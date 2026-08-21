@@ -255,7 +255,6 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 | `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
 | `pop_blocks <n>` | Roll back the last N blocks |
 | `prune_blockchain` | Enable pruning on a non-pruned database |
-| `set_bootstrap_daemon <addr>` | Set or clear a bootstrap daemon for fast-sync |
 
 **Exit**
 

@@ -213,7 +213,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/set_log_hash_rate",                 on_set_log_hash_rate,            COMMAND_RPC_SET_LOG_HASH_RATE),
         DJSON("/set_log_level",                     on_set_log_level,                COMMAND_RPC_SET_LOG_LEVEL),
         DJSON("/set_log_categories",                on_set_log_categories,           COMMAND_RPC_SET_LOG_CATEGORIES),
-        DJSON("/set_bootstrap_daemon",              on_set_bootstrap_daemon,         COMMAND_RPC_SET_BOOTSTRAP_DAEMON),
         DJSON("/stop_daemon",                       on_stop_daemon,                  COMMAND_RPC_STOP_DAEMON),
         DJSON("/get_net_stats",                     on_get_net_stats,                COMMAND_RPC_GET_NET_STATS),
         DJSON("/set_limit",                         on_set_limit,                    COMMAND_RPC_SET_LIMIT),

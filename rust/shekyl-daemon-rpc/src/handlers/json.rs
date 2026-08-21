@@ -180,7 +180,6 @@ json_handler!(get_peer_list, "/get_peer_list");
 json_handler!(set_log_hash_rate, "/set_log_hash_rate");
 json_handler!(set_log_level, "/set_log_level");
 json_handler!(set_log_categories, "/set_log_categories");
-json_handler!(set_bootstrap_daemon, "/set_bootstrap_daemon");
 json_handler!(stop_daemon, "/stop_daemon");
 json_handler!(get_net_stats, "/get_net_stats");
 json_handler!(set_limit, "/set_limit");

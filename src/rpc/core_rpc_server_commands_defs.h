@@ -101,13 +101,9 @@ namespace cryptonote
   struct rpc_response_base
   {
     std::string status;
-    bool untrusted;
-
-    rpc_response_base(): untrusted(false) {}
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(status)
-      KV_SERIALIZE(untrusted)
     END_KV_SERIALIZE_MAP()
   };
 
@@ -667,9 +663,6 @@ namespace cryptonote
       uint64_t start_time;
       uint64_t free_space;
       bool offline;
-      std::string bootstrap_daemon_address;
-      uint64_t height_without_bootstrap;
-      bool was_bootstrap_ever_used;
       uint64_t database_size;
       bool busy_syncing;
       std::string version;
@@ -717,9 +710,6 @@ namespace cryptonote
         KV_SERIALIZE(start_time)
         KV_SERIALIZE(free_space)
         KV_SERIALIZE(offline)
-        KV_SERIALIZE(bootstrap_daemon_address)
-        KV_SERIALIZE(height_without_bootstrap)
-        KV_SERIALIZE(was_bootstrap_ever_used)
         KV_SERIALIZE(database_size)
         KV_SERIALIZE(busy_syncing)
         KV_SERIALIZE(version)
@@ -1759,35 +1749,6 @@ namespace cryptonote
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(headers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_SET_BOOTSTRAP_DAEMON
-  {
-    struct request_t
-    {
-      std::string address;
-      std::string username;
-      std::string password;
-      std::string proxy;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(address)
-        KV_SERIALIZE(username)
-        KV_SERIALIZE(password)
-        KV_SERIALIZE(proxy)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string status;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(status)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

@@ -161,9 +161,8 @@ struct t_internals {
       rpcs.emplace_back(core, p2p, "core");
       rpcs.back().bind_port = main_rpc_port;
       rpcs.back().restricted = restricted;
-      auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, proxy))
+      if (!rpcs.back().server->init(vm, restricted, main_rpc_port))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
@@ -175,12 +174,11 @@ struct t_internals {
     if (has_restricted_rpc_port_arg)
     {
       auto const restricted_rpc_port = command_line::get_arg(vm, restricted_rpc_port_arg);
-      auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       rpcs.emplace_back(core, p2p, "restricted");
       rpcs.back().bind_port = restricted_rpc_port;
       rpcs.back().restricted = true;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, proxy))
+      if (!rpcs.back().server->init(vm, true, restricted_rpc_port))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }

@@ -152,6 +152,25 @@
 
 ### Removed
 
+- **The bootstrap-daemon forward is gone.** `--bootstrap-daemon-address`
+  / `-login` / `-proxy`, the `set_bootstrap_daemon` RPC and console
+  command, and the forward that — while the local node was more than ten
+  blocks behind — re-issued a wallet's queries (`/getblocks.bin` from its
+  restore height, `/is_key_image_spent`, `/gettransactions`, …) to a
+  third-party node, in `auto` mode one the daemon picked from peer
+  gossip. It inverted Shekyl's posture (own node by default; a remote is
+  the *wallet's* explicit, visible choice) by moving the most identifying
+  query pattern to a node the user never chose and flagging it with an
+  `untrusted` field no wallet reads. `get_info` loses
+  `bootstrap_daemon_address`, `height_without_bootstrap` and
+  `was_bootstrap_ever_used`; every response loses the constant-false
+  `untrusted`; `shekyld status` no longer prints a bootstrapping clause.
+  Ruling and rule-21 reopen (wallet-side, explicit, never a daemon
+  forward) in `docs/DAEMON_RPC_RUST.md`. **Operator impact:** a config
+  carrying any `bootstrap-daemon-*` key fails to start — remove the key;
+  a wallet that wants a remote while the node syncs points at it
+  directly.
+
 - **The C++ wallet stack is deleted — `wallet2` and everything that
   existed only to serve it** (Phase 5 of the Rust wallet rewrite,
   `docs/design/WALLET_REWRITE_PLAN.md`). 27,579 lines: all of

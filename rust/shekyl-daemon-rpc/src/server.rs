@@ -183,7 +183,6 @@ pub(crate) enum Endpoint {
     SetLogHashRate,
     SetLogLevel,
     SetLogCategories,
-    SetBootstrapDaemon,
     StopDaemon,
     GetNetStats,
     SetLimit,
@@ -343,11 +342,6 @@ pub(crate) const ROUTES: &[Route] = &[
         visibility: Visibility::AdminOnly,
     },
     Route {
-        endpoint: Endpoint::SetBootstrapDaemon,
-        paths: &["/set_bootstrap_daemon"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
         endpoint: Endpoint::StopDaemon,
         paths: &["/stop_daemon"],
         visibility: Visibility::AdminOnly,
@@ -453,9 +447,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
         Endpoint::SetLogLevel => get(json::set_log_level).post(json::set_log_level),
         Endpoint::SetLogCategories => get(json::set_log_categories).post(json::set_log_categories),
-        Endpoint::SetBootstrapDaemon => {
-            get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon)
-        }
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
         Endpoint::SetLimit => get(json::set_limit).post(json::set_limit),
@@ -657,7 +648,6 @@ mod tests {
         "/set_log_hash_rate",
         "/set_log_level",
         "/set_log_categories",
-        "/set_bootstrap_daemon",
         "/stop_daemon",
         "/get_net_stats",
         "/set_limit",

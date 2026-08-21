@@ -73,6 +73,47 @@ distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
 distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
 with a named caller, never “keep epee.”
 
+### Deleted bootstrap-daemon forward (no Axum route, no CLI flag)
+
+`--bootstrap-daemon-address` / `-login` / `-proxy`, the `set_bootstrap_daemon`
+RPC and console command, `bootstrap_daemon` / `bootstrap_node_selector`, and
+the `use_bootstrap_daemon_if_necessary` forward in front of 26 handlers are
+deleted (2026-08-21), together with the `get_info` fields that reported it
+(`bootstrap_daemon_address`, `height_without_bootstrap`,
+`was_bootstrap_ever_used`), the `untrusted` marker every response carried for
+it, and error code `CORE_RPC_ERROR_CODE_UNSUPPORTED_BOOTSTRAP`.
+
+**What it did.** While the local node was more than ten blocks behind, the
+daemon re-issued a wallet's queries — `/getblocks.bin` from its restore
+height, `/is_key_image_spent`, `/gettransactions` by hash,
+`get_output_histogram`, … — to a third-party node (one the operator named, or
+in `auto` mode one picked from the peer list's advertised RPC ports), and
+returned the answer flagged `untrusted=true`.
+
+**Why it goes** (mission hierarchy: privacy is the product;
+[`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc):
+inherited flows that contradict the threat model are migrated, not
+rationalized). The forward inverts Shekyl's daemon posture — own node by
+default; a remote is the *wallet's* explicit, user-visible choice
+(`--daemon-address`, onion). It moved the wallet's most identifying query
+pattern to a node the user never chose, selected by the daemon from peer
+gossip, over clearnet unless a proxy was also configured, and flagged it with a
+field no wallet in this tree reads. The wallet can already do the honest
+version of this itself, visibly: point at a remote daemon while the local one
+syncs. A daemon-side silent forward adds no capability the user lacks; it
+removes their knowledge of where their queries went. Same shape as
+`get_output_distribution` above — an inherited surface whose only effect is to
+widen who sees the wallet.
+
+**Rule-21 reopen.** Evidence that IBD at the device floor
+([`76`](../.cursor/rules/76-device-provisioning-floor.mdc), Pi 4) leaves a
+fresh install without a usable wallet for longer than the failure-mode UX
+([`82`](../.cursor/rules/82-failure-mode-ux.mdc)) can carry, **and** a design
+that keeps the choice with the user: a wallet-side "use this remote until my
+node catches up" selection, explicit and visible — never a daemon-side forward.
+Re-evaluation lands in Rust on the wallet's daemon-selection surface, not as a
+restored C++ route.
+
 ## Restricted Mode
 
 In restricted mode (`--restricted-rpc` or a separate restricted bind port):
@@ -161,6 +202,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `POST /submit_transaction` | native Rust | n/a | wallets | keep |
 | `get_archival_emission_claim_source` | `/json_rpc` | yes | claim-builder | keep |
 | `get_output_distribution` (+ `.bin`) | **no** | **removed** | none (`get_rct_distribution` deleted) | deleted |
+| Bootstrap-daemon forward (`use_bootstrap_daemon_if_necessary`, `/set_bootstrap_daemon`) | **no** | **removed** | none | deleted (privacy ruling above) |
 | epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
 
 ## Phase 2 (KV serialization)
