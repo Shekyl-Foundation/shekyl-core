@@ -37,23 +37,28 @@
 #include <boost/asio.hpp>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "daemon/rpc_client.h"
 
 namespace
 {
-  // Accept one connection, read the request head + body, answer `body` as a
-  // 200 JSON response, close. Returns the listening port.
-  class one_shot_http_server
+  // Accept `bodies.size()` connections; each is answered as a 200 JSON
+  // response from the next body, then closed. First request is captured.
+  class n_shot_http_server
   {
   public:
-    explicit one_shot_http_server(std::string body)
-      : m_body(std::move(body))
+    explicit n_shot_http_server(std::vector<std::string> bodies)
+      : m_bodies(std::move(bodies))
       , m_acceptor(m_io, boost::asio::ip::tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), 0))
       , m_thread([this] { serve(); })
     {}
 
-    ~one_shot_http_server() { m_thread.join(); }
+    explicit n_shot_http_server(std::string body)
+      : n_shot_http_server(std::vector<std::string>{std::move(body)})
+    {}
+
+    ~n_shot_http_server() { m_thread.join(); }
 
     uint16_t port() const { return m_acceptor.local_endpoint().port(); }
     const std::string& request() const { return m_request; }
@@ -61,40 +66,41 @@ namespace
   private:
     void serve()
     {
-      boost::asio::ip::tcp::socket socket(m_io);
-      m_acceptor.accept(socket);
-      boost::asio::streambuf buf;
-      boost::system::error_code ec;
-      boost::asio::read_until(socket, buf, "\r\n\r\n", ec);
-      std::string head{boost::asio::buffers_begin(buf.data()), boost::asio::buffers_end(buf.data())};
-      m_request = head;
-      const std::string response =
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
-        std::to_string(m_body.size()) + "\r\nConnection: close\r\n\r\n" + m_body;
-      boost::asio::write(socket, boost::asio::buffer(response), ec);
-      socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+      for (const auto& body : m_bodies)
+      {
+        boost::asio::ip::tcp::socket socket(m_io);
+        m_acceptor.accept(socket);
+        boost::asio::streambuf buf;
+        boost::system::error_code ec;
+        boost::asio::read_until(socket, buf, "\r\n\r\n", ec);
+        std::string head{boost::asio::buffers_begin(buf.data()), boost::asio::buffers_end(buf.data())};
+        if (m_request.empty())
+          m_request = head;
+        const std::string response =
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+          std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+        boost::asio::write(socket, boost::asio::buffer(response), ec);
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+      }
     }
 
-    std::string m_body;
+    std::vector<std::string> m_bodies;
     boost::asio::io_context m_io;
     boost::asio::ip::tcp::acceptor m_acceptor;
     std::string m_request;
     std::thread m_thread;
   };
 
-  uint16_t closed_port()
-  {
-    boost::asio::io_context io;
-    boost::asio::ip::tcp::acceptor a(io, boost::asio::ip::tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), 0));
-    return a.local_endpoint().port(); // released on return: refused a moment later
-  }
-
+  // Port 1 on loopback is connection-refused without a bind-then-drop race
+  // (an ephemeral bind released on return can be reallocated under parallel
+  // tests and produce a false pass or hang).
+  constexpr uint16_t REFUSED_PORT = 1;
   constexpr uint32_t LOOPBACK = 0x0100007f; // 127.0.0.1 in epee's int32 form
 }
 
 TEST(daemon_rpc_client, good_answer_leaves_failed_clear)
 {
-  one_shot_http_server server(R"({"status":"OK","height":42})");
+  n_shot_http_server server(R"({"status":"OK","height":42})");
   tools::t_rpc_client client(LOOPBACK, server.port());
   cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
   cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
@@ -106,14 +112,14 @@ TEST(daemon_rpc_client, good_answer_leaves_failed_clear)
 
 TEST(daemon_rpc_client, refused_connection_sets_failed)
 {
-  tools::t_rpc_client client(LOOPBACK, closed_port());
+  tools::t_rpc_client client(LOOPBACK, REFUSED_PORT);
   EXPECT_FALSE(client.check_connection());
   EXPECT_TRUE(client.failed());
 }
 
 TEST(daemon_rpc_client, non_ok_status_sets_failed)
 {
-  one_shot_http_server server(R"({"status":"BUSY","height":0})");
+  n_shot_http_server server(R"({"status":"BUSY","height":0})");
   tools::t_rpc_client client(LOOPBACK, server.port());
   cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
   cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
@@ -123,7 +129,7 @@ TEST(daemon_rpc_client, non_ok_status_sets_failed)
 
 TEST(daemon_rpc_client, json_rpc_error_member_sets_failed)
 {
-  one_shot_http_server server(R"({"jsonrpc":"2.0","id":"0","error":{"code":-32601,"message":"Method not found"}})");
+  n_shot_http_server server(R"({"jsonrpc":"2.0","id":"0","error":{"code":-32601,"message":"Method not found"}})");
   tools::t_rpc_client client(LOOPBACK, server.port());
   cryptonote::COMMAND_RPC_GET_VERSION::request req{};
   cryptonote::COMMAND_RPC_GET_VERSION::response res{};
@@ -136,14 +142,17 @@ TEST(daemon_rpc_client, failure_is_sticky_across_a_later_success)
 {
   // The exit status reflects the whole command, not the last request it
   // happened to make: a command that failed one request and then succeeded
-  // at another must still report failure.
-  tools::t_rpc_client client(LOOPBACK, closed_port());
-  EXPECT_FALSE(client.check_connection());
+  // at another must still report failure. Same client, two answers.
+  n_shot_http_server server({
+    std::string(R"({"status":"BUSY","height":0})"),
+    std::string(R"({"status":"OK","height":1})"),
+  });
+  tools::t_rpc_client client(LOOPBACK, server.port());
+  cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
+  cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
+  EXPECT_FALSE(client.rpc_request(req, res, "/get_height", "fail"));
   EXPECT_TRUE(client.failed());
-  // Same client object cannot be repointed; a second client is fresh.
-  one_shot_http_server server(R"({"status":"OK","height":1})");
-  tools::t_rpc_client fresh(LOOPBACK, server.port());
-  EXPECT_TRUE(fresh.check_connection());
-  EXPECT_FALSE(fresh.failed());
+  EXPECT_TRUE(client.rpc_request(req, res, "/get_height", "fail"));
+  EXPECT_EQ(res.height, 1u);
   EXPECT_TRUE(client.failed());
 }

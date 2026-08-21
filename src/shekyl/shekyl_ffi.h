@@ -3,16 +3,20 @@
 // All rights reserved.
 
 /// @file shekyl_ffi.h
-/// @brief C declarations for the Rust shekyl-ffi crate (libshekyl_ffi.a).
+/// @brief C declarations for the Rust FFI surface.
 ///
-/// This header is the sole FFI boundary between C++ and Rust in the Shekyl
-/// codebase. Every function here has a corresponding `#[no_mangle] pub extern "C"`
-/// in `rust/shekyl-ffi/src/lib.rs`.
+/// This header is the C ABI between C++ and Rust. Most functions are
+/// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
+/// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
+/// from `rust/shekyl-daemon-rpc` and reach C++ through the daemon image
+/// (`libshekyl_daemon_image.a`; see `cmake/BuildRust.cmake`).
 ///
 /// ## Linking
 ///
-/// Link against `libshekyl_ffi.a` (static archive produced by `cargo build`).
-/// The CMake integration is in `cmake/BuildRust.cmake`.
+/// Wallet/tool binaries link `libshekyl_ffi.a`. `shekyld` and daemon
+/// unit tests link `libshekyl_daemon_image.a` (shekyl-ffi +
+/// shekyl-daemon-rpc, one `tracing-core` dispatcher). Never link both
+/// archives on one line.
 ///
 /// ## Memory model
 ///
@@ -1387,9 +1391,10 @@ void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 ///   content type follows the route (".bin" → binary, otherwise JSON).
 /// body / body_len: request body; body may be NULL iff body_len == 0.
 /// timeout_secs: per-request bound, connect through the last body byte.
-/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body, on any
-///   error the UTF-8 reason. Always release with shekyl_daemon_ctl_free
-///   (a NULL/0 pair is a no-op there).
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body; on any
+///   error that can write (every path except a NULL out_ptr/out_len) the
+///   UTF-8 reason. Always release with shekyl_daemon_ctl_free (a NULL/0
+///   pair is a no-op there).
 /// Returns one of the SHEKYL_DAEMON_CTL_* codes.
 int32_t shekyl_daemon_ctl_post(
     const char* address,
