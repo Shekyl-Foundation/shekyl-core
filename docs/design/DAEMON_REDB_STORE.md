@@ -1,10 +1,11 @@
 # Daemon chain store — redb at genesis (Path B)
 
 **Status:** Design **open for execution of DRS-P0 / DRS-BENCH / DRS-C** after
-Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), and a
+Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), a
 **gap-close pass** (success criteria, surface map, concurrency, P0 multi-PR,
 D2-reopen as first-class good, D10 mandatory reconstructible, IBD floor
-sketch — 2026-07-27). Engine-swap (**DRS-E\***) not started; **DRS-0 blocked
+sketch — 2026-07-27), and **post-close pin PC-1** (D2-R1 re-pointed at DRS-C —
+2026-08-21, §14). Engine-swap (**DRS-E\***) not started; **DRS-0 blocked
 on DRS-P0**. Prior premature “ratified” banner remains withdrawn.
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
@@ -113,10 +114,13 @@ engine swap without A1–A3.
 
 ### 1.1 Schedule honesty
 
-Genesis under D2-closed = remaining wallet work + full DRS-E\* (Tier A+B).
-Under D2-reopen = **Tier A on LMDB** is the genesis product; redb is
-non-blocking post-genesis. DRS-C is unparked technically so D2-R2’s clock can
-start when C closes.
+Genesis under D2-closed = full DRS-E\* (Tier A+B). The wallet rewrite is no
+longer on this path: Phase 5 closed 2026-08-19 (#507, `a9dc5e4db` —
+`src/wallet/` deleted), so the chain store is the long pole of the daemon
+cutover, not a co-runner behind the wallet. Under D2-reopen = **Tier A on
+LMDB** is the genesis product; redb is non-blocking post-genesis. DRS-C is
+unparked technically so D2-R2’s clock can start when C closes; D2-R1 is the
+calendar backstop for the case where C never starts that clock.
 
 ### 1.2 DRS-D2 reopen criteria
 
@@ -124,11 +128,20 @@ start when C closes.
 
 | ID | Trigger | Bridge (**concrete**) |
 | --- | --- | --- |
-| **D2-R1** | Wallet rewrite **Phase 5** not closed by **2027-04-01** | **Ship genesis-on-LMDB** with Tier A as far as landed (minimum A1–A2–A8; A9 as C progressed). DRS-E\* post-genesis. |
+| **D2-R1** | **DRS-C** not closed by **2027-04-01** — *re-pointed 2026-08-21 (PC-1)*: the original trigger, “wallet rewrite Phase 5 not closed by 2027-04-01”, can no longer fire (Phase 5 closed 2026-08-19, #507) | **Ship genesis-on-LMDB** with Tier A as far as landed (minimum A1–A2–A8; A9 as C progressed). DRS-E\* post-genesis. |
 | **D2-R2** | **DRS-C closed**, but **DRS-E2** not green within **6 months** of C close | Same: genesis-on-LMDB + Tier A; E\* post-genesis |
 | **D2-R3** | **DRS-BENCH** fails §1.3 IBD floor (or resource DoS bounds) after one mitigation cycle | Reopen D6 / stay LMDB; Tier A still required |
 
 Reopen = decision-log + index update. Never silent.
+
+**Why R1 was re-pointed, not retired (PC-1).** R2 is a *relative* clock that
+starts only when DRS-C closes; R3 is a BENCH outcome that exists only once
+DRS-E\* runs. Neither fires if C is never opened or never closes. Retiring R1
+without a replacement would have left D2 with no calendar-anchored exit — the
+reopen-by-subtraction shape R2-8 already rejected — so the trigger moved to
+the item that is now the long pole, with the same date and the same bridge.
+The date is the genesis-schedule backstop, not a wallet-specific estimate,
+and is unchanged.
 
 ### 1.5 D2-reopen is a first-class good path
 
@@ -727,6 +740,16 @@ All **Accept** as previously recorded; residual fixes in Round-2 below.
 **Positive confirmations (no change):** R-3 method count, D5 diagrams, §6.5
 gate strike.
 
+### Post-close pin (2026-08-21)
+
+Not a new round (rule 21: a stale gate surfaced post-closure is named as a
+post-closure pin, not re-derived). The sweep belonged to the PR that cleared
+the trigger (#507) and was missed there.
+
+| ID | Finding | Disposition |
+| --- | --- | --- |
+| **PC-1** | D2-R1’s trigger (“wallet Phase 5 not closed by 2027-04-01”) became unreachable when Phase 5 closed on 2026-08-19; the row read as live optionality that no longer existed | **Accept** — R1 re-pointed at **DRS-C not closed by 2027-04-01**, same bridge (§1.2); §1.1 restated: the chain store is the long pole, the wallet is off the path |
+
 ---
 
 ## 15. Decision log
@@ -739,6 +762,7 @@ gate strike.
 | 2026-07-27 | **DRS-D3 hardening:** opposed threat models (not overhead); three layers (encodings shared / store+API separate); D3c cross-store KAT; D3d no shared redb-helpers. **DRS-D9:** strict durability free at block cadence. **DRS-BENCH:** retire throughput column; resource/privacy/IBD/pop only; in-tree artifacts + durability label required |
 | 2026-07-27 | **Gap-close:** §0.1 Tier A/B success criteria (mission-ordered); §1.5 D2-reopen first-class good; D10 reconstructible **mandatory** for D2-closed; §1.3 IBD floor sketch (H=100k, ≤1.25× LMDB); §3.5 97-method surface map; §3.6 writer/reader concurrency; §7.1 P0 multi-PR envelope P0a–P0d |
 | 2026-07-27 | **Substrate findings A-1…A-6**: dispositions §17; P0b/P0c concrete rows; A-1/A-3/A-5 are **FIX-IN-CPP candidates for feature-branch PRs** (not applied on `dev` in the design session) |
+| 2026-08-21 | **Post-close pin PC-1:** D2-R1 re-pointed from “wallet Phase 5 not closed by 2027-04-01” (unreachable since #507 closed Phase 5 on 2026-08-19) to “**DRS-C** not closed by 2027-04-01”; bridge unchanged. Retiring it outright would have left D2 with no calendar backstop (R2 is relative to C close, R3 is a BENCH outcome) — the reopen-by-subtraction shape R2-8 rejected. §1.1 restated accordingly |
 
 ---
 

@@ -58,14 +58,14 @@ def check(name, got, want):
 
 
 def peers(white=(), gray=()):
-    return {"status": "OK", "untrusted": False,
+    return {"status": "OK",
             "white_list": [{"host": h, "id": 1, "ip": 0, "port": 0} for h in white],
             "gray_list": [{"host": h, "id": 1, "ip": 0, "port": 0} for h in gray]}
 
 
 def conns(entries):
     return {"jsonrpc": "2.0", "id": "0",
-            "result": {"status": "OK", "untrusted": False, "connections": entries}}
+            "result": {"status": "OK", "connections": entries}}
 
 
 def c(addr, incoming, atype=4):
@@ -91,17 +91,15 @@ check("stored candidates survive the port suffix on host",
       "OK 1 0 0 2 1")
 
 # --- an isolated node is a REAL zero, and still reports its candidates ------
-# A genuinely isolated node omits `connections` entirely and returns exactly
-# {"status":"OK","untrusted":false}. That is a zero -- and the stored count is
-# precisely what says whether it can recover.
-check("absent connections on a well-formed reply is an empty list",
-      run({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "untrusted": False}},
-          peers(white=[ONION_A, ONION_B])),
+# A genuinely isolated node serializes `"connections":[]`. The `connections`
+# key is the discriminator (status is on every RPC reply; `untrusted` was
+# deleted with the bootstrap forward). A missing key is a different method.
+check("empty connections list is an isolated node, not a refusal",
+      run(conns([]), peers(white=[ONION_A, ONION_B])),
       "OK 0 0 0 2 0")
 
 check("isolated AND candidate-less is reported, not refused",
-      run({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "untrusted": False}},
-          peers()),
+      run(conns([]), peers()),
       "OK 0 0 0 0 0")
 
 # --- guards: each must fail if removed --------------------------------------
@@ -111,7 +109,7 @@ check("rpc error is never a zero",
       lambda g: g.startswith("ERR rpc-error:-32601"))
 
 check("absent connections without status is refused",
-      run({"jsonrpc": "2.0", "id": "0", "result": {"untrusted": False}}, peers()),
+      run({"jsonrpc": "2.0", "id": "0", "result": {}}, peers()),
       lambda g: g.startswith("ERR no-connections-field:status="))
 
 check("absent connections on a reply that is not get_connections is refused",
@@ -138,12 +136,12 @@ check("peer list with a bad status is refused",
 
 check("connections of the wrong type is refused",
       run({"jsonrpc": "2.0", "id": "0",
-           "result": {"status": "OK", "untrusted": False, "connections": "many"}}, peers()),
+           "result": {"status": "OK", "connections": "many"}}, peers()),
       lambda g: g.startswith("ERR connections-not-a-list"))
 
 check("a connection entry missing address_type is refused",
       run({"jsonrpc": "2.0", "id": "0",
-           "result": {"status": "OK", "untrusted": False,
+           "result": {"status": "OK",
                       "connections": [{"address": ONION_A, "incoming": False}]}}, peers()),
       "ERR connection-entry-missing-address_type")
 
@@ -172,7 +170,7 @@ check("a peer entry whose host is not a string refuses",
 # A non-onion host is NOT damage: white and gray legitimately carry public-zone
 # peers. Refusing those would make the instrument refuse healthy fleets.
 check("a public-zone peer is counted out, not refused",
-      run(conns([]), {"status": "OK", "untrusted": False,
+      run(conns([]), {"status": "OK",
                       "white_list": [{"host": "1.2.3.4:18080"}, {"host": ONION_A}],
                       "gray_list": []}),
       "OK 0 0 0 1 0")
@@ -184,13 +182,13 @@ check("a public-zone peer is counted out, not refused",
 # connection points.
 check("a connection entry missing incoming refuses",
       run({"jsonrpc": "2.0", "id": "0",
-           "result": {"status": "OK", "untrusted": False,
+           "result": {"status": "OK",
                       "connections": [{"address": ONION_A, "address_type": 4}]}}, peers()),
       "ERR connection-entry-bad-incoming")
 
 check("a connection entry with a non-bool incoming refuses",
       run({"jsonrpc": "2.0", "id": "0",
-           "result": {"status": "OK", "untrusted": False,
+           "result": {"status": "OK",
                       "connections": [{"address": ONION_A, "address_type": 4,
                                        "incoming": "yes"}]}}, peers()),
       "ERR connection-entry-bad-incoming")

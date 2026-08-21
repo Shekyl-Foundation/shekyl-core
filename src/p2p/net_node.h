@@ -410,8 +410,6 @@ namespace nodetool
     node_server(t_payload_net_handler& payload_handler)
       : m_payload_handler(payload_handler),
         m_external_port(0),
-        m_rpc_port(0),
-        m_rpc_credits_per_hash(0),
         m_allow_local_ip(false),
         m_hide_my_port(false),
         m_igd(no_igd),
@@ -596,16 +594,6 @@ namespace nodetool
 
   public:
 
-    void set_rpc_port(uint16_t rpc_port)
-    {
-      m_rpc_port = rpc_port;
-    }
-
-    void set_rpc_credits_per_hash(uint32_t rpc_credits_per_hash)
-    {
-      m_rpc_credits_per_hash = rpc_credits_per_hash;
-    }
-
   private:
     std::string m_config_folder;
 
@@ -614,8 +602,6 @@ namespace nodetool
     uint32_t m_listening_port;
     uint32_t m_listening_port_ipv6;
     uint32_t m_external_port;
-    uint16_t m_rpc_port;
-    uint32_t m_rpc_credits_per_hash;
     bool m_allow_local_ip;
     bool m_hide_my_port;
     igd_t m_igd;

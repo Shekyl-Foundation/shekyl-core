@@ -36,8 +36,6 @@
 
 #pragma once
 
-#include <optional>
-
 #include "daemon/rpc_command_executor.h"
 #include "common/common_fwd.h"
 #include "rpc/core_rpc_server.h"
@@ -52,11 +50,11 @@ public:
   t_command_parser_executor(
       uint32_t ip
     , uint16_t port
-    , const std::optional<tools::login>& login
-    , const epee::net_utils::ssl_options_t& ssl_options
     , bool is_rpc
     , cryptonote::core_rpc_server* rpc_server = NULL
     );
+
+  bool rpc_request_failed() const { return m_executor.rpc_request_failed(); }
 
   bool print_peer_list(const std::vector<std::string>& args);
 
@@ -147,8 +145,6 @@ public:
   bool check_blockchain_pruning(const std::vector<std::string>& args);
 
   bool print_net_stats(const std::vector<std::string>& args);
-
-  bool set_bootstrap_daemon(const std::vector<std::string>& args);
 
   bool flush_cache(const std::vector<std::string>& args);
 };

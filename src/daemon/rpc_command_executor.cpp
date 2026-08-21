@@ -29,7 +29,6 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include "string_tools.h"
-#include "common/password.h"
 #include "common/scoped_message_writer.h"
 #include "common/pruning.h"
 #include "daemon/rpc_command_executor.h"
@@ -60,18 +59,10 @@ namespace {
     }
   }
 
-  std::string print_float(float f, int prec)
-  {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%*.*f", prec, prec, f);
-    return buf;
-  }
 
-  void print_peer(std::string const & prefix, cryptonote::peer const & peer, bool pruned_only, bool publicrpc_only)
+  void print_peer(std::string const & prefix, cryptonote::peer const & peer, bool pruned_only)
   {
     if (pruned_only && peer.pruning_seed == 0)
-      return;
-    if (publicrpc_only && peer.rpc_port == 0)
       return;
 
     time_t now;
@@ -83,10 +74,8 @@ namespace {
     std::string port_str;
     epee::string_tools::xtype_to_string(peer.port, port_str);
     std::string addr_str = peer.host + ":" + port_str;
-    std::string rpc_port = peer.rpc_port ? std::to_string(peer.rpc_port) : "-";
-    std::string rpc_credits_per_hash = peer.rpc_credits_per_hash ? print_float(peer.rpc_credits_per_hash / RPC_CREDITS_PER_HASH_SCALE, 2) : "-";
     std::string pruning_seed = epee::string_tools::to_string_hex(peer.pruning_seed);
-    tools::msg_writer() << boost::format("%-10s %-25s %-25s %-5s %-5s %-4s %s") % prefix % id_str % addr_str % rpc_port % rpc_credits_per_hash % pruning_seed % elapsed;
+    tools::msg_writer() << boost::format("%-10s %-25s %-25s %-4s %s") % prefix % id_str % addr_str % pruning_seed % elapsed;
   }
 
   void print_block_header(cryptonote::block_header_response const & header)
@@ -151,8 +140,6 @@ namespace {
 t_rpc_command_executor::t_rpc_command_executor(
     uint32_t ip
   , uint16_t port
-  , const std::optional<tools::login>& login
-  , const epee::net_utils::ssl_options_t& ssl_options
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
@@ -160,10 +147,7 @@ t_rpc_command_executor::t_rpc_command_executor(
 {
   if (is_rpc)
   {
-    std::optional<epee::net_utils::http::login> http_login{};
-    if (login)
-      http_login.emplace(login->username, login->password.password());
-    m_rpc_client = new tools::t_rpc_client(ip, port, std::move(http_login), ssl_options);
+    m_rpc_client = new tools::t_rpc_client(ip, port);
   }
   else
   {
@@ -184,7 +168,7 @@ t_rpc_command_executor::~t_rpc_command_executor()
   }
 }
 
-bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only, bool publicrpc_only) {
+bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
   cryptonote::COMMAND_RPC_GET_PEER_LIST::request req;
   cryptonote::COMMAND_RPC_GET_PEER_LIST::response res;
 
@@ -214,7 +198,7 @@ bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit
     const auto end = limit ? peer + std::min(limit, res.white_list.size()) : res.white_list.cend();
     for (; peer != end; ++peer)
     {
-      print_peer("white", *peer, pruned_only, publicrpc_only);
+      print_peer("white", *peer, pruned_only);
     }
   }
 
@@ -224,7 +208,7 @@ bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit
     const auto end = limit ? peer + std::min(limit, res.gray_list.size()) : res.gray_list.cend();
     for (; peer != end; ++peer)
     {
-      print_peer("gray", *peer, pruned_only, publicrpc_only);
+      print_peer("gray", *peer, pruned_only);
     }
   }
 
@@ -498,27 +482,13 @@ bool t_rpc_command_executor::show_status() {
 
   std::time_t uptime = std::time(nullptr) - ires.start_time;
   uint64_t net_height = ires.target_height > ires.height ? ires.target_height : ires.height;
-  std::string bootstrap_msg;
-  if (ires.was_bootstrap_ever_used)
-  {
-    bootstrap_msg = ", bootstrapping from " + ires.bootstrap_daemon_address;
-    if (ires.untrusted)
-    {
-      bootstrap_msg += (boost::format(", local height: %llu (%.1f%%)") % ires.height_without_bootstrap % get_sync_percentage(ires.height_without_bootstrap, net_height)).str();
-    }
-    else
-    {
-      bootstrap_msg += " was used before";
-    }
-  }
 
   std::stringstream str;
-  str << boost::format("Height: %llu/%llu (%.1f%%) on %s%s, %s, net hash %s, v%u%s, %u(out)+%u(in) connections")
+  str << boost::format("Height: %llu/%llu (%.1f%%) on %s, %s, net hash %s, v%u%s, %u(out)+%u(in) connections")
     % (unsigned long long)ires.height
     % (unsigned long long)net_height
     % get_sync_percentage(ires)
     % (ires.testnet ? "testnet" : ires.stagenet ? "stagenet" : "mainnet")
-    % bootstrap_msg
     % (!has_mining_info ? "mining info unavailable" : mining_busy ? "syncing" : mres.active ? ( ( mres.is_background_mining_enabled ? "smart " : "" ) + std::string("mining at ") + get_mining_speed(mres.speed)) : "not mining")
     % get_mining_speed(cryptonote::difficulty_type(ires.wide_difficulty) / ires.target)
     % (unsigned)hfres.version
@@ -2354,44 +2324,6 @@ bool t_rpc_command_executor::check_blockchain_pruning()
     {
       tools::success_msg_writer() << "Blockchain is not pruned";
     }
-    return true;
-}
-
-bool t_rpc_command_executor::set_bootstrap_daemon(
-  const std::string &address,
-  const std::string &username,
-  const std::string &password,
-  const std::string &proxy)
-{
-    cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::request req;
-    cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::response res;
-    const std::string fail_message = "Unsuccessful";
-
-    req.address = address;
-    req.username = username;
-    req.password = password;
-    req.proxy = proxy;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->rpc_request(req, res, "/set_bootstrap_daemon", fail_message))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_set_bootstrap_daemon(req, res) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    tools::success_msg_writer()
-      << "Successfully set bootstrap daemon address to "
-      << (!req.address.empty() ? req.address : "none");
-
     return true;
 }
 

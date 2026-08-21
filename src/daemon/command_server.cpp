@@ -42,12 +42,10 @@ namespace p = std::placeholders;
 t_command_server::t_command_server(
     uint32_t ip
   , uint16_t port
-  , const std::optional<tools::login>& login
-  , const epee::net_utils::ssl_options_t& ssl_options
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
-  : m_parser(ip, port, login, ssl_options, is_rpc, rpc_server)
+  : m_parser(ip, port, is_rpc, rpc_server)
   , m_command_lookup()
   , m_is_rpc(is_rpc)
 {
@@ -71,7 +69,7 @@ t_command_server::t_command_server(
   m_command_lookup.set_handler(
       "print_pl"
     , std::bind(&t_command_parser_executor::print_peer_list, &m_parser, p::_1)
-    , "print_pl [white] [gray] [pruned] [publicrpc] [<limit>]"
+    , "print_pl [white] [gray] [pruned] [<limit>]"
     , "Print the current peer list."
     );
   m_command_lookup.set_handler(
@@ -311,13 +309,6 @@ t_command_server::t_command_server(
       "check_blockchain_pruning"
     , std::bind(&t_command_parser_executor::check_blockchain_pruning, &m_parser, p::_1)
     , "Check the blockchain pruning."
-    );
-    m_command_lookup.set_handler(
-      "set_bootstrap_daemon"
-    , std::bind(&t_command_parser_executor::set_bootstrap_daemon, &m_parser, p::_1)
-    , "set_bootstrap_daemon (auto | none | host[:port] [username] [password]) [proxy_ip:proxy_port]"
-    , "URL of a 'bootstrap' remote daemon that the connected wallets can use while this daemon is still not fully synced.\n"
-      "Use 'auto' to enable automatic public nodes discovering and bootstrap daemon switching"
     );
     m_command_lookup.set_handler(
       "flush_cache"

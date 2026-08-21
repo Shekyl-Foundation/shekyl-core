@@ -33,7 +33,6 @@ set(unit_tests_sources
   block_queue.cpp
   block_reward.cpp
   economics_c2a_prime.cpp
-  bootstrap_node_selector.cpp
   bulletproofs_plus.cpp
   canonical_amounts.cpp
   chacha.cpp
@@ -42,6 +41,7 @@ set(unit_tests_sources
   crypto.cpp
   cryptonote_format_utils.cpp
   daemon_default_data_dir.cpp
+  daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
   daemon_submit_shims.cpp
   decompose_amount_into_digits.cpp
@@ -49,7 +49,6 @@ set(unit_tests_sources
   difficulty.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
-  epee_http_server.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
@@ -57,7 +56,6 @@ set(unit_tests_sources
   json_serialization.cpp
   get_xtype_from_string.cpp
   hmac_keccak.cpp
-  http.cpp
   keccak.cpp
   levin.cpp
   logging.cpp
@@ -145,6 +143,10 @@ target_link_libraries(unit_tests
     # until the Phase-5 cutover unlinked it.
     mnemonics
     p2p
+    # daemon_rpc_client.cpp exercises src/daemon/rpc_client.h, whose failure
+    # path writes through scoped_message_writer -> rdln::suspend_readline
+    # (same link the daemon carries; empty when built without readline).
+    ${EPEE_READLINE}
     # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
     # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
     # the superset (shekyl-ffi + shekyl-daemon-rpc), needed since
