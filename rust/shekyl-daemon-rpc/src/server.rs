@@ -163,7 +163,6 @@ pub(crate) enum Endpoint {
     GetAltBlocksHashes,
     IsKeyImageSpent,
     SubmitTransaction,
-    GetPublicNodes,
     GetTransactionPool,
     GetTransactionPoolHashesBin,
     GetTransactionPoolHashes,
@@ -237,11 +236,6 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::SubmitTransaction,
         paths: &["/submit_transaction"],
-        visibility: Visibility::Always,
-    },
-    Route {
-        endpoint: Endpoint::GetPublicNodes,
-        paths: &["/get_public_nodes"],
         visibility: Visibility::Always,
     },
     Route {
@@ -417,7 +411,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         }
         Endpoint::IsKeyImageSpent => get(json::is_key_image_spent).post(json::is_key_image_spent),
         Endpoint::SubmitTransaction => post(submit::submit_transaction),
-        Endpoint::GetPublicNodes => get(json::get_public_nodes).post(json::get_public_nodes),
         Endpoint::GetTransactionPool => {
             get(json::get_transaction_pool).post(json::get_transaction_pool)
         }
@@ -618,7 +611,6 @@ mod tests {
         "/get_alt_blocks_hashes",
         "/is_key_image_spent",
         "/submit_transaction",
-        "/get_public_nodes",
         "/get_transaction_pool",
         "/get_transaction_pool_hashes.bin",
         "/get_transaction_pool_hashes",
@@ -635,7 +627,7 @@ mod tests {
         "/get_o_indexes.bin",
     ];
 
-    /// Paths that must **never** be served on the restricted (public)
+    /// Paths that must **never** be served on the restricted (view-only)
     /// listener. §55: `/get_stem_tallies` is the anonymity graph; the rest are
     /// node administration (mine, ban, shut down, roll back).
     const SPECIFIED_ADMIN_ONLY_PATHS: &[&str] = &[

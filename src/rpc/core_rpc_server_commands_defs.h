@@ -87,8 +87,10 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-// 3.21: block_header_response gained attestation_root (ARCHIVAL_CREDIT_WIRE.md §3)
-#define CORE_RPC_VERSION_MINOR 21
+// 3.22: drop `untrusted` from every response; drop get_info bootstrap
+// fields; delete set_bootstrap_daemon and get_public_nodes (RPC is
+// operator-to-operator — no foreign-daemon discovery or silent forward).
+#define CORE_RPC_VERSION_MINOR 22
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -1362,58 +1364,6 @@ namespace cryptonote
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(white_list)
         KV_SERIALIZE(gray_list)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct public_node
-  {
-    std::string host;
-    uint64_t last_seen;
-    uint16_t rpc_port;
-    uint32_t rpc_credits_per_hash;
-
-    public_node(): last_seen(0), rpc_port(0), rpc_credits_per_hash(0) {}
-
-    public_node(const peer &peer)
-      : host(peer.host), last_seen(peer.last_seen), rpc_port(peer.rpc_port), rpc_credits_per_hash(peer.rpc_credits_per_hash)
-    {}
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(host)
-      KV_SERIALIZE(last_seen)
-      KV_SERIALIZE(rpc_port)
-      KV_SERIALIZE(rpc_credits_per_hash)
-    END_KV_SERIALIZE_MAP()
-  };
-
-  struct COMMAND_RPC_GET_PUBLIC_NODES
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool gray;
-      bool white;
-      bool include_blocked;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(gray, false)
-        KV_SERIALIZE_OPT(white, true)
-        KV_SERIALIZE_OPT(include_blocked, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<public_node> gray;
-      std::vector<public_node> white;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(gray)
-        KV_SERIALIZE(white)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

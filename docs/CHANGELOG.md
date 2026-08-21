@@ -25,7 +25,9 @@
   connector, so a host with no root store (a minimal image, a freshly
   provisioned device) could not construct a client for a plaintext
   `http://` daemon at all. An `http://` endpoint now gets a bare
-  connector with `enforce_http(true)`; only `https://` loads roots.
+  connector with `enforce_http(true)`; only `https://` loads roots. A
+  plaintext client refuses an `https://` request URI before the connector
+  (direct and SOCKS arms share the check). `CORE_RPC_VERSION` is 3.22.
 - **The block-reward weight penalty moved to Rust; `get_block_reward` is
   now a marshaling shim.** It was the last economics arithmetic C++
   performed itself — `mul128` plus two `div128_64` on an amount — while
@@ -188,9 +190,22 @@
   `untrusted`; `shekyld status` no longer prints a bootstrapping clause.
   Ruling and rule-21 reopen (wallet-side, explicit, never a daemon
   forward) in `docs/DAEMON_RPC_RUST.md`. **Operator impact:** a config
-  carrying any `bootstrap-daemon-*` key fails to start — remove the key;
-  a wallet that wants a remote while the node syncs points at it
-  directly.
+  carrying any `bootstrap-daemon-*` key fails to start with a named
+  migration message (`removed_flags`); point the wallet at a daemon you
+  operate while IBD runs.
+
+- **`--public-node` and `/get_public_nodes` are gone.** shekyld no longer
+  advertises an RPC port over P2P for other people's wallets, and the
+  discovery RPC whose only production consumer was bootstrap-daemon
+  `auto` is deleted. RPC is operator-to-operator: both ends are machines
+  you control; the adversary is the path between them, never the peer.
+  Restricted RPC (`--restricted-rpc`, `--rpc-restricted-bind-port`)
+  remains, for your own wallet on a less-privileged port. Phone-only
+  users have no supported configuration — a deliberate product boundary;
+  rule-21 reopen is a light-client protocol, never restore `--public-node`.
+  **Operator impact:** `--public-node` in a config fails to start with a
+  named migration message. `CORE_RPC_VERSION` 3.22. See
+  `docs/DAEMON_RPC_RUST.md`.
 
 - **The C++ wallet stack is deleted — `wallet2` and everything that
   existed only to serve it** (Phase 5 of the Rust wallet rewrite,

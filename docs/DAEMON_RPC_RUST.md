@@ -118,9 +118,56 @@ node catches up" selection, explicit and visible — never a daemon-side forward
 Re-evaluation lands in Rust on the wallet's daemon-selection surface, not as a
 restored C++ route.
 
+## RPC is operator-to-operator
+
+Every RPC leg is operator-to-operator: both endpoints are machines the same
+person controls. The adversary is the network path between those machines,
+never the peer. There is no recommended configuration in which a Shekyl
+wallet talks to a daemon someone else controls.
+
+This is an RPC posture, not a P2P posture. The P2P layer talks to strangers
+by construction — that is what a blockchain is — and Dandelion++ / Tor exist
+because those peers are untrusted. "Shekyl never talks to machines you don't
+control" would be false. Accurate form: **RPC is operator-to-operator; P2P is
+adversarial by design and hardened separately.**
+
+Consequences that follow from the one threat (someone on the wire between two
+machines you own), not from a public-remote-node model:
+
+- Mutual authentication is always available: both ends are provisionable.
+  There is no case that degrades to server-only (one-way) auth.
+- A CA answers a question this posture does not raise. Enrollment of devices
+  you physically hold is fingerprint-allowlist, not delegated trust. (The
+  reopen for in-daemon clearnet TLS below is unchanged: onion / reverse
+  proxy remains the remote-security story.)
+- `--public-node` (advertise restricted RPC over P2P so strangers' wallets
+  can find this node) is deleted, together with `/get_public_nodes` (the
+  discovery RPC whose only production consumer was the bootstrap-daemon
+  `auto` picker). A privacy-maximalist chain whose nodes advertise
+  themselves as public remote endpoints is building the Monero remote-node
+  ecosystem by default — the ecosystem where wallets routinely talk to
+  strangers' nodes. The affordance is what people reach for, regardless of
+  what the docs recommend.
+
+**Restricted RPC stays.** `--restricted-rpc` and `--rpc-restricted-bind-port`
+are an operator tool: admin console on loopback, view-only on a less-
+privileged port for *your* wallet (phone on LAN, a second machine you
+own). They are not a public-remote-node product. Advertising the port over
+P2P was the half that contradicted the posture; the second listener without
+advertising is still both-ends-yours.
+
+**Phone-only gap (deliberate product boundary).** Under operator-to-operator
+only, a user with no always-on machine has no supported configuration. That
+population is who drives public-remote-node use in Monero; Shekyl's answer
+is "run the daemon on a machine you own (desktop, Pi 4, a VPS you control)
+and reach it from the phone." **Rule-21 reopen:** a designed light-client
+protocol that does not restore foreign-daemon RPC. Disposition is never
+"ship `--public-node` as unsupported-but-possible."
+
 ## Restricted Mode
 
-In restricted mode (`--restricted-rpc` or a separate restricted bind port):
+In restricted mode (`--restricted-rpc` or a separate restricted bind port) —
+the operator's own view-only listener, not a public remote node:
 
 - JSON REST: admin-only routes are not registered in the Axum router.
 - JSON-RPC: admin-only methods are rejected with code `-32601` before C++.
@@ -133,7 +180,7 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 | Context | Story |
 |---------|--------|
 | Local | Plaintext loopback (`127.0.0.1`). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
-| Remote | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. |
+| Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
 | Wallet-RPC | Keeps full `--rpc-login` / `--rpc-ssl*` (separate process). |
 | CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
 
@@ -207,6 +254,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_archival_emission_claim_source` | `/json_rpc` | yes | claim-builder | keep |
 | `get_output_distribution` (+ `.bin`) | **no** | **removed** | none (`get_rct_distribution` deleted) | deleted |
 | Bootstrap-daemon forward (`use_bootstrap_daemon_if_necessary`, `/set_bootstrap_daemon`) | **no** | **removed** | none | deleted (privacy ruling above) |
+| `--public-node` P2P advertisement + `/get_public_nodes` | **no** | **removed** | none (bootstrap `auto` was the consumer) | deleted (operator-to-operator RPC) |
 | epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
 | epee HTTP client (`http_client.h`, `http_auth`, `net_helper`, `http_abstract_invoke.h`) + dead server parser | n/a | n/a | none (control client → `shekyl_daemon_ctl_post`; bootstrap forward deleted) | deleted 2026-08-21 |
 

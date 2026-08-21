@@ -328,13 +328,6 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(banned)
 
-    def get_public_nodes(self, gray = False, white = True):
-        get_public_nodes = {
-            'gray': gray,
-            'white': white,
-        }
-        return self.rpc.send_request('/get_public_nodes', get_public_nodes)
-
     def get_transactions(self, txs_hashes = [], decode_as_json = False, prune = False, split = False, client = ""):
         get_transactions = {
             'client': client,

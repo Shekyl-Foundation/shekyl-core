@@ -222,12 +222,8 @@ void Daemon::init_options(boost::program_options::options_description & option_s
   cryptonote::core_rpc_server::init_options(option_spec);
 }
 
-Daemon::Daemon(
-    DaemonConfig const & config,
-    boost::program_options::variables_map const & vm
-  )
+Daemon::Daemon(boost::program_options::variables_map const & vm)
   : mp_internals(new t_internals{vm})
-  , public_rpc_port(config.public_rpc_port)
 {
 }
 
@@ -300,12 +296,6 @@ bool Daemon::run(bool interactive)
         false,
         mp_internals->rpcs.front().server.get()));
       rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));
-    }
-
-    if (public_rpc_port > 0)
-    {
-      MGINFO("Public RPC port " << public_rpc_port << " will be advertised to other peers over P2P");
-      mp_internals->p2p.set_rpc_port(public_rpc_port);
     }
 
     MGINFO("Starting p2p net loop...");

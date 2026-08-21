@@ -123,9 +123,9 @@ data-dir=/var/lib/shekyl
 log-file=/var/log/shekyl/shekyld.log
 log-level=0
 prune-blockchain=1
-rpc-bind-ip=0.0.0.0
-confirm-external-bind=1
-restricted-rpc=1
+# RPC defaults to loopback. For your own wallet on another machine you
+# control, bind a view-only second listener (not a public remote node):
+# rpc-restricted-bind-port=11030
 ```
 
 Load a config file with `--config-file /path/to/shekyld.conf`. See
@@ -159,7 +159,8 @@ example.
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
 | `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
+| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
+| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
 
@@ -327,9 +328,13 @@ different daemon:
     --trusted-daemon
 ```
 
-Use `--trusted-daemon` when you control the daemon (your own machine). Use
-`--untrusted-daemon` for remote public nodes -- the wallet will take extra
-precautions to avoid leaking information.
+Use `--trusted-daemon` when you control the daemon (your own machine, or
+another of yours reached over LAN / onion). Shekyl RPC is operator-to-
+operator: there is no recommended configuration in which the wallet talks
+to a daemon someone else controls, and shekyld does not advertise itself
+as a public remote node. `--untrusted-daemon` remains as a refuse-to-trust
+mode if you point the wallet at a daemon anyway; it is not a public-node
+product.
 
 To connect through a SOCKS proxy (e.g. Tor):
 

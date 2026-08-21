@@ -39,7 +39,6 @@
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
-#include "net/parse.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_server.h"
 #include "rpc/rpc_args.h"
@@ -60,58 +59,6 @@
 
 namespace po = boost::program_options;
 namespace bf = boost::filesystem;
-
-uint16_t parse_public_rpc_port(const po::variables_map &vm)
-{
-  const auto &public_node_arg = daemon_args::arg_public_node;
-  const bool public_node = command_line::get_arg(vm, public_node_arg);
-  if (!public_node)
-  {
-    return 0;
-  }
-
-  std::string rpc_port_str;
-  std::string rpc_bind_address = command_line::get_arg(vm, cryptonote::rpc_args::descriptors().rpc_bind_ip);
-  const auto &restricted_rpc_port = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
-  if (!command_line::is_arg_defaulted(vm, restricted_rpc_port))
-  {
-    rpc_port_str = command_line::get_arg(vm, restricted_rpc_port);
-    rpc_bind_address = command_line::get_arg(vm, cryptonote::rpc_args::descriptors().rpc_restricted_bind_ip);
-  }
-  else if (command_line::get_arg(vm, cryptonote::core_rpc_server::arg_restricted_rpc))
-  {
-    rpc_port_str = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
-  }
-  else
-  {
-    throw std::runtime_error("restricted RPC mode is required");
-  }
-
-  uint16_t rpc_port;
-  if (!epee::string_tools::get_xtype_from_string(rpc_port, rpc_port_str))
-  {
-    throw std::runtime_error("invalid RPC port " + rpc_port_str);
-  }
-
-  const auto address = net::get_network_address(rpc_bind_address, rpc_port);
-  if (!address) {
-    throw std::runtime_error("failed to parse RPC bind address");
-  }
-  if (address->get_zone() != epee::net_utils::zone::public_)
-  {
-    throw std::runtime_error(std::string(zone_to_string(address->get_zone()))
-      + " network zone is not supported, please check RPC server bind address");
-  }
-
-  if (address->is_loopback() || address->is_local())
-  {
-    MLOG_RED(el::Level::Warning, "--" << public_node_arg.name 
-      << " is enabled, but RPC server " << address->str() 
-      << " may be unreachable from outside, please check RPC server bind address");
-  }
-
-  return rpc_port;
-}
 
 #ifdef WIN32
 bool isFat32(const wchar_t* root_path)
@@ -162,7 +109,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
       command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
-      command_line::add_arg(core_settings, daemon_args::arg_public_node);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 
       daemonize::Daemon::init_options(core_settings);
@@ -410,9 +356,7 @@ int main(int argc, char const * argv[])
 
     LOG_PRINT_L0("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
 
-    daemonize::DaemonConfig daemon_config;
-    daemon_config.public_rpc_port = parse_public_rpc_port(vm);
-    daemonize::Daemon daemon{daemon_config, vm};
+    daemonize::Daemon daemon{vm};
     const bool interactive = !command_line::get_arg(vm, daemon_args::arg_non_interactive);
     return daemon.run(interactive) ? 0 : 1;
   }

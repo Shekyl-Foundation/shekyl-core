@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
 #include <boost/program_options.hpp>
 
@@ -39,28 +38,11 @@ namespace daemonize {
 
 struct t_internals;
 
-// Orchestration-layer daemon configuration.
-//
-// Contains only the values main.cpp extracts from variables_map before handing
-// off to Daemon. The variables_map itself is still forwarded to the wrapped
-// engines (cryptonote::core::init, node_server::init, core_rpc_server::init),
-// which keep their own engine-internal option extraction for their eventual
-// Rust cutover. DaemonConfig is the scope boundary between "orchestration" and
-// "engine" configuration: refactoring engines to typed configs is a separate
-// project with consensus-adjacent risk and is intentionally out of scope here.
-struct DaemonConfig {
-  // Advertised public RPC port; 0 means "not a public node".
-  uint16_t public_rpc_port = 0;
-};
-
 class Daemon final {
 public:
   static void init_options(boost::program_options::options_description & option_spec);
 
-  Daemon(
-      DaemonConfig const & config,
-      boost::program_options::variables_map const & vm
-    );
+  explicit Daemon(boost::program_options::variables_map const & vm);
   ~Daemon();
 
   Daemon(Daemon const &) = delete;
@@ -75,7 +57,6 @@ private:
   void stop_p2p();
 
   std::unique_ptr<t_internals> mp_internals;
-  uint16_t public_rpc_port;
 };
 
 } // namespace daemonize
