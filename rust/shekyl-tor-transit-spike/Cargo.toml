@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "DISPOSABLE measurement spike: §94 Tor transit (onion-to-onion, one-way). Not canonical; delete once ANON_ZONE_TRANSIT_MEASURED_MS lands."
 publish = false
+# Two bins now, so `cargo run -p` would be ambiguous; the session runner calls
+# the binary by path, but leaving that trap for the next person is free to fix.
+default-run = "shekyl-tor-transit-spike"
 
 [dependencies]
 # The managed-tor lifecycle and the ADD_ONION surface this rides. Deliberately

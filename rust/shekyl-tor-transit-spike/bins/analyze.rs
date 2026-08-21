@@ -143,14 +143,23 @@ fn main() {
     if let (Some(m), Some(x)) = (p90_by_arm.get("modal"), p90_by_arm.get("max_admissible")) {
         let d_kib = (16_651.0 - 8_395.0) / 1024.0;
         println!("\n=== size slope (§94.5(b)) ===");
-        println!("  p90 modal {m:.1} ms -> max_admissible {x:.1} ms   delta {:+.1} ms over {d_kib:.1} KiB", x - m);
-        println!(
-            "  per-KiB slope {:+.1} ms/KiB ({:+.1}% of the modal p90)",
-            (x - m) / d_kib,
-            (x - m) / m * 100.0
-        );
-        println!(
-            "  ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625.0 (the labelled assumption being replaced)"
-        );
+        // A zero modal p90 means the modal arm produced no `ok` samples at all.
+        // Printing `inf`/`NaN` there reads as a strange measurement rather than
+        // a missing one, which is the opposite of what a diagnostic should do —
+        // so the empty case is named instead of divided by.
+        if *m <= 0.0 {
+            println!("  modal arm has no successful samples; no slope to report.");
+            println!("  (that is a SESSION failure, not a reading — check the .err file)");
+        } else {
+            println!("  p90 modal {m:.1} ms -> max_admissible {x:.1} ms   delta {:+.1} ms over {d_kib:.1} KiB", x - m);
+            println!(
+                "  per-KiB slope {:+.1} ms/KiB ({:+.1}% of the modal p90)",
+                (x - m) / d_kib,
+                (x - m) / m * 100.0
+            );
+            println!(
+                "  ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625.0 (the labelled assumption being replaced)"
+            );
+        }
     }
 }

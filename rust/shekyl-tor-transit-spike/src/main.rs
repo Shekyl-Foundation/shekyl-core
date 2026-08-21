@@ -86,6 +86,30 @@ fn fresh_rig_seed() -> Result<[u8; 32], String> {
 const VIRTUAL_PORT: u16 = 80;
 const SAMPLE_CEILING: Duration = Duration::from_secs(120);
 
+/// Minimal JSON string escaping for the one field that carries free text.
+///
+/// The session JSONL is the round's **data record** — receipts are committed
+/// as artifacts — so a row that cannot be parsed is a sample that silently
+/// disappears. `io::Error` text is OS- and call-site-supplied and does contain
+/// quotes (this rig's own SOCKS errors interpolate `{:?}` of a byte array), and
+/// the analyzer's field reader stops at the first `"`, so an unescaped quote
+/// truncates the row rather than failing loudly.
+fn json_escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn utc_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -187,6 +211,18 @@ async fn socks_connect(socks: SocketAddr, host: &str, port: u16) -> std::io::Res
     Ok(s)
 }
 
+/// Cleanup policy, and it is NOT a drop guard on purpose.
+///
+/// A guard that removes the directory on every path would delete the two tor
+/// data dirs — including their `notice.log` — exactly when a run failed and
+/// those logs are the only evidence of why. Four runs failed during this
+/// round's bring-up and their logs were what identified a poisoned onion
+/// descriptor; a tidier cleanup would have thrown that away each time.
+///
+/// So: **removed on success, KEPT and announced on failure.** Splitting the
+/// body into `run` is what makes that uniform across every early return,
+/// rather than remembering to clean up at each one — which is the bug this
+/// replaces, where only the happy path and one failure arm removed it.
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let binary = std::env::var_os("SHEKYL_TEST_TOR_BINARY")
@@ -205,9 +241,28 @@ async fn main() -> Result<(), String> {
     std::fs::create_dir_all(&client_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&service_dir).map_err(|e| e.to_string())?;
 
+    let result = run(&binary, per_arm, client_dir, service_dir).await;
+    match &result {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        Err(e) => eprintln!(
+            "session failed ({e})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
+            root.display()
+        ),
+    }
+    result
+}
+
+async fn run(
+    binary: &std::path::Path,
+    per_arm: usize,
+    client_dir: std::path::PathBuf,
+    service_dir: std::path::PathBuf,
+) -> Result<(), String> {
     eprintln!("bringing up two tor daemons (separate guards) …");
-    let (client_tor, client_socks) = bring_up(&binary, client_dir).await?;
-    let (service_tor, _) = bring_up(&binary, service_dir).await?;
+    let (client_tor, client_socks) = bring_up(binary, client_dir).await?;
+    let (service_tor, _) = bring_up(binary, service_dir).await?;
 
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -243,6 +298,13 @@ async fn main() -> Result<(), String> {
                 return;
             }
             let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+            // The onion service is reachable by anyone who learns the address,
+            // and a fresh random address is not a access control. A stranger
+            // (or a corrupted frame) must not be able to size this allocation:
+            // refuse anything larger than the biggest frame this rig sends.
+            if len > MAX_ADMISSIBLE_BYTES {
+                return;
+            }
             let seq = u64::from_be_bytes([
                 head[4], head[5], head[6], head[7], head[8], head[9], head[10], head[11],
             ]);
@@ -267,10 +329,7 @@ async fn main() -> Result<(), String> {
                     eprintln!("  not reachable yet ({e}); retrying");
                     tokio::time::sleep(Duration::from_secs(10)).await;
                 }
-                Err(e) => {
-                    let _ = std::fs::remove_dir_all(&root);
-                    return Err(format!("service never became reachable: {e}"));
-                }
+                Err(e) => return Err(format!("service never became reachable: {e}")),
             }
         }
     };
@@ -295,7 +354,8 @@ async fn main() -> Result<(), String> {
                 // EXCLUDED from the distribution (§94.2(a)) but recorded: this is
                 // the arm expected to stay empty.
                 println!(
-                    r#"{{"utc_ms":{utc},"seq":{seq},"arm":"{arm}","size_bytes":{size},"outcome":"send_failure","detail":"{e}"}}"#
+                    r#"{{"utc_ms":{utc},"seq":{seq},"arm":"{arm}","size_bytes":{size},"outcome":"send_failure","detail":"{}"}}"#,
+                    json_escape(&e.to_string())
                 );
                 return Err(format!("stream died at seq {seq}: {e}"));
             }
@@ -325,6 +385,5 @@ async fn main() -> Result<(), String> {
     drop(stream);
     drop(client_tor);
     drop(service_tor);
-    let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
