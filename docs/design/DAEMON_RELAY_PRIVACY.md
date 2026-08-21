@@ -15107,7 +15107,8 @@ becomes a project.
 **Reopening criterion:** before `ANON_ZONE_TRANSIT_MEASURED_MS` is composed into
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
-finding that it is small.
+finding that it is small. **DISCHARGED 2026-08-21 via the second branch — see
+§94.9.**
 
 ### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
 
@@ -15190,3 +15191,72 @@ This changes no constant. It aligns the transit round with §44.3's resolved
 policy instead of re-deriving a contradiction of it, and fixes the axis
 (posture) and the superseded keeper (§89.2) so the re-derivation composes against
 one coherent rule.
+
+### 94.9 The fourth hop term is DISCHARGED — negligible, with a number (2026-08-21)
+
+§94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
+*or* a negligibility ruling with a number. No Raspberry Pi 4 was reachable to
+host the measurement, so this takes the second branch — and the branch is
+honest here because the margin is orders of magnitude, not a coin-flip.
+
+**The term splits, and only one half is per-hop.** A node's Tor CPU cost is
+circuit **construction** (the ntor / Curve25519 handshake) plus per-message
+**symmetric** crypto (onion-layer AES on the cells, the per-cell running digest,
+and the node↔guard TLS record layer).
+
+- **Circuit construction is amortised apparatus, and is excluded for the same
+  reason §94.2(a) excludes it from transit.** A circuit is built once and
+  carries the whole stem; it is not paid per hop, and the transit measurement it
+  corrects ran on an *established* connection with construction already excluded.
+  Counting it here would price a different event than transit priced.
+- **Per-message symmetric crypto is the genuine per-hop term**, and it is
+  bounded by AES throughput on the floor CPU.
+
+**The number.** Measured AES-128-CTR on the reference x86 (i9-11950H, AES-NI) is
+**13.04 GB/s** at 8 KB blocks. Model the per-message node crypto **generously** —
+**10 symmetric passes** over the message (3 onion layers + digest + TLS, both
+directions, with slack) — and evaluate it at a **conservative** floor rate: the
+Pi 4's Cortex-A72 carries the ARMv8-A **AES hardware extension** (so it is *not*
+the 5.36–5.75× software penalty the verification surface sees — that penalty is
+for FCMP++ field arithmetic, not AES), and published aes-128 figures are
+≥ 1 GB/s; take **0.8 GB/s** to be below any of them.
+
+| message / denominator | per-message node crypto (floor bound) | fraction |
+| --- | --- | --- |
+| modal, vs ~500 ms transit hop | 105 µs | 0.021 % |
+| max-admissible, vs ~500 ms transit hop | 210 µs | 0.042 % |
+| max-admissible, vs the **minimum possible** hop (verify floor 124.5 ms, transit→0) | 210 µs | **0.17 %** |
+
+The last row is the stacked worst case — largest message, generous 10-pass
+model, conservative 0.8 GB/s floor rate, and the smallest hop the design can
+produce (a genesis-tree verify with transit driven to zero, which no real Tor
+hop reaches). **Even there it is 0.17 %**; against a realistic transit-bearing
+hop it is ~0.04 %, and the reference x86 rate puts it at 0.001 %. **The
+conclusion is robust to the Pi number**: a floor measurement would move 0.17 %
+to some other fraction of a percent and change nothing that composes into
+`hop`. The armed check (`node_crypto_hop_fraction_is_negligible`) pins the
+stacked worst case under a 0.5 % bar, so it goes red if the model, the message
+size, or the floor-rate assumption ever drifts the term toward the hop —
+which is what caught an earlier draft that claimed <0.1 % against the minimum
+hop when the honest stacked figure is 0.17 %.
+
+**Why this is not the rule-76.4 shortcut.** Rule 76.4 forbids an x86 *value*
+standing in for a floor value that ships. Nothing ships here: the term is ruled
+**out**, not carried. The x86 rate is measured; the floor rate is a *hardware
+bound* from the Cortex-A72's AES extension, not an x86 number relabelled; and the
+margin is such that the ruling holds under any floor AES rate a Pi 4 can
+physically have. This is the criterion's own "ruled negligible with a number"
+branch, exercised with the number attached.
+
+**What stays open, cheaply.** If a floor device is ever in hand, the tighter
+measurement is one `getrusage`/`/proc` CPU-time sample across a burst of messages
+through an established circuit on the Pi — the harness is the transit rig plus a
+CPU sampler. It is not owed before the constant composes, because the bound above
+already discharges the criterion; it would only replace a bound with a
+measurement that is already known to be negligible.
+
+The bound is pinned in `verify_cost.rs` (`node_crypto_hop_fraction_is_negligible`)
+so the ruling is armed, not prose: it goes red if the modelled passes, the
+message size, or the floor-rate assumption ever drift the fraction toward the
+hop.
+

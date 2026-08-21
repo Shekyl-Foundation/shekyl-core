@@ -537,4 +537,49 @@ mod tests {
         // And the tail endpoint at genesis, for the same reason: 399.2 + 50.
         assert_eq!(adopted_hop_ms(8, GENESIS_TREE_DEPTH), Ok(449));
     }
+
+    /// §94.9: the fourth `hop` term — the node's own Tor/TLS/circuit crypto —
+    /// is ruled negligible with a number rather than measured on a floor
+    /// device. This arms that ruling: it goes RED if the model or the message
+    /// size ever drifts the per-hop node crypto toward the hop, forcing a
+    /// re-examination instead of letting a stale "negligible" stand.
+    ///
+    /// The check is deliberately generous on the cost side and conservative on
+    /// the hop side, so passing means negligible under assumptions that favour
+    /// the term, not against it.
+    #[test]
+    fn node_crypto_hop_fraction_is_negligible() {
+        // Generous per-message symmetric-crypto model: 3 onion AES layers + the
+        // per-cell running digest + the node<->guard TLS record layer, counted
+        // in BOTH directions, with slack — 10 passes over the message bytes.
+        const PASSES: f64 = 10.0;
+        // Conservative floor AES rate: the Pi 4's Cortex-A72 has the ARMv8-A AES
+        // hardware extension (published aes-128 >= 1 GB/s); 0.8 GB/s sits below
+        // any real figure, so the modelled cost cannot be accused of optimism.
+        const PI4_AES_BYTES_PER_SEC: f64 = 0.8e9;
+        // The larger admissible message, so the bound covers the worst case.
+        const MAX_ADMISSIBLE_MSG_BYTES: f64 = 16_651.0;
+
+        let node_crypto_ms = (MAX_ADMISSIBLE_MSG_BYTES * PASSES) / PI4_AES_BYTES_PER_SEC * 1_000.0;
+
+        // Compare against the SMALLEST possible hop: the genesis verify floor
+        // alone (transit >= 0). Using the minimum hop makes the fraction as
+        // large as it can honestly be.
+        let min_hop_ms = SPEC_VERIFY_COST.f_ms(1, GENESIS_TREE_DEPTH).unwrap();
+
+        let fraction = node_crypto_ms / min_hop_ms;
+        // 0.5% is the negligibility bar. The stacked worst case here — max message,
+        // hop = verify floor with transit -> 0, generous passes, conservative Pi
+        // rate — lands at ~0.17%, so this passes with ~3x margin and goes red
+        // only if the term genuinely drifts toward the hop. Against a realistic
+        // transit-bearing hop (§94's ~500 ms) the fraction is ~0.04% (§94.9 table).
+        assert!(
+            fraction < 0.005,
+            "§94.9: per-hop node crypto is {node_crypto_ms:.3} ms against the minimum \
+             hop of {min_hop_ms:.1} ms = {:.3}% — no longer negligible. Re-examine the \
+             ruling (or measure the term on a floor device) before it composes into \
+             a shipped hop.",
+            fraction * 100.0
+        );
+    }
 }
