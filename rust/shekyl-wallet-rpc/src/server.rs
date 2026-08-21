@@ -278,6 +278,15 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
         })
 }
 
+/// The local alternative the listen refusals point at, per platform: a
+/// `uds://` socket exists on Unix only, so the hint must not name it
+/// elsewhere. Module-level so any future refusal shares one platform branch.
+#[cfg(unix)]
+const LOCAL_ENDPOINT_HINT: &str = " (or a uds:///path socket)";
+/// See the Unix definition.
+#[cfg(windows)]
+const LOCAL_ENDPOINT_HINT: &str = "";
+
 /// Refuse a listen configuration that would expose the wallet RPC beyond what
 /// the operator can see or authenticate (`RPC_TRANSPORT_POSTURE.md`
 /// RT-1, RT-2). One function, called on every path that binds, so the two
@@ -295,12 +304,6 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 /// The socket and the pipe carry their authorization in the transport and
 /// pass through; the arms are explicit so a new variant has to decide.
 fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
-    /// The local alternative the refusals point at, per platform: a `uds://`
-    /// socket exists on Unix only, so the hint must not name it elsewhere.
-    #[cfg(unix)]
-    const LOCAL_ENDPOINT_HINT: &str = " (or a uds:///path socket)";
-    #[cfg(windows)]
-    const LOCAL_ENDPOINT_HINT: &str = "";
     let addr = match &config.listen {
         ListenAddr::Tcp(addr) => addr,
         #[cfg(unix)]
@@ -324,7 +327,8 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
             "refusing to serve the wallet RPC on {addr} with authentication disabled: the \
              address is reachable from the network and every request, spends included, \
              would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}, or set \
-             --rpc-login user:pass."
+             --rpc-login user:pass (and drop --disable-rpc-login if it is set — it wins \
+             over --rpc-login)."
         )
         .into());
     }
