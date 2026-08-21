@@ -43,23 +43,44 @@ pub const SHEKYL_DAEMON_CTL_ERR_RUNTIME: i32 = -4;
 
 /// Hand `bytes` to C++ as a `(ptr, len)` pair the caller releases with
 /// [`shekyl_daemon_ctl_free`]. `len == capacity` by construction
-/// (`into_boxed_slice`), which is what the free relies on.
+/// (`into_boxed_slice`), which is what the free relies on. An empty
+/// buffer is a null/zero pair — not a forgotten empty `Box` — so the
+/// caller's free is a no-op and nothing is leaked.
 ///
 /// # Safety
 ///
 /// `out_ptr` and `out_len` are valid for writes (checked non-null by the
 /// caller before reaching here).
 unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
+    if bytes.is_empty() {
+        out_ptr.write(std::ptr::null_mut());
+        out_len.write(0);
+        return;
+    }
     let mut boxed = bytes.into_boxed_slice();
     let len = boxed.len();
-    let ptr = if len == 0 {
-        std::ptr::null_mut()
-    } else {
-        boxed.as_mut_ptr()
-    };
+    let ptr = boxed.as_mut_ptr();
     std::mem::forget(boxed);
     out_ptr.write(ptr);
     out_len.write(len);
+}
+
+/// Reconstruct a byte slice from an FFI `(ptr, len)`. Refuses null-with-
+/// nonzero-len and `len > isize::MAX` *before* `from_raw_parts` (rule 40 /
+/// SA-R-7: that bound is a language-level precondition, not a courtesy).
+///
+/// # Safety
+///
+/// A non-null `ptr` must address at least `len` bytes that outlive the
+/// returned slice.
+unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    if ptr.is_null() || len > isize::MAX as usize {
+        return None;
+    }
+    Some(std::slice::from_raw_parts(ptr, len))
 }
 
 /// Run one POST to completion on a private current-thread runtime.
@@ -105,8 +126,9 @@ fn post_blocking(
 /// * `timeout_secs` — per-request bound, covering connect through the last
 ///   body byte.
 /// * `out_ptr` / `out_len` — on `SHEKYL_DAEMON_CTL_OK` the response body; on
-///   any error, the UTF-8 reason. Either way the caller releases the buffer
-///   with [`shekyl_daemon_ctl_free`] (a null/zero pair is a no-op there).
+///   any error that can write (every path except a null `out_ptr`/`out_len`),
+///   the UTF-8 reason. Either way the caller releases the buffer with
+///   [`shekyl_daemon_ctl_free`] (a null/zero pair is a no-op there).
 ///
 /// Returns one of the `SHEKYL_DAEMON_CTL_*` codes. The HTTP status is not
 /// surfaced separately: the daemon's routes answer every request with a JSON
@@ -136,19 +158,27 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_post(
     out_ptr.write(std::ptr::null_mut());
     out_len.write(0);
 
-    let (Some(address), Some(route)) = (c_str(address), c_str(route)) else {
+    // Owned at the boundary so a later refactor cannot hold an `&str` whose
+    // lifetime is the unconstrained `'a` of the C pointer.
+    let Some(address) = c_string(address) else {
+        emit(b"address was null or not UTF-8".to_vec(), out_ptr, out_len);
         return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
     };
-    let body = if body.is_null() {
-        if body_len != 0 {
-            return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
-        }
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(body, body_len).to_vec()
+    let Some(route) = c_string(route) else {
+        emit(b"route was null or not UTF-8".to_vec(), out_ptr, out_len);
+        return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
     };
+    let Some(body) = slice_from_ptr(body, body_len) else {
+        emit(
+            b"body was null with a non-zero length, or longer than isize::MAX".to_vec(),
+            out_ptr,
+            out_len,
+        );
+        return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
+    };
+    let body = body.to_vec();
 
-    match post_blocking(address, route, body, Duration::from_secs(timeout_secs)) {
+    match post_blocking(&address, &route, body, Duration::from_secs(timeout_secs)) {
         Ok(response) => {
             emit(response, out_ptr, out_len);
             SHEKYL_DAEMON_CTL_OK
@@ -175,16 +205,18 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_free(ptr: *mut u8, len: usize) {
     drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
 }
 
-/// Borrow a C string as `&str`; `None` for null or non-UTF-8.
+/// Copy a C string into an owned `String`; `None` for null or non-UTF-8.
+/// Owned so the FFI boundary does not mint a `&str` whose lifetime is the
+/// unconstrained lifetime of a raw pointer.
 ///
 /// # Safety
 ///
 /// `p` must be null or a valid NUL-terminated C string.
-unsafe fn c_str<'a>(p: *const c_char) -> Option<&'a str> {
+unsafe fn c_string(p: *const c_char) -> Option<String> {
     if p.is_null() {
         return None;
     }
-    std::ffi::CStr::from_ptr(p).to_str().ok()
+    std::ffi::CStr::from_ptr(p).to_str().ok().map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -299,15 +331,10 @@ mod tests {
 
     /// Nothing listening: the transport error is reported as such, with the
     /// reason in the out buffer — never a panic, never an empty failure.
+    /// `127.0.0.1:1` is connection-refused without a bind-then-drop race.
     #[test]
     fn refused_connection_is_a_transport_error_with_a_reason() {
-        // Bind-then-drop yields a port that was free a moment ago.
-        let port = TcpListener::bind("127.0.0.1:0")
-            .expect("bind")
-            .local_addr()
-            .expect("addr")
-            .port();
-        let (code, out) = call(&format!("127.0.0.1:{port}"), "/getinfo", b"{}", 10);
+        let (code, out) = call("127.0.0.1:1", "/getinfo", b"{}", 10);
         assert_eq!(code, SHEKYL_DAEMON_CTL_ERR_TRANSPORT);
         assert!(!out.is_empty(), "an error must carry its reason");
     }
@@ -325,8 +352,9 @@ mod tests {
         );
     }
 
-    /// Null out-pointers refuse without touching anything; a null body with
-    /// a non-zero length is refused rather than read.
+    /// Null out-pointers refuse without writing; every other null-argument
+    /// arm writes a UTF-8 reason into the out pair (the documented contract
+    /// once `out_ptr`/`out_len` are known non-null).
     #[test]
     fn null_arguments_refuse() {
         let address = CString::new("127.0.0.1:1").unwrap();
@@ -347,6 +375,7 @@ mod tests {
                 ),
                 SHEKYL_DAEMON_CTL_ERR_NULL_PTR
             );
+
             assert_eq!(
                 shekyl_daemon_ctl_post(
                     std::ptr::null(),
@@ -359,6 +388,11 @@ mod tests {
                 ),
                 SHEKYL_DAEMON_CTL_ERR_NULL_PTR
             );
+            assert!(len > 0, "a writable out pair carries the reason");
+            shekyl_daemon_ctl_free(ptr, len);
+            ptr = std::ptr::null_mut();
+            len = 0;
+
             assert_eq!(
                 shekyl_daemon_ctl_post(
                     address.as_ptr(),
@@ -371,7 +405,7 @@ mod tests {
                 ),
                 SHEKYL_DAEMON_CTL_ERR_NULL_PTR
             );
-            assert!(ptr.is_null());
+            assert!(len > 0, "a writable out pair carries the reason");
             shekyl_daemon_ctl_free(ptr, len);
         }
     }

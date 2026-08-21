@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use shekyl_rpc_client::{Rpc, RpcError};
 
 mod http_client;
-use http_client::{error_chain, HttpClient};
+use http_client::{error_chain, HttpClient, TransportTls};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -78,10 +78,9 @@ struct ParsedEndpoint {
     /// already split and shape-checked, so the offline validator and the
     /// constructor share one credential grammar structurally.
     credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
-    /// `true` for an `https://` endpoint. Selects whether the client is
-    /// built with a TLS layer at all; a plaintext endpoint never loads a
+    /// Whether the client builds a TLS layer. `http://` never loads a
     /// root store (see `HttpClient`).
-    tls: bool,
+    tls: TransportTls,
 }
 
 /// Locate a URL's authority userinfo '@' — the credential terminator:
@@ -187,7 +186,10 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     // `Uri::path()` is "/" for a path-less URL; the trailing-slash strip
     // above means any real path already ends in a non-'/' character.
     let path_prefix = parsed.path().trim_end_matches('/').to_string();
-    let tls = parsed.scheme_str() == Some("https");
+    let tls = match parsed.scheme_str() {
+        Some("https") => TransportTls::On,
+        _ => TransportTls::Off,
+    };
     Ok(ParsedEndpoint {
         url,
         path_prefix,
