@@ -150,23 +150,6 @@ from the object, never SDDL text, so the runtime check was never affected. The
 defect was entirely in how the probe *asked*.
 
 
-### 4.3 Third run (PR #526 head `abb4e58dd`, 2026-08-21): P-16 passes; the scouting step finds the first Windows-only wallet bug
-
-| Date | Probe | Machine / build | Result | Consequence |
-|---|---|---|---|---|
-| 2026-08-21 | P-16 (seed file owner-only, `CREATE_NEW`) | `windows-2025-vs2026`, CI | **PASS** (first execution; 11/11 probes green) | WP-D8 holds: explicit `O:` survives on the admin runner (P-7's platform fact did not bite), one `FA` ACE, second create refused |
-| 2026-08-21 | P-10, wallet-rpc half (`spawn_in_process_serves_get_version_over_the_verified_pipe`) | `windows-2025-vs2026`, CI, scouting step | **PASS** — the first execution anywhere of the self-hosted pipe under axum with the verified dial | The documented-behaviour claims WP-W2 shipped on are now observations: a server-side close reads as EOF on the client (`Connection: close` round-trips), `open_verified` accepts our own pipe, and `first_pipe_instance` + descriptor-on-every-instance serve a real request |
-| 2026-08-21 | P-10, cli half (`rpc_session_e2e`) | — | **NOT RUN** | The scouting step aborted on the failure below before reaching it. Unobserved, not passed |
-| 2026-08-21 | (not a probe) `lifecycle_create_open_close_change_password` | `windows-2025-vs2026`, CI, scouting step | **FAIL** — `open_wallet` returned `-32603` where `-29004` was expected | **First Windows-only wallet bug, and not in the transport.** `WalletFile::open` took the keys-file lock (`fd-lock` → `LockFileEx`, byte 0) and then read the file through a *second* handle (`std::fs::read(path)`). `LockFileEx` is **mandatory**, not advisory: the second handle's read fails with `ERROR_LOCK_VIOLATION`, which became `WalletFileError::Io` → the RPC's text classifier → `-32603`. Every `open` on Windows failed this way; the Windows-green tests only ever `create`. Fixed by reading through the locked handle (`KeysFileLock::acquire_and_read`), with a unit test pinning the platform fact. Found by the informational step — whose conclusion the run page showed as **success** |
-
-**Reporting consequence.** The failure above was invisible on the run page:
-a `continue-on-error` step reports `conclusion: success` whatever its
-command did, and the real result was ~8,000 log lines deep. The scouting
-step now runs all three of its commands regardless of earlier failures,
-writes a per-command exit table to the job summary, and fails the step (still
-non-blocking) when any command failed — so "informational" means *reported*,
-not *buried*.
-
 ### 4.2 Second run: 7 of 8 pass; P-7 finds a platform fact
 
 `895129d95`, same job. P-1 (rebuilt structurally), P-2, P-3, P-5, P-6, P-8 and
@@ -195,6 +178,23 @@ Both constructors route through one `build()` so the label is the sole
 difference between them.
 
 ---
+
+### 4.3 Third run (PR #526 head `abb4e58dd`, 2026-08-21): P-16 passes; the scouting step finds the first Windows-only wallet bug
+
+| Date | Probe | Machine / build | Result | Consequence |
+|---|---|---|---|---|
+| 2026-08-21 | P-16 (seed file owner-only, `CREATE_NEW`) | `windows-2025-vs2026`, CI | **PASS** (first execution; 11/11 probes green) | WP-D8 holds: explicit `O:` survives on the admin runner (P-7's platform fact did not bite), one `FA` ACE, second create refused |
+| 2026-08-21 | P-10, wallet-rpc half (`spawn_in_process_serves_get_version_over_the_verified_pipe`) | `windows-2025-vs2026`, CI, scouting step | **PASS** — the first execution anywhere of the self-hosted pipe under axum with the verified dial | The documented-behaviour claims WP-W2 shipped on are now observations: a server-side close reads as EOF on the client (`Connection: close` round-trips), `open_verified` accepts our own pipe, and `first_pipe_instance` + descriptor-on-every-instance serve a real request |
+| 2026-08-21 | P-10, cli half (`rpc_session_e2e`) | — | **NOT RUN** | The scouting step aborted on the failure below before reaching it. Unobserved, not passed |
+| 2026-08-21 | (not a probe) `lifecycle_create_open_close_change_password` | `windows-2025-vs2026`, CI, scouting step | **FAIL** — `open_wallet` returned `-32603` where `-29004` was expected | **First Windows-only wallet bug, and not in the transport.** `WalletFile::open` took the keys-file lock (`fd-lock` → `LockFileEx`, byte 0) and then read the file through a *second* handle (`std::fs::read(path)`). `LockFileEx` is **mandatory**, not advisory: the second handle's read fails with `ERROR_LOCK_VIOLATION`, which became `WalletFileError::Io` → the RPC's text classifier → `-32603`. Every `open` on Windows failed this way; the Windows-green tests only ever `create`. Fixed by reading through the locked handle (`KeysFileLock::acquire_and_read`), with a unit test pinning the platform fact. Found by the informational step — whose conclusion the run page showed as **success** |
+
+**Reporting consequence.** The failure above was invisible on the run page:
+a `continue-on-error` step reports `conclusion: success` whatever its
+command did, and the real result was ~8,000 log lines deep. The scouting
+step now runs all three of its commands regardless of earlier failures,
+writes a per-command exit table to the job summary, and fails the step (still
+non-blocking) when any command failed — so "informational" means *reported*,
+not *buried*.
 
 ## 5. What a failure does *not* license
 

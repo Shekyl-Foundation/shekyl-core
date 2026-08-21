@@ -496,6 +496,18 @@ jobs:
           # run-everything semantics the earliest failure is the informative
           # one (a failed check makes the test results moot); every command's
           # own code is in the table regardless.
+          #
+          # A non-zero cargo exit is DATA here, not an error: it has to reach
+          # $LASTEXITCODE and the table. The daemon-binary step below records
+          # that on this runner $PSNativeCommandUseErrorActionPreference has
+          # promoted expected non-zero native exits into terminating errors
+          # before $LASTEXITCODE could be read; under $ErrorActionPreference
+          # 'Stop' (the Actions pwsh default) that would end this block at
+          # the first failing command and skip the remaining commands, the
+          # table, the summary and the explicit exit. Turning the preference
+          # off for this block is the direct control; `cmd /c` isolation
+          # would work too but would put the commands back into strings.
+          $PSNativeCommandUseErrorActionPreference = $false
           $results = @()
           $first_failure = 0
           foreach ($argv in @(
