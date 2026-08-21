@@ -59,11 +59,29 @@ const MODAL_BYTES: usize = 8_395;
 /// what makes the size *slope* observable rather than assumed away.
 const MAX_ADMISSIBLE_BYTES: usize = 16_651;
 
-/// Rig-only onion identity seed. **Not a secret and not derived from a wallet**
-/// — the `.onion` value is irrelevant to a latency measurement, and binding this
-/// rig to the persona derivation would import co-activation semantics it has no
-/// business holding.
-const RIG_SEED: [u8; 32] = [0x94; 32];
+/// A **fresh** rig-only onion identity per session.
+///
+/// Not a secret and not derived from a wallet — the `.onion` value is
+/// irrelevant to a latency measurement, and binding this rig to the persona
+/// derivation would import co-activation semantics it has no business holding.
+///
+/// **It must be fresh, and this was learned the hard way.** A pinned seed
+/// republishes the *same* address from a *new* tor instance each session, and
+/// the HSDirs still hold the previous descriptor — pointing at introduction
+/// points that died with the last run. The client fetches that stale
+/// descriptor and every rendezvous fails with SOCKS `rep 0x06`. The first
+/// session after a pinned-seed smoke run failed this way for its whole 300 s
+/// reachability budget while the smoke run minutes earlier had succeeded,
+/// because the smoke run was that address's first publication.
+///
+/// Pinning bought tidiness and nothing else. Freshness costs nothing, since
+/// nothing in the measurement depends on which address it is.
+fn fresh_rig_seed() -> Result<[u8; 32], String> {
+    let bytes = std::fs::read("/dev/urandom").map_err(|e| format!("urandom: {e}"))?;
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(bytes.get(..32).ok_or("urandom short read")?);
+    Ok(seed)
+}
 
 const VIRTUAL_PORT: u16 = 80;
 const SAMPLE_CEILING: Duration = Duration::from_secs(120);
@@ -196,7 +214,7 @@ async fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let local = listener.local_addr().map_err(|e| e.to_string())?;
 
-    let identity = OnionIdentity::from_hs_id_seed(&RIG_SEED);
+    let identity = OnionIdentity::from_hs_id_seed(&fresh_rig_seed()?);
     let port = OnionPort::loopback(VIRTUAL_PORT, local).ok_or("listener must be loopback")?;
     let request = AddOnion::new(identity.mint_onion_key(), port, 8)
         .with_flags(OnionFlags { discard_pk: true })
@@ -249,7 +267,10 @@ async fn main() -> Result<(), String> {
                     eprintln!("  not reachable yet ({e}); retrying");
                     tokio::time::sleep(Duration::from_secs(10)).await;
                 }
-                Err(e) => return Err(format!("service never became reachable: {e}")),
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&root);
+                    return Err(format!("service never became reachable: {e}"));
+                }
             }
         }
     };

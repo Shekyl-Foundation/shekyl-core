@@ -15044,3 +15044,67 @@ Recorded as an expectation rather than a rule change, because it is reasoning
 about Tor's behaviour and not something this round has observed. The rig logs
 any sample that would populate the rebuild arm; if one appears, the reasoning
 is wrong and the clause was worth having.
+
+### 94.6 AMENDMENT: the measurement HOST is a parameter (2026-08-20)
+
+§94.3 froze the *network* — public Tor, not an owned testnet — and said nothing
+about the **host**. That is an unfrozen knob, and it was found by asking why the
+round was not simply run on a remote machine.
+
+**Both Tor daemons' first hops leave the measurement host, so its uplink appears
+twice in every sample.** A datacenter VM has a materially better uplink than the
+provisioning floor: rule 76 names a Raspberry Pi 4, and a Pi 4 is not sitting on
+10 GbE. Measuring there biases transit **low** — and §94.2(d) already fixed
+under-estimating as the privacy-losing direction, because it shortens the
+embargo. A datacenter reading would be a *lower* bound on what a floor node
+sees, which is the bound this round must not adopt.
+
+This is rule 76's own warning one axis over: not *the CPU that was handy*, **the
+uplink that was handy**.
+
+**Amended to:** the host's network position is recorded with every session and
+is part of the constant's provenance. The round's sessions run from a
+**floor-representative consumer connection**, not a datacenter. If a
+datacenter-hosted arm is added for session count or scheduling convenience, its
+samples are labelled and the delta against the floor-representative arm is
+reported — the floor arm governs the adopted value, and a small delta is what
+would make a datacenter arm admissible, not an assumption that it is.
+
+### 94.7 A missing term in `hop`, RECORDED and deliberately NOT measured here
+
+§71.3 composes `hop = transit + verification + scheduling`. Searching the design
+doc and `verify_cost.rs` for any accounting of the node's **own Tor/TLS/circuit
+crypto** — *tor crypto*, *tls cost*, *onion crypto*, *relay crypto*, *circuit
+crypto* — returns **nothing**. There is no slot for it.
+
+**On a floor device that cost is not zero.** A Pi 4's circuit crypto is
+materially slower than x86's, so a real floor node's hop is plausibly
+`transit + verification + scheduling + (its own Tor crypto)`, with the fourth
+term invisible in the composition. Invisible in the **under-provisioning**
+direction — the same sign as the missing transit term (§91.6), the two `F′`
+errors before it, and every other omission this arc has found.
+
+**Why the Pi does not host the transit measurement, even though it is the
+floor.** Rule 76's domain is *work time*, and it is already applied where it
+belongs: `verify_cost.rs` carries `Provenance::MeasuredPi4`, asserted by test.
+Transit is not work time. Two further reasons:
+
+- **The board is not the variable; the uplink is.** A Pi on the same connection
+  as any other machine has the same network position, so moving the transit
+  measurement onto it changes the CPU and leaves the path identical.
+- **It would break §86.1's acquittal, freshly narrowed.** §94.5 narrowed that
+  premise to *hardware*-independence, which is the clause the acquittal rests
+  on. Measuring transit on a slower board folds hardware cost into transit and
+  makes it hardware-dependent — reintroducing, through the one term certified
+  not to carry it, exactly the sorting the Pi floor exists to prevent.
+
+**So the Pi is the right instrument for the fourth term and the wrong host for
+the third.** Recorded here rather than folded in: it is a second measurement
+with its own pre-registration obligations, and §94's round is already
+calendar-bound. Expanding a round while its sessions run is how a measurement
+becomes a project.
+
+**Reopening criterion:** before `ANON_ZONE_TRANSIT_MEASURED_MS` is composed into
+a shipped `hop`, this term is either measured on the floor device or explicitly
+ruled negligible with a number attached. *"We did not measure it"* is not a
+finding that it is small.
