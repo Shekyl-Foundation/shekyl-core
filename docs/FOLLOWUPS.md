@@ -1994,7 +1994,7 @@ sustainability is unaffected by the recalibration.
   through their double floor equalities. *Target: V3.0 (with or shortly
   after the `ShardSet` PR — same validation surface).*
 
-- **RPC transport posture — draft for ratification; RT-W1 landed**
+- **RPC transport posture — RULED 2026-08-21; RT-W1 landed; RT-W2/W5/W7 authorized**
   (added 2026-08-21, `docs/design/RPC_TRANSPORT_POSTURE.md`). Posture: every
   RPC leg is operator-to-operator, the adversary is the network path, never
   the peer; no recommended configuration has a wallet speak to a stranger's
@@ -2005,9 +2005,12 @@ sustainability is unaffected by the recalibration.
   (provisional no; RT-4 no longer depends on it but the record should say
   what support was), RT-O2 closed as a corrected error (`ring` is already in
   wallet-rpc's graph via `shekyl-rpc-transport`; the Windows scouting step
-  runs natively on MSVC; TLS changes nothing there), RT-O3 C++-now vs
-  after-the-Rust-migration for L2/L3, RT-O4 the phone-only gap (proposed:
-  deliberate boundary, light client as named successor). Distinct from the
+  runs natively on MSVC; TLS changes nothing there), RT-O3 RULED — harden the daemon now
+  (RT-W2: refusals at `rpc_args.cpp:168`/`:196`), and the daemon's 2026-07-10
+  reasoning does not transfer to RT-4 (spend authority; mutual auth); RT-O4
+  RULED — deliberate boundary, light client the named successor, plus
+  `--daemon-address` warning in §1's terms at the point of configuration
+  (RT-W7, both sides). Distinct from the
   daemon entry below on purpose: the wallet holds spend authority and its
   clients are the user's own devices, so mutual authentication is the
   requirement; RT-O3's ruling must say in one sentence whether the daemon's

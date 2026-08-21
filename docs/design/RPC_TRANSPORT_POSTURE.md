@@ -117,13 +117,19 @@ is not redundant with refusing `0.0.0.0`.
 
 *Revisits on failure:* nothing. This is unconditional.
 
-**Review note — where the refusal fires on L1.** The draft said "at parse
-time". RT-W1 enforces it at **startup, before bind, on every path that
-binds** — one `validate_listen` consulted by both `run_server` and
+**Ruled 2026-08-21 — at startup, not at parse, and not both.** The draft
+said "at parse time". RT-W1 enforces it at **startup, before bind, on every
+path that binds** — one `validate_listen` consulted by both `run_server` and
 `spawn_in_process_with` — rather than in `ListenAddr::parse`. Reason: an
 embedder can construct `ListenAddr::Tcp(addr)` without ever calling `parse`,
 so a parse-time refusal would cover the CLI flag and miss the API; the bind
-seam covers both, and there is exactly one place the rule lives. The
+seam covers both, and there is exactly one place the rule lives. Not both:
+a rule in two places drifts — one gets updated and the other becomes a
+second opinion. One seam at the bind, negative-controlled at both call
+sites. **Named successor, filed here:** a `ValidatedListen` type — the bind
+seam accepting only a value that has passed the refusals, so a third caller
+cannot skip them. **Trigger:** a third bind site, or an out-of-workspace
+embedder. Until then the two-site negative control is the check. The
 IPv4-mapped spellings (`[::ffff:0.0.0.0]`) are folded by `to_canonical` so
 the rule cannot be sidestepped by notation. The tests prove the **wiring**:
 a wildcard config is fed to each bind path and must be refused by each, and
@@ -350,23 +356,58 @@ again.)
   review note that recorded this as a hard sequencing constraint on RT-W4
   was an error — a claim written down without being checked — and is
   withdrawn; RT-P3 goes with it. RT-W4 depends on RT-W3 and ratification,
-  nothing else.
-- **RT-O3 — §6 ruling** (C++ now vs. after the Rust migration).
-- **RT-O4 — §5 disposition** (phone-only gap).
+  nothing else. (Decision authority, 2026-08-21: the premise was asserted
+  by the draft's author and hardened in review; both halves owned.)
 
-**What ratification has to decide**, listed so nothing is ratified by
-omission: (a) RT-1…RT-9 as rulings, including RT-9's removal slice; (b) the
-review note on RT-1 — startup enforcement at both bind paths rather than
-parse-time; (c) RT-O3; (d) RT-O4. The citation, anchor and neighbour
-corrections are factual and need no ruling; RT-O2 is closed above as a
-corrected error, not a ruling.
+  **Second-order lesson, recorded because it generalises.** RT-4 was the
+  *only* item in this round with a sequencing dependency, and it came from
+  a claim nobody checked. **A false constraint is more expensive than a
+  missing one**: it reorders work silently and nobody notices, because a
+  plan that waits looks like a plan that is careful. A constraint earns a
+  place in a slicing table only with the command that demonstrated it.
+- **RT-O3 — §6: harden now. RULED 2026-08-21.** RT-W2 lands RT-1 and RT-2
+  on the daemon's `rpc_args` at the two confirm gates —
+  [`rpc_args.cpp:168`](../../src/rpc/rpc_args.cpp) (IPv4) and
+  [`:196`](../../src/rpc/rpc_args.cpp) (IPv6). `--confirm-external-bind` is
+  a confirmation gate, not a refusal — with the flag, `0.0.0.0` binds — so
+  the daemon is ahead in defaults and weaker in kind. Small, no epee TLS
+  surface, and it survives the Rust RPC migration as a spec requirement
+  rather than as code to port (rule 20 permits a C++ refusal; it forbids a
+  C++ TLS implementation).
+  **The 2026-07-10 daemon reasoning does not transfer to RT-4.** That ruling
+  was made about a channel whose compromise costs privacy and chain view.
+  RT-4 governs L1, where compromise costs **spend authority**, and it
+  requires *mutual* authentication — the onion / reverse-proxy answer
+  authenticates one direction and leaves client identity to whatever the
+  proxy decides; a reverse proxy terminating TLS also puts the plaintext in
+  a third process the wallet does not control, acceptable for block
+  requests and not for a passphrase. Different asset, different
+  requirement. What does transfer is the operator-supplied-transport
+  instinct, and RT-8 keeps it — as reachability, not as the security model.
+- **RT-O4 — §5: deliberate product boundary. RULED 2026-08-21.** A
+  light-client protocol is the named successor — unowned and unhomed until
+  someone opens it, and written down here so the gap returns as a design
+  question, not a bug report. **Addition:** a non-loopback, non-configured
+  `--daemon-address` **warns at the point of configuration, in §1's terms**
+  — the daemon operator sees which blocks you request and what you
+  broadcast, and no transport fixes that. Discouragement where it is
+  consumed. Today the CLI's network-posture disclosure warns about the
+  *network path* (a clear-network daemon address is observable in transit);
+  neither side says §1's thing about the *operator*, and
+  `shekyl-wallet-rpc`'s own `--daemon-address` discloses nothing. That is
+  slice RT-W7.
+
+**Ratified 2026-08-21:** (a) RT-1…RT-9 as rulings, including RT-9's removal
+slice; (b) RT-1 at startup, not parse, not both; (c) RT-O3 as above; (d)
+RT-O4 as above. The citation, anchor and neighbour corrections were
+factual; RT-O2 is closed as a corrected error, not a ruling.
 
 ### 7.1 RT-W3 probes, pre-registered (the scratch-crate treatment of `WINDOWS_WALLET_PROBE_SHEET.md`)
 
 | # | Question | How | Predicted | Revisits on failure |
 |---|---|---|---|---|
-| RT-P1 | Does the pinned rustls expose an **external** (out-of-band) PSK API for TLS 1.3? | Scratch crate: configure client and server with an externally provisioned PSK, handshake, assert the negotiated mode is `psk_dhe_ke` | **No** public API (RT-O1's provisional answer) | Nothing in RT-4 — recorded for the record. If *yes*, the PQ trade in RT-4 gets a concrete alternative to weigh against at reopen time |
-| RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake (the bite check), assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
+| RT-P1 | Does the pinned rustls expose an **external** (out-of-band) PSK API for TLS 1.3? | Scratch crate: configure client and server with an externally provisioned PSK, handshake, assert the negotiated mode is `psk_dhe_ke` | **No** public API (RT-O1's provisional answer). **Pre-registered 2026-08-21, before the probe runs: the result cannot change the mechanism.** RT-4 is ruled; the four hazards in its table are properties of PSK, not of its library support, so a positive result answers a question that is no longer load-bearing. A *yes* is recorded as "and here is what support actually was" — not a reason to revisit. Written down now so a surprising result does not invite relitigating a settled ruling | **Nothing.** If *yes*, the PQ trade in RT-4 gains a concrete alternative to name at reopen time; the reopen trigger itself (a practical PQ/hybrid TLS path) is unchanged |
+| RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake — **the bite check, and the half that matters most: a pinned-mTLS harness that never observes a rejection is a check that cannot fail** — and assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
 | RT-P3 | ~~What does `ring` in the wallet-rpc graph do to the Windows lane?~~ **Withdrawn 2026-08-21** — `ring` is already in the graph (RT-O2), so the probe would measure today's state, not TLS's effect | — | — | — |
 
 ---
@@ -376,11 +417,12 @@ corrected error, not a ruling.
 | Slice | Contents | Depends on | State |
 |---|---|---|---|
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
-| RT-W2 | RT-1 + RT-2 on the C++ daemon RPC | RT-O3 | open |
-| RT-W3 | Stack probes (§7.1) | RT-O1, RT-O2 | open |
-| RT-W4 | RT-4/5/6/7 on L1 | RT-W3, ratification | open |
-| RT-W5 | RT-9 removal, reference set enumerated first | ratification | open |
+| RT-W2 | RT-1 + RT-2 on the C++ daemon RPC (`rpc_args.cpp:168`, `:196`) | — | **authorized 2026-08-21** (RT-O3) |
+| RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **starts now**; RT-P1's result cannot move RT-4 |
+| RT-W4 | RT-4/5/6/7 on L1 | RT-W3 | open |
+| RT-W5 | RT-9 removal, the ten-file reference set enumerated first | — | **authorized 2026-08-21** |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
+| RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **authorized 2026-08-21** |
 
 RT-W1 is ruled, independent, small, and strictly reduces attack surface. It
 should not wait for the transport design — and did not.
