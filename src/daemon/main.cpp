@@ -391,7 +391,11 @@ int main(int argc, char const * argv[])
         daemonize::t_command_server rpc_commands{rpc_ip, rpc_port};
         if (rpc_commands.process_command_vec(command))
         {
-          return 0;
+          // A recognized command that could not get its answer from the
+          // daemon (unreachable, refused, non-OK status) exits non-zero: the
+          // failure is already on stderr, and a script must be able to see
+          // it without parsing that text.
+          return rpc_commands.rpc_request_failed() ? 1 : 0;
         }
         else
         {

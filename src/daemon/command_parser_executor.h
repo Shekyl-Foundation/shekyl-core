@@ -54,6 +54,8 @@ public:
     , cryptonote::core_rpc_server* rpc_server = NULL
     );
 
+  bool rpc_request_failed() const { return m_executor.rpc_request_failed(); }
+
   bool print_peer_list(const std::vector<std::string>& args);
 
   bool print_peer_list_stats(const std::vector<std::string>& args);

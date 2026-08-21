@@ -64,6 +64,11 @@ public:
 
   ~t_rpc_command_executor();
 
+  // In RPC mode: whether any request issued so far failed. Command handlers
+  // return true for "command recognized" whether or not the daemon answered;
+  // this is the signal the `shekyld <command>` exit status is derived from.
+  bool rpc_request_failed() const { return m_rpc_client != NULL && m_rpc_client->failed(); }
+
   bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false, bool publicrpc_only = false);
 
   bool print_peer_list_stats();

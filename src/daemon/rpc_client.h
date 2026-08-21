@@ -52,6 +52,11 @@ namespace tools
   {
   private:
     std::string m_address; // host:port of the daemon's RPC listener
+    // Sticky: set by the first request that fails (transport, framing, a
+    // JSON-RPC error member, or a non-OK status) and never cleared. The
+    // `shekyld <command>` process turns it into its exit status, so a failed
+    // request cannot leave the caller with the success code it used to get.
+    bool m_failed = false;
 
     static constexpr std::chrono::seconds TIMEOUT()
     {
@@ -60,7 +65,7 @@ namespace tools
 
     // One POST over the Rust transport. On success `body` holds the response
     // body; on failure `reason` names what went wrong and `body` is untouched.
-    bool post(const std::string& route, const std::string& payload, std::string& body, std::string& reason) const
+    bool post(const std::string& route, const std::string& payload, std::string& body, std::string& reason)
     {
       uint8_t* out_ptr = nullptr;
       size_t out_len = 0;
@@ -80,16 +85,18 @@ namespace tools
         return true;
       }
       reason = out.empty() ? ("control client error " + std::to_string(rc)) : std::move(out);
+      m_failed = true;
       return false;
     }
 
     template <typename T_req, typename T_res>
-    bool invoke_json(const std::string& route, T_req& req, T_res& res, std::string& reason) const
+    bool invoke_json(const std::string& route, T_req& req, T_res& res, std::string& reason)
     {
       std::string payload;
       if (!epee::serialization::store_t_to_json(req, payload))
       {
         reason = "failed to serialize request";
+        m_failed = true;
         return false;
       }
       std::string body;
@@ -98,6 +105,7 @@ namespace tools
       if (!epee::serialization::load_t_from_json(res, body))
       {
         reason = "malformed response body";
+        m_failed = true;
         return false;
       }
       return true;
@@ -106,7 +114,7 @@ namespace tools
     // JSON-RPC 2.0 envelope over `/json_rpc`. A daemon-side `error` member is
     // reported through `reason`; `res` is filled only on success.
     template <typename T_req, typename T_res>
-    bool invoke_json_rpc(const std::string& method_name, T_req& req, T_res& res, std::string& reason) const
+    bool invoke_json_rpc(const std::string& method_name, T_req& req, T_res& res, std::string& reason)
     {
       epee::json_rpc::request<T_req> envelope{};
       envelope.jsonrpc = "2.0";
@@ -121,6 +129,7 @@ namespace tools
         reason = reply.error.message.empty()
           ? ("error " + std::to_string(reply.error.code))
           : reply.error.message;
+        m_failed = true;
         return false;
       }
       res = reply.result;
@@ -156,6 +165,7 @@ namespace tools
       if (res.status != CORE_RPC_STATUS_OK) // TODO - handle CORE_RPC_STATUS_BUSY ?
       {
         fail_msg_writer() << fail_msg << " -- json_rpc_request: " << res.status;
+        m_failed = true;
         return false;
       }
       return true;
@@ -173,6 +183,7 @@ namespace tools
       if (res.status != CORE_RPC_STATUS_OK) // TODO - handle CORE_RPC_STATUS_BUSY ?
       {
         fail_msg_writer() << fail_msg << " -- rpc_request: " << res.status;
+        m_failed = true;
         return false;
       }
       return true;
@@ -187,5 +198,8 @@ namespace tools
       std::string reason;
       return invoke_json("/get_height", req, res, reason);
     }
+
+    // True once any request through this client has failed.
+    bool failed() const { return m_failed; }
   };
 }

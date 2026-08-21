@@ -62,6 +62,9 @@ public:
 
   bool process_command_str(const std::string& cmd);
 
+  // RPC mode: whether a request issued by a processed command failed.
+  bool rpc_request_failed() const { return m_parser.rpc_request_failed(); }
+
   bool process_command_vec(const std::vector<std::string>& cmd);
 
   bool start_handling(std::function<void(void)> exit_handler = NULL);

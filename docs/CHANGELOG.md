@@ -50,6 +50,13 @@
 
 ### Fixed
 
+- **`shekyld <command>` exits `1` when the request failed.** A recognized
+  command whose RPC could not be completed — daemon not running, connection
+  refused, a JSON-RPC error, a non-OK status — printed the failure and then
+  exited `0`, indistinguishable to a script or service manager from
+  success (`shekyld exit` against a dead daemon "succeeded"). The control
+  client now records a failed request and the process exit status reports
+  it; `0` means the daemon answered.
 - **The block-reward supply-headroom cap underflowed past full emission.**
   `get_block_reward`'s 6-argument overload capped a block's reward at
   `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once

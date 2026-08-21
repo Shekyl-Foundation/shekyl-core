@@ -197,6 +197,13 @@ and `--*-service` flags were removed in V3.1.
 When `shekyld` is running in the foreground, you get an interactive console.
 Type `help` to list all commands. The most useful ones, grouped by purpose:
 
+The same commands work from a second shell against a running daemon —
+`shekyld status`, `shekyld exit` — over its local RPC port (pass
+`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
+exit status is `0` when the daemon answered, `1` when the command is unknown
+or the request failed (daemon not running, connection refused, error reply),
+so scripts can check it without parsing the output.
+
 **Status and information**
 
 | Command | Description |
