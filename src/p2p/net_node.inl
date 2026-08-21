@@ -2154,8 +2154,12 @@ namespace nodetool
       node_data.my_port = m_external_port ? m_external_port : m_listening_port;
     else
       node_data.my_port = 0;
-    node_data.rpc_port = zone.m_can_pingback ? m_rpc_port : 0;
-    node_data.rpc_credits_per_hash = zone.m_can_pingback ? m_rpc_credits_per_hash : 0;
+    // This node advertises no RPC endpoint over P2P: RPC is
+    // operator-to-operator (docs/DAEMON_RPC_RUST.md). The two handshake
+    // fields stay on the wire at zero; peers' advertised values are still
+    // recorded (peerlist), never dialed.
+    node_data.rpc_port = 0;
+    node_data.rpc_credits_per_hash = 0;
     node_data.network_id = m_network_id;
     node_data.support_flags = zone.m_config.m_support_flags;
     return true;

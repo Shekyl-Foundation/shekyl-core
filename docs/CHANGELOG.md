@@ -27,7 +27,7 @@
   `http://` daemon at all. An `http://` endpoint now gets a bare
   connector with `enforce_http(true)`; only `https://` loads roots. A
   plaintext client refuses an `https://` request URI before the connector
-  (direct and SOCKS arms share the check). `CORE_RPC_VERSION` is 3.22.
+  (direct and SOCKS arms share the check).
 - **The block-reward weight penalty moved to Rust; `get_block_reward` is
   now a marshaling shim.** It was the last economics arithmetic C++
   performed itself — `mul128` plus two `div128_64` on an amount — while
@@ -205,7 +205,11 @@
   rule-21 reopen is a light-client protocol, never restore `--public-node`.
   **Operator impact:** `--public-node` in a config fails to start with a
   named migration message. `CORE_RPC_VERSION` 3.22. See
-  `docs/DAEMON_RPC_RUST.md`.
+  `docs/DAEMON_RPC_RUST.md`. With nothing left to set them, `node_server`
+  no longer carries an RPC port / credits-per-hash to advertise (the
+  handshake fields stay on the wire at zero), and the `print_pl publicrpc`
+  console filter — which could only ever list strangers' advertised RPC
+  ports — is gone.
 
 - **The C++ wallet stack is deleted — `wallet2` and everything that
   existed only to serve it** (Phase 5 of the Rust wallet rewrite,

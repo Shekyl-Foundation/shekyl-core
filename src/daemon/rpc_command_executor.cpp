@@ -66,11 +66,9 @@ namespace {
     return buf;
   }
 
-  void print_peer(std::string const & prefix, cryptonote::peer const & peer, bool pruned_only, bool publicrpc_only)
+  void print_peer(std::string const & prefix, cryptonote::peer const & peer, bool pruned_only)
   {
     if (pruned_only && peer.pruning_seed == 0)
-      return;
-    if (publicrpc_only && peer.rpc_port == 0)
       return;
 
     time_t now;
@@ -178,7 +176,7 @@ t_rpc_command_executor::~t_rpc_command_executor()
   }
 }
 
-bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only, bool publicrpc_only) {
+bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
   cryptonote::COMMAND_RPC_GET_PEER_LIST::request req;
   cryptonote::COMMAND_RPC_GET_PEER_LIST::response res;
 
@@ -208,7 +206,7 @@ bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit
     const auto end = limit ? peer + std::min(limit, res.white_list.size()) : res.white_list.cend();
     for (; peer != end; ++peer)
     {
-      print_peer("white", *peer, pruned_only, publicrpc_only);
+      print_peer("white", *peer, pruned_only);
     }
   }
 
@@ -218,7 +216,7 @@ bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit
     const auto end = limit ? peer + std::min(limit, res.gray_list.size()) : res.gray_list.cend();
     for (; peer != end; ++peer)
     {
-      print_peer("gray", *peer, pruned_only, publicrpc_only);
+      print_peer("gray", *peer, pruned_only);
     }
   }
 
