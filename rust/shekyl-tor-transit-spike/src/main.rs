@@ -40,6 +40,20 @@
 //! Output is JSONL on stdout, one object per sample, with UTC per sample so the
 //! ≥8-hour time-of-day spread (§94.5(e)) is checkable from the data rather than
 //! from anyone's recollection of when it ran.
+//!
+//! # Running the round unattended (read before you write a cron)
+//!
+//! §94.2(e) needs ≥5 sessions over ≥3 days, so this runs on a schedule, not by
+//! hand. **The scheduler must BUILD this binary before each run, never invoke a
+//! pre-built path.** A cron that called `target/release/…` directly re-ran a
+//! stale pre-fix binary for a full slot after a fix had landed in source — it
+//! OOMed on a bug that was already fixed, because the fix reached `git` but not
+//! the artifact the scheduler ran (`cargo build --release` is incremental, so
+//! build-first costs nothing when nothing changed). Record the binary's mtime
+//! in each session's output so a stale run is visible in the data, not only in
+//! hindsight. The runner is deliberately kept out of the repo: it is
+//! machine-specific glue (absolute tor-binary and worktree paths), and a
+//! committed script with a hardcoded `$HOME` is the debt rule 15/16 forbids.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
