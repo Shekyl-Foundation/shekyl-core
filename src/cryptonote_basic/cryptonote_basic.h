@@ -602,54 +602,8 @@ namespace cryptonote
         }
         if (std::is_same<Archive<W>, binary_archive<W>>())
           pqc_auths_offset = ar.getpos() - start_pos;
-        if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
-        {
-          // RF-D9. The serve-credit shape carries NO pqc_auths at all: the
-          // countersignature attests a *read* and rides the vin, while
-          // pqc_auths is per-input *spend* authorization
-          // (blockchain.cpp:3746, "signature is on the vin"). Consensus
-          // requires the vector empty (tx_verification_utils.cpp:118).
-          //
-          // Deciding that from the vin TYPES -- already parsed by the time
-          // this runs -- rather than by sniffing for EOF is what makes the
-          // write path possible at all. Before this, the tolerance below was
-          // guarded by `binary_archive<false>` and therefore existed only
-          // when READING: a serve-credit tx could be parsed and never
-          // produced, because the `pqc_auths.size() != vin.size()` check
-          // rejected the empty vector consensus mandates. The shape is a
-          // property of the transaction, not of how far a stream has been
-          // consumed, so it is read off the transaction.
-          const bool serve_credit_shape =
-            classify_archival_tx(vin).kind == archival_tx_kind::serve_credit_only;
-          bool read_pqc = !serve_credit_shape;
-          if (serve_credit_shape)
-            pqc_auths.clear();
-          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
-          {
-            // Retained for the storage-pruned full-spend form, which is a
-            // stream-position fact and genuinely cannot be typed off the vin.
-            if (ar.eof() || ar.remaining_bytes() == 0)
-            {
-              read_pqc = false;
-              pqc_auths.clear();
-            }
-          }
-          if (read_pqc)
-          {
-            ar.tag("pqc_auths");
-            ar.begin_array();
-            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
-            if (pqc_auths.size() != vin.size())
-              return false;
-            for (size_t i = 0; i < vin.size(); ++i)
-            {
-              FIELDS(pqc_auths[i])
-              if (vin.size() - i > 1)
-                ar.delimit_array();
-            }
-            ar.end_array();
-          }
-        }
+        if (!serialize_pqc_auths(ar))
+          return false;
         if (!vin.empty())
         {
           if (std::is_same<Archive<W>, binary_archive<W>>())
@@ -671,6 +625,67 @@ namespace cryptonote
       if (!typename Archive<W>::is_saving())
         pruned = false;
     END_SERIALIZE()
+
+    // The tx-level `pqc_auths` encoding, in ONE place.
+    //
+    // It used to be written out twice -- here in the full serializer and again
+    // in `serialize_base` -- and the two copies drifted inside a single change:
+    // the RF-D9 serve-credit exemption landed in one and not the other, so a
+    // serve-credit tx became writable by the full serializer while the pruned
+    // form LMDB and the RPC use (`serialize_base`) still refused it. A duplicate
+    // is not synchronised, it is deleted (rule 15); both serializers now call
+    // this.
+    //
+    // RF-D9. The serve-credit shape carries NO pqc_auths at all: the
+    // countersignature attests a *read* and rides the vin, while pqc_auths is
+    // per-input *spend* authorization (blockchain.cpp:3746, "signature is on
+    // the vin"). Consensus requires the vector empty
+    // (tx_verification_utils.cpp:118).
+    //
+    // Deciding that from the vin TYPES -- already parsed by the time this runs
+    // -- rather than by sniffing for EOF is what makes the write path possible
+    // at all. Before, the tolerance was guarded by `binary_archive<false>` and
+    // so existed only when READING: a serve-credit tx could be parsed and never
+    // produced, because `pqc_auths.size() != vin.size()` rejected the empty
+    // vector consensus mandates. The shape is a property of the transaction,
+    // not of how far a stream has been consumed, so it is read off the
+    // transaction.
+    template<bool W, template <bool> class Archive>
+    bool serialize_pqc_auths(Archive<W> &ar)
+    {
+      if (!(version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0])))
+        return true;
+      const bool serve_credit_shape =
+        classify_archival_tx(vin).kind == archival_tx_kind::serve_credit_only;
+      bool read_pqc = !serve_credit_shape;
+      if (serve_credit_shape)
+        pqc_auths.clear();
+      if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
+      {
+        // Retained for the storage-pruned full-spend form, which is a
+        // stream-position fact and genuinely cannot be typed off the vin.
+        if (ar.eof() || ar.remaining_bytes() == 0)
+        {
+          read_pqc = false;
+          pqc_auths.clear();
+        }
+      }
+      if (!read_pqc)
+        return true;
+      ar.tag("pqc_auths");
+      ar.begin_array();
+      PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+      if (pqc_auths.size() != vin.size())
+        return false;
+      for (size_t i = 0; i < vin.size(); ++i)
+      {
+        FIELDS(pqc_auths[i])
+        if (vin.size() - i > 1)
+          ar.delimit_array();
+      }
+      ar.end_array();
+      return ar.good();
+    }
 
     template<bool W, template <bool> class Archive>
     bool serialize_base(Archive<W> &ar)
@@ -694,33 +709,8 @@ namespace cryptonote
         }
         if (std::is_same<Archive<W>, binary_archive<W>>())
           pqc_auths_offset = ar.getpos() - start_pos;
-        if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
-        {
-          bool read_pqc = true;
-          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
-          {
-            if (ar.eof() || ar.remaining_bytes() == 0)
-            {
-              read_pqc = false;
-              pqc_auths.clear();
-            }
-          }
-          if (read_pqc)
-          {
-            ar.tag("pqc_auths");
-            ar.begin_array();
-            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
-            if (pqc_auths.size() != vin.size())
-              return false;
-            for (size_t i = 0; i < vin.size(); ++i)
-            {
-              FIELDS(pqc_auths[i])
-              if (vin.size() - i > 1)
-                ar.delimit_array();
-            }
-            ar.end_array();
-          }
-        }
+        if (!serialize_pqc_auths(ar))
+          return false;
       }
       if (!typename Archive<W>::is_saving())
         pruned = true;

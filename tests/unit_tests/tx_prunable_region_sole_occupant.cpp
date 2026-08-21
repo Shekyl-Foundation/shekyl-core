@@ -249,6 +249,58 @@ TEST(tx_prunable_region, serve_credit_tx_tail_is_the_empty_prunable_counts)
   expect_prunable_region_has_one_occupant(parsed, "serve_credit_only");
 }
 
+// RF-D9's second gate. The full serializer was made able to write the
+// serve-credit shape; `serialize_base` -- the PRUNED form, which is what LMDB
+// stores (db_lmdb.cpp) and what pruned RPC responses carry -- repeated the
+// pqc_auths encoding and kept refusing it, so the shape was writable and still
+// unstorable. Both serializers now share one encoding; this arm is what keeps
+// them from parting again.
+TEST(tx_prunable_region, serve_credit_tx_round_trips_through_the_pruned_serializer)
+{
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+
+  txin_archival_serve_credit_response sc{};
+  memset(sc.p_canonical_id.data, 0x11, sizeof(sc.p_canonical_id.data));
+  sc.shard_id = 7;
+  sc.settlement_epoch = 3;
+  memset(sc.segment_subroot_rk.data, 0x22, sizeof(sc.segment_subroot_rk.data));
+  sc.leaf_index_in_segment = 5;
+  memset(sc.leaf_bytes.data, 0x33, sizeof(sc.leaf_bytes.data));
+  sc.hybrid_signature.assign(config::PQC_HYBRID_SINGLE_SIG_LEN, 0x44);
+  tx.vin.push_back(sc);
+
+  rct::rctSig &rv = tx.rct_signatures;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.p.curve_trees_tree_depth = 0;
+
+  // WRITE through the pruned serializer.
+  std::stringstream ss;
+  binary_archive<true> ba(ss);
+  ASSERT_TRUE(tx.serialize_base(ba))
+      << "serialize_base refused a consensus-valid serve-credit tx -- the pruned form "
+         "LMDB stores cannot be written, so the tx cannot be persisted";
+  const blobdata base_blob = ss.str();
+
+  // READ it back through the production pruned-parse entry point.
+  transaction parsed;
+  ASSERT_TRUE(parse_and_validate_tx_base_from_blob(base_blob, parsed))
+      << "the pruned form this node wrote is not one it can read back";
+  EXPECT_TRUE(parsed.pqc_auths.empty()) << "serve-credit carries no pqc_auths";
+  EXPECT_EQ(parsed.vin.size(), 1u);
+  EXPECT_TRUE(parsed.pruned);
+
+  // The pruned blob is exactly the unprunable prefix of the full blob: the two
+  // serializers agree on where the boundary is, not merely on accepting the tx.
+  blobdata full_blob;
+  ASSERT_TRUE(t_serializable_object_to_blob(tx, full_blob));
+  ASSERT_EQ(base_blob.size(), static_cast<size_t>(tx.unprunable_size));
+  EXPECT_EQ(full_blob.substr(0, base_blob.size()), base_blob)
+      << "serialize_base and the full serializer disagree on the unprunable prefix";
+}
+
 // The arm the file exists for: a tx whose prunable region is NON-EMPTY, so the
 // length equality is actually exercised.
 //
