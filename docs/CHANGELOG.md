@@ -4,6 +4,28 @@
 
 ### Changed
 
+- **`shekyld <command>` reaches the running daemon through the Rust
+  transport.** The control client (`shekyld status`, `exit`,
+  `print_height`, …) dialed the daemon's loopback RPC with epee's
+  `http_simple_client`; it now goes through `shekyl_daemon_ctl_post`
+  (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport` —
+  the same client the wallet dials the daemon with). The C++ side keeps
+  only its request/response structs and their JSON framing
+  (`src/daemon/rpc_client.h`). Scope is exactly the control path's:
+  plaintext loopback, no credentials, no TLS — the daemon registers
+  neither `--rpc-login` nor `--rpc-ssl*`, and the login/TLS parameters
+  that were threaded through `t_command_server` →
+  `t_command_parser_executor` → `t_rpc_command_executor` only to be
+  passed as empty are gone with the client they fed. A failed request
+  now names its cause (`connection error (… Connection refused …)`)
+  instead of "Couldn't connect to daemon". No operator-visible change
+  on the happy path.
+- **`shekyl-rpc-transport` builds no TLS layer for a plaintext
+  endpoint.** Every endpoint used to be wrapped in a native-roots TLS
+  connector, so a host with no root store (a minimal image, a freshly
+  provisioned device) could not construct a client for a plaintext
+  `http://` daemon at all. An `http://` endpoint now gets a bare
+  connector with `enforce_http(true)`; only `https://` loads roots.
 - **The block-reward weight penalty moved to Rust; `get_block_reward` is
   now a marshaling shim.** It was the last economics arithmetic C++
   performed itself — `mul128` plus two `div128_64` on an amount — while

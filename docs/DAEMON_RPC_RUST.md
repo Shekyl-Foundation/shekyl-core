@@ -41,6 +41,8 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
+| `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
+| `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
 | `src/daemon/daemon.cpp` | Daemon lifecycle: always starts Axum on the configured RPC port |
 | `src/rpc/rpc_args.cpp` | Shared CLI; daemon registers bind/CORS only (`include_listener_tls_auth=false`) |
@@ -88,7 +90,7 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 | Local | Plaintext loopback (`127.0.0.1`). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. |
 | Wallet-RPC | Keeps full `--rpc-login` / `--rpc-ssl*` (separate process). |
-| CLI outbound | `process_ssl` / `net_ssl` remain for `t_command_server` reaching a daemon. |
+| CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
 need + threat-model review. Disposition is never “implement Axum `--rpc-ssl`”

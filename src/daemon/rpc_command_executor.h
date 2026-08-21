@@ -38,11 +38,9 @@
 
 #pragma once
 
-#include <optional>
-
 #include "common/common_fwd.h"
-#include "common/rpc_client.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "daemon/rpc_client.h"
 #include "rpc/core_rpc_server.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -60,8 +58,6 @@ public:
   t_rpc_command_executor(
       uint32_t ip
     , uint16_t port
-    , const std::optional<tools::login>& user
-    , const epee::net_utils::ssl_options_t& ssl_options
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL
     );

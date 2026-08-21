@@ -48,7 +48,6 @@
 #include "daemon/command_line_args.h"
 #include "daemon/command_server.h"
 #include "misc_log_ex.h"
-#include "net/net_ssl.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
 #include "rpc/core_rpc_server.h"
@@ -297,10 +296,9 @@ bool Daemon::run(bool interactive)
     std::unique_ptr<daemonize::t_command_server> rpc_commands;
     if (interactive && !mp_internals->rpcs.empty())
     {
-      // The first three ctor args are unused when the fourth is false.
+      // The first two ctor args are unused when the third is false.
       rpc_commands.reset(new daemonize::t_command_server(
-        0, 0, std::nullopt,
-        epee::net_utils::ssl_support_t::e_ssl_support_disabled,
+        0, 0,
         false,
         mp_internals->rpcs.front().server.get()));
       rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));

@@ -1363,6 +1363,46 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
+// ---------------------------------------------------------------------------
+// shekyld control client (`shekyld <command>` → running daemon), the outbound
+// half of the daemon's HTTP surface. Plaintext loopback only — the daemon
+// registers neither --rpc-login nor --rpc-ssl* (docs/DAEMON_RPC_RUST.md).
+// Rust: shekyl-daemon-rpc/src/ctl_client.rs.
+// ---------------------------------------------------------------------------
+
+/// Request completed; the out pair holds the response body.
+#define SHEKYL_DAEMON_CTL_OK             0
+/// A required pointer was null, or a C string was not UTF-8.
+#define SHEKYL_DAEMON_CTL_ERR_NULL_PTR  -1
+/// `address` did not form a dialable http://host:port endpoint.
+#define SHEKYL_DAEMON_CTL_ERR_ENDPOINT  -2
+/// Connect, send, receive, or timeout failure; the out pair holds the reason.
+#define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
+/// The runtime could not be started, or the caller is already inside one.
+#define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
+
+/// POST `body` to `http://<address>/<route>` and return the response body.
+/// address: "host:port" of the daemon RPC listener (no scheme).
+/// route: the path, leading '/' optional ("/json_rpc", "/getinfo", …); the
+///   content type follows the route (".bin" → binary, otherwise JSON).
+/// body / body_len: request body; body may be NULL iff body_len == 0.
+/// timeout_secs: per-request bound, connect through the last body byte.
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body, on any
+///   error the UTF-8 reason. Always release with shekyl_daemon_ctl_free
+///   (a NULL/0 pair is a no-op there).
+/// Returns one of the SHEKYL_DAEMON_CTL_* codes.
+int32_t shekyl_daemon_ctl_post(
+    const char* address,
+    const char* route,
+    const uint8_t* body,
+    size_t body_len,
+    uint64_t timeout_secs,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
+/// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
+void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
+
 
 // ---------------------------------------------------------------------------
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)

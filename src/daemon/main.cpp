@@ -33,7 +33,6 @@
 #include "common/command_line.h"
 #include "common/removed_flags.h"
 #include "common/scoped_message_writer.h"
-#include "common/password.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/miner.h"
@@ -385,16 +384,11 @@ int main(int argc, char const * argv[])
 
         // The shekyld RPC listener is plaintext loopback with no digest auth
         // (rpc_args is registered with include_listener_tls_auth=false), so the
-        // control client connects without a login or TLS. The former
-        // --rpc-login / --rpc-ssl* flags are no longer registered for shekyld;
-        // reading them here (e.g. process_ssl) would throw boost::bad_any_cast
-        // on the unregistered variables_map entries. Remote/authenticated
+        // control client has no login or TLS to carry: the former --rpc-login /
+        // --rpc-ssl* flags are not registered for shekyld. Remote/authenticated
         // access is fronted by an onion service or reverse proxy outside the
         // daemon (docs/DAEMON_RPC_RUST.md).
-        std::optional<tools::login> login{};
-        epee::net_utils::ssl_options_t ssl_options{epee::net_utils::ssl_support_t::e_ssl_support_disabled};
-
-        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, std::move(login), std::move(ssl_options)};
+        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port};
         if (rpc_commands.process_command_vec(command))
         {
           return 0;

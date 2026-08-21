@@ -42,6 +42,7 @@
 
 pub mod conn_limit;
 pub mod core;
+pub mod ctl_client;
 pub mod ffi;
 pub mod ffi_exports;
 pub mod handlers;

@@ -29,7 +29,6 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include "string_tools.h"
-#include "common/password.h"
 #include "common/scoped_message_writer.h"
 #include "common/pruning.h"
 #include "daemon/rpc_command_executor.h"
@@ -151,8 +150,6 @@ namespace {
 t_rpc_command_executor::t_rpc_command_executor(
     uint32_t ip
   , uint16_t port
-  , const std::optional<tools::login>& login
-  , const epee::net_utils::ssl_options_t& ssl_options
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
@@ -160,10 +157,7 @@ t_rpc_command_executor::t_rpc_command_executor(
 {
   if (is_rpc)
   {
-    std::optional<epee::net_utils::http::login> http_login{};
-    if (login)
-      http_login.emplace(login->username, login->password.password());
-    m_rpc_client = new tools::t_rpc_client(ip, port, std::move(http_login), ssl_options);
+    m_rpc_client = new tools::t_rpc_client(ip, port);
   }
   else
   {
