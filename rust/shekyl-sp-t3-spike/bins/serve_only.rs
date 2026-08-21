@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Apparatus::bring_up_with_pow(tor, dir.path().join("tor-data"), 1, fixture.bytes(), pow)
             .await?;
 
-    let publish = app.await_reachable(len).await?;
+    let publish = app.await_reachable().await?;
     let persona = &app.personas[0];
 
     // The address readers dial. This is the one place a service id is printed on
@@ -98,6 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ONION={}", persona.service_id().hostname());
     println!("URL={}", persona.shard_url(0));
     println!("PAYLOAD_BYTES={len}");
+    // The number a remote reader should compare a fetched body against. Not
+    // PAYLOAD_BYTES: since RF-D4 the body leads with a frame header, and the
+    // apparatus derives the framed length through the production contract.
+    println!("BODY_BYTES={}", app.expected_body_len());
     eprintln!(
         "reachable after {:.1} s; holding. Ctrl-C to stop.",
         publish.as_secs_f64()

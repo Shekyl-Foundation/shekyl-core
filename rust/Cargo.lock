@@ -3925,6 +3925,7 @@ dependencies = [
  "redb",
  "serde_json",
  "shekyl-consensus",
+ "shekyl-curve-io",
  "shekyl-fcmp",
  "tempfile",
 ]

@@ -78,22 +78,12 @@ impl VectorInputs<'_> {
             .as_bool()
             .unwrap_or_else(|| panic!("field {field} must be bool"))
     }
-
-    fn usize_array(&self, field: &str) -> Vec<usize> {
-        self.get(field)
-            .as_array()
-            .unwrap_or_else(|| panic!("field {field} must be an array"))
-            .iter()
-            .map(|v| usize::try_from(v.as_u64().expect("count")).expect("usize"))
-            .collect()
-    }
 }
 
 fn reason_from_name(name: &str) -> GateReject {
     match name {
-        "PathLayerCountExceedsBound" => GateReject::PathLayerCountExceedsBound,
-        "C1BranchScalarCountExceedsBound" => GateReject::C1BranchScalarCountExceedsBound,
-        "C2BranchScalarCountExceedsBound" => GateReject::C2BranchScalarCountExceedsBound,
+        "VinUnparseable" => GateReject::VinUnparseable,
+        "PrunedRecordSizeOutOfBounds" => GateReject::PrunedRecordSizeOutOfBounds,
         "DuplicatePreBlock" => GateReject::DuplicatePreBlock,
         "BondSubstrateMissing" => GateReject::BondSubstrateMissing,
         "EpochBeforeEFirst" => GateReject::EpochBeforeEFirst,
@@ -103,10 +93,9 @@ fn reason_from_name(name: &str) -> GateReject {
         "SealHashUnavailable" => GateReject::SealHashUnavailable,
         "ShardNotHeldAtFire" => GateReject::ShardNotHeldAtFire,
         "ShardRegistryUnavailableAtFire" => GateReject::ShardRegistryUnavailableAtFire,
+        "LeafIndexDerivationRefused" => GateReject::LeafIndexDerivationRefused,
         "LeafIndexOutOfSegmentRange" => GateReject::LeafIndexOutOfSegmentRange,
         "LeafChunkReadFailed" => GateReject::LeafChunkReadFailed,
-        "VinSerializeFailed" => GateReject::VinSerializeFailed,
-        "UnexpectedVinWireTag" => GateReject::UnexpectedVinWireTag,
         "FfiVerifyFailed" => GateReject::FfiVerifyFailed,
         other => panic!("unknown expected_reason {other}"),
     }
@@ -144,28 +133,18 @@ fn gate_vectors_verdict_and_reason() {
             overrides: &vector["overrides"],
         };
 
-        let c1 = v.usize_array("c1_branch_scalar_counts");
-        let c2 = v.usize_array("c2_branch_scalar_counts");
         let seal_hash = if v.bool("seal_hash_available") {
             Some(hex32(v.get("seal_hash_hex")))
         } else {
             None
-        };
-        let wire_first_byte = {
-            let raw = v.get("wire_first_byte");
-            if raw.is_null() {
-                None
-            } else {
-                Some(u8::try_from(raw.as_u64().expect("byte")).expect("u8"))
-            }
         };
 
         let inputs = ServeCreditGateInputs {
             p_canonical_id: hex32(v.get("p_canonical_id_hex")),
             shard_id: v.u64("shard_id"),
             settlement_epoch: v.u64("settlement_epoch"),
-            c1_branch_scalar_counts: &c1,
-            c2_branch_scalar_counts: &c2,
+            vin_parsed: v.bool("vin_parsed"),
+            pruned_record_in_bounds: v.bool("pruned_record_in_bounds"),
             preblock_present: v.bool("preblock_present"),
             bond_substrate_present: v.bool("bond_substrate_present"),
             join_epoch: v.u64("join_epoch"),
@@ -176,10 +155,8 @@ fn gate_vectors_verdict_and_reason() {
             seal_hash,
             held_at_fire: v.bool("held_at_fire"),
             registry_present_at_fire: v.bool("registry_present_at_fire"),
-            leaf_index_in_segment: v.u64("leaf_index_in_segment"),
+            segment_leaf_count: v.u64("segment_leaf_count"),
             leaf_chunk_ok: v.bool("leaf_chunk_ok"),
-            wire_serialize_ok: v.bool("wire_serialize_ok"),
-            wire_first_byte,
             verify_ok: v.bool("verify_ok"),
         };
 
@@ -363,7 +340,10 @@ fn regenerate_equivalence_fixture_from_gate2() {
     // The integration wire is the parse-authoritative source for the leaf
     // index the base mirrors (and for the path shape asserted below).
     let wire = hex_bytes(&integ["wire_hex"]);
-    let response =
+    // Parse-only assertion: the kept half must still parse. Nothing below
+    // reads it -- the index is the fixture's recorded derivation and the path
+    // is on the pruned half (RF-D1/RF-D6).
+    let _kept =
         ArchivalServeCreditResponse::read(&mut wire.as_slice()).expect("integration wire parses");
 
     for (key, value) in [
@@ -375,42 +355,22 @@ fn regenerate_equivalence_fixture_from_gate2() {
             "current_height",
             integ["current_height"].as_u64().expect("current_height"),
         ),
+        // RF-D6: the index is no longer on the wire; the gate-2 fixture records
+        // the verifier's derived value, which is what the base mirrors.
         (
             "leaf_index_in_segment",
-            u64::from(response.leaf_index_in_segment),
+            integ["leaf_index_in_segment"]
+                .as_u64()
+                .expect("recorded index"),
         ),
     ] {
         doc = replace_first_scalar(&doc, key, value);
     }
 
-    // The base's branch-scalar-count arrays mirror the integration path's
-    // shape. That shape is a property of the CT2 tree structure, not of the
-    // keypair, so a gate-2 regen does not move it — assert instead of
-    // rewriting (a mismatch means the tree substrate itself changed, which is
-    // a hand-re-author event, not a mechanical sync).
+    // (The base no longer mirrors the path shape: the path is inside the pruned
+    // record, which C++ does not read, so its bounds are no longer gate steps.)
     let reparsed: serde_json::Value = serde_json::from_str(&doc).expect("rewritten doc parses");
-    let base = &reparsed["gate"]["base"];
-    let counts = |layers: &Vec<Vec<[u8; 32]>>| -> Vec<u64> {
-        layers.iter().map(|l| l.len() as u64).collect()
-    };
-    let json_counts = |v: &serde_json::Value| -> Vec<u64> {
-        v.as_array()
-            .expect("count array")
-            .iter()
-            .map(|c| c.as_u64().expect("count"))
-            .collect()
-    };
-    assert_eq!(
-        json_counts(&base["c1_branch_scalar_counts"]),
-        counts(&response.path.c1_layers),
-        "c1 path shape moved — the CT2 substrate changed; re-author the base by hand"
-    );
-    assert_eq!(
-        json_counts(&base["c2_branch_scalar_counts"]),
-        counts(&response.path.c2_layers),
-        "c2 path shape moved — the CT2 substrate changed; re-author the base by hand"
-    );
-
+    let _ = &reparsed;
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/serve_credit_equivalence_kat_v1.json");
     std::fs::write(&path, doc).expect("write");

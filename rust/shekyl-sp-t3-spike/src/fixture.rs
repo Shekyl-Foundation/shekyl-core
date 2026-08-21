@@ -197,7 +197,14 @@ impl FixtureShardProvider {
 
 impl ShardProvider for FixtureShardProvider {
     fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        Ok(Some(ShardBody::flat(Arc::clone(&self.payload))))
+        // `flat` refuses a payload that is not a whole number of leaves —
+        // the served frame declares a leaf count, so such bytes have no
+        // representable header. [`ShardFixture::load`] already enforces
+        // exactly [`SHARD_BYTES`], so the `None` arm is the guard for a
+        // payload handed to [`FixtureShardProvider::new`] directly, and it
+        // renders the ordinary miss rather than a body no witness could
+        // verify.
+        Ok(ShardBody::flat(Arc::clone(&self.payload)))
     }
 }
 
@@ -222,6 +229,21 @@ mod tests {
         // "≈ 3.33 MB" as the design docs state it, checked in integer bytes so
         // the assertion needs no lossy usize→f64 cast.
         assert!((3_320_000..3_340_000).contains(&SHARD_BYTES));
+    }
+
+    /// The body a reader actually receives is the frame header plus the
+    /// shard, and the apparatus derives that number through the production
+    /// contract rather than taking it from a caller. Pinned here because the
+    /// first version of the harness compared against `SHARD_BYTES` directly,
+    /// and when RF-D4's frame landed every probe went stale at once.
+    ///
+    /// `4` is the hand-derived header for a full unpadded segment
+    /// (`88 CB 01 00`, `ARCHIVAL_RESPONSE_FORMAT.md` §3.5).
+    #[test]
+    fn served_body_is_the_frame_plus_the_shard() {
+        let payload: std::sync::Arc<[u8]> = vec![0u8; SHARD_BYTES].into();
+        let body = shekyl_p_serve::ShardBody::flat(payload).expect("a full shard is framable");
+        assert_eq!(body.header().framed_len(), (SHARD_BYTES + 4) as u64);
     }
 
     #[test]

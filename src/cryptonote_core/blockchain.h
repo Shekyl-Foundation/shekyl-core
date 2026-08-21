@@ -1176,8 +1176,10 @@ namespace cryptonote
      */
     static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
+    // RF-D1: a pass record is checked as a pair -- the vin's opaque kept half
+    // and this vin's pruned record from rctSig.p.serve_credit_pruned.
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
-      uint64_t current_height) const;
+      const std::vector<uint8_t>& pruned_record, uint64_t current_height) const;
 
     // `auth_pubkey` is the bond input's pqc auth key
     // (`tx.pqc_auths[bond_index].hybrid_public_key`); the §3.5 step-5

@@ -12,12 +12,15 @@ use std::io::Cursor;
 
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
-    bond_floor, challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
-    r_market_count, serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
-    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BadInterval, BondPostError, BondPostKind, ConservationError,
-    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    bond_floor, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
+    challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk,
+    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, r_market_count,
+    serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
+    verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
+    ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
+    BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
+    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
+    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -40,6 +43,14 @@ fn decode_hex32(s: &str) -> [u8; 32] {
     let v = decode_hex(s);
     assert_eq!(v.len(), 32);
     let mut a = [0u8; 32];
+    a.copy_from_slice(&v);
+    a
+}
+
+fn decode_hex128(s: &str) -> [u8; 128] {
+    let v = decode_hex(s);
+    assert_eq!(v.len(), 128);
+    let mut a = [0u8; 128];
     a.copy_from_slice(&v);
     a
 }
@@ -259,30 +270,42 @@ fn gate4_lifecycle_kat_vectors() {
         serve["bond_hybrid_pubkey_hex"].as_str().expect("pk"),
     ))
     .expect("pk");
-    let sig_bytes = parsed
-        .hybrid_signature
-        .to_canonical_bytes()
-        .expect("sig bytes");
-    let sig = shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&sig_bytes)
-        .expect("sig");
-    HybridEd25519MlDsa
-        .verify(
-            &int_pk,
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
-            &parsed.signature_preimage(),
-            &sig,
-        )
-        .expect("hybrid verify");
 
+    // RF-D6/RF-D8: `R_k` and the leaf index are verifier-derived, not parsed
+    // from the wire. The fixture records the verifier's values; the index is
+    // re-derived here and asserted against that record, so the fixture cannot
+    // silently carry a stale derivation.
     let segment_leaf_count = serve["segment_leaf_count"].as_u64().expect("segment count");
-    verify_leaf_index(
-        parsed.leaf_index_in_segment,
+    let rk = decode_hex32(serve["segment_subroot_rk_hex"].as_str().expect("rk"));
+    let leaf_index = challenge_leaf_index(
         &parsed.p_canonical_id,
         parsed.shard_id,
         parsed.settlement_epoch,
         segment_leaf_count,
+    );
+    assert_eq!(
+        u64::from(leaf_index),
+        serve["leaf_index_in_segment"]
+            .as_u64()
+            .expect("recorded index"),
+        "fixture's recorded leaf index drifted from the derivation"
+    );
+    // The pruned half (RF-D1) and the remaining verifier-derived input
+    // (RF-D8: the challenged leaf, which the verifier reads from its chunk).
+    let pruned = ArchivalServeCreditPruned::read_exact(
+        &mut decode_hex(serve["pruned_hex"].as_str().expect("pruned")).as_slice(),
     )
-    .expect("leaf index");
+    .expect("pruned parse");
+    let leaf_bytes = decode_hex128(serve["leaf_bytes_hex"].as_str().expect("leaf"));
+    let sig = hybrid_countersignature(&parsed, &pruned);
+    HybridEd25519MlDsa
+        .verify(
+            &int_pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &parsed.signature_preimage(&rk, leaf_index, &leaf_bytes, &pruned.path),
+            &sig,
+        )
+        .expect("hybrid verify");
 
     let layer_scalars: Vec<[u8; 32]> = decode_hex(
         serve["leaf_layer_scalars_hex"]
@@ -297,13 +320,25 @@ fn gate4_lifecycle_kat_vectors() {
     })
     .collect();
 
-    verify_segment_path(
-        &parsed.leaf_bytes,
-        &layer_scalars,
-        &parsed.path,
-        &parsed.segment_subroot_rk,
-    )
-    .expect("path verify");
+    // Offset of the challenged leaf inside the chunk: global index minus the
+    // chunk's first global position -- exactly the verifier's arithmetic.
+    let leaf_offset = challenged_leaf_offset_in_chunk(parsed.shard_id, u64::from(leaf_index))
+        .expect("derived index lies inside the segment");
+    assert_eq!(
+        challenge_leaf_chunk_bounds(parsed.shard_id, u64::from(leaf_index))
+            .expect("bounds")
+            .first_leaf_position,
+        serve["chunk_first_leaf_position"]
+            .as_u64()
+            .expect("chunk first"),
+        "fixture's chunk start drifted from the derivation"
+    );
+    assert_eq!(
+        challenged_leaf_bytes(&layer_scalars, leaf_offset),
+        Some(leaf_bytes),
+        "the leaf at the derived offset is the fixture's challenged leaf"
+    );
+    verify_segment_path(&layer_scalars, leaf_offset, &pruned.path, &rk).expect("path verify");
 
     let h_open = settlement_epoch_open_height(settlement_epoch);
     let h_close = h_open + SETTLEMENT_EPOCH_BLOCKS - 1;

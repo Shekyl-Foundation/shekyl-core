@@ -15,12 +15,13 @@ use serde_json::{json, Value};
 use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
-    challenge_seal_height, encode_path, p_canonical_id_from_hybrid_pubkey, verify_leaf_index,
-    verify_segment_path, ArchivalServeCreditResponse, SegmentPathOpening, SEGMENT_LEAF_COUNT,
-    SETTLEMENT_EPOCH_BLOCKS,
+    challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk, encode_path,
+    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, split_countersignature,
+    verify_segment_path, ArchivalServeCreditPruned, ArchivalServeCreditResponse,
+    SegmentPathOpening, ED25519_COUNTERSIGNATURE_LEN, SEGMENT_LEAF_COUNT, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
+    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme,
 };
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
@@ -131,7 +132,6 @@ fn flat_layer_scalars_hex(scalars: &[[u8; 32]]) -> String {
 }
 
 fn build_integration_substrate(
-    anchor: &WireAnchor,
     pinned_pk_hex: Option<&str>,
     pinned_sk_hex: Option<&str>,
     pinned_sig_hex: Option<&str>,
@@ -146,7 +146,11 @@ fn build_integration_substrate(
     // SELENE_CHUNK_WIDTH leaves from the curve-tree leaf table
     // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2 — frozen segments have only
     // full chunks), so the integration substrate must carry a full chunk.
-    let (leaf_bytes, rk, path, layer_scalars) = ct2_full_chunk_opening();
+    // The founder's own leaf is NOT used as the challenged leaf: the challenge
+    // index is derived, and the challenged leaf is whichever leaf of this
+    // chunk sits at that index (RF-D8). The path is per-chunk, so it verifies
+    // for every leaf in it; only the signed preimage depends on which.
+    let (_founder_leaf, rk, path, layer_scalars) = ct2_full_chunk_opening();
     assert_eq!(
         layer_scalars.len(),
         4 * SELENE_CHUNK_WIDTH,
@@ -177,19 +181,22 @@ fn build_integration_substrate(
     );
     let current_height = h_fire.saturating_add(1);
 
+    // Kept half first (identity only); the signature legs are filled in below
+    // once the preimage over the verifier-derived terms is known.
+    // The verifier's view of the challenged leaf: selected from the chunk at
+    // the derived offset (global index minus the chunk's first position).
+    let leaf_offset = challenged_leaf_offset_in_chunk(shard_id, u64::from(leaf_index))
+        .expect("derived index lies inside the segment");
+    let leaf_bytes = challenged_leaf_bytes(&layer_scalars, leaf_offset)
+        .expect("derived offset lies inside the substrate chunk");
+
     let mut response = ArchivalServeCreditResponse {
         p_canonical_id: p_id,
         shard_id,
         settlement_epoch,
-        segment_subroot_rk: rk,
-        leaf_index_in_segment: leaf_index,
-        leaf_bytes,
-        path,
-        // Placeholder only — `signature_preimage()` does not cover the
-        // signature field, and the real signature is set right below.
-        hybrid_signature: anchor.signature.clone(),
+        ed25519_countersignature: [0u8; ED25519_COUNTERSIGNATURE_LEN],
     };
-    let preimage = response.signature_preimage();
+    let preimage = response.signature_preimage(&rk, leaf_index, &leaf_bytes, &path);
     // Re-pin: reuse the committed integration signature while it still
     // verifies over the recomputed preimage (same idempotence discipline as
     // the wire anchor); re-sign only on a genuine construction change.
@@ -208,7 +215,7 @@ fn build_integration_substrate(
                 )
                 .is_ok()
         });
-    response.hybrid_signature = pinned_sig.unwrap_or_else(|| {
+    let hybrid_signature = pinned_sig.unwrap_or_else(|| {
         scheme
             .sign(
                 &hybrid_sk,
@@ -217,31 +224,30 @@ fn build_integration_substrate(
             )
             .expect("integration sign")
     });
+    // RF-D2: one container, split across the kept/pruned boundary.
+    let (ed_leg, ml_leg) = split_countersignature(&hybrid_signature).expect("canonical legs");
+    response.ed25519_countersignature = ed_leg;
+    let pruned = ArchivalServeCreditPruned {
+        path,
+        ml_dsa_countersignature: ml_leg,
+    };
 
-    verify_leaf_index(
-        response.leaf_index_in_segment,
-        &response.p_canonical_id,
-        response.shard_id,
-        response.settlement_epoch,
-        segment_leaf_count,
-    )
-    .expect("integration leaf index");
-    verify_segment_path(
-        &response.leaf_bytes,
-        &layer_scalars,
-        &response.path,
-        &response.segment_subroot_rk,
-    )
-    .expect("integration path");
+    verify_segment_path(&layer_scalars, leaf_offset, &pruned.path, &rk).expect("integration path");
 
     let wire = response.serialize().expect("integration wire");
+    let pruned_bytes = pruned.serialize().expect("integration pruned");
     json!({
         "label": "ct2_opening_epoch1_consensus_verify",
         "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
         "shard_id": response.shard_id,
         "settlement_epoch": response.settlement_epoch,
         "segment_leaf_count": segment_leaf_count,
-        "leaf_index_in_segment": response.leaf_index_in_segment,
+        // Verifier-derived inputs, recorded so consumers (gate-4) can supply
+        // them the way the verifier does -- from outside the wire. Neither is
+        // transported (RF-D6/RF-D8); both are in the signed preimage.
+        "leaf_index_in_segment": leaf_index,
+        "segment_subroot_rk_hex": encode_hex(&rk),
+        "leaf_bytes_hex": encode_hex(&leaf_bytes),
         "freeze_height": h_fire,
         "h_open": h_open,
         "h_close": h_close,
@@ -257,13 +263,24 @@ fn build_integration_substrate(
         // still verifies. Test-only material, like every key in this fixture.
         "bond_hybrid_secret_key_hex": encode_hex(&hybrid_sk_bytes),
         "bond_hybrid_signature_hex": encode_hex(
-            &response.hybrid_signature.to_canonical_bytes().expect("integration sig bytes")
+            &hybrid_signature.to_canonical_bytes().expect("integration sig bytes")
         ),
         "leaf_layer_scalars_hex": flat_layer_scalars_hex(&layer_scalars),
         "chunk_first_leaf_position": chunk_bounds.first_leaf_position,
         "chunk_leaf_count": chunk_bounds.leaf_count,
+        // The two halves of the record (RF-D1): `wire_hex` is the vin
+        // (kept, tag included); `pruned_hex` is this vin's slice of the
+        // prunable region.
         "wire_hex": encode_hex(&wire),
+        "pruned_hex": encode_hex(&pruned_bytes),
     })
+}
+
+/// Test-only: where `leaf` sits in `chunk`. The verifier never searches — it
+/// derives the offset from the challenge index — but a fixture that pins a
+/// leaf by value needs to recover its position to call the verifier.
+fn leaf_offset_in_chunk(chunk: &[[u8; 32]], leaf: &[u8; 128]) -> Option<usize> {
+    (0..chunk.len() / 4).find(|&i| challenged_leaf_bytes(chunk, i).as_ref() == Some(leaf))
 }
 
 /// The fixed message the synthetic wire anchor signs. The anchor exists so the
@@ -498,19 +515,32 @@ fn build_kat_document(
         c1_layers: vec![vec![[0x44; 32]; 4]],
         c2_layers: vec![vec![[0x55; 32]; 8], vec![[0x66; 32]; 8]],
     };
+    // RF-D6: `R_k` and the leaf index are signed but NOT transported, so they
+    // are preimage inputs here rather than struct fields. The fixture keeps
+    // both under their old keys so the preimage pin stays byte-identical.
+    let wire_rk = [0x22u8; 32];
+    let wire_leaf_index = 1_234u32;
+    let wire_leaf_bytes = [0x33u8; 128];
+    let (anchor_ed, anchor_ml) = split_countersignature(&anchor.signature).expect("anchor legs");
     let response = ArchivalServeCreditResponse {
         p_canonical_id: [0x11; 32],
         shard_id: 42,
         settlement_epoch: 7,
-        segment_subroot_rk: [0x22; 32],
-        leaf_index_in_segment: 1_234,
-        leaf_bytes: [0x33; 128],
+        ed25519_countersignature: anchor_ed,
+    };
+    let pruned = ArchivalServeCreditPruned {
         path: path.clone(),
-        hybrid_signature: anchor.signature.clone(),
+        ml_dsa_countersignature: anchor_ml,
     };
     let wire_hex = encode_hex(&response.serialize().expect("wire"));
+    let pruned_hex = encode_hex(&pruned.serialize().expect("pruned"));
     let encode_path_hex = encode_hex(&encode_path(&path));
-    let signature_preimage_hex = encode_hex(&response.signature_preimage());
+    let signature_preimage_hex = encode_hex(&response.signature_preimage(
+        &wire_rk,
+        wire_leaf_index,
+        &wire_leaf_bytes,
+        &path,
+    ));
 
     let (opening_leaf, opening_rk, opening_path, _layer_scalars) = ct2_founder_opening();
 
@@ -535,17 +565,19 @@ fn build_kat_document(
             "p_canonical_id_hex": encode_hex(&response.p_canonical_id),
             "shard_id": response.shard_id,
             "settlement_epoch": response.settlement_epoch,
-            "segment_subroot_rk_hex": encode_hex(&response.segment_subroot_rk),
-            "leaf_index_in_segment": response.leaf_index_in_segment,
-            "leaf_bytes_hex": encode_hex(&response.leaf_bytes),
-            "c1_layers": layers_to_json(&response.path.c1_layers),
-            "c2_layers": layers_to_json(&response.path.c2_layers),
+            // Preimage inputs only (RF-D6) -- not on the wire, still signed.
+            "segment_subroot_rk_hex": encode_hex(&wire_rk),
+            "leaf_index_in_segment": wire_leaf_index,
+            "leaf_bytes_hex": encode_hex(&wire_leaf_bytes),
+            "c1_layers": layers_to_json(&pruned.path.c1_layers),
+            "c2_layers": layers_to_json(&pruned.path.c2_layers),
             "hybrid_signature_hex": encode_hex(
-                &response.hybrid_signature.to_canonical_bytes().unwrap()
+                &anchor.signature.to_canonical_bytes().unwrap()
             ),
             "anchor_pubkey_hex": encode_hex(&anchor.pk_bytes),
             "anchor_secret_key_hex": encode_hex(&anchor.sk_bytes),
             "wire_hex": wire_hex,
+            "pruned_hex": pruned_hex,
             "encode_path_hex": encode_path_hex,
             "signature_preimage_hex": signature_preimage_hex,
         },
@@ -557,7 +589,6 @@ fn build_kat_document(
             "c2_layers": layers_to_json(&opening_path.c2_layers),
         },
         "integration": build_integration_substrate(
-            anchor,
             integration_pk_hex,
             integration_sk_hex,
             integration_sig_hex,
@@ -605,6 +636,40 @@ fn regenerate_gate2_kat_fixture() {
     eprintln!("wrote {}", path.display());
 }
 
+/// The pruned pass record has ONE size for a FROZEN segment at
+/// `SEGMENT_LAYER_J = 2`: the opening of any leaf in a full segment is one
+/// Helios branch layer of 18 scalars and one Selene of 38 (CR-D2's 1,792 B of
+/// layers plus varint framing), plus the ML-DSA-65 leg. `cryptonote_config.h`
+/// pins that plus its 2-byte length prefix as
+/// `ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES = 5107`, which is what lets a
+/// pruned node reconstruct a serve-credit tx's weight exactly.
+///
+/// Constructed at the production geometry rather than borrowed from the CT-2
+/// test substrate: that substrate is a small tree (its opening's top layer is
+/// 4 wide, a 3,440-byte record), and a first draft of this test borrowed it
+/// and pinned the wrong number. The determinism the C++ relies on holds
+/// because admission verifies the path against a frozen segment's `R_k`, and
+/// a frozen segment's opening has exactly this shape -- a record of any other
+/// shape cannot hash to that root.
+#[test]
+fn pruned_record_size_is_deterministic_for_a_frozen_segment() {
+    let pruned = ArchivalServeCreditPruned {
+        path: SegmentPathOpening {
+            c1_layers: vec![vec![[0u8; 32]; 38]],
+            c2_layers: vec![vec![[0u8; 32]; 18]],
+        },
+        ml_dsa_countersignature: [0u8; 3309],
+    };
+    let bytes = pruned.serialize().expect("serialize");
+    assert_eq!(
+        bytes.len(),
+        5_105,
+        "pruned record size moved: re-pin the C++ twin (5107 incl. prefix)"
+    );
+    // The C++ transport adds varint(5105) = 2 bytes.
+    assert_eq!(5_105 + 2, 5_107);
+}
+
 #[test]
 fn gate2_serve_credit_kat_vectors() {
     let kat: Value = serde_json::from_str(KAT_FIXTURE).expect("kat json");
@@ -625,7 +690,8 @@ fn gate2_serve_credit_kat_vectors() {
             challenge_leaf_index(&p_id, shard_id, epoch, count),
             leaf_index
         );
-        verify_leaf_index(leaf_index, &p_id, shard_id, epoch, count).expect("leaf index verify");
+        // (verify_leaf_index was deleted by RF-D6; the derivation above IS the
+        // pinned value, asserted against the fixture directly.)
         assert_eq!(
             challenge_seal_height(h_open),
             case["h_seal"].as_u64().expect("h_seal")
@@ -660,31 +726,54 @@ fn gate2_serve_credit_kat_vectors() {
             &hybrid_signature,
         )
         .expect("wire anchor must verify under the current construction");
+    let (anchor_ed, anchor_ml) = split_countersignature(&hybrid_signature).expect("anchor legs");
     let response = ArchivalServeCreditResponse {
         p_canonical_id: decode_hex32(wire["p_canonical_id_hex"].as_str().expect("p_id")),
         shard_id: wire["shard_id"].as_u64().expect("shard"),
         settlement_epoch: wire["settlement_epoch"].as_u64().expect("epoch"),
-        segment_subroot_rk: decode_hex32(wire["segment_subroot_rk_hex"].as_str().expect("rk")),
-        leaf_index_in_segment: u32::try_from(
-            wire["leaf_index_in_segment"].as_u64().expect("leaf idx"),
-        )
-        .expect("leaf idx fits u32"),
-        leaf_bytes: decode_hex128(wire["leaf_bytes_hex"].as_str().expect("leaf")),
-        path,
-        hybrid_signature,
+        ed25519_countersignature: anchor_ed,
     };
+    let pruned = ArchivalServeCreditPruned {
+        path,
+        ml_dsa_countersignature: anchor_ml,
+    };
+    // Preimage inputs the verifier supplies (RF-D6/RF-D8): off the wire, in the signature.
+    let rk = decode_hex32(wire["segment_subroot_rk_hex"].as_str().expect("rk"));
+    let leaf_index =
+        u32::try_from(wire["leaf_index_in_segment"].as_u64().expect("leaf idx")).expect("u32");
+    let wire_leaf_bytes = decode_hex128(wire["leaf_bytes_hex"].as_str().expect("leaf"));
 
     assert_eq!(
-        encode_hex(&encode_path(&response.path)),
+        encode_hex(&encode_path(&pruned.path)),
         wire["encode_path_hex"].as_str().expect("encode_path")
     );
     assert_eq!(
-        encode_hex(&response.signature_preimage()),
+        encode_hex(&response.signature_preimage(&rk, leaf_index, &wire_leaf_bytes, &pruned.path)),
         wire["signature_preimage_hex"].as_str().expect("preimage")
     );
     assert_eq!(
         encode_hex(&response.serialize().expect("serialize")),
         wire["wire_hex"].as_str().expect("wire")
+    );
+    assert_eq!(
+        encode_hex(&pruned.serialize().expect("serialize")),
+        wire["pruned_hex"].as_str().expect("pruned")
+    );
+    // Both halves re-parse to what was written, and the legs reassemble to
+    // the anchor signature that verified above.
+    let kept_back = ArchivalServeCreditResponse::read(
+        &mut decode_hex(wire["wire_hex"].as_str().unwrap()).as_slice(),
+    )
+    .expect("kept parse");
+    let pruned_back = ArchivalServeCreditPruned::read_exact(
+        &mut decode_hex(wire["pruned_hex"].as_str().unwrap()).as_slice(),
+    )
+    .expect("pruned parse");
+    assert_eq!(
+        hybrid_countersignature(&kept_back, &pruned_back)
+            .to_canonical_bytes()
+            .unwrap(),
+        hybrid_signature.to_canonical_bytes().unwrap()
     );
 
     let opening = &kat["opening"];
@@ -704,7 +793,9 @@ fn gate2_serve_credit_kat_vectors() {
     assert_eq!(opening_path.c1_layers, live_path.c1_layers);
     assert_eq!(opening_path.c2_layers, live_path.c2_layers);
 
-    verify_segment_path(&leaf_bytes, &live_layer_scalars, &opening_path, &rk)
+    let opening_offset = leaf_offset_in_chunk(&live_layer_scalars, &leaf_bytes)
+        .expect("opening leaf is in the live chunk");
+    verify_segment_path(&live_layer_scalars, opening_offset, &opening_path, &rk)
         .expect("opening verifies to R_k");
 
     let integration = &kat["integration"];
@@ -714,22 +805,56 @@ fn gate2_serve_credit_kat_vectors() {
     let mut cursor = std::io::Cursor::new(&integration_wire[1..]);
     let parsed =
         ArchivalServeCreditResponse::read_payload(&mut cursor).expect("parse integration wire");
+    // RF-D6: the integration substrate's `R_k` and leaf index are verifier
+    // inputs, not wire fields. Named `int_*` deliberately -- the opening
+    // section's `rk` is a DIFFERENT segment's root, and reusing that name
+    // here is exactly how this test briefly verified the integration
+    // signature against the wrong preimage.
+    let int_rk = decode_hex32(
+        integration["segment_subroot_rk_hex"]
+            .as_str()
+            .expect("integration rk"),
+    );
+    let int_leaf_index = challenge_leaf_index(
+        &parsed.p_canonical_id,
+        parsed.shard_id,
+        parsed.settlement_epoch,
+        integration["segment_leaf_count"]
+            .as_u64()
+            .expect("segment count"),
+    );
     let int_pk = HybridPublicKey::from_canonical_bytes(&decode_hex(
         integration["bond_hybrid_pubkey_hex"]
             .as_str()
             .expect("integration pk"),
     ))
     .expect("integration pk parse");
-    let int_sig = parsed
-        .hybrid_signature
-        .to_canonical_bytes()
-        .expect("integration sig bytes");
-    let int_sig = HybridSignature::from_canonical_bytes(&int_sig).expect("integration sig parse");
+    // The pruned half, parsed from its own record; the legs reassemble into
+    // the signature the verifier checks.
+    let int_pruned = ArchivalServeCreditPruned::read_exact(
+        &mut decode_hex(integration["pruned_hex"].as_str().expect("pruned")).as_slice(),
+    )
+    .expect("parse integration pruned");
+    let int_leaf_bytes = decode_hex128(
+        integration["leaf_bytes_hex"]
+            .as_str()
+            .expect("integration leaf"),
+    );
+    let int_sig = hybrid_countersignature(&parsed, &int_pruned);
+    assert_eq!(
+        encode_hex(&int_sig.to_canonical_bytes().expect("sig bytes")),
+        integration["bond_hybrid_signature_hex"]
+            .as_str()
+            .expect("pinned sig"),
+        "reassembled legs must equal the pinned hybrid signature"
+    );
+    let int_preimage =
+        parsed.signature_preimage(&int_rk, int_leaf_index, &int_leaf_bytes, &int_pruned.path);
     HybridEd25519MlDsa
         .verify(
             &int_pk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
-            &parsed.signature_preimage(),
+            &int_preimage,
             &int_sig,
         )
         .expect("integration hybrid verify");
@@ -748,30 +873,27 @@ fn gate2_serve_credit_kat_vectors() {
             .verify(
                 &foreign_pk,
                 shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
-                &parsed.signature_preimage(),
+                &int_preimage,
                 &int_sig,
             )
             .is_err(),
         "a well-formed serve-credit signature under a foreign key must be rejected (F1)"
     );
+    // RF-D6: the index is not on the wire. The fixture records the verifier's
+    // derived value; the derivation must still reproduce it.
     assert_eq!(
-        challenge_leaf_index(
-            &parsed.p_canonical_id,
-            parsed.shard_id,
-            parsed.settlement_epoch,
-            integration["segment_leaf_count"]
-                .as_u64()
-                .expect("segment count"),
-        ),
-        parsed.leaf_index_in_segment
+        u64::from(int_leaf_index),
+        integration["leaf_index_in_segment"]
+            .as_u64()
+            .expect("recorded index"),
+        "fixture's recorded leaf index drifted from the derivation"
     );
 
     // Chunk-bounds pin (pipeline doc §6.2): the fixture's pinned bounds must
     // match the live derivation, and the substrate chunk must be exactly one
     // full leaf chunk (chunk_leaf_count leaves × 128 bytes).
-    let bounds =
-        challenge_leaf_chunk_bounds(parsed.shard_id, u64::from(parsed.leaf_index_in_segment))
-            .expect("challenged index within segment");
+    let bounds = challenge_leaf_chunk_bounds(parsed.shard_id, u64::from(int_leaf_index))
+        .expect("challenged index within segment");
     assert_eq!(
         bounds.first_leaf_position,
         integration["chunk_first_leaf_position"]

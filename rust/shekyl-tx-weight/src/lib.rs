@@ -475,6 +475,8 @@ mod tests {
                         })
                         .collect(),
                     prunable: Some(Prunable {
+                        // Spend fixture: no pass records (RF-D1).
+                        serve_credit_pruned: Vec::new(),
                         bulletproofs: vec![bp],
                         tree_depth: u64::from(depth),
                         fcmp_proof: vec![0u8; fcmp_proof_size(InputCount::clamped(n_in), depth)],

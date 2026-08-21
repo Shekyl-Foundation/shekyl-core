@@ -11,33 +11,36 @@
 //!
 //! # Mechanism status (2026-08-11): this is the RETIRED sampled-leaf mode
 //!
-//! **Do not build against this module.** It implements the fire-beacon
-//! design's *sampled-leaf* proof of retention — replay one derived-index
-//! leaf's opening against `R_k` — which is **superseded** by derived
-//! assignment (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2). Under the ruled
-//! mechanism the witness pulls the **entire shard** and verifies it by
-//! recomputing the sub-root over the received bytes
-//! (`shekyl_curve_tree::recompute_segment_r_k`), which is what the serving
-//! path's axis test actually calls. [`verify_leaf_index`] in particular is
-//! bound to [`crate::challenge::challenge_leaf_index`], the retired
-//! per-pair leaf derivation, and sits on the same deletion surface as the
-//! beacon constants annotated in [`crate::constants`] and
-//! [`crate::challenge`].
+//! **The sampled-leaf opening, kept by the format round as SUPPLEMENTARY
+//! consensus-checkable evidence.** An earlier version of this header said the
+//! module was superseded wholesale by derived assignment and would delete with
+//! the format round. The format round (`ARCHIVAL_RESPONSE_FORMAT.md`, RF-D8,
+//! ruled 2026-08-20) examined that and **kept the opening**, for a reason the
+//! earlier note did not weigh:
 //!
-//! **It is not dead code, which is why it is annotated rather than
-//! deleted.** This module is the live interim serve-credit admission path:
-//! `shekyl-ffi`'s `shekyl_archival_verify_serve_credit_vin` calls
-//! [`verify_segment_path`] and [`verify_leaf_index`], and `blockchain.cpp`
-//! calls that during block verification; [`SegmentPathOpening`] is also
-//! carried by [`crate::wire`]'s `encode_path`. **Named blocker (rule 22):**
-//! the replacement response wire is not yet designed, so until the format
-//! round freezes it this is the only admission path standing. It deletes
-//! wholesale with that round's deletion surface.
+//! Every other element of a pass record depends on witness honesty. The
+//! witness claims it fetched the whole shard and recomputed `R_k`; nothing on
+//! chain checks that claim, so a witness colluding with `P` can manufacture a
+//! pass with `P` holding zero bytes. **The opening is the one element
+//! consensus verifies independently of the witness**: `P` must produce a valid
+//! path for a leaf index it cannot choose, against a root it cannot supply
+//! (both verifier-derived), and every node checks it at admission. It raises
+//! the floor from "P may hold nothing" to "P must hold at least the challenged
+//! leaf and its path" -- weak, cheaply outsourced, but non-zero, and the only
+//! component that survives total witness collusion. That is what
+//! ~1,920 B/record buys.
 //!
-//! The distinction matters because the two modes are easy to conflate: a
-//! build survey filed [`verify_leaf_index`] as *reusable* for the serving
-//! path, which would have resurrected the sampled design through the
-//! implementation door. Extend the **new** mechanism, never this one.
+//! Whole-shard fetching by the witness (`shekyl_curve_tree::recompute_segment_r_k`)
+//! remains the **mechanism**; `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6's finding
+//! that sampled-leaf is insufficient as a *standalone* mechanism stands, and
+//! says nothing against an opening carried additively on top. Accordingly
+//! [`crate::challenge::challenge_leaf_index`] comes **off** §2's deletion
+//! surface: it is the verifier-side derivation the opening is checked against.
+//!
+//! **Everything the verifier can derive, it derives** (RF-D6/RF-D8): `R_k`
+//! from its frozen-segment record, the leaf index from `challenge_leaf_index`,
+//! and the challenged leaf's bytes from the leaf chunk it already reads. None
+//! of those travel on the wire; the prover supplies only the branch layers.
 
 use crate::error::VerifyError;
 use shekyl_fcmp::tree::{
@@ -46,6 +49,12 @@ use shekyl_fcmp::tree::{
 };
 
 const ZERO: [u8; 32] = [0u8; 32];
+
+/// Width of one challenged leaf — `SCALARS_PER_LEAF` Selene scalars. Twin of
+/// `shekyl_curve_tree::LEAF_BYTES`; this crate does not take that edge, so
+/// the width is the scalar fact rather than a second imported number.
+pub const CHALLENGED_LEAF_LEN: usize = SCALARS_PER_LEAF * 32;
+const _: () = assert!(CHALLENGED_LEAF_LEN == 128);
 
 /// Sibling branches from a segment leaf to frozen sub-root `R_k`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,32 +99,44 @@ fn recompute_subroot(path: &SegmentPathOpening) -> [u8; 32] {
     root.expect("segment path depth >= 2 yields at least one branch layer")
 }
 
-/// Returns true when `leaf_bytes` equals one output's four scalars inside
-/// `leaf_layer_scalars`.
-fn leaf_bytes_in_layer(leaf_bytes: &[u8; 128], leaf_layer_scalars: &[[u8; 32]]) -> bool {
+/// The challenged leaf's 128 bytes, selected from the verifier's own leaf
+/// chunk at the derived offset.
+///
+/// Replaces a transported `leaf_bytes` (RF-D8): the verifier must read the
+/// whole chunk to verify at all, so it already holds the challenged leaf, and a
+/// wire copy was a prover-supplied value the verifier had to check against its
+/// own data -- the class RF-D6 removed. Selecting by offset is also STRONGER
+/// than the old check, which only asked whether the supplied bytes matched
+/// *some* leaf in the chunk and never bound them to the challenged index.
+///
+/// Returns `None` if the offset is outside the chunk.
+#[must_use]
+pub fn challenged_leaf_bytes(
+    leaf_layer_scalars: &[[u8; 32]],
+    leaf_offset_in_chunk: usize,
+) -> Option<[u8; CHALLENGED_LEAF_LEN]> {
     if !leaf_layer_scalars.len().is_multiple_of(SCALARS_PER_LEAF) {
-        return false;
+        return None;
     }
-    let outputs = leaf_layer_scalars.len() / SCALARS_PER_LEAF;
-    (0..outputs).any(|i| {
-        let start = i * SCALARS_PER_LEAF;
-        let mut packed = [0u8; 128];
-        for j in 0..SCALARS_PER_LEAF {
-            packed[j * 32..(j + 1) * 32].copy_from_slice(&leaf_layer_scalars[start + j]);
-        }
-        packed == *leaf_bytes
-    })
+    let start = leaf_offset_in_chunk.checked_mul(SCALARS_PER_LEAF)?;
+    let scalars = leaf_layer_scalars.get(start..start.checked_add(SCALARS_PER_LEAF)?)?;
+    let mut packed = [0u8; CHALLENGED_LEAF_LEN];
+    for (j, scalar) in scalars.iter().enumerate() {
+        packed[j * 32..(j + 1) * 32].copy_from_slice(scalar);
+    }
+    Some(packed)
 }
 
-/// `VerifyPath(leaf_bytes, path, R_k)` from gate-2 §5.3 step 7.
+/// `VerifyPath(path, R_k)` from gate-2 §5.3 step 7, over verifier-held inputs.
 ///
 /// `leaf_layer_scalars` is the Selene leaf-layer chunk containing the
-/// challenged output (`4 × chunk_width` scalars). Consensus derives it from
-/// segment leaf store at the challenged index's parent node; the vin carries
-/// only the challenged `leaf_bytes` (128 bytes).
+/// challenged output (`4 × chunk_width` scalars), read by consensus from its
+/// own leaf store; `leaf_offset_in_chunk` is where the derived challenge index
+/// falls inside it. The vin carries neither -- only the branch layers in
+/// `path` are the prover's.
 pub fn verify_segment_path(
-    leaf_bytes: &[u8; 128],
     leaf_layer_scalars: &[[u8; 32]],
+    leaf_offset_in_chunk: usize,
     path: &SegmentPathOpening,
     rk: &[u8; 32],
 ) -> Result<(), VerifyError> {
@@ -124,7 +145,7 @@ pub fn verify_segment_path(
         return Err(VerifyError::PathTooShallow);
     }
 
-    if !leaf_bytes_in_layer(leaf_bytes, leaf_layer_scalars) {
+    if challenged_leaf_bytes(leaf_layer_scalars, leaf_offset_in_chunk).is_none() {
         return Err(VerifyError::LeafNotInOpening);
     }
 
@@ -142,25 +163,9 @@ pub fn verify_segment_path(
     Ok(())
 }
 
-/// Gate-2 §5.3 step 4: challenged index must match epoch derivation.
-pub fn verify_leaf_index(
-    leaf_index_in_segment: u32,
-    p_id: &[u8; 32],
-    shard_id: u64,
-    settlement_epoch: u64,
-    segment_leaf_count: u64,
-) -> Result<(), VerifyError> {
-    let expected = crate::challenge::challenge_leaf_index(
-        p_id,
-        shard_id,
-        settlement_epoch,
-        segment_leaf_count,
-    );
-    if leaf_index_in_segment != expected {
-        return Err(VerifyError::LeafIndexMismatch {
-            got: leaf_index_in_segment,
-            expected,
-        });
-    }
-    Ok(())
-}
+// `verify_leaf_index` was DELETED by RF-D6. It compared a wire-transported
+// `leaf_index_in_segment` against `challenge_leaf_index`; the index is no
+// longer transported, so there is nothing to compare -- the verifier derives
+// it and uses it directly (path verification, signature preimage). A check
+// whose only possible input is the value it would check against is not a
+// check.

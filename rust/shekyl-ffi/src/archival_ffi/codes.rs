@@ -35,10 +35,12 @@ pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW: u8 = 3;
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING: u8 = 4;
 /// Recomputed sub-root does not match `R_k`.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH: u8 = 5;
-/// `leaf_index_in_segment` does not match epoch challenge index.
-pub const SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX: u8 = 6;
-/// Vin `segment_subroot_rk` does not match registry value in context.
-pub const SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK: u8 = 7;
+// Code 6 (`ERR_LEAF_INDEX`) is RETIRED with code 7: the index it compared is
+// derived, not transported (RF-D6). Unassigned, not reused.
+// Code 7 (`ERR_REGISTRY_RK`) is RETIRED, not reusable: it reported a wire `R_k`
+// disagreeing with the registry's, and RF-D6 took `R_k` off the wire. The
+// number stays unassigned so an old log line cannot be misread as a new
+// condition.
 /// `current_height` is not past `H_fire`.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED: u8 = 8;
 /// `current_height` is past `H_credit_deadline` (`H_close`).
@@ -347,7 +349,6 @@ pub(super) fn map_verify_error(err: &shekyl_archival_retention::VerifyError) -> 
         VerifyError::PathTooShallow => SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW,
         VerifyError::LeafNotInOpening => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING,
         VerifyError::SubrootMismatch => SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH,
-        VerifyError::LeafIndexMismatch { .. } => SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX,
     }
 }
 
