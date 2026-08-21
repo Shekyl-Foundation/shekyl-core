@@ -11,7 +11,9 @@ use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use shekyl_rt_p2_spike::{client_config, dial, pin_error_of, serve, DialError, Identity, PinError};
+use shekyl_rt_p2_spike::{
+    client_config, dial, pin_error_of, rustls_error_in, serve, DialError, Identity, PinError,
+};
 
 fn ids() -> (Identity, Identity, Identity) {
     (
@@ -21,9 +23,20 @@ fn ids() -> (Identity, Identity, Identity) {
     )
 }
 
-/// Give the serve task a moment to record a rejection before reading it.
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(100)).await;
+/// Wait until `counter` reaches `expected`, or fail after a generous bound.
+/// Polling rather than a fixed sleep: the server task records a rejection on
+/// its own schedule, and "as long as it takes, up to a limit" does not flake
+/// on a loaded runner the way "exactly 100 ms" does.
+async fn await_count(counter: &std::sync::atomic::AtomicUsize, expected: usize, what: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while counter.load(Ordering::SeqCst) < expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what}: expected {expected}, still {} after 5s",
+            counter.load(Ordering::SeqCst)
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 /// 1. Correct pins connect, both directions — and the posture is what RT-4
@@ -66,17 +79,18 @@ async fn p2_wrong_server_pin_is_refused_before_any_byte_is_written() {
     let err = dial(served.addr, config)
         .await
         .expect_err("a wrong server pin must not connect");
-    let DialError::Handshake(tls) = &err else {
+    let DialError::Handshake(io) = &err else {
         panic!("rejection must be at the handshake, before any write: {err:?}");
     };
-    match pin_error_of(tls) {
+    let tls = rustls_error_in(io).expect("a pin refusal carries the rustls error");
+    match pin_error_of(&tls) {
         Some(PinError::ServerPinMismatch { expected, found }) => {
             assert_eq!(*expected, stranger.fingerprint);
             assert_eq!(*found, server.fingerprint);
         }
         other => panic!("expected a typed ServerPinMismatch, got {other:?} in {tls}"),
     }
-    settle().await;
+    await_count(&served.rejected, 1, "refused handshakes").await;
     assert_eq!(
         served.hits.load(Ordering::SeqCst),
         0,
@@ -106,15 +120,14 @@ async fn p2_unenrolled_client_is_refused_server_side() {
     // TLS 1.3: the client's Finished precedes the server's verdict, so the
     // refusal can arrive either during the handshake or on the first I/O.
     let tls = match &err {
-        DialError::Handshake(tls) => Some(tls.clone()),
-        DialError::AfterHandshake(io) => shekyl_rt_p2_spike::rustls_error_in(io),
+        DialError::Handshake(io) | DialError::AfterHandshake(io) => rustls_error_in(io),
         DialError::Connect(_) => None,
     };
     assert!(
         matches!(tls, Some(rustls::Error::AlertReceived(_))),
         "the client must learn of the refusal as a TLS alert, got {err:?}"
     );
-    settle().await;
+    await_count(&served.rejected, 1, "refused handshakes").await;
     assert_eq!(
         served.hits.load(Ordering::SeqCst),
         0,
@@ -152,14 +165,15 @@ async fn p2_pin_mismatch_is_not_a_connection_failure() {
 
     assert!(matches!(mismatch, DialError::Handshake(_)));
     assert!(matches!(refused, DialError::Connect(_)));
-    let DialError::Handshake(tls) = &mismatch else {
+    let DialError::Handshake(io) = &mismatch else {
         unreachable!()
     };
+    let tls = rustls_error_in(io).expect("the mismatch carries the rustls error");
     assert!(
-        pin_error_of(tls).is_some(),
+        pin_error_of(&tls).is_some(),
         "the mismatch must carry the typed PinError a UI can branch on"
     );
-    let shown = pin_error_of(tls)
+    let shown = pin_error_of(&tls)
         .map(ToString::to_string)
         .unwrap_or_default();
     assert!(

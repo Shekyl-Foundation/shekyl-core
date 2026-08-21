@@ -412,6 +412,14 @@ impl axum::serve::Listener for TlsListener {
                 Ok(tls) => return (tls, peer),
                 Err(_) => {
                     self.rejected.fetch_add(1, Ordering::SeqCst);
+                    // Each iteration awaits a fresh TCP connection, so this is
+                    // work proportional to inbound traffic, not a spin. The
+                    // yield keeps a burst of bad handshakes from starving
+                    // other tasks on the runtime; a sleep here would instead
+                    // penalise the next legitimate client behind an attacker.
+                    // Per-peer rate limiting belongs to RT-W4's real listener,
+                    // not to this probe.
+                    tokio::task::yield_now().await;
                 }
             }
         }
@@ -470,16 +478,21 @@ pub async fn serve(
 
 /// Where a dial failed. The split is the point: a handshake failure means
 /// **no application byte was written**; anything after is a different claim.
+/// The variant is decided by **which call failed**, never by what the error
+/// happens to carry: every error from `connect()` is a handshake-stage
+/// failure whether or not a `rustls::Error` can be recovered from it.
 #[derive(Debug)]
 pub enum DialError {
     /// TCP connect failed — no TLS was attempted.
     Connect(std::io::Error),
-    /// The TLS handshake failed; nothing was written. Carries the typed rustls
-    /// error so a pin mismatch is matchable (see [`pin_error_of`]).
-    Handshake(TlsError),
-    /// The handshake completed client-side and the failure came afterwards
-    /// (the server's refusal of *our* certificate arrives here in TLS 1.3,
-    /// because the client's Finished precedes the server's verdict).
+    /// `TlsConnector::connect` failed: the handshake did not complete and
+    /// nothing was written. Use [`rustls_error_in`] to recover the typed
+    /// rustls error it usually wraps, and [`pin_error_of`] on that for a pin
+    /// mismatch.
+    Handshake(std::io::Error),
+    /// `connect()` returned `Ok` and the failure came afterwards (the
+    /// server's refusal of *our* certificate arrives here in TLS 1.3, because
+    /// the client's Finished precedes the server's verdict).
     AfterHandshake(std::io::Error),
 }
 
@@ -502,10 +515,7 @@ pub async fn dial(addr: SocketAddr, config: Arc<ClientConfig>) -> Result<Dialed,
     let mut tls = TlsConnector::from(config)
         .connect(name, tcp)
         .await
-        .map_err(|e| match rustls_error_in(&e) {
-            Some(tls) => DialError::Handshake(tls),
-            None => DialError::AfterHandshake(e),
-        })?;
+        .map_err(DialError::Handshake)?;
     let (version, kx_group) = {
         let (_, conn) = tls.get_ref();
         (
