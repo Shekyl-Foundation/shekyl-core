@@ -62,9 +62,32 @@ if [ "$CRATE_COUNT" -lt 100 ]; then
   exit 1
 fi
 
-HITS="$(rg -n 'fs::read(_to_string)?\(\s*"/dev/' rust/ \
-          --glob '*.rs' --glob '!target' --glob '!shekyl-oxide' \
-        | grep -v 'device-read-allow' || true)"
+# Fail CLOSED on a scan error, and read the verdict UNPIPED (rule 46).
+#
+# `rg | grep ... || true` was wrong twice over: the `|| true` swallowed the
+# whole pipeline's exit, and the pipeline's exit is grep's, not rg's — so an
+# `rg` that errored (exit 2: a file it could not read) would leave HITS empty
+# and the gate would certify a tree it never fully scanned. That is the
+# fail-open shape this gate exists to be the opposite of.
+#
+# rg exit codes: 0 = match, 1 = no match (the clean pass), >=2 = error. Capture
+# rg alone so its status is the verdict, then filter the allow-marker off the
+# captured text — where a "nothing left" grep exit cannot mask a scan failure.
+set +e
+RAW="$(rg -n 'fs::read(_to_string)?\(\s*"/dev/' rust/ \
+         --glob '*.rs' --glob '!target' --glob '!shekyl-oxide')"
+RG_STATUS=$?
+set -e
+if [ "$RG_STATUS" -ge 2 ]; then
+  echo "FAIL: ripgrep errored (exit ${RG_STATUS}) while scanning rust/." >&2
+  echo "      The gate cannot certify a tree it could not fully read." >&2
+  exit 1
+fi
+
+# The marker filter runs on captured text, not in the verdict pipe. grep exits 1
+# when every line is filtered (the clean case), so `|| true` here catches THAT
+# and only that — it can no longer hide an rg error, which already exited above.
+HITS="$(printf '%s' "$RAW" | grep -v 'device-read-allow' || true)"
 
 if [ -n "$HITS" ]; then
   echo "FAIL: unbounded read of a /dev character device." >&2
