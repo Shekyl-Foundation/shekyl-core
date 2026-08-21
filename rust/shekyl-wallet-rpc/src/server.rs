@@ -407,14 +407,15 @@ impl BoundListener {
 /// the server creates the next one itself. That loop lives in
 /// `shekyl_win_sec::OwnerOnlyPipeListener::accept` (it is where the `unsafe`
 /// create call is); this wrapper only adapts its fallible accept to axum's
-/// infallible one, retrying after a short pause the way axum's own TCP and
-/// UDS listeners do rather than tearing the server down on a transient error.
+/// infallible one, with exactly the retry shape axum gives its own TCP and
+/// UDS listeners: log at `error!`, sleep one second, try again — never tear
+/// the server down on an accept error.
 #[cfg(windows)]
 struct PipeListener(shekyl_win_sec::OwnerOnlyPipeListener);
 
 #[cfg(windows)]
 impl axum::serve::Listener for PipeListener {
-    type Io = tokio::net::windows::named_pipe::NamedPipeServer;
+    type Io = shekyl_win_sec::ConnectedPipe;
     type Addr = ();
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
@@ -422,8 +423,15 @@ impl axum::serve::Listener for PipeListener {
             match self.0.accept().await {
                 Ok(io) => return (io, ()),
                 Err(e) => {
-                    tracing::warn!(error = %e, "named pipe accept failed; retrying");
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    // axum's `handle_accept_error`, verbatim in shape: `error!`
+                    // and a one-second sleep (its hyper-inherited EMFILE
+                    // reasoning). A fault that persists stays visible once a
+                    // second rather than being rate-limited into silence, and
+                    // every CLI call in the meantime fails in the open with
+                    // `NotFound` or a refusal — including the case where the
+                    // listener is trying to reclaim a squatted name.
+                    tracing::error!(error = %e, "named pipe accept error; retrying in 1s");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             }
         }

@@ -91,8 +91,8 @@ pub use peer::label_from_sacl_for_testing;
 pub use peer::{IntegrityLevel, PeerCheck, PeerCheckError};
 #[cfg(windows)]
 pub use pipe::{
-    open_verified, self_hosted_pipe_name, DialError, OwnerOnlyPipeListener, PipeBindError,
-    VerifiedPipe,
+    open_verified, self_hosted_pipe_name, ConnectedPipe, DialError, OwnerOnlyPipeListener,
+    PipeBindError, VerifiedPipe,
 };
 #[cfg(windows)]
 pub use sddl::{OwnerOnlyDescriptor, SddlError};

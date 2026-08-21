@@ -108,11 +108,16 @@ pub struct OwnerOnlyDescriptor {
     attributes: SECURITY_ATTRIBUTES,
 }
 
-// SAFETY: the descriptor is a `LocalAlloc` heap block this value owns
-// exclusively and frees exactly once; `LocalAlloc` memory has no thread
-// affinity and `LocalFree` may run on any thread. The raw pointer is what
-// makes the struct `!Send` by default, and it is the only field. Needed so the
-// pipe listener that holds one can live inside a spawned serve task.
+// SAFETY: `SECURITY_ATTRIBUTES::lpSecurityDescriptor` is a `*mut c_void`, and
+// raw pointers are `!Send` by an explicit negative impl in core
+// (`impl<T> !Send for *mut T`, `core::marker`), so the auto-trait does NOT
+// derive `Send` for this struct and `windows-sys` adds no impl of its own.
+// The override is sound because the pointee is a `LocalAlloc` heap block this
+// value owns exclusively and frees exactly once in `Drop`; `LocalAlloc`
+// memory has no thread affinity and `LocalFree` may run on any thread.
+// Needed so the pipe listener that holds one can live inside a spawned serve
+// task — `pipe.rs` carries a compile-time `Send` assertion that goes red if
+// this impl is removed.
 unsafe impl Send for OwnerOnlyDescriptor {}
 
 impl OwnerOnlyDescriptor {

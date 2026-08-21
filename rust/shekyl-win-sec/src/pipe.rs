@@ -52,7 +52,12 @@ use std::fmt;
 use std::fs::File;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_SEM_TIMEOUT, GENERIC_READ,
@@ -132,16 +137,34 @@ impl From<SddlError> for PipeBindError {
 ///
 /// A named pipe is not a socket with a backlog. Each client connection
 /// consumes one *instance*; to keep accepting, the server creates the next
-/// instance itself. [`Self::accept`] does that, and does it **before**
-/// handing the connected instance out, so the name stays held continuously.
+/// instance itself. [`Self::accept`] does that **before** handing the
+/// connected instance out, and — if a successor create ever fails — knows
+/// whether the name is still held by one of ours, so a name that did become
+/// free is reclaimed loud rather than joined. The exact guarantee is on
+/// [`Self::accept`].
 pub struct OwnerOnlyPipeListener {
     name: String,
     descriptor: OwnerOnlyDescriptor,
     /// The instance currently waiting for a client. `None` only after a
     /// successor could not be created, in which case the next `accept`
-    /// retries and surfaces the error.
+    /// recreates it (and surfaces the error if that fails too).
     waiting: Option<NamedPipeServer>,
+    /// Connected instances handed out by [`Self::accept`] and not yet
+    /// dropped. While this is non-zero the name is held by one of ours even
+    /// when `waiting` is `None`; when it is zero and `waiting` is `None`, the
+    /// name may be free — or taken.
+    live: Arc<AtomicUsize>,
 }
+
+// The listener lives inside a spawned serve task, so it must be `Send`. The
+// descriptor it holds carries a raw pointer and is `Send` only by the explicit
+// impl in `sddl.rs`; this goes red if that impl is removed — a check that can
+// fail, and the edit that makes it fail is named.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<OwnerOnlyPipeListener>();
+    assert_send::<ConnectedPipe>();
+};
 
 impl OwnerOnlyPipeListener {
     /// Create the first instance at `name` — owner-only descriptor, session
@@ -159,6 +182,7 @@ impl OwnerOnlyPipeListener {
             name,
             descriptor,
             waiting: Some(first),
+            live: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -170,14 +194,25 @@ impl OwnerOnlyPipeListener {
 
     /// Wait for a client, then return the connected instance.
     ///
-    /// The successor instance is created while the connected one still
-    /// exists, so there is no moment at which the name is free for someone
-    /// else to take. If the successor cannot be created the connected client
-    /// is still served, and the next call retries (and reports) the create.
-    pub async fn accept(&mut self) -> io::Result<NamedPipeServer> {
+    /// **The guarantee, exactly.** On the ordinary path the successor is
+    /// created while the connected instance still exists, so the name is
+    /// never free. If a successor create fails, the connected client is still
+    /// served and the name stays held for as long as any instance of ours is
+    /// alive; the next call recreates — and if **no** instance of ours is
+    /// live at that point it recreates with `first_pipe_instance(true)`, so a
+    /// name that did become free in the gap is *reclaimed loud*: a squatter
+    /// who took it makes the create fail with `ERROR_ACCESS_DENIED` (WP-D3
+    /// (1) re-applied) instead of this server quietly attaching a second
+    /// instance to someone else's pipe. The residual race — one of ours
+    /// dropping between the liveness read and the create — is covered by the
+    /// dial-side peer check, which is the load-bearing half regardless.
+    pub async fn accept(&mut self) -> io::Result<ConnectedPipe> {
         let waiting = match self.waiting.take() {
             Some(instance) => instance,
-            None => create_instance(&self.name, &self.descriptor, false)?,
+            None => {
+                let held_by_us = self.live.load(Ordering::Acquire) > 0;
+                create_instance(&self.name, &self.descriptor, !held_by_us)?
+            }
         };
         if let Err(e) = waiting.connect().await {
             // The instance is still usable; keep it for the next call rather
@@ -185,8 +220,75 @@ impl OwnerOnlyPipeListener {
             self.waiting = Some(waiting);
             return Err(e);
         }
+        // Count the connected instance BEFORE attempting the successor, so a
+        // failed successor create leaves the liveness count telling the truth.
+        let connected = ConnectedPipe::new(waiting, Arc::clone(&self.live));
         self.waiting = create_instance(&self.name, &self.descriptor, false).ok();
-        Ok(waiting)
+        Ok(connected)
+    }
+}
+
+/// A connected instance handed out by [`OwnerOnlyPipeListener::accept`].
+///
+/// Wraps the tokio instance so the listener can count how many of its
+/// instances are live; that count is what lets a recovery `accept` tell "the
+/// name is still ours" (plain create) from "the name may be free" (loud
+/// `first_pipe_instance(true)` reclaim). Reads and writes delegate unchanged.
+pub struct ConnectedPipe {
+    inner: NamedPipeServer,
+    live: Arc<AtomicUsize>,
+}
+
+impl ConnectedPipe {
+    fn new(inner: NamedPipeServer, live: Arc<AtomicUsize>) -> Self {
+        live.fetch_add(1, Ordering::AcqRel);
+        Self { inner, live }
+    }
+}
+
+impl Drop for ConnectedPipe {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl AsyncRead for ConnectedPipe {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ConnectedPipe {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
