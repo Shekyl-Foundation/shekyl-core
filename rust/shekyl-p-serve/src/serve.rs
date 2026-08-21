@@ -564,11 +564,19 @@ mod tests {
     }
 
     impl FixtureProvider {
-        /// Every fixture payload is asserted to be a whole number of leaves
-        /// **here**, at construction. `ShardBody::flat` returns `None` for
-        /// anything else, so without this a mis-sized fixture would arrive
-        /// as a 404 and read as a routing bug — the failure would be real
-        /// but would name the wrong thing.
+        /// Every fixture payload is asserted servable **here**, at
+        /// construction. `ShardBody::flat` returns `None` for anything it
+        /// cannot frame, so without this a bad fixture would arrive as a 404
+        /// and read as a routing bug — the failure would be real but would
+        /// name the wrong thing.
+        ///
+        /// Two constraints, one authority each. The leaf-multiple check is
+        /// spelled out because its message can name the leaf width; the
+        /// bound check goes through [`ServedFrameHeader::for_segment`] — the
+        /// same call the production path makes — so this guard cannot drift
+        /// from `flat`'s actual acceptance rule. (Its first version did
+        /// exactly that: it asserted the multiple and silently let an
+        /// oversized fixture fall through to the 404 it claimed to prevent.)
         fn new(shards: impl IntoIterator<Item = (u64, Vec<u8>)>) -> Arc<Self> {
             Arc::new(Self {
                 shards: shards
@@ -580,11 +588,30 @@ mod tests {
                              {LEAF_BYTES}-byte leaves — a served body is a leaf array",
                             bytes.len()
                         );
+                        if let Err(e) = ServedFrameHeader::for_segment(bytes.len() / LEAF_BYTES) {
+                            panic!("fixture for shard {id} is not servable: {e}");
+                        }
                         (id, Arc::from(bytes.into_boxed_slice()))
                     })
                     .collect(),
             })
         }
+    }
+
+    /// The guards above demonstrated firing — a guard that has never fired is
+    /// indistinguishable from one that cannot (the defect its first version
+    /// had, caught in review: the oversized case fell through silently).
+    #[test]
+    #[should_panic(expected = "not servable")]
+    fn an_oversized_fixture_fails_at_construction_not_as_a_404() {
+        let leaves = shekyl_curve_tree::leaves_per_segment() + 1;
+        FixtureProvider::new([(0, vec![0u8; leaves * LEAF_BYTES])]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a whole number")]
+    fn a_ragged_fixture_fails_at_construction_not_as_a_404() {
+        FixtureProvider::new([(0, vec![0u8; LEAF_BYTES - 1])]);
     }
 
     impl ShardProvider for FixtureProvider {
