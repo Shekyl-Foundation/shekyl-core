@@ -209,7 +209,10 @@
   no longer carries an RPC port / credits-per-hash to advertise (the
   handshake fields stay on the wire at zero), and the `print_pl publicrpc`
   console filter — which could only ever list strangers' advertised RPC
-  ports — is gone.
+  ports — is gone. The same ruling applies to the RPC readout:
+  `get_peer_list`'s `peer` and `get_connections`' `connection_info` no
+  longer carry `rpc_port` / `rpc_credits_per_hash` (values only a
+  non-conforming peer could supply; rides the same 3.22 bump).
 
 - **The C++ wallet stack is deleted — `wallet2` and everything that
   existed only to serve it** (Phase 5 of the Rust wallet rewrite,

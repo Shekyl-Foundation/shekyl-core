@@ -342,7 +342,6 @@ static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
 #define CRYPTONOTE_PRUNING_LOG_STRIPES          3 // the higher, the more space saved
 #define CRYPTONOTE_PRUNING_TIP_BLOCKS           5500 // the smaller, the more space saved
 
-#define RPC_CREDITS_PER_HASH_SCALE ((float)(1<<24))
 
 #define DNS_BLOCKLIST_LIFETIME (86400 * 8)
 
