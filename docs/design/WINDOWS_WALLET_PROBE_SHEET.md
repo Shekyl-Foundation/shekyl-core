@@ -7,7 +7,9 @@
 2026-08-20** on the `Windows (MSVC, daemon)` CI job — 3 passed, 5 failed, and
 one prediction was falsified in a way that also exposed a fail-open assertion.
 Results in §4. Predictions not yet exercised remain claims about *documented*
-behaviour, not observations.
+behaviour, not observations. **2026-08-20, WP-W2:** P-16 added to §1; P-4,
+P-10 and P-11 re-celled in §2 for the self-hosted-only ruling
+(`WINDOWS_WALLET_SUPPORT.md` §8.1).
 
 **Why this exists.** [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
 rules a transport whose security properties have never been executed by anyone
@@ -65,21 +67,23 @@ session. These are `cargo test -p shekyl-win-sec` unless noted.
 | P-8 | Does the disk probe return sane numbers on a real volume? | `shekyl_win_sec::free_bytes_available` on `%TEMP%` — **the shipping function**, not a copy (the Windows arm moved into this crate on 2026-08-20, which deleted the copy and its drift gate) | `Ok(n)`, `0 < n <` volume size; and `Err` for a nonexistent path | **WP-D9** — a wrong figure silently disarms the operator-alarm headroom condition |
 | P-14 | Is a **truncated** mandatory-label ACE refused rather than read? | Hand-build a SACL whose label ACE declares `SubAuthorityCount = 200` inside a 20-byte ACE; call the parser | `None` (malformed-refuse) — **not** `Some(Medium)` | **WP-D4** — `SYSTEM_MANDATORY_LABEL_ACE` embeds only the first DWORD of a variable-length SID, so a size check against the struct proves nothing about the sub-authorities. If this returns a level, the RID read walked off the end of an attacker-supplied ACE and a hostile server's malformed label is being trusted |
 | P-15 | Is the logon SID actually a **logon** SID? | `current_logon_sid()` must return `S-1-5-5-<high>-<low>`, five dashes, and differ from the user SID | Holds | **WP-D6** — `SE_GROUP_LOGON_ID` is a two-bit marker, so a partial-bit match would select some other group this token belongs to and the DACL would grant *that* group. Invisible to the client-side owner check, because the owner would still be us |
+| P-16 | Is the exported **seed file** owner-only from creation, and does creation refuse an existing path? | `shekyl_win_sec::create_owner_only_file` on a temp path; owner read back **literally** via `GetSecurityInfo(SE_FILE_OBJECT)` + `ConvertSidToStringSidW`; DACL asserted **structurally** from SDDL; a second create on the same path | Owner equals `current_user_sid()` (explicit `O:`, so not `BUILTIN\Administrators` even on an admin account — P-7's platform fact); `D:P` with exactly one ACE, `FA`; second create `Err` | **WP-D8** — a wrong owner or a second ACE means the seed is readable beyond the account that exported it, which is the whole difference `0600` makes; a successful second create means the `O_EXCL` half is missing and an existing seed file would be clobbered. Registered 2026-08-20 with WP-W2 (which absorbed WP-W4) |
 | P-9 | Does the round-tripped SID match `whoami /user`? | Compare `current_user_sid()` against `whoami /user /fo csv` | Equal | **WP-D1** — the pipe name is derived from this; a wrong SID means the name and the DACL key on different values and self-consistency is lost |
 
 ## 2. Registered but not implemented
 
-Two kinds live here: probes blocked on WP-W2/W3, and one (P-4) that is
-deliberately unimplemented because the ruling that closed §9.1 removed the
-decision it would have informed. Both are stated rather than quietly
-dropped — a probe that disappears from the sheet is indistinguishable from
-one that was answered.
+Three kinds live here, all stated rather than quietly dropped — a probe that
+disappears from the sheet is indistinguishable from one that was answered:
+P-4, unimplemented and **decision-relevant again** since 2026-08-20 (its row
+says why, and what it needs); P-10, which exists as an ordinary test that no
+blocking lane runs yet; and P-11, which WP-W2 made a property of a type
+rather than something to observe.
 
 | # | Question | Why not implemented | Revisits on failure |
 |---|---|---|---|
-| P-4 | Can a *second process* attach an instance to an existing name? | **Deliberately not implemented.** Needs a multi-process helper binary that was never written, and §9.1 closed on the threat-model ruling — its own "revisits" cell already said **Nothing**. Kept registered so the question stays visible, not because a result is owed | **Nothing.** Reopen only if §6's scope ruling is revisited, which would restore the question this probe was going to answer |
-| P-10 | End-to-end CLI ↔ wallet-rpc over the pipe | WP-W2 transport + WP-W3 peer checks | **WP-Q1** — if axum cannot be driven over create-instance-per-accept without unacceptable complexity, the transport ruling itself is what gets revisited, not the plumbing |
-| P-11 | Does a passphrase ever cross the pipe **before** `PeerCheck::verify` returns `Ok`? | WP-W3 | **WP-D3 (2)** — ordering is the whole property; a check that runs after the first write is decoration |
+| P-4 | Can a *second process* hold our name before we create it — and does **our** `first_pipe_instance(true)` create then fail loud, cross-process, the way P-3 shows in-process? | **Not implemented; decision-relevant since 2026-08-20.** The first form of this row said its revisit cell was *Nothing*, because §9.1 had closed on the scope ruling. That was correct for §9.1's question (who may attach *after* we hold the name) and wrong for this one (who may hold it *before*), which `WINDOWS_WALLET_SUPPORT.md` §8.1 identified as the 0700 directory's containment job. Predicted: a second process's `CreateNamedPipe` with `FILE_FLAG_FIRST_PIPE_INSTANCE` on a name we hold fails with `ERROR_ACCESS_DENIED`; ours fails the same way on a name it holds. Needs a second process (a self-re-exec helper would do); not written in WP-W2 because a helper that has never run once locally is the harness-artifact shape the first run of P-3/P-5/P-6 already produced. Named as a follow-up, not quietly dropped | **WP-D3 (1)** — if the flag does not fail loud on a taken name, the create-side half of containment is missing and the dial-side peer check carries containment alone. A stale *Nothing* here was worse than a blank |
+| P-10 | End-to-end CLI ↔ wallet-rpc over the pipe | **Exists as an ordinary cross-platform test, not yet as a CI-durable probe.** WP-W2 (2026-08-20) gives `shekyl-cli`'s `rpc_session_e2e` a Windows arm that self-hosts, dials through `open_verified`, and round-trips `get_version`. It runs on no blocking lane until WP-W5 turns the wallet test lane on; the Windows runner's scouting step (`continue-on-error`, §7) runs it informationally until then. Stays here rather than moving to §1 because a §1 row whose test executes nowhere would be the coverage claim this sheet exists to refuse | **WP-Q1** — if axum cannot be driven over create-instance-per-accept without unacceptable complexity, the transport ruling itself is what gets revisited, not the plumbing |
+| P-11 | Does a passphrase ever cross the pipe **before** `PeerCheck::verify` returns `Ok`? | **Made structural in WP-W2 (2026-08-20) rather than probed.** The only pipe-open path in `shekyl-cli` is `shekyl_win_sec::open_verified`, which runs `verify` before returning a handle; a write before `Ok` has nothing to write to. A runtime probe would be testing the type system. The reviewable check is the absence of any other pipe open in `shekyl-cli` (`CreateFileW`, `ClientOptions::open`, or a `\\.\pipe\` path in an `OpenOptions`) | **WP-D3 (2)** — ordering is the whole property; a check that runs after the first write is decoration |
 
 ## 3. Laptop-only, with a recorded result
 

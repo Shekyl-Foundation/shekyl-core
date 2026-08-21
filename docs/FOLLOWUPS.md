@@ -2086,6 +2086,36 @@ sustainability is unaffected by the recalibration.
   skips the Rust binaries there, and Windows release archives still carry the
   daemon but no wallet.
 
+  **UPDATE 2026-08-20 — WP-W2 CUT, self-hosted only; W3 and W4 folded in.**
+  Ruled (that document's §8.1): Windows ships **no** `npipe://` and **no**
+  `uds://` external form — `uds://` is refused at parse on both the CLI and
+  the server, naming the platform, and `RpcUrlForm::Uds` / `ListenAddr::Uds`
+  are `cfg(unix)` so a Windows arm that offered the transport cannot compile.
+  The ruling's first form called the peer check "pre-positioned, not
+  load-bearing" because the self-hosted client supposedly dialled a handle; it
+  dials a *name* through the OS namespace, the 0700 directory's containment
+  has no pipe analogue, and the dial-side owner + integrity check plus
+  `first_pipe_instance(true)` are its replacement on a path that runs with
+  auth disabled — recorded there as an error corrected by grounding. What
+  landed: `shekyl-win-sec` gained the listener (`OwnerOnlyPipeListener`,
+  create-instance-per-accept, descriptor on every instance) and the dial
+  (`open_verified`, which returns a handle only after `PeerCheck::verify`
+  passes, so "no secret before `Ok`" is a type property); `shekyl-wallet-rpc`
+  routes both `run_server` and `spawn_in_process_with` through one
+  `BoundListener` seam with a `cfg(windows)` pipe arm whose payload has no
+  public constructor; `shekyl-cli` dials it and refuses `uds://`; the seed
+  file (WP-B3/WP-D8) is created owner-only at `CreateFileW` (user-SID grant
+  — a file outlives the logon session — one ACE, protected, `CREATE_NEW`),
+  pinned by **P-16**. **Gate asymmetry, stated:** the `shekyl-win-sec` half is
+  checked, clippy'd, doc'd and probed for a Windows target; the
+  `cfg(windows)` arms in `shekyl-wallet-rpc` / `shekyl-cli` are seen by no
+  compiler on a Linux box and are observed only by the Windows runner's
+  `continue-on-error` scouting step, which now also runs the two end-to-end
+  tests (P-10). **Still unmet:** nothing *links* for Windows through CMake,
+  `BuildRust.cmake` still skips the Rust binaries there, the scouting step is
+  still informational (WP-W5 owns the flip, once observed green), and Windows
+  release archives still carry the daemon but no wallet.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and

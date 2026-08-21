@@ -51,6 +51,41 @@
 
 ### Added
 
+- **The Windows wallet transport, self-hosted only** (WP-W2, second
+  implementing slice of the Windows wallet round —
+  `docs/design/WINDOWS_WALLET_SUPPORT.md` §8.1, ruled 2026-08-20). On
+  Windows `shekyl-cli` hosts `shekyl-wallet-rpc` in-process over an
+  owner-only named pipe: descriptor applied at creation on every instance,
+  `first_pipe_instance(true)` so a name someone else already holds fails
+  loud instead of being joined, and a client dial (`open_verified`) that
+  runs the owner + integrity peer check **before** handing back a handle,
+  so no request byte can reach a pipe that has not passed. Windows ships
+  **no** external local form: there is no `npipe://`, and `uds://` is
+  refused at parse on both the CLI and the server with a message naming
+  the platform — `RpcUrlForm::Uds` and `ListenAddr::Uds` are `cfg(unix)`,
+  so a Windows arm offering the transport cannot compile. The scripted
+  seed export (`--seed-out`) is created owner-only at `CreateFileW`
+  (user-SID grant, one ACE, protected DACL, `CREATE_NEW`), the `0600`
+  equivalent, pinned by probe P-16.
+
+  The design record carries a correction worth reading: the ruling's first
+  form called the peer check "pre-positioned, not load-bearing" on the
+  self-hosted path, on the premise that the client dials a handle. It dials
+  a *name* through the OS namespace, and the 0700 directory that contains
+  the Unix socket has no pipe analogue, so the check is the replacement for
+  that containment on a path that runs with auth disabled. Recorded as an
+  error corrected by grounding.
+
+  **Gate asymmetry, stated plainly.** The `shekyl-win-sec` half is checked,
+  clippy'd, documented and probed for a Windows target. The `cfg(windows)`
+  arms in `shekyl-wallet-rpc` and `shekyl-cli` are seen by no compiler on
+  a Linux box (their graphs reach `ring`) and are observed only by the
+  Windows runner's informational scouting step, which now also runs the
+  two end-to-end tests. **No Windows wallet ships yet:** `BuildRust.cmake`
+  still skips the Rust binaries for Windows targets, and Windows release
+  archives still carry the daemon and no wallet. WP-W5 owns both the build
+  gate and turning the scouting step blocking, once it has been seen green.
+
 - **`shekyl-win-sec`: the Windows security primitives for the wallet
   transport** (WP-W1, first implementing slice of the Windows wallet round —
   `docs/design/WINDOWS_WALLET_SUPPORT.md`). Owner-only security descriptors

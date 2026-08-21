@@ -58,9 +58,9 @@ try {
 }
 
 if ($cargoExit -eq 0) {
-    Add-Result 'P-1,2,3,5,6,7,8,9' 'PASS' 'cargo test -p shekyl-win-sec --test probes'
+    Add-Result 'P-1,2,3,5,6,7,8,9,14,15,16' 'PASS' 'cargo test -p shekyl-win-sec --test probes'
 } else {
-    Add-Result 'P-1,2,3,5,6,7,8,9' 'FAIL' "cargo exited $cargoExit — see output above; the sheet names which decision each revisits"
+    Add-Result 'P-1,2,3,5,6,7,8,9,14,15,16' 'FAIL' "cargo exited $cargoExit — see output above; the sheet names which decision each revisits"
 }
 
 # P-9's external half: the crate's own SID must match what the OS reports.

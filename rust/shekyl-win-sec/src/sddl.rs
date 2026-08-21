@@ -12,6 +12,10 @@
 //! O:<user-sid>G:<user-sid>D:P(A;;GA;;;<logon-sid>)S:(ML;;NW;;;ME)
 //! ```
 //!
+//! (A second, for the seed **file** — `O:<user>G:<user>D:P(A;;FA;;;<user>)`
+//! — is [`OwnerOnlyDescriptor::private_file`]; `file.rs` explains why a file
+//! grants the user SID where the pipe must not.)
+//!
 //! - `O:` / `G:` — owner and group are the **user** SID, so a peer reading the
 //!   owner back off the handle sees the SID the pipe name was derived from
 //!   (the WP-D1 self-consistency property). Owner is identity, not access.
@@ -104,6 +108,18 @@ pub struct OwnerOnlyDescriptor {
     attributes: SECURITY_ATTRIBUTES,
 }
 
+// SAFETY: `SECURITY_ATTRIBUTES::lpSecurityDescriptor` is a `*mut c_void`, and
+// raw pointers are `!Send` by an explicit negative impl in core
+// (`impl<T> !Send for *mut T`, `core::marker`), so the auto-trait does NOT
+// derive `Send` for this struct and `windows-sys` adds no impl of its own.
+// The override is sound because the pointee is a `LocalAlloc` heap block this
+// value owns exclusively and frees exactly once in `Drop`; `LocalAlloc`
+// memory has no thread affinity and `LocalFree` may run on any thread.
+// Needed so the pipe listener that holds one can live inside a spawned serve
+// task — `pipe.rs` carries a compile-time `Send` assertion that goes red if
+// this impl is removed.
+unsafe impl Send for OwnerOnlyDescriptor {}
+
 impl OwnerOnlyDescriptor {
     /// Build the descriptor: owned by `owner`, access granted to `logon_sid`
     /// alone, labelled at Medium integrity.
@@ -115,9 +131,24 @@ impl OwnerOnlyDescriptor {
         Self::build(owner, logon_sid, MEDIUM_INTEGRITY_SACL)
     }
 
-    /// The one place the policy string is assembled. Both constructors route
-    /// through it so the label is the *only* thing that can differ between
-    /// them — a second `format!` would be a second policy to keep in sync.
+    /// The seed-file descriptor (**WP-D8**): owned by `owner`, full file
+    /// access for `owner` alone, protected DACL, **no label**.
+    ///
+    /// This is the one place in the crate that grants the *user* SID, and
+    /// `file.rs` says why that is not the WP-D6 bug coming back: a file is
+    /// persistent, so a logon-SID grant would make it unreadable at the next
+    /// logon, and the user SID is exactly what `0600` means. Still one ACE —
+    /// a second grant here would be the PR #516 shape, and P-16 counts.
+    pub fn private_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!("O:{o}G:{o}D:P(A;;FA;;;{o})", o = owner.as_str());
+        Self::from_sddl(&sddl)
+    }
+
+    /// The one place the **pipe** policy string is assembled. Both pipe
+    /// constructors route through it so the label is the *only* thing that
+    /// can differ between them — a second `format!` would be a second policy
+    /// to keep in sync. (The file policy has its own single `format!` in
+    /// [`Self::private_file`]; two policies, one assembly point each.)
     fn build(owner: &SidString, logon_sid: &SidString, sacl: &str) -> Result<Self, SddlError> {
         // The user SID is owner and group (identity, for the peer check); the
         // logon SID is the ONLY grant (access, scoped to this session).
@@ -126,7 +157,12 @@ impl OwnerOnlyDescriptor {
             owner = owner.as_str(),
             logon = logon_sid.as_str(),
         );
+        Self::from_sddl(&sddl)
+    }
 
+    /// Hand a finished SDDL string to the OS. Every constructor ends here, so
+    /// there is exactly one `unsafe` conversion to review.
+    fn from_sddl(sddl: &str) -> Result<Self, SddlError> {
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
 
         let mut psd: *mut c_void = std::ptr::null_mut();
@@ -205,28 +241,17 @@ impl OwnerOnlyDescriptor {
     /// preserved what we wrote — which is a claim about the OS, not about our
     /// formatting, and therefore worth testing rather than assuming.
     pub fn to_sddl(&self) -> Result<String, SddlError> {
-        let mut wide: *mut u16 = std::ptr::null_mut();
-        let mut len: u32 = 0;
-        // SAFETY: `lpSecurityDescriptor` is a live descriptor owned by `self`.
-        // On success the callee allocates `wide` with `LocalAlloc`.
-        let ok = unsafe {
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        // SAFETY: `lpSecurityDescriptor` is a live descriptor owned by `self`
+        // for the duration of the call.
+        unsafe {
+            sddl_of(
                 self.attributes.lpSecurityDescriptor,
-                SDDL_REVISION_1,
                 OWNER_SECURITY_INFORMATION
                     | GROUP_SECURITY_INFORMATION
                     | DACL_SECURITY_INFORMATION
                     | LABEL_SECURITY_INFORMATION,
-                &raw mut wide,
-                &raw mut len,
             )
-        };
-        if ok == 0 {
-            return Err(SddlError::Convert(last_error()));
         }
-        let guard = crate::sid::LocalFreeGuard(wide);
-        // SAFETY: `wide` is a NUL-terminated wide string owned by `guard`.
-        Ok(unsafe { crate::sid::wide_to_string(guard.0) })
     }
 
     /// Whether the DACL is **protected** — inherited ACEs cannot widen it
@@ -245,6 +270,40 @@ impl OwnerOnlyDescriptor {
         };
         ok != 0 && (control & SE_DACL_PROTECTED) != 0
     }
+}
+
+/// Render the selected parts of a live descriptor as SDDL.
+///
+/// Shared by [`OwnerOnlyDescriptor::to_sddl`] and the P-16 file readback, so
+/// there is one conversion to review. The returned string is the OS's
+/// **canonicalised** form — well-known SIDs come back as abbreviations (P-1's
+/// first run) — so callers compare structure, not literal owners.
+///
+/// # Safety
+/// `psd` must point to a valid security descriptor that outlives the call.
+pub(crate) unsafe fn sddl_of(
+    psd: *mut c_void,
+    info: windows_sys::Win32::Security::OBJECT_SECURITY_INFORMATION,
+) -> Result<String, SddlError> {
+    let mut wide: *mut u16 = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    // SAFETY: `psd` is valid per the contract above. On success the callee
+    // allocates `wide` with `LocalAlloc`, freed by `guard`.
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            psd,
+            SDDL_REVISION_1,
+            info,
+            &raw mut wide,
+            &raw mut len,
+        )
+    };
+    if ok == 0 {
+        return Err(SddlError::Convert(last_error()));
+    }
+    let guard = crate::sid::LocalFreeGuard(wide);
+    // SAFETY: `wide` is a NUL-terminated wide string owned by `guard`.
+    Ok(unsafe { crate::sid::wide_to_string(guard.0) })
 }
 
 impl Drop for OwnerOnlyDescriptor {

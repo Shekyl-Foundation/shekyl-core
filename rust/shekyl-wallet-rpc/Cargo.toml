@@ -52,6 +52,13 @@ shekyl-address = { path = "../shekyl-address" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-types = { path = "../shekyl-types" }
 
+# WP-W2: the in-process host's named-pipe listener. The `unsafe`
+# `create_with_security_attributes_raw` call and the owner-only descriptor
+# live there (WP-D2 — this crate is `deny(unsafe_code)`); what is here is one
+# `cfg(windows)` arm of `BoundListener` and an axum `Listener` adapter.
+[target.'cfg(windows)'.dependencies]
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }

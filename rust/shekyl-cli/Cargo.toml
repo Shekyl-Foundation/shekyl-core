@@ -31,6 +31,14 @@ tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
 shekyl-units = { path = "../shekyl-units" }
 
+# WP-W2: the self-hosted transport's dial (`open_verified`, which runs the
+# peer check before handing back a handle) and the seed file's owner-only
+# create (WP-D8). Both need Win32 calls and `unsafe`; this crate has neither
+# and per WP-D2 does not acquire them. Off Windows the crate compiles to
+# nothing and the call sites are `cfg(windows)`.
+[target.'cfg(windows)'.dependencies]
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"

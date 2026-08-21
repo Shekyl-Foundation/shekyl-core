@@ -40,13 +40,27 @@
 //! that work into the OS, so our `unsafe` reduces to one call plus a
 //! `LocalFree`, and the security policy becomes a reviewable string.
 //!
+//! # What lives here, as of WP-W2
+//!
+//! - [`OwnerOnlyDescriptor`], [`current_user_sid`], [`current_logon_sid`] —
+//!   the descriptor and the identities it is built from (WP-W1).
+//! - [`PeerCheck`] — the client-side owner + integrity check (WP-D4/D5).
+//! - [`OwnerOnlyPipeListener`] and [`open_verified`] — the self-hosted
+//!   transport's two ends (WP-W2). The dial returns a handle only *after* the
+//!   peer check passes, which is how `WINDOWS_WALLET_SUPPORT.md` §8.1's
+//!   containment argument becomes a type rather than a call-site rule.
+//! - [`create_owner_only_file`] — the seed file's `0600` equivalent (WP-D8).
+//! - [`free_bytes_available`] — the disk probe's Windows half (WP-D9).
+//!
 //! # Verification status
 //!
-//! Type-checked for `x86_64-pc-windows-gnu` on the pinned toolchain (the §7
-//! local gate). **Not** behaviour-tested: nothing on the development box runs
-//! Windows, so every claim below about what the OS *does* with these
-//! descriptors is a claim about documented behaviour, discharged by the
-//! Windows CI smoke test in WP-W5 — not by anything we have observed.
+//! Type-checked, clippy'd and documented for `x86_64-pc-windows-gnu` on the
+//! pinned toolchain (the §7 local gate), and the pre-registered probes run
+//! blocking on the Windows CI job. What the probes do **not** cover is the
+//! transport end to end — that is `shekyl-cli`'s `rpc_session_e2e`, which the
+//! Windows runner executes informationally until WP-W5 — so claims here about
+//! how a served pipe behaves under axum are claims about documented behaviour
+//! until that test has been observed.
 //!
 //! [`WINDOWS_WALLET_SUPPORT.md`]: https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/docs/design/WINDOWS_WALLET_SUPPORT.md
 
@@ -55,7 +69,11 @@
 #[cfg(windows)]
 mod disk;
 #[cfg(windows)]
+mod file;
+#[cfg(windows)]
 mod peer;
+#[cfg(windows)]
+mod pipe;
 #[cfg(windows)]
 mod sddl;
 #[cfg(windows)]
@@ -63,10 +81,19 @@ mod sid;
 
 #[cfg(windows)]
 pub use disk::free_bytes_available;
+#[cfg(windows)]
+pub use file::{create_owner_only_file, FileCreateError};
+#[cfg(all(windows, feature = "test-utils"))]
+pub use file::{file_owner_for_testing, file_sddl_for_testing};
 #[cfg(all(windows, feature = "test-utils"))]
 pub use peer::label_from_sacl_for_testing;
 #[cfg(windows)]
 pub use peer::{IntegrityLevel, PeerCheck, PeerCheckError};
+#[cfg(windows)]
+pub use pipe::{
+    open_verified, self_hosted_pipe_name, ConnectedPipe, DialError, OwnerOnlyPipeListener,
+    PipeBindError, VerifiedPipe,
+};
 #[cfg(windows)]
 pub use sddl::{OwnerOnlyDescriptor, SddlError};
 #[cfg(windows)]

@@ -464,14 +464,26 @@ jobs:
       # the same slice that makes it pass — that flip is the gate, and until
       # then this step's output is read by a human, not by CI.
       #
-      # The one thing it proves today: WP-D9's disk probe. engine-core cannot
-      # be Windows-checked on a Linux box, so this is the only place its
-      # `GetDiskFreeSpaceExW` half is compiled at all.
-      - name: "WP-W5 scouting: remaining Windows errors (informational)"
+      # What it observes as of WP-W2: the `cfg(windows)` arms of
+      # `shekyl-wallet-rpc` and `shekyl-cli` — the named-pipe listener seam
+      # and the verified dial — which no Linux box can compile (their graphs
+      # reach `ring`). If the check passes, the two end-to-end tests run in
+      # the same step: the first execution, anywhere, of the self-hosted pipe
+      # under axum (the probe sheet's P-10). They are informational for the
+      # same reason and end the same way — WP-W5 turns the wallet test lane
+      # blocking. Exit codes are read directly, never through a pipe
+      # (rule 46).
+      - name: "WP-W5 scouting: remaining Windows errors + pipe e2e (informational)"
         shell: pwsh
         working-directory: rust
         continue-on-error: true
-        run: cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
+        run: |
+          cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p shekyl-wallet-rpc --test http_get_version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p shekyl-cli --test rpc_session_e2e
+          exit $LASTEXITCODE
 
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
