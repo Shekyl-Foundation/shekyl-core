@@ -3,7 +3,7 @@
 **Status:** R0 — **RULED 2026-08-21.** RT-1…RT-9 ratified as written; RT-O3
 and RT-O4 ruled (§7); RT-O2 closed as a corrected error; RT-O1 stays a
 probe whose result cannot move the mechanism (§7.1). **RT-W1 landed** with
-this round; RT-W2, RT-W5 and RT-W7 are authorized; RT-W3 starts now.
+this round; RT-W2, RT-W5 and RT-W7 are authorized; **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
@@ -442,6 +442,45 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 | RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake — **the bite check, and the half that matters most: a pinned-mTLS harness that never observes a rejection is a check that cannot fail** — and assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
 | RT-P3 | ~~What does `ring` in the wallet-rpc graph do to the Windows lane?~~ **Withdrawn 2026-08-21** — `ring` is already in the graph (RT-O2), so the probe would measure today's state, not TLS's effect | — | — | — |
 
+**Results — 2026-08-22, PR #532, `rust/shekyl-rt-p2-spike` (DISPOSABLE; RT-W4
+rewrites what it keeps). Nine probes, each observed red under a named edit
+before its green was trusted.**
+
+- **RT-P1 — No, as predicted.** *Read from the rustls 0.23.37 source, not
+  handshake-probed*: the pre-registered "configure an external PSK and
+  handshake" had nothing to configure — the only public PSK item is the wire
+  enum `PskKeyExchangeMode`, and `ClientConfig` exposes `resumption` only.
+  Recorded as what support was. RT-4 unmoved, per the pre-registration.
+- **RT-P2 — Works; every refusal the ruling relies on fires, observed.**
+  (1) correct pins round-trip under TLS 1.3, tickets off on the server
+  (a resumed TLS 1.3 handshake never calls the client verifier, so the
+  allowlist must run on every handshake by construction); (2) a wrong server
+  pin is refused at the handshake, before any *application* byte (the
+  handshake itself is bytes), as a typed `ServerPinMismatch { expected,
+  found }`, with the server counting one refusal by the peer and nothing
+  else; (3a) an un-enrolled client is refused server-side; (3b) a
+  certificate-less client is refused — client authentication mandatory is
+  *observed*, not read off a flag; (4) a pin mismatch is a different value
+  from a dead TCP connect, with the remedy in its message; (5) an enrolled
+  certificate replayed without its key passes the allowlist and is refused
+  at CertificateVerify, on its own counter — the custom-verifier misuse the
+  mechanism invites, watched rather than trusted; (6) a connected-but-silent
+  peer neither blocks the next client nor outlives the handshake deadline;
+  (7) the same `ClientConfig` drives hyper-rustls's `HttpsConnector` — the
+  connector `shekyl-rpc-transport` already builds — round-trip, and the typed
+  mismatch is recoverable from hyper's error chain. The revisit trigger
+  (axum/hyper cannot be driven with a required client cert without
+  unacceptable plumbing) did not fire.
+- **Carried to RT-W4, from the probe's review:** ureq 3's `TlsConfig` has no
+  custom-`ServerCertVerifier` hook, so the L1 client builds its connector on
+  hyper-rustls (as probe 7 does) or a bespoke ureq `Connector`, and carries
+  the typed pin error through instead of flattening to a string; two
+  rule-35 residuals named on `Identity` — ring's private scalar inside
+  rcgen's and rustls's parsed keys (rcgen's `Zeroize` wipes only the DER;
+  ring has no zeroize-on-drop), and pki-types's `Zeroize`-without-`Drop`
+  copy; the handshake deadline's production value and per-peer rate
+  limiting; tickets stay off.
+
 ---
 
 ## 8. Slices
@@ -450,8 +489,8 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 |---|---|---|---|
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
 | RT-W2 | RT-1 + RT-2 on the C++ daemon RPC (`rpc_args.cpp:168`, `:196`), and on the restricted-bind path (`--rpc-restricted-bind-ip`, parsed in the same file with no confirm gate at all) — RT-1 is "every RPC listener", so every daemon bind site is in scope, not the two confirm gates alone | — | **authorized 2026-08-21** (RT-O3) |
-| RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **starts now**; RT-P1's result cannot move RT-4 |
-| RT-W4 | RT-4/5/6/7 on L1 | RT-W3 | open |
+| RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
+| RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — unblocked |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **authorized 2026-08-21** |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
 | RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **authorized 2026-08-21** |

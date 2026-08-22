@@ -16,11 +16,13 @@
 //!
 //! 1. Correct pins connect, both directions.
 //! 2. A wrong **server** pin is rejected **at the handshake, before the client
-//!    writes a byte** — for a channel that will carry a passphrase, "the
-//!    handshake failed" and "the passphrase never left the process" are
-//!    different claims, and only the second is the security property. Asserted
-//!    on both sides: the client's error is the handshake variant, and the
-//!    server counts zero handler hits and one refusal *by the peer*.
+//!    writes an application byte** — the handshake itself is bytes on the wire
+//!    (a ClientHello, a key share), but for a channel that will carry a
+//!    passphrase, "the handshake failed" and "the passphrase never left the
+//!    process" are different claims, and only the second is the security
+//!    property. Asserted on both sides: the client's error is the handshake
+//!    variant, which by construction precedes the first application write, and
+//!    the server counts zero handler hits and one refusal *by the peer*.
 //! 3. A client whose key is **not in the allowlist** is refused by the server,
 //!    and so is a client that presents **no certificate at all**: client
 //!    authentication being mandatory is observed, not read off a flag.
@@ -33,6 +35,11 @@
 //!    than trusted.
 //! 6. One peer that connects and never speaks does not stop the next one:
 //!    handshakes run per connection, under a deadline, off the accept loop.
+//! 7. The same `ClientConfig` drives **hyper-rustls's `HttpsConnector`** — the
+//!    connector `shekyl-rpc-transport` already builds, so the shape RT-W4's
+//!    client will have — and the typed mismatch survives hyper's error chain.
+//!    Probe 2's hand-written dial shows *where* the refusal lands; this shows
+//!    the production plumbing accepts the verifier and the client identity.
 //!
 //! # Why this goes through `dangerous()`, and why that is correct here
 //!
@@ -791,4 +798,94 @@ pub fn rustls_error_in(err: &std::io::Error) -> Option<TlsError> {
     err.get_ref()
         .and_then(|inner| inner.downcast_ref::<TlsError>())
         .cloned()
+}
+
+/// The typed refusal anywhere in an error's chain — a `rustls::Error`
+/// directly, or inside however many `io::Error`s wrap it. This is what a
+/// client built on hyper needs: hyper-util's error wraps the connector's,
+/// hyper-rustls wraps tokio-rustls's `io::Error` in an `io::Error` of its
+/// own, and that one wraps rustls's — and the rule-82 property is that the
+/// pin verdict is still there at the top.
+///
+/// The walk descends `io::Error` by `get_ref()`, not `source()`: std's
+/// `io::Error::source()` returns the *wrapped* error's source, stepping over
+/// the wrapped error itself, so a `source()`-only walk skips exactly the
+/// level that carries the verdict.
+#[must_use]
+pub fn pin_error_in_chain(err: &(dyn std::error::Error + 'static)) -> Option<PinError> {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if let Some(tls) = e.downcast_ref::<TlsError>() {
+            return pin_error_of(tls).cloned();
+        }
+        cur = match e.downcast_ref::<std::io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|inner| inner as &(dyn std::error::Error + 'static)),
+            None => e.source(),
+        };
+    }
+    None
+}
+
+/// Where a hyper-driven dial failed: building the request's connection (the
+/// handshake lives here, so the pin verdict does too) or reading the body.
+#[derive(Debug)]
+pub enum HyperDialError {
+    /// hyper-util could not complete the request — connect, handshake, or
+    /// the exchange itself. [`pin_error_in_chain`] recovers a pin verdict.
+    Request(hyper_util::client::legacy::Error),
+    /// The response body could not be read.
+    Body(hyper::Error),
+}
+
+impl fmt::Display for HyperDialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Request(e) => write!(f, "request failed: {e}"),
+            Self::Body(e) => write!(f, "response body failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for HyperDialError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Request(e) => Some(e),
+            Self::Body(e) => Some(e),
+        }
+    }
+}
+
+/// `GET /` through hyper-rustls's `HttpsConnector` over hyper-util's client
+/// — the connector shape `shekyl-rpc-transport` builds — with `config`
+/// installed through `with_tls_config`, so the custom verifier, the client
+/// identity, TLS 1.3 only, and no resumption all travel the production path.
+/// The URI is `https://<addr>/`; the IP is the server name, which the pin
+/// verifier ignores (the pin is the identity).
+pub async fn dial_via_hyper(
+    addr: SocketAddr,
+    config: Arc<ClientConfig>,
+) -> Result<String, HyperDialError> {
+    use http_body_util::BodyExt as _;
+
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config((*config).clone())
+        .https_only()
+        .enable_http1()
+        .build();
+    let client: hyper_util::client::legacy::Client<_, http_body_util::Empty<hyper::body::Bytes>> =
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+            .build(connector);
+    let uri: hyper::Uri = format!("https://{addr}/")
+        .parse()
+        .expect("a socket address is a valid authority");
+    let response = client.get(uri).await.map_err(HyperDialError::Request)?;
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .map_err(HyperDialError::Body)?
+        .to_bytes();
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }

@@ -14,10 +14,10 @@ description = "DISPOSABLE probe: RT-P2, pinned mutual TLS under axum with the wr
 publish = false
 
 # Every dependency below was already in Cargo.lock before this crate existed
-# (rule 17: no new supply-chain surface for a probe). rustls/tokio-rustls come
-# through shekyl-rpc-transport's HTTPS client; rcgen through shekyl-ffi; sha2
-# is a workspace dependency. The SPKI is read through rustls's own parser, so
-# no second X.509 parser is pulled in.
+# (rule 17: no new supply-chain surface for a probe). rustls/tokio-rustls and
+# the hyper trio come through shekyl-rpc-transport's HTTPS client; rcgen
+# through shekyl-ffi; sha2 is a workspace dependency. The SPKI is read through
+# rustls's own parser, so no second X.509 parser is pulled in.
 [dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "1"
@@ -29,6 +29,13 @@ rcgen = { version = "0.14", features = ["zeroize"] }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 axum = "0.8"
+# The production client shape: shekyl-rpc-transport drives the same
+# `HttpsConnector<HttpConnector>`; probe 7 installs this crate's ClientConfig
+# into it, so the pin travels the connector RT-W4 will use.
+hyper = { version = "1", default-features = false, features = ["http1", "client"] }
+hyper-util = { version = "0.1", default-features = false, features = ["http1", "client-legacy", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring"] }
+http-body-util = { version = "0.1", default-features = false }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "io-util", "time", "sync"] }
 
 [lints]
