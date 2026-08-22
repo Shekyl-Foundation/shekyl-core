@@ -4,6 +4,31 @@
 
 ### Changed
 
+- **The legacy FCMP++ prove seam is gone.** `genRctFcmpPlusPlus` — the C++ end
+  of the retired C++ → Rust → C++ → Rust proving round-trip — had no caller:
+  production signing moved to `shekyl_sign_fcmp_transaction` (one call), and
+  `core_tests/chaingen.cpp` stopped calling it when the `gen_fcmp_*` tests were
+  deleted. It is deleted with the exports that existed only to serve it
+  (`shekyl_fcmp_prove`, `shekyl_fcmp_proof_len`) and their C++ declarations,
+  including `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, `ShekylFcmpProveResult` and
+  `ProveInputFields`. **No production path changes** — the Rust prover is
+  untouched; this removes a C++ orchestration wrapper and an FFI surface, per
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md) §5 step 1.
+
+  The witness *format* survives and moved rather than died: the FROST multisig
+  coordinator still parses it, so `parse_prove_witness`, its helpers, the
+  `shekyl_fcmp_build_witness_header` writer, `ProveInputFields` and the
+  `WITNESS_HEADER.json` round-trip test are now `#[cfg(feature = "multisig")]`,
+  which puts the dependency where the compiler enforces it instead of leaving a
+  parser that nothing in a default build reads. Its wire-format spec — the only
+  prose description of the layout — moved onto `parse_prove_witness` **with a
+  correction**: it had documented a 224-byte, 7-field header, omitting the
+  commitment mask, where the real header is 256 bytes and 8 fields.
+
+  `fill_construct_tx_rct_stub` is deliberately **not** deleted: the
+  `construct_tx*` chain that calls it is the C++ consensus oracle's transaction
+  factory, and retiring that is the oracle lane's work.
+
 - **`shekyl-wallet-rpc` refuses two listen configurations it used to
   accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
   A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
