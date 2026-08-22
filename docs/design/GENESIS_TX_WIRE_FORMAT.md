@@ -331,7 +331,7 @@ prefilter. *(Corrects an earlier keccak/X25519 derivation that cited a stale pat
 **Terminology:** *CT = confidential transaction.* There is no RingCT — Monero's
 rings/decoys are gone — so this PR says **CT**, not RCT in prose. Per
 `CT_SURFACE_NAMING_PIN.md`, renaming the bulk C++ `rct*` source symbols
-(`rctTypes.h`, the `rct_signatures` field, the `rct::` namespace) to `ct*` is
+(`ct_types.h`, the `ct_signatures` field, the `ct::` namespace) to `ct*` is
 **deferred to Phase 5** (wallet2 retirement), **not** a genesis change: the
 **type values are genesis-locked**, and `binary_archive` is positional (ignores
 names), so identifier renames have **no genesis-wire effect**. The V3.0
@@ -342,12 +342,12 @@ JSON-archive-only `ar.tag` names are now `ct_signatures` / `ctsig_prunable`
 
 | Element | Source | Disposition |
 |---|---|---|
-| type byte | rctTypes.h:163-170,200 | **Ratify** — already minimal: `CTTypeNull=0`, `CTTypeFcmpPlusPlusPqc=1` (Q7 dense renumber, §2.0); C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). |
-| coinbase `Null`-but-committed (`outPk`/`enc_amounts`/`enc_labels`) | rctTypes.h:209-212 | **Ratify as the exception.** Shekyl-intended for FCMP++ tree-leaf commitment uniformity (Monero's null coinbase has no commitments). Explicitly **not** the spend template. |
-| base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | rctTypes.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
-| base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | rctTypes.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |
+| type byte | ct_types.h:163-170,200 | **Ratify** — already minimal: `CTTypeNull=0`, `CTTypeFcmpPlusPlusPqc=1` (Q7 dense renumber, §2.0); C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). |
+| coinbase `Null`-but-committed (`outPk`/`enc_amounts`/`enc_labels`) | ct_types.h:209-212 | **Ratify as the exception.** Shekyl-intended for FCMP++ tree-leaf commitment uniformity (Monero's null coinbase has no commitments). Explicitly **not** the spend template. |
+| base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | ct_types.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
+| base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | ct_types.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |
 | `pqc_auths` (non-coinbase): `nvin ×` `{auth_version(1) scheme_id(1) flags(u16 LE) hybrid_public_key(varint+bytes) hybrid_signature(varint+bytes)}` at **tx level**, EOF-tolerant on read | basic.h:334-353,491-517 | **Ratify** — tx-level, between base and prunable; read tolerates truncation (pruned form). |
-| prunable (type≠Null): `VARINT(nbp)` `bpp×nbp` `VARINT(curve_trees_tree_depth)` `VARINT(proof_len)` `fcmp_pp_proof[proof_len]` `pseudoOuts[n_spend×32]` | rctTypes.h:347-410 | **Ratify** — but `bpp` and `fcmp_pp_proof` interiors are a freeze gap, see §6 Q6. `n_spend` = the `txin_to_key` subset of vin (== `nvin` for pure spends; a bond_post vin carries no pseudo-out — §1.1 coupling closure, 2026-07-05). |
+| prunable (type≠Null): `VARINT(nbp)` `bpp×nbp` `VARINT(curve_trees_tree_depth)` `VARINT(proof_len)` `fcmp_pp_proof[proof_len]` `pseudoOuts[n_spend×32]` | ct_types.h:347-410 | **Ratify** — but `bpp` and `fcmp_pp_proof` interiors are a freeze gap, see §6 Q6. `n_spend` = the `txin_to_key` subset of vin (== `nvin` for pure spends; a bond_post vin carries no pseudo-out — §1.1 coupling closure, 2026-07-05). |
 
 **`enc_labels` indistinguishability invariant — BINDING serializer rule.** Every
 output carries a fixed-size `enc_label` (9 B), **real or zero-sentinel, never
@@ -445,7 +445,7 @@ C++ `check_outs_valid` (`cryptonote_format_utils.cpp`, pool txs +
 `prevalidate_miner_transaction` for coinbase output keys) and
 `check_commitment_mask_valid` (`blockchain.cpp`) are thin marshaling shims per
 rule 20 boundary advancement — the native `crypto::check_key` /
-`rct::zeroCommit` logic is retired from the admission path in the same cut.
+`ct::zeroCommit` logic is retired from the admission path in the same cut.
 
 ### 2.4 Coinbase construction
 
@@ -786,7 +786,7 @@ pre-renumber tags until recapture.)*
 | Bound | Value | Enforced | Constant |
 |---|---|---|---|
 | inputs / tx | **8** | blockchain.cpp:3618 | `FCMP_MAX_INPUTS_PER_TX` (config:211) |
-| outputs / tx | **16** | BP+ layout (rctSigs.cpp:211; tx_verification_utils.cpp:213) | `BULLETPROOF_PLUS_MAX_OUTPUTS` (config:241) |
+| outputs / tx | **16** | BP+ layout (ct_semantics.cpp:211; tx_verification_utils.cpp:213) | `BULLETPROOF_PLUS_MAX_OUTPUTS` (config:241) |
 | tx size | **1,000,000** | tx_verification_utils.cpp:63 | `CRYPTONOTE_MAX_TX_SIZE` (config:44) |
 | tx_extra | **24,576** | cryptonote_tx_utils.cpp:579 | `MAX_TX_EXTRA_SIZE` (config:254) |
 | PQC pubkey blob | **1,996** single / 13,974 multisig-max | cryptonote_basic.h:347 | `PQC_HYBRID_SINGLE_KEY_LEN` / `PQC_MAX_PUBLIC_KEY_BLOB` (config:291) |
@@ -938,7 +938,7 @@ Gate = **identical accept/reject** (§7), not round-trip.
   fingerprinting — distinct from `SPENDABLE_AGE=10`), with proactive re-anchor at
   `+50` (REBUILD_AT) before the MAX_AGE cutoff.
 - **CT balance:** `Σ pseudoOuts == Σ outPk + fee` (+ `bond_credit` for bond-post) —
-  `verRctSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
+  `verCtSemanticsSimple` / `shekyl_fcmp_verify` (tx_verification_utils.cpp:234;
   blockchain.cpp:4125). The general spend rule (the bond floor §2.0 is the
   bond-post case of this).
 - **Archival arms (single-wave, spec-grounded):** `bond_post` is **JoinMarket-only

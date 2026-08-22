@@ -9,7 +9,7 @@
 > touch rubric** (referenced by `docs/CHANGELOG.md`, `docs/USER_GUIDE.md`,
 > `contrib/depends/README.md`, `docs/CPP_INHERITANCE_INVENTORY.md`, the
 > four 32-bit tripwire comment blocks, and `FOLLOWUPS.md`), the
-> `rct::`/`ct::` naming reference, the C++ alternative-tokens decision,
+> `ct::`/`ct::` naming reference, the C++ alternative-tokens decision,
 > the deliberately-coupled test-surface items, and the upstream-technique
 > tracking table. Resolved items have been swept to `docs/audit_trail/`
 > (see `RESOLVED_260419.md`); git history is the authoritative archive of
@@ -25,8 +25,10 @@
 > Monero. Decisions that weigh heavily on cherry-pick preservation
 > should be re-examined on their own merits; the cost they assume is
 > largely notional. See `docs/FOLLOWUPS.md` for the scheduled V3.2
-> revisit of the `/FIiso646.h` workaround and the `rct::` → `ct::`
-> rename, both of which rest on this premise.
+> revisit of the `/FIiso646.h` workaround, which rests on this premise.
+> The `rct::` → `ct::` rename rested on it too and was **done
+> 2026-08-21** — its stated blocker (`wallet2`) was deleted, not merely
+> retired.
 
 ---
 
@@ -45,8 +47,8 @@ change to replace hundreds of `not`/`and`/`or` sites is high-effort,
 low-value, and historically cited upstream-cherry-pick risk as a
 primary constraint. That constraint is largely notional (see framing
 note above); the decision is scheduled for a V3.2 revisit on its own
-merits, tracked in `docs/FOLLOWUPS.md` §"Re-examine `/FIiso646.h` and
-`rct::` → `ct::` deferrals".
+merits, tracked in `docs/FOLLOWUPS.md` §"Re-examine the `/FIiso646.h`
+deferral".
 
 ---
 
@@ -538,38 +540,51 @@ audit finding.
 
 ## Naming / Code Clarity
 
-### `rct_signatures` field name is a Monero-era misnomer — partially addressed
-**Priority**: Low — cosmetic, but misleading.
-**Target**: V3.2 Phase 5 (`wallet2.cpp` retirement). **Disposition pin:**
+### `rct_signatures` field name is a Monero-era misnomer — resolved 2026-08-21
+**Priority**: was Low — cosmetic, but misleading.
+**Disposition pin:**
 [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
-(2026-06-09). No rename PR before cutover; Rust vocabulary effective now.
+(2026-06-09, closed 2026-08-21). Retained as the naming reference for what
+the container holds; the rename itself is done.
 
-`transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
-signatures. In Shekyl v3, the only accepted types are `CTTypeNull`
-(coinbase) and `CTTypeFcmpPlusPlusPqc`. The struct actually carries:
+`transaction::ct_signatures` (typed `ct::CtSig`) never held ring signatures
+in Shekyl. In Shekyl v3, the only accepted types are `CTTypeNull` (coinbase)
+and `CTTypeFcmpPlusPlusPqc`. The struct carries:
 
-- **`rctSigBase`**: Pedersen commitments (`outPk`), HKDF-encrypted amounts
+- **`CtSigBase`**: Pedersen commitments (`outPk`), HKDF-encrypted amounts
   (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor). (The dead
   legacy base-slot `pseudoOuts` was deleted 2026-07-09 —
   `CT_SURFACE_NAMING_PIN.md` §2.)
-- **`rctSigPrunable`**: BP+ range proofs, the opaque FCMP++ membership
+- **`CtSigPrunable`**: BP+ range proofs, the opaque FCMP++ membership
   proof, `curve_trees_tree_depth`, `pseudoOuts` (one per spend input).
 
 All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 `RCTTypeBulletproof`, `RCTTypeBulletproofPlus`) are rejected at
-deserialization. The name "rct" (Ring Confidential Transactions) is
-misleading since the ring component no longer exists.
+deserialization. The inherited name "rct" (Ring Confidential Transactions)
+asserted a ring component that does not exist.
 
-**Status (April 2026, revised June 2026):** `using ct_signatures =
-rct::rctSig;` in `cryptonote_basic.h` fixes **RCT → CT** (no ring). It does
-**not** fix **signatures** in the verifier module name — `rctSigs` targets
-`ct_semantics`, not `ct_signatures`. Three surfaces (wire tags, C++ ids,
-Rust/FFI) have different timing; see the pin. C++ rename triggers on
-`wallet2` gone; new Rust code uses Shekyl-native names and maps at FFI.
+**Resolution (2026-08-21).** Two fixes, landed apart:
 
-The `rct::` namespace (`src/fcmp/rctTypes.h`, `rctOps.h`, `rctSigs.h`)
-has the same problem — it was renamed from `ringct/` to `fcmp/` at the
-directory level but retains the `rct::` namespace internally.
+1. **RCT → CT** — the April 2026 `using ct_signatures = rct::rctSig;` alias
+   in `cryptonote_basic.h`, superseded 2026-07-11 when the field itself became
+   `ct_signatures` (V3.0 public-API slice: JSON-archive tags, `CTType*` enum
+   variants). The alias then had no users and was deleted with the sweep below.
+2. **signatures → semantics** — the alias never fixed this half, and applying
+   `ct_signatures` to the verifier module would have produced
+   `ct_signatures.cpp` and re-committed the fossil. Pin §5 step 2 landed
+   2026-08-21: `namespace rct` → `namespace ct`, `rctSig*` → `CtSig*`, and
+   `src/fcmp/rctSigs.{h,cpp}` → **`ct_semantics.{h,cpp}`** (with `rctTypes` →
+   `ct_types`, `rctOps` → `ct_ops`, `rctCryptoOps` → `ct_crypto_ops`).
+   Rename-only: binary archive tags are numeric and untouched.
+
+The pinned trigger was `wallet2.cpp` retirement; `wallet2` was **deleted**
+outright in the Phase-5 lane (`src/wallet/` is gone), firing it in V3.0.
+
+**Still owed:** the two legacy construction stand-ins `genRctFcmpPlusPlus`
+and `fill_construct_tx_rct_stub` are **deletion** targets, not rename
+targets, so the sweep left their names alone — they are the only
+`Rct`-spelled identifiers deliberately surviving under `src/fcmp/`. Tracked
+in `docs/FOLLOWUPS.md` (V3.0).
 
 **Deception observed (April 2026):** during the `chore/cxx-logging-
 consolidation` work we nearly shipped a `make ringct` comment in the
@@ -579,10 +594,13 @@ directory was renamed to `fcmp/` and the CMake object library is
 `obj_fcmp` / `fcmp`), but the name still reads as current Shekyl
 vocabulary to anyone skimming — exactly the confusion this
 structural-debt entry exists to retire. The recipes now name `common`,
-which is real. Every further `ringct` / `rct::` sighting in fresh
+which is real. Every further `ringct` / `ct::` sighting in fresh
 documentation, comments, or build scaffolding should be treated the
 same way: it is Monero-era deadweight masquerading as current naming
-and needs renaming-on-touch under rule 93.
+and needs renaming-on-touch under rule 93. With the sweep landed, the rule
+is now a **no-accretion** one — a fresh `ringct` / `rct::` / `rctSig`
+sighting in C++ is a regression to fix at once, not debt to schedule
+(`CT_SURFACE_NAMING_PIN.md` §6).
 
 ---
 
@@ -649,7 +667,7 @@ Versioned the remaining undecided structural items (libunbound
 stubbing → V3.2; MSVC vendored-code warnings → V3.2; vcpkg
 manifest-mode → V3.3). Kept the framing note at the top; the
 "cousin, not downstream" posture underpins the V3.2 revisit of
-`/FIiso646.h` and the `rct::` rename tracked in
+`/FIiso646.h` and the `ct::` rename tracked in
 `docs/FOLLOWUPS.md`.*
 
 *Last updated: 2026-04-21 — Closed the easylogging++ replacement

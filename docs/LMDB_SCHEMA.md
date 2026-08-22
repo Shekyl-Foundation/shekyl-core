@@ -137,7 +137,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 
 ### `txs_prunable`
 
-Prunable suffix of serialized transactions (`rctSigPrunable`: Bulletproof+ range proofs, pseudo-outs, and the opaque FCMP++ membership-proof blob).
+Prunable suffix of serialized transactions (`CtSigPrunable`: Bulletproof+ range proofs, pseudo-outs, and the opaque FCMP++ membership-proof blob).
 
 | Property | Value |
 |---|---|
@@ -280,7 +280,7 @@ Offset  Size  Field
 16      32    crypto::public_key pubkey
 48       8    uint64_t unlock_time
 56       8    uint64_t height
-64      32    rct::key commitment
+64      32    ct::key commitment
 ```
 
 **`pre_rct_outkey` (non-RCT, amount > 0), 64 bytes:**
@@ -316,7 +316,7 @@ Pruning-safe output metadata, retained after transaction pruning.
 ```
 Offset  Size  Field
 0       32    crypto::public_key pubkey
-32      32    rct::key commitment
+32      32    ct::key commitment
 64       8    uint64_t unlock_time
 72       8    uint64_t height
 80       1    uint8_t pruned (1 if parent tx prunable data removed)

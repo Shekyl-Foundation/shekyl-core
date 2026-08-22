@@ -1,10 +1,11 @@
 # Confidential-transaction surface naming — disposition pin
 
-**Status.** **Pinned** (2026-06-09). No rename PR until `wallet2.cpp` retirement
-([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 5). This document is
-the authoritative disposition for inherited `rct::` / `rctSig` / `rctSigs` /
-`rct_signatures` naming. Implementation is deferred; **Rust-side vocabulary is
-effective now** across the FFI boundary.
+**Status.** **CLOSED — the rename landed 2026-08-21** (see the UPDATE below).
+Originally **pinned** 2026-06-09 with no rename PR until `wallet2.cpp`
+retirement ([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 5). This
+document remains the authoritative disposition for the inherited `rct::` /
+`rctSig` / `rctSigs` / `rct_signatures` naming — it is now the record of *what
+was renamed to what and why*, and §6's accretion criterion is live.
 
 **UPDATE 2026-07-11 — V3.0 public-API slice pulled forward and landed.** The
 later `FOLLOWUPS.md` umbrella entry (flagged 2026-06-22) split the sweep:
@@ -22,13 +23,64 @@ macro, Rust `CT_TYPE_FCMP_PLUS_PLUS_PQC`), and Rust-side residue
 namespace, `rctSig*` struct/module/file names, and `serialize_rctsig_*`
 function names stay gated on `wallet2` retirement per §5.
 
+**UPDATE 2026-08-21 — §5 step 2 LANDED; this pin is closed.** The trigger
+fired early and by a stronger event than the one pinned: `wallet2` was not
+*retired*, it was **deleted** — `src/wallet/` no longer exists — so the C++
+caller surface the pin wanted shrunk went to zero inside V3.0 rather than
+V3.2. The mechanical sweep landed as its own PR:
+
+| Was | Now |
+|-----|-----|
+| `src/fcmp/rctTypes.{h,cpp}` | `src/fcmp/ct_types.{h,cpp}` |
+| `src/fcmp/rctOps.{h,cpp}` | `src/fcmp/ct_ops.{h,cpp}` |
+| `src/fcmp/rctCryptoOps.{h,c}` | `src/fcmp/ct_crypto_ops.{h,c}` |
+| `src/fcmp/rctSigs.{h,cpp}` | `src/fcmp/ct_semantics.{h,cpp}` |
+| `namespace rct` / `rct::` | `namespace ct` / `ct::` |
+| `rctSig`, `rctSigBase`, `rctSigPrunable` | `CtSig`, `CtSigBase`, `CtSigPrunable` |
+| `transaction.rct_signatures` | `transaction.ct_signatures` |
+| `serialize_rctsig_base`, `hash_rctsig_base_component` | `serialize_ctsig_base`, `hash_ctsig_base_component` |
+| `verRctSemanticsSimple`, `verRctSemanticsBondPost` | `verCtSemanticsSimple`, `verCtSemanticsBondPost` |
+| `is_rct_bulletproof_plus`, `is_rct_fcmp_pp_pqc`, `ver_mixed_rct_semantics` | `is_ct_*`, `ver_mixed_ct_semantics` |
+
+**Byte-invariance** (the §3 requirement) is structural, not merely tested:
+`VARIANT_TAG(binary_archive, …)` values are **numeric** (`0x90`–`0xa0`) and
+were not touched, so no serialized byte can depend on a renamed C++
+identifier. The `json_archive` / `debug_archive` tag *strings* did move with
+the type names (`"rct_key"` → `"ct_key"`, `"rct_rctSig"` → `"ct_CtSig"`,
+`"rct::key"` → `"ct::key"`, …) — JSON-visible surface, in the same
+pre-genesis-free class the 2026-07-11 slice disclosed, affecting
+`decode_as_json` / tx-pool JSON only. Those tags follow the inherited
+`<namespace>_<typename-as-written>` convention (`rct_keyV` preserved camel),
+which is why `ct::CtSig` tags as `ct_CtSig`; the stutter is the convention's,
+not new.
+
+**The dead `ct_signatures` alias was deleted with the sweep.** After the
+2026-07-11 slice renamed the field itself, `using ct_signatures = rct::rctSig;`
+in `cryptonote_basic.h` had no users; post-rename it would have read `using
+ct_signatures = ct::CtSig;`, a self-referential no-op. It is gone.
+
+**Not landed — §5 step 1.** `genRctFcmpPlusPlus` and
+`fill_construct_tx_rct_stub` are **deletion** targets, so the sweep left their
+names untouched on purpose: they are now the only `Rct`-spelled identifiers
+under `src/fcmp/`, which keeps the remaining debt legible instead of
+laundering it into `Ct` spelling. Grounding done while scoping the sweep:
+`genRctFcmpPlusPlus` has **zero callers** (the `shekyl_ffi.h` comment naming
+`core_tests/chaingen.cpp` is stale — that file references it zero times), so
+its deletion is unblocked and cascades into
+`SHEKYL_PROVE_WITNESS_HEADER_BYTES` / the legacy `shekyl_fcmp_prove` path;
+`fill_construct_tx_rct_stub` has one live production caller
+(`cryptonote_tx_utils.cpp:637`) and needs that stub construction moved to the
+Rust signing path first. Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0).
+
 **Supersedes (partially).** April 2026 `ct_signatures = rct::rctSig` alias
 ([`STRUCTURAL_TODO.md`](../STRUCTURAL_TODO.md) §"`rct_signatures` field name is
 a Monero-era misnomer") — retained as the C++ type bridge, not as the module or
 verifier rename target.
 
-**Tracked in.** [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) §V3.2 — "Rename inherited
-`rct::` / `rctSig` / `rctSigs` C++ surface after `wallet2` cutover."
+**Tracked in.** [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — the tracking entry
+("Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after `wallet2`
+cutover") is marked **[Done 2026-08-21]**; the surviving open item is the §5
+step-1 deletion of `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub`.
 
 ---
 
@@ -48,11 +100,12 @@ ring). It does **not** fix **signatures → semantics/container**. Applying
 `ct_signatures` to the verifier module would yield `ct_signatures.cpp` and
 re-commit the fossil.
 
-Production FCMP++ proving is Rust (`shekyl_sign_fcmp_transaction`). C++
-`rctSigs` retains semantic verification (balance equations, Bulletproof+ batch
-verify, fee-only / bond-post variants, `get_tx_prehash`). Deprecated
-`genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` are deletion targets, not
-rename targets.
+Production FCMP++ proving is Rust (`shekyl_sign_fcmp_transaction`). The C++
+module retains semantic verification (balance equations, Bulletproof+ batch
+verify, fee-only / bond-post variants, `get_tx_prehash`) — which is why its
+rename target was `ct_semantics`, and what it is called since 2026-08-21.
+Deprecated `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` are deletion
+targets, not rename targets.
 
 ---
 
@@ -62,10 +115,10 @@ One inherited module name covers two roles. They diverge at rename time.
 
 | Current (C++) | Role | Target (at cutover) |
 |---------------|------|---------------------|
-| `rctTypes.h` | Wire blob struct + type enum (variants already `CTType*`, renamed 2026-07-11) | `ct_types.h` |
-| `rctOps.h`, `rctCryptoOps.h` | Field / point arithmetic | `ct_ops.h` (split TBD) |
-| `rctSigs.h` / `.cpp` | **Semantics verification** | `ct_semantics.h` / `.cpp` |
-| `rct::rctSig` (field type) | Passive wire container | Keep `ct_signatures` alias for now; de-"sig" the type noun is lower priority |
+| `rctTypes.h` | Wire blob struct + type enum (variants already `CTType*`, renamed 2026-07-11) | **Done** — `ct_types.h` |
+| `rctOps.h`, `rctCryptoOps.h` | Field / point arithmetic | **Done** — `ct_ops.h` and `ct_crypto_ops.h`; the "split TBD" resolved as *keep the existing split*, since the C shim (`.c`) and the C++ ops are separate translation units |
+| `rctSigs.h` / `.cpp` | **Semantics verification** | **Done** — `ct_semantics.h` / `.cpp` |
+| `rct::rctSig` (field type) | Passive wire container | **Done** — `ct::CtSig`; the `ct_signatures` alias was deleted (dead after the 2026-07-11 field rename) |
 | `genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with `wallet2` / chaingen migration — do not rename |
 | `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **DELETED (standalone pre-sweep PR)** (see below) |
 
@@ -107,11 +160,21 @@ not act on them:
   would corrupt the boost wallet-cache format. The boost `rctSigBase`
   serializer never emitted the base slot at all.
 
-Verifier entry points already use "semantics" vocabulary:
+Verifier entry points already used "semantics" vocabulary:
 `verRctSemanticsSimple`, `verRctSemanticsFeeOnly`, `verRctSemanticsBondPost`
-(gate-4). Target namespace functions:
-`ct::verify_semantics_simple` / `_fee_only` / `_bond_post` (exact spelling at
-implementation PR).
+(gate-4). This pin proposed `ct::verify_semantics_simple` / `_fee_only` /
+`_bond_post` and delegated the exact spelling to the implementation PR.
+
+**Decided 2026-08-21 — `ct::verCtSemantics*`, superseding the proposed
+snake_case.** Not a drift: two members of the family were *already* renamed to
+that spelling and merged in PR #522 (`verCtSemanticsFeeOnly`,
+`verCtSemanticsEmission`), so snake_case would have created a **third**
+convention across five sibling functions rather than one. The sweep instead
+converged the family on the landed spelling (`verCtSemanticsSimple`,
+`verCtSemanticsBondPost`), which also matches the camelCase of the arithmetic
+they sit beside (`addKeys`, `scalarmultH`, `equalKeys`). The pin's substantive
+requirement — the module says *semantics*, never *signatures* — is met; only
+the casing differs from the proposal.
 
 ---
 
@@ -122,7 +185,7 @@ Do not lump these into one "V4 namespace" deferral.
 | Surface | Consensus / wire | Pre-genesis cost | Rename PR gate |
 |---------|------------------|------------------|----------------|
 | **Wire tags** | **Renamed 2026-07-11** — `ar.tag("ct_signatures")`, `"ctsig_prunable"` in [`cryptonote_basic.h`](../../src/cryptonote_basic/cryptonote_basic.h). JSON-archive-only (`binary_archive::tag` is a no-op): affects `decode_as_json` / tx-pool JSON, not binary bytes; no KAT pinned the JSON key names | Done pre-genesis | Landed (V3.0 public-API slice) |
-| **C++ identifiers** | Invisible if wire tags unchanged | Cheap after `wallet2` gone | Rename-only; byte-identical round-trip required |
+| **C++ identifiers** | Invisible if wire tags unchanged | Cheap after `wallet2` gone | **Landed 2026-08-21** — rename-only; byte-identical by construction (binary variant tags are numeric) |
 | **Rust + FFI** | C ABI strings stable until coordinated cut | **Free now** — use Shekyl-native names in Rust | New exports use `shekyl_ct_*` / semantics vocabulary; legacy `rct_*` only at the C++ glue edge |
 
 PQC binding is identifier-independent:
@@ -145,7 +208,15 @@ says `rctSigs` on the other side of the boundary.
 
 - Name Rust concepts for what they are: **confidential tx body**, **semantics
   verification**, **signing body**, **prunable bundle** — aligned with
-  `RctSigningBody` / `RctSigPrunable` *roles* in spec prose, not C++ type names.
+  `CtSigningBody` / `CtSigPrunable` *roles* in spec prose. (These prose role
+  names were `RctSigningBody` / `RctSigPrunable` until 2026-08-21 and were
+  renamed with the sweep, since a `Rct`-spelled role label outliving the
+  namespace is exactly the deadweight-masquerading-as-current-naming that
+  `STRUCTURAL_TODO.md` flags. **Deliberate consequence:** `CtSigPrunable` is
+  now *also* the C++ type name, so this bullet's original role-vs-type
+  distinction no longer holds for that one label — the role and the type
+  genuinely denote the same thing, and pretending otherwise cost more than it
+  bought. `CtSigningBody` remains role-only; the C++ type is `CtSigBase`.)
 - Keep wire-field references in **comments and FFI glue only** when describing
   what C++ will populate (e.g. "`SignedProofs` → C++ `tx.rct_signatures`").
 - Prefer new FFI exports like `shekyl_ct_verify_semantics_*` or domain-specific
@@ -169,7 +240,8 @@ Curve-tree work uses **CT-0/1/2/4** and [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.m
 namespace. No code-level clash (`curve_tree` / `shekyl-fcmp` vs `fcmp/rct*`),
 but prose must disambiguate. If the type noun is reopened later,
 `confidential_tx_*` spelled out removes ambiguity at a verbosity cost; not
-required while the `ct_signatures` alias stands.
+required, since `ct::` now names the confidential-tx namespace outright and
+curve-tree work is spelled `curve_tree` / `CT-0..4` with no code-level clash.
 
 ---
 
@@ -186,12 +258,17 @@ binding trigger**, not upstream cherry-pick calendar.
 **At cutover (separate PRs, scoped):**
 
 1. Delete `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` (if not already
-   gone).
+   gone). **Still open** — step 2 landed first, which §5 permits; see the
+   2026-08-21 UPDATE for each one's actual blocker (they differ).
 2. C++ namespace/module rename (`rct::` → `ct::`, `rctSigs` → `ct_semantics`,
    etc.) — rename-only, gated on tx blob round-trip / determinism CI. **Scope
    note:** `rctSigBase::pseudoOuts` no longer exists — it was deleted in the
    standalone pre-sweep PR (§2), byte-identically. The step-2 review check is
    simply that the sweep introduces no new base-slot pseudo-out identifier.
+   **LANDED 2026-08-21.** The review check was run and passes: every
+   `pseudoOuts` occurrence the sweep touched is prunable-context
+   (`rv.p.pseudoOuts` / `tx.ct_signatures.p.pseudoOuts`); no base-slot
+   pseudo-out container exists under any name.
 3. ~~Wire tag rename (`rct_signatures` → successor)~~ — **landed 2026-07-11**
    pre-genesis as part of the V3.0 public-API slice (`ct_signatures` /
    `ctsig_prunable`; JSON-archive-only, no KAT update was needed — see the
@@ -210,11 +287,17 @@ guardrail as the `ringct/` → `fcmp/` directory rename.
 
 Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc):
 
-- **Accretion:** new production Rust module or C++ surface named `rctSigs` /
-  `rct::` after Phase 5 → immediate rename PR, not further deferral.
-- **Substrate:** if verifier logic fully migrates to Rust before Phase 5, revisit
-  whether C++ rename PR scope shrinks to wire container + consensus glue only
-  (design-round amendment to this pin, not silent scope drift).
+- **Accretion (ARMED 2026-08-21).** With the sweep landed there is no
+  remaining licence for the old spelling: any new production Rust module or
+  C++ surface named `rctSigs` / `rct::` / `rctSig*` is a regression → immediate
+  rename PR, not further deferral. The two deliberate survivors are the §5
+  step-1 deletion targets (`genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub`)
+  and they are not precedent.
+- **Substrate:** *moot* — this criterion existed to shrink the rename PR's
+  scope if verifier logic migrated to Rust before Phase 5. The rename has
+  landed, so there is no scope left to shrink. Verifier migration continues on
+  its own track ([`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc));
+  it no longer interacts with this pin.
 
 ---
 

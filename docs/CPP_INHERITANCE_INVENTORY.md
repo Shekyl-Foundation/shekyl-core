@@ -187,7 +187,7 @@ files when it completes.
 | --- | --- | --- |
 | [`src/crypto/chacha.{h,cpp}`](../src/crypto/chacha.h) | ChaCha20 stream cipher (used by wallet2 encrypt/decrypt) | B-3 architectural workstream: Rust handles encrypt/decrypt of on-disk blob with master key Rust holds internally; the C++ `chacha::generate_chacha_key` + `chacha::chacha_encrypt` / `chacha_decrypt` surfaces cease to exist when wallet2 cluster + B-3 land |
 | [`src/crypto/hmac-keccak.{h,c}`](../src/crypto/hmac-keccak.h) | HMAC-Keccak (used by ChaCha cipher integrity check) | Subsumed alongside `chacha.{h,cpp}` when B-3 lands; verify usage during the wallet2-cluster pre-flight to confirm no non-wallet2 callers |
-| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Active C++ callers exist (`wallet2.cpp:10036`, `device_trezor/protocol.cpp:700`, `rctSigs.cpp:326,135,142`); the F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those sites call. Disposition lands when the per-call-site walk confirms FCMP++-vs-pre-FCMP++ scope and whether a Rust-side replacement is intended at V3.0 or V3.1+ |
+| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Active C++ callers exist (`wallet2.cpp:10036`, `device_trezor/protocol.cpp:700`, `ct_semantics.cpp:326,135,142`); the F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those sites call. Disposition lands when the per-call-site walk confirms FCMP++-vs-pre-FCMP++ scope and whether a Rust-side replacement is intended at V3.0 or V3.1+ |
 
 **Workstream attribution.** B-3 architectural workstream + wallet2
 cluster (Lens B + C dispositions). The C-4/C-5 stop-gap context applies:
@@ -201,20 +201,20 @@ eventual collapse.
 
 The F.C++-4 entry for [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h)
 (below) describes the file as Rust-FFI-routed: "Type declaration
-consumed by `rctSigs.cpp`; underlying proof generation/verification
+consumed by `ct_semantics.cpp`; underlying proof generation/verification
 routes through Rust `shekyl-proofs` / `crypto/generalized-bulletproofs`."
 This claim was surfaced during PR #46 Copilot review as needing
 verification, because [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc)
 exists as a ~1000-line C++ implementation with active callers:
 
 - `src/wallet/wallet2.cpp:10036` calls
-  `rct::bulletproof_plus_PROVE`.
+  `ct::bulletproof_plus_PROVE`.
 - ~~`src/device_trezor/trezor/protocol.cpp:700` called
   `bulletproof_plus_PROVE` and (line 720)
-  `rct::bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
+  `ct::bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
   backend is deleted (no PQC firmware support), so this caller no
   longer exists.
-- [`src/fcmp/rctSigs.cpp:135,142,326`](../src/fcmp/rctSigs.cpp) calls
+- [`src/fcmp/ct_semantics.cpp:135,142,326`](../src/fcmp/ct_semantics.cpp) calls
   `bulletproof_plus_VERIFY` and `bulletproof_plus_PROVE` (the
   `make_dummy_bulletproof_plus` at lines 53-81 is the
   transaction-construction-shape stand-in the F.C++-4 entry referred to,
@@ -256,9 +256,9 @@ construction surfaces that remain in C++ at V3.0.
 
 | File | Wrapped Rust surface | Verification |
 | --- | --- | --- |
-| [`src/fcmp/rctSigs.{cpp,h}`](../src/fcmp/rctSigs.cpp) | FCMP++ signature construction + verification (Rust `shekyl-fcmp` / `shekyl-proofs`) | Confirmed Rust-FFI wrapper: `#include "shekyl/shekyl_ffi.h"` at `rctSigs.cpp:40`; `make_dummy_bulletproof_plus` is a transaction-construction-shape stand-in pattern, not a parallel implementation |
-| [`src/fcmp/rctOps.{cpp,h}`](../src/fcmp/rctOps.cpp), [`src/fcmp/rctTypes.{cpp,h}`](../src/fcmp/rctTypes.cpp), [`src/fcmp/rctCryptoOps.c`](../src/fcmp/rctCryptoOps.c) | RingCT data types + crypto-ops wrappers | Supporting layer for `rctSigs.{cpp,h}`; same Rust-FFI consumer status |
-| [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h) | Bulletproofs+ proof shape declaration | **Re-verification pending** — see F.C++-3's "bulletproofs_plus re-verification" subsection above. The `make_dummy_bulletproof_plus` pattern in `rctSigs.cpp` is the transaction-construction-shape stand-in this row originally described, but `bulletproof_plus_PROVE` / `bulletproof_plus_VERIFY` call sites resolve to the C++ implementation in `bulletproofs_plus.cc`, not a Rust-FFI shim. Categorization re-evaluated when the per-call-site walk lands |
+| [`src/fcmp/ct_semantics.{cpp,h}`](../src/fcmp/ct_semantics.cpp) | FCMP++ signature construction + verification (Rust `shekyl-fcmp` / `shekyl-proofs`) | Confirmed Rust-FFI wrapper: `#include "shekyl/shekyl_ffi.h"` at `ct_semantics.cpp:40`; `make_dummy_bulletproof_plus` is a transaction-construction-shape stand-in pattern, not a parallel implementation |
+| [`src/fcmp/ct_ops.{cpp,h}`](../src/fcmp/ct_ops.cpp), [`src/fcmp/ct_types.{cpp,h}`](../src/fcmp/ct_types.cpp), [`src/fcmp/ct_crypto_ops.c`](../src/fcmp/ct_crypto_ops.c) | Confidential-transaction data types + crypto-ops wrappers | Supporting layer for `ct_semantics.{cpp,h}`; same Rust-FFI consumer status |
+| [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h) | Bulletproofs+ proof shape declaration | **Re-verification pending** — see F.C++-3's "bulletproofs_plus re-verification" subsection above. The `make_dummy_bulletproof_plus` pattern in `ct_semantics.cpp` is the transaction-construction-shape stand-in this row originally described, but `bulletproof_plus_PROVE` / `bulletproof_plus_VERIFY` call sites resolve to the C++ implementation in `bulletproofs_plus.cc`, not a Rust-FFI shim. Categorization re-evaluated when the per-call-site walk lands |
 
 **Workstream attribution.** None (no migration work scheduled). These
 files stay as Rust-FFI consumers as long as the transaction-construction

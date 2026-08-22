@@ -32,8 +32,8 @@ signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs 
 ```
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
-- **ct_base_blob** = `rctSigBase::serialize_rctsig_base(inputs, outputs)` — see §1.3.
-- **prunable_hash** = `keccak256(rctSigPrunable::serialize_rctsig_prunable(type, inputs, outputs))` — see §1.4 (a 32-byte digest, not the blob).
+- **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.
+- **prunable_hash** = `keccak256(CtSigPrunable::serialize_ctsig_prunable(type, inputs, outputs))` — see §1.4 (a 32-byte digest, not the blob).
 - **pqc_header(i)** = the i-th auth's header — see §1.5 (no signature bytes).
 - **all_key_hashes** = `‖ over all auths: keccak256(hybrid_public_key)` (binds every input's key).
 
@@ -48,7 +48,7 @@ FIELD(extra)           # varint(len) + bytes
 The FCMP++ **`signable_tx_hash`** (what the membership/SAL proof signs) is the prefix
 hash = `keccak256(serialize(transaction_prefix))` — **also includes `version=3`**.
 
-### 1.3 rctSigBase (`src/fcmp/rctTypes.h:198-…`)
+### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
 ```
 FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
@@ -59,7 +59,7 @@ enc_labels                        # outputs × 9 bytes,            no len prefix
 outPk                             # outputs × 32 bytes (commitments), no len prefix
 ```
 
-### 1.4 rctSigPrunable (`src/fcmp/rctTypes.h:348-…`)
+### 1.4 CtSigPrunable (`src/fcmp/ct_types.h:348-…`)
 ```
 VARINT(nbp)                       # bulletproof+ count (= 1 at genesis)
 bulletproofs_plus[nbp]            # Bp+ structure
