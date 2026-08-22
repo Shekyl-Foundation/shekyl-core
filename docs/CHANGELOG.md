@@ -66,7 +66,12 @@
   handle, and the bytes of the file that was locked rather than whatever
   sits at the path a moment later. A unit test pins the platform fact
   (a path read while locked fails on Windows, succeeds on POSIX), and
-  `lock.rs` no longer claims the lock is advisory everywhere.
+  `lock.rs` no longer claims the lock is advisory everywhere. The review
+  of that fix found the sibling: `WalletFile::verify_password` — the
+  first-stake entry's verify-before-close — read the path lock-free *by
+  design*, which is the same second handle, so every first stake on
+  Windows would have failed the same way. It is now a method on the open
+  handle, checking the keys bytes that handle read under its lock.
 
   The Windows scouting step that found it reported **success** on the run
   page — `continue-on-error` hides its command's result — with the failure

@@ -34,7 +34,9 @@
 //! handle in the same process included — until the locking handle
 //! closes. `fd-lock` locks byte 0. That single fact shaped the API
 //! below: **every read of the keys file while the lock is held goes
-//! through the handle that holds it** ([`KeysFileLock::acquire_and_read`]).
+//! through the handle that holds it** ([`KeysFileLock::acquire_and_read`]),
+//! and `WalletFile::verify_password` is a method on the open handle rather
+//! than a path function for the same reason.
 //! The first `open` of a wallet on Windows failed with
 //! `ERROR_LOCK_VIOLATION` because it did `acquire` and then
 //! `std::fs::read(path)` — a second handle — and that surfaced as a

@@ -958,25 +958,31 @@ async fn reopen_with_first_stake_intent(
     password: Zeroizing<Vec<u8>>,
     slot: u32,
 ) -> Result<SharedEngine, WalletRpcError> {
-    let (base, network, endpoint) = {
+    let (base, network, endpoint, shared) = {
         let state = tenants.lock().await;
         (
             wallet_base(&state.wallet_dir, expected_name),
             state.network,
             state.daemon.clone(),
+            state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?,
         )
     };
 
-    // Verify-then-close (envelope KDF + AEAD auth, lock-free read; see
+    // Verify-then-close through the OPEN handle (envelope KDF + AEAD auth
+    // against the keys bytes it read under its lock; see
     // `WalletFile::verify_password`): the common failure — a wrong
-    // password — refuses HERE, wallet still open.
-    tokio::task::block_in_place(|| {
-        shekyl_engine_file::WalletFile::verify_password(&base, password.as_slice())
-    })
+    // password — refuses HERE, wallet still open. No second handle on the
+    // keys file is opened: on Windows the open handle's lock is mandatory,
+    // and a path read here failed every stake attempt.
+    {
+        let engine = shared.read().await;
+        tokio::task::block_in_place(|| engine.file().verify_password(password.as_slice()))
+    }
     .map_err(|e| match e {
         shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
         other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
     })?;
+    drop(shared);
     // Connect-then-close: a daemon refusal also lands pre-close.
     let daemon = make_daemon(&endpoint).await?;
 

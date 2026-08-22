@@ -542,22 +542,35 @@ impl WalletFile {
         Ok((handle, outcome))
     }
 
-    /// Verify `password` against the sealed keys envelope at `base_path`
-    /// **without** opening the wallet: reads `.wallet.keys` and runs the
-    /// full KDF + AEAD auth check, then drops the opened material
-    /// (zeroize-on-drop). A wrong password surfaces as the same envelope
-    /// error [`Self::open`] would produce.
+    /// Verify `password` against this open wallet's keys envelope
+    /// **without** re-reading the file: the handle's cached keys bytes are
+    /// the bytes it read under its lock at open (kept current by
+    /// [`Self::rotate_password`]), so this checks exactly the envelope a
+    /// fresh open would see. Runs the full KDF + AEAD auth check, then
+    /// drops the opened material (zeroize-on-drop). A wrong password
+    /// surfaces as the same envelope error [`Self::open`] would produce.
     ///
-    /// Deliberately does **not** take the keys-file lock, so it is callable
-    /// while another handle holds the wallet open. The intended caller is a
-    /// credentialed close-and-reopen choreography (the RPC first-stake
-    /// entry), which must refuse a wrong password **before** tearing down
-    /// the open wallet it is about to reopen — verify-then-close, so a
-    /// mistyped password can never log the user out. Read-only: no file is
-    /// created, written, or locked.
-    pub fn verify_password(base_path: &Path, password: &[u8]) -> Result<(), WalletFileError> {
-        let keys_bytes = std::fs::read(keys_path_from(base_path))?;
-        let _opened = open_keys_file(password, &keys_bytes)?;
+    /// This is a method on the open handle, not a path function, for the
+    /// reason `lock.rs` records: on Windows the lock this handle holds is
+    /// mandatory for the locked byte, so a path read here — a second
+    /// handle — fails with `ERROR_LOCK_VIOLATION` for every password, right
+    /// or wrong. The first version of this function did exactly that and
+    /// was reachable only from the RPC first-stake entry, so the bug was
+    /// "stake is impossible on Windows", surfaced as an internal error.
+    ///
+    /// The intended caller is that credentialed close-and-reopen
+    /// choreography, which must refuse a wrong password **before** tearing
+    /// down the open wallet it is about to reopen — verify-then-close, so a
+    /// mistyped password can never log the user out. Read-only: nothing is
+    /// created, written, or re-locked.
+    pub fn verify_password(&self, password: &[u8]) -> Result<(), WalletFileError> {
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let _opened = open_keys_file(password, &keys_file_bytes)?;
         Ok(())
     }
 
@@ -1569,6 +1582,53 @@ mod tests {
         // New password works.
         let (_, _) = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
             .expect("open-with-new-pw");
+    }
+
+    /// `verify_password` answers from the bytes the open handle holds: the
+    /// open password passes, a wrong one is the envelope error `open` gives
+    /// (the RPC maps it to `InvalidPassword`), and a rotation moves the
+    /// answer with it without a reopen. It takes no path, so there is no
+    /// second handle to collide with the mandatory lock on Windows; that
+    /// property is the signature's, not something this Linux-run test
+    /// observes — the first version read the path and was found by the
+    /// Windows scouting run, not by a test. The edit that turns this red
+    /// is verifying against stale bytes (skipping the rotate update).
+    #[test]
+    fn verify_password_reads_through_the_open_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let handle = {
+            let params = make_params(&fx, &base, b"old", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+
+        handle
+            .verify_password(b"old")
+            .expect("the open password verifies");
+        assert!(
+            matches!(
+                handle.verify_password(b"wrong"),
+                Err(WalletFileError::Envelope(_))
+            ),
+            "a wrong password must be the envelope error the RPC maps to InvalidPassword"
+        );
+
+        handle
+            .rotate_password(b"old", b"new", None)
+            .expect("rotate");
+        handle
+            .verify_password(b"new")
+            .expect("the rotated password verifies through the same handle");
+        assert!(
+            matches!(
+                handle.verify_password(b"old"),
+                Err(WalletFileError::Envelope(_))
+            ),
+            "the pre-rotation password must no longer verify"
+        );
     }
 
     #[test]
