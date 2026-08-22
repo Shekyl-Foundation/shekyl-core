@@ -20,8 +20,12 @@
   be `NAME:PASSWORD` with both halves non-empty: `:` used to yield a blank
   Basic credential that the listener counted as authentication (`Basic Og==`
   satisfied it), and a value without `:` used to yield a username with an
-  empty password; both are now refused by name, and the bind seam treats a
-  blank-credential `Basic` exactly like `Disabled`. This is slice RT-W1
+  empty password; both are now refused by name at the parser, and the
+  credential type (`BasicCredential`) cannot be constructed blank, so the
+  bind seam has nothing to re-inspect. `--rpc-login` together with
+  `--disable-rpc-login` is refused as a contradiction rather than resolved
+  by precedence. Off loopback, Basic over cleartext is permitted until RT-W4
+  and logged as a warning naming what it costs (RT-3). This is slice RT-W1
   of the RPC transport posture (RULED 2026-08-21): every RPC leg is
   operator-to-operator and the adversary is the network path; remote legs
   become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,

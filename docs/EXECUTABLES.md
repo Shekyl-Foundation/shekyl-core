@@ -297,8 +297,8 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 |--------|-------------|
 | `--wallet-dir <dir>` | Directory of wallet files (default `.`); `create_wallet` / `open_wallet` operate here |
 | `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
-| `--rpc-login <user:pass>` | HTTP basic authentication. Required for any non-loopback `--rpc-bind`; omitted = auth disabled, accepted only on loopback or a UDS socket |
-| `--disable-rpc-login` | Disable auth even if `--rpc-login` is set. Refused on a non-loopback bind |
+| `--rpc-login <user:pass>` | HTTP basic authentication, `NAME:PASSWORD` with **both halves non-empty** — a value without `:`, or with a blank half, is refused at startup. Required for any non-loopback `--rpc-bind` (where the server also logs that Basic travels in the clear until the TLS leg lands); omitted = auth disabled, accepted only on loopback or a UDS socket |
+| `--disable-rpc-login` | Run without authentication. Refused on a non-loopback bind, and refused together with `--rpc-login` (a contradiction, not a precedence) |
 | `--daemon-address <url>` | Daemon JSON-RPC base URL (default `http://127.0.0.1:28581`) |
 | `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
 | `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
@@ -377,7 +377,7 @@ the shared multisig address printed to stdout.
 
 ## 5. `shekyl-gen-ssl-cert` — TLS Certificate Generator
 
-Generates an RSA TLS certificate and private key for use with RPC SSL.
+Generates an RSA TLS certificate and private key. No Shekyl RPC binary consumes them any more (the C++ `--rpc-ssl-*` surface is retired, §3); the output suits a TLS terminator you run in front of the daemon.
 Prints the SHA-256 fingerprint of the generated certificate.
 
 ### Usage
@@ -402,7 +402,8 @@ shekyl-gen-ssl-cert --certificate-filename=<file> --private-key-filename=<file> 
 shekyl-gen-ssl-cert \
     --certificate-filename /etc/shekyl/rpc.crt \
     --private-key-filename /etc/shekyl/rpc.key
-# → prints SHA-256 fingerprint; use with --rpc-ssl-certificate / --rpc-ssl-private-key
+# → prints SHA-256 fingerprint. No Shekyl RPC binary takes `--rpc-ssl-*` any
+#   more (see §3); the output is for a TLS terminator you run in front.
 ```
 
 ---

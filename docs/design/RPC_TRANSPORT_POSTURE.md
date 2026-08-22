@@ -46,9 +46,10 @@ node. We can decline to build the road.
 | L2 | `shekyl-wallet-rpc` | `shekyld` RPC | Rust client → C++ server |
 | L3 | remote wallet | `shekyld` RPC | Rust client → C++ server |
 
-`ListenAddr` ([`server.rs:54-69`](../../rust/shekyl-wallet-rpc/src/server.rs))
-and `AuthConfig` ([`auth.rs:22-33`](../../rust/shekyl-wallet-rpc/src/auth.rs))
-are L1's current surface. [`rpc_args.cpp:92-99`](../../src/rpc/rpc_args.cpp)
+`ListenAddr` ([`server.rs`](../../rust/shekyl-wallet-rpc/src/server.rs))
+and `AuthConfig` ([`auth.rs`](../../rust/shekyl-wallet-rpc/src/auth.rs))
+are L1's current surface (symbols, not line anchors — the lines moved
+within this round). [`rpc_args.cpp:92-99`](../../src/rpc/rpc_args.cpp)
 is L2/L3's.
 
 ### 2.1 Explicitly out of scope
@@ -150,11 +151,14 @@ transport.
 
 ### RT-3 — Remote legs are mutually authenticated and encrypted
 
-No cleartext RPC leaves the host. HTTP Basic
-([`auth.rs:26-32`](../../rust/shekyl-wallet-rpc/src/auth.rs)) puts the
+No cleartext RPC leaves the host. HTTP Basic (`AuthConfig::check` in
+[`auth.rs`](../../rust/shekyl-wallet-rpc/src/auth.rs)) puts the
 credential on the wire in **every request**; under §3 that is equivalent to
 publishing it. Basic is retained only for loopback and is superseded on
-remote legs by RT-4.
+remote legs by RT-4. Until RT-W4 lands, an addressed non-loopback bind with
+Basic is *permitted* (RT-1/RT-2 pass) and the server logs a warning at the
+bind seam naming what it costs — the doc describes the destination; the
+warning describes the interim.
 
 ### RT-4 — Mechanism: pinned mutual TLS with a server-side fingerprint allowlist
 
@@ -204,7 +208,11 @@ table cites that.
 PSK's one advantage — symmetric keys are quantum-resistant, whereas
 ECDHE+signature is not — is recorded as a considered trade, not an oversight.
 The channel carries a session, not a long-term commitment. *Rule-21 reopen:*
-a practical PQ or hybrid TLS path in the chosen stack.
+a practical PQ or hybrid TLS path in the chosen stack (rustls, or whatever
+RT-W4 lands on). *Re-evaluation shape:* a new RT-P probe row in §7.1
+demonstrating the hybrid handshake under the served stack, then RT-4
+re-ruled in this document by the decision authority — not a dependency bump
+that turns the option on.
 
 **Scaling note.** Symmetric pinning (each side pins the other's exact cert)
 does not scale past two endpoints without N² provisioning. A server-side
@@ -431,7 +439,7 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 | Slice | Contents | Depends on | State |
 |---|---|---|---|
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
-| RT-W2 | RT-1 + RT-2 on the C++ daemon RPC (`rpc_args.cpp:168`, `:196`) | — | **authorized 2026-08-21** (RT-O3) |
+| RT-W2 | RT-1 + RT-2 on the C++ daemon RPC (`rpc_args.cpp:168`, `:196`), and on the restricted-bind path (`--rpc-restricted-bind-ip`, parsed in the same file with no confirm gate at all) — RT-1 is "every RPC listener", so every daemon bind site is in scope, not the two confirm gates alone | — | **authorized 2026-08-21** (RT-O3) |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **starts now**; RT-P1's result cannot move RT-4 |
 | RT-W4 | RT-4/5/6/7 on L1 | RT-W3 | open |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **authorized 2026-08-21** |

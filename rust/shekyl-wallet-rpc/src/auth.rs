@@ -9,6 +9,8 @@
 //! TCP / tooling deployments may require `Authorization: Basic …`
 //! (`docs/api/wallet_rpc.yaml` servers; `WALLET_REWRITE_PLAN.md` §Phase 4).
 
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{header, StatusCode};
@@ -23,14 +25,18 @@ use zeroize::Zeroizing;
 /// Constructible only through [`Self::new`], which refuses an empty half,
 /// so an [`AuthConfig::Basic`] listener always carries a real secret and the
 /// bind seam (`validate_listen`) does not have to inspect it — the
-/// guarantee lives in the type, not at every site that reads it. The
-/// password is a secret under `35-secure-memory.mdc`: it lives in a
-/// `Zeroizing<String>`, every clone (`AppState`, the middleware layer) wipes
-/// on drop, and the per-request comparison buffers wipe too.
+/// guarantee lives in the type, not at every site that reads it.
+///
+/// The password is a secret under `35-secure-memory.mdc`. It is held only
+/// as the `user:pass` blob the wire carries, built once into a
+/// pre-sized `Zeroizing<Vec<u8>>` (no reallocation, so no unwiped
+/// intermediate), and every clone (`AppState`, the middleware layer)
+/// wipes on drop. The one copy this type cannot wipe is the process's
+/// argv, which is the operating system's.
 #[derive(Clone)]
 pub struct BasicCredential {
     username: String,
-    password: Zeroizing<String>,
+    expected: Zeroizing<Vec<u8>>,
 }
 
 impl BasicCredential {
@@ -48,9 +54,13 @@ impl BasicCredential {
                     .into(),
             );
         }
+        let mut expected = Zeroizing::new(Vec::with_capacity(username.len() + 1 + password.len()));
+        expected.extend_from_slice(username.as_bytes());
+        expected.push(b':');
+        expected.extend_from_slice(password.as_bytes());
         Ok(Self {
             username: username.to_owned(),
-            password: Zeroizing::new(password.to_owned()),
+            expected,
         })
     }
 
@@ -59,6 +69,14 @@ impl BasicCredential {
     pub fn username(&self) -> &str {
         &self.username
     }
+
+    /// Whether a decoded `Authorization: Basic` payload is exactly this
+    /// credential. The whole `user:pass` blob is compared constant-time so
+    /// the response does not leak which half mismatched; a length mismatch
+    /// still short-circuits (inherent to variable-length secrets).
+    fn matches(&self, attempt: &[u8]) -> bool {
+        attempt.len() == self.expected.len() && bool::from(attempt.ct_eq(&self.expected))
+    }
 }
 
 /// Manual (not derived): the password is never rendered (rule 35).
@@ -66,7 +84,7 @@ impl std::fmt::Debug for BasicCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BasicCredential")
             .field("username", &self.username)
-            .field("password", &"<redacted>")
+            .field("expected", &"<redacted>")
             .finish()
     }
 }
@@ -95,17 +113,35 @@ impl std::fmt::Debug for AuthConfig {
 impl AuthConfig {
     /// Build from the `--rpc-login` value.
     ///
-    /// `None` or empty → [`AuthConfig::Disabled`] (the flag was not given).
-    /// Otherwise the value is split at the first `:` and handed to
+    /// Empty → [`AuthConfig::Disabled`] (the flag was not given). Otherwise
+    /// the value is split at the first `:` and handed to
     /// [`BasicCredential::new`], which refuses a blank half — so a value
     /// without `:` (no password) is refused too, rather than becoming a
     /// username with an empty password.
-    pub fn from_rpc_login(login: Option<&str>) -> Result<Self, String> {
-        let Some(raw) = login.filter(|s| !s.is_empty()) else {
+    pub fn from_rpc_login(login: &str) -> Result<Self, String> {
+        if login.is_empty() {
             return Ok(Self::Disabled);
-        };
-        let (username, password) = raw.split_once(':').unwrap_or((raw, ""));
+        }
+        let (username, password) = login.split_once(':').unwrap_or((login, ""));
         BasicCredential::new(username, password).map(Self::Basic)
+    }
+
+    /// Build from the binary's flag pair. `--rpc-login` together with
+    /// `--disable-rpc-login` is refused as a contradiction rather than
+    /// resolved by precedence: an operator who wrote both believes a
+    /// password is set, and silently running without one is the failure
+    /// RT-2 exists to prevent (name the action, not the intent).
+    pub fn from_cli(rpc_login: &str, disable_rpc_login: bool) -> Result<Self, String> {
+        match (disable_rpc_login, rpc_login.is_empty()) {
+            (true, false) => Err(
+                "--disable-rpc-login and --rpc-login contradict each other; \
+                                  pass one. --disable-rpc-login is accepted only on a loopback \
+                                  bind or, on Unix, a uds:// socket"
+                    .into(),
+            ),
+            (true, true) => Ok(Self::Disabled),
+            (false, _) => Self::from_rpc_login(rpc_login),
+        }
     }
 
     /// Whether a request's `Authorization` header satisfies this config.
@@ -116,41 +152,35 @@ impl AuthConfig {
                 let Some(header_val) = authorization else {
                     return false;
                 };
-                let Some(encoded) = header_val.strip_prefix("Basic ") else {
+                // `credentials = auth-scheme 1*SP token68`; the scheme is
+                // case-insensitive (RFC 9110 §11.1).
+                let Some((scheme, encoded)) = header_val.split_once(' ') else {
                     return false;
                 };
-                // The decoded attempt carries the client's password; the
-                // expected blob carries ours. Both wipe on drop (rule 35).
+                if !scheme.eq_ignore_ascii_case("basic") {
+                    return false;
+                }
+                // The decoded attempt carries the client's password; it
+                // wipes on drop (rule 35).
                 let Ok(attempt) = base64::engine::general_purpose::STANDARD
                     .decode(encoded.trim())
                     .map(Zeroizing::new)
                 else {
                     return false;
                 };
-                let expected = Zeroizing::new(
-                    format!("{}:{}", cred.username, cred.password.as_str()).into_bytes(),
-                );
-                // Compare the full `user:pass` blob constant-time so we do
-                // not leak which field mismatched. Length mismatch still
-                // short-circuits (inherent to variable-length secrets);
-                // content comparison uses `subtle::ConstantTimeEq`.
-                ct_eq_bytes(&attempt, &expected)
+                cred.matches(&attempt)
             }
         }
     }
 }
 
-/// Constant-time equality for equal-length slices; `false` on length mismatch.
-fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    bool::from(a.ct_eq(b))
-}
-
 /// Axum middleware: reject unauthorized requests with HTTP 401.
+///
+/// The state is an `Arc` so each request costs a refcount bump, not a clone
+/// of the credential (`from_fn_with_state` clones its state per call, and
+/// the `State` extractor clones it again).
 pub async fn require_basic_auth(
-    axum::extract::State(auth): axum::extract::State<AuthConfig>,
+    axum::extract::State(auth): axum::extract::State<Arc<AuthConfig>>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -177,44 +207,22 @@ pub async fn require_basic_auth(
 mod tests {
     use super::*;
 
-    /// The type cannot hold a blank half: the constructor refuses, so no
-    /// consumer has to re-check what a `Basic` carries.
-    #[test]
-    fn credential_cannot_be_blank() {
-        for (u, p) in [("", ""), ("alice", ""), ("", "hunter2")] {
-            let err = BasicCredential::new(u, p).expect_err("blank half");
-            assert!(err.contains("--rpc-login"), "{u:?}:{p:?}: {err}");
-            assert!(
-                !err.contains("alice") && !err.contains("hunter2"),
-                "{u:?}:{p:?}: the value must not be echoed: {err}"
-            );
-        }
-        assert_eq!(
-            BasicCredential::new("alice", "hunter2")
-                .expect("valid")
-                .username(),
-            "alice"
-        );
-    }
-
-    /// The parser refuses every shape that would have produced a blank
-    /// credential, and never echoes the value it refused.
+    /// The parser is the public seam: every shape that would have produced
+    /// a blank credential is refused there, naming the flag and never
+    /// echoing the value. (`BasicCredential::new` is what refuses; the
+    /// parser only splits, so one table covers both.)
     #[test]
     fn rpc_login_parses_name_password_and_refuses_blank_halves() {
         assert!(matches!(
-            AuthConfig::from_rpc_login(None),
+            AuthConfig::from_rpc_login(""),
             Ok(AuthConfig::Disabled)
         ));
-        assert!(matches!(
-            AuthConfig::from_rpc_login(Some("")),
-            Ok(AuthConfig::Disabled)
-        ));
-        assert!(matches!(
-            AuthConfig::from_rpc_login(Some("alice:hunter2")),
-            Ok(AuthConfig::Basic { .. })
-        ));
+        let Ok(AuthConfig::Basic(cred)) = AuthConfig::from_rpc_login("alice:hunter2") else {
+            panic!("NAME:PASSWORD must parse to Basic");
+        };
+        assert_eq!(cred.username(), "alice");
         for bad in [":", "alice:", ":hunter2", "alice"] {
-            let err = AuthConfig::from_rpc_login(Some(bad)).expect_err(bad);
+            let err = AuthConfig::from_rpc_login(bad).expect_err(bad);
             assert!(
                 err.contains("--rpc-login"),
                 "{bad:?}: must name the flag: {err}"
@@ -226,28 +234,66 @@ mod tests {
         }
     }
 
-    fn basic_header(user: &str, pass: &str) -> String {
+    /// The flag pair: each flag alone does what it says; both together is
+    /// a contradiction, refused by name. The edit that turns the last arm
+    /// red is resolving the pair by precedence.
+    #[test]
+    fn flag_pair_is_refused_when_contradictory() {
+        assert!(matches!(
+            AuthConfig::from_cli("", false),
+            Ok(AuthConfig::Disabled)
+        ));
+        assert!(matches!(
+            AuthConfig::from_cli("", true),
+            Ok(AuthConfig::Disabled)
+        ));
+        assert!(matches!(
+            AuthConfig::from_cli("alice:hunter2", false),
+            Ok(AuthConfig::Basic(_))
+        ));
+        let err = AuthConfig::from_cli("alice:hunter2", true).expect_err("contradiction");
+        assert!(
+            err.contains("--disable-rpc-login") && err.contains("--rpc-login"),
+            "{err}"
+        );
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    fn basic_header(scheme: &str, user: &str, pass: &str) -> String {
         let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
-        format!("Basic {enc}")
+        format!("{scheme} {enc}")
     }
 
     fn alice() -> AuthConfig {
         AuthConfig::Basic(BasicCredential::new("alice", "secret").expect("valid"))
     }
 
+    /// The scheme token is case-insensitive (RFC 9110 §11.1); the payload
+    /// is not.
     #[test]
-    fn accepts_matching_credentials() {
-        assert!(alice().check(Some(&basic_header("alice", "secret"))));
+    fn accepts_matching_credentials_under_any_scheme_case() {
+        for scheme in ["Basic", "basic", "BASIC"] {
+            assert!(
+                alice().check(Some(&basic_header(scheme, "alice", "secret"))),
+                "{scheme}"
+            );
+        }
+        assert!(!alice().check(Some(&basic_header("Basic", "Alice", "secret"))));
+        assert!(!alice().check(Some(&basic_header("Bearer", "alice", "secret"))));
     }
 
     #[test]
     fn rejects_wrong_password() {
-        assert!(!alice().check(Some(&basic_header("alice", "wrong"))));
+        assert!(!alice().check(Some(&basic_header("Basic", "alice", "wrong"))));
+        assert!(!alice().check(Some(&basic_header("Basic", "alice", "secre"))));
+        assert!(!alice().check(Some(&basic_header("Basic", "alice", "secret2"))));
     }
 
     #[test]
-    fn rejects_missing_header() {
+    fn rejects_missing_or_malformed_header() {
         assert!(!alice().check(None));
+        assert!(!alice().check(Some("Basic")));
+        assert!(!alice().check(Some("Basic not-base64!")));
     }
 
     /// `Debug` of the credential, the config, and anything holding them never

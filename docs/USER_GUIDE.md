@@ -802,8 +802,8 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 |------|-------------|
 | `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
 | `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
-| `--rpc-login <user:pass>` | HTTP basic auth. Mandatory off loopback; on loopback or a UDS socket it may be omitted |
-| `--disable-rpc-login` | Disable auth even if `--rpc-login` is set — refused off loopback |
+| `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
+| `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
 | `--daemon-address <url>` | Your node's RPC URL |
 | `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
 | `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |

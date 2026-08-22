@@ -36,7 +36,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::auth::{require_basic_auth, AuthConfig};
 use crate::handlers;
@@ -86,14 +86,21 @@ impl std::fmt::Debug for SelfHostedPipe {
 }
 
 impl ListenAddr {
-    /// Parse a listen string: `uds:///path` (Unix) or `host:port` / `ip:port`.
+    /// Parse a listen string: `uds:///path` (Unix) or a numeric `IP:PORT`
+    /// (`127.0.0.1:29500`, `[::1]:29500`). Hostnames are not resolved —
+    /// a listen address names an interface, and resolving one at bind time
+    /// would make the bind depend on a resolver answer — so the refusal
+    /// says so rather than leaving `localhost:29500` to a syntax error.
     pub fn parse(s: &str) -> Result<Self, String> {
         if let Some(path) = s.strip_prefix("uds://") {
             return Self::uds(path);
         }
-        s.parse::<SocketAddr>()
-            .map(Self::Tcp)
-            .map_err(|e| format!("invalid listen address '{s}': {e}"))
+        s.parse::<SocketAddr>().map(Self::Tcp).map_err(|e| {
+            format!(
+                "invalid listen address '{s}': {e}. Use a numeric IP:PORT such as \
+                 127.0.0.1:29500 or [::1]:29500 — hostnames are not resolved"
+            )
+        })
     }
 
     /// The `uds://` form on Unix: a non-empty path.
@@ -203,7 +210,7 @@ impl AppState {
 
 /// Build the axum router (shared by TCP, UDS, the pipe, and in-process tests).
 pub fn build_router(state: Arc<AppState>) -> Router {
-    let auth = state.auth.clone();
+    let auth = Arc::new(state.auth.clone());
     Router::new()
         .route("/", post(json_rpc_handler))
         .layer(axum::middleware::from_fn_with_state(
@@ -280,12 +287,12 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 
 /// The local alternative the listen refusals point at, per platform: a
 /// `uds://` socket exists on Unix only, so the hint must not name it
-/// elsewhere. Module-level so any future refusal shares one platform branch.
-#[cfg(unix)]
-const LOCAL_ENDPOINT_HINT: &str = " (or a uds:///path socket)";
-/// See the Unix definition.
-#[cfg(windows)]
-const LOCAL_ENDPOINT_HINT: &str = "";
+/// elsewhere. One definition, defined on every target.
+const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
+    " (or a uds:///path socket)"
+} else {
+    ""
+};
 
 /// Refuse a listen configuration that would expose the wallet RPC beyond what
 /// the operator can see or authenticate (`RPC_TRANSPORT_POSTURE.md`
@@ -303,6 +310,11 @@ const LOCAL_ENDPOINT_HINT: &str = "";
 ///
 /// The socket and the pipe carry their authorization in the transport and
 /// pass through; the arms are explicit so a new variant has to decide.
+///
+/// A bind that passes both rules on a non-loopback address is the one
+/// posture RT-3 tolerates only until RT-W4: Basic over cleartext, the
+/// credential in every request. That is logged as a warning at the same
+/// seam, so the operator who chose it is told what it costs.
 fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     let addr = match &config.listen {
         ListenAddr::Tcp(addr) => addr,
@@ -318,23 +330,36 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
              bind every interface, including ones that do not exist yet (a VPN that comes up \
              later, a hotspot, a container bridge). Bind a specific IP address instead: \
              127.0.0.1 or [::1] for this machine only{LOCAL_ENDPOINT_HINT}, or the address \
-             of the one interface your clients are on."
+             of the one interface your clients are on (which also requires --rpc-login \
+             NAME:PASSWORD)."
         )
         .into());
+    }
+    if ip.is_loopback() {
+        return Ok(());
     }
     // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
     // public fields and its constructor refuses a blank half, so the seam
-    // does not re-inspect it — the guarantee is the type's.
-    if !ip.is_loopback() && matches!(config.auth, AuthConfig::Disabled) {
+    // does not re-inspect it — the guarantee is the type's. The only way
+    // to reach this arm is to have asked for no authentication.
+    if matches!(config.auth, AuthConfig::Disabled) {
         return Err(format!(
-            "refusing to serve the wallet RPC on {addr} without usable authentication \
-             (disabled, or a blank user or password): the address is reachable from the \
+            "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
+             not set, or --disable-rpc-login given): the address is reachable from the \
              network and every request, spends included, would be honoured. Bind 127.0.0.1 \
-             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD (and drop \
-             --disable-rpc-login if it is set — it wins over --rpc-login)."
+             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
         )
         .into());
     }
+    // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
+    // lands, a network-reachable bind carries the credential in the clear.
+    warn!(
+        %addr,
+        "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
+         credential travels in every request and any network path between a client \
+         and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
+         you control; the encrypted remote leg is RT-W4."
+    );
     Ok(())
 }
 
@@ -776,7 +801,7 @@ mod tests {
             network: Network::Stagenet,
             daemon_address: endpoint.address.clone(),
             proxy: endpoint.proxy.clone(),
-            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")).expect("login parses"),
+            auth: AuthConfig::from_rpc_login("rpcuser:opensesame").expect("login parses"),
             kdf: KdfParams::default(),
         };
 
@@ -814,7 +839,7 @@ mod tests {
     }
 
     fn basic() -> AuthConfig {
-        AuthConfig::from_rpc_login(Some("user:pass")).expect("login parses")
+        AuthConfig::from_rpc_login("user:pass").expect("login parses")
     }
 
     /// RT-1: every wildcard spelling is refused, with auth *enabled* so the
@@ -846,7 +871,7 @@ mod tests {
             let err = validate_listen(&listen_config(addr, AuthConfig::Disabled))
                 .expect_err("auth-less non-loopback bind must be refused")
                 .to_string();
-            assert!(err.contains("usable authentication"), "{addr}: {err}");
+            assert!(err.contains("without authentication"), "{addr}: {err}");
             assert!(
                 err.contains("--rpc-login"),
                 "{addr}: must say what to do: {err}"
@@ -873,20 +898,35 @@ mod tests {
 
     /// The wiring, not the predicate: both bind paths must consult
     /// `validate_listen`. The edit that turns each half red is deleting the
-    /// call at that site. `run_server` would block forever if the refusal
-    /// did not fire, hence the timeout — a hang here is a failure, not a
-    /// pass.
+    /// call at that site. The oracle is the wildcard message itself, not a
+    /// bare `is_err()`: `validate_daemon_endpoint` runs first on both paths,
+    /// and any refusal of the fixture's daemon address would otherwise
+    /// satisfy the test with the listen check gone. `run_server` would
+    /// block forever if the refusal did not fire, hence the timeout — a
+    /// hang here is a failure, not a pass.
     #[tokio::test]
     async fn both_bind_paths_refuse_a_wildcard_before_binding() {
         let config = listen_config("0.0.0.0:0", basic());
-        assert!(
-            spawn_in_process_with(config.clone()).await.is_err(),
-            "spawn_in_process_with must refuse a wildcard bind"
-        );
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
+        let Err(err) = spawn_in_process_with(config.clone()).await else {
+            panic!("spawn_in_process_with must refuse a wildcard bind");
+        };
+        let err = err.to_string();
+        assert!(err.contains("wildcard"), "spawn_in_process_with: {err}");
+        let err = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
             .await
-            .expect("run_server must return (refuse) rather than bind and block");
-        assert!(outcome.is_err(), "run_server must refuse a wildcard bind");
+            .expect("run_server must return (refuse) rather than bind and block")
+            .expect_err("run_server must refuse a wildcard bind")
+            .to_string();
+        assert!(err.contains("wildcard"), "run_server: {err}");
+    }
+
+    /// `localhost:29500` is the spelling the retired server's docs taught;
+    /// the refusal must say what to use instead, not just "syntax".
+    #[test]
+    fn hostname_listen_is_refused_with_the_remedy() {
+        let err = ListenAddr::parse("localhost:29500").expect_err("hostnames do not parse");
+        assert!(err.contains("hostnames are not resolved"), "{err}");
+        assert!(err.contains("127.0.0.1:29500"), "{err}");
     }
 
     /// `uds://` is a Unix form. On Windows it must be refused at parse, naming
