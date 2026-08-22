@@ -975,7 +975,12 @@ async fn reopen_with_first_stake_intent(
     // stake attempt), snapshotted under the engine read lock and verified
     // — an Argon2id derivation — only after that lock is released, so the
     // KDF never holds the engine's writers up.
-    let envelope = shared.read().await.file().sealed_keys_envelope();
+    let envelope = {
+        let engine = shared.read().await;
+        engine.file().sealed_keys_envelope()
+    };
+    // The Arc, not the guard: `take_and_close_tenant` below unwraps the
+    // engine's Arc, so a live clone held here would fail the close.
     drop(shared);
     tokio::task::block_in_place(|| envelope.verify_password(password.as_slice())).map_err(|e| {
         match e {

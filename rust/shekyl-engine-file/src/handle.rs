@@ -198,10 +198,11 @@ pub struct CreateParams<'a> {
 
 /// A point-in-time copy of an open wallet's sealed `.wallet.keys` bytes,
 /// from [`WalletFile::sealed_keys_envelope`]. Ciphertext as it sits on
-/// disk — not a secret — that can verify a password without the handle,
-/// the file, or any lock.
-#[derive(Clone)]
-pub struct SealedKeysEnvelope(Vec<u8>);
+/// disk — Argon2id-sealed, not a key, but an offline guessing target — that
+/// can verify a password without the handle, the file, or any lock. It
+/// wipes on drop, like the handle's own copy, and is deliberately not
+/// `Clone`: a second copy is a second snapshot, taken when it is needed.
+pub struct SealedKeysEnvelope(Zeroizing<Vec<u8>>);
 
 impl SealedKeysEnvelope {
     /// Verify `password` against the envelope: the full KDF + AEAD auth
@@ -228,7 +229,10 @@ impl SealedKeysEnvelope {
 /// [`Mutex`] so trait-shaped `&self` saves and rotation can serialize
 /// (PR 6 / §2.6 Round 3 note).
 struct WalletFileState {
-    keys_file_bytes: Vec<u8>,
+    /// The sealed envelope as read under the lock; wiped on drop — not a
+    /// key, but an offline guessing target, and redacted from `Debug` for
+    /// the same reason.
+    keys_file_bytes: Zeroizing<Vec<u8>>,
 }
 
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
@@ -416,7 +420,7 @@ impl WalletFile {
             pscan_path,
             pending_path,
             state: Mutex::new(WalletFileState {
-                keys_file_bytes: keys_bytes,
+                keys_file_bytes: Zeroizing::new(keys_bytes),
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -553,7 +557,7 @@ impl WalletFile {
             pscan_path,
             pending_path,
             state: Mutex::new(WalletFileState {
-                keys_file_bytes: keys_bytes,
+                keys_file_bytes: Zeroizing::new(keys_bytes),
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -782,7 +786,7 @@ impl WalletFile {
         let new_keys_bytes =
             rewrap_keys_file_password(old_password, new_password, &state.keys_file_bytes, new_kdf)?;
         atomic_write_file(&self.keys_path, &new_keys_bytes)?;
-        state.keys_file_bytes = new_keys_bytes;
+        state.keys_file_bytes = Zeroizing::new(new_keys_bytes);
         Ok(())
     }
 
@@ -1015,7 +1019,7 @@ impl WalletFile {
         self.state
             .lock()
             .expect("wallet file mutex poisoned")
-            .keys_file_bytes = bytes;
+            .keys_file_bytes = Zeroizing::new(bytes);
     }
 
     /// Zeroize transient `file_kek` after HKDF session subkeys are cached
