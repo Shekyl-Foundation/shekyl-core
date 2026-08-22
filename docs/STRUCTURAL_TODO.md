@@ -9,7 +9,8 @@
 > touch rubric** (referenced by `docs/CHANGELOG.md`, `docs/USER_GUIDE.md`,
 > `contrib/depends/README.md`, `docs/CPP_INHERITANCE_INVENTORY.md`, the
 > four 32-bit tripwire comment blocks, and `FOLLOWUPS.md`), the
-> `ct::`/`ct::` naming reference, the C++ alternative-tokens decision,
+> confidential-transaction naming reference (`rct::` → `ct::`, now
+> resolved), the C++ alternative-tokens decision,
 > the deliberately-coupled test-surface items, and the upstream-technique
 > tracking table. Resolved items have been swept to `docs/audit_trail/`
 > (see `RESOLVED_260419.md`); git history is the authoritative archive of
