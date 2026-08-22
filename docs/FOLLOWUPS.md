@@ -47,6 +47,32 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **RT-P2's result rows are owed to `RPC_TRANSPORT_POSTURE.md` §7.1** (added
+  2026-08-21, PR #532). The probe crate
+  [`shekyl-rt-p2-spike`](../rust/shekyl-rt-p2-spike) landed with seven
+  probes green — correct pins round-trip under TLS 1.3; a wrong server pin
+  refused at the handshake with a typed `ServerPinMismatch`; an un-enrolled
+  client, a certificate-less client, and an enrolled certificate replayed
+  without its key each refused server-side on its own counter; a silent peer
+  reaped under a deadline without blocking the next client — but the design
+  doc it was pre-registered in exists only on `feat/rt-1-bind-refusals`
+  (PR #529), so this branch cannot amend it. **Blocker:** #529 unmerged.
+  **Landing condition:** once #529 is on `dev`, add dated result rows to
+  §7.1 for RT-P1 (*read from source, not handshake-probed*: rustls 0.23.37
+  has no external-PSK API) and RT-P2 (the seven observations above, each
+  with the edit that was observed to turn it red), and stamp RT-W3 landed in
+  §8. **Carried for RT-W4, from the probe's review:** (1) ureq 3's
+  `TlsConfig` has no custom-`ServerCertVerifier` hook, so the L1 client
+  builds its connector on hyper-rustls (`ConnectorBuilder::with_tls_config`,
+  already in the graph) or a bespoke ureq `Connector`, and carries the typed
+  pin error through instead of flattening to a string; (2) two rule-35
+  residuals named on `Identity` — ring's private scalar inside rcgen's and
+  rustls's parsed keys, and pki-types's `Zeroize`-without-`Drop` copy;
+  (3) `HANDSHAKE_TIMEOUT`'s production value and per-peer rate limiting;
+  (4) tickets stay off (`send_tls13_tickets = 0`) so the allowlist runs on
+  every handshake — a resumed TLS 1.3 handshake never calls the verifier.
+  Target: the post-#529 doc pass, before RT-W4 starts.
+
 - **`combined_shared_secret` gate is vacuous: delete it or re-point it**
   (added 2026-08-19, Phase-5 follow-up round). The
   [`rust-audit-test.yml`](../.github/workflows/rust-audit-test.yml) step *"CI
