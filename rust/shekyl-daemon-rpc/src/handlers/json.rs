@@ -55,10 +55,16 @@ fn json_ok(body: String) -> (StatusCode, [(&'static str, &'static str); 1], Stri
 }
 
 fn json_dispatch_error() -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    json_error("FFI dispatch failed")
+}
+
+/// The REST error envelope with a reason that names what actually failed —
+/// a natively-served method never fails for "FFI dispatch" reasons.
+fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [("content-type", "application/json")],
-        r#"{"status":"ERROR","error":"FFI dispatch failed"}"#.to_string(),
+        serde_json::json!({"status": "ERROR", "error": reason}).to_string(),
     )
 }
 
@@ -118,16 +124,16 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
             Ok(json) => json_ok(json),
             Err(e) => {
                 tracing::warn!(?e, "get_height: reply could not be encoded");
-                json_dispatch_error()
+                json_error("reply could not be encoded")
             }
         },
         Ok(Err(fault)) => {
             tracing::warn!(?fault, "get_height: facts unavailable");
-            json_dispatch_error()
+            json_error("chain facts unavailable")
         }
         Err(e) => {
             tracing::warn!(?e, "get_height: handler task did not complete");
-            json_dispatch_error()
+            json_error("handler did not complete")
         }
     }
 }
@@ -159,7 +165,18 @@ pub async fn get_info(State(state): State<Arc<AppState>>, body: String) -> impl 
 
 #[cfg(test)]
 mod tests {
-    use super::fill_rpc_connections_count;
+    use super::{fill_rpc_connections_count, json_error};
+
+    /// A native method's failure names its own cause in the envelope —
+    /// never "FFI dispatch failed", which it cannot be.
+    #[test]
+    fn native_error_envelope_names_the_cause() {
+        let (status, _, body) = json_error("chain facts unavailable");
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], "chain facts unavailable");
+    }
 
     #[test]
     fn fills_live_count_when_unrestricted() {

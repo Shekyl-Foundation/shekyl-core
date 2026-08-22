@@ -1414,6 +1414,7 @@ void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 #define SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR -1
 #define SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN  -2
 #define SHEKYL_DAEMON_CONSOLE_ERR_REQUEST  -3
+#define SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE -4  // both rpc_server_ptr and address given
 
 /// Run one console command (`argv[0]` selects) and return its rendered text.
 /// rpc_server_ptr: the live core_rpc_server in-process, else NULL.

@@ -34,6 +34,8 @@ pub const SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR: i32 = -1;
 pub const SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN: i32 = -2;
 /// The request failed; `out` holds the reason to print as failure output.
 pub const SHEKYL_DAEMON_CONSOLE_ERR_REQUEST: i32 = -3;
+/// Both a live core and an address were given: the contract is exactly one.
+pub const SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE: i32 = -4;
 
 /// Where a console command gets its facts from.
 enum Source {
@@ -103,6 +105,12 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR;
         };
         args.push(s);
+    }
+    // Exactly one source. Silently preferring one when both are given would
+    // make the same argv render from different daemons depending on which
+    // caller forgot to null the other — refuse instead.
+    if !rpc_server_ptr.is_null() && !address.is_null() {
+        return SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE;
     }
     let source = if !rpc_server_ptr.is_null() {
         match CoreRpc::from_raw(rpc_server_ptr) {
@@ -211,6 +219,33 @@ mod tests {
         let (code, text) = run(&["print_height"], Some("127.0.0.1:1"));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
         assert!(!text.is_empty());
+    }
+
+    /// Both sources given: refused before either is touched (the live
+    /// pointer is never dereferenced — it is a sentinel here).
+    #[test]
+    fn both_sources_is_ambiguous_and_refused() {
+        let cmd = CString::new("print_height").unwrap();
+        let argv = [cmd.as_ptr()];
+        let address = CString::new("127.0.0.1:1").unwrap();
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len: usize = 0;
+        let sentinel = std::ptr::dangling_mut::<c_void>();
+        // SAFETY: valid argv/address/out pointers; the non-null core pointer
+        // is refused before any dereference.
+        let code = unsafe {
+            shekyl_daemon_console_run(
+                argv.as_ptr(),
+                1,
+                sentinel,
+                address.as_ptr(),
+                1,
+                &raw mut ptr,
+                &raw mut len,
+            )
+        };
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE);
+        assert!(ptr.is_null());
     }
 
     #[test]
