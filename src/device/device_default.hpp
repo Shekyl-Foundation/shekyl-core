@@ -89,8 +89,8 @@ namespace hw {
             /*                            DERIVATION & KEY                             */
             /* ======================================================================= */
             bool  verify_keys(const crypto::secret_key &secret_key, const crypto::public_key &public_key)  override;
-            bool  scalarmultKey(rct::key & aP, const rct::key &P, const rct::key &a) override;
-            bool  scalarmultBase(rct::key &aG, const rct::key &a) override;
+            bool  scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) override;
+            bool  scalarmultBase(ct::key &aG, const ct::key &a) override;
             bool  sc_secret_add(crypto::secret_key &r, const crypto::secret_key &a, const crypto::secret_key &b) override;
             crypto::secret_key  generate_keys(crypto::public_key &pub, crypto::secret_key &sec, const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false) override;
             bool  generate_key_derivation(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_derivation &derivation) override;
@@ -110,15 +110,15 @@ namespace hw {
             bool  encrypt_payment_id(crypto::hash8 &payment_id, const crypto::public_key &public_key, const crypto::secret_key &secret_key) override;
 
 
-            bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) override;
-            bool  tx_prepare(const rct::key &H, const rct::key &xx, rct::key &a, rct::key &aG, rct::key &aHP, rct::key &rvII) override;
-            bool  tx_prepare(rct::key &a, rct::key &aG) override;
-            bool  tx_hash(const rct::keyV &long_message, rct::key &c) override;
-            bool  tx_sign(const rct::key &c, const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss) override;
+            bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const ct::keyV &hashes, const ct::ctkeyV &outPk, ct::key &prehash) override;
+            bool  tx_prepare(const ct::key &H, const ct::key &xx, ct::key &a, ct::key &aG, ct::key &aHP, ct::key &rvII) override;
+            bool  tx_prepare(ct::key &a, ct::key &aG) override;
+            bool  tx_hash(const ct::keyV &long_message, ct::key &c) override;
+            bool  tx_sign(const ct::key &c, const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss) override;
 
-            bool fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) override;
+            bool fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) override;
             bool fcmp_proof_start(size_t num_inputs) override;
-            bool fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) override;
+            bool fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) override;
 
             bool  close_tx(void) override;
         };

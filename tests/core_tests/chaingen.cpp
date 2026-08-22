@@ -59,8 +59,8 @@
 extern "C" {
 #include "crypto/crypto-ops.h"
 }
-#include "fcmp/rctOps.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_ops.h"
+#include "fcmp/ct_semantics.h"
 #include "memwipe.h"
 #include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
@@ -516,15 +516,15 @@ namespace
 }
 
 static bool try_v3_scan_output(const cryptonote::account_base& from, const transaction& tx,
-    size_t j, uint64_t& amount_out, rct::key& mask_out,
+    size_t j, uint64_t& amount_out, ct::key& mask_out,
     crypto::secret_key* ho_out = nullptr)
 {
     const auto& keys = from.get_keys();
     if (keys.m_ml_kem_decap_key.empty()) return false;
     if (tx.version < 3) return false;
-    if (j >= tx.rct_signatures.outPk.size()) return false;
-    if (j >= tx.rct_signatures.enc_amounts.size()) return false;
-    if (j >= tx.rct_signatures.enc_labels.size()) return false;
+    if (j >= tx.ct_signatures.outPk.size()) return false;
+    if (j >= tx.ct_signatures.enc_amounts.size()) return false;
+    if (j >= tx.ct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
@@ -542,8 +542,8 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
 
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[j]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
-    uint8_t amount_tag = tx.rct_signatures.enc_amounts[j][8];
-    uint8_t label_tag = tx.rct_signatures.enc_labels[j][8];
+    uint8_t amount_tag = tx.ct_signatures.enc_amounts[j][8];
+    uint8_t label_tag = tx.ct_signatures.enc_labels[j][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -556,10 +556,10 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
         keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
-        tx.rct_signatures.outPk[j].mask.bytes,
-        tx.rct_signatures.enc_amounts[j].data(),
+        tx.ct_signatures.outPk[j].mask.bytes,
+        tx.ct_signatures.enc_amounts[j].data(),
         amount_tag,
-        tx.rct_signatures.enc_labels[j].data(),
+        tx.ct_signatures.enc_labels[j].data(),
         label_tag,
         view_tag,
         static_cast<uint64_t>(j),
@@ -623,7 +623,7 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                     outs[amount_key][tx_global_idx].idx = tx_global_idx;
 
                     uint64_t recovered_amount = 0;
-                    rct::key recovered_mask{};
+                    ct::key recovered_mask{};
                     crypto::secret_key recovered_ho{};
                     if (try_v3_scan_output(from, tx, j, recovered_amount, recovered_mask, &recovered_ho))
                     {
@@ -650,9 +650,9 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
 {
     const auto& keys = from.get_keys();
     if (keys.m_ml_kem_decap_key.empty() || tx.version < 3) return false;
-    if (out_no >= tx.rct_signatures.outPk.size()) return false;
-    if (out_no >= tx.rct_signatures.enc_amounts.size()) return false;
-    if (out_no >= tx.rct_signatures.enc_labels.size()) return false;
+    if (out_no >= tx.ct_signatures.outPk.size()) return false;
+    if (out_no >= tx.ct_signatures.enc_amounts.size()) return false;
+    if (out_no >= tx.ct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
@@ -670,8 +670,8 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
 
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[out_no]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
-    uint8_t amount_tag = tx.rct_signatures.enc_amounts[out_no][8];
-    uint8_t label_tag = tx.rct_signatures.enc_labels[out_no][8];
+    uint8_t amount_tag = tx.ct_signatures.enc_amounts[out_no][8];
+    uint8_t label_tag = tx.ct_signatures.enc_labels[out_no][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -684,10 +684,10 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
         keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
-        tx.rct_signatures.outPk[out_no].mask.bytes,
-        tx.rct_signatures.enc_amounts[out_no].data(),
+        tx.ct_signatures.outPk[out_no].mask.bytes,
+        tx.ct_signatures.enc_amounts[out_no].data(),
         amount_tag,
-        tx.rct_signatures.enc_labels[out_no].data(),
+        tx.ct_signatures.enc_labels[out_no].data(),
         label_tag,
         view_tag,
         static_cast<uint64_t>(out_no),
@@ -781,10 +781,10 @@ bool fill_output_entries(std::vector<output_index>& out_indices, size_t sender_o
 
     if (append)
     {
-      rct::key comm = oi.commitment();
+      ct::key comm = oi.commitment();
       crypto::public_key otk_key;
       CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, otk_key), false, "Invalid output target type in fill_output_entries");
-      output_entries.push_back(tx_source_entry::output_entry(oi.idx, rct::ctkey({rct::pk2rct(otk_key), comm})));
+      output_entries.push_back(tx_source_entry::output_entry(oi.idx, ct::ctkey({ct::pk2rct(otk_key), comm})));
     }
   }
 
@@ -831,8 +831,8 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                 ts.mask = oi.v3_mask;
                 ts.ho = oi.v3_ho;
                 ts.v3_ho_valid = true;
-                rct::key C_check = rct::commit(ts.amount, ts.mask);
-                if (!rct::equalKeys(C_check, oi.p_tx->rct_signatures.outPk[oi.out_no].mask)) {
+                ct::key C_check = ct::commit(ts.amount, ts.mask);
+                if (!ct::equalKeys(C_check, oi.p_tx->ct_signatures.outPk[oi.out_no].mask)) {
                     LOG_ERROR("v3 recovered commitment mismatch for output " << oi.out_no
                         << " amount=" << ts.amount);
                     continue;
@@ -985,7 +985,7 @@ void block_tracker::get_fake_outs(size_t num_outs, uint64_t amount, uint64_t glo
     if (used.find(oi_idx) != used.end())
       continue;
 
-    rct::key comm = oi.commitment();
+    ct::key comm = oi.commitment();
     auto item = std::make_tuple(oi.idx, oi_out_key, comm);
     outs.push_back(item);
     used.insert(oi_idx);
@@ -1029,7 +1029,7 @@ void block_tracker::dump_data(const std::string & fname)
 std::string dump_data(const cryptonote::transaction &tx)
 {
   ostringstream ss;
-  ss << "msg: " << dump_keys(tx.rct_signatures.message.bytes)
+  ss << "msg: " << dump_keys(tx.ct_signatures.message.bytes)
      << ", vin: ";
 
   for(auto & in : tx.vin){
@@ -1296,7 +1296,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
-    tx.rct_signatures = {};
+    tx.ct_signatures = {};
 
     add_tx_pub_key_to_extra(tx, txkey.pub);
     if (!sort_tx_extra(tx.extra, tx.extra))
@@ -1320,9 +1320,9 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     tx_extra_pqc_leaf_hashes leaf_hash_field;
     leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
 
-    tx.rct_signatures.outPk.resize(1);
-    tx.rct_signatures.enc_amounts.resize(1);
-    tx.rct_signatures.enc_labels.resize(1);
+    tx.ct_signatures.outPk.resize(1);
+    tx.ct_signatures.enc_amounts.resize(1);
+    tx.ct_signatures.enc_labels.resize(1);
 
     ShekylOutputData od = shekyl_construct_output(
       reinterpret_cast<const uint8_t*>(&txkey.sec),
@@ -1340,11 +1340,11 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
     tx.vout.push_back(out);
 
-    memcpy(tx.rct_signatures.outPk[0].mask.bytes, od.commitment, 32);
-    memcpy(tx.rct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
-    tx.rct_signatures.enc_amounts[0][8] = od.amount_tag;
-    memcpy(tx.rct_signatures.enc_labels[0].data(), od.enc_label, 8);
-    tx.rct_signatures.enc_labels[0][8] = od.label_tag;
+    memcpy(tx.ct_signatures.outPk[0].mask.bytes, od.commitment, 32);
+    memcpy(tx.ct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
+    tx.ct_signatures.enc_amounts[0][8] = od.amount_tag;
+    memcpy(tx.ct_signatures.enc_labels[0].data(), od.enc_label, 8);
+    tx.ct_signatures.enc_labels[0][8] = od.label_tag;
 
     kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
     if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -1429,19 +1429,19 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
   cryptonote::set_tx_out(amount, out_key, true, vt, out);
   tx.vout.push_back(out);
 
-  rct::ctkey pk_entry;
+  ct::ctkey pk_entry;
   memcpy(pk_entry.mask.bytes, od.commitment, 32);
-  tx.rct_signatures.outPk.push_back(pk_entry);
+  tx.ct_signatures.outPk.push_back(pk_entry);
 
   std::array<uint8_t, 9> enc_amt{};
   memcpy(enc_amt.data(), od.enc_amount, 8);
   enc_amt[8] = od.amount_tag;
-  tx.rct_signatures.enc_amounts.push_back(enc_amt);
+  tx.ct_signatures.enc_amounts.push_back(enc_amt);
 
   std::array<uint8_t, 9> enc_label{};
   memcpy(enc_label.data(), od.enc_label, 8);
   enc_label[8] = od.label_tag;
-  tx.rct_signatures.enc_labels.push_back(enc_label);
+  tx.ct_signatures.enc_labels.push_back(enc_label);
 
   std::vector<tx_extra_field> extra_fields;
   CHECK_AND_ASSERT_MES(parse_tx_extra(tx.extra, extra_fields), false, "failed to parse tx.extra");
@@ -1573,7 +1573,7 @@ static uint64_t count_eligible_outputs(const cryptonote::transaction& tx, bool i
     else
       continue;
 
-    if (i >= tx.rct_signatures.outPk.size())
+    if (i >= tx.ct_signatures.outPk.size())
       continue;
 
     (void)maturity;
@@ -1622,7 +1622,7 @@ static uint64_t compute_leaf_count_at_height(
         else
           continue;
 
-        if (i >= tx.rct_signatures.outPk.size())
+        if (i >= tx.ct_signatures.outPk.size())
           continue;
 
         if (mat <= target_height)

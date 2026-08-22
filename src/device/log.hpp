@@ -32,7 +32,7 @@
 #include <cstddef>
 #include <string>
 
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "crypto/crypto.h"
 #include "cryptonote_basic/account.h"
 
@@ -69,9 +69,9 @@ namespace hw {
         crypto::key_derivation decrypt(const crypto::key_derivation &derivation) ;
         cryptonote::account_keys decrypt(const cryptonote::account_keys& keys) ;
         crypto::secret_key decrypt(const crypto::secret_key &sec) ;
-        rct::key  decrypt(const rct::key &sec);
+        ct::key  decrypt(const ct::key &sec);
         crypto::ec_scalar decrypt(const crypto::ec_scalar &res);
-        rct::keyV decrypt(const rct::keyV &keys);
+        ct::keyV decrypt(const ct::keyV &keys);
 
         void check32(const std::string &msg, const std::string &info, const char *h, const char *d, bool crypted=false);
         void check8(const std::string &msg, const std::string &info, const char *h, const char *d,  bool crypted=false);

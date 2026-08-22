@@ -32,8 +32,8 @@
 
 //#define DBG
 
-#ifndef RCTSIGS_H
-#define RCTSIGS_H
+#ifndef CT_SEMANTICS_H
+#define CT_SEMANTICS_H
 
 #include <cstddef>
 #include <vector>
@@ -48,8 +48,8 @@ extern "C" {
 #include "crypto/crypto.h"
 
 
-#include "rctTypes.h"
-#include "rctOps.h"
+#include "ct_types.h"
+#include "ct_ops.h"
 
 //Define this flag when debugging to get additional info on the console
 #ifdef DBG
@@ -63,7 +63,7 @@ namespace hw {
 }
 
 
-namespace rct {
+namespace ct {
 
     // Per-output data in a leaf chunk (compressed Ed25519 points + PQC hash).
     struct fcmp_chunk_entry {
@@ -76,7 +76,7 @@ namespace rct {
     // DEPRECATED: Production wallet code now uses shekyl_sign_fcmp_transaction (Rust FFI).
     // Retained only for core_tests/chaingen.cpp test infrastructure until that is migrated.
     // TODO(PR-wallet): migrate chaingen.cpp to shekyl_sign_fcmp_transaction and delete this.
-    rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
+    CtSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,
                                const std::vector<xmr_amount> &outamounts,
                                const keyV &commitment_masks,
@@ -90,22 +90,22 @@ namespace rct {
                                const std::vector<key> &pqc_pk_hashes, hw::device &hwdev);
 
     /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
-    void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
+    void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
         const std::vector<xmr_amount> &outamounts, const keyV &destinations);
-    bool verRctSemanticsSimple(const rctSig & rv);
-    bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
+    bool verCtSemanticsSimple(const CtSig & rv);
+    bool verCtSemanticsSimple(const std::vector<const CtSig*> & rv);
     // Fee-only RCT (empty FCMP++ proof and pseudo-outs); used by archival serve-credit.
-    bool verCtSemanticsFeeOnly(const rctSig &rv);
+    bool verCtSemanticsFeeOnly(const CtSig &rv);
     // Bond-post CT balance: sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit
     // (gate-4 ARCHIVAL_BOND_GATE4.md section 3.2).
-    bool verRctSemanticsBondPost(const rctSig &rv, uint64_t bond_credit, uint64_t bond_debit);
+    bool verCtSemanticsBondPost(const CtSig &rv, uint64_t bond_credit, uint64_t bond_debit);
     // Archival emission CT balance: sum(pseudoOuts) + total_reward = sum(out masks) + fee —
     // the mint enters on the input side (the debit slot of the shared balance FFI). Fee
     // inputs are optional: the FCMP++ proof is present iff fee_input_count > 0
     // (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4).
-    bool verCtSemanticsEmission(const rctSig &rv, uint64_t total_reward, size_t fee_input_count);
-    key get_tx_prehash(const rctSig &rv, hw::device &hwdev);
+    bool verCtSemanticsEmission(const CtSig &rv, uint64_t total_reward, size_t fee_input_count);
+    key get_tx_prehash(const CtSig &rv, hw::device &hwdev);
 }
-#endif  /* RCTSIGS_H */
+#endif  /* CT_SEMANTICS_H */
 

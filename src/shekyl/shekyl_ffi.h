@@ -1612,7 +1612,7 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
     uint64_t bond_debit);
 
 // General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
-// shape for verRctSemanticsSimple / verCtSemanticsFeeOnly. Canonical prime-order
+// shape for verCtSemanticsSimple / verCtSemanticsFeeOnly. Canonical prime-order
 // points only; INVALID_POINT is checked before the sum, so a torsion-laden input
 // returns INVALID_POINT (never SUM_MISMATCH).
 #define SHEKYL_CT_BALANCE_OK                  0

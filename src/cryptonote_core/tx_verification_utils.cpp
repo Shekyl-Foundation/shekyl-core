@@ -35,7 +35,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
 #include "hardforks/hardforks.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -49,7 +49,7 @@ template <class TxForwardIt>
 static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt tx_end,
         tx_verification_context& tvc, std::uint8_t hf_version)
 {
-    std::vector<const rct::rctSig*> rvv;
+    std::vector<const ct::CtSig*> rvv;
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
     const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
@@ -112,7 +112,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
             const bool is_archival_emission_tx = (archival_class.kind == archival_tx_kind::emission);
             if (archival_serve_credit_only)
             {
-                const rct::rctSig& rv = tx.rct_signatures;
+                const ct::CtSig& rv = tx.ct_signatures;
                 // Non-spending vin: no chain outputs, no fee, no RCT output material (gate-2 §5).
                 if (!tx.pqc_auths.empty()
                     || !tx.vout.empty()
@@ -121,8 +121,8 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.p.bulletproofs_plus.empty()
                     || !rv.p.fcmp_pp_proof.empty()
                     || !rv.p.pseudoOuts.empty()
-                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
-                    || !rct::verCtSemanticsFeeOnly(rv))
+                    || rv.type != ct::CTTypeFcmpPlusPlusPqc
+                    || !ct::verCtSemanticsFeeOnly(rv))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;
@@ -133,13 +133,13 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
             {
                 const txin_archival_bond_post& bond =
                     std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
-                const rct::rctSig& rv = tx.rct_signatures;
+                const ct::CtSig& rv = tx.ct_signatures;
                 if (tx.pqc_auths.size() != tx.vin.size()
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
                     || rv.p.fcmp_pp_proof.empty()
-                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
-                    || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
+                    || rv.type != ct::CTTypeFcmpPlusPlusPqc
+                    || !ct::verCtSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;
@@ -155,7 +155,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                 // is check_tx_inputs' (the vout_reward_sum operand); here only
                 // the balance-equation shape is enforced. Fee inputs optional
                 // (Q11): with zero, the fee is paid out of the mint.
-                const rct::rctSig& rv = tx.rct_signatures;
+                const ct::CtSig& rv = tx.ct_signatures;
                 // Amount arithmetic in Rust (rule 20): single-sourced checked
                 // sum, the SAME primitive check_tx_inputs uses for its reward
                 // operand — the two totals cannot drift.
@@ -171,8 +171,8 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || total_reward == 0
                     || tx.pqc_auths.size() != tx.vin.size()
                     || rv.p.pseudoOuts.size() != spend_input_count
-                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
-                    || !rct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
+                    || rv.type != ct::CTTypeFcmpPlusPlusPqc
+                    || !ct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;
@@ -180,12 +180,12 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                 }
             }
             else
-                rvv.push_back(&tx.rct_signatures);
+                rvv.push_back(&tx.ct_signatures);
         }
     }
 
     // Rule 7
-    if (!ver_mixed_rct_semantics(std::move(rvv)))
+    if (!ver_mixed_ct_semantics(std::move(rvv)))
     {
         tvc.m_verifivation_failed = true;
         tvc.m_invalid_input = true;
@@ -209,23 +209,23 @@ uint64_t get_transaction_weight_limit(const uint8_t hf_version)
         return get_min_block_weight(hf_version) - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
 }
 
-bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
+bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv)
 {
     size_t batch_rv_size = 0; // this acts as an "end" iterator to the last simple batchable sig ptr
     for (size_t i = 0; i < rvv.size(); ++i)
     {
-        const rct::rctSig& rv = *rvv[i];
+        const ct::CtSig& rv = *rvv[i];
 
         bool is_batchable_rv = false;
 
         switch (rv.type)
         {
-        case rct::CTTypeNull:
-            MERROR("Unexpected Null rctSig type");
+        case ct::CTTypeNull:
+            MERROR("Unexpected Null CtSig type");
             return false;
             break;
-        case rct::CTTypeFcmpPlusPlusPqc:
-            if (!rct::is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+        case ct::CTTypeFcmpPlusPlusPqc:
+            if (!ct::is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
             {
                 MERROR("Bulletproof_plus does not have canonical form");
                 return false;
@@ -246,7 +246,7 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
     if (batch_rv_size) // if any simple, batchable ring sigs...
     {
         rvv.resize(batch_rv_size);
-        if (!rct::verRctSemanticsSimple(rvv))
+        if (!ct::verCtSemanticsSimple(rvv))
         {
             MERROR("rct signature semantics check failed: simple-style batch verification failed");
             return false;

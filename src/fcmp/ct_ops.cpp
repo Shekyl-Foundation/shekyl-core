@@ -31,7 +31,7 @@
 #include <boost/lexical_cast.hpp>
 #include "misc_log_ex.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "rctOps.h"
+#include "ct_ops.h"
 using namespace crypto;
 using namespace std;
 
@@ -40,7 +40,7 @@ using namespace std;
 
 #define CHECK_AND_ASSERT_THROW_MES_L1(expr, message) {if(!(expr)) {MWARNING(message); throw std::runtime_error(message);}}
 
-struct zero_commitment { uint64_t amount; rct::key commitment; };
+struct zero_commitment { uint64_t amount; ct::key commitment; };
 static const zero_commitment zero_commitments[] = {
   { (uint64_t)0ull, {{0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66}} },
   { (uint64_t)1ull, {{0x17, 0x38, 0xeb, 0x7a, 0x67, 0x7c, 0x61, 0x49, 0x22, 0x8a, 0x2b, 0xea, 0xa2, 0x1b, 0xea, 0x9e, 0x33, 0x70, 0x80, 0x2d, 0x72, 0xa3, 0xee, 0xc7, 0x90, 0x11, 0x95, 0x80, 0xe0, 0x2b, 0xd5, 0x22}} },
@@ -217,7 +217,7 @@ static const zero_commitment zero_commitments[] = {
   { (uint64_t)10000000000000000000ull, {{0x65, 0x8d, 0x1, 0x37, 0x6d, 0x18, 0x63, 0xe7, 0x7b, 0x9, 0x6f, 0x98, 0xe6, 0xe5, 0x13, 0xc2, 0x4, 0x10, 0xf5, 0xc7, 0xfb, 0x18, 0xa6, 0xe5, 0x9a, 0x52, 0x66, 0x84, 0x5c, 0xd9, 0xb1, 0xe3}} },
 };
 
-namespace rct {
+namespace ct {
 
     //Various key initialization functions
 
@@ -295,7 +295,7 @@ namespace rct {
 
     //generates C =aG + bH from b, a is given..
     void genC(key & C, const key & a, xmr_amount amount) {
-        addKeys2(C, a, d2h(amount), rct::H);
+        addKeys2(C, a, d2h(amount), ct::H);
     }
 
     //generates a <secret , public> / Pedersen commitment to the amount
@@ -322,7 +322,7 @@ namespace rct {
     key zeroCommit(xmr_amount amount) {
         const zero_commitment *begin = zero_commitments;
         const zero_commitment *end = zero_commitments + sizeof(zero_commitments) / sizeof(zero_commitments[0]);
-        const zero_commitment value{amount, rct::zero()};
+        const zero_commitment value{amount, ct::zero()};
         const auto it = std::lower_bound(begin, end, value, [](const zero_commitment &e0, const zero_commitment &e1){ return e0.amount < e1.amount; });
         if (it != end && it->amount == amount)
         {
@@ -403,7 +403,7 @@ namespace rct {
         ge_p1p1 p1;
         ge_mul8(&p1, &p2);
         ge_p1p1_to_p2(&p2, &p1);
-        rct::key res;
+        ct::key res;
         ge_tobytes(res.bytes, &p2);
         return res;
     }
@@ -441,15 +441,15 @@ namespace rct {
         ge_p3_tobytes(AB.bytes, &A2);
     }
 
-    rct::key addKeys(const key &A, const key &B) {
+    ct::key addKeys(const key &A, const key &B) {
       key k;
       addKeys(k, A, B);
       return k;
     }
 
-    rct::key addKeys(const keyV &A) {
+    ct::key addKeys(const keyV &A) {
       if (A.empty())
-        return rct::identity();
+        return ct::identity();
       ge_p3 p3, tmp;
       CHECK_AND_ASSERT_THROW_MES_L1(ge_frombytes_vartime(&p3, A[0].bytes) == 0, "ge_frombytes_vartime failed at "+boost::lexical_cast<std::string>(__LINE__));
       for (size_t i = 1; i < A.size(); ++i)
@@ -461,7 +461,7 @@ namespace rct {
         ge_add(&p1, &p3, &p2);
         ge_p1p1_to_p3(&p3, &p1);
       }
-      rct::key res;
+      ct::key res;
       ge_p3_tobytes(res.bytes, &p3);
       return res;
     }
@@ -607,7 +607,7 @@ namespace rct {
     //This takes the outputs and commitments
     //and hashes them into a 32 byte sized key
     key cn_fast_hash(const ctkeyV &PC) {
-        if (PC.empty()) return rct::hash2rct(crypto::cn_fast_hash("", 0));
+        if (PC.empty()) return ct::hash2rct(crypto::cn_fast_hash("", 0));
         key rv;
         cn_fast_hash(rv, &PC[0], 64*PC.size());
         return rv;
@@ -624,7 +624,7 @@ namespace rct {
    //put them in the key vector and it concatenates them
    //and then hashes them
    key cn_fast_hash(const keyV &keys) {
-       if (keys.empty()) return rct::hash2rct(crypto::cn_fast_hash("", 0));
+       if (keys.empty()) return ct::hash2rct(crypto::cn_fast_hash("", 0));
        key rv;
        cn_fast_hash(rv, &keys[0], keys.size() * sizeof(keys[0]));
        //dp(rv);

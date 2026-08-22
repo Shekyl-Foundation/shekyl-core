@@ -22,7 +22,7 @@
 //         and NOTHING deserializes the blob into pseudoOuts;
 //   (ii)  dispatch size check — `tx_verification_utils.cpp:175`
 //         (`rv.p.pseudoOuts.size() != spend_input_count`); and
-//   (iii) leaf size check — `rctSigs.cpp:362`
+//   (iii) leaf size check — `ct_semantics.cpp:362`
 //         (`rv.p.pseudoOuts.size() == fee_input_count`).
 //
 // This KAT is the TRIPWIRE on the guard, not the guard itself. It is
@@ -84,8 +84,8 @@ extern "C"
 #include "cryptonote_config.h"
 #include "cryptonote_core/tx_verification_utils.h"
 #include "fcmp/bulletproofs_plus.h"
-#include "fcmp/rctOps.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_ops.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
@@ -116,9 +116,9 @@ uint64_t checked_reward_sum(const transaction& tx)
   return total;
 }
 
-rct::key add_scalars(const rct::key& a, const rct::key& b)
+ct::key add_scalars(const ct::key& a, const ct::key& b)
 {
-  rct::key out;
+  ct::key out;
   sc_add(out.bytes, a.bytes, b.bytes);
   return out;
 }
@@ -126,24 +126,24 @@ rct::key add_scalars(const rct::key& a, const rct::key& b)
 // Balanced emission rct set for one fee input and two outputs (CT values
 // 100 reward-mirror + 3 change): pseudo(10) + 100*H = (100 + 3)*H + 7*H,
 // blinding closed by g_pseudo = g0 + g1. Canonical single aggregate BP+.
-rct::rctSig make_balanced_emission_rv()
+ct::CtSig make_balanced_emission_rv()
 {
-  const rct::key g0 = rct::skGen();
-  const rct::key g1 = rct::skGen();
-  const rct::key g_pseudo = add_scalars(g0, g1);
+  const ct::key g0 = ct::skGen();
+  const ct::key g1 = ct::skGen();
+  const ct::key g_pseudo = add_scalars(g0, g1);
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = kFee;
   rv.p.fcmp_pp_proof = {0x01};
-  rv.p.pseudoOuts.push_back(rct::commit(10, g_pseudo));
+  rv.p.pseudoOuts.push_back(ct::commit(10, g_pseudo));
   rv.outPk.resize(2);
-  rv.outPk[0].mask = rct::commit(kReward, g0);
-  rv.outPk[1].mask = rct::commit(3, g1);
+  rv.outPk[0].mask = ct::commit(kReward, g0);
+  rv.outPk[1].mask = ct::commit(3, g1);
   rv.enc_amounts.resize(2);
   rv.enc_labels.resize(2);
-  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(
-    std::vector<uint64_t>{kReward, 3}, rct::keyV{g0, g1}));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(
+    std::vector<uint64_t>{kReward, 3}, ct::keyV{g0, g1}));
   return rv;
 }
 
@@ -163,7 +163,7 @@ rct::rctSig make_balanced_emission_rv()
 // and reuse it — produce txs differing ONLY in `canonical_bytes`, the
 // delta that arm depends on. (`rv` itself is skGen-blinded; determinism
 // is this function's, per shared `rv`, not the fixture set's.)
-transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseudo_out)
+transaction make_emission_tx(const ct::CtSig& rv, const ct::key& backing_pseudo_out)
 {
   transaction tx{};
   // Real emission txs are version 3 (min accepted version, blockchain.cpp);
@@ -179,7 +179,7 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
 
   txin_to_key fee_in{};
   // key_offsets stay empty: FCMP++ txs carry no ring members.
-  const rct::key ki = rct::scalarmultBase(rct::d2h(7));
+  const ct::key ki = ct::scalarmultBase(ct::d2h(7));
   std::memcpy(&fee_in.k_image, ki.bytes, sizeof(fee_in.k_image));
   tx.vin.push_back(fee_in);
 
@@ -189,7 +189,7 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    const rct::key out_key = rct::scalarmultBase(rct::d2h(11 + i));
+    const ct::key out_key = ct::scalarmultBase(ct::d2h(11 + i));
     std::memcpy(&tagged.key, out_key.bytes, sizeof(tagged.key));
     tagged.view_tag.data = 0;
     vout.target = tagged;
@@ -201,11 +201,11 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
   for (auto& auth : tx.pqc_auths)
     auth.auth_version = 1;
 
-  tx.rct_signatures = rv;
+  tx.ct_signatures = rv;
   return tx;
 }
 
-std::vector<uint8_t> flatten(const rct::keyV& ks)
+std::vector<uint8_t> flatten(const ct::keyV& ks)
 {
   std::vector<uint8_t> out;
   out.reserve(ks.size() * 32);
@@ -223,10 +223,10 @@ std::vector<uint8_t> flatten(const rct::keyV& ks)
 // the verdict identity documents the signature-level exclusion.
 TEST(archival_emission_ct_balance, backing_identity_O_vs_O_prime)
 {
-  const rct::rctSig rv = make_balanced_emission_rv();
+  const ct::CtSig rv = make_balanced_emission_rv();
 
-  const rct::key backing_O = rct::commit(500, rct::skGen());
-  const rct::key backing_O_prime = rct::commit(9999, rct::skGen());
+  const ct::key backing_O = ct::commit(500, ct::skGen());
+  const ct::key backing_O_prime = ct::commit(9999, ct::skGen());
   const transaction tx_O = make_emission_tx(rv, backing_O);
   const transaction tx_O_prime = make_emission_tx(rv, backing_O_prime);
 
@@ -252,13 +252,13 @@ TEST(archival_emission_ct_balance, backing_identity_O_vs_O_prime)
   // that signature-level exclusion — it is NOT the coordinated-regression
   // catch. The biting assertion is EXPECT_TRUE(verdict_O): the balanced
   // 1-pseudo-out tx passes only while pseudoOuts covers exactly the fee
-  // inputs (leaf size check rctSigs.cpp:362); bumping that check to `+ 1`
+  // inputs (leaf size check ct_semantics.cpp:362); bumping that check to `+ 1`
   // breaks it. The dispatch check (:175) and the blob→pseudoOuts boundary
   // are the harness-gated follow-up (see header).
-  const bool verdict_O = rct::verCtSemanticsEmission(
-    tx_O.rct_signatures, total_reward, cls_O.spend_input_count);
-  const bool verdict_O_prime = rct::verCtSemanticsEmission(
-    tx_O_prime.rct_signatures, total_reward, cls_O_prime.spend_input_count);
+  const bool verdict_O = ct::verCtSemanticsEmission(
+    tx_O.ct_signatures, total_reward, cls_O.spend_input_count);
+  const bool verdict_O_prime = ct::verCtSemanticsEmission(
+    tx_O_prime.ct_signatures, total_reward, cls_O_prime.spend_input_count);
   EXPECT_TRUE(verdict_O);
   EXPECT_EQ(verdict_O, verdict_O_prime);
 }
@@ -269,37 +269,37 @@ TEST(archival_emission_ct_balance, backing_identity_O_vs_O_prime)
 // case (backing appended to pseudoOuts, size check bumped in lockstep).
 TEST(archival_emission_ct_balance, backing_inclusion_shape_rejects_in_production)
 {
-  const rct::key m1 = rct::skGen();
-  const rct::key m2 = rct::skGen();
+  const ct::key m1 = ct::skGen();
+  const ct::key m2 = ct::skGen();
 
   // pseudo(10, m1) + backing(50, m2) + 100*H = out(153, m1+m2) + 7*H
   // holds iff the backing is summed; without it the balance is short by
   // commit(50, m2).
-  const rct::key backing = rct::commit(50, m2);
-  const rct::key g_out = add_scalars(m1, m2);
+  const ct::key backing = ct::commit(50, m2);
+  const ct::key g_out = add_scalars(m1, m2);
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = kFee;
   rv.p.fcmp_pp_proof = {0x01};
-  rv.p.pseudoOuts.push_back(rct::commit(10, m1));
+  rv.p.pseudoOuts.push_back(ct::commit(10, m1));
   rv.outPk.resize(1);
-  rv.outPk[0].mask = rct::commit(153, g_out);
+  rv.outPk[0].mask = ct::commit(153, g_out);
   rv.enc_amounts.resize(1);
   rv.enc_labels.resize(1);
-  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(
-    std::vector<uint64_t>{153}, rct::keyV{g_out}));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(
+    std::vector<uint64_t>{153}, ct::keyV{g_out}));
 
   // Production: backing excluded → balance short → reject.
-  EXPECT_FALSE(rct::verCtSemanticsEmission(rv, kReward, /*fee_input_count=*/1));
+  EXPECT_FALSE(ct::verCtSemanticsEmission(rv, kReward, /*fee_input_count=*/1));
 
   // The coordinated-regression shape: backing appended to the pseudo side
   // (pseudo count 2 = fee_input_count + 1). The single-sourced balance
   // FFI accepts it — so the production rejection above is the Q11
   // exclusion doing the work, not an unrelated malformation.
   const std::vector<uint8_t> pseudo_flat =
-    flatten(rct::keyV{rv.p.pseudoOuts[0], backing});
-  const std::vector<uint8_t> mask_flat = flatten(rct::keyV{rv.outPk[0].mask});
+    flatten(ct::keyV{rv.p.pseudoOuts[0], backing});
+  const std::vector<uint8_t> mask_flat = flatten(ct::keyV{rv.outPk[0].mask});
   const uint8_t included_rc = shekyl_archival_verify_bond_post_ct_balance(
     pseudo_flat.data(), 2, mask_flat.data(), 1, kFee,
     /*bond_credit=*/0, /*bond_debit=*/kReward);
@@ -319,10 +319,10 @@ TEST(archival_emission_ct_balance, backing_inclusion_shape_rejects_in_production
 // must reject through the dispatch, not survive to an accepting balance.
 TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variation)
 {
-  const rct::rctSig rv = make_balanced_emission_rv();
+  const ct::CtSig rv = make_balanced_emission_rv();
 
-  const rct::key backing_O = rct::commit(500, rct::skGen());
-  const rct::key backing_O_prime = rct::commit(9999, rct::skGen());
+  const ct::key backing_O = ct::commit(500, ct::skGen());
+  const ct::key backing_O_prime = ct::commit(9999, ct::skGen());
   const transaction tx_O = make_emission_tx(rv, backing_O);
   const transaction tx_O_prime = make_emission_tx(rv, backing_O_prime);
 
@@ -330,7 +330,7 @@ TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variati
   // fixture drift cannot silently turn this arm into a same-tx tautology.
   ASSERT_NE(std::get<txin_archival_reward_emission>(tx_O.vin[0]).canonical_bytes,
     std::get<txin_archival_reward_emission>(tx_O_prime.vin[0]).canonical_bytes);
-  ASSERT_EQ(tx_O.rct_signatures.outPk[0].mask, tx_O_prime.rct_signatures.outPk[0].mask);
+  ASSERT_EQ(tx_O.ct_signatures.outPk[0].mask, tx_O_prime.ct_signatures.outPk[0].mask);
 
   // HF_VERSION_SHEKYL_NG is the genesis (and only) consensus surface; the
   // dispatch derives min/max tx version and the weight limit from it.
@@ -346,7 +346,7 @@ TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variati
   // through the dispatch (pseudoOuts.size() != spend_input_count at
   // tx_verification_utils.cpp; the leaf's own size check backstops it).
   transaction tx_included = make_emission_tx(rv, backing_O);
-  tx_included.rct_signatures.p.pseudoOuts.push_back(backing_O);
+  tx_included.ct_signatures.p.pseudoOuts.push_back(backing_O);
   tx_verification_context tvc_included{};
   EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included, HF_VERSION_SHEKYL_NG));
   EXPECT_TRUE(tvc_included.m_verifivation_failed);

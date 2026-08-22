@@ -26,7 +26,7 @@
 #include "blockchain_db/testdb.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include "string_tools.h"
 
 #ifndef EMISSION_CONNECT_KAT_FIXTURE_PATH
@@ -94,7 +94,7 @@ public:
   struct StoredOutput {
     uint64_t amount;
     bool has_commitment;
-    rct::key commitment;
+    ct::key commitment;
   };
 
   EmissionConnectDB() { m_open = true; }
@@ -111,7 +111,7 @@ public:
   }
 
   uint64_t add_output(const crypto::hash&, const cryptonote::tx_out& tx_output,
-    const uint64_t&, const uint64_t, const rct::key* commitment) override
+    const uint64_t&, const uint64_t, const ct::key* commitment) override
   {
     StoredOutput out{};
     out.amount = tx_output.amount;
@@ -156,9 +156,9 @@ transaction make_emission_tx(const EmissionConnectKat& kat)
     vout.target = tagged;
     tx.vout.push_back(vout);
 
-    rct::ctkey out_pk{};
+    ct::ctkey out_pk{};
     memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
-    tx.rct_signatures.outPk.push_back(out_pk);
+    tx.ct_signatures.outPk.push_back(out_pk);
   }
   return tx;
 }
@@ -202,7 +202,7 @@ TEST(archival_emission_connect, stores_vouts_amount_zero_with_commitments)
     EXPECT_EQ(db.m_outputs[i].amount, 0u) << "vout " << i;
     ASSERT_TRUE(db.m_outputs[i].has_commitment) << "vout " << i;
     EXPECT_EQ(0, memcmp(db.m_outputs[i].commitment.bytes,
-      tx.rct_signatures.outPk[i].mask.bytes, sizeof(rct::key))) << "vout " << i;
+      tx.ct_signatures.outPk[i].mask.bytes, sizeof(ct::key))) << "vout " << i;
   }
 }
 

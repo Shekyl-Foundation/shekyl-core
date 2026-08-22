@@ -144,7 +144,7 @@ struct output_data_t
   crypto::public_key pubkey;       //!< the output's public key (for spend verification)
   uint64_t           unlock_time;  //!< the output's unlock time (or height)
   uint64_t           height;       //!< the height of the block which created the output
-  rct::key           commitment;   //!< the output's amount commitment (for spend verification)
+  ct::key           commitment;   //!< the output's amount commitment (for spend verification)
 };
 #pragma pack(pop)
 
@@ -178,7 +178,7 @@ struct alt_block_data_t
 struct output_pruning_metadata_t
 {
   crypto::public_key pubkey;       //!< output one-time public key
-  rct::key           commitment;   //!< Pedersen commitment (amount commitment)
+  ct::key           commitment;   //!< Pedersen commitment (amount commitment)
   uint64_t           unlock_time;  //!< unlock time or height
   uint64_t           height;       //!< block height containing this output
   uint8_t            pruned;       //!< 1 if the parent tx's prunable data was removed
@@ -665,7 +665,7 @@ private:
    * @param commitment the rct commitment to the output amount
    * @return amount output index
    */
-  virtual uint64_t add_output(const crypto::hash& tx_hash, const tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const rct::key *commitment) = 0;
+  virtual uint64_t add_output(const crypto::hash& tx_hash, const tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const ct::key *commitment) = 0;
 
   /**
    * @brief store amount output indices for a tx's outputs

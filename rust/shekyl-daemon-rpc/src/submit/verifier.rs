@@ -113,9 +113,9 @@ const PQC_SCHEME_MULTISIG: u8 = 2;
 /// `tx_pqc_verify.cpp:50`).
 const MULTISIG_KEY_HEADER_LEN: usize = 2;
 
-/// Compressed identity — `rct::identity()` byte-for-byte; the O6
+/// Compressed identity — `ct::identity()` byte-for-byte; the O6
 /// comparison is over compressed encodings, exactly as the C++
-/// `operator==(rct::key)` compares.
+/// `operator==(ct::key)` compares.
 const IDENTITY_COMPRESSED: [u8; 32] = {
     let mut bytes = [0u8; 32];
     bytes[0] = 1;
@@ -174,8 +174,8 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     // ── N8 leg 1: CT cleartext balance ──────────────────────────────────
     // `sum(pseudoOuts) == sum(outPk) + fee·H` via the single-sourced
     // equation (`shekyl-ct-balance`) — the same crate the C++
-    // `verRctSemanticsSimple` dispatches to through
-    // `shekyl_verify_ct_balance` (rctSigs.cpp:226-241). The arity
+    // `verCtSemanticsSimple` dispatches to through
+    // `shekyl_verify_ct_balance` (ct_semantics.cpp:226-241). The arity
     // pre-checks around it (`outPk == enc_amounts == enc_labels`,
     // `pseudoOuts == ToKey subset` — every spend input for this shape —
     // and base pseudoOuts empty) are structural in `shekyl-wire`'s
@@ -261,8 +261,8 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // ── N7 balance leg: the bond CT balance ─────────────────────────────
     // `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit` via the
     // single-sourced `shekyl-archival-retention` equation — the same crate
-    // the C++ `verRctSemanticsBondPost` dispatches to through
-    // `shekyl_archival_verify_bond_post_ct_balance` (rctSigs.cpp:325-340).
+    // the C++ `verCtSemanticsBondPost` dispatches to through
+    // `shekyl_archival_verify_bond_post_ct_balance` (ct_semantics.cpp:325-340).
     // The `(credit, debit) → BondTerm` conversion — rejecting the both /
     // neither / zero states — happens here at the untrusted-input edge,
     // mirroring the FFI boundary's identical conversion, so the total core
@@ -416,7 +416,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     // ── EV4: the mint-side CT balance ───────────────────────────────────
     // `Σ pseudoOuts + total_reward = Σ out_masks + fee` — the mint rides
     // the debit slot of the single-sourced archival balance
-    // (`verRctSemanticsBondPost`'s sibling, rctSigs.cpp:348-370). The loud
+    // (`verCtSemanticsBondPost`'s sibling, ct_semantics.cpp:348-370). The loud
     // vout sum is non-zero by Phase A's EV3 static, so the `BondTerm`
     // conversion below is total for an admitted submission.
     let vout_reward_sum: u64 = {
@@ -679,7 +679,7 @@ fn fcmp_reference_layers(
 /// arms. Thin-port of `check_commitment_mask_valid`
 /// (blockchain.cpp:3284-3320), non-coinbase legs: reject `C == identity`
 /// (mask 0, amount 0) and `C == G` (mask 1, amount 0). Byte-compare over
-/// the compressed encoding, as the C++ compares `rct::key`s. The coinbase
+/// the compressed encoding, as the C++ compares `ct::key`s. The coinbase
 /// zeroCommit leg does not apply — Phase A rejects coinbase submissions.
 fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyFailure> {
     for commitment in &base.commitments {

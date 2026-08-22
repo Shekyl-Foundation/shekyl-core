@@ -31,8 +31,8 @@
 
 #pragma once
 
-#ifndef RCTOPS_H
-#define RCTOPS_H
+#ifndef CT_OPS_H
+#define CT_OPS_H
 
 #include <cstddef>
 #include <tuple>
@@ -42,11 +42,11 @@
 extern "C" {
 #include "crypto/random.h"
 #include "crypto/keccak.h"
-#include "rctCryptoOps.h"
+#include "ct_crypto_ops.h"
 }
 #include "crypto/crypto.h"
 
-#include "rctTypes.h"
+#include "ct_types.h"
 
 //Define this flag when debugging to get additional info on the console
 #ifdef DBG
@@ -55,7 +55,7 @@ extern "C" {
 #define DP(x)
 #endif
 
-namespace rct {
+namespace ct {
 
     //Various key initialization functions
 
@@ -132,8 +132,8 @@ namespace rct {
 
     //for curve points: AB = A + B
     void addKeys(key &AB, const key &A, const key &B);
-    rct::key addKeys(const key &A, const key &B);
-    rct::key addKeys(const keyV &A);
+    ct::key addKeys(const key &A, const key &B);
+    ct::key addKeys(const keyV &A);
     //aGB = aG + B where a is a scalar, G is the basepoint, and B is a point
     void addKeys1(key &aGB, const key &a, const key & B);
     //aGbB = aG + bB where a, b are scalars, G is the basepoint and B is a point
@@ -183,4 +183,4 @@ namespace rct {
     void sumKeys(key & Csum, const key &Cis);
 
 }
-#endif  /* RCTOPS_H */
+#endif  /* CT_OPS_H */

@@ -123,8 +123,8 @@ namespace boost { namespace serialization {
 #include "difficulty.h"
 #include "common/unordered_containers_boost_serialization.h"
 #include "crypto/crypto.h"
-#include "fcmp/rctTypes.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_types.h"
+#include "fcmp/ct_ops.h"
 
 namespace cryptonote
 {
@@ -340,9 +340,9 @@ namespace boost
     }
     else
     {
-      a & (rct::rctSigBase&)x.rct_signatures;
-      if (x.rct_signatures.type != rct::CTTypeNull)
-        a & x.rct_signatures.p;
+      a & (ct::CtSigBase&)x.ct_signatures;
+      if (x.ct_signatures.type != ct::CTTypeNull)
+        a & x.ct_signatures.p;
       if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
         a & x.pqc_auths;
     }
@@ -373,20 +373,20 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::key &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::key &x, const boost::serialization::version_type ver)
   {
-    a & reinterpret_cast<char (&)[sizeof(rct::key)]>(x);
+    a & reinterpret_cast<char (&)[sizeof(ct::key)]>(x);
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::ctkey &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::ctkey &x, const boost::serialization::version_type ver)
   {
     a & x.dest;
     a & x.mask;
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::BulletproofPlus &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::BulletproofPlus &x, const boost::serialization::version_type ver)
   {
     a & x.V;
     a & x.A;
@@ -406,32 +406,32 @@ namespace boost
   }
 
   template <class Archive>
-  inline typename std::enable_if<Archive::is_loading::value, void>::type serializeOutPk(Archive &a, rct::ctkeyV &outPk_, const boost::serialization::version_type ver)
+  inline typename std::enable_if<Archive::is_loading::value, void>::type serializeOutPk(Archive &a, ct::ctkeyV &outPk_, const boost::serialization::version_type ver)
   {
-    rct::keyV outPk;
+    ct::keyV outPk;
     a & outPk;
     outPk_.resize(outPk.size());
     for (size_t n = 0; n < outPk_.size(); ++n)
     {
-      outPk_[n].dest = rct::identity();
+      outPk_[n].dest = ct::identity();
       outPk_[n].mask = outPk[n];
     }
   }
 
   template <class Archive>
-  inline typename std::enable_if<Archive::is_saving::value, void>::type serializeOutPk(Archive &a, rct::ctkeyV &outPk_, const boost::serialization::version_type ver)
+  inline typename std::enable_if<Archive::is_saving::value, void>::type serializeOutPk(Archive &a, ct::ctkeyV &outPk_, const boost::serialization::version_type ver)
   {
-    rct::keyV outPk(outPk_.size());
+    ct::keyV outPk(outPk_.size());
     for (size_t n = 0; n < outPk_.size(); ++n)
       outPk[n] = outPk_[n].mask;
     a & outPk;
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::rctSigBase &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::CtSigBase &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::CTTypeNull)
+    if (x.type == ct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -439,8 +439,8 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw cryptonote::boost_archive_content_error("Unsupported rct type");
+    if (x.type != ct::CTTypeFcmpPlusPlusPqc)
+      throw cryptonote::boost_archive_content_error("Unsupported ct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -448,7 +448,7 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::CtSigPrunable &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::CtSigPrunable &x, const boost::serialization::version_type ver)
   {
     a & x.bulletproofs_plus;
     a & x.pseudoOuts;
@@ -456,10 +456,10 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::rctSig &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, ct::CtSig &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::CTTypeNull)
+    if (x.type == ct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -467,8 +467,8 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
-      throw cryptonote::boost_archive_content_error("Unsupported rct type");
+    if (x.type != ct::CTTypeFcmpPlusPlusPqc)
+      throw cryptonote::boost_archive_content_error("Unsupported ct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -508,8 +508,8 @@ namespace boost
 }
 }
 
-BOOST_CLASS_VERSION(rct::CtSigPrunable, 2)
-BOOST_CLASS_VERSION(rct::rctSig, 2)
+BOOST_CLASS_VERSION(ct::CtSigPrunable, 2)
+BOOST_CLASS_VERSION(ct::CtSig, 2)
 // V1: attestation_root (ARCHIVAL_CREDIT_WIRE.md §3); version-0 archives are
 // refused in serialize() above.
 BOOST_CLASS_VERSION(cryptonote::block, 1)

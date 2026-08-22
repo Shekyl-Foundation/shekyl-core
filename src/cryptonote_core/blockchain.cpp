@@ -64,7 +64,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
 #include "difficulty_engine_error.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 #include "common/perf_timer.h"
 #include "common/notify.h"
@@ -1642,7 +1642,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
   CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
-  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::CTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
+  CHECK_AND_ASSERT_MES(b.miner_tx.ct_signatures.type == ct::CTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
 
   // F-H: consensus coinbase output-count cap (FOLLOWUPS "GENESIS-FREEZE: cap
   // the coinbase output count"; ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
@@ -1984,7 +1984,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
       LOG_ERROR("Creating block template: error: tx version < 3 is not supported on Shekyl");
       continue;
     }
-    if (cur_tx.fee != cur_tx.tx.rct_signatures.txnFee)
+    if (cur_tx.fee != cur_tx.tx.ct_signatures.txnFee)
     {
       LOG_ERROR("Creating block template: error: invalid fee");
     }
@@ -2716,7 +2716,7 @@ bool Blockchain::get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMA
   return true;
 }
 //------------------------------------------------------------------
-void Blockchain::get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, rct::key& mask, bool& unlocked) const
+void Blockchain::get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, ct::key& mask, bool& unlocked) const
 {
   const auto o_data = m_db->get_output_key(amount, index);
   key = o_data.pubkey;
@@ -3416,11 +3416,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 // amount to any observer.
 static bool check_commitment_mask_valid(const transaction& tx)
 {
-  const auto& rv = tx.rct_signatures;
+  const auto& rv = tx.ct_signatures;
 
   // Every tx shape carries exactly one outPk commitment per vout (0 == 0 for
   // the no-output serve-credit shape). The wire serializer already pins this
-  // (serialize_rctsig_base sizes outPk to vout.size(), rctTypes.h) and
+  // (serialize_ctsig_base sizes outPk to vout.size(), ct_types.h) and
   // check_tx_semantic re-checks it for pool txs — but this gate must be
   // locally sound rather than lean on a distant invariant, or an empty outPk
   // beside a non-empty vout would skate through the empty fast-path below
@@ -3434,14 +3434,14 @@ static bool check_commitment_mask_valid(const transaction& tx)
   if (rv.outPk.empty())
     return true;
 
-  static_assert(sizeof(rct::key) == 32, "rct::key must be 32 bytes");
+  static_assert(sizeof(ct::key) == 32, "ct::key must be 32 bytes");
   std::vector<uint8_t> masks_flat;
-  masks_flat.reserve(rv.outPk.size() * sizeof(rct::key));
+  masks_flat.reserve(rv.outPk.size() * sizeof(ct::key));
   for (const auto& pk : rv.outPk)
-    masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(rct::key));
+    masks_flat.insert(masks_flat.end(), pk.mask.bytes, pk.mask.bytes + sizeof(ct::key));
 
   std::vector<uint64_t> coinbase_amounts;
-  if (rv.type == rct::CTTypeNull)
+  if (rv.type == ct::CTTypeNull)
   {
     coinbase_amounts.reserve(tx.vout.size());
     for (const auto& o : tx.vout)
@@ -3503,10 +3503,10 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  if (tx.rct_signatures.type != rct::CTTypeNull &&
-      tx.rct_signatures.type != rct::CTTypeFcmpPlusPlusPqc)
+  if (tx.ct_signatures.type != ct::CTTypeNull &&
+      tx.ct_signatures.type != ct::CTTypeFcmpPlusPlusPqc)
   {
-    MERROR_VER("Disallowed rct type " << (unsigned)tx.rct_signatures.type);
+    MERROR_VER("Disallowed rct type " << (unsigned)tx.ct_signatures.type);
     tvc.m_invalid_output = true;
     return false;
   }
@@ -3578,7 +3578,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
 
   const uint8_t hf_version = m_hardfork->get_current_version();
-  const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
+  const bool is_fcmp_pp = ct::is_ct_fcmp_pp_pqc(tx.ct_signatures.type);
 
   // Shared archival-tx taxonomy (classify_archival_tx, cryptonote_basic.h):
   // one special vin with key-imaged spends as the only permitted co-residents
@@ -3659,7 +3659,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
   }
 
-  std::vector<std::vector<rct::ctkey>> pubkeys(tx.vin.size());
+  std::vector<std::vector<ct::ctkey>> pubkeys(tx.vin.size());
 
   // Block connect passes nullptr; steer to stack storage so FCMP++ paths can
   // always update max reference height without a null check at each write site.
@@ -3750,15 +3750,15 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   }
 
   {
-    const rct::rctSig &rv = tx.rct_signatures;
+    const ct::CtSig &rv = tx.ct_signatures;
     switch (rv.type)
     {
-    case rct::CTTypeNull: {
+    case ct::CTTypeNull: {
       MERROR_VER("CTTypeNull is not allowed for non-coinbase transactions");
       tvc.m_verifivation_failed = true;
       return false;
     }
-    case rct::CTTypeFcmpPlusPlusPqc:
+    case ct::CTTypeFcmpPlusPlusPqc:
     {
       const uint64_t chain_height = m_db->height();
       const size_t num_inputs = tx.vin.size();
@@ -3818,7 +3818,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
         // RF-D1: one pruned pass record per serve-credit vin, in vin order.
         // Every vin is a serve-credit in this shape, so index i pairs them.
-        const auto& pruned_records = tx.rct_signatures.p.serve_credit_pruned;
+        const auto& pruned_records = tx.ct_signatures.p.serve_credit_pruned;
         if (pruned_records.size() != num_inputs)
         {
           MERROR_VER("Archival serve-credit: " << pruned_records.size()
@@ -4403,7 +4403,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       break;
     }
     default:
-      MERROR_VER("Unsupported rct type: " << rv.type);
+      MERROR_VER("Unsupported ct type: " << rv.type);
       return false;
     }
   }
@@ -4615,7 +4615,7 @@ bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time, uint8_t hf_versi
 // This function locates all outputs associated with a given input (mixins)
 // and validates that they exist and are usable.  It also checks the ring
 // signature for each input.
-bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const rct::rctSig &rct_signatures, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const
+bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -4625,14 +4625,14 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
 
   struct outputs_visitor
   {
-    std::vector<rct::ctkey >& m_output_keys;
+    std::vector<ct::ctkey >& m_output_keys;
     const Blockchain& m_bch;
     const uint8_t hf_version;
-    outputs_visitor(std::vector<rct::ctkey>& output_keys, const Blockchain& bch, uint8_t hf_version) :
+    outputs_visitor(std::vector<ct::ctkey>& output_keys, const Blockchain& bch, uint8_t hf_version) :
       m_output_keys(output_keys), m_bch(bch), hf_version(hf_version)
     {
     }
-    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const rct::key &commitment)
+    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const ct::key &commitment)
     {
       //check tx unlock time
       if (!m_bch.is_tx_spendtime_unlocked(unlock_time, hf_version))
@@ -4648,7 +4648,7 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
       // Additional type checks on outputs were also added via cryptonote::check_output_types
       // and cryptonote::get_output_public_key (see Blockchain::check_tx_outputs).
 
-      m_output_keys.push_back(rct::ctkey({rct::pk2rct(pubkey), commitment}));
+      m_output_keys.push_back(ct::ctkey({ct::pk2rct(pubkey), commitment}));
       return true;
     }
   };
@@ -4671,14 +4671,14 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
   if (tx_version == 1) {
     CHECK_AND_ASSERT_MES(sig.size() == output_keys.size(), false, "internal error: tx signatures count=" << sig.size() << " mismatch with outputs keys count for inputs=" << output_keys.size());
   }
-  // rct_signatures will be expanded after this
+  // ct_signatures will be expanded after this
   return true;
 }
 //------------------------------------------------------------------
 crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 {
-  const rct::rctSig &rv = tx.rct_signatures;
-  if (rv.type != rct::CTTypeFcmpPlusPlusPqc)
+  const ct::CtSig &rv = tx.ct_signatures;
+  if (rv.type != ct::CTTypeFcmpPlusPlusPqc)
     return crypto::null_hash;
 
   // Mempool verification-cache id: binds proof bytes to the anchored snapshot
@@ -5344,7 +5344,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     MERROR_VER("Archival serve-credit vin did not parse");
     return false;
   }
-  if (pruned_record.empty() || pruned_record.size() > rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES)
+  if (pruned_record.empty() || pruned_record.size() > ct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES)
   {
     MERROR_VER("Archival serve-credit pruned record size out of bounds");
     return false;
@@ -6084,7 +6084,7 @@ leave:
       // FFI call but still run all structural checks (referenceBlock, depth,
       // key images, PQC auth).
       const bool can_skip_fcmp = found_tx_in_pool
-          && rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
+          && ct::is_ct_fcmp_pp_pqc(tx.ct_signatures.type);
 
       tx_verification_context tvc;
       if(!check_tx_inputs(tx, tvc, nullptr, can_skip_fcmp))

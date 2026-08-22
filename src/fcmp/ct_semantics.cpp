@@ -33,7 +33,7 @@
 #include "common/perf_timer.h"
 #include "common/threadpool.h"
 #include "common/util.h"
-#include "rctSigs.h"
+#include "ct_semantics.h"
 #include "bulletproofs_plus.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
@@ -47,7 +47,7 @@ using namespace std;
 
 #define CHECK_AND_ASSERT_MES_L1(expr, ret, message) {if(!(expr)) {MCERROR("verify", message); return ret;}}
 
-namespace rct {
+namespace ct {
 namespace
 {
     BulletproofPlus make_dummy_bulletproof_plus(const std::vector<uint64_t> &outamounts, keyV &C, keyV &masks)
@@ -93,7 +93,7 @@ namespace
     }
 }
 
-    void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
+    void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
         const std::vector<xmr_amount> &outamounts, const keyV &destinations)
     {
@@ -153,7 +153,7 @@ namespace
       catch (...) { return false; }
     }
 
-    key get_tx_prehash(const rctSig &rv, hw::device &hwdev)
+    key get_tx_prehash(const CtSig &rv, hw::device &hwdev)
     {
       keyV hashes;
       hashes.reserve(3);
@@ -165,8 +165,8 @@ namespace
       const size_t inputs = rv.p.pseudoOuts.size();
       const size_t outputs = rv.enc_amounts.size();
       key prehash;
-      CHECK_AND_ASSERT_THROW_MES(const_cast<rctSig&>(rv).serialize_rctsig_base(ba, inputs, outputs),
-          "Failed to serialize rctSigBase");
+      CHECK_AND_ASSERT_THROW_MES(const_cast<CtSig&>(rv).serialize_ctsig_base(ba, inputs, outputs),
+          "Failed to serialize CtSigBase");
       cryptonote::get_blob_hash(ss.str(), h);
       hashes.push_back(hash2rct(h));
 
@@ -193,19 +193,19 @@ namespace
 
     //ver FCMP++ simple
     //assumes only post-rct style inputs (at least for max anonymity)
-    bool verRctSemanticsSimple(const std::vector<const rctSig*> & rvv) {
+    bool verCtSemanticsSimple(const std::vector<const CtSig*> & rvv) {
       try
       {
-        PERF_TIMER(verRctSemanticsSimple);
+        PERF_TIMER(verCtSemanticsSimple);
 
         std::vector<const BulletproofPlus*> bpp_proofs;
 
-        for (const rctSig *rvp: rvv)
+        for (const CtSig *rvp: rvv)
         {
-          CHECK_AND_ASSERT_MES(rvp, false, "rctSig pointer is NULL");
-          const rctSig &rv = *rvp;
+          CHECK_AND_ASSERT_MES(rvp, false, "CtSig pointer is NULL");
+          const CtSig &rv = *rvp;
           CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc,
-              false, "verRctSemanticsSimple called on unsupported rctSig type");
+              false, "verCtSemanticsSimple called on unsupported CtSig type");
           CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(),
               false, "FCMP++ proof is empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
@@ -213,9 +213,9 @@ namespace
           CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false, "Mismatched sizes of enc_labels and rv.enc_amounts");
         }
 
-        for (const rctSig *rvp: rvv)
+        for (const CtSig *rvp: rvv)
         {
-          const rctSig &rv = *rvp;
+          const CtSig &rv = *rvp;
 
           // CT cleartext balance `sum(pseudoOuts) = sum(outPk masks) + fee*H`,
           // single-sourced in Rust (`shekyl-ct-balance::verify_ct_balance`) and
@@ -253,19 +253,19 @@ namespace
       }
       catch (const std::exception &e)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsSimple: " << e.what());
+        LOG_PRINT_L1("Error in verCtSemanticsSimple: " << e.what());
         return false;
       }
       catch (...)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsSimple, but not an actual exception");
+        LOG_PRINT_L1("Error in verCtSemanticsSimple, but not an actual exception");
         return false;
       }
     }
 
-    bool verRctSemanticsSimple(const rctSig & rv)
+    bool verCtSemanticsSimple(const CtSig & rv)
     {
-      return verRctSemanticsSimple(std::vector<const rctSig*>(1, &rv));
+      return verCtSemanticsSimple(std::vector<const CtSig*>(1, &rv));
     }
 
     // Shared CT-balance + aggregate-range tail for the archival bond-post and
@@ -274,7 +274,7 @@ namespace
     // the (credit, debit) operands and each caller's structural prologue differ,
     // so the common logic lives here once. `what` labels the log lines. Any
     // divergence must be made here, not forked into a second copy.
-    static bool verArchivalCtBalanceAndRange(const rctSig &rv,
+    static bool verArchivalCtBalanceAndRange(const CtSig &rv,
         const uint64_t bond_credit, const uint64_t bond_debit, const char *what)
     {
       CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
@@ -322,35 +322,35 @@ namespace
       return true;
     }
 
-    bool verRctSemanticsBondPost(const rctSig &rv, const uint64_t bond_credit, const uint64_t bond_debit)
+    bool verCtSemanticsBondPost(const CtSig &rv, const uint64_t bond_credit, const uint64_t bond_debit)
     {
       try
       {
         CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
-            "verRctSemanticsBondPost called on unsupported rctSig type");
+            "verCtSemanticsBondPost called on unsupported CtSig type");
         CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
-            "verRctSemanticsBondPost requires non-empty FCMP++ proof");
+            "verCtSemanticsBondPost requires non-empty FCMP++ proof");
         // Bond-post CT balance: credit = bond_credit, debit = bond_debit.
         return verArchivalCtBalanceAndRange(rv, bond_credit, bond_debit, "Bond-post");
       }
       catch (const std::exception &e)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsBondPost: " << e.what());
+        LOG_PRINT_L1("Error in verCtSemanticsBondPost: " << e.what());
         return false;
       }
       catch (...)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsBondPost, but not an actual exception");
+        LOG_PRINT_L1("Error in verCtSemanticsBondPost, but not an actual exception");
         return false;
       }
     }
 
-    bool verCtSemanticsEmission(const rctSig &rv, const uint64_t total_reward, const size_t fee_input_count)
+    bool verCtSemanticsEmission(const CtSig &rv, const uint64_t total_reward, const size_t fee_input_count)
     {
       try
       {
         CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
-            "verCtSemanticsEmission called on unsupported rctSig type");
+            "verCtSemanticsEmission called on unsupported CtSig type");
         // Q11: fee inputs are optional. The FCMP++ proof authorizes exactly the
         // txin_to_key co-residents — present iff there are any (a proof with no
         // spends, or spends with no proof, are both malformed).
@@ -379,12 +379,12 @@ namespace
       }
     }
 
-    bool verCtSemanticsFeeOnly(const rctSig &rv)
+    bool verCtSemanticsFeeOnly(const CtSig &rv)
     {
       try
       {
         CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
-            "verCtSemanticsFeeOnly called on unsupported rctSig type");
+            "verCtSemanticsFeeOnly called on unsupported CtSig type");
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
@@ -446,7 +446,7 @@ namespace
         buf.push_back(static_cast<uint8_t>(val >> 24));
     }
 
-    rctSig genRctFcmpPlusPlus(
+    CtSig genRctFcmpPlusPlus(
         const key &message,
         const ctkeyV &inSk,
         const ctkeyV &inPk,
@@ -478,7 +478,7 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
         CHECK_AND_ASSERT_THROW_MES(leaf_chunk_entries.size() == inamounts.size(), "Different number of leaf_chunk_entries/inputs");
 
-        rctSig rv;
+        CtSig rv;
         rv.type = CTTypeFcmpPlusPlusPqc;
         rv.message = message;
         rv.txnFee = txnFee;
@@ -513,7 +513,7 @@ namespace
             ctkeyV outSk(destinations.size());
             for (size_t i = 0; i < outamounts.size(); ++i)
             {
-                rv.outPk[i].mask = rct::scalarmult8(C[i]);
+                rv.outPk[i].mask = ct::scalarmult8(C[i]);
                 outSk[i].mask = masks[i];
             }
 

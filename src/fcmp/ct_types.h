@@ -29,8 +29,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
-#ifndef RCT_TYPES_H
-#define RCT_TYPES_H
+#ifndef CT_TYPES_H
+#define CT_TYPES_H
 
 #include <array>
 #include <cstddef>
@@ -69,7 +69,7 @@ extern "C" {
 //for printing large ints
 
 //Namespace for confidential transaction types (FCMP++, Bulletproofs+, Pedersen commitments)
-namespace rct {
+namespace ct {
     //basic ops containers
     typedef unsigned char * Bytes;
 
@@ -123,15 +123,15 @@ namespace rct {
     
     struct BulletproofPlus
     {
-      rct::keyV V;
-      rct::key A{}, A1{}, B{};
-      rct::key r1{}, s1{}, d1{};
-      rct::keyV L, R;
+      ct::keyV V;
+      ct::key A{}, A1{}, B{};
+      ct::key r1{}, s1{}, d1{};
+      ct::keyV L, R;
 
       BulletproofPlus() = default;
-      BulletproofPlus(const rct::key &V, const rct::key &A, const rct::key &A1, const rct::key &B, const rct::key &r1, const rct::key &s1, const rct::key &d1, const rct::keyV &L, const rct::keyV &R):
+      BulletproofPlus(const ct::key &V, const ct::key &A, const ct::key &A1, const ct::key &B, const ct::key &r1, const ct::key &s1, const ct::key &d1, const ct::keyV &L, const ct::keyV &R):
         V({V}), A(A), A1(A1), B(B), r1(r1), s1(s1), d1(d1), L(L), R(R) {}
-      BulletproofPlus(const rct::keyV &V, const rct::key &A, const rct::key &A1, const rct::key &B, const rct::key &r1, const rct::key &s1, const rct::key &d1, const rct::keyV &L, const rct::keyV &R):
+      BulletproofPlus(const ct::keyV &V, const ct::key &A, const ct::key &A1, const ct::key &B, const ct::key &r1, const ct::key &s1, const ct::key &d1, const ct::keyV &L, const ct::keyV &R):
         V(V), A(A), A1(A1), B(B), r1(r1), s1(s1), d1(d1), L(L), R(R) {}
 
       bool operator==(const BulletproofPlus &other) const { return V == other.V && A == other.A && A1 == other.A1 && B == other.B && r1 == other.r1 && s1 == other.s1 && d1 == other.d1 && L == other.L && R == other.R; }
@@ -168,7 +168,7 @@ namespace rct {
       CTTypeNull = 0,
       CTTypeFcmpPlusPlusPqc = 1,
     };
-    struct rctSigBase {
+    struct CtSigBase {
         uint8_t type;
         key message;
         // Per-output encrypted amount: bytes [0..8) = amount XOR k_amount[..8],
@@ -189,12 +189,12 @@ namespace rct {
         xmr_amount txnFee; // contains b
         crypto::hash referenceBlock; // FCMP++: block hash anchoring the tree root for proof
 
-        rctSigBase() :
+        CtSigBase() :
           type(CTTypeNull), message{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
         {}
 
         template<bool W, template <bool> class Archive>
-        bool serialize_rctsig_base(Archive<W> &ar, size_t inputs, size_t outputs)
+        bool serialize_ctsig_base(Archive<W> &ar, size_t inputs, size_t outputs)
         {
           FIELD(type)
           if (type != CTTypeNull && type != CTTypeFcmpPlusPlusPqc)
@@ -283,16 +283,16 @@ namespace rct {
 
         // NOTE (dead-serializer removal, pre-genesis cleanup): this struct
         // deliberately has NO standalone object serializer. The only wire
-        // encoding of the rct base is `serialize_rctsig_base` above, invoked
+        // encoding of the rct base is `serialize_ctsig_base` above, invoked
         // from the transaction serializer (cryptonote_basic.h), the tx-hash
         // paths (cryptonote_format_utils.cpp), the FCMP++ pre-hash
-        // (rctSigs.cpp) and the PQC payload binding (tx_pqc_verify.cpp).
+        // (ct_semantics.cpp) and the PQC payload binding (tx_pqc_verify.cpp).
         // A second BEGIN_SERIALIZE_OBJECT definition used to live here —
         // caller-less, and disagreeing with the real wire (it emitted
         // `message` and a legacy base `pseudoOuts`) — and its existence
         // produced a phantom wire-format finding. Do not re-add one; if a
         // standalone encoding is ever needed, route it through
-        // `serialize_rctsig_base` so there is exactly one definition of the
+        // `serialize_ctsig_base` so there is exactly one definition of the
         // bytes.
     };
     struct CtSigPrunable {
@@ -418,10 +418,10 @@ namespace rct {
           return ar.good();
         }
 
-        // No standalone object serializer — see the rctSigBase note above.
+        // No standalone object serializer — see the CtSigBase note above.
         // `serialize_ctsig_prunable` is the only encoding.
     };
-    struct rctSig: public rctSigBase {
+    struct CtSig: public CtSigBase {
         CtSigPrunable p;
 
         // The pseudo-out commitments live in the prunable section for every
@@ -542,31 +542,31 @@ namespace rct {
     //int[64] to uint long long
     xmr_amount b2d(bits amountb);
 
-    bool is_rct_bulletproof_plus(int type);
-    bool is_rct_fcmp_pp_pqc(int type);
+    bool is_ct_bulletproof_plus(int type);
+    bool is_ct_fcmp_pp_pqc(int type);
 
-    static inline const rct::key &pk2rct(const crypto::public_key &pk) { return (const rct::key&)pk; }
-    static inline const rct::key &sk2rct(const crypto::secret_key &sk) { return (const rct::key&)sk; }
-    static inline const rct::key &ki2rct(const crypto::key_image &ki) { return (const rct::key&)ki; }
-    static inline const rct::key &hash2rct(const crypto::hash &h) { return (const rct::key&)h; }
-    static inline const crypto::public_key &rct2pk(const rct::key &k) { return (const crypto::public_key&)k; }
-    static inline const crypto::secret_key &rct2sk(const rct::key &k) { return (const crypto::secret_key&)k; }
-    static inline const crypto::key_image &rct2ki(const rct::key &k) { return (const crypto::key_image&)k; }
-    static inline const crypto::hash &rct2hash(const rct::key &k) { return (const crypto::hash&)k; }
-    static inline bool operator==(const rct::key &k0, const crypto::public_key &k1) { return !crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
-    static inline bool operator!=(const rct::key &k0, const crypto::public_key &k1) { return crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
+    static inline const ct::key &pk2rct(const crypto::public_key &pk) { return (const ct::key&)pk; }
+    static inline const ct::key &sk2rct(const crypto::secret_key &sk) { return (const ct::key&)sk; }
+    static inline const ct::key &ki2rct(const crypto::key_image &ki) { return (const ct::key&)ki; }
+    static inline const ct::key &hash2rct(const crypto::hash &h) { return (const ct::key&)h; }
+    static inline const crypto::public_key &rct2pk(const ct::key &k) { return (const crypto::public_key&)k; }
+    static inline const crypto::secret_key &rct2sk(const ct::key &k) { return (const crypto::secret_key&)k; }
+    static inline const crypto::key_image &rct2ki(const ct::key &k) { return (const crypto::key_image&)k; }
+    static inline const crypto::hash &rct2hash(const ct::key &k) { return (const crypto::hash&)k; }
+    static inline bool operator==(const ct::key &k0, const crypto::public_key &k1) { return !crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
+    static inline bool operator!=(const ct::key &k0, const crypto::public_key &k1) { return crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
 }
 
 
 namespace cryptonote {
-    static inline bool operator==(const crypto::public_key &k0, const rct::key &k1) { return !crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
-    static inline bool operator!=(const crypto::public_key &k0, const rct::key &k1) { return crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
-    static inline bool operator==(const crypto::secret_key &k0, const rct::key &k1) { return !crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
-    static inline bool operator!=(const crypto::secret_key &k0, const rct::key &k1) { return crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
+    static inline bool operator==(const crypto::public_key &k0, const ct::key &k1) { return !crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
+    static inline bool operator!=(const crypto::public_key &k0, const ct::key &k1) { return crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
+    static inline bool operator==(const crypto::secret_key &k0, const ct::key &k1) { return !crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
+    static inline bool operator!=(const crypto::secret_key &k0, const ct::key &k1) { return crypto_verify_32((const unsigned char*)&k0, k1.bytes); }
 }
 
-namespace rct {
-inline std::ostream &operator <<(std::ostream &o, const rct::key &v) {
+namespace ct {
+inline std::ostream &operator <<(std::ostream &o, const ct::key &v) {
   epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
 }
 }
@@ -574,41 +574,41 @@ inline std::ostream &operator <<(std::ostream &o, const rct::key &v) {
 
 namespace std
 {
-  template<> struct hash<rct::key> { std::size_t operator()(const rct::key &k) const { return reinterpret_cast<const std::size_t&>(k); } };
+  template<> struct hash<ct::key> { std::size_t operator()(const ct::key &k) const { return reinterpret_cast<const std::size_t&>(k); } };
 }
 
-BLOB_SERIALIZER(rct::key);
-BLOB_SERIALIZER(rct::key64);
-BLOB_SERIALIZER(rct::ctkey);
+BLOB_SERIALIZER(ct::key);
+BLOB_SERIALIZER(ct::key64);
+BLOB_SERIALIZER(ct::ctkey);
 
-VARIANT_TAG(debug_archive, rct::key, "rct::key");
-VARIANT_TAG(debug_archive, rct::key64, "rct::key64");
-VARIANT_TAG(debug_archive, rct::keyV, "rct::keyV");
-VARIANT_TAG(debug_archive, rct::keyM, "rct::keyM");
-VARIANT_TAG(debug_archive, rct::ctkey, "rct::ctkey");
-VARIANT_TAG(debug_archive, rct::ctkeyV, "rct::ctkeyV");
-VARIANT_TAG(debug_archive, rct::ctkeyM, "rct::ctkeyM");
-VARIANT_TAG(debug_archive, rct::rctSig, "rct::rctSig");
-VARIANT_TAG(debug_archive, rct::BulletproofPlus, "rct::bulletproof_plus");
+VARIANT_TAG(debug_archive, ct::key, "ct::key");
+VARIANT_TAG(debug_archive, ct::key64, "ct::key64");
+VARIANT_TAG(debug_archive, ct::keyV, "ct::keyV");
+VARIANT_TAG(debug_archive, ct::keyM, "ct::keyM");
+VARIANT_TAG(debug_archive, ct::ctkey, "ct::ctkey");
+VARIANT_TAG(debug_archive, ct::ctkeyV, "ct::ctkeyV");
+VARIANT_TAG(debug_archive, ct::ctkeyM, "ct::ctkeyM");
+VARIANT_TAG(debug_archive, ct::CtSig, "ct::CtSig");
+VARIANT_TAG(debug_archive, ct::BulletproofPlus, "ct::bulletproof_plus");
 
-VARIANT_TAG(binary_archive, rct::key, 0x90);
-VARIANT_TAG(binary_archive, rct::key64, 0x91);
-VARIANT_TAG(binary_archive, rct::keyV, 0x92);
-VARIANT_TAG(binary_archive, rct::keyM, 0x93);
-VARIANT_TAG(binary_archive, rct::ctkey, 0x94);
-VARIANT_TAG(binary_archive, rct::ctkeyV, 0x95);
-VARIANT_TAG(binary_archive, rct::ctkeyM, 0x96);
-VARIANT_TAG(binary_archive, rct::rctSig, 0x9b);
-VARIANT_TAG(binary_archive, rct::BulletproofPlus, 0xa0);
+VARIANT_TAG(binary_archive, ct::key, 0x90);
+VARIANT_TAG(binary_archive, ct::key64, 0x91);
+VARIANT_TAG(binary_archive, ct::keyV, 0x92);
+VARIANT_TAG(binary_archive, ct::keyM, 0x93);
+VARIANT_TAG(binary_archive, ct::ctkey, 0x94);
+VARIANT_TAG(binary_archive, ct::ctkeyV, 0x95);
+VARIANT_TAG(binary_archive, ct::ctkeyM, 0x96);
+VARIANT_TAG(binary_archive, ct::CtSig, 0x9b);
+VARIANT_TAG(binary_archive, ct::BulletproofPlus, 0xa0);
 
-VARIANT_TAG(json_archive, rct::key, "rct_key");
-VARIANT_TAG(json_archive, rct::key64, "rct_key64");
-VARIANT_TAG(json_archive, rct::keyV, "rct_keyV");
-VARIANT_TAG(json_archive, rct::keyM, "rct_keyM");
-VARIANT_TAG(json_archive, rct::ctkey, "rct_ctkey");
-VARIANT_TAG(json_archive, rct::ctkeyV, "rct_ctkeyV");
-VARIANT_TAG(json_archive, rct::ctkeyM, "rct_ctkeyM");
-VARIANT_TAG(json_archive, rct::rctSig, "rct_rctSig");
-VARIANT_TAG(json_archive, rct::BulletproofPlus, "rct_bulletproof_plus");
+VARIANT_TAG(json_archive, ct::key, "ct_key");
+VARIANT_TAG(json_archive, ct::key64, "ct_key64");
+VARIANT_TAG(json_archive, ct::keyV, "ct_keyV");
+VARIANT_TAG(json_archive, ct::keyM, "ct_keyM");
+VARIANT_TAG(json_archive, ct::ctkey, "ct_ctkey");
+VARIANT_TAG(json_archive, ct::ctkeyV, "ct_ctkeyV");
+VARIANT_TAG(json_archive, ct::ctkeyM, "ct_ctkeyM");
+VARIANT_TAG(json_archive, ct::CtSig, "ct_CtSig");
+VARIANT_TAG(json_archive, ct::BulletproofPlus, "ct_bulletproof_plus");
 
-#endif  /* RCTTYPES_H */
+#endif  /* CT_TYPES_H */

@@ -362,7 +362,7 @@ namespace cryptonote
             meta.set_origin_zone(origin_zone);
           memset(meta.padding, 0, sizeof(meta.padding));
 
-          if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
+          if (tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc)
           {
             meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
             meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -483,7 +483,7 @@ namespace cryptonote
 
     // §3.5 attestation: same derivation as the P2P path above. The
     // certificate gate lives in the (only) caller.
-    if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
+    if (tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc)
     {
       meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
       meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -1634,7 +1634,7 @@ namespace cryptonote
   {
     if (!meta.fcmp_verified)
       return false;
-    if (tx.rct_signatures.type != rct::CTTypeFcmpPlusPlusPqc)
+    if (tx.ct_signatures.type != ct::CTTypeFcmpPlusPlusPqc)
       return false;
     const crypto::hash expected = Blockchain::compute_fcmp_verification_hash(tx);
     return expected != crypto::null_hash && expected == meta.fcmp_verification_hash;

@@ -377,9 +377,9 @@ bool gen_block_miner_tx_has_no_out::generate(std::vector<test_event_entry>& even
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
   miner_tx.vout.clear();
-  miner_tx.rct_signatures.outPk.clear();
-  miner_tx.rct_signatures.enc_amounts.clear();
-  miner_tx.rct_signatures.enc_labels.clear();
+  miner_tx.ct_signatures.outPk.clear();
+  miner_tx.ct_signatures.enc_amounts.clear();
+  miner_tx.ct_signatures.enc_labels.clear();
   miner_tx.extra.clear();
   miner_tx.invalidate_hashes();
 
@@ -445,18 +445,18 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
   uint64_t remainder = amount % tx_out_count;
   txout_target_v target = miner_tx.vout[0].target;
   miner_tx.vout.clear();
-  miner_tx.rct_signatures.outPk.clear();
-  miner_tx.rct_signatures.enc_amounts.clear();
-  miner_tx.rct_signatures.enc_labels.clear();
+  miner_tx.ct_signatures.outPk.clear();
+  miner_tx.ct_signatures.enc_amounts.clear();
+  miner_tx.ct_signatures.enc_labels.clear();
   for (size_t i = 0; i < tx_out_count; ++i)
   {
     tx_out o;
     o.amount = portion;
     o.target = target;
     miner_tx.vout.push_back(o);
-    miner_tx.rct_signatures.outPk.push_back({});
-    miner_tx.rct_signatures.enc_amounts.push_back({});
-    miner_tx.rct_signatures.enc_labels.push_back({});
+    miner_tx.ct_signatures.outPk.push_back({});
+    miner_tx.ct_signatures.enc_amounts.push_back({});
+    miner_tx.ct_signatures.enc_labels.push_back({});
   }
   if (0 < remainder)
   {
@@ -464,9 +464,9 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
     o.amount = remainder;
     o.target = target;
     miner_tx.vout.push_back(o);
-    miner_tx.rct_signatures.outPk.push_back({});
-    miner_tx.rct_signatures.enc_amounts.push_back({});
-    miner_tx.rct_signatures.enc_labels.push_back({});
+    miner_tx.ct_signatures.outPk.push_back({});
+    miner_tx.ct_signatures.enc_amounts.push_back({});
+    miner_tx.ct_signatures.enc_labels.push_back({});
   }
 
   block blk_1;
