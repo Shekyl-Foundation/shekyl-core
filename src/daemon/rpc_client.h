@@ -77,7 +77,9 @@ namespace tools
         static_cast<uint64_t>(TIMEOUT().count()),
         &out_ptr,
         &out_len);
-      std::string out(reinterpret_cast<const char*>(out_ptr), out_ptr ? out_len : 0);
+      // A null/zero pair is the export's empty buffer; never hand a null
+      // pointer to std::string's range constructor, even with a zero count.
+      std::string out = out_ptr ? std::string(reinterpret_cast<const char*>(out_ptr), out_len) : std::string();
       shekyl_daemon_ctl_free(out_ptr, out_len);
       if (rc == SHEKYL_DAEMON_CTL_OK)
       {

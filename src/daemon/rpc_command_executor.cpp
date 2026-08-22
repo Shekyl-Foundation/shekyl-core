@@ -155,7 +155,9 @@ bool t_rpc_command_executor::run_rust_console(const std::vector<std::string>& ar
     m_is_rpc ? m_rpc_client->address().c_str() : nullptr,
     tools::t_rpc_client::timeout_secs(),
     &out_ptr, &out_len);
-  std::string text(reinterpret_cast<const char*>(out_ptr), out_ptr ? out_len : 0);
+  // A null/zero pair is the export's empty buffer; never hand a null pointer
+  // to std::string's range constructor, even with a zero count.
+  const std::string text = out_ptr ? std::string(reinterpret_cast<const char*>(out_ptr), out_len) : std::string();
   shekyl_daemon_ctl_free(out_ptr, out_len);
   if (rc == SHEKYL_DAEMON_CONSOLE_OK)
   {
