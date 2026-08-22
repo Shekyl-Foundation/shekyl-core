@@ -808,14 +808,17 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 | `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
 | `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
 
-**Two things the server will refuse, on purpose.** Binding `0.0.0.0` or
+**Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
 `::` binds every interface your machine has *and every one it gains later*
 (a VPN, a hotspot, a container bridge), so the server asks you to name the
 one interface you mean. And it will not serve without authentication on any
 address other than loopback: a wallet RPC the network can reach honours
 every request, spends included. **The network being yours is not what
 provides the security** — the TV, the smart plug and a guest's phone are on
-your home network too.
+your home network too. And it answers only requests whose `Content-Type` is
+`application/json` (anything else gets HTTP 415): that is what stops a web
+page in your browser from driving the wallet on `127.0.0.1` — every real
+client sends it anyway.
 
 ### Method categories
 

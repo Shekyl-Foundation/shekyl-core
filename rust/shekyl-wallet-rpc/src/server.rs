@@ -208,7 +208,59 @@ impl AppState {
     }
 }
 
+/// The one body media type the JSON-RPC endpoint accepts.
+///
+/// This is the browser boundary, and it is structural rather than a matter
+/// of authentication. A web page can make a browser send a cross-origin POST
+/// to `127.0.0.1` without any preflight *as long as* the request is "simple"
+/// — `text/plain` or a form type — and default-deny CORS only hides the
+/// **response** from the page; the request still executes. So on the
+/// loopback listener, where RT-2 permits `AuthConfig::Disabled`, a page could
+/// otherwise drive spends through a `no-cors` `text/plain` POST carrying
+/// JSON-RPC. `application/json` is not a simple type: a browser must
+/// preflight it, and the default-deny `CorsLayer` refuses every preflight,
+/// so the request is never sent. Anything else is refused with 415 before
+/// the credential check or the body is looked at. Non-browser clients send
+/// `application/json` anyway (`docs/api/wallet_rpc.yaml`).
+const JSON_MEDIA_TYPE: &str = "application/json";
+
+/// `Content-Type` media type, parameters (`; charset=utf-8`) ignored, case
+/// folded (RFC 9110 §8.3.1).
+fn is_json_media_type(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case(JSON_MEDIA_TYPE))
+}
+
+/// Axum middleware: refuse any request that is not `application/json`.
+async fn require_json_content_type(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let is_json = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(is_json_media_type);
+    if is_json {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "this endpoint accepts only Content-Type: application/json",
+        )
+            .into_response()
+    }
+}
+
 /// Build the axum router (shared by TCP, UDS, the pipe, and in-process tests).
+///
+/// Layer order, outermost first: CORS (default-deny, so every preflight
+/// fails), body limit, the `application/json` gate, then authentication.
+/// A browser-driven request is refused by the gate before a credential is
+/// ever compared; a non-JSON request never reaches the handler.
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = Arc::new(state.auth.clone());
     Router::new()
@@ -217,11 +269,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             auth,
             require_basic_auth,
         ))
+        .layer(axum::middleware::from_fn(require_json_content_type))
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         // Default-deny CORS. This process will host spend operations; a
         // permissive ACAO on loopback TCP would let a malicious web page
-        // drive-by the wallet. Reopen only for an explicit web-client
-        // deployment (rule 21).
+        // read responses, and — with the JSON gate above — the preflight it
+        // forces is what keeps the page from sending the request at all.
+        // Reopen only for an explicit web-client deployment (rule 21).
         .layer(CorsLayer::new())
         .with_state(state)
 }
@@ -918,6 +972,33 @@ mod tests {
             .expect_err("run_server must refuse a wildcard bind")
             .to_string();
         assert!(err.contains("wildcard"), "run_server: {err}");
+    }
+
+    /// The browser boundary's predicate: the JSON media type with or without
+    /// parameters, any case, and nothing a browser can send without a
+    /// preflight. The integration test in `tests/http_get_version.rs`
+    /// proves the wiring (a `text/plain` POST is 415).
+    #[test]
+    fn only_the_json_media_type_passes_the_gate() {
+        for ok in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON",
+            " application/json ;charset=utf-8",
+        ] {
+            assert!(is_json_media_type(ok), "{ok:?}");
+        }
+        for bad in [
+            "text/plain",
+            "text/plain;charset=UTF-8",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data; boundary=x",
+            "application/jsonx",
+            "application/json-rpc",
+            "",
+        ] {
+            assert!(!is_json_media_type(bad), "{bad:?}");
+        }
     }
 
     /// `localhost:29500` is the spelling the retired server's docs taught;

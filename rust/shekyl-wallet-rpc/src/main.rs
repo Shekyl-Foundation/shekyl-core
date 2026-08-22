@@ -45,19 +45,21 @@ struct Cli {
     rpc_bind: String,
 
     /// HTTP basic auth as `NAME:PASSWORD`, both halves non-empty (anything
-    /// else is refused by name). Omitted disables auth, which is accepted
-    /// only on loopback or a UDS socket (filesystem permissions carry the
-    /// authorization there); a non-loopback --rpc-bind refuses to start
-    /// without it. Contradicts --disable-rpc-login: pass one.
+    /// else given — an empty value included — is refused by name). Omitted
+    /// disables auth, which is accepted only on loopback or a UDS socket
+    /// (filesystem permissions carry the authorization there); a
+    /// non-loopback --rpc-bind refuses to start without it. Contradicts
+    /// --disable-rpc-login: pass one.
     #[arg(
         long = "rpc-login",
-        default_value = "",
-        // Parsed straight into a wiping buffer (rule 35): the `String` clap
-        // produces is moved, not copied, into the `Zeroizing`. argv itself
-        // and clap's transient copies are the OS's and clap's — the residual.
+        // No default: presence is the signal, so `--rpc-login=` is a given
+        // (and refused) value rather than an omission. Parsed straight into
+        // a wiping buffer (rule 35): the `String` clap produces is moved,
+        // not copied, into the `Zeroizing`. argv itself and clap's
+        // transient copies are the OS's and clap's — the residual.
         value_parser = clap::builder::StringValueParser::new().map(Zeroizing::new),
     )]
-    rpc_login: Zeroizing<String>,
+    rpc_login: Option<Zeroizing<String>>,
 
     /// Run without authentication. Accepted only on a loopback --rpc-bind
     /// or a UDS socket; refused off loopback, and refused together with
@@ -116,7 +118,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _guard = shekyl_logging::init(config)?;
 
     let listen = ListenAddr::parse(&cli.rpc_bind)?;
-    let auth = AuthConfig::from_cli(&cli.rpc_login, cli.disable_rpc_login)?;
+    let auth = AuthConfig::from_cli(
+        cli.rpc_login.as_deref().map(String::as_str),
+        cli.disable_rpc_login,
+    )?;
     // The credential now lives only in `auth`; wipe the flag's copy here
     // rather than at process exit.
     drop(cli.rpc_login);

@@ -1049,3 +1049,59 @@ async fn open_during_inflight_close_is_refused_busy() {
     .await;
     assert!(bal.get("error").is_none(), "restore failed: {bal}");
 }
+
+/// The browser boundary: a `text/plain` POST — what a web page can make a
+/// browser send cross-origin with no preflight — and a POST with no
+/// `Content-Type` at all are refused with 415 before the body or a
+/// credential is looked at, authentication enabled or not; the same body
+/// as `application/json` is served. The edit that turns this red is
+/// removing the JSON gate from `build_router`.
+#[tokio::test]
+async fn non_json_content_type_is_refused_before_anything_else() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "get_version"
+    }))
+    .unwrap();
+    let configs = || {
+        [
+            AuthConfig::Disabled,
+            AuthConfig::Basic(
+                shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret")
+                    .expect("valid credential"),
+            ),
+        ]
+    };
+    for auth in configs() {
+        for content_type in [
+            Some("text/plain"),
+            Some("application/x-www-form-urlencoded"),
+            None,
+        ] {
+            let app = build_router(test_state(auth.clone()));
+            let mut req = Request::builder().method("POST").uri("/");
+            if let Some(ct) = content_type {
+                req = req.header("content-type", ct);
+            }
+            let response = app
+                .oneshot(req.body(Body::from(body.clone())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{content_type:?} with {auth:?} must be refused by the JSON gate"
+            );
+        }
+    }
+    // The control: the same request as JSON reaches the handler (the
+    // Disabled config, so the outcome is the method's, not the credential's).
+    let app = build_router(test_state(AuthConfig::Disabled));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header("content-type", "application/json; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}

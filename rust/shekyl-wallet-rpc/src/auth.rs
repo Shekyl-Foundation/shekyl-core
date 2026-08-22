@@ -111,36 +111,34 @@ impl std::fmt::Debug for AuthConfig {
 }
 
 impl AuthConfig {
-    /// Build from the `--rpc-login` value.
-    ///
-    /// Empty → [`AuthConfig::Disabled`] (the flag was not given). Otherwise
-    /// the value is split at the first `:` and handed to
-    /// [`BasicCredential::new`], which refuses a blank half — so a value
-    /// without `:` (no password) is refused too, rather than becoming a
-    /// username with an empty password.
+    /// Build from a `--rpc-login` value that was **given**. The value is
+    /// split at the first `:` and handed to [`BasicCredential::new`], which
+    /// refuses a blank half — so an empty value, or one without `:` (no
+    /// password), is refused rather than becoming "no authentication" or a
+    /// username with an empty password. Omission is [`Self::from_cli`]'s
+    /// to decide; a value is never silently equal to no value.
     pub fn from_rpc_login(login: &str) -> Result<Self, String> {
-        if login.is_empty() {
-            return Ok(Self::Disabled);
-        }
         let (username, password) = login.split_once(':').unwrap_or((login, ""));
         BasicCredential::new(username, password).map(Self::Basic)
     }
 
-    /// Build from the binary's flag pair. `--rpc-login` together with
+    /// Build from the binary's flag pair, where **presence** is the signal:
+    /// `None` is the flag omitted. `--rpc-login` given together with
     /// `--disable-rpc-login` is refused as a contradiction rather than
-    /// resolved by precedence: an operator who wrote both believes a
+    /// resolved by precedence — an operator who wrote both believes a
     /// password is set, and silently running without one is the failure
-    /// RT-2 exists to prevent (name the action, not the intent).
-    pub fn from_cli(rpc_login: &str, disable_rpc_login: bool) -> Result<Self, String> {
-        match (disable_rpc_login, rpc_login.is_empty()) {
-            (true, false) => Err(
-                "--disable-rpc-login and --rpc-login contradict each other; \
-                                  pass one. --disable-rpc-login is accepted only on a loopback \
-                                  bind or, on Unix, a uds:// socket"
+    /// RT-2 exists to prevent (name the action, not the intent). That holds
+    /// for `--rpc-login=` too: an empty value is a value.
+    pub fn from_cli(rpc_login: Option<&str>, disable_rpc_login: bool) -> Result<Self, String> {
+        match (disable_rpc_login, rpc_login) {
+            (true, Some(_)) => Err(
+                "--disable-rpc-login and --rpc-login contradict each other; pass one. \
+                 --disable-rpc-login is accepted only on a loopback bind or, on Unix, a \
+                 uds:// socket"
                     .into(),
             ),
-            (true, true) => Ok(Self::Disabled),
-            (false, _) => Self::from_rpc_login(rpc_login),
+            (_, None) => Ok(Self::Disabled),
+            (false, Some(login)) => Self::from_rpc_login(login),
         }
     }
 
@@ -208,20 +206,16 @@ mod tests {
     use super::*;
 
     /// The parser is the public seam: every shape that would have produced
-    /// a blank credential is refused there, naming the flag and never
-    /// echoing the value. (`BasicCredential::new` is what refuses; the
-    /// parser only splits, so one table covers both.)
+    /// a blank credential — the empty value included — is refused there,
+    /// naming the flag and never echoing the value. (`BasicCredential::new`
+    /// is what refuses; the parser only splits, so one table covers both.)
     #[test]
     fn rpc_login_parses_name_password_and_refuses_blank_halves() {
-        assert!(matches!(
-            AuthConfig::from_rpc_login(""),
-            Ok(AuthConfig::Disabled)
-        ));
         let Ok(AuthConfig::Basic(cred)) = AuthConfig::from_rpc_login("alice:hunter2") else {
             panic!("NAME:PASSWORD must parse to Basic");
         };
         assert_eq!(cred.username(), "alice");
-        for bad in [":", "alice:", ":hunter2", "alice"] {
+        for bad in ["", ":", "alice:", ":hunter2", "alice"] {
             let err = AuthConfig::from_rpc_login(bad).expect_err(bad);
             assert!(
                 err.contains("--rpc-login"),
@@ -234,29 +228,36 @@ mod tests {
         }
     }
 
-    /// The flag pair: each flag alone does what it says; both together is
-    /// a contradiction, refused by name. The edit that turns the last arm
-    /// red is resolving the pair by precedence.
+    /// The flag pair: omission disables, alone or with `--disable-rpc-login`;
+    /// a given value must be a credential; a given value together with
+    /// `--disable-rpc-login` is a contradiction, refused by name — and
+    /// `--rpc-login=` is a given value, not an omission, on both counts. The
+    /// edits that turn this red: resolving the pair by precedence, or
+    /// treating the empty value as absent.
     #[test]
-    fn flag_pair_is_refused_when_contradictory() {
+    fn flag_pair_presence_is_the_signal() {
         assert!(matches!(
-            AuthConfig::from_cli("", false),
+            AuthConfig::from_cli(None, false),
             Ok(AuthConfig::Disabled)
         ));
         assert!(matches!(
-            AuthConfig::from_cli("", true),
+            AuthConfig::from_cli(None, true),
             Ok(AuthConfig::Disabled)
         ));
         assert!(matches!(
-            AuthConfig::from_cli("alice:hunter2", false),
+            AuthConfig::from_cli(Some("alice:hunter2"), false),
             Ok(AuthConfig::Basic(_))
         ));
-        let err = AuthConfig::from_cli("alice:hunter2", true).expect_err("contradiction");
-        assert!(
-            err.contains("--disable-rpc-login") && err.contains("--rpc-login"),
-            "{err}"
-        );
-        assert!(!err.contains("hunter2"), "{err}");
+        let empty = AuthConfig::from_cli(Some(""), false).expect_err("an empty value is refused");
+        assert!(empty.contains("--rpc-login"), "{empty}");
+        for given in ["alice:hunter2", ""] {
+            let err = AuthConfig::from_cli(Some(given), true).expect_err("contradiction");
+            assert!(
+                err.contains("--disable-rpc-login") && err.contains("contradict"),
+                "{given:?}: {err}"
+            );
+            assert!(!err.contains("hunter2"), "{err}");
+        }
     }
 
     fn basic_header(scheme: &str, user: &str, pass: &str) -> String {

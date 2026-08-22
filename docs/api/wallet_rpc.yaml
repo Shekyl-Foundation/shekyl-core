@@ -226,6 +226,11 @@ paths:
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
       requestBody:
         required: true
+        description: >-
+          `application/json` is the only accepted Content-Type; any other
+          (or none) is refused with HTTP 415 before authentication. This is
+          the browser boundary: a non-JSON POST is one a web page can make
+          a browser send cross-origin without a preflight.
         content:
           application/json:
             schema:

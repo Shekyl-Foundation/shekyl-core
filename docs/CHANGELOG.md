@@ -24,8 +24,14 @@
   credential type (`BasicCredential`) cannot be constructed blank, so the
   bind seam has nothing to re-inspect. `--rpc-login` together with
   `--disable-rpc-login` is refused as a contradiction rather than resolved
-  by precedence. Off loopback, Basic over cleartext is permitted until RT-W4
-  and logged as a warning naming what it costs (RT-3). This is slice RT-W1
+  by precedence; `--rpc-login=` is a given (and refused) value, not an
+  omission. Off loopback, Basic over cleartext is permitted until RT-W4
+  and logged as a warning naming what it costs (RT-3). The listener now
+  accepts `Content-Type: application/json` only (415 otherwise): a browser
+  can send a cross-origin `text/plain` POST to loopback with no preflight,
+  and default-deny CORS hides only the response — so this gate, not the
+  credential, is what keeps a web page from driving the auth-less loopback
+  listener. This is slice RT-W1
   of the RPC transport posture (RULED 2026-08-21): every RPC leg is
   operator-to-operator and the adversary is the network path; remote legs
   become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,

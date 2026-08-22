@@ -149,6 +149,16 @@ posture and the OS enforces the machine boundary — and the Unix socket and
 the Windows pipe pass through, because their authorization rides the
 transport.
 
+*The browser boundary on loopback is structural, not credential-based.* A
+web page can make a browser send a cross-origin `text/plain` POST to
+`127.0.0.1` with no preflight; default-deny CORS hides only the response.
+The listener therefore accepts `application/json` only — not a "simple"
+type, so a browser must preflight it, and the default-deny CORS layer
+refuses every preflight — and answers anything else with 415 before the
+credential check. That gate is what makes the auth-less loopback exception
+defensible; it also protects the authenticated case, where a page could not
+read the response but could have caused the spend.
+
 ### RT-3 — Remote legs are mutually authenticated and encrypted
 
 No cleartext RPC leaves the host. HTTP Basic (`AuthConfig::check` in
