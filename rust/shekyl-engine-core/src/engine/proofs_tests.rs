@@ -314,7 +314,16 @@ mod check_workflows {
                     }
                     json!({ "txs": txs, "missed_tx": missed })
                 }
-                "get_height" => json!({ "height": self.height }),
+                // Built from the daemon's own wire type, not a JSON literal:
+                // the compiler holds this double to the contract's field set
+                // (a hand-written `{"height": ..}` once drifted and was only
+                // caught when the typed reader refused it).
+                "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
+                    status: shekyl_rpc_types::RpcStatus::ok(),
+                    height: self.height as u64,
+                    hash: "00".repeat(32),
+                })
+                .expect("wire type serializes"),
                 "is_key_image_spent" => {
                     let req: Value = serde_json::from_slice(&body).expect("request body is JSON");
                     let n = req["key_images"]
