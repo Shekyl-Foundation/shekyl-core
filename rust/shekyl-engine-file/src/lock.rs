@@ -267,15 +267,16 @@ mod tests {
 
     /// The platform fact this module's API is built around, pinned rather
     /// than remembered: while the lock is held, a read of the same path
-    /// through a **second** handle fails on Windows with exactly
-    /// `ERROR_LOCK_VIOLATION` (`LockFileEx` is mandatory for the locked
-    /// byte) and on POSIX returns the bytes that were written (`flock` is
-    /// advisory). Pinned to the specific error and the specific bytes so an
-    /// unrelated failure — a missing file, a permission problem — cannot
-    /// pass as the platform fact. The edit that turns the Windows arm red
-    /// is `fd-lock` or std changing how the lock or the read is issued;
-    /// the edit that turns the POSIX arm red is someone making the lock
-    /// mandatory there.
+    /// through a **second** handle fails on Windows with a lock-class error
+    /// (`LockFileEx` is mandatory for the locked byte) and on POSIX returns
+    /// the bytes that were written (`flock` is advisory). Pinned to the
+    /// lock-class codes and the specific bytes so an unrelated failure — a
+    /// missing file, a permission problem — cannot pass as the platform
+    /// fact, while the two codes that both mean "the locked byte is
+    /// unreachable through another handle" are both accepted. The edit
+    /// that turns the Windows arm red is `fd-lock` or std changing how the
+    /// lock or the read is issued; the edit that turns the POSIX arm red is
+    /// someone making the lock mandatory there.
     #[test]
     fn path_read_while_locked_is_platform_dependent() {
         let dir = tempfile::tempdir().unwrap();
@@ -285,16 +286,23 @@ mod tests {
         let second_handle = std::fs::read(&path);
         #[cfg(windows)]
         {
-            /// `winerror.h`: the locked byte range cannot be accessed.
+            /// `winerror.h`: the locked byte range cannot be accessed — what
+            /// `LockFileEx` produces today.
             const ERROR_LOCK_VIOLATION: i32 = 33;
+            /// `winerror.h`: the file is in use by another process's share
+            /// mode — what a share-mode exclusivity would produce if std or
+            /// `fd-lock` ever moved to one. Same invariant, other mechanism.
+            const ERROR_SHARING_VIOLATION: i32 = 32;
             let err = second_handle.expect_err(
                 "Windows: a path read while locked must fail — if it passes, the \
                  mandatory-lock premise behind acquire_and_read no longer holds",
             );
-            assert_eq!(
-                err.raw_os_error(),
-                Some(ERROR_LOCK_VIOLATION),
-                "Windows: the failure must be the lock violation, not something else: {err}"
+            assert!(
+                matches!(
+                    err.raw_os_error(),
+                    Some(ERROR_LOCK_VIOLATION | ERROR_SHARING_VIOLATION)
+                ),
+                "Windows: the failure must be a lock-class error, not something else: {err}"
             );
         }
         #[cfg(unix)]

@@ -988,12 +988,19 @@ async fn reopen_with_first_stake_intent(
     // verdict: the reopen below still needs it, and one owned buffer at a
     // time is the whole point of not cloning it.
     let (verdict, password) = tokio::task::spawn_blocking(move || {
-        let verdict = envelope.verify_password(&password);
+        let verdict = envelope.verify_password(password.as_slice());
         (verdict, password)
     })
     .await
     .map_err(|e| {
-        WalletRpcError::InternalError(format!("stake: password verification task: {e}"))
+        // A panic is a bug in the verifier; a cancellation is the runtime
+        // shutting down under us. Name which, so the log says which.
+        let how = if e.is_panic() {
+            "panicked"
+        } else {
+            "was cancelled"
+        };
+        WalletRpcError::InternalError(format!("stake: password verification task {how}: {e}"))
     })?;
     verdict.map_err(|e| match e {
         shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
