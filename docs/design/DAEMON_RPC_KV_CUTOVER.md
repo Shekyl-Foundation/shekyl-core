@@ -1,8 +1,9 @@
 # Daemon RPC — Phase 2: the KV cutover (native Rust handlers over facts FFI)
 
-**Status:** Design **open for RK-1** (the pattern slice). Census and
-binding decisions verified at source against `dev` **`077d97c4e`** (PR #528
-merge); every `file:line` below was read at that commit.
+**Status:** **RK-1 landed** (the pattern slice, PR #534); design **open for
+RK-2**. Census and binding decisions verified at source against `dev`
+**`077d97c4e`** (PR #528 merge); every `file:line` below was read at that
+commit.
 **Identifier family:** `RK-` (RPC KV cutover), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit that
 lands this document (rule 94). Neighbours present as families: `RF-`, `RP-`,
@@ -153,7 +154,7 @@ type, not three string constants in three crates.
 typedef struct shekyl_rpc_chain_tip_facts {
     uint64_t chain_height;      // top block height + 1
     uint8_t  top_hash[32];
-    uint64_t target_height;     // 0 when synchronized
+    uint64_t target_height;     // raw core target; "0 when synchronized" is the handler's rule
     uint8_t  synchronized;
     uint8_t  release_build;     // SHEKYL_VERSION_IS_RELEASE (build-generated, C++-owned)
     uint8_t  reserved[6];
@@ -205,7 +206,11 @@ with `SHEKYL_WRITE_RPC_VECTORS=1`; the vectors are committed. Commit *N+1*
 deletes the C++ handler, struct and dispatch rows; the Rust test feeds the
 same fixed facts to the native handler and asserts parsed-equality (JSON)
 or byte-equality (`.bin`) against the committed vector. The vector is the
-contract's memory of the C++ oracle after the oracle is gone.
+contract's memory of the C++ oracle after the oracle is gone — stored as
+the bytes epee produced (its JSON pretty-printer emits CRLF), with the
+directory marked `-text` in `.gitattributes` so no platform's checkout
+rewrites them; RK-D4 makes that whitespace non-contractual, so nothing
+downstream depends on it either way.
 
 ---
 
