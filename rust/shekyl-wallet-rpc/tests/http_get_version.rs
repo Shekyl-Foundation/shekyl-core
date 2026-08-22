@@ -1182,3 +1182,24 @@ async fn rebindable_host_is_refused_where_auth_is_disabled() {
         "with authentication enabled the credential is the gate, not the Host"
     );
 }
+
+/// The media-type half judges only requests that carry a body: a `GET /`
+/// has none, so the router's 405 is the answer, not a misleading 415. The
+/// rebinding half is method-independent — a rebound `GET` is still 421
+/// where authentication is disabled. The edit that turns the first half
+/// red is gating every method; the second, gating the Host check by method.
+#[tokio::test]
+async fn bodiless_methods_are_not_judged_by_media_type() {
+    let get = |host: &'static str| async move {
+        let app = build_router(test_state(AuthConfig::Disabled));
+        let req = Request::builder()
+            .method("GET")
+            .uri("/")
+            .header("host", host)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    };
+    assert_eq!(get("127.0.0.1").await, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(get("evil.example").await, StatusCode::MISDIRECTED_REQUEST);
+}

@@ -261,10 +261,13 @@ fn is_json_media_type(content_type: &str) -> bool {
         .is_some_and(|media| media.trim().eq_ignore_ascii_case(JSON_MEDIA_TYPE))
 }
 
-/// Axum middleware: the browser boundary. Refuse any request that is not
-/// `application/json` (415), and — where authentication is disabled — any
-/// request addressed by a rebindable name (421 Misdirected Request). Both
-/// run before the credential check, the body limit, or the body.
+/// Axum middleware: the browser boundary. Refuse any body-carrying request
+/// (POST, PUT, PATCH) that is not `application/json` (415) — a request with
+/// no body has no media type to judge, and the router's own 405 is the
+/// accurate answer to a `GET /` — and, where authentication is disabled,
+/// any request addressed by a rebindable name (421 Misdirected Request),
+/// method-independent: a rebound page could read as well as spend. Both run
+/// before the credential check, the body limit, or the body.
 async fn browser_boundary(
     axum::extract::State(auth): axum::extract::State<Arc<AuthConfig>>,
     request: axum::extract::Request,
@@ -276,6 +279,10 @@ async fn browser_boundary(
     // alive across `next.run` would make this future `!Send` (`Body` is not
     // `Sync`), and axum's middleware requires `Send`.
     let headers = request.headers();
+    let carries_body = matches!(
+        *request.method(),
+        axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::PATCH
+    );
     let is_json = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -284,7 +291,7 @@ async fn browser_boundary(
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .is_some_and(host_is_unrebindable);
-    if !is_json {
+    if carries_body && !is_json {
         return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "this endpoint accepts only Content-Type: application/json",
