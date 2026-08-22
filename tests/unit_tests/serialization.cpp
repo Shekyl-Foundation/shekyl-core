@@ -45,7 +45,7 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_config.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "serialization/binary_archive.h"
 #include "serialization/json_archive.h"
 #include "serialization/debug_archive.h"
@@ -692,8 +692,8 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_l
     tx0.vout.push_back(out);
   }
 
-  rct::rctSig& rv = tx0.rct_signatures;
-  rv.type = rct::CTTypeNull;
+  ct::CtSig& rv = tx0.ct_signatures;
+  rv.type = ct::CTTypeNull;
   rv.outPk.resize(2);
   rv.enc_amounts.resize(2);
   rv.enc_labels.resize(2);
@@ -718,23 +718,23 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_l
   ASSERT_TRUE(serialization::parse_binary(blob, tx1))
     << "CTTypeNull deserialization failed; blob size=" << blob.size();
 
-  EXPECT_EQ(tx1.rct_signatures.type, rct::CTTypeNull);
-  ASSERT_EQ(tx1.rct_signatures.outPk.size(), 2u);
-  ASSERT_EQ(tx1.rct_signatures.enc_amounts.size(), 2u);
-  ASSERT_EQ(tx1.rct_signatures.enc_labels.size(), 2u);
+  EXPECT_EQ(tx1.ct_signatures.type, ct::CTTypeNull);
+  ASSERT_EQ(tx1.ct_signatures.outPk.size(), 2u);
+  ASSERT_EQ(tx1.ct_signatures.enc_amounts.size(), 2u);
+  ASSERT_EQ(tx1.ct_signatures.enc_labels.size(), 2u);
 
   for (size_t i = 0; i < 2; ++i)
   {
-    EXPECT_EQ(tx1.rct_signatures.outPk[i].mask, rv.outPk[i].mask)
+    EXPECT_EQ(tx1.ct_signatures.outPk[i].mask, rv.outPk[i].mask)
       << "outPk[" << i << "].mask mismatch after round-trip";
-    EXPECT_EQ(tx1.rct_signatures.enc_amounts[i], rv.enc_amounts[i])
+    EXPECT_EQ(tx1.ct_signatures.enc_amounts[i], rv.enc_amounts[i])
       << "enc_amounts[" << i << "] mismatch after round-trip (8-byte amount + 1-byte tag)";
-    EXPECT_EQ(tx1.rct_signatures.enc_labels[i], rv.enc_labels[i])
+    EXPECT_EQ(tx1.ct_signatures.enc_labels[i], rv.enc_labels[i])
       << "enc_labels[" << i << "] mismatch after round-trip (8-byte label + 1-byte tag)";
   }
 
-  EXPECT_EQ(tx1.rct_signatures.txnFee, 0u)
+  EXPECT_EQ(tx1.ct_signatures.txnFee, 0u)
     << "CTTypeNull must not serialize txnFee, but it was non-zero after parse";
-  EXPECT_EQ(tx1.rct_signatures.referenceBlock, crypto::hash{})
+  EXPECT_EQ(tx1.ct_signatures.referenceBlock, crypto::hash{})
     << "CTTypeNull must not serialize referenceBlock";
 }

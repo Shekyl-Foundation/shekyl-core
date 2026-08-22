@@ -134,7 +134,7 @@ both to be compromised simultaneously.
 
 ### FCMP++ Membership Proof
 
-The proof blob (`fcmp_pp_proof` in `rctSigPrunable`) is an opaque byte
+The proof blob (`fcmp_pp_proof` in `CtSigPrunable`) is an opaque byte
 array produced by the Rust `shekyl_fcmp_prove()` function. It encodes:
 
 - Generalized Schnorr Protocol (GSP) transcripts for each input
@@ -168,18 +168,18 @@ The proof size scales with the number of inputs and the tree depth:
 
 ### CTTypeFcmpPlusPlusPqc (type = 1)
 
-Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
+Shekyl's only non-coinbase transaction type. Defined in `ct_types.h`.
 
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig {
+  ct_signatures: CtSig {
     type: CTTypeFcmpPlusPlusPqc   // = 1
     txnFee: u64
     ecdhInfo: [EcdhTuple]
     outPk: [key]
     referenceBlock: hash            // block hash anchoring curve tree snapshot
-    pseudoOuts: [key]               // in rctSigPrunable
+    pseudoOuts: [key]               // in CtSigPrunable
     bp_plus: [BulletproofPlus]      // range proofs (unchanged)
     curve_trees_tree_depth: u8      // tree depth at referenceBlock
     fcmp_pp_proof: bytes            // opaque FCMP++ proof blob
@@ -188,16 +188,16 @@ TransactionV3 {
 }
 ```
 
-**Only two CT type values exist.** The `rctTypes.h` enum contains
+**Only two CT type values exist.** The `ct_types.h` enum contains
 `CTTypeNull = 0` (coinbase only) and `CTTypeFcmpPlusPlusPqc = 1` (all
 non-coinbase spends). Legacy Monero types (`RCTTypeFull` through
 `RCTTypeBulletproofPlus`) are not defined; associated structs (`mgSig`,
 `clsag`, `rangeSig`, non-plus `Bulletproof`, `RCTConfig`, etc.) and ring /
 CLSAG signing and verification code have been removed from the codebase.
 
-The `rctSigBase` struct has no `mixRing` member. `rctSigPrunable` holds only
+The `CtSigBase` struct has no `mixRing` member. `CtSigPrunable` holds only
 `bulletproofs_plus`, `pseudoOuts`, `curve_trees_tree_depth`, and
-`fcmp_pp_proof`. The `serialize_rctsig_prunable` API has no `mixin`
+`fcmp_pp_proof`. The `serialize_ctsig_prunable` API has no `mixin`
 parameter.
 
 ### `tx_extra`: Hybrid KEM ciphertext tag (`0x06`)
@@ -245,7 +245,7 @@ rederive per-output keys, sign with `pqc_auths` on the spend transaction).
 ### Transaction Hash Computation
 
 ```text
-tx_hash = cn_fast_hash(prefix_hash || base_rct_hash || pqc_auths_hash || prunable_hash)
+tx_hash = cn_fast_hash(prefix_hash || base_ct_hash || pqc_auths_hash || prunable_hash)
 ```
 
 `pqc_auths_hash` is `cn_fast_hash` of the canonical serialization of the full
@@ -356,14 +356,14 @@ state:
 ```text
 signed_payload_i = cn_fast_hash(
     serialize(TransactionPrefixV3)
-    || serialize(RctSigningBody)
-    || H(serialize(RctSigPrunable))
+    || serialize(CtSigningBody)
+    || H(serialize(CtSigPrunable))
     || serialize(PqcAuthHeader_i)
     || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
 )
 ```
 
-`H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+`H(serialize(CtSigPrunable))` is `cn_fast_hash` of the serialized prunable
 data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
 `BulletproofPlus`). This 32-byte digest directly binds the PQC signature
 to the FCMP++ proof, preventing an attacker from substituting different
@@ -378,12 +378,12 @@ other inputs' signatures.
 
 | Field | Covered via | Binding |
 |-------|-----------|---------|
-| `referenceBlock` | `RctSigningBody` (in `rctSigBase`) | Anchors the tree snapshot |
+| `referenceBlock` | `CtSigningBody` (in `CtSigBase`) | Anchors the tree snapshot |
 | All key images | `TransactionPrefixV3` (in `vin`) | Prevents key image substitution |
-| `fcmp_pp_proof` | `H(RctSigPrunable)` in signed payload | Direct proof binding |
-| `pseudoOuts` | `H(RctSigPrunable)` in signed payload | Pseudo-output binding |
-| `curve_trees_tree_depth` | `H(RctSigPrunable)` in signed payload | Tree depth binding |
-| `BulletproofPlus` | `H(RctSigPrunable)` in signed payload | Range proof binding |
+| `fcmp_pp_proof` | `H(CtSigPrunable)` in signed payload | Direct proof binding |
+| `pseudoOuts` | `H(CtSigPrunable)` in signed payload | Pseudo-output binding |
+| `curve_trees_tree_depth` | `H(CtSigPrunable)` in signed payload | Tree depth binding |
+| `BulletproofPlus` | `H(CtSigPrunable)` in signed payload | Range proof binding |
 | `H(pqc_pk)` values | `PqcAuthHeader_i` + all-inputs hash tail | Full PQC key binding |
 
 ### PqcAuthHeader Layout (Per-Input)
@@ -512,8 +512,8 @@ from `pqc_auths` in the same code path.
 ### Step 7: Bulletproof+ Range Proof Verification
 
 Standard BulletproofPlus verification for output range proofs, handled by
-`verRctSemanticsSimple` (batch verification of BP+ and pseudo-output sum
-checks) called from `ver_mixed_rct_semantics` in `tx_verification_utils.cpp`.
+`verCtSemanticsSimple` (batch verification of BP+ and pseudo-output sum
+checks) called from `ver_mixed_ct_semantics` in `tx_verification_utils.cpp`.
 
 ---
 
@@ -652,7 +652,7 @@ The curve tree and related metadata are stored in five LMDB tables.
 
 | Table | Key | Value | Purpose |
 |-------|-----|-------|---------|
-| `txs_pruned` | `tx_id` (u64) | prefix + `rctSigBase` only | Canonical pruned prefix |
+| `txs_pruned` | `tx_id` (u64) | prefix + `CtSigBase` only | Canonical pruned prefix |
 | `txs_pqc_auths` | `tx_id` (u64) | `pqc_auths` bytes (optional) | Split from `txs_pruned` so pruning can delete PQC auth data |
 | `txs_prunable` | `tx_id` (u64) | Bulletproofs+, FCMP++, pseudoOuts | Deleted after tx-data pruning |
 
@@ -1161,7 +1161,7 @@ any other output. Specifically:
    ML-KEM ciphertext in `tx_extra` (`0x06`), `H(pqc_pk)` leaf hashes in
    `tx_extra` (`0x07`), and a 2-output structure (reward + dummy change).
 3. Consensus: BP+ range proofs on claim tx outputs go through the standard
-   `verRctSemanticsSimple` batch verification path alongside regular
+   `verCtSemanticsSimple` batch verification path alongside regular
    transaction outputs.
 
 **Batch pool balance check:** The total of all claim amounts in a
@@ -1202,7 +1202,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
-| `CTTypeFcmpPlusPlusPqc` | 1 | `rctTypes.h` |
+| `CTTypeFcmpPlusPlusPqc` | 1 | `ct_types.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
 | `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
@@ -1226,7 +1226,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Key image y-normalization check | **Done** | `blockchain.cpp` |
 | FCMP++ proof FFI call | **Done** | `blockchain.cpp` → `shekyl_fcmp_verify()` |
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
-| `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `rctSigs.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
+| `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `ct_semantics.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
 | PQC key rederivation from stored secret | **Done** (legacy C++ scan cache; deletion target at rewrite Phase 5) | `wallet2.cpp` |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
@@ -1238,7 +1238,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
 | Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
 | Trezor protocol legacy RCT removal | **Done** | `protocol.cpp`, `protocol.hpp` |
-| Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `rctTypes.h/cpp`, `rctSigs.h/cpp`, all consumers |
+| Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `ct_types.h/cpp`, `ct_semantics.h/cpp`, all consumers |
 | Non-plus Bulletproof code removal | **Done** | `bulletproofs.h`, `bulletproofs.cc` |
 | `RCTConfig` parameter removal from tx construction | **Done** | `cryptonote_tx_utils.h/cpp`, `wallet2.h/cpp` |
 | RPC `low_mixin` field removal | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
@@ -1254,13 +1254,13 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Dead `expand_transaction_2` removal | **Done** | `blockchain.cpp`, `blockchain.h` |
 | PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
 | Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
-| Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
+| Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `ct_semantics.h/cpp`, `tx_verification_utils.h/cpp` |
 | Universal deferred tree insertion | **Done** | `pending_tree_leaves` / `pending_tree_drain` / `block_pending_additions` / `output_to_leaf` / `leaf_to_output` DB tables, `blockchain_db.cpp`, `shekyl_types.h` |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
 | PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
 | `pqc_authentication` deserialization size bounds | **Done** | `cryptonote_basic.h` |
-| `pseudoOuts` gated in generic `rctSigBase` serializer | **Done** | `rctTypes.h` |
+| `pseudoOuts` gated in generic `CtSigBase` serializer | **Done** | `ct_types.h` |
 | `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
 | Ring-based validation path removed (genesis-native) | **Done** | `blockchain.cpp` |
 | `tx_extra` KEM blob tag `0x06` (N × 1120 bytes hybrid ct) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
@@ -1282,7 +1282,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` (`estimate_rct_tx_size`) |
 | GUI wallet QR code (full Bech32m address) | **Done** | `shekyl-gui-wallet` |
 | GUI wallet fee preview on Send page | **Done** | `shekyl-gui-wallet` |
-| `rct::key::operator!=` for key-vs-key comparison | **Done** | `rctTypes.h` |
+| `ct::key::operator!=` for key-vs-key comparison | **Done** | `ct_types.h` |
 | PQC secret keys eliminated from C++ wallet (sign via `shekyl_sign_pqc_auth`) | **Done** | `wallet2.cpp`, `wallet2_ffi.cpp` |
 | MSVC-compatible `binary_archive` construction | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
@@ -1310,7 +1310,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Real `verify()` in `shekyl-fcmp` (batch verifiers: Ed25519/Selene/Helios) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| C++ callers updated for new FFI signatures | **Done** | `rctSigs.cpp`, `blockchain.cpp`, `wallet2.cpp` |
+| C++ callers updated for new FFI signatures | **Done** | `ct_semantics.cpp`, `blockchain.cpp`, `wallet2.cpp` |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
 | FROST SAL module (`frost_sal.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | `prove_with_sal()` for multisig proof construction | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
@@ -1318,7 +1318,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `rctSigs.h/cpp` (test-only; production uses collapsed Rust signing) |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `ct_semantics.h/cpp` (test-only; production uses collapsed Rust signing) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
@@ -1345,7 +1345,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
 | X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
 | `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
-| `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `rctTypes.h` |
+| `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `ct_types.h` |
 | On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
 | `check_commitment_mask_valid` rejects z=0/z=1 | **Done** | `blockchain.cpp` |
 | PQC salt unified to `shekyl-output-derive-v1` | **Done** | `derivation.rs`, `output.rs` |
@@ -1740,7 +1740,7 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 
 ### Encrypted Labels Wire Format (5-T, FA-11)
 
-Per-output logical labels use `enc_labels` in `rctSigBase` (9 bytes each),
+Per-output logical labels use `enc_labels` in `CtSigBase` (9 bytes each),
 serialized immediately after `enc_amounts` and before `outPk`:
 
 ```
@@ -1753,7 +1753,7 @@ serialized immediately after `enc_amounts` and before `outPk`:
 - `label_tag` is the first byte of HKDF-Expand(`shekyl-output-label-tag` ‖ index);
   verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
   cleartext sentinel-vs-tag discriminator).
-- Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
+- Included in `serialize_ctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
 - Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
 - `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
@@ -1798,7 +1798,7 @@ typed `ProveInputFields` `#[repr(C)]` struct, replacing raw `memcpy` calls.
   FROST group key), the FROST SAL path operates with a per-output T-component.
   Gate behind "requires two-component address scheme" until V4.
 - **Coinbase commitment mask**: `zeroCommit(amount) = G + amount*H`, so the
-  mask scalar is 1 (`rct::identity()`), not 0.
+  mask scalar is 1 (`ct::identity()`), not 0.
 
 ---
 
@@ -1958,6 +1958,6 @@ assert that `enc_amount` comes from chain lookup, not from the proof.
 - `docs/AUDIT_SCOPE.md` — 4-scalar leaf circuit security audit scope
 - `tests/stressnet/README.md` — stressnet operational guide (pre-audit gate)
 - `src/shekyl/shekyl_ffi.h` — FFI declarations
-- `src/fcmp/rctSigs.h` — `genRctFcmpPlusPlus` declaration
+- `src/fcmp/ct_semantics.h` — `genRctFcmpPlusPlus` declaration
 - `rust/shekyl-fcmp/` — Rust FCMP++ proof implementation
 - `rust/shekyl-crypto-pq/` — PQC primitives, KEM, address encoding

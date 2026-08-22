@@ -576,7 +576,7 @@ namespace cryptonote
      * @param key out - the output's key
      * @param unlocked out - the output's unlocked state
      */
-    void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, rct::key& mask, bool& unlocked) const;
+    void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, ct::key& mask, bool& unlocked) const;
 
     /**
      * @brief gets per block distribution of outputs of a given amount
@@ -1162,7 +1162,7 @@ namespace cryptonote
     static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
     // RF-D1: a pass record is checked as a pair -- the vin's opaque kept half
-    // and this vin's pruned record from rctSig.p.serve_credit_pruned.
+    // and this vin's pruned record from CtSig.p.serve_credit_pruned.
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
       const std::vector<uint8_t>& pruned_record, uint64_t current_height) const;
 
@@ -1352,13 +1352,13 @@ namespace cryptonote
      * @param tx_prefix_hash the transaction prefix hash, for caching organization
      * @param sig the input signature
      * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param rct_signatures the FCMP++ signatures, which are only valid if tx version > 1
+     * @param ct_signatures the FCMP++ signatures, which are only valid if tx version > 1
      * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
      * @param hf_version the consensus rules version to use
      *
      * @return false if any output is not yet unlocked, or is missing, otherwise true
      */
-    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const rct::rctSig &rct_signatures, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
+    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
 
     /**
      * @brief validate a transaction's inputs and their keys

@@ -189,7 +189,7 @@ caller-side `B'` lookup (`output.rs:631-636`).
 ### 3.3 Round 2 substrate pin — no output label / memo field
 
 Per-output confidential data on wire is **`enc_amounts` only** (9 bytes per
-output in `rctSigBase`; amount XOR + `amount_tag` — no label slot).
+output in `CtSigBase`; amount XOR + `amount_tag` — no label slot).
 `tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf hashes (`0x07`)
 — no encrypted memo tag in `ExtraField` (`rust/shekyl-scanner/src/extra.rs`).
 Payment-request labels are **net-new** surface; transport is **5-T**
@@ -886,7 +886,7 @@ read as calm ("Received 12.5 SHEKYL") instead of alarming.
 **Substrate confirmation (Round 2).** There is **no encrypted-memo / label
 field on outputs today.** Per-output confidential payload is
 `enc_amounts` (9 bytes: 8-byte XOR-encrypted amount + 1-byte `amount_tag`;
-`rctSigBase`, `rctTypes.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
+`CtSigBase`, `ct_types.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
 leaf hashes (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
 request `label` is therefore **net-new wire surface** — which makes **where
 the label rides** the load-bearing Round-3 decision, not an afterthought (§
@@ -1368,7 +1368,7 @@ empty/omitted slots — emptiness **is** the fingerprint. The Priority-2-clean
 property **is** the cost; they are the same property.
 
 **Ecosystem obligation (FA-10 cost ledger).** Mandatory uniform wire means
-consensus and `serialize_rctsig_base` enforce **presence and exact size** (9
+consensus and `serialize_ctsig_base` enforce **presence and exact size** (9
 bytes per output: 8-byte `enc_label` + 1-byte `label_tag`) alongside
 `enc_amounts`. They **do not** validate plaintext content (sentinel vs
 `REQUEST` is opaque ciphertext). Every tx-producing implementation — full
@@ -1425,8 +1425,8 @@ not "unattributed" — only possible if wire were optional (rejected).
   (R2-F8 flag retired 2026-06-15, see *Gate retirement* above). GUI tooling
   emitting `rid` URIs is the de-facto feature boundary.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
-- [x] `enc_label` wire field in `rctSigBase` (+ 1-byte `label_tag` parallel to amount).
-- [x] Tx-hash binding via `serialize_rctsig_base`; FCMP++ leaf explicitly excluded.
+- [x] `enc_label` wire field in `CtSigBase` (+ 1-byte `label_tag` parallel to amount).
+- [x] Tx-hash binding via `serialize_ctsig_base`; FCMP++ leaf explicitly excluded.
 - [x] Output serialization + verifier + `PQC_OUTPUT_SECRETS.json` KAT vectors (FA-11 landing).
 
 #### 5.7.11 Logical tag system (5-T wire + wallet mapping)
@@ -1553,7 +1553,7 @@ walkthroughs **cannot** detect violations of these rules.
   imply content integrity.
 - Unlike amounts (Pedersen commitment self-check after decrypt), **labels have no
   commitment backstop**. Integrity of the on-wire label octets comes **only**
-  from inclusion in `serialize_rctsig_base` → the second component of
+  from inclusion in `serialize_ctsig_base` → the second component of
   `get_tx_prehash`. A relay that bit-flips `enc_label` without breaking the
   prehash cannot reach consensus — tampering is impossible, not merely
   detectable.
@@ -1961,7 +1961,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | [`docs/THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) | **Closed** (2026-06-09): §4.6–§4.8, R2-F9 (§5.7.12), T6 post-FA-6 framing, pit-of-success vs adversary |
 | FA-10 | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md) §Cooperative attribution foundation pin | **Closed** (2026-06-09): §6.4 pin prose propagated |
-| FA-11 | Output / RCT spec + verifier | §5.7.10: `enc_label` layout; sentinel encrypt-per-output; bind in tx hash, **not** FCMP++ leaf; amend `rctSigBase` / consensus docs |
+| FA-11 | Output / RCT spec + verifier | §5.7.10: `enc_label` layout; sentinel encrypt-per-output; bind in tx hash, **not** FCMP++ leaf; amend `CtSigBase` / consensus docs |
 
 ---
 

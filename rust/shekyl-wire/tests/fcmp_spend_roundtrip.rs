@@ -10,7 +10,7 @@
 //! Bulletproof+) is written and re-read, proving the serializer is internally
 //! consistent (`read(write(x)) == x`) across every FCMP++ field with arbitrary
 //! byte values. The byte layout is transcribed from the C++ oracle source
-//! (`rctTypes.h` `serialize_rctsig_base`/`serialize_rctsig_prunable`,
+//! (`ct_types.h` `serialize_ctsig_base`/`serialize_ctsig_prunable`,
 //! `cryptonote_basic.h` `pqc_authentication`) — see `src/transaction.rs`.
 //!
 //! The byte-identity proof on a *real, consensus-valid* spend lives in

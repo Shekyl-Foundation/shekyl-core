@@ -372,7 +372,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // included, + FCMP over the fee spends) with `total_reward` as the
         // INPUT-side cleartext term — the daemon's balance is
         // `Σ pseudoOuts + total_reward·H = Σ out_masks + fee·H`
-        // (`verCtSemanticsEmission`, rctSigs.cpp:364). The build-time
+        // (`verCtSemanticsEmission`, ct_semantics.cpp:364). The build-time
         // backing self-check (CPU-bound verify) rides the same closure.
         let mut spend_inputs = Vec::with_capacity(prepared.len());
         let mut pqc_pubkeys = Vec::with_capacity(prepared.len());

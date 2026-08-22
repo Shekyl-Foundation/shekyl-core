@@ -47,9 +47,9 @@ using namespace epee;
 #include "file_io_utils.h"
 #include <csignal>
 #include "checkpoints/checkpoints.h"
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include "blockchain_db/blockchain_db.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "common/notify.h"
 #include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
@@ -805,7 +805,7 @@ namespace cryptonote
     }
     if (tx.version > 1)
     {
-      if (tx.rct_signatures.outPk.size() != tx.vout.size())
+      if (tx.ct_signatures.outPk.size() != tx.vout.size())
       {
         MERROR_VER("tx with mismatched vout/outPk count, rejected for tx id= " << get_transaction_hash(tx));
         tvc.m_verifivation_failed = true;
@@ -994,9 +994,9 @@ namespace cryptonote
       if (std::holds_alternative<txin_archival_reward_emission>(in))
         continue;
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      if (rct::ki2rct(tokey_in.k_image) == rct::identity())
+      if (ct::ki2rct(tokey_in.k_image) == ct::identity())
         return false;
-      if (!(rct::scalarmultKey(rct::ki2rct(tokey_in.k_image), rct::curveOrder()) == rct::identity()))
+      if (!(ct::scalarmultKey(ct::ki2rct(tokey_in.k_image), ct::curveOrder()) == ct::identity()))
         return false;
     }
     return true;

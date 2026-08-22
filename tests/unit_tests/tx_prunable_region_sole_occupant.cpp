@@ -10,8 +10,8 @@
 //
 //   blob path         get_blob_hash(blob + unprunable_size, blob.size() - unprunable_size)
 //                     -- the whole tail, wholesale
-//   re-serialize path rct_signatures.p.serialize_ctsig_prunable(...)
-//                     -- only rct_signatures.p
+//   re-serialize path ct_signatures.p.serialize_ctsig_prunable(...)
+//                     -- only ct_signatures.p
 //
 // They agree ONLY because `ctsig_prunable` is the last thing written by
 // transaction::BEGIN_SERIALIZE (cryptonote_basic.h:645-648, where the object closes
@@ -102,12 +102,12 @@ std::vector<uint8_t> pruned_record()
 
 bool prunable_reserialized_size(transaction &t, size_t &out)
 {
-  if (t.rct_signatures.type == rct::CTTypeNull)
+  if (t.ct_signatures.type == ct::CTTypeNull)
     return false;
   std::stringstream ss;
   binary_archive<true> ba(ss);
-  if (!t.rct_signatures.p.serialize_ctsig_prunable(
-          ba, t.rct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin),
+  if (!t.ct_signatures.p.serialize_ctsig_prunable(
+          ba, t.ct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin),
           t.vout.size()))
     return false;
   out = ss.str().size();
@@ -129,7 +129,7 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
                                     "did not go through the binary archive";
   ASSERT_LE(static_cast<size_t>(unprunable_size), blob.size());
 
-  if (t.rct_signatures.type == rct::CTTypeNull)
+  if (t.ct_signatures.type == ct::CTTypeNull)
   {
     // No prunable region at all: the tail must be empty, or something is living
     // past `unprunable_size` that the CTTypeNull early-out at
@@ -151,7 +151,7 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
   EXPECT_EQ(tail, reserialized)
       << "the prunable region has a SECOND OCCUPANT.\n"
          "  blob tail after unprunable_size: " << tail << " bytes\n"
-         "  rct_signatures.p re-serialized:  " << reserialized << " bytes\n"
+         "  ct_signatures.p re-serialized:  " << reserialized << " bytes\n"
          "Something is now written after ctsig_prunable in "
          "transaction::BEGIN_SERIALIZE (cryptonote_basic.h). The blob path of "
          "calculate_transaction_prunable_hash hashes it; the re-serialize path does "
@@ -206,7 +206,7 @@ TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
 // `tx_verification_utils.cpp:113-127` does not merely permit an empty prunable
 // region for a serve-credit-only tx -- it REQUIRES it (`bulletproofs_plus`,
 // `fcmp_pp_proof` and `pseudoOuts` must all be empty, and
-// `verRctSemanticsFeeOnly` is called nowhere else). The bond-post arm twenty
+// `verCtSemanticsFeeOnly` is called nowhere else). The bond-post arm twenty
 // lines below rejects on `fcmp_pp_proof.empty()`, i.e. the exact opposite. So
 // this shape is reachable through serve-credit txs and nothing else.
 //
@@ -231,8 +231,8 @@ TEST(tx_prunable_region, serve_credit_tx_tail_is_the_empty_prunable_counts)
   tx.vin.push_back(serve_credit_vin());
   // No vout, no fee, no RCT output material: the non-spending shape.
 
-  rct::rctSig &rv = tx.rct_signatures;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig &rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   // Explicitly zero, because the prunable stanza VARINT-encodes it and an
   // indeterminate value changes the tail's LENGTH, not just its content: this
@@ -287,8 +287,8 @@ TEST(tx_prunable_region, serve_credit_tx_round_trips_through_the_pruned_serializ
 
   tx.vin.push_back(serve_credit_vin());
 
-  rct::rctSig &rv = tx.rct_signatures;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig &rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.curve_trees_tree_depth = 0;
   rv.p.serve_credit_pruned = {pruned_record()};
@@ -331,10 +331,10 @@ TEST(tx_prunable_region, serve_credit_tx_with_pqc_auths_is_refused_not_normalise
   tx.unlock_time = 0;
 
   tx.vin.push_back(serve_credit_vin());
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.txnFee = 0;
-  tx.rct_signatures.p.curve_trees_tree_depth = 0;
-  tx.rct_signatures.p.serve_credit_pruned = {pruned_record()};
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {pruned_record()};
   // The invalid part: one per-input spend authorization on a non-spending vin.
   tx.pqc_auths.resize(1);
 
@@ -387,8 +387,8 @@ TEST(tx_prunable_region, fcmp_tx_tail_matches_reserialized_prunable)
   txout.target = tagged;
   tx.vout.push_back(txout);
 
-  rct::rctSig &rv = tx.rct_signatures;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig &rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);
@@ -399,7 +399,7 @@ TEST(tx_prunable_region, fcmp_tx_tail_matches_reserialized_prunable)
   rv.enc_labels.resize(1);
   rv.enc_labels[0].fill(0x43);
 
-  rct::BulletproofPlus bpp{};
+  ct::BulletproofPlus bpp{};
   bpp.L.resize(6); // L.size()==6 -> max_amounts 2^0 = 1 >= the single output
   bpp.R.resize(6);
   rv.p.bulletproofs_plus.push_back(bpp);
@@ -421,7 +421,7 @@ TEST(tx_prunable_region, fcmp_tx_tail_matches_reserialized_prunable)
   // Guard against the arm going vacuous: if the fixture ever stops producing a
   // prunable region, the equality below would hold trivially (0 == 0) and this
   // file would be back to testing only the boundary case.
-  ASSERT_NE(parsed.rct_signatures.type, rct::CTTypeNull)
+  ASSERT_NE(parsed.ct_signatures.type, ct::CTTypeNull)
       << "fixture no longer has a prunable region -- the main assertion would pass "
          "vacuously";
   ASSERT_GT(blob.size(), static_cast<size_t>(parsed.unprunable_size))

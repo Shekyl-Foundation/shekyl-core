@@ -121,9 +121,9 @@ depends on the coinbase's own `prunable_hash`.
 
 *Why the coinbase's `prunable_hash` cannot carry the commitment (the finding
 that drove the shape search).* The v3 tx-hash is
-`cn_fast_hash({prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash})`, but
+`cn_fast_hash({prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash})`, but
 `prunable_hash` is **hardcoded to `null_hash` whenever
-`rct_signatures.type == CTTypeNull`** (`cryptonote_format_utils.cpp:1236`), and
+`ct_signatures.type == CTTypeNull`** (`cryptonote_format_utils.cpp:1236`), and
 the coinbase is always `CTTypeNull` (`prevalidate_miner_transaction`: "FCMP++
 signatures not allowed in coinbase"). So a signature placed in the coinbase's
 prunable region gets **no** commitment from the coinbase itself. Shapes 1/3

@@ -99,7 +99,7 @@ or the leaf simply not added) when any of:
 
 - (a) output target ∉ {`txout_to_tagged_key`, `txout_to_key`,
   `txout_to_staked_key`} — `else { continue; }` at `:392-393`;
-- (b) `i >= tx.rct_signatures.outPk.size()` — `continue` at `:395-396`;
+- (b) `i >= tx.ct_signatures.outPk.size()` — `continue` at `:395-396`;
 - (c) `shekyl_construct_curve_tree_leaf(...)` returns false — the `if` at
   `:401-403` guards `add_pending_tree_leaf`, so a decompress-failure output is
   silently not a leaf.
@@ -145,12 +145,12 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Question | Rule | Source |
 |----------|------|--------|
 | Is coinbase a tree leaf? | **Yes** — `collect_outputs(blk.miner_tx, true)`; deferred, maturity `+60`. | `blockchain_db.cpp:417-420`, `372-374` |
-| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `rctTypes.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
-| Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `rctOps.cpp:322-333` |
+| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `ct_types.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
+| Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `ct_ops.cpp:322-333` |
 | Coinbase `h_pqc` | **Real per-output hybrid hash**, `Blake2b-512("shekyl-pqc-leaf" ‖ hybrid_pk) wide-reduced`, computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_HASHES`, `N×32` in vout order). | `derivation.rs:53-71`, `cryptonote_tx_utils.cpp:162-192`,`726-755`, `tx_extra.h:45` |
 | Where the tree reads `h_pqc` | `extract_leaf_hashes` parses `tx.extra`, finds the **single** `tx_extra_pqc_leaf_hashes` field (one `0x07` field, blob `N×32` in vout order), and returns it **only if** `blob.size() % 32 == 0`; `collect_outputs` then slices `blob + i*32`. **Falls back to 32 zero bytes** when: parse fails, the tag is absent, `blob.size() % 32 != 0` (malformed length → whole field dropped), **or** `i >= num_leaf_hashes` (blob present but shorter than vout count). | `blockchain_db.cpp:341-364` (`extract_leaf_hashes`, `zero_pqc` at `:332`), `tx_extra.h:45,219-228`, `FCMP_PLUS_PLUS.md:222-225` |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
-| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `rctTypes.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
+| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `ct_types.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
 
 ### 3.1 Replication obligation — `h_pqc` is on-chain, not recomputable
 

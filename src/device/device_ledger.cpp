@@ -29,7 +29,7 @@
 
 #include "version.h"
 #include "device_ledger.hpp"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/subaddress_index.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
@@ -177,7 +177,7 @@ namespace hw {
     /* ===                        Keymap                                ==== */
     /* ===================================================================== */
 
-    ABPkeys::ABPkeys(const rct::key& A, const rct::key& B, const bool is_subaddr, const bool is_change, const size_t real_output_index, const rct::key& P, const rct::key& AK) {
+    ABPkeys::ABPkeys(const ct::key& A, const ct::key& B, const bool is_subaddr, const bool is_change, const size_t real_output_index, const ct::key& P, const ct::key& AK) {
       Aout = A;
       Bout = B;
       is_subaddress = is_subaddr;
@@ -210,7 +210,7 @@ namespace hw {
       return *this;
     }
 
-    bool Keymap::find(const rct::key& P, ABPkeys& keys) const {
+    bool Keymap::find(const ct::key& P, ABPkeys& keys) const {
       size_t sz = ABP.size();
       for (size_t i=0; i<sz; i++) {
         if (ABP[i].Pout == P) {
@@ -867,13 +867,13 @@ namespace hw {
         return verified == 1;
     }
 
-    bool device_ledger::scalarmultKey(rct::key & aP, const rct::key &P, const rct::key &a) {
+    bool device_ledger::scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) {
         AUTO_LOCK_CMD();
 
         #ifdef DEBUG_HWDEVICE
-        const rct::key P_x    =  P;
-        const rct::key a_x    =  hw::ledger::decrypt(a);
-        rct::key aP_x;
+        const ct::key P_x    =  P;
+        const ct::key a_x    =  hw::ledger::decrypt(a);
+        ct::key aP_x;
         log_hexbuffer("scalarmultKey: [[IN]]  P ", (char*)P_x.bytes, 32);       
         log_hexbuffer("scalarmultKey: [[IN]]  a ", (char*)a_x.bytes, 32);       
         this->controle_device->scalarmultKey(aP_x, P_x, a_x);
@@ -901,12 +901,12 @@ namespace hw {
         return true;
     }
 
-    bool device_ledger::scalarmultBase(rct::key &aG, const rct::key &a) {
+    bool device_ledger::scalarmultBase(ct::key &aG, const ct::key &a) {
         AUTO_LOCK_CMD();
 
         #ifdef DEBUG_HWDEVICE
-        const rct::key a_x    =  hw::ledger::decrypt(a);
-        rct::key aG_x;
+        const ct::key a_x    =  hw::ledger::decrypt(a);
+        ct::key aG_x;
         log_hexbuffer("scalarmultKey: [[IN]]  a ", (char*)a_x.bytes, 32);       
         this->controle_device->scalarmultBase(aG_x, a_x);
         log_hexbuffer("scalarmultKey: [[OUT]] aG", (char*)aG_x.bytes, 32);       
@@ -938,7 +938,7 @@ namespace hw {
         const crypto::secret_key a_x = hw::ledger::decrypt(a);
         const crypto::secret_key b_x = hw::ledger::decrypt(b);
         crypto::secret_key r_x;
-        rct::key aG_x;
+        ct::key aG_x;
         log_hexbuffer("sc_secret_add: [[IN]]  a ", (char*)a_x.data, 32);       
         log_hexbuffer("sc_secret_add: [[IN]]  b ", (char*)b_x.data, 32);       
         this->controle_device->sc_secret_add(r_x, a_x, b_x);
@@ -1012,7 +1012,7 @@ namespace hw {
 
         #ifdef DEBUG_HWDEVICE
         const crypto::public_key pub_x = pub;
-        const crypto::secret_key sec_x = (sec == rct::rct2sk(rct::I)) ? sec: hw::ledger::decrypt(sec);
+        const crypto::secret_key sec_x = (sec == ct::rct2sk(ct::I)) ? sec: hw::ledger::decrypt(sec);
         crypto::key_derivation derivation_x;
         log_hexbuffer("generate_key_derivation: [[IN]]  pub       ", pub_x.data, 32);
         log_hexbuffer("generate_key_derivation: [[IN]]  sec       ", sec_x.data, 32);
@@ -1285,15 +1285,15 @@ namespace hw {
 
     bool  device_ledger::add_output_key_mapping(const crypto::public_key &Aout, const crypto::public_key &Bout, const bool is_subaddress, const bool is_change,
                                                 const bool need_additional, const size_t real_output_index,
-                                                const rct::key &amount_key,  const crypto::public_key &out_eph_public_key)  {
+                                                const ct::key &amount_key,  const crypto::public_key &out_eph_public_key)  {
         (void)need_additional;
-        key_map.add(ABPkeys(rct::pk2rct(Aout),rct::pk2rct(Bout), is_subaddress, is_change, real_output_index, rct::pk2rct(out_eph_public_key), amount_key));
+        key_map.add(ABPkeys(ct::pk2rct(Aout),ct::pk2rct(Bout), is_subaddress, is_change, real_output_index, ct::pk2rct(out_eph_public_key), amount_key));
         return true;
     }
 
     bool device_ledger::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size,
-                                     const rct::keyV &hashes, const rct::ctkeyV &outPk,
-                                     rct::key &prehash) {
+                                     const ct::keyV &hashes, const ct::ctkeyV &outPk,
+                                     ct::key &prehash) {
         AUTO_LOCK_CMD();
         unsigned int  data_offset, C_offset, kv_offset, i;
         const char *data;
@@ -1302,9 +1302,9 @@ namespace hw {
         const std::string blob_x  = blob;
         size_t inputs_size_x      = inputs_size;
         size_t outputs_size_x     = outputs_size;
-        const rct::keyV hashes_x  = hashes;
-        const rct::ctkeyV outPk_x = outPk;
-        rct::key prehash_x;
+        const ct::keyV hashes_x  = hashes;
+        const ct::ctkeyV outPk_x = outPk;
+        ct::key prehash_x;
         this->controle_device->tx_prehash(blob_x, inputs_size_x, outputs_size_x, hashes_x, outPk_x, prehash_x);
         if (inputs_size) {
           log_message("tx_prehash", (std::string("inputs_size not null: ") +  std::to_string(inputs_size)).c_str());
@@ -1433,17 +1433,17 @@ namespace hw {
     }
 
 
-    bool device_ledger::tx_prepare(const rct::key &H, const rct::key &xx,
-                                     rct::key &a, rct::key &aG, rct::key &aHP, rct::key &II) {
+    bool device_ledger::tx_prepare(const ct::key &H, const ct::key &xx,
+                                     ct::key &a, ct::key &aG, ct::key &aHP, ct::key &II) {
         AUTO_LOCK_CMD();
 
         #ifdef DEBUG_HWDEVICE
-        const rct::key H_x = H;
-        const rct::key xx_x = hw::ledger::decrypt(xx);
-        rct::key a_x;
-        rct::key aG_x;
-        rct::key aHP_x;
-        rct::key II_x;
+        const ct::key H_x = H;
+        const ct::key xx_x = hw::ledger::decrypt(xx);
+        ct::key a_x;
+        ct::key aG_x;
+        ct::key aHP_x;
+        ct::key II_x;
         #endif
 
         int offset = set_command_header_noopt(INS_TX_SIGN, 0x01);
@@ -1468,9 +1468,9 @@ namespace hw {
         #ifdef DEBUG_HWDEVICE
         a_x = hw::ledger::decrypt(a);
 
-        rct::scalarmultBase(aG_x, a_x);
-        rct::scalarmultKey(aHP_x, H_x, a_x);
-        rct::scalarmultKey(II_x, H_x, xx_x);
+        ct::scalarmultBase(aG_x, a_x);
+        ct::scalarmultKey(aHP_x, H_x, a_x);
+        ct::scalarmultKey(II_x, H_x, xx_x);
         hw::ledger::check32("tx_prepare", "AG", (char*)aG_x.bytes, (char*)aG.bytes);
         hw::ledger::check32("tx_prepare", "aHP", (char*)aHP_x.bytes, (char*)aHP.bytes);
         hw::ledger::check32("tx_prepare", "II", (char*)II_x.bytes, (char*)II.bytes);
@@ -1479,13 +1479,13 @@ namespace hw {
         return true;
     }
 
-    bool device_ledger::tx_prepare(rct::key &a, rct::key &aG) {
+    bool device_ledger::tx_prepare(ct::key &a, ct::key &aG) {
         AUTO_LOCK_CMD();
         int offset;
 
         #ifdef DEBUG_HWDEVICE
-        rct::key a_x;
-        rct::key aG_x;
+        ct::key a_x;
+        ct::key aG_x;
         #endif
 
         send_simple(INS_TX_SIGN, 0x01);
@@ -1496,20 +1496,20 @@ namespace hw {
 
         #ifdef DEBUG_HWDEVICE
         a_x = hw::ledger::decrypt(a);
-        rct::scalarmultBase(aG_x, a_x);
+        ct::scalarmultBase(aG_x, a_x);
         hw::ledger::check32("tx_prepare", "AG", (char*)aG_x.bytes, (char*)aG.bytes);
         #endif
 
         return true;
     }
 
-    bool device_ledger::tx_hash(const rct::keyV &long_message, rct::key &c) {
+    bool device_ledger::tx_hash(const ct::keyV &long_message, ct::key &c) {
         AUTO_LOCK_CMD();
         size_t cnt;
 
         #ifdef DEBUG_HWDEVICE
-        const rct::keyV long_message_x = long_message;
-        rct::key c_x;
+        const ct::keyV long_message_x = long_message;
+        ct::key c_x;
         this->controle_device->tx_hash(long_message_x, c_x);
         #endif
 
@@ -1538,7 +1538,7 @@ namespace hw {
         return true;
     }
 
-    bool device_ledger::tx_sign(const rct::key &c, const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss) {
+    bool device_ledger::tx_sign(const ct::key &c, const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss) {
         AUTO_LOCK_CMD();
 
         CHECK_AND_ASSERT_THROW_MES(dsRows<=rows, "dsRows greater than rows");
@@ -1547,12 +1547,12 @@ namespace hw {
         CHECK_AND_ASSERT_THROW_MES(ss.size() == rows, "ss size does not match rows");
 
         #ifdef DEBUG_HWDEVICE
-        const rct::key c_x      = c;
-        const rct::keyV xx_x    = hw::ledger::decrypt(xx);
-        const rct::keyV alpha_x = hw::ledger::decrypt(alpha);
+        const ct::key c_x      = c;
+        const ct::keyV xx_x    = hw::ledger::decrypt(xx);
+        const ct::keyV alpha_x = hw::ledger::decrypt(alpha);
         const int rows_x        = rows;
         const int dsRows_x      = dsRows;
-        rct::keyV ss_x(ss.size());
+        ct::keyV ss_x(ss.size());
         this->controle_device->tx_sign(c_x, xx_x, alpha_x, rows_x, dsRows_x, ss_x);
         #endif
 
@@ -1590,7 +1590,7 @@ namespace hw {
         return true;
     }
 
-    bool device_ledger::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
+    bool device_ledger::fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) {
         MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
         return false;
     }
@@ -1600,7 +1600,7 @@ namespace hw {
         return false;
     }
 
-    bool device_ledger::fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) {
+    bool device_ledger::fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) {
         MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
         return false;
     }

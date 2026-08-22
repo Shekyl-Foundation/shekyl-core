@@ -68,6 +68,32 @@
   server (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`, digest
   auth), none of which exists.
 
+- **The inherited `rct` confidential-transaction surface is now spelled
+  `ct`.** `src/fcmp/rctTypes.{h,cpp}`, `rctOps.{h,cpp}`,
+  `rctCryptoOps.{h,c}` and `rctSigs.{h,cpp}` are now `ct_types`, `ct_ops`,
+  `ct_crypto_ops` and **`ct_semantics`**; `namespace rct` is `namespace ct`;
+  `rctSig` / `rctSigBase` / `rctSigPrunable` are `CtSig` / `CtSigBase` /
+  `CtSigPrunable`; `transaction.rct_signatures` is `ct_signatures`; and the
+  `serialize_rctsig_*`, `verRctSemantics*`, `is_rct_*` families follow. The
+  name asserted a construction Shekyl does not have — there is no ring, and
+  the module it named does verification, not signing, which is why the
+  verifier is `ct_semantics` and not `ct_signatures` (that spelling would
+  have re-committed the "signatures" half of the misnomer). Disposition and
+  the full was→now table:
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md).
+  **Rename-only; no consensus byte moved.** The `binary_archive` variant
+  tags are numeric (`0x90`–`0xa0`) and untouched, so no serialized byte
+  depends on a renamed identifier. **JSON-visible:** the `json_archive` /
+  `debug_archive` variant-tag *strings* changed with the type names
+  (`"rct_key"` → `"ct_key"`, `"rct_rctSig"` → `"ct_CtSig"`, `"rct::key"` →
+  `"ct::key"`, …), affecting `decode_as_json` / tx-pool JSON — the same
+  pre-genesis-free public surface the 2026-07-11 tag rename disclosed. The
+  dead `using ct_signatures = rct::rctSig;` alias in `cryptonote_basic.h`
+  was deleted with the sweep. `genRctFcmpPlusPlus` and
+  `fill_construct_tx_rct_stub` keep their names deliberately: they are
+  deletion targets, not rename targets, and are the only `Rct`-spelled
+  identifiers left under `src/fcmp/`.
+
 - **`shekyld <command>` reaches the running daemon through the Rust
   transport.** The control client (`shekyld status`, `exit`,
   `print_height`, …) dialed the daemon's loopback RPC with epee's

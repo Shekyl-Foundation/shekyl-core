@@ -33,7 +33,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 
 namespace cryptonote
 {
@@ -47,7 +47,7 @@ namespace cryptonote
 
   struct tx_source_entry
   {
-    typedef std::pair<uint64_t, rct::ctkey> output_entry;
+    typedef std::pair<uint64_t, ct::ctkey> output_entry;
 
     std::vector<output_entry> outputs;  //index + key + optional commitment
     uint64_t real_output;               //index in outputs vector of real output_entry
@@ -55,13 +55,13 @@ namespace cryptonote
     uint64_t real_output_in_tx_index;   //index in transaction outputs vector
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
-    rct::key mask;                      //amount mask
+    ct::key mask;                      //amount mask
     crypto::secret_key ho{};            // v3: HKDF-derived output secret scalar; wiped on destruction
     bool v3_ho_valid = false;           // true when ho was populated from shekyl_scan_and_recover
 
     ~tx_source_entry() { memwipe(ho.data, sizeof(ho.data)); }
 
-    void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
+    void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, ct::ctkey({ct::pk2rct(k), ct::zeroCommit(amount)}))); }
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(outputs)
@@ -127,8 +127,8 @@ namespace cryptonote
   //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::account_public_address>& change_addr);
   bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx

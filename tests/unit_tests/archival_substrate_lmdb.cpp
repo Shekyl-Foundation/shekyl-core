@@ -2737,13 +2737,13 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
     vout.target = tagged;
     tx.vout.push_back(vout);
 
-    rct::ctkey out_pk{};
+    ct::ctkey out_pk{};
     memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
-    tx.rct_signatures.outPk.push_back(out_pk);
-    // The rctSigBase serializer requires one enc_amounts/enc_labels entry per
+    tx.ct_signatures.outPk.push_back(out_pk);
+    // The CtSigBase serializer requires one enc_amounts/enc_labels entry per
     // vout regardless of type; filler is fine, nothing decrypts them here.
-    tx.rct_signatures.enc_amounts.push_back({});
-    tx.rct_signatures.enc_labels.push_back({});
+    tx.ct_signatures.enc_amounts.push_back({});
+    tx.ct_signatures.enc_labels.push_back({});
   }
   return tx;
 }

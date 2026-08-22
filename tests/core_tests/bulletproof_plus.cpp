@@ -28,7 +28,7 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "chaingen.h"
 #include "bulletproof_plus.h"
@@ -148,10 +148,10 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     src.real_out_tx_key = cryptonote::get_tx_pub_key_from_extra(blocks[n].miner_tx);
     src.real_output = n;
     src.real_output_in_tx_index = real_index_in_tx;
-    src.mask = rct::identity();
+    src.mask = ct::identity();
     src.rct = true;
     {
-      rct::key comm = rct::zeroCommit(src.amount);
+      ct::key comm = ct::zeroCommit(src.amount);
       for (auto &ot : src.outputs)
         ot.second.mask = comm;
     }
@@ -218,7 +218,7 @@ bool gen_bpp_tx_validation_base::check_bpp(const cryptonote::transaction &tx, si
 {
   DEFINE_TESTS_ERROR_CONTEXT(context);
   CHECK_TEST_CONDITION(tx.version >= 2);
-  CHECK_TEST_CONDITION(rct::is_rct_bulletproof_plus(tx.rct_signatures.type));
+  CHECK_TEST_CONDITION(ct::is_ct_bulletproof_plus(tx.ct_signatures.type));
   size_t n_sizes = 0, n_amounts = 0;
   for (size_t n = 0; n < tx_idx; ++n)
   {
@@ -228,10 +228,10 @@ bool gen_bpp_tx_validation_base::check_bpp(const cryptonote::transaction &tx, si
   }
   while (sizes[n_sizes] != (size_t)-1)
     n_amounts += sizes[n_sizes++];
-  CHECK_TEST_CONDITION(tx.rct_signatures.p.bulletproofs_plus.size() == n_sizes);
-  CHECK_TEST_CONDITION(rct::n_bulletproof_plus_max_amounts(tx.rct_signatures.p.bulletproofs_plus) == n_amounts);
+  CHECK_TEST_CONDITION(tx.ct_signatures.p.bulletproofs_plus.size() == n_sizes);
+  CHECK_TEST_CONDITION(ct::n_bulletproof_plus_max_amounts(tx.ct_signatures.p.bulletproofs_plus) == n_amounts);
   for (size_t n = 0; n < n_sizes; ++n)
-    CHECK_TEST_CONDITION(rct::n_bulletproof_plus_max_amounts(tx.rct_signatures.p.bulletproofs_plus[n]) == sizes[n]);
+    CHECK_TEST_CONDITION(ct::n_bulletproof_plus_max_amounts(tx.ct_signatures.p.bulletproofs_plus[n]) == sizes[n]);
   return true;
 }
 
@@ -325,10 +325,10 @@ bool gen_bpp_tx_invalid_not_enough_proofs::generate(std::vector<test_event_entry
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {5000, 5000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
-    CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
-    tx.rct_signatures.p.bulletproofs_plus.pop_back();
-    CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
+    CHECK_TEST_CONDITION(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(!tx.ct_signatures.p.bulletproofs_plus.empty());
+    tx.ct_signatures.p.bulletproofs_plus.pop_back();
+    CHECK_TEST_CONDITION(!tx.ct_signatures.p.bulletproofs_plus.empty());
     return true;
   });
 }
@@ -339,8 +339,8 @@ bool gen_bpp_tx_invalid_empty_proofs::generate(std::vector<test_event_entry>& ev
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {50000, 50000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
-    tx.rct_signatures.p.bulletproofs_plus.clear();
+    CHECK_TEST_CONDITION(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc);
+    tx.ct_signatures.p.bulletproofs_plus.clear();
     return true;
   });
 }
@@ -351,9 +351,9 @@ bool gen_bpp_tx_invalid_too_many_proofs::generate(std::vector<test_event_entry>&
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {10000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
-    CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
-    tx.rct_signatures.p.bulletproofs_plus.push_back(tx.rct_signatures.p.bulletproofs_plus.back());
+    CHECK_TEST_CONDITION(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(!tx.ct_signatures.p.bulletproofs_plus.empty());
+    tx.ct_signatures.p.bulletproofs_plus.push_back(tx.ct_signatures.p.bulletproofs_plus.back());
     return true;
   });
 }
@@ -364,9 +364,9 @@ bool gen_bpp_tx_invalid_wrong_amount::generate(std::vector<test_event_entry>& ev
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {10000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
-    CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
-    tx.rct_signatures.p.bulletproofs_plus.back() = rct::bulletproof_plus_PROVE(1000, rct::skGen());
+    CHECK_TEST_CONDITION(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(!tx.ct_signatures.p.bulletproofs_plus.empty());
+    tx.ct_signatures.p.bulletproofs_plus.back() = ct::bulletproof_plus_PROVE(1000, ct::skGen());
     return true;
   });
 }

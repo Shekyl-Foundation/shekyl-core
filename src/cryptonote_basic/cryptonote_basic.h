@@ -48,7 +48,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include "device/device.hpp"
 #include "cryptonote_basic/fwd.h"
 
@@ -56,10 +56,6 @@ namespace cryptonote
 {
   typedef std::vector<crypto::signature> ring_signature;
 
-  // Migration alias: the inherited field name "rct_signatures" and type "rct::rctSig"
-  // predate Shekyl's FCMP++ architecture. New code should use ct_signatures.
-  // Full rename to ct:: namespace deferred to a separate PR.
-  using ct_signatures = rct::rctSig;
 
 
   /* outputs */
@@ -249,7 +245,7 @@ namespace cryptonote
   // inside: the three fields consensus indexes by -- (P, shard, E) -- come
   // through `shekyl_archival_serve_credit_extract` (the tagged blob, whole),
   // and admission verifies through `shekyl_archival_verify_serve_credit_vin`
-  // with this vin's pruned record (rctSig.p.serve_credit_pruned[i]) alongside.
+  // with this vin's pruned record (CtSig.p.serve_credit_pruned[i]) alongside.
   //
   // This used to be a typed struct with nine fields. Two of those were values
   // the verifier derives (RF-D6), one more was the challenged leaf the
@@ -309,7 +305,7 @@ namespace cryptonote
   // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
   // the prunable pseudoOuts array: an archival bond-post vin occupies a
   // pqc_auths slot but carries no pseudo-out (its cleartext bond_credit rides
-  // the CT balance instead; see rctTypes.h serialize_ctsig_prunable). For a
+  // the CT balance instead; see ct_types.h serialize_ctsig_prunable). For a
   // pure spend every vin is txin_to_key, so the two counts coincide. The
   // authoritative wire definition is Rust-side (shekyl-wire, GENESIS_TX_WIRE_FORMAT.md
   // §9.9); this helper keeps the C++ parser byte-aligned with it.
@@ -492,7 +488,7 @@ namespace cryptonote
 
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
-    rct::rctSig rct_signatures;
+    ct::CtSig ct_signatures;
     std::vector<pqc_authentication> pqc_auths; // one per input for FCMP++ txs
 
     // hash cash
@@ -581,7 +577,7 @@ namespace cryptonote
         if (!vin.empty())
         {
           ar.begin_object();
-          bool r = rct_signatures.serialize_rctsig_base(ar, vin.size(), vout.size());
+          bool r = ct_signatures.serialize_ctsig_base(ar, vin.size(), vout.size());
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
@@ -594,14 +590,14 @@ namespace cryptonote
           if (std::is_same<Archive<W>, binary_archive<W>>())
             unprunable_size = ar.getpos() - start_pos;
 
-          if (!pruned && rct_signatures.type != rct::CTTypeNull)
+          if (!pruned && ct_signatures.type != ct::CTTypeNull)
           {
             // pseudoOuts are sized by the spend subset, not vin.size() — see
             // count_spend_inputs. Matches the consensus pins in blockchain.cpp
             // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
             ar.tag("ctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_ctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), count_serve_credit_inputs(vin), vout.size());
+            bool r = ct_signatures.p.serialize_ctsig_prunable(ar, ct_signatures.type, count_spend_inputs(vin), count_serve_credit_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
@@ -703,7 +699,7 @@ namespace cryptonote
         if (!vin.empty())
         {
           ar.begin_object();
-          bool r = rct_signatures.serialize_rctsig_base(ar, vin.size(), vout.size());
+          bool r = ct_signatures.serialize_ctsig_base(ar, vin.size(), vout.size());
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
@@ -729,7 +725,7 @@ namespace cryptonote
     prunable_hash_valid(false),
     blob_size_valid(false),
     signatures(t.signatures),
-    rct_signatures(t.rct_signatures),
+    ct_signatures(t.ct_signatures),
     pqc_auths(t.pqc_auths),
     pruned(t.pruned),
     unprunable_size(t.unprunable_size.load()),
@@ -761,7 +757,7 @@ namespace cryptonote
     set_prunable_hash_valid(false);
     set_blob_size_valid(false);
     signatures = t.signatures;
-    rct_signatures = t.rct_signatures;
+    ct_signatures = t.ct_signatures;
     pqc_auths = t.pqc_auths;
     if (t.is_hash_valid())
     {
@@ -801,7 +797,7 @@ namespace cryptonote
   {
     transaction_prefix::set_null();
     signatures.clear();
-    rct_signatures.type = rct::CTTypeNull;
+    ct_signatures.type = ct::CTTypeNull;
     pqc_auths.clear();
     set_hash_valid(false);
     set_prunable_hash_valid(false);

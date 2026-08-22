@@ -46,7 +46,7 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "cryptonote_basic/merge_mining.h"
 #include "misc_language.h"
 #include "net/local_ip.h"
@@ -2673,9 +2673,9 @@ namespace cryptonote
             reinterpret_cast<const uint8_t*>(od.pubkey.data) + 32);
 
         ge_p3 hp;
-        rct::key od_rct;
+        ct::key od_rct;
         memcpy(od_rct.bytes, od.pubkey.data, 32);
-        rct::hash_to_p3(hp, od_rct);
+        ct::hash_to_p3(hp, od_rct);
         uint8_t ki_gen[32];
         ge_p3_tobytes(ki_gen, &hp);
         chunk_output_bytes.insert(chunk_output_bytes.end(), ki_gen, ki_gen + 32);

@@ -31,7 +31,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "rpc/rpc_handler.h"
 
 #include <unordered_map>
@@ -121,7 +121,7 @@ namespace rpc
   struct output_key_mask_unlocked
   {
     crypto::public_key key;
-    rct::key mask;
+    ct::key mask;
     bool unlocked;
   };
 

@@ -250,7 +250,7 @@ fn bp_lr_undersize_for_output_count_rejected() {
 
 #[test]
 fn bp_lr_mismatch_rejected() {
-    // |L| != |R| is malformed regardless of the output count (rctTypes.cpp
+    // |L| != |R| is malformed regardless of the output count (ct_types.cpp
     // "Mismatched bulletproof L/R size").
     let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
     set_bp_lr(&mut tx, 7, 6);
@@ -261,7 +261,7 @@ fn bp_lr_mismatch_rejected() {
 #[test]
 fn bp_lr_out_of_range_rejected_on_parse() {
     // Parse-parity: the C++ deserializer fails on |L| outside 6..=10
-    // (n_bulletproof_plus_max_amounts returns 0 ⇒ serialize_rctsig_prunable
+    // (n_bulletproof_plus_max_amounts returns 0 ⇒ serialize_ctsig_prunable
     // fails), so the byte-level parser must reject too — write is faithful,
     // so serialize a hand-built out-of-range tx and re-parse.
     for (l_len, r_len) in [(11usize, 11usize), (5, 5), (7, 6)] {

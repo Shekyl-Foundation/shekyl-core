@@ -34,7 +34,7 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_config.h"
 #include "crypto/hash.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 #include "serialization/binary_archive.h"
 
@@ -74,19 +74,19 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     prefix_blob = ss.str();
   }
 
-  std::string rct_blob;
+  std::string ct_blob;
   {
     std::ostringstream ss;
     binary_archive<true> ba(ss);
     transaction& tt = const_cast<transaction&>(tx);
     const size_t inputs = tx.vin.size();
     const size_t outputs = tx.vout.size();
-    if (!tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs))
+    if (!tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs))
     {
-      MERROR("PQC payload: failed to serialize rctSigBase (input " << input_index << ")");
+      MERROR("PQC payload: failed to serialize CtSigBase (input " << input_index << ")");
       return false;
     }
-    rct_blob = ss.str();
+    ct_blob = ss.str();
   }
 
   // Hash the prunable RCT data (fcmp_pp_proof, pseudoOuts, curve_trees_tree_depth,
@@ -95,7 +95,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   // invalidating PQC signatures, breaking the dual-layer security model.
   std::string prunable_hash_blob;
   {
-    const rct::rctSig& rv = tx.rct_signatures;
+    const ct::CtSig& rv = tx.ct_signatures;
     // pseudoOuts are sized by the spend subset, not vin.size() — see
     // count_spend_inputs (cryptonote_basic.h).
     const size_t spend_inputs = count_spend_inputs(tx.vin);
@@ -103,7 +103,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     const size_t outputs = tx.vout.size();
     std::ostringstream ss;
     binary_archive<true> ba(ss);
-    if (!const_cast<rct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, serve_credit_inputs, outputs))
+    if (!const_cast<ct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, serve_credit_inputs, outputs))
     {
       MERROR("PQC payload: failed to serialize CtSigPrunable (input " << input_index << ")");
       return false;
@@ -154,7 +154,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     }
   }
 
-  payload_out = prefix_blob + rct_blob + prunable_hash_blob + pqc_header_blob + all_pqc_key_hashes;
+  payload_out = prefix_blob + ct_blob + prunable_hash_blob + pqc_header_blob + all_pqc_key_hashes;
   return true;
 }
 

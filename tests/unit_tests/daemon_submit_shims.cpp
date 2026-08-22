@@ -274,8 +274,8 @@ cryptonote::transaction make_fcmp_shape_tx(uint8_t variant, uint8_t ki_variant)
   txout.target = tagged;
   tx.vout.push_back(txout);
 
-  rct::rctSig& rv = tx.rct_signatures;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig& rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);
@@ -288,7 +288,7 @@ cryptonote::transaction make_fcmp_shape_tx(uint8_t variant, uint8_t ki_variant)
   rv.enc_labels.resize(1);
   rv.enc_labels[0].fill(0x43);
 
-  rct::BulletproofPlus bpp{};
+  ct::BulletproofPlus bpp{};
   bpp.L.resize(6);
   bpp.R.resize(6);
   rv.p.bulletproofs_plus.push_back(bpp);

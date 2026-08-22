@@ -56,7 +56,7 @@ impl CurveTreeClient {
     /// a tree-vs-scanner numbering desync rather than performing the lookup.
     ///
     /// The block hash threaded into [`TreeContext::reference_block`] (for the
-    /// eventual `rctSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
+    /// eventual `CtSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
     /// caller supplies the full consensus anchor (height, root, hash) as one
     /// value. Reference-block *selection* (the validity-horizon arithmetic in
     /// [`crate::reference`], e.g. [`crate::reference::select_reference_height`])

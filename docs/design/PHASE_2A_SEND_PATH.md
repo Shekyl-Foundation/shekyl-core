@@ -720,7 +720,7 @@ proof object that does not exist. F2 reshapes:
     `enc_labels: Vec<[u8; 9]>` (per-output),
   - `per_input: Vec<TxInputSignature>`,
   - `fcmp_proof: Vec<u8>` — the **single aggregate** FCMP++ blob,
-  - `reference_block: [u8; 32]`, `tree_depth: u8` (echo for the `rctSig`
+  - `reference_block: [u8; 32]`, `tree_depth: u8` (echo for the `CtSig`
     container).
 - **`TxInputSignature`** (per-input, **reshaped from `{}`**):
   `{ key_image: KeyImage, pseudo_out: [u8; 32], pqc_auth: PqcAuth }`.

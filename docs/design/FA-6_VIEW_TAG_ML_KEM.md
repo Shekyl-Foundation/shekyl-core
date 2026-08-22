@@ -150,10 +150,10 @@ post-decap (or decap is universal).
 | Wire field | Location | Leg (today / target) | Derived from | Check order (scanner) | T6 (view-half / quantum `a`) | FA-6 disposition |
 |------------|----------|----------------------|--------------|------------------------|------------------------------|------------------|
 | **`view_tag`** (pre-filter) | `txout_to_tagged_key` | Classical → **hybrid** | `x25519_ss` → **`ml_kem_ss`** | **Pre-decap** (today) | **Leaks** | **Re-key** (`derive_view_tag_prefilter`) |
-| **`amount_tag`** | `rctSigBase` / `enc_amounts` pair | Hybrid | `combined_ss` (`prk` in `derive_output_secrets`) | **Post-decap** | Safe | **Verify** — no change |
-| **`enc_amount` (8 B)** | `rctSigBase` | Hybrid | `k_amount` from `combined_ss` | Post-decap decrypt | Opaque XOR; not a tag | **Verify** — no change |
-| **`label_tag`** (FA-11) | `rctSigBase` / `enc_labels` | Hybrid (spec) | `combined_ss` — same discipline as `amount_tag` (`SUBADDRESS_UNDER_PQC.md` §5.7.11) | **Post-decap** (must **not** be pre-decap) | Safe **iff** verified post-decap | **Verify** at FA-11 review — **do not assume**; ambiguity “before decrypt” = pre-decap filter → would require re-key |
-| **`enc_label` (8 B)** (FA-11) | `rctSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
+| **`amount_tag`** | `CtSigBase` / `enc_amounts` pair | Hybrid | `combined_ss` (`prk` in `derive_output_secrets`) | **Post-decap** | Safe | **Verify** — no change |
+| **`enc_amount` (8 B)** | `CtSigBase` | Hybrid | `k_amount` from `combined_ss` | Post-decap decrypt | Opaque XOR; not a tag | **Verify** — no change |
+| **`label_tag`** (FA-11) | `CtSigBase` / `enc_labels` | Hybrid (spec) | `combined_ss` — same discipline as `amount_tag` (`SUBADDRESS_UNDER_PQC.md` §5.7.11) | **Post-decap** (must **not** be pre-decap) | Safe **iff** verified post-decap | **Verify** at FA-11 review — **do not assume**; ambiguity “before decrypt” = pre-decap filter → would require re-key |
+| **`enc_label` (8 B)** (FA-11) | `CtSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
 | `view_tag_combined` | **Not on wire** | Hybrid | `combined_ss` | Internal only | N/A | No wire action |
 | KEM CTs (`R_eph`, ML-KEM) | `tx_extra` | Public / ciphertext | — | — | No clustering via tag alone | No FA-6 change |
 | `output_key`, commitment, `pqc_pk`, `h_pqc` | tx / RCT | Public | — | — | No | No FA-6 change |

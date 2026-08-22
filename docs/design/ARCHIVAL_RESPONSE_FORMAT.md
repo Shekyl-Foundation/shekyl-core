@@ -51,7 +51,7 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 
 Kept, on the vin in the prefix: the record header, `leaf_bytes`, and the 64 B
 Ed25519 leg. Pruned, as a **parallel structure keyed to the vin, inside
-`serialize_rctsig_prunable`** — ~9,965 B: the ML-DSA leg and `path` including the
+`serialize_ctsig_prunable`** — ~9,965 B: the ML-DSA leg and `path` including the
 leaf chunk.
 
 `CR-D2` sized the kept side at **~278 B ≈ 7.1 GB/yr**. **`RF-D6` (§3.5) refines
@@ -64,7 +64,7 @@ contents.
 **A vin cannot straddle `unprunable_size`** — `tx.vin` serializes wholly inside
 the prefix — so the pruned parts are not fields within the vin. And by the
 carrier round's §1 the parallel structure lives **inside**
-`serialize_rctsig_prunable`, never appended after `ctsig_prunable`: inside, both
+`serialize_ctsig_prunable`, never appended after `ctsig_prunable`: inside, both
 paths of `calculate_transaction_prunable_hash` see it by construction; after,
 they diverge silently and throw on blob-holding nodes only. That invariant is
 guarded by `tests/unit_tests/tx_prunable_region_sole_occupant.cpp`.
@@ -582,25 +582,25 @@ serve-credit vins"* — a `MUST` that is a consistency check on a value the tx
 already determines. That is `WITNESS_PREFIX_LEN`'s lesson arriving two paragraphs
 after `RF-D2` deletes the same redundant framing from `hybrid_signature`: a
 length carried beside data whose length is already known. The length is **implied
-by the vin count**, and `serialize_rctsig_prunable` already takes vin-derived
+by the vin count**, and `serialize_ctsig_prunable` already takes vin-derived
 counts, so the precedent for deriving rather than carrying is in the signature it
 will be written into.
 
 **Corrected 2026-08-20 — the derived count is not one of the four arguments, and
 artifact A must widen the signature.** The precedent holds, but the specific
-value does not: `serialize_rctsig_prunable(ba, type, count_spend_inputs(vin),
+value does not: `serialize_ctsig_prunable(ba, type, count_spend_inputs(vin),
 vout.size())` is passed the count of **spend** inputs, and a serve-credit vin is
 explicitly *not* a spend input (`blockchain.cpp:3630` skips the whole spend arm
 for it — `CR-D1`). So "one entry per serve-credit vin, no count field" gives the
 deserializer a length it **cannot** currently see. Artifact A therefore widens
-`serialize_rctsig_prunable` by one argument, and every call site widens with it —
+`serialize_ctsig_prunable` by one argument, and every call site widens with it —
 including `tx_prunable_region_sole_occupant.cpp`'s
 `prunable_reserialized_size`, which reproduces the production call.
 
 Found while checking the #509 tripwire against `RF-D1`'s placement, before
 writing artifact A rather than during. **The tripwire itself is better than
 merely compatible**: it asserts *tail length equals re-serialized length*, so a
-parallel structure added **inside** `serialize_rctsig_prunable` grows both sides
+parallel structure added **inside** `serialize_ctsig_prunable` grows both sides
 and passes — and its failure message already directs new prunable bytes to
 exactly where `RF-D1` puts them. It asserts the equivalence property, not the
 three blocks that happened to exist when it was written.
@@ -826,7 +826,7 @@ FFI and both KATs.
 **Transport ceilings, twinned — and the rule for when a twin is licensed.**
 `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 117` lives in `cryptonote_config.h` and
 `shekyl-wire`; the pruned-record ceiling `1 053 185` lives in
-`rct::CtSigPrunable` (where it is **enforced**) and `shekyl-wire`. Each pair is
+`ct::CtSigPrunable` (where it is **enforced**) and `shekyl-wire`. Each pair is
 pinned to the same literal by static/const-assert, so moving one side fails
 the other.
 
@@ -1319,5 +1319,5 @@ change instead of two.
   end of it; the arithmetic is pinned by the restated proxy tests and the verdict
   belongs to `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`.
 - **The prunable structure's own layout beyond its residence.** Its *residence*
-  is ruled (inside `serialize_rctsig_prunable`); its field order and framing are
+  is ruled (inside `serialize_ctsig_prunable`); its field order and framing are
   this round's to draw.

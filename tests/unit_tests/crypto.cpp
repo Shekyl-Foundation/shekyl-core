@@ -72,7 +72,7 @@ TEST(Crypto, Ostream)
   EXPECT_TRUE(is_formatted<crypto::signature>());
   EXPECT_TRUE(is_formatted<crypto::key_derivation>());
   EXPECT_TRUE(is_formatted<crypto::key_image>());
-  EXPECT_TRUE(is_formatted<rct::key>());
+  EXPECT_TRUE(is_formatted<ct::key>());
 }
 
 TEST(Crypto, null_keys)

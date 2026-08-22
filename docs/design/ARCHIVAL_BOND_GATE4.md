@@ -812,7 +812,7 @@ law (§4.5); `== bond_floor`; UTXO framings rejected.
 - [x] **Slash trigger interface** — [`ARCHIVAL_RETENTION_GATE2.md`](../completed/ARCHIVAL_RETENTION_GATE2.md)
       §6 `challenge_failed` → §4.2 `slash(P,s)`; consensus hook landed (`process_archival_slash_at_height`).
 - [x] C++ / Rust `txin_archival_bond_post` vin registration (`tag 0x05`, `bond_wire`, §3.4.1).
-- [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verRctSemanticsBondPost`; NIC path).
+- [x] `bond_credit`/`bond_debit` in RCT balance verifier (`verCtSemanticsBondPost`; NIC path).
 - [x] JoinMarket connect: `put_archival_bond_record` + `total_bonded_atomic`.
 - [ ] Rebond / Unbond / HoldingsUpdate connect paths — **V3.0 scope** (promoted 2026-06-15;
       FSM actions in [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)).

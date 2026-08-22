@@ -213,7 +213,7 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     assert_eq!(path.tree.tree_root, reference.curve_tree_root);
 
     // The caller-supplied block hash is threaded verbatim into the tree
-    // context for the eventual `rctSig.referenceBlock` (the CT-4 anchor
+    // context for the eventual `CtSig.referenceBlock` (the CT-4 anchor
     // contract, §5). A distinctive non-zero `block_hash` in the caller's
     // `ReferenceBlock` (set below) makes this catch both a dropped/zeroed value
     // and a silent swap with the root.

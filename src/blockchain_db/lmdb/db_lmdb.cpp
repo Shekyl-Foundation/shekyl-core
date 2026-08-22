@@ -80,7 +80,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "crypto/crypto.h"
 #include "profile_tools.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain.db.lmdb"
@@ -1211,7 +1211,7 @@ uint64_t BlockchainLMDB::add_output(const crypto::hash& tx_hash,
     const tx_out& tx_output,
     const uint64_t& local_index,
     const uint64_t unlock_time,
-    const rct::key *commitment)
+    const ct::key *commitment)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();

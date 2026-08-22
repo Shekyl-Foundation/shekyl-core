@@ -345,7 +345,7 @@ necessary-not-sufficient (2026-07-09, verified at source).** The Q11 ACCEPT
     pseudo-out set.
   - **(ii) dispatch size check** — `tx_verification_utils.cpp:175`
     (`rv.p.pseudoOuts.size() != spend_input_count`).
-  - **(iii) leaf size check** — `rctSigs.cpp:362`
+  - **(iii) leaf size check** — `ct_semantics.cpp:362`
     (`rv.p.pseudoOuts.size() == fee_input_count`).
 
   This is a make-bad-states-unrepresentable guard: the double-use isn't

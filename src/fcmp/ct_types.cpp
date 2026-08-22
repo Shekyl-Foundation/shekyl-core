@@ -30,7 +30,7 @@
 
 #include "misc_log_ex.h"
 #include "cryptonote_config.h"
-#include "rctTypes.h"
+#include "ct_types.h"
 #include "int-util.h"
 #include "shekyl/consensus_constants_generated.h"
 using namespace crypto;
@@ -46,13 +46,13 @@ using namespace std;
 // is consensus-critical (a daemon reading `7` from the wire and a
 // wallet writing `8` would fork). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
-static_assert(static_cast<uint8_t>(rct::CTTypeFcmpPlusPlusPqc) ==
+static_assert(static_cast<uint8_t>(ct::CTTypeFcmpPlusPlusPqc) ==
                   SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC,
-              "rct::CTTypeFcmpPlusPlusPqc enum tag drifted from "
+              "ct::CTTypeFcmpPlusPlusPqc enum tag drifted from "
               "config/consensus_constants.json — changing the wire "
               "type number is a consensus rule change");
 
-namespace rct {
+namespace ct {
 
     //dp 
     //Debug printing for the above types
@@ -202,7 +202,7 @@ namespace rct {
         return vali;
     }
 
-    bool is_rct_bulletproof_plus(int type)
+    bool is_ct_bulletproof_plus(int type)
     {
         switch (type)
         {
@@ -213,7 +213,7 @@ namespace rct {
         }
     }
 
-    bool is_rct_fcmp_pp_pqc(int type)
+    bool is_ct_fcmp_pp_pqc(int type)
     {
         switch (type)
         {
