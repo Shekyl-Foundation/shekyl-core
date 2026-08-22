@@ -16,9 +16,10 @@
   [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md) §5 step 1.
 
   The witness *format* survives and moved rather than died: the FROST multisig
-  coordinator still parses it, so `parse_prove_witness`, its helpers, the
-  `shekyl_fcmp_build_witness_header` writer, `ProveInputFields` and the
-  `WITNESS_HEADER.json` round-trip test are now `#[cfg(feature = "multisig")]`,
+  coordinator still parses it, so `parse_prove_witness`, its helpers,
+  `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, the `shekyl_fcmp_build_witness_header`
+  writer, `ProveInputFields` and the `WITNESS_HEADER.json` round-trip test are
+  all now `#[cfg(feature = "multisig")]`,
   which puts the dependency where the compiler enforces it instead of leaving a
   parser that nothing in a default build reads. Its wire-format spec — the only
   prose description of the layout — moved onto `parse_prove_witness` **with a
