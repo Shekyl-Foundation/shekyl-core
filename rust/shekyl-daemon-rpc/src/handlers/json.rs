@@ -116,9 +116,19 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
     match result {
         Ok(Ok(reply)) => match serde_json::to_string(&reply) {
             Ok(json) => json_ok(json),
-            Err(_) => json_dispatch_error(),
+            Err(e) => {
+                tracing::warn!(?e, "get_height: reply could not be encoded");
+                json_dispatch_error()
+            }
         },
-        _ => json_dispatch_error(),
+        Ok(Err(fault)) => {
+            tracing::warn!(?fault, "get_height: facts unavailable");
+            json_dispatch_error()
+        }
+        Err(e) => {
+            tracing::warn!(?e, "get_height: handler task did not complete");
+            json_dispatch_error()
+        }
     }
 }
 json_handler!(get_transactions, "/get_transactions");

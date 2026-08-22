@@ -17,10 +17,26 @@ use shekyl_rpc_types::{GetHeightResponse, GetVersionResponse, HardForkEntry, Rpc
 use crate::chain_facts::{ChainFacts, FactsFault};
 
 /// Why a native method could not answer. Maps onto the transport's existing
-/// error envelopes in the handlers (REST: `status`; JSON-RPC: `-32603`).
+/// error envelopes in the handlers (REST: `status`; JSON-RPC: `-32603`), but
+/// is logged by variant so telemetry tells a core that could not supply
+/// facts apart from a transport that could not frame them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RpcFault {
+    /// The facts source refused (a C return code, or no core).
     Facts(FactsFault),
+    /// The handler answered but the transport could not deliver it.
+    Internal(InternalFault),
+}
+
+/// A failure on the transport's side of a native method — never a fact
+/// about the chain, and never reported as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InternalFault {
+    /// `serde_json` could not encode the reply (a type-level bug: every wire
+    /// type here is plain data).
+    Serialize,
+    /// The `spawn_blocking` task that ran the handler did not complete.
+    Join,
 }
 
 impl From<FactsFault> for RpcFault {
