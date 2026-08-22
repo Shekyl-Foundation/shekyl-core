@@ -61,10 +61,14 @@ fn json_dispatch_error() -> (StatusCode, [(&'static str, &'static str); 1], Stri
 /// The REST error envelope with a reason that names what actually failed —
 /// a natively-served method never fails for "FFI dispatch" reasons.
 fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let envelope = shekyl_rpc_types::RestErrorEnvelope {
+        status: shekyl_rpc_types::RpcStatus("ERROR".to_owned()),
+        error: reason.to_owned(),
+    };
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [("content-type", "application/json")],
-        serde_json::json!({"status": "ERROR", "error": reason}).to_string(),
+        serde_json::to_string(&envelope).expect("plain data serializes"),
     )
 }
 

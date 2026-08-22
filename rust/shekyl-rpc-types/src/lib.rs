@@ -61,8 +61,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod chain;
 pub use chain::{
-    GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus, CORE_RPC_VERSION,
-    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
+    GetHeightResponse, GetVersionResponse, HardForkEntry, RestErrorEnvelope, RpcStatus,
+    CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
 
 /// Request body for `POST /submit_transaction` (§2.4).

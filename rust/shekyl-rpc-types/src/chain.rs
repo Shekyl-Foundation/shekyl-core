@@ -61,6 +61,17 @@ impl RpcStatus {
     }
 }
 
+/// The REST error envelope a natively-served endpoint answers with when it
+/// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
+/// names what failed (diagnostic text — RK-D8 scope — not contract). The
+/// transport sends the body whatever the HTTP status, so a client that wants
+/// the reason decodes this when the success type does not fit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestErrorEnvelope {
+    pub status: RpcStatus,
+    pub error: String,
+}
+
 /// Response of `GET|POST /get_height` (alias `/getheight`). The request body
 /// is empty (and ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +128,22 @@ mod tests {
         // MAKE_CORE_RPC_VERSION(3, 22) == 0x0003_0016 == 196630, the value the
         // captured get_version vectors carry.
         assert_eq!(CORE_RPC_VERSION, 196_630);
+    }
+
+    #[test]
+    fn error_envelope_round_trips() {
+        let e = RestErrorEnvelope {
+            status: RpcStatus("ERROR".to_owned()),
+            error: "chain facts unavailable".to_owned(),
+        };
+        let wire = serde_json::to_string(&e).unwrap();
+        assert_eq!(
+            wire,
+            r#"{"status":"ERROR","error":"chain facts unavailable"}"#
+        );
+        let back: RestErrorEnvelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back, e);
+        assert!(!back.status.is_ok());
     }
 
     #[test]

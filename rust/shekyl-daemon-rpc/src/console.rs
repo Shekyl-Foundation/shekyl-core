@@ -20,7 +20,7 @@ use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_rpc_types::GetHeightResponse;
+use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
 
 use crate::chain_facts::FfiChainFacts;
 use crate::core::CoreRpc;
@@ -45,6 +45,26 @@ enum Source {
     Remote { address: String, timeout: Duration },
 }
 
+/// Decode a REST reply body: the success type, else the daemon's error
+/// envelope (the transport hands the body through whatever the HTTP status
+/// was), else a malformed-reply error. The envelope's reason is what the
+/// operator reads, never "missing field `height`".
+fn decode_reply<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
+    if let Ok(reply) = serde_json::from_slice::<T>(body) {
+        return Ok(reply);
+    }
+    if let Ok(envelope) = serde_json::from_slice::<RestErrorEnvelope>(body) {
+        return Err(format!("{method} failed: {}", envelope.error));
+    }
+    Err(format!(
+        "malformed {method} reply: {}",
+        String::from_utf8_lossy(body)
+            .chars()
+            .take(120)
+            .collect::<String>()
+    ))
+}
+
 fn print_height(src: &Source) -> Result<String, String> {
     let reply = match src {
         Source::Live(core) => {
@@ -54,8 +74,7 @@ fn print_height(src: &Source) -> Result<String, String> {
         Source::Remote { address, timeout } => {
             let body = ctl_client::post_blocking(address, "/get_height", b"{}".to_vec(), *timeout)
                 .map_err(|(_, reason)| reason)?;
-            serde_json::from_slice::<GetHeightResponse>(&body)
-                .map_err(|e| format!("malformed get_height reply: {e}"))?
+            decode_reply::<GetHeightResponse>(&body, "get_height")?
         }
     };
     if !reply.status.is_ok() {
@@ -212,6 +231,30 @@ mod tests {
         let (code, text) = run(&["print_height"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
         assert_eq!(text, "BUSY");
+    }
+
+    /// A daemon that could not answer sends the error envelope (HTTP 500,
+    /// body still delivered); the operator sees its reason, not a serde
+    /// complaint about the success type.
+    #[test]
+    fn error_envelope_reason_is_surfaced() {
+        let address = one_shot(r#"{"status":"ERROR","error":"chain facts unavailable"}"#);
+        let (code, text) = run(&["print_height"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert_eq!(text, "get_height failed: chain facts unavailable");
+    }
+
+    /// Neither shape: the reply is reported as malformed, with a bounded
+    /// excerpt of what arrived.
+    #[test]
+    fn malformed_reply_is_named_as_such() {
+        let address = one_shot(r#"<html>not json</html>"#);
+        let (code, text) = run(&["print_height"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            text.starts_with("malformed get_height reply: <html>"),
+            "{text}"
+        );
     }
 
     #[test]
