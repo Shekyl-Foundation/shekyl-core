@@ -818,7 +818,9 @@ provides the security** — the TV, the smart plug and a guest's phone are on
 your home network too. And it answers only requests whose `Content-Type` is
 `application/json` (anything else gets HTTP 415): that is what stops a web
 page in your browser from driving the wallet on `127.0.0.1` — every real
-client sends it anyway.
+client sends it anyway — and, when you run without `--rpc-login`, it answers
+only to its IP address or `localhost`, not to a hostname a web page could
+have pointed at your machine.
 
 ### Method categories
 

@@ -155,9 +155,15 @@ web page can make a browser send a cross-origin `text/plain` POST to
 The listener therefore accepts `application/json` only — not a "simple"
 type, so a browser must preflight it, and the default-deny CORS layer
 refuses every preflight — and answers anything else with 415 before the
-credential check. That gate is what makes the auth-less loopback exception
-defensible; it also protects the authenticated case, where a page could not
-read the response but could have caused the spend.
+credential check. That is half of what makes the auth-less loopback
+exception defensible; it also protects the authenticated case, where a page
+could not read the response but could have caused the spend. The other half
+is **DNS rebinding**: a page's hostname re-pointed at `127.0.0.1` makes its
+JSON fetch same-origin, with no preflight to refuse. Rebinding needs a DNS
+name, so where authentication is disabled the `Host` must be an IP literal
+or `localhost` (421 otherwise); on an authenticated leg the credential is
+the gate and a hostname keeps working. Both halves are one middleware,
+`browser_boundary`, ahead of the body limit and the credential check.
 
 ### RT-3 — Remote legs are mutually authenticated and encrypted
 
