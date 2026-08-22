@@ -320,6 +320,48 @@ async fn unread_request_bytes_do_not_truncate_the_served_shard() {
 }
 
 #[tokio::test]
+async fn a_slow_reader_is_not_reset_before_it_reads_the_shard() {
+    // The sibling test above leaves the same unread bytes but reads
+    // immediately, so a fast client empties the send buffer before the
+    // server closes and the bug hides. This one pins the interleaving that
+    // actually failed in CI: the client does not read until after the
+    // server has written the response and finished closing.
+    //
+    // Pre-fix the drain stopped after MAX_DRAIN_BYTES with ~56 KiB still
+    // queued, so the drop sent RST and purged the response that had not
+    // been read yet — `read_to_end` returned ConnectionReset. The byte
+    // bound was the whole cause: it guaranteed unread bytes remained,
+    // which is precisely the condition close_gracefully exists to clear.
+    let payload: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
+        .await
+        .expect("bind");
+    let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+        .await
+        .expect("write request");
+    s.write_all(&vec![b'q'; 64 * 1024])
+        .await
+        .expect("write trailing bytes");
+
+    // Do not read yet. The response lands in the send buffer while the
+    // server drains and closes; only then does this client collect it.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let mut out = Vec::new();
+    s.read_to_end(&mut out)
+        .await
+        .expect("a peer with unread request bytes must still receive its response");
+    assert!(head_of(&out).starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(
+        &out[out.len() - payload.len()..],
+        &payload[..],
+        "the whole shard must arrive intact for a reader that was slow to start"
+    );
+    assert_eq!(ep.served_count(), 1);
+}
+
+#[tokio::test]
 async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     // The body is streamed in WRITE_CHUNK_BYTES pieces; a chunking or
     // cursor bug shows up as reordering, duplication, or a short body,

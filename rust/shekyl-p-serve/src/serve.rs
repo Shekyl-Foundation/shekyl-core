@@ -129,14 +129,22 @@ const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 /// tight spin without logging or changing response shape.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
 
-/// Bound on discarding a peer's unread request bytes before close, in time
-/// and in bytes. Deliberately small: the in-flight permit is still held, so
-/// a generous drain would hand back the slot-squatting [`MAX_INFLIGHT`]
-/// exists to prevent.
+/// Bound on discarding a peer's unread request bytes before close.
+///
+/// **Time only, deliberately.** The in-flight permit is still held during the
+/// drain, so the drain must be bounded — but slot-squatting is a *duration*
+/// property, and this is the bound that measures it. A byte bound does not:
+/// a peer trickling a few kilobytes slowly squats the full timeout anyway,
+/// while a peer that sent one honest large request gets its drain cut short.
+///
+/// A byte bound is worse than merely useless here, which is why there is no
+/// longer one. Stopping the drain early leaves unread bytes in the receive
+/// queue, and that is exactly the condition [`close_gracefully`] exists to
+/// clear: the drop then sends RST instead of FIN and discards the response
+/// still in the send buffer. An 8 KiB cap therefore *guaranteed* the reset
+/// for every peer that sent more than 8 KiB — the failure the function is
+/// written to prevent, reintroduced by its own bound. Do not add one back.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Byte bound on the same drain.
-const MAX_DRAIN_BYTES: usize = 8 * 1024;
 
 /// A running loopback serve endpoint for one persona.
 ///
@@ -376,12 +384,13 @@ async fn handle_connection(
 async fn close_gracefully(stream: &mut TcpStream) {
     stream.shutdown().await.ok();
     let mut sink = [0u8; 1024];
-    let mut drained = 0usize;
     tokio::time::timeout(DRAIN_TIMEOUT, async {
-        while drained < MAX_DRAIN_BYTES {
+        // Read to EOF, discarding. Anything short of EOF leaves bytes in the
+        // receive queue and turns the drop into an RST — see DRAIN_TIMEOUT.
+        loop {
             match stream.read(&mut sink).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => drained += n,
+                Ok(_) => {}
             }
         }
     })
