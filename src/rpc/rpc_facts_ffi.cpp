@@ -6,12 +6,17 @@
 #include "rpc_facts_ffi.h"
 
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "misc_log_ex.h"
 #include "version.h"
+
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.facts"
 
 namespace
 {
@@ -32,21 +37,40 @@ namespace
 
 extern "C" {
 
+// Every export is an exception barrier: a throw from a core / P2P read is
+// logged and becomes SHEKYL_RPC_FACTS_ERR_INTERNAL, never an unwind across
+// the C ABI into Rust (which would abort the daemon). Same discipline as
+// daemon_submit_ffi.cpp's shims.
 int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  std::memset(out, 0, sizeof(*out));
-  cryptonote::core& core = h->rpc->get_core();
-  uint64_t top_height = 0;
-  crypto::hash top_hash = crypto::null_hash;
-  core.get_blockchain_top(top_height, top_hash);
-  out->chain_height = top_height + 1;
-  std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
-  out->target_height = core.get_target_blockchain_height();
-  out->synchronized = h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
-  out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
-  return SHEKYL_RPC_FACTS_OK;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    cryptonote::core& core = h->rpc->get_core();
+    uint64_t top_height = 0;
+    crypto::hash top_hash = crypto::null_hash;
+    core.get_blockchain_top(top_height, top_hash);
+    out->chain_height = top_height + 1;
+    std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
+    out->target_height = core.get_target_blockchain_height();
+    out->synchronized = h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
+    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("chain tip facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("chain tip facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
 }
 
 int shekyl_rpc_hardforks(core_rpc_handle* h,
@@ -54,18 +78,35 @@ int shekyl_rpc_hardforks(core_rpc_handle* h,
 {
   if (!h || !h->rpc || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  auto* rows = new std::vector<shekyl_rpc_hardfork_entry>();
-  for (const hardfork_t& hf : h->rpc->get_core().get_blockchain_storage().get_hardforks())
+  *out = nullptr;
+  *out_len = 0;
+  *out_owner = nullptr;
+  std::unique_ptr<std::vector<shekyl_rpc_hardfork_entry>> rows;
+  try
   {
-    shekyl_rpc_hardfork_entry e;
-    std::memset(&e, 0, sizeof(e));
-    e.version = hf.version;
-    e.height = hf.height;
-    rows->push_back(e);
+    rows.reset(new std::vector<shekyl_rpc_hardfork_entry>());
+    for (const hardfork_t& hf : h->rpc->get_core().get_blockchain_storage().get_hardforks())
+    {
+      shekyl_rpc_hardfork_entry e;
+      std::memset(&e, 0, sizeof(e));
+      e.version = hf.version;
+      e.height = hf.height;
+      rows->push_back(e);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("hardforks facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("hardforks facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
   *out = rows->empty() ? nullptr : rows->data();
   *out_len = rows->size();
-  *out_owner = rows;
+  *out_owner = rows.release();
   return SHEKYL_RPC_FACTS_OK;
 }
 

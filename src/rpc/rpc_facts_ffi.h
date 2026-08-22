@@ -26,6 +26,7 @@ enum {
     SHEKYL_RPC_FACTS_OK = 0,
     SHEKYL_RPC_FACTS_ERR_NULL = -1,       // null handle or null out pointer
     SHEKYL_RPC_FACTS_ERR_NOT_READY = -2,  // core not initialized
+    SHEKYL_RPC_FACTS_ERR_INTERNAL = -3,   // a core/P2P read threw; logged, never propagated across the C ABI
 };
 
 // Chain tip + the one build fact get_version reports (RK-1).

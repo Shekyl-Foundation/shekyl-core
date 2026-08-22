@@ -180,7 +180,9 @@ void shekyl_rpc_hardforks_free(void* owner);
 Twins in `shekyl-daemon-rpc/src/ffi.rs`; layout pinned both directions by
 `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` (seed-derived per-field
 values, the F26 pattern). Return codes: `0` ok, `-1` null handle, `-2`
-core not ready. The shim reads; it does not decide.
+core not ready, `-3` a core/P2P read threw (every export is an exception
+barrier — logged in C++, a code to Rust, never an unwind across the C ABI,
+which would abort the daemon). The shim reads; it does not decide.
 
 ### 3.3 Handler — behind a trait
 

@@ -233,6 +233,9 @@ pub const SHEKYL_RPC_FACTS_OK: i32 = 0;
 pub const SHEKYL_RPC_FACTS_ERR_NULL: i32 = -1;
 /// The core is not initialized.
 pub const SHEKYL_RPC_FACTS_ERR_NOT_READY: i32 = -2;
+/// A core / P2P read threw inside the shim; logged there, reported here —
+/// never an unwind across the C ABI.
+pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 
 /// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
 /// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via

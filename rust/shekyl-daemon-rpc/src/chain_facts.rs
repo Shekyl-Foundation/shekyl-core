@@ -58,6 +58,10 @@ pub enum FactsFault {
     NullHandle,
     /// The core is not initialized yet (`BUSY` on the wire).
     NotReady,
+    /// A core / P2P read threw inside the C++ shim (logged there with the
+    /// exception text); the shim's exception barrier turned it into a
+    /// code instead of an unwind across the C ABI.
+    Internal,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),
@@ -68,6 +72,7 @@ impl FactsFault {
         match code {
             ffi::SHEKYL_RPC_FACTS_ERR_NULL => Self::NullHandle,
             ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY => Self::NotReady,
+            ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
             other => Self::Unknown(other),
         }
     }
@@ -129,6 +134,10 @@ mod tests {
         assert_eq!(
             FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY),
             FactsFault::NotReady
+        );
+        assert_eq!(
+            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL),
+            FactsFault::Internal
         );
         assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
     }
