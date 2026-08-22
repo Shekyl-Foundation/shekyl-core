@@ -181,9 +181,6 @@ tracing = "0.1"
 # without a nested-`block_on` panic. `block_in_place` is gated behind
 # `rt-multi-thread`, so the symbol does not even resolve without this
 # feature; until Stage 2 it was enabled only in `[dev-dependencies]`, so
-# Test doubles answer with the daemon's own wire types (RK-D1), so a double
-# cannot drift from the contract the way a hand-written JSON literal can.
-shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # the lib did not compile standalone (`cargo build -p shekyl-engine-core`)
 # and relied on a downstream consumer's feature unification. Promoting it
 # here de-fragilizes that latent `block_in_place` feature-unification bug.
@@ -246,6 +243,9 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# Test doubles answer with the daemon's own wire types (RK-D1), so a double
+# cannot drift from the contract the way a hand-written JSON literal can.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`
