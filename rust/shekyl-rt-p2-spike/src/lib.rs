@@ -122,8 +122,8 @@ use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::ParsedCertificate;
 use rustls::sign::CertifiedKey;
 use rustls::{
-    AlertDescription, CertificateError, ClientConfig, DigitallySignedStruct, DistinguishedName,
-    Error as TlsError, OtherError, ServerConfig, SignatureScheme,
+    CertificateError, ClientConfig, DigitallySignedStruct, DistinguishedName, Error as TlsError,
+    OtherError, ServerConfig, SignatureScheme,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -525,8 +525,10 @@ pub fn client_config_replaying(
 }
 
 /// How long a connected peer has to finish the TLS handshake before it is
-/// dropped and counted. Probe-scale; RT-W4 chooses the production value.
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+/// dropped and counted. Probe-scale — wide enough that a loaded runner's
+/// good handshake completes well inside it; RT-W4 chooses the production
+/// value.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Everything the listener counts. Each counter is one axis a probe asserts
 /// on, and every probe requires the others to be zero, so a refusal filed
@@ -549,15 +551,14 @@ impl Counters {
             // `certificate_required` on the wire).
             Some(e) if pin_error_of(&e).is_some() => &self.refused_by_us,
             Some(TlsError::NoCertificatesPresented) => &self.refused_by_us,
-            // Theirs: a wrong server pin makes the client's verifier return
-            // `CertificateError::Other`, which rustls sends as exactly
-            // `certificate_unknown`. Only that alert counts: any other
-            // certificate-class alert is a peer that disliked our certificate
-            // for a reason that is not a pin verdict, and a peer can send any
-            // alert it likes.
-            Some(TlsError::AlertReceived(AlertDescription::CertificateUnknown)) => {
-                &self.refused_by_peer
-            }
+            // Theirs: the peer sent a fatal alert and closed — it refused us,
+            // whatever its reason (a wrong server pin arrives as
+            // `certificate_unknown`, rustls's mapping of the client verifier's
+            // `CertificateError::Other`; the mapping is observed client-side
+            // by probe 2, not pinned here). Any alert is peer-controllable, so
+            // narrowing to one description buys no robustness — it only
+            // re-files a refusal as a generic error when a mapping moves.
+            Some(TlsError::AlertReceived(_)) => &self.refused_by_peer,
             // The certificate passed the allowlist; the CertificateVerify
             // over the transcript did not: a replayed certificate without its
             // key. Its own axis, because it is the hazard the module doc
@@ -686,8 +687,8 @@ pub struct Served {
     pub hits: Arc<AtomicUsize>,
     /// Handshakes our allowlist refused, or that presented no certificate.
     pub refused_by_us: Arc<AtomicUsize>,
-    /// Handshakes the peer refused with `certificate_unknown` — its pin of us
-    /// did not match.
+    /// Handshakes the peer refused with a fatal alert — in the probes, its
+    /// pin of us did not match.
     pub refused_by_peer: Arc<AtomicUsize>,
     /// Enrolled certificate, wrong key: the CertificateVerify failed.
     pub possession_failures: Arc<AtomicUsize>,

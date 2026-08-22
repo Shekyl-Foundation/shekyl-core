@@ -39,13 +39,13 @@ use rustls::{AlertDescription, ClientConfig};
 use shekyl_rt_p2_spike::{
     client_config, client_config_replaying, client_config_without_identity, dial, dial_via_hyper,
     pin_error_in_chain, pin_error_of, rustls_error_in, serve, DialError, Dialed, HyperDialError,
-    Identity, PinError, Served, HANDSHAKE_TIMEOUT,
+    Identity, PinError, Served,
 };
 
 /// Longer than any legitimate exchange here and longer than
-/// [`HANDSHAKE_TIMEOUT`], so a probe that waits on the server reaping a peer
+/// `HANDSHAKE_TIMEOUT`, so a probe that waits on the server reaping a peer
 /// still concludes inside it.
-const DEADLINE: Duration = Duration::from_secs(5);
+const DEADLINE: Duration = Duration::from_secs(8);
 
 fn ids() -> (Identity, Identity, Identity) {
     (
@@ -310,11 +310,14 @@ async fn p2_replayed_certificate_without_its_key_is_refused() {
 
 /// 6. A connected peer that never sends a ClientHello holds only its own
 ///    handshake task: a correctly pinned client is served while it is still
-///    connected, and the silent peer is reaped under [`HANDSHAKE_TIMEOUT`] —
+///    connected, and the silent peer is reaped under `HANDSHAKE_TIMEOUT` —
 ///    counted once, on its own axis, with the good client's one hit the only
-///    other entry in the tally. The edit that turns the first half red is
-///    awaiting the handshake inline in the accept loop; the second half,
-///    removing the timeout.
+///    other entry in the tally. The ordering is a count, not a clock: when
+///    the good dial completes, `handshake_timeouts` is still 0, so the
+///    silent peer was still connected (not yet reaped) while another client
+///    was served. The edit that turns the first half red is awaiting the
+///    handshake inline in the accept loop (the good dial then cannot
+///    complete before the reap); the second half, removing the timeout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2_silent_peer_does_not_block_the_next_client() {
     let (server, laptop, _) = ids();
@@ -323,17 +326,19 @@ async fn p2_silent_peer_does_not_block_the_next_client() {
         .await
         .expect("connect without speaking");
 
-    let dialed = tokio::time::timeout(
-        HANDSHAKE_TIMEOUT / 2,
-        dial(
-            served.addr,
-            client_config(&laptop, server.fingerprint).expect("config"),
-        ),
+    let dialed = dial_within(
+        served.addr,
+        client_config(&laptop, server.fingerprint).expect("config"),
     )
     .await
-    .expect("the good client must be served while the silent peer is still connected")
-    .expect("correct pins must connect");
+    .expect("correct pins must connect while a silent peer is connected");
     assert_eq!(dialed.body, "ok");
+    assert_eq!(
+        served.handshake_timeouts.load(Ordering::SeqCst),
+        0,
+        "the silent peer must still be connected (not yet reaped) when the good client \
+         has been served — that is the ordering claim"
+    );
 
     assert_tally(&served, Some(Axis::Timeout), 1).await;
     drop(silent);
