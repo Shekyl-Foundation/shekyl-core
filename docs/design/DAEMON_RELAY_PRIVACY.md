@@ -15107,4 +15107,144 @@ becomes a project.
 **Reopening criterion:** before `ANON_ZONE_TRANSIT_MEASURED_MS` is composed into
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
-finding that it is small.
+finding that it is small. **DISCHARGED 2026-08-21 via the first branch —
+measured on the floor device (`skl-pi`); see §94.9.**
+
+### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
+
+> **Corrected before merge.** A first draft of this section claimed
+> transit-dominance makes err-high a *"first-order privacy loss"* and made
+> per-zone `F` the *"presumed default"* on privacy grounds. **Both were wrong,
+> and §44.3 already contained the refutation** — recorded as a correction rather
+> than silently reversed, because a design section that argues the opposite of a
+> resolved one leaves the next reader to pick by reading order.
+
+**§43.2 raised the two-consumers worry; §44.3 resolved it, and the resolution
+survives the transit round.** §44.3 separated two referents that share the name
+`F`:
+
+- **§6.7's `F` is the *wire* quantity** — the real first-passage of the return
+  flood. A larger *real* `F` raises the leak (measured).
+- **`fluff_return_ms` (which the transit constant feeds) is a *derivation
+  input*** whose only production consumer is the embargo solve. Over-estimating
+  **it** does not change the wire; it lengthens the derived embargo, which
+  **reduces** the prefix-fire leak (measured 2.91 → 2.23 %) and improves disarm.
+
+So **over-estimating the transit constant is privacy-safe** — the **wire**
+leak is untouched (the constant is a derivation input, not the wire quantity),
+while **prefix-fire** leak *decreases* and **disarm** improves — at a
+**black-hole recovery-latency** cost only. This is
+**magnitude-independent**: a longer embargo reduces prefix-fire leak
+monotonically, so the sign does not flip when transit becomes the dominant term
+(§91.6). **Transit-dominance therefore does not reopen the err-high sign.** What
+it changes is priced below.
+
+**Three consequences, fixed before the number:**
+
+1. **Compose the constant at the measured p90 (§94.2(d)) — not the p90 plus a
+   margin, and the reason is provenance, not privacy.** §44.3 shows extra margin
+   above the measurement would be privacy-safe, so the objection to it is *not* a
+   leak cost; it is that bolting the old assumption's cushion onto a measured
+   value **contaminates the measurement with the assumption it replaced** (§87.2:
+   a measured value must be distinguishable from an assumed one). The p90 is the
+   adequate-conservative reduction of the distribution; more buys only recovery
+   latency and muddies provenance.
+
+2. **The p90 is a privacy FLOOR, not a privacy ceiling — asymmetric, each bound
+   with its own reason.** Going *below* the p90 (reducing toward the mean at an
+   attractive-low reading) under-provisions the derivation input, shortens the
+   embargo and *raises* leak — the genuine privacy-losing direction (§65, §66).
+   Going *above* it is privacy-safe (§44.3) and barred only on the provenance
+   ground in (1). The temptation a low number invites — "so shorten everything" —
+   is the one this floor refuses.
+
+3. **Per-zone `F` stays a LIVENESS call (§44.3), which the transit round
+   amplifies but does not promote to a privacy default.** §44.3 ruled worst-zone
+   provisioning privacy-safe by construction and per-zone `F` a recovery-latency
+   optimisation, left unbuilt. The transit round widens the anon/clearnet gap, so
+   worst-zone provisioning wastes *more* recovery latency on clearnet — the
+   liveness case strengthens, the privacy-neutrality does not change. It remains a
+   liveness decision for the re-derivation round.
+
+   **If it is built, the axis is *posture*, not zone.** `record_arrival` fans to
+   every zone (`i_p2p_endpoint::record_tx_arrivals`), so a dual-stack node
+   stemming on the anon zone still sees its return over clearnet: the node's
+   **transport posture** selects the return graph, not the zone it stemmed on.
+   The constant is network-wide and cannot adapt — §18 refused a degree-adaptive
+   embargo because embargo length is measurable from fluff timing, and the same
+   argument forbids a posture-adaptive one — so each zone must cover its **worst
+   posture**: clearnet's worst posture is clearnet-capable (every clearnet node) →
+   clearnet `F` = the clearnet flood; the anon zone's worst posture is Tor-only →
+   anon `F` = the anon flood. That collapses per-posture to **two determinate
+   values**, the operational form, reached through posture rather than zone.
+
+   **§89.2's keeper is superseded by Design A — tenth instance.** Its rebuttal of
+   per-zone `F` — *"a dual-stack node's fluff returns over both networks, so there
+   is no per-zone value to pick"* — was a **Design B** statement: under B the
+   fluff exits to clearnet and never traverses the anon zone, so there was one
+   flood graph and genuinely no per-zone value. Design A created the second
+   graph. Correct for the architecture it was written under, stale when A landed —
+   exactly like §25.1's *"no fluff path on a noise zone"*. The **governing**
+   analysis is §44.3 (liveness, not privacy), which is *not* stale.
+
+This changes no constant. It aligns the transit round with §44.3's resolved
+policy instead of re-deriving a contradiction of it, and fixes the axis
+(posture) and the superseded keeper (§89.2) so the re-derivation composes against
+one coherent rule.
+
+### 94.9 The fourth hop term is DISCHARGED — measured on the floor device (2026-08-21)
+
+§94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
+*or* a negligibility ruling with a number. **It is measured on the floor device
+(`skl-pi`, the reference Raspberry Pi 4 Model B), which is the criterion's first
+and stronger branch** — and a first draft of this section, which took the second
+branch on a *bounded* Pi rate, got the bound wrong in a way only the measurement
+caught. That correction is kept in view below, because it is the case for
+measuring on the actual floor rather than reasoning about it.
+
+**The term splits, and only one half is per-hop.** Circuit **construction** (the
+ntor / Curve25519 handshake) is amortised apparatus — built once, carried across
+the whole stem — and is excluded for the same reason §94.2(a) excludes it from
+transit. The genuine per-hop term is per-message **symmetric** crypto: onion-layer
+AES on the cells, the per-cell running digest, and the node↔guard TLS record layer.
+
+**The measurement, and the claim it refuted.** The draft asserted the Pi 4's
+Cortex-A72 "has the ARMv8-A AES hardware extension" and bounded its AES at a
+"conservative" 0.8 GB/s. **Both are false.** The Cortex-A72 in the Pi 4 carries
+**no** ARMv8 crypto extension — `/proc/cpuinfo` Features reads
+`fp asimd evtstrm crc32 cpuid`, with no `aes`/`sha`/`pmull`, and forcing
+`OPENSSL_armcap=0` barely moves the number — so AES runs in **software**. Measured
+AES-128-CTR at 8 KB: **0.139 GB/s** on the floor, against 13.04 GB/s on the
+reference x86 (AES-NI) — a **~94×** gap, not the 5.36–5.75× the *verification*
+surface sees (that ratio is FCMP++ field arithmetic, and does not transfer to AES).
+The draft's bound was optimistic by 5.8×.
+
+**The number, corrected.** A generous **10-pass** model (3 onion layers + digest +
+TLS, both hop endpoints on the floor device) at the measured 0.139 GB/s:
+
+| message / denominator | per-hop node crypto | fraction |
+| --- | --- | --- |
+| modal, realistic hop (~500 ms transit + 124.5 ms verify) | 0.60 ms | **0.10 %** |
+| max-admissible, realistic hop | 1.20 ms | **0.19 %** |
+| max-admissible, verify floor alone (124.5 ms, transit→0 — no real Tor hop) | 1.20 ms | 0.96 % |
+
+**Negligible against any real hop (0.1–0.2 %)**, rising toward ~1 % only against
+the verify floor with transit driven to zero, which no anonymity-zone hop reaches.
+The margin is ~2–3 orders against a realistic hop — **not** the ~4 orders the draft
+claimed on its wrong rate. It stays excluded from `hop`: carrying a 0.1–0.2 % term
+while transit itself is measured with far larger spread would be false precision.
+
+**Why the correction matters more than the result.** The disposition (negligible,
+excluded) is unchanged, but the draft reached it through a hardware assumption
+that was wrong and a rate that was 5.8× off, and only measuring on `skl-pi`
+surfaced either. A grep that had found the host earlier would have replaced a
+plausible-but-wrong bound with the measurement three steps sooner — the same
+ground-at-source lesson this arc keeps re-learning.
+
+**Armed, not prose.** `node_crypto_hop_fraction_is_negligible` pins the stacked
+worst case (max message, both endpoints on the floor, verify-floor-only
+denominator) under a **1 % bar** using the **measured** 0.139 GB/s floor rate. It
+goes red if the model, the message size, or the floor rate drifts the term toward
+the hop — and it already fired once, catching the draft's <0.1 % claim (true only
+on the wrong rate; the honest worst case is 0.96 %).
+

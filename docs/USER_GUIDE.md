@@ -779,33 +779,48 @@ For the full technical specification, see
 
 ## Wallet RPC Server (`shekyl-wallet-rpc`)
 
-The wallet RPC server provides programmatic JSON-RPC access to wallet
-functions. Use it for exchange integrations, automated payments, or
-building applications on top of Shekyl.
+`shekyl-wallet-rpc` is the JSON-RPC server behind every Shekyl wallet
+client: `shekyl-cli` hosts one in-process for you over a private local
+endpoint, so most users never start it directly. Run it yourself for
+tooling that speaks JSON-RPC over HTTP, or to serve several wallets from one
+process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
+`docs/EXECUTABLES.md` §3.
 
 ### Launching
 
 ```bash
 ./shekyl-wallet-rpc \
-    --wallet-file /path/to/wallet \
-    --rpc-bind-port 11030 \
+    --wallet-dir /path/to/wallets \
+    --rpc-bind 127.0.0.1:29500 \
     --rpc-login user:password \
-    --daemon-address 127.0.0.1:11029
+    --daemon-address http://127.0.0.1:28581
 ```
 
 ### Key flags
 
 | Flag | Description |
 |------|-------------|
-| `--wallet-file <path>` | Wallet file to open |
-| `--wallet-dir <path>` | Directory for `create_wallet`/`open_wallet` RPC methods |
-| `--rpc-bind-port <port>` | Port to listen on (required) |
-| `--rpc-login <user:pass>` | Require HTTP digest auth (strongly recommended) |
-| `--disable-rpc-login` | Disable auth -- **dangerous**, use only in trusted environments |
-| `--restricted-rpc` | Limit to read-only and transfer operations |
-| `--rpc-ssl <mode>` | Enable SSL (`enabled`, `disabled`, `autodetect`) |
-| `--daemon-address <addr>` | Connect to a specific daemon |
-| `--trusted-daemon` | Enable commands that rely on a trusted daemon (your own node) |
+| `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
+| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
+| `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
+| `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
+| `--daemon-address <url>` | Your node's RPC URL |
+| `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
+| `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
+
+**Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
+`::` binds every interface your machine has *and every one it gains later*
+(a VPN, a hotspot, a container bridge), so the server asks you to name the
+one interface you mean. And it will not serve without authentication on any
+address other than loopback: a wallet RPC the network can reach honours
+every request, spends included. **The network being yours is not what
+provides the security** — the TV, the smart plug and a guest's phone are on
+your home network too. And it answers only requests whose `Content-Type` is
+`application/json` (anything else gets HTTP 415): that is what stops a web
+page in your browser from driving the wallet on `127.0.0.1` — every real
+client sends it anyway — and, when you run without `--rpc-login`, it answers
+only to its IP address or `localhost`, not to a hostname a web page could
+have pointed at your machine.
 
 ### Method categories
 

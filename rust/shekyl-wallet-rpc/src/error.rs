@@ -300,11 +300,11 @@ pub enum WalletRpcError {
     #[error("submit ambiguous")]
     SubmitAmbiguous,
     /// `abandon_tx`: the send's current state forbids abandoning.
-    /// `state` is the projected [`TransferState`] so the client hears
+    /// `state` is the projected [`TransferState`](crate::types::TransferState) so the client hears
     /// the same vocabulary `get_transfers` speaks.
     #[error("cannot abandon: the send is {state}")]
     AbandonStateForbids {
-        /// Projected [`TransferState`] of the refusing row.
+        /// Projected [`TransferState`](crate::types::TransferState) of the refusing row.
         state: crate::types::TransferState,
     },
     /// `check_*`: proof string failed Bech32m decode, carried the wrong
