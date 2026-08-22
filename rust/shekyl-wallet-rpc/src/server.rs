@@ -35,7 +35,6 @@ use tokio::net::UnixListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
-use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{info, warn};
 
 use crate::auth::{require_basic_auth, AuthConfig};
@@ -210,19 +209,46 @@ impl AppState {
 
 /// The one body media type the JSON-RPC endpoint accepts.
 ///
-/// This is the browser boundary, and it is structural rather than a matter
-/// of authentication. A web page can make a browser send a cross-origin POST
-/// to `127.0.0.1` without any preflight *as long as* the request is "simple"
-/// — `text/plain` or a form type — and default-deny CORS only hides the
-/// **response** from the page; the request still executes. So on the
-/// loopback listener, where RT-2 permits `AuthConfig::Disabled`, a page could
-/// otherwise drive spends through a `no-cors` `text/plain` POST carrying
-/// JSON-RPC. `application/json` is not a simple type: a browser must
-/// preflight it, and the default-deny `CorsLayer` refuses every preflight,
-/// so the request is never sent. Anything else is refused with 415 before
-/// the credential check or the body is looked at. Non-browser clients send
-/// `application/json` anyway (`docs/api/wallet_rpc.yaml`).
+/// This is half of the browser boundary, and it is structural rather than a
+/// matter of authentication. A web page can make a browser send a
+/// cross-origin POST to `127.0.0.1` without any preflight *as long as* the
+/// request is "simple" — `text/plain` or a form type — and default-deny CORS
+/// only hides the **response** from the page; the request still executes. So
+/// on the loopback listener, where RT-2 permits `AuthConfig::Disabled`, a
+/// page could otherwise drive spends through a `no-cors` `text/plain` POST
+/// carrying JSON-RPC. `application/json` is not a simple type: a browser
+/// must preflight it, and the default-deny `CorsLayer` refuses every
+/// preflight, so the request is never sent. Anything else is refused with
+/// 415 before the credential check, the body limit, or the body is looked
+/// at. Non-browser clients send `application/json` anyway
+/// (`docs/api/wallet_rpc.yaml`). The other half is [`host_is_unrebindable`].
 const JSON_MEDIA_TYPE: &str = "application/json";
+
+/// The other half of the browser boundary: **DNS rebinding**. A page served
+/// from `evil.example` can have that name re-pointed at `127.0.0.1` after it
+/// loads; the browser then treats an `application/json` fetch to
+/// `evil.example:29500` as same-origin, sends no preflight, and the JSON
+/// gate alone does not stop it. Rebinding needs a DNS *name*, so the request
+/// carries one in its `Host` — and a wallet bound to a numeric address has
+/// no legitimate reason to be addressed by a name other than `localhost`.
+/// Accepted: an IP literal (`127.0.0.1:29500`, `[::1]:29500`) or `localhost`,
+/// port optional, case folded. Anything else is a request that was routed
+/// here by a name this server never answered to.
+///
+/// Applied only where authentication is disabled — the loopback exception,
+/// where the browser boundary is the only gate. On an authenticated leg the
+/// credential is the gate and an operator's `wallet.lan:29500` keeps working.
+fn host_is_unrebindable(host: &str) -> bool {
+    let host = host.trim();
+    if let Some(rest) = host.strip_prefix('[') {
+        // `[v6]` or `[v6]:port`; the brackets are the v6 literal's syntax.
+        return rest
+            .split_once(']')
+            .is_some_and(|(inner, _)| inner.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    let name = host.rsplit_once(':').map_or(host, |(name, _port)| name);
+    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok()
+}
 
 /// `Content-Type` media type, parameters (`; charset=utf-8`) ignored, case
 /// folded (RFC 9110 §8.3.1).
@@ -233,44 +259,68 @@ fn is_json_media_type(content_type: &str) -> bool {
         .is_some_and(|media| media.trim().eq_ignore_ascii_case(JSON_MEDIA_TYPE))
 }
 
-/// Axum middleware: refuse any request that is not `application/json`.
-async fn require_json_content_type(
+/// Axum middleware: the browser boundary. Refuse any request that is not
+/// `application/json` (415), and — where authentication is disabled — any
+/// request addressed by a rebindable name (421 Misdirected Request). Both
+/// run before the credential check, the body limit, or the body.
+async fn browser_boundary(
+    axum::extract::State(auth): axum::extract::State<Arc<AuthConfig>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    use axum::http::header;
     use axum::response::IntoResponse as _;
-    let is_json = request
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
+    // Both verdicts are taken before the await: a borrow of the request kept
+    // alive across `next.run` would make this future `!Send` (`Body` is not
+    // `Sync`), and axum's middleware requires `Send`.
+    let headers = request.headers();
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(is_json_media_type);
-    if is_json {
-        next.run(request).await
-    } else {
-        (
+    let host_ok = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(host_is_unrebindable);
+    if !is_json {
+        return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "this endpoint accepts only Content-Type: application/json",
         )
-            .into_response()
+            .into_response();
     }
+    if matches!(*auth, AuthConfig::Disabled) && !host_ok {
+        return (
+            StatusCode::MISDIRECTED_REQUEST,
+            "this endpoint answers only to its IP address or `localhost` when authentication \
+             is disabled (a hostname can be rebound to this machine by a web page)",
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 /// Build the axum router (shared by TCP, UDS, the pipe, and in-process tests).
 ///
 /// Layer order, outermost first: CORS (default-deny, so every preflight
-/// fails), body limit, the `application/json` gate, then authentication.
-/// A browser-driven request is refused by the gate before a credential is
-/// ever compared; a non-JSON request never reaches the handler.
+/// fails), the browser boundary (`application/json` only; an unrebindable
+/// `Host` where auth is disabled), then authentication. The body limit is
+/// axum's `DefaultBodyLimit`, enforced where the body is read (the handler's
+/// `Bytes` extractor) rather than by a layer that rewraps the body type —
+/// so it constrains no middleware order, and a declared oversize length is
+/// judged only after every gate. A browser-driven request is refused by the
+/// boundary before a credential is compared; a non-JSON request never
+/// reaches the handler.
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = Arc::new(state.auth.clone());
     Router::new()
         .route("/", post(json_rpc_handler))
         .layer(axum::middleware::from_fn_with_state(
-            auth,
+            Arc::clone(&auth),
             require_basic_auth,
         ))
-        .layer(axum::middleware::from_fn(require_json_content_type))
-        .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
+        .layer(axum::extract::DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
+        .layer(axum::middleware::from_fn_with_state(auth, browser_boundary))
         // Default-deny CORS. This process will host spend operations; a
         // permissive ACAO on loopback TCP would let a malicious web page
         // read responses, and — with the JSON gate above — the preflight it
@@ -998,6 +1048,34 @@ mod tests {
             "",
         ] {
             assert!(!is_json_media_type(bad), "{bad:?}");
+        }
+    }
+
+    /// The rebinding half's predicate: IP literals and `localhost`, with or
+    /// without a port, any case; never a name that DNS could re-point.
+    #[test]
+    fn only_ip_literals_and_localhost_are_unrebindable() {
+        for ok in [
+            "127.0.0.1",
+            "127.0.0.1:29500",
+            "[::1]",
+            "[::1]:29500",
+            "localhost",
+            "LOCALHOST:29500",
+            "192.168.1.20:29500",
+        ] {
+            assert!(host_is_unrebindable(ok), "{ok:?}");
+        }
+        for bad in [
+            "",
+            "evil.example",
+            "evil.example:29500",
+            "localhost.evil.example",
+            "127.0.0.1.evil.example",
+            "[evil.example]:29500",
+            "::1",
+        ] {
+            assert!(!host_is_unrebindable(bad), "{bad:?}");
         }
     }
 

@@ -87,6 +87,7 @@ async fn post_json(auth: AuthConfig, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
@@ -103,6 +104,7 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(body))
         .unwrap();
@@ -123,6 +125,7 @@ async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .header("authorization", format!("Basic {cred}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -139,6 +142,7 @@ async fn rpc(state: Arc<AppState>, body: Value) -> Value {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
@@ -283,6 +287,7 @@ async fn basic_auth_rejects_missing_header() {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
@@ -1093,15 +1098,87 @@ async fn non_json_content_type_is_refused_before_anything_else() {
             );
         }
     }
+    // The gate is outside the body limit: a non-JSON request declaring an
+    // oversize body is 415, not 413 — nothing else judges it first.
+    for auth in configs() {
+        let app = build_router(test_state(auth));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("host", "127.0.0.1")
+            .header("content-type", "text/plain")
+            .header("content-length", (10 * 1024 * 1024).to_string())
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
     // The control: the same request as JSON reaches the handler (the
     // Disabled config, so the outcome is the method's, not the credential's).
     let app = build_router(test_state(AuthConfig::Disabled));
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json; charset=utf-8")
         .body(Body::from(body))
         .unwrap();
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// The rebinding half of the browser boundary. Where authentication is
+/// disabled, a request addressed by a DNS name other than `localhost` is
+/// 421 — a page that rebound its hostname to this machine arrives exactly
+/// so — while the IP literals and `localhost` are served. Where
+/// authentication is enabled the credential is the gate: the same rebound
+/// request is the ordinary 401, and an operator's hostname works with a
+/// credential. The edit that turns this red is dropping the Host check
+/// from `browser_boundary`.
+#[tokio::test]
+async fn rebindable_host_is_refused_where_auth_is_disabled() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "get_version"
+    }))
+    .unwrap();
+    async fn post(auth: AuthConfig, host: Option<&str>, body: Vec<u8>) -> StatusCode {
+        let app = build_router(test_state(auth));
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("content-type", "application/json");
+        if let Some(h) = host {
+            req = req.header("host", h);
+        }
+        app.oneshot(req.body(Body::from(body)).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+    for bad in [
+        Some("evil.example:29500"),
+        Some("localhost.evil.example"),
+        None,
+    ] {
+        assert_eq!(
+            post(AuthConfig::Disabled, bad, body.clone()).await,
+            StatusCode::MISDIRECTED_REQUEST,
+            "{bad:?} with auth disabled"
+        );
+    }
+    for ok in ["127.0.0.1:29500", "[::1]:29500", "localhost", "LOCALHOST"] {
+        assert_eq!(
+            post(AuthConfig::Disabled, Some(ok), body.clone()).await,
+            StatusCode::OK,
+            "{ok:?} with auth disabled"
+        );
+    }
+    let basic = AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret").expect("valid credential"),
+    );
+    assert_eq!(
+        post(basic, Some("evil.example:29500"), body).await,
+        StatusCode::UNAUTHORIZED,
+        "with authentication enabled the credential is the gate, not the Host"
+    );
 }

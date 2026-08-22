@@ -230,7 +230,10 @@ paths:
           `application/json` is the only accepted Content-Type; any other
           (or none) is refused with HTTP 415 before authentication. This is
           the browser boundary: a non-JSON POST is one a web page can make
-          a browser send cross-origin without a preflight.
+          a browser send cross-origin without a preflight. Where the server
+          runs without authentication, the `Host` must be an IP literal or
+          `localhost` (421 otherwise): a hostname can be rebound to the
+          machine by a web page.
         content:
           application/json:
             schema:

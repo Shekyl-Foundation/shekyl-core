@@ -55,6 +55,7 @@ async fn post_json(body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();

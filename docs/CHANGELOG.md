@@ -31,7 +31,10 @@
   can send a cross-origin `text/plain` POST to loopback with no preflight,
   and default-deny CORS hides only the response — so this gate, not the
   credential, is what keeps a web page from driving the auth-less loopback
-  listener. This is slice RT-W1
+  listener. Its other half closes DNS rebinding: where authentication is
+  disabled, the `Host` must be an IP literal or `localhost` (421 otherwise),
+  because a rebound hostname makes a page's JSON fetch same-origin with no
+  preflight to refuse. This is slice RT-W1
   of the RPC transport posture (RULED 2026-08-21): every RPC leg is
   operator-to-operator and the adversary is the network path; remote legs
   become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,
