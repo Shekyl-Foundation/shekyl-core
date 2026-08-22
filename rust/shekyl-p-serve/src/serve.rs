@@ -137,13 +137,19 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
 /// a peer trickling a few kilobytes slowly squats the full timeout anyway,
 /// while a peer that sent one honest large request gets its drain cut short.
 ///
-/// A byte bound is worse than merely useless here, which is why there is no
-/// longer one. Stopping the drain early leaves unread bytes in the receive
-/// queue, and that is exactly the condition [`close_gracefully`] exists to
-/// clear: the drop then sends RST instead of FIN and discards the response
-/// still in the send buffer. An 8 KiB cap therefore *guaranteed* the reset
-/// for every peer that sent more than 8 KiB — the failure the function is
-/// written to prevent, reintroduced by its own bound. Do not add one back.
+/// The invariant [`close_gracefully`] is defending is **an empty receive queue
+/// at drop**, not EOF as such: Linux sends RST rather than FIN when a socket
+/// is dropped with unread bytes queued, and the RST discards the response
+/// still in the send buffer. EOF is simply the one condition that *positively*
+/// establishes the queue will stay empty, so the loop reads until it.
+///
+/// Hitting this timeout is therefore a normal outcome, not a failure: a peer
+/// that stops sending but holds its write half open leaves `read` pending on
+/// an already-drained queue, and dropping there is clean. What is not safe is
+/// stopping while bytes remain — which is what a *byte* bound does. An 8 KiB
+/// cap guaranteed the reset for every peer that sent more than 8 KiB, the
+/// exact failure this drain exists to prevent, reintroduced by its own bound.
+/// Do not add one back.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A running loopback serve endpoint for one persona.
@@ -385,8 +391,10 @@ async fn close_gracefully(stream: &mut TcpStream) {
     stream.shutdown().await.ok();
     let mut sink = [0u8; 1024];
     tokio::time::timeout(DRAIN_TIMEOUT, async {
-        // Read to EOF, discarding. Anything short of EOF leaves bytes in the
-        // receive queue and turns the drop into an RST — see DRAIN_TIMEOUT.
+        // Discard until the queue is drained: EOF ends the loop, and a peer
+        // that merely stops sending leaves `read` pending on an empty queue
+        // until DRAIN_TIMEOUT — both are safe to drop on. Stopping while
+        // bytes remain is the RST case. See DRAIN_TIMEOUT.
         loop {
             match stream.read(&mut sink).await {
                 Ok(0) | Err(_) => break,

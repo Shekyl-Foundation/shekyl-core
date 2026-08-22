@@ -343,9 +343,17 @@ async fn a_slow_reader_is_not_reset_before_it_reads_the_shard() {
     s.write_all(&vec![b'q'; 64 * 1024])
         .await
         .expect("write trailing bytes");
+    // Half-close so the drain observes EOF and the server's close completes
+    // promptly. Without this the server sits in close_gracefully until
+    // DRAIN_TIMEOUT, and the read below would race that 2s window rather
+    // than testing what happens after the close — the unread bytes that
+    // provoke the reset are already queued either way.
+    s.shutdown()
+        .await
+        .expect("half-close the client write side");
 
-    // Do not read yet. The response lands in the send buffer while the
-    // server drains and closes; only then does this client collect it.
+    // Do not read yet. The response sits in the send buffer while the server
+    // drains and closes; only then does this client collect it.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let mut out = Vec::new();
