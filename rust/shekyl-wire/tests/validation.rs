@@ -8,9 +8,10 @@
 //! unlock_time block-height form, and `nbp == 1`. Chain-context rules (§13) are
 //! the consensus layer's and are not exercised here.
 
+use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
-    ServeCredit, Transaction, TxPrefix,
+    Transaction, TxPrefix,
 };
 
 /// A minimal fee-only-shaped tx (no outputs, empty pqc, no prunable) wrapping a
@@ -35,6 +36,21 @@ fn fee_only_with(input: Input) -> Transaction {
             prunable: None,
         },
     }
+}
+
+/// An opaque kept-half blob of the retention codec's shape (this crate checks
+/// only tag and ceiling).
+fn kept_blob() -> Vec<u8> {
+    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+    b.extend_from_slice(&[0u8; 32]);
+    b.extend_from_slice(&[0, 0]);
+    b.extend_from_slice(&[0u8; 64]);
+    b
+}
+
+/// The pruned half of a pass record as an opaque blob, minimal but in bounds.
+fn pruned_record() -> Vec<u8> {
+    vec![0u8; 16]
 }
 
 fn out() -> Output {
@@ -98,6 +114,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
                 })
                 .collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: (0..nbp).map(|_| bp(n_out)).collect(),
                 tree_depth: 1,
                 fcmp_proof: vec![],
@@ -333,46 +350,34 @@ fn pqc_auth_oversized_blob_rejected() {
     assert!(err.to_string().contains("public key"), "{err}");
 }
 
-#[test]
-fn serve_credit_oversized_signature_rejected() {
-    // validate() mirrors the read caps for the archival arms: an oversized
-    // hybrid_signature must reject (else it would serialize to unparseable bytes).
-    let sc = ServeCredit {
-        p_canonical_id: [0u8; 32],
-        shard_id: 0,
-        settlement_epoch: 0,
-        segment_subroot_rk: [0u8; 32],
-        leaf_index_in_segment: 0,
-        leaf_bytes: [0u8; 128],
-        c1_layers: vec![],
-        c2_layers: vec![],
-        hybrid_signature: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_SIG_LEN + 1],
-    };
-    let err = fee_only_with(Input::ServeCredit(Box::new(sc)))
-        .validate()
-        .unwrap_err();
-    assert!(err.to_string().contains("hybrid_signature"), "{err}");
-}
+// `serve_credit_oversized_signature_rejected` was DELETED by RF-D2, and the
+// deletion is the point rather than a coverage loss.
+//
+// It asserted that an over-long `hybrid_signature: Vec<u8>` is refused by
+// `validate`. After the split the kept side carries
+// `ed25519_countersignature: [u8; 64]`, so an over-long value is not a case the
+// checker rejects -- it is **not a representable value of the type**. The test
+// cannot be written any more, because its subject does not exist.
+//
+// Rewriting it to construct an oversized array would have been the wrong
+// instinct: it would test the compiler, not the wire. The property it used to
+// guard -- that the encoded width cannot drift -- is now pinned directly in
+// `archival_arms_roundtrip.rs::serve_credit_kept_side_is_the_pinned_width`.
 
 #[test]
 fn serve_credit_must_not_mix_with_a_spend() {
     // §2.5: serve_credit is the entire tx. Mixed with a key-image spend it would
     // otherwise pass the spend branch's lenient pseudoOuts coupling — reject the shape.
-    let sc = ServeCredit {
-        p_canonical_id: [0u8; 32],
-        shard_id: 0,
-        settlement_epoch: 0,
-        segment_subroot_rk: [0u8; 32],
-        leaf_index_in_segment: 0,
-        leaf_bytes: [0u8; 128],
-        c1_layers: vec![],
-        c2_layers: vec![],
-        hybrid_signature: vec![],
-    };
+    let sc = kept_blob();
     let tx = Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![Input::ServeCredit(Box::new(sc)), ki(1)],
+            inputs: vec![
+                Input::ServeCredit {
+                    canonical_bytes: sc,
+                },
+                ki(1),
+            ],
             outputs: vec![out()],
             extra: vec![],
         },
@@ -397,18 +402,8 @@ fn serve_credit_must_not_mix_with_a_spend() {
 fn multiple_serve_credits_allowed() {
     // The oracle allows *multiple* serve_credit inputs (it only rejects mixing with
     // other arms; check_inputs_types_supported). A 2-serve_credit fee-only tx validates.
-    let sc = || {
-        Input::ServeCredit(Box::new(ServeCredit {
-            p_canonical_id: [0u8; 32],
-            shard_id: 0,
-            settlement_epoch: 0,
-            segment_subroot_rk: [0u8; 32],
-            leaf_index_in_segment: 0,
-            leaf_bytes: [0u8; 128],
-            c1_layers: vec![],
-            c2_layers: vec![],
-            hybrid_signature: vec![],
-        }))
+    let sc = || Input::ServeCredit {
+        canonical_bytes: kept_blob(),
     };
     let tx = Transaction {
         prefix: TxPrefix {
@@ -426,7 +421,17 @@ fn multiple_serve_credits_allowed() {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            // RF-D1: one pruned pass record per serve-credit vin. Two vins,
+            // two records -- which is also what makes this test the coupling's
+            // positive control, the negative one being
+            // `a_record_count_disagreeing_with_the_vin_count_is_refused`.
+            prunable: Some(Prunable {
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                serve_credit_pruned: vec![pruned_record(), pruned_record()],
+            }),
         },
     };
     tx.validate().expect("multiple serve_credits must validate");

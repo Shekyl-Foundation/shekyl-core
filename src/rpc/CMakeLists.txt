@@ -32,8 +32,6 @@ set(rpc_base_sources
 
 set(rpc_sources
   archival_claim_source.cpp
-  bootstrap_daemon.cpp
-  bootstrap_node_selector.cpp
   core_rpc_server.cpp
   core_rpc_ffi.cpp
   daemon_submit_ffi.cpp
@@ -49,7 +47,6 @@ set(rpc_headers
 
 set(rpc_private_headers
   archival_claim_source.h
-  bootstrap_daemon.h
   core_rpc_server.h
   core_rpc_ffi.h
   core_rpc_ffi_internal.h

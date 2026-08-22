@@ -87,8 +87,13 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-// 3.21: block_header_response gained attestation_root (ARCHIVAL_CREDIT_WIRE.md §3)
-#define CORE_RPC_VERSION_MINOR 21
+// 3.22: drop `untrusted` from every response; drop get_info bootstrap
+// fields; delete set_bootstrap_daemon and get_public_nodes; drop the
+// advertised `rpc_port` / `rpc_credits_per_hash` from get_peer_list's
+// `peer` and get_connections' `connection_info` (RPC is
+// operator-to-operator — no foreign-daemon discovery or silent forward,
+// and no readout of strangers' advertised RPC endpoints).
+#define CORE_RPC_VERSION_MINOR 22
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -101,13 +106,9 @@ namespace cryptonote
   struct rpc_response_base
   {
     std::string status;
-    bool untrusted;
-
-    rpc_response_base(): untrusted(false) {}
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(status)
-      KV_SERIALIZE(untrusted)
     END_KV_SERIALIZE_MAP()
   };
 
@@ -667,9 +668,6 @@ namespace cryptonote
       uint64_t start_time;
       uint64_t free_space;
       bool offline;
-      std::string bootstrap_daemon_address;
-      uint64_t height_without_bootstrap;
-      bool was_bootstrap_ever_used;
       uint64_t database_size;
       bool busy_syncing;
       std::string version;
@@ -717,9 +715,6 @@ namespace cryptonote
         KV_SERIALIZE(start_time)
         KV_SERIALIZE(free_space)
         KV_SERIALIZE(offline)
-        KV_SERIALIZE(bootstrap_daemon_address)
-        KV_SERIALIZE(height_without_bootstrap)
-        KV_SERIALIZE(was_bootstrap_ever_used)
         KV_SERIALIZE(database_size)
         KV_SERIALIZE(busy_syncing)
         KV_SERIALIZE(version)
@@ -1319,21 +1314,19 @@ namespace cryptonote
     std::string host;
     uint32_t ip;
     uint16_t port;
-    uint16_t rpc_port;
-    uint32_t rpc_credits_per_hash;
     uint64_t last_seen;
     uint32_t pruning_seed;
 
     peer() = default;
 
-    peer(uint64_t id, const std::string &host, uint64_t last_seen, uint32_t pruning_seed, uint16_t rpc_port, uint32_t rpc_credits_per_hash)
-      : id(id), host(host), ip(0), port(0), rpc_port(rpc_port), rpc_credits_per_hash(rpc_credits_per_hash), last_seen(last_seen), pruning_seed(pruning_seed)
+    peer(uint64_t id, const std::string &host, uint64_t last_seen, uint32_t pruning_seed)
+      : id(id), host(host), ip(0), port(0), last_seen(last_seen), pruning_seed(pruning_seed)
     {}
-    peer(uint64_t id, const std::string &host, uint16_t port, uint64_t last_seen, uint32_t pruning_seed, uint16_t rpc_port, uint32_t rpc_credits_per_hash)
-      : id(id), host(host), ip(0), port(port), rpc_port(rpc_port), rpc_credits_per_hash(rpc_credits_per_hash), last_seen(last_seen), pruning_seed(pruning_seed)
+    peer(uint64_t id, const std::string &host, uint16_t port, uint64_t last_seen, uint32_t pruning_seed)
+      : id(id), host(host), ip(0), port(port), last_seen(last_seen), pruning_seed(pruning_seed)
     {}
-    peer(uint64_t id, uint32_t ip, uint16_t port, uint64_t last_seen, uint32_t pruning_seed, uint16_t rpc_port, uint32_t rpc_credits_per_hash)
-      : id(id), host(epee::string_tools::get_ip_string_from_int32(ip)), ip(ip), port(port), rpc_port(rpc_port), rpc_credits_per_hash(rpc_credits_per_hash), last_seen(last_seen), pruning_seed(pruning_seed)
+    peer(uint64_t id, uint32_t ip, uint16_t port, uint64_t last_seen, uint32_t pruning_seed)
+      : id(id), host(epee::string_tools::get_ip_string_from_int32(ip)), ip(ip), port(port), last_seen(last_seen), pruning_seed(pruning_seed)
     {}
 
     BEGIN_KV_SERIALIZE_MAP()
@@ -1341,8 +1334,6 @@ namespace cryptonote
       KV_SERIALIZE(host)
       KV_SERIALIZE(ip)
       KV_SERIALIZE(port)
-      KV_SERIALIZE_OPT(rpc_port, (uint16_t)0)
-      KV_SERIALIZE_OPT(rpc_credits_per_hash, (uint32_t)0)
       KV_SERIALIZE(last_seen)
       KV_SERIALIZE_OPT(pruning_seed, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
@@ -1372,58 +1363,6 @@ namespace cryptonote
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(white_list)
         KV_SERIALIZE(gray_list)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct public_node
-  {
-    std::string host;
-    uint64_t last_seen;
-    uint16_t rpc_port;
-    uint32_t rpc_credits_per_hash;
-
-    public_node(): last_seen(0), rpc_port(0), rpc_credits_per_hash(0) {}
-
-    public_node(const peer &peer)
-      : host(peer.host), last_seen(peer.last_seen), rpc_port(peer.rpc_port), rpc_credits_per_hash(peer.rpc_credits_per_hash)
-    {}
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(host)
-      KV_SERIALIZE(last_seen)
-      KV_SERIALIZE(rpc_port)
-      KV_SERIALIZE(rpc_credits_per_hash)
-    END_KV_SERIALIZE_MAP()
-  };
-
-  struct COMMAND_RPC_GET_PUBLIC_NODES
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool gray;
-      bool white;
-      bool include_blocked;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(gray, false)
-        KV_SERIALIZE_OPT(white, true)
-        KV_SERIALIZE_OPT(include_blocked, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<public_node> gray;
-      std::vector<public_node> white;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(gray)
-        KV_SERIALIZE(white)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;
@@ -1759,35 +1698,6 @@ namespace cryptonote
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(headers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_SET_BOOTSTRAP_DAEMON
-  {
-    struct request_t
-    {
-      std::string address;
-      std::string username;
-      std::string password;
-      std::string proxy;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(address)
-        KV_SERIALIZE(username)
-        KV_SERIALIZE(password)
-        KV_SERIALIZE(proxy)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string status;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(status)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

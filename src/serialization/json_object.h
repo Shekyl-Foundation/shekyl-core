@@ -223,12 +223,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_to_key& txin);
 
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_leaf_bytes& leaf);
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes& leaf);
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_segment_path_opening& path);
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_path_opening& path);
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_credit_response& txin);
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_holdings_descriptor& holdings);

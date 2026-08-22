@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
-    OutputIdentity, SegmentId, SegmentPin, ServingReader, TargetKind,
+    OutputIdentity, SegmentId, SegmentPin, ServedFrameHeader, ServingReader, TargetKind,
+    LEAF_BYTES,
 };
 use shekyl_p_serve::{PServeEndpoint, ShardProvider, StoreShardProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -93,14 +94,31 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         .expect("bind endpoint");
 
     let response = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-    let body = body_of(&response);
-    assert_eq!(body.len(), leaves_per_segment() * 128, "whole-shard read");
+    let mut body = body_of(&response);
 
-    // The witness check: chunk the fetched bytes back into leaves,
+    // The witness's first act is to read the frame (`RF-D4`): it says how
+    // many leaves the response carries and how many bytes follow them that
+    // are *not* part of the `R_k` input. This test is the nearest thing to
+    // a fetcher that exists, so it reads the format the way one will —
+    // through `ServedFrameHeader::read`, not by assuming the body starts at
+    // byte zero.
+    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
+    assert_eq!(frame.leaf_count(), leaves_per_segment() as u64);
+    assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
+    assert_eq!(
+        body.len() as u64,
+        frame.segment_bytes() + frame.padding_len(),
+        "the frame accounts for every byte after the header"
+    );
+
+    // The witness check: chunk the *segment* bytes back into leaves,
     // recompute the sub-root, compare against the chain-committed record.
-    let leaves: Vec<[u8; 128]> = body
-        .chunks_exact(128)
-        .map(|c| c.try_into().expect("128-byte leaf"))
+    // Padding, when a scheme exists, is excluded here by construction —
+    // the slice is taken at `segment_bytes()`, not at the end of the body.
+    let segment = &body[..usize::try_from(frame.segment_bytes()).expect("segment fits usize")];
+    let leaves: Vec<[u8; LEAF_BYTES]> = segment
+        .chunks_exact(LEAF_BYTES)
+        .map(|c| c.try_into().expect("whole leaf"))
         .collect();
     let recomputed = recompute_segment_r_k(&leaves).expect("recompute R_k");
     let record = store

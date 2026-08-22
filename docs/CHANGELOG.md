@@ -4,6 +4,71 @@
 
 ### Changed
 
+- **`shekyl-wallet-rpc` refuses two listen configurations it used to
+  accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
+  A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
+  spellings) is refused at startup: a wildcard bind is a bind to interfaces
+  that do not exist yet — the VPN that comes up tomorrow, a hotspot, a
+  container bridge — so it is consent on behalf of the operator's future
+  self, which is why it is a refusal rather than the daemon's one-time
+  `--confirm-external-bind`. And a non-loopback bind with authentication
+  disabled is refused: there is no deployment in which an unauthenticated
+  wallet RPC that the network can reach is acceptable. Both rules live in
+  one `validate_listen`, consulted by both bind paths (`run_server` and
+  `spawn_in_process_with`), and the tests prove the wiring at each. Loopback
+  with auth disabled and the Unix socket are unchanged. `--rpc-login` must
+  be `NAME:PASSWORD` with both halves non-empty: `:` used to yield a blank
+  Basic credential that the listener counted as authentication (`Basic Og==`
+  satisfied it), and a value without `:` used to yield a username with an
+  empty password; both are now refused by name at the parser, and the
+  credential type (`BasicCredential`) cannot be constructed blank, so the
+  bind seam has nothing to re-inspect. `--rpc-login` together with
+  `--disable-rpc-login` is refused as a contradiction rather than resolved
+  by precedence; `--rpc-login=` is a given (and refused) value, not an
+  omission. Off loopback, Basic over cleartext is permitted until RT-W4
+  and logged as a warning naming what it costs (RT-3). The listener now
+  accepts `Content-Type: application/json` only (415 otherwise): a browser
+  can send a cross-origin `text/plain` POST to loopback with no preflight,
+  and default-deny CORS hides only the response — so this gate, not the
+  credential, is what keeps a web page from driving the auth-less loopback
+  listener. This is slice RT-W1
+  of the RPC transport posture (RULED 2026-08-21): every RPC leg is
+  operator-to-operator and the adversary is the network path; remote legs
+  become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,
+  external PSK rejected on four hazards with RFC 8446 / 9257 / 9258 anchors
+  read), Tor in addition to TCP under one auth story, and `--public-node`
+  slated for removal — with two probes (RT-P1, RT-P2) pre-registered before
+  they run; a third, RT-P3, was withdrawn when its premise proved false.
+
+  The `shekyl-wallet-rpc` sections of `EXECUTABLES.md` and `USER_GUIDE.md`
+  are rewritten against the Rust binary: they had described the retired C++
+  server (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`, digest
+  auth), none of which exists.
+
+- **`shekyld <command>` reaches the running daemon through the Rust
+  transport.** The control client (`shekyld status`, `exit`,
+  `print_height`, …) dialed the daemon's loopback RPC with epee's
+  `http_simple_client`; it now goes through `shekyl_daemon_ctl_post`
+  (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport` —
+  the same client the wallet dials the daemon with). The C++ side keeps
+  only its request/response structs and their JSON framing
+  (`src/daemon/rpc_client.h`). Scope is exactly the control path's:
+  plaintext loopback, no credentials, no TLS — the daemon registers
+  neither `--rpc-login` nor `--rpc-ssl*`, and the login/TLS parameters
+  that were threaded through `t_command_server` →
+  `t_command_parser_executor` → `t_rpc_command_executor` only to be
+  passed as empty are gone with the client they fed. A failed request
+  now names its cause (`connection error (… Connection refused …)`)
+  instead of "Couldn't connect to daemon". No operator-visible change
+  on the happy path.
+- **`shekyl-rpc-transport` builds no TLS layer for a plaintext
+  endpoint.** Every endpoint used to be wrapped in a native-roots TLS
+  connector, so a host with no root store (a minimal image, a freshly
+  provisioned device) could not construct a client for a plaintext
+  `http://` daemon at all. An `http://` endpoint now gets a bare
+  connector with `enforce_http(true)`; only `https://` loads roots. A
+  plaintext client refuses an `https://` request URI before the connector
+  (direct and SOCKS arms share the check).
 - **The block-reward weight penalty moved to Rust; `get_block_reward` is
   now a marshaling shim.** It was the last economics arithmetic C++
   performed itself — `mul128` plus two `div128_64` on an amount — while
@@ -28,6 +93,13 @@
 
 ### Fixed
 
+- **`shekyld <command>` exits `1` when the request failed.** A recognized
+  command whose RPC could not be completed — daemon not running, connection
+  refused, a JSON-RPC error, a non-OK status — printed the failure and then
+  exited `0`, indistinguishable to a script or service manager from
+  success (`shekyld exit` against a dead daemon "succeeded"). The control
+  client now records a failed request and the process exit status reports
+  it; `0` means the daemon answered.
 - **The block-reward supply-headroom cap underflowed past full emission.**
   `get_block_reward`'s 6-argument overload capped a block's reward at
   `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once
@@ -129,6 +201,59 @@
   this file built staticlibs only, because an archive is never linked.
 
 ### Removed
+
+- **epee's HTTP client is deleted.** `http_client.h` / `http_client_base.h`
+  / `abstract_http_client`, digest auth (`http_auth.{h,cpp}`, both the
+  client and the server halves), `net_helper` (the blocking asio
+  connector), the `invoke_http_*` templates (`http_abstract_invoke.h`,
+  `http_server_handlers_map2.h`), and the HTTP server request parser
+  (`http_server_impl_base.h`, `http_protocol_handler.{h,inl}`) that had no
+  production includer since the listener deletion and was kept compiling
+  by its own unit test. Its last two production consumers moved off it in
+  the preceding changes (the `shekyld <command>` control client onto the
+  Rust transport; the bootstrap forward deleted). With the listener
+  already gone, epee has no HTTP surface left; the `http-client` fuzz
+  target and the `HTTP_*Auth` / `http_server` unit tests go with the code
+  they exercised. `net_ssl` stays — the P2P TCP server still links it.
+
+- **The bootstrap-daemon forward is gone.** `--bootstrap-daemon-address`
+  / `-login` / `-proxy`, the `set_bootstrap_daemon` RPC and console
+  command, and the forward that — while the local node was more than ten
+  blocks behind — re-issued a wallet's queries (`/getblocks.bin` from its
+  restore height, `/is_key_image_spent`, `/gettransactions`, …) to a
+  third-party node, in `auto` mode one the daemon picked from peer
+  gossip. It inverted Shekyl's posture (own node by default; a remote is
+  the *wallet's* explicit, visible choice) by moving the most identifying
+  query pattern to a node the user never chose and flagging it with an
+  `untrusted` field no wallet reads. `get_info` loses
+  `bootstrap_daemon_address`, `height_without_bootstrap` and
+  `was_bootstrap_ever_used`; every response loses the constant-false
+  `untrusted`; `shekyld status` no longer prints a bootstrapping clause.
+  Ruling and rule-21 reopen (wallet-side, explicit, never a daemon
+  forward) in `docs/DAEMON_RPC_RUST.md`. **Operator impact:** a config
+  carrying any `bootstrap-daemon-*` key fails to start with a named
+  migration message (`removed_flags`); point the wallet at a daemon you
+  operate while IBD runs.
+
+- **`--public-node` and `/get_public_nodes` are gone.** shekyld no longer
+  advertises an RPC port over P2P for other people's wallets, and the
+  discovery RPC whose only production consumer was bootstrap-daemon
+  `auto` is deleted. RPC is operator-to-operator: both ends are machines
+  you control; the adversary is the path between them, never the peer.
+  Restricted RPC (`--restricted-rpc`, `--rpc-restricted-bind-port`)
+  remains, for your own wallet on a less-privileged port. Phone-only
+  users have no supported configuration — a deliberate product boundary;
+  rule-21 reopen is a light-client protocol, never restore `--public-node`.
+  **Operator impact:** `--public-node` in a config fails to start with a
+  named migration message. `CORE_RPC_VERSION` 3.22. See
+  `docs/DAEMON_RPC_RUST.md`. With nothing left to set them, `node_server`
+  no longer carries an RPC port / credits-per-hash to advertise (the
+  handshake fields stay on the wire at zero), and the `print_pl publicrpc`
+  console filter — which could only ever list strangers' advertised RPC
+  ports — is gone. The same ruling applies to the RPC readout:
+  `get_peer_list`'s `peer` and `get_connections`' `connection_info` no
+  longer carry `rpc_port` / `rpc_credits_per_hash` (values only a
+  non-conforming peer could supply; rides the same 3.22 bump).
 
 - **The C++ wallet stack is deleted — `wallet2` and everything that
   existed only to serve it** (Phase 5 of the Rust wallet rewrite,

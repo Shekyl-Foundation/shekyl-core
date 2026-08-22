@@ -107,7 +107,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 56 | `net_stats` | N/A | Out of scope | Network stats, daemon concern |
 | 57 | `payment_id` | N/A | Out of scope | Payment IDs deprecated |
 | 58 | `payments` | N/A | Out of scope | Payment ID lookup, deprecated |
-| 59 | `public_nodes` | N/A | Out of scope | Public node discovery, daemon concern |
+| 59 | `public_nodes` | N/A | Deleted | Daemon `/get_public_nodes` removed (operator-to-operator RPC; `docs/DAEMON_RPC_RUST.md`) |
 | 60 | `rescan_spent` | N/A | Out of scope | Spent output rescan; folds into the row-29 rescan surface when it lands |
 | 61 | `rpc_payment_info` | N/A | Out of scope | RPC payment, Monero feature removed |
 | 62 | `save_bc` | N/A | Out of scope | Blockchain save, daemon concern |

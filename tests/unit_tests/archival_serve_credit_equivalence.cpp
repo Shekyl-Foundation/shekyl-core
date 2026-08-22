@@ -113,6 +113,8 @@ struct Gate2Substrate {
   std::string seal_hash_hex;
   std::string bond_pubkey_hex;
   std::string leaf_scalars_hex;
+  std::string pruned_hex;      // RF-D1: this vin's pruned record
+  std::string segment_rk_hex;  // verifier-derived R_k, recorded by the fixture
   uint64_t shard_id = 0;
   uint64_t settlement_epoch = 0;
   uint64_t segment_leaf_count = 0;
@@ -135,6 +137,8 @@ Gate2Substrate load_gate2_substrate()
   s.seal_hash_hex = i["block_hash_at_seal_hex"].GetString();
   s.bond_pubkey_hex = i["bond_hybrid_pubkey_hex"].GetString();
   s.leaf_scalars_hex = i["leaf_layer_scalars_hex"].GetString();
+  s.pruned_hex = i["pruned_hex"].GetString();
+  s.segment_rk_hex = i["segment_subroot_rk_hex"].GetString();
   s.shard_id = i["shard_id"].GetUint64();
   s.settlement_epoch = i["settlement_epoch"].GetUint64();
   s.segment_leaf_count = i["segment_leaf_count"].GetUint64();
@@ -330,18 +334,24 @@ struct BlockchainAndPool
 #endif
 };
 
+// RF-D1 / rule 40: the fixture's `wire_hex` IS the vin's opaque
+// `canonical_bytes` (the Rust codec's encoding, tag included); C++ wraps it,
+// it does not parse it.
 txin_archival_serve_credit_response load_serve_credit_vin(const std::string& wire_hex)
 {
-  const std::vector<uint8_t> wire = bytes_from_hex(wire_hex);
-  txin_v vin;
-  binary_archive<false> iar({wire.data(), wire.size()});
-  if (!::do_serialize(iar, vin)
-      || !std::holds_alternative<txin_archival_serve_credit_response>(vin))
-  {
-    throw std::runtime_error("failed to deserialize serve-credit vin");
-  }
-  return std::get<txin_archival_serve_credit_response>(vin);
+  txin_archival_serve_credit_response resp{};
+  resp.canonical_bytes = bytes_from_hex(wire_hex);
+  if (resp.canonical_bytes.size() < 2 || resp.canonical_bytes[0] != TXIN_ARCHIVAL_SERVE_CREDIT_WIRE_TAG)
+    throw std::runtime_error("fixture wire_hex is not a serve-credit blob");
+  return resp;
 }
+
+// Byte offset of the settlement-epoch varint inside the kept blob, valid while
+// `shard_id` encodes as ONE varint byte (the fixture's does: 42): tag(1) +
+// p_id(32) + shard(1). A test that needs a different epoch patches this byte
+// rather than re-encoding -- C++ has no encoder for the Rust layout by design,
+// and a one-byte patch under a pinned fixture is the honest test-only seam.
+constexpr size_t KEPT_BLOB_EPOCH_OFFSET = 1 + 32 + 1;
 
 /// The gate's own h_fire derivation from the fixture operands — same FFI chain
 /// the C++ gate calls (WS-1 h_fire symmetry).
@@ -365,6 +375,7 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   const rapidjson::Value& overrides)
 {
   txin_archival_serve_credit_response resp = load_serve_credit_vin(s.wire_hex);
+  std::vector<uint8_t> pruned = bytes_from_hex(s.pruned_hex);
   const crypto::hash p_id = hash_from_hex(s.p_id_hex);
   const crypto::hash seal_hash = hash_from_hex(s.seal_hash_hex);
   const uint64_t h_fire = derived_fire_height(s);
@@ -375,36 +386,48 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   bool seed_segment = true;
   bool seed_leaves = true;
   bool seed_seal = true;
+  bool zero_registry_count = false;
   std::vector<shekyl::db::ArchivalBondValue::BadInterval> bad_intervals;
 
   auto db = std::make_unique<EquivalenceTestDB>();
 
   if (cpp_setup == "baseline" || cpp_setup == "deadline_boundary"
-      || cpp_setup == "past_deadline" || cpp_setup == "epoch_at_join"
-      || cpp_setup == "leaf_index_oob")
+      || cpp_setup == "past_deadline" || cpp_setup == "epoch_at_join")
   {
     // Numeric overrides below carry the whole variation.
   }
+  // The structural-bound vectors now live in the PRUNED record (RF-D1), and
+  // the bounds are the Rust parser's: an over-bound record fails the FFI
+  // verify's parse. C++ has no encoder for the layout by design, so each case
+  // is the minimal byte prefix that trips the bound before anything else is
+  // read -- the parser rejects a layer count or width the moment it reads it.
+  //   record := c1_layer_count varint ‖ (width varint ‖ scalars)* ‖ c2 ... ‖ ml_dsa
   else if (cpp_setup == "inflate_c1_layers")
   {
-    resp.path.c1_layers.assign(config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND + 1, {});
+    pruned = {static_cast<uint8_t>(config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND + 1)};
   }
   else if (cpp_setup == "fat_c1_branch")
   {
-    resp.path.c1_layers.assign(1,
-      std::vector<crypto::hash>(config::ARCHIVAL_MAX_BRANCH_SCALARS + 1));
+    pruned = {1, 0x81, 0x02}; // one c1 layer, width varint 257
   }
   else if (cpp_setup == "fat_c2_branch")
   {
-    resp.path.c2_layers.assign(1,
-      std::vector<crypto::hash>(config::ARCHIVAL_MAX_BRANCH_SCALARS + 1));
+    pruned = {0, 1, 0x81, 0x02}; // no c1 layers; one c2 layer, width 257
   }
   else if (cpp_setup == "fat_c1_and_c2_branch")
   {
-    resp.path.c1_layers.assign(1,
-      std::vector<crypto::hash>(config::ARCHIVAL_MAX_BRANCH_SCALARS + 1));
-    resp.path.c2_layers.assign(1,
-      std::vector<crypto::hash>(config::ARCHIVAL_MAX_BRANCH_SCALARS + 1));
+    pruned = {1, 0x81, 0x02}; // c1 trips first; c2 never reached
+  }
+  else if (cpp_setup == "zero_registry_count")
+  {
+    // RF-D6: the index is derived from the registry's geometry; a zero count
+    // makes the derivation refuse (B-17-zero-geometry).
+    zero_registry_count = true;
+  }
+  else if (cpp_setup == "empty_pruned_record")
+  {
+    // RF-D1: the one size check C++ keeps on the pruned record (B-00b).
+    pruned.clear();
   }
   else if (cpp_setup == "seed_credit_bit")
   {
@@ -441,9 +464,11 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   }
   else if (cpp_setup == "corrupt_signature")
   {
-    if (resp.hybrid_signature.empty())
-      throw std::runtime_error("fixture wire carries no signature to corrupt");
-    resp.hybrid_signature[0] ^= 0x01;
+    // The Ed25519 leg is the kept blob's trailing 64 bytes (RF-D2); one
+    // flipped bit there must fail the hybrid verify.
+    if (resp.canonical_bytes.size() < 64)
+      throw std::runtime_error("fixture wire is too short to carry the Ed25519 leg");
+    resp.canonical_bytes.back() ^= 0x01;
   }
   else
   {
@@ -455,11 +480,19 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   if (overrides.HasMember("current_height") && overrides["current_height"].IsUint64())
     current_height = overrides["current_height"].GetUint64();
   if (overrides.HasMember("settlement_epoch") && overrides["settlement_epoch"].IsUint64())
-    resp.settlement_epoch = overrides["settlement_epoch"].GetUint64();
-  if (overrides.HasMember("leaf_index_in_segment")
-      && overrides["leaf_index_in_segment"].IsUint64())
-    resp.leaf_index_in_segment =
-      static_cast<uint32_t>(overrides["leaf_index_in_segment"].GetUint64());
+  {
+    // Byte-patch the epoch varint (see KEPT_BLOB_EPOCH_OFFSET); fixture
+    // overrides stay below 0x80 so the varint stays one byte.
+    const uint64_t epoch_override = overrides["settlement_epoch"].GetUint64();
+    if (epoch_override >= 0x80)
+      throw std::runtime_error("settlement_epoch override must fit one varint byte");
+    resp.canonical_bytes.at(KEPT_BLOB_EPOCH_OFFSET) = static_cast<uint8_t>(epoch_override);
+  }
+  // `leaf_index_in_segment` is no longer an override: the index is DERIVED
+  // (RF-D6) from (P, shard, E, segment_leaf_count) and cannot be supplied
+  // from the wire, so the `leaf_index_oob` vector was retired on both legs.
+  if (overrides.HasMember("leaf_index_in_segment"))
+    throw std::runtime_error("leaf_index_in_segment override is not representable post-RF-D6");
 
   // Seed the substrate (gate-2 shape). Leaf placement always uses the
   // ORIGINAL challenged index — post-seed response mutations must not move
@@ -478,8 +511,10 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   {
     shekyl::db::ArchivalShardSegmentValue segment{};
     segment.freeze_height = s.freeze_height;
-    segment.segment_leaf_count = s.segment_leaf_count;
-    memcpy(segment.segment_subroot_rk.data(), resp.segment_subroot_rk.data, 32);
+    segment.segment_leaf_count = zero_registry_count ? 0 : s.segment_leaf_count;
+    // RF-D6: R_k is the registry's; the fixture records the verifier's value.
+    const crypto::hash fixture_rk = hash_from_hex(s.segment_rk_hex);
+    memcpy(segment.segment_subroot_rk.data(), fixture_rk.data, 32);
     db->put_segment(s.shard_id, std::move(segment));
   }
   if (seed_leaves)
@@ -508,7 +543,7 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
     throw std::runtime_error("Blockchain::init failed");
 
-  return bc->check_archival_serve_credit_input(resp, current_height);
+  return bc->check_archival_serve_credit_input(resp, pruned, current_height);
 }
 
 } // namespace
@@ -536,10 +571,12 @@ TEST(serve_credit_equivalence, gate_vectors_live_cpp_verdict)
   // serializes the response itself, so the first byte is always the variant
   // tag). Enumerated here per §5 — recorded, not silently dropped; the Rust
   // mirror leg asserts these branches.
+  // Rust-only vectors (cpp_reachable=false), enumerated so a new one cannot
+  // slip in unreviewed. B-19..B-21 (typed-vin round-trip and tag pin) were
+  // RETIRED with the typed vin (RF-D1); B-00 is the codec-parse step, which
+  // C++ cannot drive without a varint-overflow blob.
   const std::set<std::string> known_unreachable = {
-    "B-19-serialize-fail",
-    "B-20-wrong-tag",
-    "B-21-empty-wire",
+    "B-00-vin-unparseable",
   };
 
   size_t driven = 0;

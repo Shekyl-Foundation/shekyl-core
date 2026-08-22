@@ -3,16 +3,20 @@
 // All rights reserved.
 
 /// @file shekyl_ffi.h
-/// @brief C declarations for the Rust shekyl-ffi crate (libshekyl_ffi.a).
+/// @brief C declarations for the Rust FFI surface.
 ///
-/// This header is the sole FFI boundary between C++ and Rust in the Shekyl
-/// codebase. Every function here has a corresponding `#[no_mangle] pub extern "C"`
-/// in `rust/shekyl-ffi/src/lib.rs`.
+/// This header is the C ABI between C++ and Rust. Most functions are
+/// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
+/// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
+/// from `rust/shekyl-daemon-rpc` and reach C++ through the daemon image
+/// (`libshekyl_daemon_image.a`; see `cmake/BuildRust.cmake`).
 ///
 /// ## Linking
 ///
-/// Link against `libshekyl_ffi.a` (static archive produced by `cargo build`).
-/// The CMake integration is in `cmake/BuildRust.cmake`.
+/// Wallet/tool binaries link `libshekyl_ffi.a`. `shekyld` and daemon
+/// unit tests link `libshekyl_daemon_image.a` (shekyl-ffi +
+/// shekyl-daemon-rpc, one `tracing-core` dispatcher). Never link both
+/// archives on one line.
 ///
 /// ## Memory model
 ///
@@ -1363,6 +1367,47 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
+// ---------------------------------------------------------------------------
+// shekyld control client (`shekyld <command>` → running daemon), the outbound
+// half of the daemon's HTTP surface. Plaintext loopback only — the daemon
+// registers neither --rpc-login nor --rpc-ssl* (docs/DAEMON_RPC_RUST.md).
+// Rust: shekyl-daemon-rpc/src/ctl_client.rs.
+// ---------------------------------------------------------------------------
+
+/// Request completed; the out pair holds the response body.
+#define SHEKYL_DAEMON_CTL_OK             0
+/// A required pointer was null, or a C string was not UTF-8.
+#define SHEKYL_DAEMON_CTL_ERR_NULL_PTR  -1
+/// `address` did not form a dialable http://host:port endpoint.
+#define SHEKYL_DAEMON_CTL_ERR_ENDPOINT  -2
+/// Connect, send, receive, or timeout failure; the out pair holds the reason.
+#define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
+/// The runtime could not be started, or the caller is already inside one.
+#define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
+
+/// POST `body` to `http://<address>/<route>` and return the response body.
+/// address: "host:port" of the daemon RPC listener (no scheme).
+/// route: the path, leading '/' optional ("/json_rpc", "/getinfo", …); the
+///   content type follows the route (".bin" → binary, otherwise JSON).
+/// body / body_len: request body; body may be NULL iff body_len == 0.
+/// timeout_secs: per-request bound, connect through the last body byte.
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body; on any
+///   error that can write (every path except a NULL out_ptr/out_len) the
+///   UTF-8 reason. Always release with shekyl_daemon_ctl_free (a NULL/0
+///   pair is a no-op there).
+/// Returns one of the SHEKYL_DAEMON_CTL_* codes.
+int32_t shekyl_daemon_ctl_post(
+    const char* address,
+    const char* route,
+    const uint8_t* body,
+    size_t body_len,
+    uint64_t timeout_secs,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
+/// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
+void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
+
 
 // ---------------------------------------------------------------------------
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
@@ -1387,8 +1432,8 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW 3
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING 4
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH  5
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX        6
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK       7
+/* 6 (ERR_LEAF_INDEX) RETIRED by RF-D6: the index is derived, not transported. Not reused. */
+/* 7 (ERR_REGISTRY_RK) RETIRED by RF-D6: R_k is not on the wire. Not reused. */
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED  8
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE   9
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY       10
@@ -1438,10 +1483,34 @@ uint64_t shekyl_archival_challenge_fire_height(
     uint64_t shard_id,
     uint64_t settlement_epoch);
 
-/// `vin_payload` is the vin body after the `0x04` type tag.
+/// Extract `(P, shard, E)` from a serve-credit vin's opaque `canonical_bytes`
+/// (tag byte INCLUDED). The Rust codec is the only parser of those bytes
+/// (RF-D1 / rule 40): C++ indexes by these three fields and reads nothing
+/// else. Returns SHEKYL_ARCHIVAL_VERIFY_OK or a wire error code. Empty
+/// length is a wire failure, not ERR_NULL_PTR.
+uint8_t shekyl_archival_serve_credit_extract(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint8_t* out_p_canonical_id,
+    uint64_t* out_shard_id,
+    uint64_t* out_settlement_epoch);
+
+/// The verifier-derived challenge leaf index (RF-D6: never on the wire).
+uint8_t shekyl_archival_challenge_leaf_index(
+    const uint8_t* p_canonical_id,
+    uint64_t shard_id,
+    uint64_t settlement_epoch,
+    uint64_t segment_leaf_count,
+    uint32_t* out_leaf_index);
+
+/// Verify one pass record: the vin's `canonical_bytes` (tag byte INCLUDED)
+/// plus this vin's slice of the prunable region's serve-credit records
+/// (RF-D1: one per serve-credit vin, in vin order).
 uint8_t shekyl_archival_verify_serve_credit_vin(
     const uint8_t* vin_payload_ptr,
     size_t vin_payload_len,
+    const uint8_t* pruned_ptr,
+    size_t pruned_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
 // ---------------------------------------------------------------------------
@@ -1543,7 +1612,7 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
     uint64_t bond_debit);
 
 // General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
-// shape for verRctSemanticsSimple / verRctSemanticsFeeOnly. Canonical prime-order
+// shape for verRctSemanticsSimple / verCtSemanticsFeeOnly. Canonical prime-order
 // points only; INVALID_POINT is checked before the sum, so a torsion-laden input
 // returns INVALID_POINT (never SUM_MISMATCH).
 #define SHEKYL_CT_BALANCE_OK                  0

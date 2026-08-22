@@ -40,9 +40,10 @@ fn tor_binary() -> std::path::PathBuf {
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
 async fn two_personas_publish_and_serve_over_real_rendezvous() {
     // A payload with structure, so a truncated or substituted response fails the
-    // byte comparison rather than passing a length check.
+    // byte comparison rather than passing a length check. 64 000 B is exactly
+    // 500 leaves: the served frame requires a whole number of them, and the
+    // apparatus derives the expected body length (frame + leaves) itself.
     let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
-    let len = payload.len();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let app = Apparatus::bring_up(
@@ -69,7 +70,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
         "distinct slots must publish distinct onions"
     );
 
-    app.await_reachable(len)
+    app.await_reachable()
         .await
         .expect("at least one persona becomes reachable");
 
@@ -77,7 +78,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
     // intact. Distinct client ids so the two fetches ride separate circuits —
     // the client-side isolation SP-T2 proved, exercised here on the serving axis.
     for (index, id_seq) in [(0usize, 900_001u64), (1usize, 900_002u64)] {
-        let obs = app.timed_fetch(&cold_client_id(id_seq), index, len).await;
+        let obs = app.timed_fetch(&cold_client_id(id_seq), index).await;
         assert!(
             obs.is_success(),
             "persona {index} must serve its shard over the rendezvous: {obs:?}"
@@ -87,7 +88,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
     // A warm fetch (reused client id) must also succeed — this is the arm the
     // measurement calls optimistic, and a failure here would mean the warm arm
     // measures nothing.
-    let warm = app.timed_fetch(&warm_client_id(), 0, len).await;
+    let warm = app.timed_fetch(&warm_client_id(), 0).await;
     assert!(
         warm.is_success(),
         "warm-circuit fetch must succeed: {warm:?}"

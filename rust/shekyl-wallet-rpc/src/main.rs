@@ -3,23 +3,28 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Standalone `shekyl-wallet-rpc` binary (Phase 4 Engine-native server).
-//!
-//! Distinct from the C++ `wallet_rpc_server` binary still built as
-//! `shekyl-wallet-rpc` — until Phase 5 deletion, operators must not confuse
-//! the two. This binary is the Shekyl-native contract in
-//! `docs/api/wallet_rpc.yaml`. (The third name in this space, the
-//! transitional `shekyl-engine-rpc` wallet2-FFI bridge, is deleted.)
+//! Standalone `shekyl-wallet-rpc` binary: the Engine-native wallet JSON-RPC
+//! server, serving the contract in `docs/api/wallet_rpc.yaml`. It is the
+//! only binary of that name — the C++ `wallet_rpc_server` it replaced was
+//! deleted with `src/wallet/` (`a9dc5e4db`), and the transitional
+//! `shekyl-engine-rpc` wallet2-FFI bridge before it. The flag reference is
+//! `docs/EXECUTABLES.md` §3; the listen posture is
+//! `docs/design/RPC_TRANSPORT_POSTURE.md`.
 
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use clap::builder::TypedValueParser as _;
 use clap::Parser;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::{run_server, AuthConfig, ListenAddr, ServerConfig};
+use zeroize::Zeroizing;
 
-#[derive(Parser, Debug)]
+/// No `Debug`: `rpc_login` is a secret (rule 35), and a derived `Debug` on
+/// the struct that holds it is exactly the render path the credential
+/// types below refuse to offer.
+#[derive(Parser)]
 #[command(
     name = "shekyl-wallet-rpc",
     about = "Shekyl-native wallet JSON-RPC server (Phase 4)"
@@ -29,18 +34,36 @@ struct Cli {
     #[arg(long = "wallet-dir", default_value = ".")]
     wallet_dir: PathBuf,
 
-    /// Listen address: `HOST:PORT` (TCP) or `uds:///path/to.sock` (Unix only;
-    /// refused on Windows, where the wallet is self-hosted by shekyl-cli).
-    /// Default is loopback TCP; UDS is the recommended local deployment.
+    /// Listen address: a numeric `IP:PORT` (TCP — `127.0.0.1:29500`,
+    /// `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock`
+    /// (Unix only; refused on Windows, where the wallet is self-hosted by
+    /// shekyl-cli). Default is loopback TCP; UDS is the recommended local
+    /// deployment. Wildcard addresses (0.0.0.0, ::, [::]) are refused — bind
+    /// a specific IP address — and any non-loopback address requires
+    /// --rpc-login.
     #[arg(long = "rpc-bind", default_value = "127.0.0.1:29500")]
     rpc_bind: String,
 
-    /// HTTP basic auth as `user:pass`. Empty / omitted disables auth
-    /// (appropriate for UDS + filesystem permissions).
-    #[arg(long = "rpc-login", default_value = "")]
-    rpc_login: String,
+    /// HTTP basic auth as `NAME:PASSWORD`, both halves non-empty (anything
+    /// else given — an empty value included — is refused by name). Omitted
+    /// disables auth, which is accepted only on loopback or a UDS socket
+    /// (filesystem permissions carry the authorization there); a
+    /// non-loopback --rpc-bind refuses to start without it. Contradicts
+    /// --disable-rpc-login: pass one.
+    #[arg(
+        long = "rpc-login",
+        // No default: presence is the signal, so `--rpc-login=` is a given
+        // (and refused) value rather than an omission. Parsed straight into
+        // a wiping buffer (rule 35): the `String` clap produces is moved,
+        // not copied, into the `Zeroizing`. argv itself and clap's
+        // transient copies are the OS's and clap's — the residual.
+        value_parser = clap::builder::StringValueParser::new().map(Zeroizing::new),
+    )]
+    rpc_login: Option<Zeroizing<String>>,
 
-    /// Disable RPC login even if `--rpc-login` is set.
+    /// Run without authentication. Accepted only on a loopback --rpc-bind
+    /// or a UDS socket; refused off loopback, and refused together with
+    /// --rpc-login (the pair is a contradiction, not a precedence).
     #[arg(long = "disable-rpc-login", default_value_t = false)]
     disable_rpc_login: bool,
 
@@ -95,11 +118,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _guard = shekyl_logging::init(config)?;
 
     let listen = ListenAddr::parse(&cli.rpc_bind)?;
-    let auth = if cli.disable_rpc_login || cli.rpc_login.is_empty() {
-        AuthConfig::Disabled
-    } else {
-        AuthConfig::from_rpc_login(Some(&cli.rpc_login))
-    };
+    let auth = AuthConfig::from_cli(
+        cli.rpc_login.as_deref().map(String::as_str),
+        cli.disable_rpc_login,
+    )?;
+    // The credential now lives only in `auth`; wipe the flag's copy here
+    // rather than at process exit.
+    drop(cli.rpc_login);
 
     let network = Network::from_str(&cli.network)
         .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;

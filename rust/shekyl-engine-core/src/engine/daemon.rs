@@ -76,10 +76,8 @@ use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
 /// `core_rpc_server::on_get_base_fee_estimate` always takes the
 /// `version >= HF_VERSION_2021_SCALING` branch and always answers with
 /// a four-element `fees` array (`Blockchain::
-/// get_dynamic_base_fee_estimate_2021_scaling` `resize(4)`s it). This
-/// holds for a reply forwarded from a bootstrap daemon too — that
-/// forward reaches another Shekyl daemon, which is subject to the same
-/// rule.
+/// get_dynamic_base_fee_estimate_2021_scaling` `resize(4)`s it). Every
+/// Shekyl daemon is subject to the same rule.
 ///
 /// A pre-2021-scaling daemon answering with a bare scalar `fee` is
 /// therefore a shape that **cannot occur on this chain**; it is

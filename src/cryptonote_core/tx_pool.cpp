@@ -1828,10 +1828,13 @@ namespace cryptonote
       else if (std::holds_alternative<txin_archival_serve_credit_response>(vin))
       {
         const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+        if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+          continue; // unparseable: admission rejects it; no pool key to reserve
         std::string key(1, 'S');
-        key.append(resp.p_canonical_id.data, sizeof(resp.p_canonical_id.data));
-        append_be64(key, resp.shard_id);
-        append_be64(key, resp.settlement_epoch);
+        key.append(p_id.data, sizeof(p_id.data));
+        append_be64(key, shard_id);
+        append_be64(key, settlement_epoch);
         tx_keys.push_back(std::move(key));
       }
     }

@@ -209,7 +209,7 @@ constant. Encode does not consult limits. The Rust crate takes a
 | Caller | objects | fields | strings | C++ source |
 |--------|---------|--------|---------|------------|
 | Levin invoke/notify | 8192 | 16384 | 16384 | `default_levin_limits` (`levin_abstract_invoke2.h`) |
-| HTTP `.bin` RPC | 196608 | 196608 | 196608 | `default_http_bin_limits` = 65536×3 (`http_abstract_invoke.h`) |
+| HTTP `.bin` RPC | 196608 | 196608 | 196608 | Rust `Limits::HTTP_BIN` (`shekyl-portable-storage/src/limits.rs`) — the C++ `default_http_bin_limits` (65536×3) left with `http_abstract_invoke.h` in the epee HTTP client deletion (2026-08-21) |
 | Null limits pointer | `usize::MAX` | `usize::MAX` | `usize::MAX` | `load_from_binary` unrestricted |
 
 - **objects** — nested sections. The root section is not counted.

@@ -224,10 +224,7 @@ Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 the post-2021-scaling regime — confirmed in `cryptonote_config.h`),
 the `fees` vector is **always** populated with the four tiers by
 `get_dynamic_base_fee_estimate_2021_scaling`. The legacy
-single-`fee` branch is dead code on Shekyl from genesis. This also
-holds for a reply forwarded through the bootstrap-daemon path
-(`core_rpc_server.cpp`, `use_bootstrap_daemon_if_necessary`), since
-that forward reaches another Shekyl daemon under the same rule.
+single-`fee` branch is dead code on Shekyl from genesis.
 
 **Wallet-side consequence (2026-08-17, PR #490).** The wallet no
 longer accepts a scalar-only reply. It previously synthesized a tier

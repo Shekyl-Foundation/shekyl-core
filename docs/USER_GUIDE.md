@@ -123,9 +123,9 @@ data-dir=/var/lib/shekyl
 log-file=/var/log/shekyl/shekyld.log
 log-level=0
 prune-blockchain=1
-rpc-bind-ip=0.0.0.0
-confirm-external-bind=1
-restricted-rpc=1
+# RPC defaults to loopback. For your own wallet on another machine you
+# control, bind a view-only second listener (not a public remote node):
+# rpc-restricted-bind-port=11030
 ```
 
 Load a config file with `--config-file /path/to/shekyld.conf`. See
@@ -159,7 +159,8 @@ example.
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
 | `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
+| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
+| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
 
@@ -196,6 +197,13 @@ and `--*-service` flags were removed in V3.1.
 
 When `shekyld` is running in the foreground, you get an interactive console.
 Type `help` to list all commands. The most useful ones, grouped by purpose:
+
+The same commands work from a second shell against a running daemon —
+`shekyld status`, `shekyld exit` — over its local RPC port (pass
+`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
+exit status is `0` when the daemon answered, `1` when the command is unknown
+or the request failed (daemon not running, connection refused, error reply),
+so scripts can check it without parsing the output.
 
 **Status and information**
 
@@ -255,7 +263,6 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 | `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
 | `pop_blocks <n>` | Roll back the last N blocks |
 | `prune_blockchain` | Enable pruning on a non-pruned database |
-| `set_bootstrap_daemon <addr>` | Set or clear a bootstrap daemon for fast-sync |
 
 **Exit**
 
@@ -321,9 +328,13 @@ different daemon:
     --trusted-daemon
 ```
 
-Use `--trusted-daemon` when you control the daemon (your own machine). Use
-`--untrusted-daemon` for remote public nodes -- the wallet will take extra
-precautions to avoid leaking information.
+Use `--trusted-daemon` when you control the daemon (your own machine, or
+another of yours reached over LAN / onion). Shekyl RPC is operator-to-
+operator: there is no recommended configuration in which the wallet talks
+to a daemon someone else controls, and shekyld does not advertise itself
+as a public remote node. `--untrusted-daemon` remains as a refuse-to-trust
+mode if you point the wallet at a daemon anyway; it is not a public-node
+product.
 
 To connect through a SOCKS proxy (e.g. Tor):
 
@@ -768,33 +779,46 @@ For the full technical specification, see
 
 ## Wallet RPC Server (`shekyl-wallet-rpc`)
 
-The wallet RPC server provides programmatic JSON-RPC access to wallet
-functions. Use it for exchange integrations, automated payments, or
-building applications on top of Shekyl.
+`shekyl-wallet-rpc` is the JSON-RPC server behind every Shekyl wallet
+client: `shekyl-cli` hosts one in-process for you over a private local
+endpoint, so most users never start it directly. Run it yourself for
+tooling that speaks JSON-RPC over HTTP, or to serve several wallets from one
+process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
+`docs/EXECUTABLES.md` §3.
 
 ### Launching
 
 ```bash
 ./shekyl-wallet-rpc \
-    --wallet-file /path/to/wallet \
-    --rpc-bind-port 11030 \
+    --wallet-dir /path/to/wallets \
+    --rpc-bind 127.0.0.1:29500 \
     --rpc-login user:password \
-    --daemon-address 127.0.0.1:11029
+    --daemon-address http://127.0.0.1:28581
 ```
 
 ### Key flags
 
 | Flag | Description |
 |------|-------------|
-| `--wallet-file <path>` | Wallet file to open |
-| `--wallet-dir <path>` | Directory for `create_wallet`/`open_wallet` RPC methods |
-| `--rpc-bind-port <port>` | Port to listen on (required) |
-| `--rpc-login <user:pass>` | Require HTTP digest auth (strongly recommended) |
-| `--disable-rpc-login` | Disable auth -- **dangerous**, use only in trusted environments |
-| `--restricted-rpc` | Limit to read-only and transfer operations |
-| `--rpc-ssl <mode>` | Enable SSL (`enabled`, `disabled`, `autodetect`) |
-| `--daemon-address <addr>` | Connect to a specific daemon |
-| `--trusted-daemon` | Enable commands that rely on a trusted daemon (your own node) |
+| `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
+| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
+| `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
+| `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
+| `--daemon-address <url>` | Your node's RPC URL |
+| `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
+| `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
+
+**Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
+`::` binds every interface your machine has *and every one it gains later*
+(a VPN, a hotspot, a container bridge), so the server asks you to name the
+one interface you mean. And it will not serve without authentication on any
+address other than loopback: a wallet RPC the network can reach honours
+every request, spends included. **The network being yours is not what
+provides the security** — the TV, the smart plug and a guest's phone are on
+your home network too. And it answers only requests whose `Content-Type` is
+`application/json` (anything else gets HTTP 415): that is what stops a web
+page in your browser from driving the wallet on `127.0.0.1` — every real
+client sends it anyway.
 
 ### Method categories
 

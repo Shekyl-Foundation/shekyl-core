@@ -116,10 +116,9 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
 async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode, Value) {
     use base64::Engine as _;
     let cred = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
-    let state = test_state(AuthConfig::Basic {
-        username: user.to_owned(),
-        password: pass.to_owned(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new(user, pass).expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
@@ -277,10 +276,9 @@ async fn invalid_id_type_responds_with_null_id() {
 
 #[tokio::test]
 async fn basic_auth_rejects_missing_header() {
-    let state = test_state(AuthConfig::Basic {
-        username: "alice".into(),
-        password: "secret".into(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret").expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
@@ -1050,4 +1048,60 @@ async fn open_during_inflight_close_is_refused_busy() {
     )
     .await;
     assert!(bal.get("error").is_none(), "restore failed: {bal}");
+}
+
+/// The browser boundary: a `text/plain` POST — what a web page can make a
+/// browser send cross-origin with no preflight — and a POST with no
+/// `Content-Type` at all are refused with 415 before the body or a
+/// credential is looked at, authentication enabled or not; the same body
+/// as `application/json` is served. The edit that turns this red is
+/// removing the JSON gate from `build_router`.
+#[tokio::test]
+async fn non_json_content_type_is_refused_before_anything_else() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "get_version"
+    }))
+    .unwrap();
+    let configs = || {
+        [
+            AuthConfig::Disabled,
+            AuthConfig::Basic(
+                shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret")
+                    .expect("valid credential"),
+            ),
+        ]
+    };
+    for auth in configs() {
+        for content_type in [
+            Some("text/plain"),
+            Some("application/x-www-form-urlencoded"),
+            None,
+        ] {
+            let app = build_router(test_state(auth.clone()));
+            let mut req = Request::builder().method("POST").uri("/");
+            if let Some(ct) = content_type {
+                req = req.header("content-type", ct);
+            }
+            let response = app
+                .oneshot(req.body(Body::from(body.clone())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{content_type:?} with {auth:?} must be refused by the JSON gate"
+            );
+        }
+    }
+    // The control: the same request as JSON reaches the handler (the
+    // Disabled config, so the outcome is the method's, not the credential's).
+    let app = build_router(test_state(AuthConfig::Disabled));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header("content-type", "application/json; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

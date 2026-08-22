@@ -106,12 +106,12 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 |------|-------|----------------------|
 | **ASIO / epee networking** | `abstract_tcp_server2.h`, `levin_protocol_handler_async.h` | P2P networking layer; RPC already migrated to Axum |
 | **Multi-index containers** | `net_peerlist.h` | Composite indices (by address, time, id) have no direct std equivalent |
-| **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
+| ~~**Spirit parser**~~ | ~~`http_auth.cpp`~~ | Deleted -- epee digest auth went with the epee HTTP client (2026-08-21); the wallet's digest auth is `shekyl-rpc-transport` |
 | **Multiprecision** | `difficulty.h`, `int-util.cpp` | Consensus-critical 128-bit arithmetic; evaluate `__uint128_t` |
 | **Filesystem (net_ssl)** | `net_ssl.cpp` | epee SSL layer with permissions API coupling |
 | ~~**boost::format (simplewallet)**~~ | ~~`simplewallet.cpp`~~ | Deleted -- simplewallet has been replaced by `shekyl-cli` (Rust) |
 | **boost::split (token_compress)** | `util.cpp` (vercmp, word_wrap) | `token_compress_on` has no direct std equivalent |
-| **boost::regex (network parsers)** | `http_base.cpp`, `http_client.h`, `wallet_rpc_server.cpp` | Parse untrusted network input; edge-case semantics must be verified |
+| **boost::regex (network parsers)** | `http_base.cpp`, `net_parse_helpers.cpp` | Parse untrusted network input; edge-case semantics must be verified (`http_client.h` and `wallet_rpc_server.cpp` are deleted) |
 | **boost::posix_time / date_time** | `connection_context.h`, `block_queue.h`, `net_node.h` | Types cross P2P protocol boundaries; must migrate as a coordinated unit |
 | **boost::thread (attributes)** | `threadpool.h` | `boost::thread::attributes` (stack size) has no std equivalent |
 

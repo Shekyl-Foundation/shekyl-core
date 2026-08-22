@@ -295,11 +295,30 @@ namespace rct {
         // `serialize_rctsig_base` so there is exactly one definition of the
         // bytes.
     };
-    struct rctSigPrunable {
+    struct CtSigPrunable {
         std::vector<BulletproofPlus> bulletproofs_plus;
         keyV pseudoOuts;
         uint8_t curve_trees_tree_depth;
         std::vector<uint8_t> fcmp_pp_proof; // opaque FCMP++ proof blob
+        // RF-D1: the PRUNED half of each serve-credit pass record, one per
+        // serve-credit vin in vin order, each an opaque blob (branch layers +
+        // ML-DSA leg) whose only parser is shekyl-archival-retention::wire.
+        // Inside the prunable region -- never appended after it -- so both
+        // paths of calculate_transaction_prunable_hash see it by construction
+        // (tests/unit_tests/tx_prunable_region_sole_occupant.cpp).
+        std::vector<std::vector<uint8_t>> serve_credit_pruned;
+
+        // The ONE C++ home of the pruned-record transport ceiling -- this is
+        // where it is enforced, so this is where it lives (cryptonote_config
+        // deliberately does not hold a copy). Twin of shekyl-wire's
+        // `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`, a boundary no header can
+        // cross; the literal is pinned on both sides (`== 1053185`). Formula:
+        // 2 kinds × (count varint + 64 layers × (width varint + 256 × 32)) +
+        // ML-DSA-65.
+        static constexpr size_t SERVE_CREDIT_PRUNED_MAX_BYTES =
+          2 * (10 + 64 * (10 + 256 * 32)) + 3309;
+        static_assert(SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185,
+          "twin of shekyl-wire's ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES");
 
         // when changing this function, update cryptonote::get_pruned_transaction_weight
         //
@@ -307,12 +326,15 @@ namespace rct {
         // inputs, NOT vin.size(). An archival bond-post vin carries no
         // pseudo-out (blockchain.cpp / tx_verification_utils.cpp pin
         // `pseudoOuts.size() == num_spend`); for a pure spend the two counts
-        // coincide. Callers compute the spend subset (cryptonote_basic.h
+        // coincide. `serve_credit_inputs` likewise sizes the pruned pass-record
+        // array (RF-D1). Callers compute both subsets (cryptonote_basic.h
         // transaction serializer, tx_pqc_verify.cpp, get_transaction_prunable_hash).
         template<bool W, template <bool> class Archive>
-        bool serialize_rctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t outputs)
+        bool serialize_ctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t serve_credit_inputs, size_t outputs)
         {
           if (inputs >= 0xffffffff)
+            return false;
+          if (serve_credit_inputs >= 0xffffffff)
             return false;
           if (outputs >= 0xffffffff)
             return false;
@@ -372,14 +394,35 @@ namespace rct {
             }
             ar.end_array();
           }
+
+          {
+            // RF-D1: pruned pass records, one per serve-credit vin, each
+            // length-prefixed (C++ transports bytes it does not parse, and
+            // must still hand each vin its own slice). Bounded per record.
+            ar.tag("serve_credit_pruned");
+            ar.begin_array();
+            PREPARE_CUSTOM_VECTOR_SERIALIZATION(serve_credit_inputs, serve_credit_pruned);
+            if (serve_credit_pruned.size() != serve_credit_inputs)
+              return false;
+            for (size_t i = 0; i < serve_credit_inputs; ++i)
+            {
+              FIELDS(serve_credit_pruned[i])
+              if (serve_credit_pruned[i].empty()
+                  || serve_credit_pruned[i].size() > SERVE_CREDIT_PRUNED_MAX_BYTES)
+                return false;
+              if (serve_credit_inputs - i > 1)
+                ar.delimit_array();
+            }
+            ar.end_array();
+          }
           return ar.good();
         }
 
         // No standalone object serializer — see the rctSigBase note above.
-        // `serialize_rctsig_prunable` is the only encoding.
+        // `serialize_ctsig_prunable` is the only encoding.
     };
     struct rctSig: public rctSigBase {
-        rctSigPrunable p;
+        CtSigPrunable p;
 
         // The pseudo-out commitments live in the prunable section for every
         // rct type: CTTypeFcmpPlusPlusPqc carries one per spend input, and

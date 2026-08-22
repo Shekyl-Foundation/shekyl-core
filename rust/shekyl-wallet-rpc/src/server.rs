@@ -36,7 +36,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::auth::{require_basic_auth, AuthConfig};
 use crate::handlers;
@@ -86,14 +86,21 @@ impl std::fmt::Debug for SelfHostedPipe {
 }
 
 impl ListenAddr {
-    /// Parse a listen string: `uds:///path` (Unix) or `host:port` / `ip:port`.
+    /// Parse a listen string: `uds:///path` (Unix) or a numeric `IP:PORT`
+    /// (`127.0.0.1:29500`, `[::1]:29500`). Hostnames are not resolved —
+    /// a listen address names an interface, and resolving one at bind time
+    /// would make the bind depend on a resolver answer — so the refusal
+    /// says so rather than leaving `localhost:29500` to a syntax error.
     pub fn parse(s: &str) -> Result<Self, String> {
         if let Some(path) = s.strip_prefix("uds://") {
             return Self::uds(path);
         }
-        s.parse::<SocketAddr>()
-            .map(Self::Tcp)
-            .map_err(|e| format!("invalid listen address '{s}': {e}"))
+        s.parse::<SocketAddr>().map(Self::Tcp).map_err(|e| {
+            format!(
+                "invalid listen address '{s}': {e}. Use a numeric IP:PORT such as \
+                 127.0.0.1:29500 or [::1]:29500 — hostnames are not resolved"
+            )
+        })
     }
 
     /// The `uds://` form on Unix: a non-empty path.
@@ -116,7 +123,7 @@ impl ListenAddr {
         Err(
             "uds:// listen addresses are not available on Windows: a Unix domain socket has \
              no Windows form. The Windows wallet is self-hosted (run shekyl-cli without \
-             --rpc-url); a standalone shekyl-wallet-rpc listens on HOST:PORT with --rpc-login."
+             --rpc-url); a standalone shekyl-wallet-rpc listens on IP:PORT with --rpc-login."
                 .into(),
         )
     }
@@ -201,20 +208,74 @@ impl AppState {
     }
 }
 
+/// The one body media type the JSON-RPC endpoint accepts.
+///
+/// This is the browser boundary, and it is structural rather than a matter
+/// of authentication. A web page can make a browser send a cross-origin POST
+/// to `127.0.0.1` without any preflight *as long as* the request is "simple"
+/// — `text/plain` or a form type — and default-deny CORS only hides the
+/// **response** from the page; the request still executes. So on the
+/// loopback listener, where RT-2 permits `AuthConfig::Disabled`, a page could
+/// otherwise drive spends through a `no-cors` `text/plain` POST carrying
+/// JSON-RPC. `application/json` is not a simple type: a browser must
+/// preflight it, and the default-deny `CorsLayer` refuses every preflight,
+/// so the request is never sent. Anything else is refused with 415 before
+/// the credential check or the body is looked at. Non-browser clients send
+/// `application/json` anyway (`docs/api/wallet_rpc.yaml`).
+const JSON_MEDIA_TYPE: &str = "application/json";
+
+/// `Content-Type` media type, parameters (`; charset=utf-8`) ignored, case
+/// folded (RFC 9110 §8.3.1).
+fn is_json_media_type(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case(JSON_MEDIA_TYPE))
+}
+
+/// Axum middleware: refuse any request that is not `application/json`.
+async fn require_json_content_type(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let is_json = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(is_json_media_type);
+    if is_json {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "this endpoint accepts only Content-Type: application/json",
+        )
+            .into_response()
+    }
+}
+
 /// Build the axum router (shared by TCP, UDS, the pipe, and in-process tests).
+///
+/// Layer order, outermost first: CORS (default-deny, so every preflight
+/// fails), body limit, the `application/json` gate, then authentication.
+/// A browser-driven request is refused by the gate before a credential is
+/// ever compared; a non-JSON request never reaches the handler.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    let auth = state.auth.clone();
+    let auth = Arc::new(state.auth.clone());
     Router::new()
         .route("/", post(json_rpc_handler))
         .layer(axum::middleware::from_fn_with_state(
             auth,
             require_basic_auth,
         ))
+        .layer(axum::middleware::from_fn(require_json_content_type))
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         // Default-deny CORS. This process will host spend operations; a
         // permissive ACAO on loopback TCP would let a malicious web page
-        // drive-by the wallet. Reopen only for an explicit web-client
-        // deployment (rule 21).
+        // read responses, and — with the JSON gate above — the preflight it
+        // forces is what keeps the page from sending the request at all.
+        // Reopen only for an explicit web-client deployment (rule 21).
         .layer(CorsLayer::new())
         .with_state(state)
 }
@@ -278,10 +339,89 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
         })
 }
 
+/// The local alternative the listen refusals point at, per platform: a
+/// `uds://` socket exists on Unix only, so the hint must not name it
+/// elsewhere. One definition, defined on every target.
+const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
+    " (or a uds:///path socket)"
+} else {
+    ""
+};
+
+/// Refuse a listen configuration that would expose the wallet RPC beyond what
+/// the operator can see or authenticate (`RPC_TRANSPORT_POSTURE.md`
+/// RT-1, RT-2). One function, called on every path that binds, so the two
+/// sites cannot disagree.
+///
+/// - **RT-1:** a wildcard address (`0.0.0.0`, `::`, and their IPv4-mapped
+///   forms, folded by `to_canonical`) is refused outright. A wildcard bind is
+///   a bind to interfaces that do not exist yet — the VPN that comes up
+///   tomorrow, the hotspot, the container bridge — so it is consent on behalf
+///   of the operator's future self, which no one-time confirmation can cover.
+/// - **RT-2:** `AuthConfig::Disabled` on a non-loopback address is refused.
+///   There is no defensible deployment of an unauthenticated wallet RPC that
+///   the network can reach; every request, spends included, would be honoured.
+///
+/// The socket and the pipe carry their authorization in the transport and
+/// pass through; the arms are explicit so a new variant has to decide.
+///
+/// A bind that passes both rules on a non-loopback address is the one
+/// posture RT-3 tolerates only until RT-W4: Basic over cleartext, the
+/// credential in every request. That is logged as a warning at the same
+/// seam, so the operator who chose it is told what it costs.
+fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
+    let addr = match &config.listen {
+        ListenAddr::Tcp(addr) => addr,
+        #[cfg(unix)]
+        ListenAddr::Uds(_) => return Ok(()),
+        #[cfg(windows)]
+        ListenAddr::SelfHostedPipe(_) => return Ok(()),
+    };
+    let ip = addr.ip().to_canonical();
+    if ip.is_unspecified() {
+        return Err(format!(
+            "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
+             bind every interface, including ones that do not exist yet (a VPN that comes up \
+             later, a hotspot, a container bridge). Bind a specific IP address instead: \
+             127.0.0.1 or [::1] for this machine only{LOCAL_ENDPOINT_HINT}, or the address \
+             of the one interface your clients are on (which also requires --rpc-login \
+             NAME:PASSWORD)."
+        )
+        .into());
+    }
+    if ip.is_loopback() {
+        return Ok(());
+    }
+    // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
+    // public fields and its constructor refuses a blank half, so the seam
+    // does not re-inspect it — the guarantee is the type's. The only way
+    // to reach this arm is to have asked for no authentication.
+    if matches!(config.auth, AuthConfig::Disabled) {
+        return Err(format!(
+            "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
+             not set, or --disable-rpc-login given): the address is reachable from the \
+             network and every request, spends included, would be honoured. Bind 127.0.0.1 \
+             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
+        )
+        .into());
+    }
+    // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
+    // lands, a network-reachable bind carries the credential in the clear.
+    warn!(
+        %addr,
+        "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
+         credential travels in every request and any network path between a client \
+         and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
+         you control; the encrypted remote leg is RT-W4."
+    );
+    Ok(())
+}
+
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
 /// process exit). Blocks the calling task.
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
+    validate_listen(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -671,10 +811,12 @@ fn private_config(
 /// Spawn an in-process server with a full [`ServerConfig`] (tests / CLI).
 ///
 /// Honors `config.listen`: UDS sockets are chmodded 0600 after bind; TCP
-/// is served as configured (callers binding auth-less TCP own that risk —
-/// prefer [`spawn_in_process`]).
+/// is served as configured, within [`validate_listen`]'s refusals — auth-less
+/// TCP is accepted on loopback only, and never on a wildcard address (prefer
+/// [`spawn_in_process`]).
 pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
+    validate_listen(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -713,7 +855,7 @@ mod tests {
             network: Network::Stagenet,
             daemon_address: endpoint.address.clone(),
             proxy: endpoint.proxy.clone(),
-            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")),
+            auth: AuthConfig::from_rpc_login("rpcuser:opensesame").expect("login parses"),
             kdf: KdfParams::default(),
         };
 
@@ -734,6 +876,138 @@ mod tests {
         assert!(format!("{endpoint:?}").contains("<redacted>"));
         assert!(format!("{endpoint:?}").contains("127.0.0.1:28581"));
         assert!(format!("{:?}", config.auth).contains("rpcuser"));
+    }
+
+    /// A config with the given listen address and auth; everything else is
+    /// inert for the listen refusals.
+    fn listen_config(listen: &str, auth: AuthConfig) -> ServerConfig {
+        ServerConfig {
+            listen: ListenAddr::parse(listen).expect("listen parses"),
+            wallet_dir: std::path::PathBuf::from("."),
+            network: Network::Stagenet,
+            daemon_address: "http://127.0.0.1:1".into(),
+            proxy: None,
+            auth,
+            kdf: KdfParams::default(),
+        }
+    }
+
+    fn basic() -> AuthConfig {
+        AuthConfig::from_rpc_login("user:pass").expect("login parses")
+    }
+
+    /// RT-1: every wildcard spelling is refused, with auth *enabled* so the
+    /// refusal is provably the wildcard rule and not RT-2.
+    #[test]
+    fn wildcard_binds_are_refused_even_with_auth() {
+        for addr in ["0.0.0.0:29500", "[::]:29500", "[::ffff:0.0.0.0]:29500"] {
+            let err = validate_listen(&listen_config(addr, basic()))
+                .expect_err("wildcard bind must be refused")
+                .to_string();
+            assert!(err.contains("wildcard"), "{addr}: {err}");
+            assert!(
+                err.contains("127.0.0.1"),
+                "{addr}: must say what to do: {err}"
+            );
+        }
+    }
+
+    /// RT-2: an unauthenticated, network-reachable bind is refused — the
+    /// IPv6 and IPv4-mapped spellings included, so the rule cannot be
+    /// sidestepped by notation.
+    #[test]
+    fn unauthenticated_non_loopback_bind_is_refused() {
+        for addr in [
+            "192.0.2.1:29500",
+            "[2001:db8::1]:29500",
+            "[::ffff:192.0.2.1]:29500",
+        ] {
+            let err = validate_listen(&listen_config(addr, AuthConfig::Disabled))
+                .expect_err("auth-less non-loopback bind must be refused")
+                .to_string();
+            assert!(err.contains("without authentication"), "{addr}: {err}");
+            assert!(
+                err.contains("--rpc-login"),
+                "{addr}: must say what to do: {err}"
+            );
+        }
+    }
+
+    /// The complements, so the refusals are seen to be narrow: loopback with
+    /// auth disabled passes (the in-process default's posture), and an
+    /// addressed bind with auth passes validation (binding is not attempted
+    /// here — the address is TEST-NET).
+    #[test]
+    fn loopback_and_authenticated_binds_pass_validation() {
+        for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
+            validate_listen(&listen_config(addr, AuthConfig::Disabled))
+                .unwrap_or_else(|e| panic!("{addr} with auth disabled must pass: {e}"));
+        }
+        validate_listen(&listen_config("192.0.2.1:29500", basic()))
+            .expect("an addressed bind with auth passes validation");
+        #[cfg(unix)]
+        validate_listen(&listen_config("uds:///tmp/x.sock", AuthConfig::Disabled))
+            .expect("the socket carries its own authorization");
+    }
+
+    /// The wiring, not the predicate: both bind paths must consult
+    /// `validate_listen`. The edit that turns each half red is deleting the
+    /// call at that site. The oracle is the wildcard message itself, not a
+    /// bare `is_err()`: `validate_daemon_endpoint` runs first on both paths,
+    /// and any refusal of the fixture's daemon address would otherwise
+    /// satisfy the test with the listen check gone. `run_server` would
+    /// block forever if the refusal did not fire, hence the timeout — a
+    /// hang here is a failure, not a pass.
+    #[tokio::test]
+    async fn both_bind_paths_refuse_a_wildcard_before_binding() {
+        let config = listen_config("0.0.0.0:0", basic());
+        let Err(err) = spawn_in_process_with(config.clone()).await else {
+            panic!("spawn_in_process_with must refuse a wildcard bind");
+        };
+        let err = err.to_string();
+        assert!(err.contains("wildcard"), "spawn_in_process_with: {err}");
+        let err = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
+            .await
+            .expect("run_server must return (refuse) rather than bind and block")
+            .expect_err("run_server must refuse a wildcard bind")
+            .to_string();
+        assert!(err.contains("wildcard"), "run_server: {err}");
+    }
+
+    /// The browser boundary's predicate: the JSON media type with or without
+    /// parameters, any case, and nothing a browser can send without a
+    /// preflight. The integration test in `tests/http_get_version.rs`
+    /// proves the wiring (a `text/plain` POST is 415).
+    #[test]
+    fn only_the_json_media_type_passes_the_gate() {
+        for ok in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON",
+            " application/json ;charset=utf-8",
+        ] {
+            assert!(is_json_media_type(ok), "{ok:?}");
+        }
+        for bad in [
+            "text/plain",
+            "text/plain;charset=UTF-8",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data; boundary=x",
+            "application/jsonx",
+            "application/json-rpc",
+            "",
+        ] {
+            assert!(!is_json_media_type(bad), "{bad:?}");
+        }
+    }
+
+    /// `localhost:29500` is the spelling the retired server's docs taught;
+    /// the refusal must say what to use instead, not just "syntax".
+    #[test]
+    fn hostname_listen_is_refused_with_the_remedy() {
+        let err = ListenAddr::parse("localhost:29500").expect_err("hostnames do not parse");
+        assert!(err.contains("hostnames are not resolved"), "{err}");
+        assert!(err.contains("127.0.0.1:29500"), "{err}");
     }
 
     /// `uds://` is a Unix form. On Windows it must be refused at parse, naming

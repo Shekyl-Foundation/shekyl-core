@@ -47,31 +47,19 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **RT-P2's result rows are owed to `RPC_TRANSPORT_POSTURE.md` §7.1** (added
-  2026-08-21, PR #532). The probe crate
-  [`shekyl-rt-p2-spike`](../rust/shekyl-rt-p2-spike) landed with seven
-  probes green — correct pins round-trip under TLS 1.3; a wrong server pin
-  refused at the handshake with a typed `ServerPinMismatch`; an un-enrolled
-  client, a certificate-less client, and an enrolled certificate replayed
-  without its key each refused server-side on its own counter; a silent peer
-  reaped under a deadline without blocking the next client — but the design
-  doc it was pre-registered in exists only on `feat/rt-1-bind-refusals`
-  (PR #529), so this branch cannot amend it. **Blocker:** #529 unmerged.
-  **Landing condition:** once #529 is on `dev`, add dated result rows to
-  §7.1 for RT-P1 (*read from source, not handshake-probed*: rustls 0.23.37
-  has no external-PSK API) and RT-P2 (the seven observations above, each
-  with the edit that was observed to turn it red), and stamp RT-W3 landed in
-  §8. **Carried for RT-W4, from the probe's review:** (1) ureq 3's
-  `TlsConfig` has no custom-`ServerCertVerifier` hook, so the L1 client
-  builds its connector on hyper-rustls (`ConnectorBuilder::with_tls_config`,
-  already in the graph) or a bespoke ureq `Connector`, and carries the typed
-  pin error through instead of flattening to a string; (2) two rule-35
-  residuals named on `Identity` — ring's private scalar inside rcgen's and
-  rustls's parsed keys, and pki-types's `Zeroize`-without-`Drop` copy;
-  (3) `HANDSHAKE_TIMEOUT`'s production value and per-peer rate limiting;
-  (4) tickets stay off (`send_tls13_tickets = 0`) so the allowlist runs on
-  every handshake — a resumed TLS 1.3 handshake never calls the verifier.
-  Target: the post-#529 doc pass, before RT-W4 starts.
+- **`rct_signatures` / `rctSig` / `namespace rct` → CT names (rule 93 sweep,
+  ~290 sites)** — RF-D9 (PR #522) renamed the three RCT-named symbols it
+  edited (`serialize_rctsig_prunable` → `serialize_ctsig_prunable`,
+  `verRctSemanticsFeeOnly` → `verCtSemanticsFeeOnly`, `rctSigPrunable` →
+  `CtSigPrunable`); the first of those was emitting an archive tag already
+  named `ctsig_prunable`, so the function disagreed with its own bytes. The
+  remaining three families (`rct_signatures` 224 sites, `rctSig` 56,
+  `namespace rct` 10) are a mechanical sweep that would have swamped that
+  PR's review surface. Own PR; no behaviour change; rule 93's "when touching
+  code" clause made the partial rename right, and makes finishing it owed.
+  **Target: V3.0** (pre-genesis naming hygiene; the inherited name asserts a
+  construction Shekyl does not use — see `no-ringct-use-ct`).
+
 
 - **`combined_shared_secret` gate is vacuous: delete it or re-point it**
   (added 2026-08-19, Phase-5 follow-up round). The
@@ -2019,6 +2007,28 @@ sustainability is unaffected by the recalibration.
   on underflow), and HU add/drop verifies imply the invariant arithmetically
   through their double floor equalities. *Target: V3.0 (with or shortly
   after the `ShardSet` PR — same validation surface).*
+
+- **RPC transport posture — RULED 2026-08-21; RT-W1 landed; RT-W2/W5/W7 authorized**
+  (added 2026-08-21, `docs/design/RPC_TRANSPORT_POSTURE.md`). Posture: every
+  RPC leg is operator-to-operator, the adversary is the network path, never
+  the peer; no recommended configuration has a wallet speak to a stranger's
+  daemon. **Landed (RT-W1):** `shekyl-wallet-rpc` refuses wildcard binds
+  (RT-1) and auth-less non-loopback binds (RT-2) at both bind paths; its
+  operator docs rewritten against the Rust binary (they described the
+  retired C++ server). **Open:** RT-O1 the rustls external-PSK probe
+  (provisional no; RT-4 no longer depends on it but the record should say
+  what support was), RT-O2 closed as a corrected error (`ring` is already in
+  wallet-rpc's graph via `shekyl-rpc-transport`; the Windows scouting step
+  runs natively on MSVC; TLS changes nothing there), RT-O3 RULED — harden the daemon now
+  (RT-W2: refusals at `rpc_args.cpp:168`/`:196`), and the daemon's 2026-07-10
+  reasoning does not transfer to RT-4 (spend authority; mutual auth); RT-O4
+  RULED — deliberate boundary, light client the named successor, plus
+  `--daemon-address` warning in §1's terms at the point of configuration
+  (RT-W7, both sides). Distinct from the
+  daemon entry below on purpose: the wallet holds spend authority and its
+  clients are the user's own devices, so mutual authentication is the
+  requirement; RT-O3's ruling must say in one sentence whether the daemon's
+  no-in-process-TLS reasoning transfers. *Target: V3.0.*
 
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
   2026-07-10, epee HTTP listener deletion). shekyld no longer exposes

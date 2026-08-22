@@ -27,7 +27,9 @@ impl Limits {
         strings: 16384,
     };
 
-    /// `default_http_bin_limits` in `http_abstract_invoke.h` (65536 × 3).
+    /// `default_http_bin_limits` (65536 × 3), formerly in the C++
+    /// `http_abstract_invoke.h`. That header left with the epee HTTP client
+    /// (2026-08-21); this constant is now the only holder of the bound.
     pub const HTTP_BIN: Self = Self {
         objects: 196_608,
         fields: 196_608,
