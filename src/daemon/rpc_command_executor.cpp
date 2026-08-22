@@ -137,6 +137,39 @@ namespace {
   }
 }
 
+// Commands whose method has moved to Rust render there, on both arms
+// (DAEMON_RPC_KV_CUTOVER.md §3.4): live core in-process, the RPC address
+// when running as `shekyld <command>`. Output and failure are printed here
+// so the console's writers stay in one place.
+bool t_rpc_command_executor::run_rust_console(const std::vector<std::string>& argv)
+{
+  std::vector<const char*> ptrs;
+  ptrs.reserve(argv.size());
+  for (const auto& a : argv)
+    ptrs.push_back(a.c_str());
+  uint8_t* out_ptr = nullptr;
+  size_t out_len = 0;
+  const int32_t rc = shekyl_daemon_console_run(
+    ptrs.data(), ptrs.size(),
+    m_is_rpc ? nullptr : static_cast<void*>(m_rpc_server),
+    m_is_rpc ? m_rpc_client->address().c_str() : nullptr,
+    tools::t_rpc_client::timeout_secs(),
+    &out_ptr, &out_len);
+  // A null/zero pair is the export's empty buffer; never hand a null pointer
+  // to std::string's range constructor, even with a zero count.
+  const std::string text = out_ptr ? std::string(reinterpret_cast<const char*>(out_ptr), out_len) : std::string();
+  shekyl_daemon_ctl_free(out_ptr, out_len);
+  if (rc == SHEKYL_DAEMON_CONSOLE_OK)
+  {
+    tools::success_msg_writer() << text;
+    return true;
+  }
+  tools::fail_msg_writer() << (text.empty() ? ("console command failed (" + std::to_string(rc) + ")") : text);
+  if (m_is_rpc)
+    m_rpc_client->note_failure();
+  return true;
+}
+
 t_rpc_command_executor::t_rpc_command_executor(
     uint32_t ip
   , uint16_t port
@@ -851,30 +884,7 @@ bool t_rpc_command_executor::set_log_categories(const std::string &categories) {
 }
 
 bool t_rpc_command_executor::print_height() {
-  cryptonote::COMMAND_RPC_GET_HEIGHT::request req;
-  cryptonote::COMMAND_RPC_GET_HEIGHT::response res;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/getheight", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_height(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << boost::lexical_cast<std::string>(res.height);
-
-  return true;
+  return run_rust_console({"print_height"});
 }
 
 bool t_rpc_command_executor::print_block_by_hash(crypto::hash block_hash, bool include_hex) {

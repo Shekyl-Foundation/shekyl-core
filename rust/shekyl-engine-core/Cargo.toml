@@ -243,6 +243,9 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# Test doubles answer with the daemon's own wire types (RK-D1), so a double
+# cannot drift from the contract the way a hand-written JSON literal can.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`

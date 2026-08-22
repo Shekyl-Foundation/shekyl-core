@@ -77,6 +77,7 @@ set(unit_tests_sources
   random.cpp
   rpc_target_wire_contract.cpp
   rpc_args_daemon_surface.cpp
+  rpc_facts_ffi_roundtrip.cpp
   rolling_median.cpp
   scaling_2021.cpp
   seed_epoch.cpp

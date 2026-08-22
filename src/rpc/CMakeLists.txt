@@ -35,6 +35,7 @@ set(rpc_sources
   core_rpc_server.cpp
   core_rpc_ffi.cpp
   daemon_submit_ffi.cpp
+  rpc_facts_ffi.cpp
   instanciations.cpp)
 
 
@@ -51,6 +52,7 @@ set(rpc_private_headers
   core_rpc_ffi.h
   core_rpc_ffi_internal.h
   daemon_submit_ffi.h
+  rpc_facts_ffi.h
   core_rpc_server_commands_defs.h
   core_rpc_server_error_codes.h)
 

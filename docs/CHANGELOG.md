@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
+  natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
+  wire types are now `shekyl-rpc-types::{GetHeightResponse,
+  GetVersionResponse}` — one definition for the daemon that serves them,
+  the wallet that reads them and the console that renders them — and the
+  handlers read core state through a typed facts FFI
+  (`shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks`) instead of C++
+  `COMMAND_RPC_*` structs marshaled by epee. Parity with the old handlers
+  is pinned by oracle vectors captured from epee before the C++ was
+  deleted; the JSON documents are parsed-equal (same keys, values and
+  `KV_SERIALIZE_OPT` omissions; key order and whitespace are no longer
+  epee's). `CORE_RPC_VERSION` (3.22, unchanged) moved to Rust with its
+  only reader. The console's `print_height` renders in Rust on both arms
+  (`shekyld print_height` and the interactive console). Also deleted as
+  dead: `COMMAND_RPC_GET_OUTPUTS{,_BIN}`, `COMMAND_RPC_FAST_EXIT` and the
+  `core::get_outs` / `Blockchain::get_outs` chain behind them — none had
+  a dispatch row or a caller. No change to any reply a client parses; the
+  reason text inside a transport-level failure (the 500 envelope's `error`
+  string) now names what actually failed instead of "FFI dispatch failed"
+  — diagnostic text, not contract (RK-D8 scope).
 - **`shekyl-wallet-rpc` refuses two listen configurations it used to
   accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
   A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped

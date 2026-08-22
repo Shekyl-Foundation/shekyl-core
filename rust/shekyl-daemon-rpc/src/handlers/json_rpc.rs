@@ -28,6 +28,7 @@
 
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
+use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
 use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
 use axum::extract::State;
@@ -85,6 +86,21 @@ pub async fn handle(
                 "Method not allowed in restricted mode".into(),
             )),
         );
+    }
+
+    // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
+    // never reach the C++ dispatch table.
+    if let Some(native) = native_method(&state, &method).await {
+        return match native {
+            Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
+            Err(fault) => {
+                warn!(method = %method, ?fault, "native JSON-RPC method failed");
+                (
+                    StatusCode::OK,
+                    Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
+                )
+            }
+        };
     }
 
     let params_str = if request.params.is_null()
@@ -161,9 +177,71 @@ pub async fn handle(
     }
 }
 
+/// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
+/// table. Each arm is one `methods::*` call framed as a JSON value.
+async fn native_method(
+    state: &Arc<AppState>,
+    method: &str,
+) -> Option<Result<serde_json::Value, crate::methods::RpcFault>> {
+    match method {
+        "get_version" => {
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_version(&facts)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        _ => None,
+    }
+}
+
+/// Frame a native method's outcome as a JSON value, keeping the cause of a
+/// failure where it belongs: a facts fault stays a facts fault; a reply the
+/// transport could not encode, or a handler task that did not complete, is
+/// an [`InternalFault`] — never attributed to the core.
+fn frame_native<T: serde::Serialize>(
+    out: Result<Result<T, RpcFault>, tokio::task::JoinError>,
+) -> Result<serde_json::Value, RpcFault> {
+    match out {
+        Ok(Ok(reply)) => {
+            serde_json::to_value(reply).map_err(|_| RpcFault::Internal(InternalFault::Serialize))
+        }
+        Ok(Err(fault)) => Err(fault),
+        Err(_) => Err(RpcFault::Internal(InternalFault::Join)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain_facts::FactsFault;
+
+    /// The framing keeps causes apart: a facts code is a facts fault, a join
+    /// failure is internal. Collapsing either into the other is the edit this
+    /// turns red (it was `FactsFault::Unknown(0)` for both, once).
+    #[tokio::test]
+    async fn frame_native_keeps_the_cause_of_a_failure() {
+        let ok: Result<Result<u64, RpcFault>, tokio::task::JoinError> = Ok(Ok(7));
+        assert_eq!(frame_native(ok).unwrap(), serde_json::json!(7));
+
+        let facts: Result<Result<u64, RpcFault>, tokio::task::JoinError> =
+            Ok(Err(RpcFault::Facts(FactsFault::NotReady)));
+        assert_eq!(
+            frame_native(facts).unwrap_err(),
+            RpcFault::Facts(FactsFault::NotReady)
+        );
+
+        // A task that panicked is the one JoinError we can manufacture.
+        let joined =
+            tokio::task::spawn_blocking(|| -> Result<u64, RpcFault> { panic!("boom") }).await;
+        assert!(joined.is_err());
+        assert_eq!(
+            frame_native(joined).unwrap_err(),
+            RpcFault::Internal(InternalFault::Join)
+        );
+    }
 
     /// The admin JSON-RPC surface, restated independently of
     /// `RESTRICTED_METHODS`.

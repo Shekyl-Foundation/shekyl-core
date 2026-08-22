@@ -4063,6 +4063,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-scanner",
  "shekyl-standoff",
  "shekyl-tor",

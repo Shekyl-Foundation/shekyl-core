@@ -55,10 +55,20 @@ fn json_ok(body: String) -> (StatusCode, [(&'static str, &'static str); 1], Stri
 }
 
 fn json_dispatch_error() -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    json_error("FFI dispatch failed")
+}
+
+/// The REST error envelope with a reason that names what actually failed —
+/// a natively-served method never fails for "FFI dispatch" reasons.
+fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let envelope = shekyl_rpc_types::RestErrorEnvelope {
+        status: shekyl_rpc_types::RpcStatus("ERROR".to_owned()),
+        error: reason.to_owned(),
+    };
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [("content-type", "application/json")],
-        r#"{"status":"ERROR","error":"FFI dispatch failed"}"#.to_string(),
+        serde_json::to_string(&envelope).expect("plain data serializes"),
     )
 }
 
@@ -101,7 +111,36 @@ macro_rules! json_handler {
 }
 
 // Unrestricted endpoints
-json_handler!(get_height, "/get_height");
+
+/// `/get_height` (alias `/getheight`) — served natively (RK-1,
+/// `docs/design/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
+/// handler ignored its empty request struct. A facts fault answers with the
+/// same envelope a failed FFI dispatch does.
+pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let facts = crate::chain_facts::FfiChainFacts::new(core);
+        crate::methods::get_height(&facts)
+    })
+    .await;
+    match result {
+        Ok(Ok(reply)) => match serde_json::to_string(&reply) {
+            Ok(json) => json_ok(json),
+            Err(e) => {
+                tracing::warn!(?e, "get_height: reply could not be encoded");
+                json_error("reply could not be encoded")
+            }
+        },
+        Ok(Err(fault)) => {
+            tracing::warn!(?fault, "get_height: facts unavailable");
+            json_error("chain facts unavailable")
+        }
+        Err(e) => {
+            tracing::warn!(?e, "get_height: handler task did not complete");
+            json_error("handler did not complete")
+        }
+    }
+}
 json_handler!(get_transactions, "/get_transactions");
 json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(is_key_image_spent, "/is_key_image_spent");
@@ -130,7 +169,18 @@ pub async fn get_info(State(state): State<Arc<AppState>>, body: String) -> impl 
 
 #[cfg(test)]
 mod tests {
-    use super::fill_rpc_connections_count;
+    use super::{fill_rpc_connections_count, json_error};
+
+    /// A native method's failure names its own cause in the envelope —
+    /// never "FFI dispatch failed", which it cannot be.
+    #[test]
+    fn native_error_envelope_names_the_cause() {
+        let (status, _, body) = json_error("chain facts unavailable");
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], "chain facts unavailable");
+    }
 
     #[test]
     fn fills_live_count_when_unrestricted() {

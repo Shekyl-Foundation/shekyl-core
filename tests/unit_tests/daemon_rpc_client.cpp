@@ -100,14 +100,14 @@ namespace
 
 TEST(daemon_rpc_client, good_answer_leaves_failed_clear)
 {
-  n_shot_http_server server(R"({"status":"OK","height":42})");
+  n_shot_http_server server(R"({"status":"OK","limit_up":42,"limit_down":0})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
-  cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
-  ASSERT_TRUE(client.rpc_request(req, res, "/get_height", "fail"));
-  EXPECT_EQ(res.height, 42u);
+  cryptonote::COMMAND_RPC_GET_LIMIT::request req{};
+  cryptonote::COMMAND_RPC_GET_LIMIT::response res{};
+  ASSERT_TRUE(client.rpc_request(req, res, "/get_limit", "fail"));
+  EXPECT_EQ(res.limit_up, 42u);
   EXPECT_FALSE(client.failed());
-  EXPECT_EQ(server.request().rfind("POST /get_height HTTP/1.1", 0), 0u) << server.request();
+  EXPECT_EQ(server.request().rfind("POST /get_limit HTTP/1.1", 0), 0u) << server.request();
 }
 
 TEST(daemon_rpc_client, refused_connection_sets_failed)
@@ -119,11 +119,11 @@ TEST(daemon_rpc_client, refused_connection_sets_failed)
 
 TEST(daemon_rpc_client, non_ok_status_sets_failed)
 {
-  n_shot_http_server server(R"({"status":"BUSY","height":0})");
+  n_shot_http_server server(R"({"status":"BUSY","limit_up":0,"limit_down":0})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
-  cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
-  EXPECT_FALSE(client.rpc_request(req, res, "/get_height", "fail"));
+  cryptonote::COMMAND_RPC_GET_LIMIT::request req{};
+  cryptonote::COMMAND_RPC_GET_LIMIT::response res{};
+  EXPECT_FALSE(client.rpc_request(req, res, "/get_limit", "fail"));
   EXPECT_TRUE(client.failed());
 }
 
@@ -131,9 +131,9 @@ TEST(daemon_rpc_client, json_rpc_error_member_sets_failed)
 {
   n_shot_http_server server(R"({"jsonrpc":"2.0","id":"0","error":{"code":-32601,"message":"Method not found"}})");
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_GET_VERSION::request req{};
-  cryptonote::COMMAND_RPC_GET_VERSION::response res{};
-  EXPECT_FALSE(client.basic_json_rpc_request(req, res, "get_version"));
+  cryptonote::COMMAND_RPC_GET_LIMIT::request req{};
+  cryptonote::COMMAND_RPC_GET_LIMIT::response res{};
+  EXPECT_FALSE(client.basic_json_rpc_request(req, res, "get_limit"));
   EXPECT_TRUE(client.failed());
   EXPECT_EQ(server.request().rfind("POST /json_rpc HTTP/1.1", 0), 0u) << server.request();
 }
@@ -144,15 +144,15 @@ TEST(daemon_rpc_client, failure_is_sticky_across_a_later_success)
   // happened to make: a command that failed one request and then succeeded
   // at another must still report failure. Same client, two answers.
   n_shot_http_server server({
-    std::string(R"({"status":"BUSY","height":0})"),
-    std::string(R"({"status":"OK","height":1})"),
+    std::string(R"({"status":"BUSY","limit_up":0,"limit_down":0})"),
+    std::string(R"({"status":"OK","limit_up":1,"limit_down":0})"),
   });
   tools::t_rpc_client client(LOOPBACK, server.port());
-  cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
-  cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
-  EXPECT_FALSE(client.rpc_request(req, res, "/get_height", "fail"));
+  cryptonote::COMMAND_RPC_GET_LIMIT::request req{};
+  cryptonote::COMMAND_RPC_GET_LIMIT::response res{};
+  EXPECT_FALSE(client.rpc_request(req, res, "/get_limit", "fail"));
   EXPECT_TRUE(client.failed());
-  EXPECT_TRUE(client.rpc_request(req, res, "/get_height", "fail"));
-  EXPECT_EQ(res.height, 1u);
+  EXPECT_TRUE(client.rpc_request(req, res, "/get_limit", "fail"));
+  EXPECT_EQ(res.limit_up, 1u);
   EXPECT_TRUE(client.failed());
 }

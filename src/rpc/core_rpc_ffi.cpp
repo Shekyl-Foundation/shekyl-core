@@ -190,8 +190,6 @@ using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 
 const std::unordered_map<std::string, json_fn>& get_json_table() {
     static const std::unordered_map<std::string, json_fn> t = {
-        DJSON("/get_height",                        on_get_height,                   COMMAND_RPC_GET_HEIGHT),
-        DJSON("/getheight",                         on_get_height,                   COMMAND_RPC_GET_HEIGHT),
         DJSON("/get_transactions",                  on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/gettransactions",                   on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
@@ -389,7 +387,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
         DJRPC_WE("flush_txpool",          on_flush_txpool,                COMMAND_RPC_FLUSH_TRANSACTION_POOL),
         DJRPC_WE("get_output_histogram",   on_get_output_histogram,       COMMAND_RPC_GET_OUTPUT_HISTOGRAM),
-        DJRPC_WE("get_version",            on_get_version,                COMMAND_RPC_GET_VERSION),
         DJRPC_WE("get_coinbase_tx_sum",    on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM),
         DJRPC_WE("get_fee_estimate",       on_get_base_fee_estimate,      COMMAND_RPC_GET_BASE_FEE_ESTIMATE),
         DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),

@@ -4,3 +4,6 @@ cmake/Version.cmake export-subst
 # hash-pinned via include_str! in address_derivation_freeze.rs). Never
 # apply EOL conversion: working-tree bytes must equal committed bytes.
 docs/test_vectors/** -text
+# RPC oracle vectors (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.5): epee's exact
+# bytes, CRLF included. Never apply EOL conversion.
+rust/shekyl-rpc-types/tests/vectors/rpc/** -text
