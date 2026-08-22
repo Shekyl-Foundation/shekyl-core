@@ -52,7 +52,7 @@ fn state(dir: &TempDir) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth: AuthConfig::Disabled,
+        auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })
@@ -64,6 +64,7 @@ async fn rpc(state: Arc<AppState>, method: &str, params: Value) -> Value {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();

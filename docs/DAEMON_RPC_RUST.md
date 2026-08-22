@@ -181,7 +181,7 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 |---------|--------|
 | Local | Plaintext loopback (`127.0.0.1`). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
-| Wallet-RPC | Keeps full `--rpc-login` / `--rpc-ssl*` (separate process). |
+| Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
 | CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
