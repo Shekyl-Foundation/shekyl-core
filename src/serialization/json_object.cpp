@@ -302,7 +302,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   }
   {
     dest.Key("fcmp");
-    toJsonValue(dest, tx.rct_signatures, tx.pruned);
+    toJsonValue(dest, tx.ct_signatures, tx.pruned);
   }
   if (!tx.pqc_auths.empty())
   {
@@ -325,7 +325,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   GET_FROM_JSON_OBJECT(val, tx.vin, inputs);
   GET_FROM_JSON_OBJECT(val, tx.vout, outputs);
   GET_FROM_JSON_OBJECT(val, tx.extra, extra);
-  GET_FROM_JSON_OBJECT(val, tx.rct_signatures, fcmp);
+  GET_FROM_JSON_OBJECT(val, tx.ct_signatures, fcmp);
 
   const auto& sigs = val.FindMember("signatures");
   if (sigs != val.MemberEnd())
@@ -339,7 +339,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
     fromJsonValue(pqc->value, tx.pqc_auths);
   }
 
-  const auto& rsig = tx.rct_signatures;
+  const auto& rsig = tx.ct_signatures;
   if (!cryptonote::is_coinbase(tx) && rsig.p.bulletproofs_plus.empty() && rsig.get_pseudo_outs().empty() && rsig.p.fcmp_pp_proof.empty() && sigs == val.MemberEnd())
     tx.pruned = true;
 }
@@ -1317,13 +1317,13 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::BlockHeaderResp
   GET_FROM_JSON_OBJECT(val, response.reward, reward);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& sig, const bool prune)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const ct::CtSig& sig, const bool prune)
 {
   using boost::adaptors::transform;
 
   dest.StartObject();
 
-  const auto just_mask = [] (rct::ctkey const& key) -> rct::key const&
+  const auto just_mask = [] (ct::ctkey const& key) -> ct::key const&
   {
     return key.mask;
   };
@@ -1336,7 +1336,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
     INSERT_INTO_JSON_OBJECT(dest, enc_labels, sig.enc_labels);
   if (!sig.outPk.empty())
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
-  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
+  if (sig.type == ct::CTTypeFcmpPlusPlusPqc)
   {
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
     INSERT_INTO_JSON_OBJECT(dest, referenceBlock, sig.referenceBlock);
@@ -1362,7 +1362,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   dest.EndObject();
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
+void fromJsonValue(const rapidjson::Value& val, ct::CtSig& sig)
 {
   using boost::adaptors::transform;
 
@@ -1380,7 +1380,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(val, sig.enc_labels, enc_labels);
   if (val.HasMember("commitments"))
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
-  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
+  if (sig.type == ct::CTTypeFcmpPlusPlusPqc)
   {
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
     if (val.HasMember("referenceBlock"))
@@ -1391,7 +1391,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   const auto prunable = val.FindMember("prunable");
   if (prunable != val.MemberEnd())
   {
-    rct::keyV pseudo_outs = std::move(sig.get_pseudo_outs());
+    ct::keyV pseudo_outs = std::move(sig.get_pseudo_outs());
 
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.bulletproofs_plus, bulletproofs_plus);
     GET_FROM_JSON_OBJECT(prunable->value, pseudo_outs, pseudo_outs);
@@ -1412,7 +1412,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   }
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::ctkey& key)
+void fromJsonValue(const rapidjson::Value& val, ct::ctkey& key)
 {
   key.dest = {};
   fromJsonValue(val, key.mask);
@@ -1435,7 +1435,7 @@ void fromJsonValue(const rapidjson::Value& val, std::array<uint8_t, 9>& enc_amou
     throw WRONG_TYPE("valid hex for enc_amount");
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::BulletproofPlus& p)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const ct::BulletproofPlus& p)
 {
   dest.StartObject();
 
@@ -1452,7 +1452,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::Bulletpr
   dest.EndObject();
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::BulletproofPlus& p)
+void fromJsonValue(const rapidjson::Value& val, ct::BulletproofPlus& p)
 {
   if (!val.IsObject())
   {

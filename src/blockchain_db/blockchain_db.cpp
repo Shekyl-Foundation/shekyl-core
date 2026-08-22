@@ -35,7 +35,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "profile_tools.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "shekyl/shekyl_ffi.h"
 
 #include "lmdb/db_lmdb.h"
@@ -393,19 +393,19 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     if (miner_tx || emission_tx)
     {
       cryptonote::tx_out vout = tx.vout[i];
-      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+      CHECK_AND_ASSERT_THROW_MES(i < tx.ct_signatures.outPk.size(),
         "tx outPk missing for output " + std::to_string(i));
-      rct::key commitment = tx.rct_signatures.outPk[i].mask;
+      ct::key commitment = tx.ct_signatures.outPk[i].mask;
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
         &commitment);
     }
     else
     {
-      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+      CHECK_AND_ASSERT_THROW_MES(i < tx.ct_signatures.outPk.size(),
         "tx outPk missing for output " + std::to_string(i));
       amount_output_indices[i] = add_output(tx_hash, tx.vout[i], i, tx.unlock_time,
-        &tx.rct_signatures.outPk[i].mask);
+        &tx.ct_signatures.outPk[i].mask);
     }
   }
   add_tx_amount_output_indices(tx_id, amount_output_indices);
@@ -532,9 +532,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         else
           continue;
 
-        if (i >= tx.rct_signatures.outPk.size())
+        if (i >= tx.ct_signatures.outPk.size())
           continue;
-        rct::key commitment = tx.rct_signatures.outPk[i].mask;
+        ct::key commitment = tx.ct_signatures.outPk[i].mask;
 
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];

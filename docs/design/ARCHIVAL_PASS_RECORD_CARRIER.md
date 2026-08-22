@@ -155,7 +155,7 @@ ordinary transaction (§2 step 4) and the guard needs no change.
 computes the prunable-region hash two ways:
 
 - **blob path** — `get_blob_hash(blob->data() + unprunable_size, blob->size() - unprunable_size)`: the whole tail, wholesale.
-- **re-serialize path** — `rct_signatures.p.serialize_rctsig_prunable(...)`: only `rct_signatures.p`.
+- **re-serialize path** — `ct_signatures.p.serialize_ctsig_prunable(...)`: only `ct_signatures.p`.
 
 **They agree today only because `ctsig_prunable` is the last thing written** —
 [`cryptonote_basic.h:645-648`](../../src/cryptonote_basic/cryptonote_basic.h#L645-L648),
@@ -171,9 +171,9 @@ depending on whether they kept the blob.** A moving split point would at least
 be a visible consequence; this is not.
 
 **The inside-versus-after distinction is what makes an option safe.** A block
-added *inside* `serialize_rctsig_prunable` does not have this problem: the blob
+added *inside* `serialize_ctsig_prunable` does not have this problem: the blob
 path hashes the tail, which contains it; the re-serialize path serializes
-`rct_signatures.p`, which contains it. Both paths still agree **by construction
+`ct_signatures.p`, which contains it. Both paths still agree **by construction
 rather than by ordering luck** — which is a strictly better property than the
 one in force today.
 
@@ -339,7 +339,7 @@ Each option is stated with what would decide it. None is chosen.
 ### CR-O1 — Split the signature legs only — **REJECTED (CR-D2, 2026-08-18)**
 
 Kept Ed25519 leg (64 B) unprunable; pruned ML-DSA leg (3,309 B) as a fourth
-block **inside** `serialize_rctsig_prunable`.
+block **inside** `serialize_ctsig_prunable`.
 
 *Rejected because it leaves ~6,934 B/record ≈ 177 GB/yr* — `path` is the
 dominant term, not the signature. Retained because the leg split itself is
@@ -349,7 +349,7 @@ settled where the kept leg lands: **on the vin**, in a slimmed
 
 ### CR-O1′ — Partition the record — **RULED**
 
-Pruned, inside `serialize_rctsig_prunable` where both hash paths see it by
+Pruned, inside `serialize_ctsig_prunable` where both hash paths see it by
 construction: the **leaf chunk**, the **branch layers**, and the **ML-DSA leg**
 (~9,965 B). Kept: the record header, `leaf_bytes`, and the Ed25519 leg (~278 B,
 ≈7.1 GB/yr).
@@ -363,13 +363,13 @@ error besides.
 | | Where | Bytes | GB/yr |
 | --- | --- | ---: | ---: |
 | **Kept** | the vin, in the prefix — header + `leaf_bytes` + 64 B Ed25519 | 278 | **7.1** |
-| **Pruned** | a new block **inside** `serialize_rctsig_prunable` — ML-DSA leg + `path` (incl. leaf chunk) | 9,965 | — |
+| **Pruned** | a new block **inside** `serialize_ctsig_prunable` — ML-DSA leg + `path` (incl. leaf chunk) | 9,965 | — |
 
 **A vin cannot have fields on both sides of `unprunable_size`.** `tx.vin`
 serializes inside the prefix, wholly. So the pruned parts cannot be *fields
 within* the vin — they become a **parallel structure keyed to the vin**, and by
 [§1](#1-the-invariant-this-round-must-not-break-which-nothing-currently-protects)
-that structure lives **inside `serialize_rctsig_prunable`**, never appended after
+that structure lives **inside `serialize_ctsig_prunable`**, never appended after
 `ctsig_prunable`. Inside, both hash paths see it by construction; after, they
 diverge silently and throw on blob-holding nodes only — the invariant
 `tx_prunable_region_sole_occupant.cpp` now guards.
@@ -419,7 +419,7 @@ invariant is a property of the **C++ serializer's ordering**. A Rust test in
 it — the test must live where the defect can be introduced. This is a
 new-test-in-C++ exception, flagged rather than silent.
 
-**It asserts length equality, not only hash equality.** `serialize_rctsig_prunable(...)`
+**It asserts length equality, not only hash equality.** `serialize_ctsig_prunable(...)`
 `.size() == blob.size() - unprunable_size` names the defect directly — *"the
 prunable region has a second occupant"* — where a hash mismatch says only
 *"different"*, sending the next reader hunting a serialization bug instead of a

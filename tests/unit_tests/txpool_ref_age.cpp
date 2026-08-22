@@ -200,8 +200,8 @@ cryptonote::transaction make_fcmp_shape_tx()
   txout.target = tagged;
   tx.vout.push_back(txout);
 
-  rct::rctSig& rv = tx.rct_signatures;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig& rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);
@@ -209,7 +209,7 @@ cryptonote::transaction make_fcmp_shape_tx()
   // parse_and_validate_tx_from_blob's expand step computes mask * INV_EIGHT
   // (expand_transaction_1), which throws on garbage bytes. The Ed25519
   // basepoint's compressed encoding (0x58 then 0x66×31) is the cheapest
-  // valid point that needs no rctOps call.
+  // valid point that needs no ct_ops call.
   memset(rv.outPk[0].mask.bytes, 0x66, sizeof(rv.outPk[0].mask.bytes));
   rv.outPk[0].mask.bytes[0] = 0x58;
   rv.enc_amounts.resize(1);
@@ -217,7 +217,7 @@ cryptonote::transaction make_fcmp_shape_tx()
   rv.enc_labels.resize(1);
   rv.enc_labels[0].fill(0x43);
 
-  rct::BulletproofPlus bpp{};
+  ct::BulletproofPlus bpp{};
   bpp.L.resize(6); // L.size()==6 → max_amounts 2^0 = 1 ≥ the single output
   bpp.R.resize(6);
   rv.p.bulletproofs_plus.push_back(bpp);

@@ -756,7 +756,7 @@ adds a dedicated hybrid authorization structure outside `tx_extra`.
 The FCMP++ type for user transactions is `CTTypeFcmpPlusPlusPqc = 1`. This is
 Shekyl's only non-coinbase CT type. It replaces CLSAG ring signatures with
 FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
-`referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
+`referenceBlock` field to `CtSigBase` anchoring the proof to a specific curve
 tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
 opaque `fcmp_pp_proof` blob instead of CLSAGs.
 
@@ -767,7 +767,7 @@ Conceptually:
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig          // type = CTTypeFcmpPlusPlusPqc (1)
+  ct_signatures: CtSig          // type = CTTypeFcmpPlusPlusPqc (1)
   pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```
@@ -922,8 +922,8 @@ Therefore the signed payload is defined as:
 signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
-    || serialize(RctSigningBody)
-    || H(serialize(RctSigPrunable))
+    || serialize(CtSigningBody)
+    || H(serialize(CtSigPrunable))
     || serialize(PqcAuthHeader)
     || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
   )
@@ -933,9 +933,9 @@ Where:
 
 - `TransactionPrefixV3` is the full serialized transaction prefix, including
   `extra`
-- `RctSigningBody` is the non-PQC FCMP++ body data required to bind the actual
+- `CtSigningBody` is the non-PQC FCMP++ body data required to bind the actual
   transaction economics, outputs, and spend semantics (see layout below)
-- `H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+- `H(serialize(CtSigPrunable))` is `cn_fast_hash` of the serialized prunable
   data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
   `BulletproofPlus`), binding the signature to the FCMP++ proof
 - `H(pqc_pk_i)` is `cn_fast_hash` of the `hybrid_public_key` blob for each
@@ -951,9 +951,9 @@ PqcAuthHeader {
 }
 ```
 
-### RctSigningBody Layout
+### CtSigningBody Layout
 
-`RctSigningBody` is the output of `rctSig.serialize_rctsig_base(ar, num_inputs, num_outputs)`.
+`CtSigningBody` is the output of `CtSig.serialize_ctsig_base(ar, num_inputs, num_outputs)`.
 It comprises the base (non-prunable) FCMP++ structure: type, message,
 pseudoOuts/ecdhInfo as applicable, and `referenceBlock` (the block height
 anchoring the FCMP++ curve tree snapshot, validated within `[tip - 100, tip - 2]`).
@@ -1313,7 +1313,7 @@ sets the intended direction:
 ### Resolved Items
 
 - **Rust crate for ML-DSA-65:** `fips204` crate (`ml_dsa_65` module).
-- **`RctSigningBody` layout:** `rctSig.serialize_rctsig_base` output; used in
+- **`CtSigningBody` layout:** `CtSig.serialize_ctsig_base` output; used in
   the signing payload alongside prefix and PQ auth header.
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the

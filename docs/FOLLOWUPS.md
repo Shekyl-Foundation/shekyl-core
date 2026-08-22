@@ -47,18 +47,55 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **`rct_signatures` / `rctSig` / `namespace rct` → CT names (rule 93 sweep,
-  ~290 sites)** — RF-D9 (PR #522) renamed the three RCT-named symbols it
-  edited (`serialize_rctsig_prunable` → `serialize_ctsig_prunable`,
-  `verRctSemanticsFeeOnly` → `verCtSemanticsFeeOnly`, `rctSigPrunable` →
-  `CtSigPrunable`); the first of those was emitting an archive tag already
-  named `ctsig_prunable`, so the function disagreed with its own bytes. The
-  remaining three families (`rct_signatures` 224 sites, `rctSig` 56,
-  `namespace rct` 10) are a mechanical sweep that would have swamped that
-  PR's review surface. Own PR; no behaviour change; rule 93's "when touching
-  code" clause made the partial rename right, and makes finishing it owed.
-  **Target: V3.0** (pre-genesis naming hygiene; the inherited name asserts a
-  construction Shekyl does not use — see `no-ringct-use-ct`).
+- **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
+  names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the
+  three RCT-named symbols it happened to edit (`serialize_rctsig_prunable` →
+  `serialize_ctsig_prunable`, `verRctSemanticsFeeOnly` →
+  `verCtSemanticsFeeOnly`, `rctSigPrunable` → `CtSigPrunable`); the first of
+  those was emitting an archive tag already named `ctsig_prunable`, so the
+  function disagreed with its own bytes. The remaining three families
+  (`rct_signatures` 224 sites, `rctSig` 56, `namespace rct` 10) landed as the
+  mechanical sweep that would have swamped that PR's review surface.
+  **Full record — including the was→now table, the byte-invariance argument
+  and what is still owed — is the V3.2 entry "Rename inherited `rct::` /
+  `rctSig` / `rctSigs` C++ surface after `wallet2` cutover", also marked
+  [Done 2026-08-21]; this entry is the V3.0-scoped duplicate of it and is kept
+  only so the V3.0 reader is not left with an open item that silently moved.**
+  One thing to carry from here: this entry's "~290 sites" is the count of
+  *those three families*, not of the string `rct` in the tree — see the
+  surviving-long-tail note in
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md).
+
+- **Delete the two legacy C++ construction stand-ins `genRctFcmpPlusPlus` and
+  `fill_construct_tx_rct_stub`** (filed 2026-08-21 as the remaining half of the
+  CT-naming sequence). [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)
+  §2 and §5 step 1 classify both as **deletion targets, not rename
+  targets**, which is why the step-2 sweep left their names untouched — they
+  are the only `Rct`-spelled identifiers deliberately surviving in `src/fcmp/`,
+  and renaming them would have made the debt look discharged. The two are **not
+  equally blocked**, established at source while scoping the sweep:
+
+  - **`genRctFcmpPlusPlus` has no caller at all.** `grep` across `src/` and
+    `tests/` finds only its own definition (`ct_semantics.cpp:449`),
+    declaration (`ct_semantics.h:79`), and internal log lines.
+    `shekyl_ffi.h:47`'s "used only by `genRctFcmpPlusPlus` in
+    `core_tests/chaingen.cpp`" is **stale** — `chaingen.cpp` references it zero
+    times (the `gen_fcmp_*` tests that called it were deleted). So the deletion
+    is *unblocked today*, and it cascades: `SHEKYL_PROVE_WITNESS_HEADER_BYTES`
+    and the legacy `shekyl_fcmp_prove` witness path lose their last C++
+    consumer with it. That cascade — an FFI-surface reduction — is why this is
+    its own PR and not a rider on a rename ([`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)),
+    not because anything blocks it.
+  - **`fill_construct_tx_rct_stub` has one live production caller**
+    (`cryptonote_tx_utils.cpp:637`), which builds the serializable `CtSig` stub
+    that the wallet later overwrites via `shekyl_sign_fcmp_transaction`. That
+    caller is the real blocker: deleting the stub means moving stub
+    construction to the Rust signing path, which is transform work, not
+    deletion.
+
+  **Target: V3.0** (pre-genesis; a deletion target that outlives its deletion
+  trigger is debt that compounds,
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)).
 
 
 - **`combined_shared_secret` gate is vacuous: delete it or re-point it**
@@ -2485,10 +2522,10 @@ sustainability is unaffected by the recalibration.
   (`shell: bash` + `set -o pipefail`, or drop the tee). *Target: V3.0*
   (the economics consensus KAT gate must be real before genesis).
 
-- **[Done 2026-07-01] CT-balance FFI cutover — `verRctSemanticsSimple` +
-  `verRctSemanticsFeeOnly` → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
+- **[Done 2026-07-01] CT-balance FFI cutover — `verCtSemanticsSimple` +
+  `verCtSemanticsFeeOnly` → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
   is the last native-C++ island in an otherwise-FFI'd FCMP++ verify path
-  (`src/fcmp/rctSigs.cpp`); the bond-post sibling already routes through the
+  (`src/fcmp/ct_semantics.cpp`); the bond-post sibling already routes through the
   single-sourced `shekyl-ct-balance::verify_ct_balance`. Cut both general balance
   verifiers over to it.
   - **Gate F-1 [ratified 2026-06-30]:** the canonical prime-order
@@ -2524,8 +2561,8 @@ sustainability is unaffected by the recalibration.
     `shekyl-ct-balance::decompress_point`; both sides now reject, in agreement.
   - **Sequence [rule 07 atomic] — completed:** ratify (§2.3) → rename (PR #218) →
     corpus + dormant export (PR #219) → construct self-verify + BondTerm (PR #220)
-    → **the two `rctSigs.cpp` re-points landed here**: `verRctSemanticsSimple` and
-    `verRctSemanticsFeeOnly` now call `shekyl_verify_ct_balance`, the native
+    → **the two `ct_semantics.cpp` re-points landed here**: `verCtSemanticsSimple` and
+    `verCtSemanticsFeeOnly` now call `shekyl_verify_ct_balance`, the native
     `addKeys`/`equalKeys` balance blocks are deleted, and the C++ balance oracle is
     retired from the verifiers. The export was dormant on `dev` since #219, so the
     re-point is a single atomic swap with no dual-path drift window. C++ suites
@@ -2570,10 +2607,10 @@ sustainability is unaffected by the recalibration.
   surfacing at submit. Resolved as the flagged parse/validate consensus-parity pass,
   mirroring the C++ split: `BpPlus::read` now rejects `|L| ∉ 6..=MAX_BP_LR_LEN`
   (`= 6 + log2(MAX_OUTPUTS)`) and `|R| != |L|` — the deserialization-time rejects of
-  `n_bulletproof_plus_max_amounts` (`rctTypes.h:338`) — and `validate()` pins
+  `n_bulletproof_plus_max_amounts` (`ct_types.h:338`) — and `validate()` pins
   `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` exactly, the parse-time
   `n_padded >= n_out` bound plus the verify-time V/L tightness
-  (`n_bulletproof_amounts_base`, `rctTypes.cpp:234-235`, `V` restored from
+  (`n_bulletproof_amounts_base`, `ct_types.cpp:234-235`, `V` restored from
   `outPk == n_out`). `weight()`'s PR #179 clamp stays (it is reachable on hand-built,
   not-yet-validated txs). Accept/reject parity pinned by `bp_lr_*` tests in
   `shekyl-wire/tests/validation.rs`.
@@ -2820,7 +2857,7 @@ sustainability is unaffected by the recalibration.
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
   proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT
   split, no V1 tx — yet the inherited CryptoNote surface still carries `rct` naming
-  throughout (`transaction.rct_signatures`, `rct::rctSig*`, the `rct::` C++
+  throughout (`transaction.ct_signatures`, `ct::CtSig*`, the `ct::` C++
   namespace, plus assorted Rust residue). **Naming-only — no
   wire-format / consensus / behavior change** (the wire carries a `ct_type`
   discriminant byte, never the string "rct"; `shekyl-wire` already uses the correct
@@ -2838,7 +2875,7 @@ sustainability is unaffected by the recalibration.
   (JSON-archive-only; binary wire positional, byte-identical); (2) legacy
   wallet-RPC `estimate_tx_size_and_weight` request field `rct` → `ct` with
   `WALLET_RPC_VERSION` major bump 1→2, plus the FFI dispatch and Python
-  RPC-framework helper; (3) enum variants `RCTTypeNull`/`RCTTypeFcmpPlusPlusPqc`
+  RPC-framework helper; (3) enum variants `CTTypeNull`/`CTTypeFcmpPlusPlusPqc`
   → `CTTypeNull`/`CTTypeFcmpPlusPlusPqc` (values unchanged); (4) the
   cross-language constant chain — `ct_type_fcmp_plus_plus_pqc` JSON key,
   `SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC` C++ macro, Rust
@@ -2846,9 +2883,9 @@ sustainability is unaffected by the recalibration.
   `RctSignaturesBase` doc refs). This also clears the "depends on the rct→ct
   Rust rename" gate on the CT-balance batched-FFI item above. **Remaining
   (V3.1+, gated on `wallet2` retirement per
-  `design/CT_SURFACE_NAMING_PIN.md` §5):** the `rct::` namespace, `rctSig*`
+  `design/CT_SURFACE_NAMING_PIN.md` §5):** the `ct::` namespace, `CtSig*`
   struct/module/file names, `serialize_rctsig_*`, and the
-  `transaction.rct_signatures` C++ field. The standing no-new-`rct`-names rule
+  `transaction.ct_signatures` C++ field. The standing no-new-`rct`-names rule
   stays in force until that lands.
 
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
@@ -2897,7 +2934,7 @@ sustainability is unaffected by the recalibration.
 - **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
   Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
   `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp`, ≈ line 3756) derives the
-  per-output key-image generator `I = Hp(O)` with `rct::hash_to_p3` /
+  per-output key-image generator `I = Hp(O)` with `ct::hash_to_p3` /
   `ge_p3_tobytes` while building `chunk_outputs_blob`, recomputing in C++ a
   crypto contract the Rust side already owns
   (`shekyl_fcmp::tree::key_image_generator`, at the FFI boundary as
@@ -5351,7 +5388,7 @@ sustainability is unaffected by the recalibration.
   reduced-scope sibling branch `chore/cbindgen-consensus-constants`
   introduced `config/consensus_constants.json` as a JSON authority
   for the silent-wrong-output subset (`FCMP_REFERENCE_BLOCK_*_AGE`,
-  `RCT_TYPE_FCMP_PLUS_PLUS_PQC`) and shipped before audit, sharing
+  `SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC`) and shipped before audit, sharing
   the Python-generator + Rust-build.rs pattern with
   `config/economics_params.json`. `ADDRESS_VERSION_V1` is single-
   source in Rust with no C++ duplicate, so there's nothing to
@@ -7563,7 +7600,7 @@ sustainability is unaffected by the recalibration.
   three-leg guard: **(i)** nothing deserializes the emission vin's opaque
   `canonical_bytes` into `rv.p.pseudoOuts`; **(ii)** the dispatch size
   check (`tx_verification_utils.cpp:175`); **(iii)** the leaf size check
-  (`rctSigs.cpp:362`). CB-4 ratifies on that structural guard; the KAT
+  (`ct_semantics.cpp:362`). CB-4 ratifies on that structural guard; the KAT
   (`tests/unit_tests/archival_emission_ct_balance.cpp`) is its
   **necessary-not-sufficient tripwire**.
   **Done in the round-1 PR (not deferred):** arm 1 was strengthened to
@@ -9450,7 +9487,7 @@ sustainability is unaffected by the recalibration.
     range rejection, key-image-must-derive-from-input-key, key-image-must-
     be-on-curve, output-key-must-be-on-curve, output-type-must-be-
     `txout_to_key`/`txout_to_tagged_key`. Spec-anchors live in
-    `cryptonote_format_utils.cpp` (line 295 et al.) and `fcmp::rctSigs.cpp`.
+    `cryptonote_format_utils.cpp` (line 295 et al.) and `fcmp::ct_semantics.cpp`.
     Target: V3.x — lands with the `cryptonote_core` Rust port, since the
     invariants are daemon-side.
   - **FCMP++ tx-pool invariants** (from the 5 deleted `gen_fcmp_*`):
@@ -10630,7 +10667,7 @@ its wake.
   during the WI-2 bond-assembly pseudoOuts coupling closure
   (`GENESIS_TX_WIRE_FORMAT.md` §1.1): `get_transaction_signed_payload` in
   `src/cryptonote_core/tx_pqc_verify.cpp` hand-assembles the phase-1 signed
-  payload (prefix blob + rctSigBase blob + prunable hash + PQC header + all-key
+  payload (prefix blob + CtSigBase blob + prunable hash + PQC header + all-key
   hashes) in C++, byte-for-byte parallel to the Rust assembly that already
   exists and is tested on the signing side
   (`shekyl_wire::Transaction::pqc_signing_payload_hashes`, consumed by
@@ -11456,42 +11493,52 @@ one place to confirm each item's relationship to the wallet stack.
   references: decision log *"Wallet → Engine rename"* (2026-04-27)
   §"Deferred work" entry 1; CHANGELOG `[Unreleased]` BREAKING block.
 
-- **Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after
-  `wallet2` cutover (Monero-era misnomer).** Disposition pinned in
-  [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
-  (2026-06-09). Summary: April `ct_signatures` alias fixes RCT→CT only;
-  verifier module target is `ct_semantics` (not `ct_signatures`); wire tags,
-  C++ identifiers, and Rust vocabulary have separate cost curves; Rust uses
-  Shekyl-native names now and maps at FFI only.
+- **[Done 2026-08-21] Rename inherited `rct::` / `rctSig` / `rctSigs` C++
+  surface after `wallet2` cutover (Monero-era misnomer).** Disposition pinned
+  in [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
+  (2026-06-09): the April `ct_signatures` alias fixed RCT→CT only, so the
+  verifier module's target was **`ct_semantics`**, not `ct_signatures` — naming
+  it `ct_signatures.cpp` would have re-committed the "signatures" fossil the
+  rename exists to retire.
 
-  *Trigger:* **`wallet2.cpp` retirement** (Phase 5) — not a rename PR before
-  then. Rust-side naming discipline is effective immediately per the pin.
+  *Trigger fired early.* The pin gated the rename on `wallet2.cpp` retirement
+  (Phase 5). `wallet2` was not retired but **deleted** — `src/wallet/` no
+  longer exists — which fired the trigger inside V3.0 rather than the pinned
+  V3.2. The rename landed as pin §5 **step 2**: `rctTypes.{h,cpp}` →
+  `ct_types.{h,cpp}`, `rctOps` → `ct_ops`, `rctCryptoOps` → `ct_crypto_ops`,
+  `rctSigs.{h,cpp}` → **`ct_semantics.{h,cpp}`**, `namespace rct` → `namespace
+  ct`, `rctSig`/`rctSigBase` → `CtSig`/`CtSigBase`, `transaction.rct_signatures`
+  → `ct_signatures`, and the `serialize_rctsig_*` / `verRctSemantics*` /
+  `is_rct_*` function families.
 
-  *Target:* **V3.2** — [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
-  Phase 5. Scoped rename PR(s) at cutover; no rename riding feature work.
+  *Definition of done — discharged, item by item (pin §5):*
 
-  *Definition of done:* per pin §5 — delete construction stubs; C++ rename
-  gated on byte-identical round-trip; wire-tag changes update KATs at genesis
-  definition; `STRUCTURAL_TODO` updated.
+  - **Byte-identical round-trip.** Rename-only. The `binary_archive`
+    `VARIANT_TAG`s are numeric (`0x90`–`0xa0`) and untouched, so no serialized
+    byte depends on any renamed identifier; the `json_archive` /
+    `debug_archive` tag strings moved with the type names (JSON-visible,
+    pre-genesis-free — same class the 2026-07-11 public-API slice disclosed).
+    Full C++ build + full `ctest`, plus the Rust workspace gates, green.
+  - **Base-slot pseudo-out exit check** — grep-mechanical, and it passes:
+    every `pseudoOuts` occurrence the sweep touched is prunable-context
+    (`rv.p.pseudoOuts` / `tx.ct_signatures.p.pseudoOuts`). No base-slot
+    pseudo-out container exists under any name. (The field itself was already
+    gone: it was deleted **byte-identically** in the standalone pre-sweep PR of
+    2026-07-09. This entry previously claimed the deletion had a wire-visible
+    half riding pin §5 step 3 — that claim was **refuted at source** and
+    corrected in pin §2; nothing from the deletion rode this sweep.)
+  - **Wire tags** — already landed 2026-07-11 (V3.0 public-API slice); no KAT
+    update was owed here.
+  - **`STRUCTURAL_TODO` updated** — its naming section is now marked resolved.
+  - **Construction stubs deleted** — **not** discharged; pin §5 step 1 is
+    still owed and is filed as its own V3.0 item (`genRctFcmpPlusPlus`,
+    `fill_construct_tx_rct_stub`). Pin §5 permits landing step 2 first ("if
+    not already gone"); the sweep deliberately left both names untouched so the
+    remaining debt stays visible as `Rct`-spelled.
 
-  *Deletion, not rename — `rctSigBase::pseudoOuts` (pinned 2026-07-09, pin
-  §2).* The sweep **deletes the base-slot field outright; renaming it is a
-  scope failure**. A mechanical RCT→CT pass would carry the field through as
-  a renamed container with the same dead slot — dead-guarded under a new
-  name, in permanence. The accessor proves it dead: `get_pseudo_outs()`
-  (`rctTypes.h:430–438`) reaches the base slot only for
-  non-`CTTypeFcmpPlusPlusPqc` types; the only other live type is
-  `CTTypeNull` (coinbase), which never carries pseudo-outs — the slot is a
-  constant empty vector on every reachable path. The field, its
-  `CTTypeNull` wire branch (a wire change — rides pin §5 step 3 with the
-  serialization-version bump, not the byte-identical rename step), its
-  boost-serialization line, the accessor's base arm, and every
-  `rv.pseudoOuts.empty()` dead-field guard leave together; none is
-  separable. Exit check is grep-mechanical: post-sweep, no base-slot
-  pseudo-out container exists under any name.
-
-  *Reopening criterion:* new production `rctSigs` / `rct::` accretion after
-  Phase 5 → immediate rename PR (`21-reversion-clause-discipline.mdc`).
+  *Reopening criterion (now armed, pin §6):* any new production `rctSigs` /
+  `rct::` C++ surface → immediate rename PR, not a further deferral
+  ([`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
 
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names
   (folded into Phase 4b's Shekyl-native RPC method-set work).** The
@@ -11846,8 +11893,9 @@ one place to confirm each item's relationship to the wallet stack.
   called from `src/daemon/main.cpp` after `mlog_configure`. See
   `V3_WALLET_DECISION_LOG.md` 2026-06-10 + 2026-06-11 amendments.
 
-- **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
-  deferrals rest on the same "upstream cherry-pick preservation"
+- **Re-examine the `/FIiso646.h` deferral.** (Filed as a two-item entry;
+  the `rct::` → `ct::` half was discharged 2026-08-21 — see item 2.) The
+  deferral rests on the same "upstream cherry-pick preservation"
   framing that
   [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md)'s framing note
   (top of file) calls largely notional given Shekyl's actual
@@ -11857,8 +11905,8 @@ one place to confirm each item's relationship to the wallet stack.
   rename cost" but "do these mechanical changes earn their place in
   the V3.2 release on their own merits."
 
-  Two items in scope, evaluated independently against the V3.2 release
-  window:
+  Two items were in scope, evaluated independently against the V3.2
+  release window; item 2 has since landed early:
 
   1. **`/FIiso646.h` MSVC workaround** — hundreds of call sites use
      `not` / `and` / `or` instead of `!` / `&&` / `||`. The workaround
@@ -11872,23 +11920,26 @@ one place to confirm each item's relationship to the wallet stack.
      so a fourth "defer again to V3.3" disposition is allowed only
      with a written reason that does not reduce to cherry-pick-risk.
 
-  2. **`rct::` → `ct::` namespace rename** — disposition **revised**
-     (2026-06-09): full pin at
-     [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md).
-     `ct_signatures` alias is not the verifier-module answer; `rctSigs` →
-     `ct_semantics` at cutover. Trigger: `wallet2` gone (V3.2 Phase 5).
-     Rust vocabulary effective now; no rename PR pre-cutover.
+  2. **`rct::` → `ct::` namespace rename — DONE 2026-08-21, ahead of
+     V3.2.** Disposition was revised 2026-06-09 (full pin at
+     [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)):
+     the `ct_signatures` alias is not the verifier-module answer, so `rctSigs`
+     → **`ct_semantics`**, not `ct_signatures`. The pinned trigger was
+     `wallet2` gone; `wallet2` was **deleted** in the Phase-5 lane
+     (`src/wallet/` no longer exists), which fired the trigger inside V3.0
+     rather than V3.2, and the sweep landed as pin §5 step 2. This item needs
+     no V3.2 disposition; only item 1 remains open.
 
   Cross-references (by section header, robust against line drift):
   [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) framing note (top of
   file; cousin-not-downstream premise),
   §"C++ alternative tokens (`not`, `and`, `or`) used extensively"
   (alternative-tokens decision),
-  §"`rct_signatures` field name is a Monero-era misnomer — partially
-  addressed" (rct/ct rename status). Exit criteria: each of the two
-  items has a written V3.2 disposition (do, defer-with-reason, or
-  stay-on-workaround); the STRUCTURAL_TODO citations point at a real
-  section header. Target: V3.2.
+  §"`rct_signatures` field name is a Monero-era misnomer — resolved
+  2026-08-21" (rct/ct rename status). Exit criteria: **item 1** has a written
+  V3.2 disposition (do, defer-with-reason, or stay-on-workaround) — item 2 is
+  discharged — and the STRUCTURAL_TODO citations point at a real section
+  header. Target: V3.2.
 
 - **MSVC / Windows build-debt cluster (migrated from
   `STRUCTURAL_TODO.md`, 2026-05-30).** Consolidated here so open debt

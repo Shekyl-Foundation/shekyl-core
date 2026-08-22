@@ -33,7 +33,7 @@
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include <boost/thread/tss.hpp>
 
 #include <lmdb.h>
@@ -424,7 +424,7 @@ private:
       const tx_out& tx_output,
       const uint64_t& local_index,
       const uint64_t unlock_time,
-      const rct::key *commitment
+      const ct::key *commitment
       );
 
   virtual void add_tx_amount_output_indices(const uint64_t tx_id,

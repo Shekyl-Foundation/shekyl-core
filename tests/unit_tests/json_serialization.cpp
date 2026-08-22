@@ -19,7 +19,7 @@
 #include "memwipe.h"
 #include "common/varint.h"
 #include "shekyl/shekyl_ffi.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 
 namespace
 {
@@ -160,9 +160,9 @@ namespace
         uint64_t output_index)
     {
         ge_p3 hp;
-        rct::key od_rct;
+        ct::key od_rct;
         memcpy(od_rct.bytes, out.output_key, 32);
-        rct::hash_to_p3(hp, od_rct);
+        ct::hash_to_p3(hp, od_rct);
         uint8_t hp_of_o[32];
         ge_p3_tobytes(hp_of_o, &hp);
 
@@ -302,9 +302,9 @@ namespace test
 
         // --- 6. Build Hp(O) for leaf entry ---
         ge_p3 hp;
-        rct::key od_rct;
+        ct::key od_rct;
         memcpy(od_rct.bytes, input_out.output_key, 32);
-        rct::hash_to_p3(hp, od_rct);
+        ct::hash_to_p3(hp, od_rct);
         uint8_t hp_of_o[32];
         ge_p3_tobytes(hp_of_o, &hp);
 
@@ -448,21 +448,21 @@ namespace test
         cryptonote::add_tx_pub_key_to_extra(tx, tx_pk);
 
         // RCT base fields
-        tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-        tx.rct_signatures.txnFee = fee;
-        memcpy(tx.rct_signatures.message.bytes, tx_prefix_hash, 32);
-        memcpy(tx.rct_signatures.referenceBlock.data, reference_block, 32);
-        tx.rct_signatures.p.curve_trees_tree_depth = proofs_doc["tree_depth"].GetUint();
+        tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+        tx.ct_signatures.txnFee = fee;
+        memcpy(tx.ct_signatures.message.bytes, tx_prefix_hash, 32);
+        memcpy(tx.ct_signatures.referenceBlock.data, reference_block, 32);
+        tx.ct_signatures.p.curve_trees_tree_depth = proofs_doc["tree_depth"].GetUint();
 
         // outPk from commitments
         {
             const auto& comms = proofs_doc["commitments"].GetArray();
-            tx.rct_signatures.outPk.resize(comms.Size());
+            tx.ct_signatures.outPk.resize(comms.Size());
             for (rapidjson::SizeType i = 0; i < comms.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(comms[i].GetString());
                 EXPECT_EQ(bin.size(), 32u) << "DEBUG: commitment size mismatch at " << i;
-                memcpy(tx.rct_signatures.outPk[i].mask.bytes, bin.data(), 32);
+                memcpy(tx.ct_signatures.outPk[i].mask.bytes, bin.data(), 32);
             }
         }
 
@@ -476,10 +476,10 @@ namespace test
             size_t bp_len = bp_bin.size();
             size_t bp_off = 0;
 
-            rct::BulletproofPlus bpp{};
-            bpp.V.resize(tx.rct_signatures.outPk.size());
-            for (size_t vi = 0; vi < tx.rct_signatures.outPk.size(); ++vi)
-                bpp.V[vi] = tx.rct_signatures.outPk[vi].mask;
+            ct::BulletproofPlus bpp{};
+            bpp.V.resize(tx.ct_signatures.outPk.size());
+            for (size_t vi = 0; vi < tx.ct_signatures.outPk.size(); ++vi)
+                bpp.V[vi] = tx.ct_signatures.outPk[vi].mask;
 
             EXPECT_GE(bp_len, bp_off + 192u) << "DEBUG: BP+ blob too short for fixed fields";
             memcpy(bpp.A.bytes,  bp_data + bp_off, 32); bp_off += 32;
@@ -521,8 +521,8 @@ namespace test
                 bp_off += 32;
             }
 
-            tx.rct_signatures.p.bulletproofs_plus.clear();
-            tx.rct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
+            tx.ct_signatures.p.bulletproofs_plus.clear();
+            tx.ct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
         }
 
         // enc_amounts (9 bytes each)
@@ -530,13 +530,13 @@ namespace test
             if (!proofs_doc.HasMember("enc_amounts") || !proofs_doc["enc_amounts"].IsArray())
                 throw std::runtime_error("enc_amounts missing or not an array in signed proofs JSON");
             const auto& ea_arr = proofs_doc["enc_amounts"].GetArray();
-            tx.rct_signatures.enc_amounts.resize(ea_arr.Size());
+            tx.ct_signatures.enc_amounts.resize(ea_arr.Size());
             for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(ea_arr[i].GetString());
                 if (bin.size() != 9)
                     throw std::runtime_error("enc_amount must decode to 9 bytes");
-                memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), 9);
+                memcpy(tx.ct_signatures.enc_amounts[i].data(), bin.data(), 9);
             }
         }
 
@@ -545,28 +545,28 @@ namespace test
             if (!proofs_doc.HasMember("enc_labels") || !proofs_doc["enc_labels"].IsArray())
                 throw std::runtime_error("enc_labels missing or not an array in signed proofs JSON");
             const auto& el_arr = proofs_doc["enc_labels"].GetArray();
-            tx.rct_signatures.enc_labels.resize(el_arr.Size());
+            tx.ct_signatures.enc_labels.resize(el_arr.Size());
             for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(el_arr[i].GetString());
                 if (bin.size() != 9)
                     throw std::runtime_error("enc_label must decode to 9 bytes");
-                memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), 9);
+                memcpy(tx.ct_signatures.enc_labels[i].data(), bin.data(), 9);
             }
         }
 
         // pseudoOuts (prunable section for CTTypeFcmpPlusPlusPqc)
         {
-            tx.rct_signatures.p.pseudoOuts.resize(pseudo_outs_arr.Size());
+            tx.ct_signatures.p.pseudoOuts.resize(pseudo_outs_arr.Size());
             for (rapidjson::SizeType i = 0; i < pseudo_outs_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(pseudo_outs_arr[i].GetString());
-                memcpy(tx.rct_signatures.p.pseudoOuts[i].bytes, bin.data(), 32);
+                memcpy(tx.ct_signatures.p.pseudoOuts[i].bytes, bin.data(), 32);
             }
         }
 
         // FCMP++ proof blob
-        tx.rct_signatures.p.fcmp_pp_proof.assign(fcmp_proof.begin(), fcmp_proof.end());
+        tx.ct_signatures.p.fcmp_pp_proof.assign(fcmp_proof.begin(), fcmp_proof.end());
 
         // PQC auth via FFI
         {
@@ -643,9 +643,9 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
     EXPECT_EQ(tx.version, 3u) << "DEBUG: version mismatch";
     EXPECT_EQ(tx.vin.size(), 1u) << "DEBUG: input count mismatch";
     EXPECT_EQ(tx.vout.size(), 1u) << "DEBUG: output count mismatch";
-    EXPECT_EQ(tx.rct_signatures.type, rct::CTTypeFcmpPlusPlusPqc)
-        << "DEBUG: rct type mismatch, got " << (int)tx.rct_signatures.type;
-    EXPECT_FALSE(tx.rct_signatures.p.fcmp_pp_proof.empty())
+    EXPECT_EQ(tx.ct_signatures.type, ct::CTTypeFcmpPlusPlusPqc)
+        << "DEBUG: rct type mismatch, got " << (int)tx.ct_signatures.type;
+    EXPECT_FALSE(tx.ct_signatures.p.fcmp_pp_proof.empty())
         << "DEBUG: FCMP++ proof blob is empty";
     EXPECT_EQ(tx.pqc_auths.size(), 1u) << "DEBUG: pqc_auths count mismatch";
     EXPECT_FALSE(tx.pqc_auths[0].hybrid_public_key.empty())
@@ -668,12 +668,12 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
         << " Copy: " << epee::string_tools::pod_to_hex(tx_copy_hash);
 
     EXPECT_EQ(tx_copy.version, 3u);
-    EXPECT_EQ(tx_copy.rct_signatures.type, rct::CTTypeFcmpPlusPlusPqc);
-    EXPECT_EQ(tx_copy.rct_signatures.p.fcmp_pp_proof.size(),
-              tx.rct_signatures.p.fcmp_pp_proof.size())
+    EXPECT_EQ(tx_copy.ct_signatures.type, ct::CTTypeFcmpPlusPlusPqc);
+    EXPECT_EQ(tx_copy.ct_signatures.p.fcmp_pp_proof.size(),
+              tx.ct_signatures.p.fcmp_pp_proof.size())
         << "DEBUG: FCMP++ proof blob size changed after round-trip: "
-        << tx.rct_signatures.p.fcmp_pp_proof.size() << " -> "
-        << tx_copy.rct_signatures.p.fcmp_pp_proof.size();
+        << tx.ct_signatures.p.fcmp_pp_proof.size() << " -> "
+        << tx_copy.ct_signatures.p.fcmp_pp_proof.size();
     EXPECT_EQ(tx_copy.pqc_auths.size(), tx.pqc_auths.size());
     EXPECT_EQ(tx_copy.pqc_auths[0].hybrid_public_key.size(),
               tx.pqc_auths[0].hybrid_public_key.size())
@@ -681,14 +681,14 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
     EXPECT_EQ(tx_copy.pqc_auths[0].hybrid_signature.size(),
               tx.pqc_auths[0].hybrid_signature.size())
         << "DEBUG: PQC signature size changed after round-trip";
-    EXPECT_EQ(tx_copy.rct_signatures.outPk.size(),
-              tx.rct_signatures.outPk.size());
-    EXPECT_EQ(tx_copy.rct_signatures.p.pseudoOuts.size(),
-              tx.rct_signatures.p.pseudoOuts.size());
-    EXPECT_EQ(tx_copy.rct_signatures.enc_amounts.size(),
-              tx.rct_signatures.enc_amounts.size());
-    EXPECT_EQ(tx_copy.rct_signatures.enc_labels.size(),
-              tx.rct_signatures.enc_labels.size());
+    EXPECT_EQ(tx_copy.ct_signatures.outPk.size(),
+              tx.ct_signatures.outPk.size());
+    EXPECT_EQ(tx_copy.ct_signatures.p.pseudoOuts.size(),
+              tx.ct_signatures.p.pseudoOuts.size());
+    EXPECT_EQ(tx_copy.ct_signatures.enc_amounts.size(),
+              tx.ct_signatures.enc_amounts.size());
+    EXPECT_EQ(tx_copy.ct_signatures.enc_labels.size(),
+              tx.ct_signatures.enc_labels.size());
 
     cryptonote::blobdata tx_bytes{};
     cryptonote::blobdata tx_copy_bytes{};

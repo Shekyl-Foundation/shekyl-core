@@ -36,9 +36,9 @@
 #include <sstream>
 #include <vector>
 
-#include "fcmp/rctTypes.h"
-#include "fcmp/rctSigs.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_types.h"
+#include "fcmp/ct_semantics.h"
+#include "fcmp/ct_ops.h"
 #include "crypto/crypto.h"
 #include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
@@ -48,20 +48,20 @@
 
 using namespace std;
 using namespace crypto;
-using namespace rct;
+using namespace ct;
 
 namespace {
 
-crypto::hash hash_rctsig_base_component(const rct::rctSig &rv)
+crypto::hash hash_ctsig_base_component(const ct::CtSig &rv)
 {
   std::stringstream ss;
   binary_archive<true> ba(ss);
   const size_t inputs = rv.p.pseudoOuts.size();
   const size_t outputs = rv.enc_amounts.size();
-  rct::rctSig mutable_rv = rv;
+  ct::CtSig mutable_rv = rv;
   CHECK_AND_ASSERT_THROW_MES(
-      mutable_rv.serialize_rctsig_base(ba, inputs, outputs),
-      "serialize_rctsig_base failed in test");
+      mutable_rv.serialize_ctsig_base(ba, inputs, outputs),
+      "serialize_ctsig_base failed in test");
   return cryptonote::get_blob_hash(ss.str());
 }
 
@@ -115,7 +115,7 @@ TEST(fcmp, d2b)
 TEST(fcmp, key_ostream)
 {
   std::stringstream out;
-  out << "BEGIN" << rct::H << "END";
+  out << "BEGIN" << ct::H << "END";
   EXPECT_EQ(
     std::string{"BEGIN<8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94>END"},
     out.str()
@@ -125,52 +125,52 @@ TEST(fcmp, key_ostream)
 TEST(fcmp, zeroCommmit)
 {
   static const uint64_t amount = crypto::rand<uint64_t>();
-  const rct::key z = rct::zeroCommit(amount);
-  const rct::key a = rct::scalarmultBase(rct::identity());
-  const rct::key b = rct::scalarmultH(rct::d2h(amount));
-  const rct::key manual = rct::addKeys(a, b);
+  const ct::key z = ct::zeroCommit(amount);
+  const ct::key a = ct::scalarmultBase(ct::identity());
+  const ct::key b = ct::scalarmultH(ct::d2h(amount));
+  const ct::key manual = ct::addKeys(a, b);
   ASSERT_EQ(z, manual);
 }
 
-static rct::key uncachedZeroCommit(uint64_t amount)
+static ct::key uncachedZeroCommit(uint64_t amount)
 {
-  const rct::key am = rct::d2h(amount);
-  const rct::key bH = rct::scalarmultH(am);
-  return rct::addKeys(rct::G, bH);
+  const ct::key am = ct::d2h(amount);
+  const ct::key bH = ct::scalarmultH(am);
+  return ct::addKeys(ct::G, bH);
 }
 
 TEST(fcmp, zeroCommitCache)
 {
-  ASSERT_EQ(rct::zeroCommit(0), uncachedZeroCommit(0));
-  ASSERT_EQ(rct::zeroCommit(1), uncachedZeroCommit(1));
-  ASSERT_EQ(rct::zeroCommit(2), uncachedZeroCommit(2));
-  ASSERT_EQ(rct::zeroCommit(10), uncachedZeroCommit(10));
-  ASSERT_EQ(rct::zeroCommit(200), uncachedZeroCommit(200));
-  ASSERT_EQ(rct::zeroCommit(1000000000), uncachedZeroCommit(1000000000));
-  ASSERT_EQ(rct::zeroCommit(3000000000000), uncachedZeroCommit(3000000000000));
-  ASSERT_EQ(rct::zeroCommit(900000000000000), uncachedZeroCommit(900000000000000));
+  ASSERT_EQ(ct::zeroCommit(0), uncachedZeroCommit(0));
+  ASSERT_EQ(ct::zeroCommit(1), uncachedZeroCommit(1));
+  ASSERT_EQ(ct::zeroCommit(2), uncachedZeroCommit(2));
+  ASSERT_EQ(ct::zeroCommit(10), uncachedZeroCommit(10));
+  ASSERT_EQ(ct::zeroCommit(200), uncachedZeroCommit(200));
+  ASSERT_EQ(ct::zeroCommit(1000000000), uncachedZeroCommit(1000000000));
+  ASSERT_EQ(ct::zeroCommit(3000000000000), uncachedZeroCommit(3000000000000));
+  ASSERT_EQ(ct::zeroCommit(900000000000000), uncachedZeroCommit(900000000000000));
 }
 
 TEST(fcmp, H)
 {
   ge_p3 p3;
-  ASSERT_EQ(ge_frombytes_vartime(&p3, rct::H.bytes), 0);
+  ASSERT_EQ(ge_frombytes_vartime(&p3, ct::H.bytes), 0);
   ASSERT_EQ(memcmp(&p3, &ge_p3_H, sizeof(ge_p3)), 0);
 }
 
 TEST(fcmp, mul8)
 {
   ge_p3 p3;
-  rct::key key;
-  ASSERT_EQ(rct::scalarmult8(rct::identity()), rct::identity());
-  rct::scalarmult8(p3,rct::identity());
+  ct::key key;
+  ASSERT_EQ(ct::scalarmult8(ct::identity()), ct::identity());
+  ct::scalarmult8(p3,ct::identity());
   ge_p3_tobytes(key.bytes, &p3);
-  ASSERT_EQ(key, rct::identity());
-  ASSERT_EQ(rct::scalarmult8(rct::H), rct::scalarmultKey(rct::H, rct::EIGHT));
-  rct::scalarmult8(p3,rct::H);
+  ASSERT_EQ(key, ct::identity());
+  ASSERT_EQ(ct::scalarmult8(ct::H), ct::scalarmultKey(ct::H, ct::EIGHT));
+  ct::scalarmult8(p3,ct::H);
   ge_p3_tobytes(key.bytes, &p3);
-  ASSERT_EQ(key, rct::scalarmultKey(rct::H, rct::EIGHT));
-  ASSERT_EQ(rct::scalarmultKey(rct::scalarmultKey(rct::H, rct::INV_EIGHT), rct::EIGHT), rct::H);
+  ASSERT_EQ(key, ct::scalarmultKey(ct::H, ct::EIGHT));
+  ASSERT_EQ(ct::scalarmultKey(ct::scalarmultKey(ct::H, ct::INV_EIGHT), ct::EIGHT), ct::H);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ TEST(fcmp, mul8)
 
 TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 {
-  // Round-trips the rct base through `serialize_rctsig_base` — the ONLY
+  // Round-trips the rct base through `serialize_ctsig_base` — the ONLY
   // encoding of the base (the transaction serializer, the tx-hash paths, the
   // FCMP++ pre-hash, and the PQC payload binding all call it). A standalone
   // object serializer used to exist and was round-tripped here instead; it
@@ -188,8 +188,8 @@ TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   // dead-serializer cleanup (CT_SURFACE_NAMING_PIN.md §2). The prunable
   // section's real-path round-trip is covered at the transaction level
   // (tests/unit_tests/serialization.cpp and the shekyl-wire KATs).
-  rct::rctSig rv;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAB, sizeof(rv.referenceBlock));
 
@@ -203,9 +203,9 @@ TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   enc_lbl[8] = 0xE1;
   rv.enc_labels.push_back(enc_lbl);
 
-  rct::ctkey outpk;
-  outpk.dest = rct::pkGen();
-  outpk.mask = rct::pkGen();
+  ct::ctkey outpk;
+  outpk.dest = ct::pkGen();
+  outpk.mask = ct::pkGen();
   rv.outPk.push_back(outpk);
 
   const size_t inputs = 1;
@@ -216,18 +216,18 @@ TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(rv.serialize_rctsig_base(ar, inputs, outputs));
+    ASSERT_TRUE(rv.serialize_ctsig_base(ar, inputs, outputs));
     blob = oss.str();
   }
 
   // Deserialize
-  rct::rctSig rv2;
+  ct::CtSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, inputs, outputs));
+    ASSERT_TRUE(rv2.serialize_ctsig_base(ar, inputs, outputs));
   }
 
-  ASSERT_EQ(rv2.type, rct::CTTypeFcmpPlusPlusPqc);
+  ASSERT_EQ(rv2.type, ct::CTTypeFcmpPlusPlusPqc);
   ASSERT_EQ(rv2.txnFee, rv.txnFee);
   ASSERT_EQ(rv2.referenceBlock, rv.referenceBlock);
   ASSERT_EQ(rv2.enc_amounts, rv.enc_amounts);
@@ -237,17 +237,17 @@ TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 }
 
 // enc_label integrity is prehash-bound (no Pedersen commitment backstop).
-// Tampering enc_labels must change serialize_rctsig_base → get_tx_prehash input.
+// Tampering enc_labels must change serialize_ctsig_base → get_tx_prehash input.
 TEST(fcmp, enc_label_binds_rctsig_base_prehash)
 {
-  rct::rctSig rv;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xCD, sizeof(rv.referenceBlock));
   rv.enc_amounts.resize(1);
   rv.enc_labels.resize(1);
   rv.outPk.resize(1);
-  rv.outPk[0].mask = rct::skGen();
+  rv.outPk[0].mask = ct::skGen();
   for (size_t i = 0; i < 8; ++i)
   {
     rv.enc_amounts[0][i] = static_cast<uint8_t>(0x10 + i);
@@ -256,45 +256,45 @@ TEST(fcmp, enc_label_binds_rctsig_base_prehash)
   rv.enc_amounts[0][8] = 0x55;
   rv.enc_labels[0][8] = 0x66;
 
-  const crypto::hash h0 = hash_rctsig_base_component(rv);
+  const crypto::hash h0 = hash_ctsig_base_component(rv);
 
   rv.enc_labels[0][0] ^= 0x01;
-  const crypto::hash h_label_tamper = hash_rctsig_base_component(rv);
-  EXPECT_NE(h0, h_label_tamper) << "enc_label byte flip must change rctSigBase prehash component";
+  const crypto::hash h_label_tamper = hash_ctsig_base_component(rv);
+  EXPECT_NE(h0, h_label_tamper) << "enc_label byte flip must change CtSigBase prehash component";
 
   rv.enc_labels[0][0] ^= 0x01;
   rv.enc_amounts[0][0] ^= 0x01;
-  const crypto::hash h_amount_tamper = hash_rctsig_base_component(rv);
-  EXPECT_NE(h0, h_amount_tamper) << "enc_amount byte flip must change rctSigBase prehash component";
+  const crypto::hash h_amount_tamper = hash_ctsig_base_component(rv);
+  EXPECT_NE(h0, h_amount_tamper) << "enc_amount byte flip must change CtSigBase prehash component";
 }
 
 TEST(fcmp, CTTypeNull_serialization)
 {
-  // The real coinbase base encoding (`serialize_rctsig_base`, the only
+  // The real coinbase base encoding (`serialize_ctsig_base`, the only
   // encoding — see the roundtrip test above) for a Null rct with no outputs
   // is exactly the one type byte: no txnFee, no referenceBlock, no legacy
   // pseudo-out material. The full-transaction-level pin lives in
   // tests/unit_tests/serialization.cpp; this is the focused component read.
-  rct::rctSig rv;
-  rv.type = rct::CTTypeNull;
+  ct::CtSig rv;
+  rv.type = ct::CTTypeNull;
 
   std::string blob;
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(rv.serialize_rctsig_base(ar, 1, 0));
+    ASSERT_TRUE(rv.serialize_ctsig_base(ar, 1, 0));
     blob = oss.str();
   }
   ASSERT_EQ(blob.size(), 1u);
-  ASSERT_EQ(blob[0], static_cast<char>(rct::CTTypeNull));
+  ASSERT_EQ(blob[0], static_cast<char>(ct::CTTypeNull));
 
-  rct::rctSig rv2;
+  ct::CtSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, 1, 0));
+    ASSERT_TRUE(rv2.serialize_ctsig_base(ar, 1, 0));
   }
 
-  ASSERT_EQ(rv2.type, rct::CTTypeNull);
+  ASSERT_EQ(rv2.type, ct::CTTypeNull);
 }
 
 TEST(fcmp, referenceBlock_staleness_constants)
@@ -322,18 +322,18 @@ TEST(fcmp, get_pseudo_outs_uses_prunable_for_all_types)
   // dead-serializer cleanup): FCMP++ carries one per spend input, and a
   // coinbase (CTTypeNull) has none, so the accessor returns the empty
   // prunable vector there.
-  rct::rctSig rv;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
 
-  rct::key k1 = rct::skGen();
+  ct::key k1 = ct::skGen();
   rv.p.pseudoOuts.push_back(k1);
 
   const auto &po = rv.get_pseudo_outs();
   ASSERT_EQ(po.size(), 1u);
   ASSERT_EQ(po[0], k1);
 
-  rct::rctSig coinbase;
-  coinbase.type = rct::CTTypeNull;
+  ct::CtSig coinbase;
+  coinbase.type = ct::CTTypeNull;
   ASSERT_TRUE(coinbase.get_pseudo_outs().empty());
 }
 
@@ -370,13 +370,13 @@ TEST(fcmp, curve_tree_root_in_block_header)
 
 TEST(fcmp, fcmp_pp_proof_empty_rejected_by_verifier)
 {
-  rct::rctSig rv;
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.p.fcmp_pp_proof.clear();
   rv.p.curve_trees_tree_depth = 20;
 
-  // verRctSemanticsSimple should reject empty proof
-  ASSERT_FALSE(rct::verRctSemanticsSimple(rv));
+  // verCtSemanticsSimple should reject empty proof
+  ASSERT_FALSE(ct::verCtSemanticsSimple(rv));
 }
 
 // ---------------------------------------------------------------------------
@@ -699,12 +699,12 @@ cryptonote::transaction msw6_two_spend_skeleton()
   tx.vin.push_back(in0);
   tx.vin.push_back(in1);
 
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.txnFee = 0;
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
-  tx.rct_signatures.p.curve_trees_tree_depth = 1;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
-  tx.rct_signatures.p.pseudoOuts.resize(2);  // one per spend input
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.p.curve_trees_tree_depth = 1;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
+  tx.ct_signatures.p.pseudoOuts.resize(2);  // one per spend input
 
   tx.pqc_auths.resize(2);
   return tx;
@@ -799,9 +799,9 @@ TEST(fcmp, verification_cache_hash_deterministic)
   // Same transaction produces the same verification hash twice
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
 
   cryptonote::txin_to_key in1;
   memset(&in1.k_image, 0xBB, 32);
@@ -818,9 +818,9 @@ TEST(fcmp, verification_cache_hash_differs_on_proof_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
 
   cryptonote::txin_to_key in1;
   memset(&in1.k_image, 0xBB, 32);
@@ -829,7 +829,7 @@ TEST(fcmp, verification_cache_hash_differs_on_proof_change)
 
   crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
 
-  tx.rct_signatures.p.fcmp_pp_proof[0] = 0xFF;
+  tx.ct_signatures.p.fcmp_pp_proof[0] = 0xFF;
   crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
 
   ASSERT_NE(h1, h2);
@@ -839,9 +839,9 @@ TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
 
   cryptonote::txin_to_key in1;
   memset(&in1.k_image, 0xBB, 32);
@@ -850,7 +850,7 @@ TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
 
   crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
 
-  memset(&tx.rct_signatures.referenceBlock, 0xCC, 32);
+  memset(&tx.ct_signatures.referenceBlock, 0xCC, 32);
   crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
 
   ASSERT_NE(h1, h2);
@@ -860,9 +860,9 @@ TEST(fcmp, verification_cache_hash_differs_on_key_image_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
 
   cryptonote::txin_to_key in1;
   memset(&in1.k_image, 0xBB, 32);
@@ -881,7 +881,7 @@ TEST(fcmp, verification_cache_hash_null_for_non_fcmp_type)
 {
   cryptonote::transaction tx{};
   tx.version = 2;
-  tx.rct_signatures.type = rct::CTTypeNull;
+  tx.ct_signatures.type = ct::CTTypeNull;
 
   crypto::hash h = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h, crypto::null_hash);
@@ -891,9 +891,9 @@ TEST(fcmp, verification_cache_hash_multiple_inputs)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
-  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
+  memset(&tx.ct_signatures.referenceBlock, 0xAA, 32);
 
   for (int i = 0; i < 4; ++i)
   {

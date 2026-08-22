@@ -305,10 +305,10 @@ struct output_index {
   bool is_coin_base;
   bool spent;
   bool rct;
-  rct::key comm;
+  ct::key comm;
   const cryptonote::block *p_blk;
   const cryptonote::transaction *p_tx;
-  rct::key v3_mask{};
+  ct::key v3_mask{};
   crypto::secret_key v3_ho{};
   bool v3_recovered = false;
 
@@ -329,13 +329,13 @@ struct output_index {
 
   void set_rct(bool arct) {
     rct = arct;
-    if (rct && p_tx->rct_signatures.outPk.size() > out_no)
-      comm = p_tx->rct_signatures.outPk[out_no].mask;
+    if (rct && p_tx->ct_signatures.outPk.size() > out_no)
+      comm = p_tx->ct_signatures.outPk[out_no].mask;
     else
-      comm = rct::zeroCommit(amount);
+      comm = ct::zeroCommit(amount);
   }
 
-  rct::key commitment() const {
+  ct::key commitment() const {
     return comm;
   }
 
@@ -364,7 +364,7 @@ struct output_index {
   }
 };
 
-typedef std::tuple<uint64_t, crypto::public_key, rct::key> get_outs_entry;
+typedef std::tuple<uint64_t, crypto::public_key, ct::key> get_outs_entry;
 typedef std::pair<crypto::hash, size_t> output_hasher;
 typedef boost::hash<output_hasher> output_hasher_hasher;
 typedef std::map<uint64_t, std::vector<size_t> > map_output_t;
@@ -937,7 +937,7 @@ inline bool do_replay_file(const std::string& filename)
 
 #define MAKE_TX_MIX_RCT(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, NMIX, HEAD)                       \
   cryptonote::transaction TX_NAME;                                                             \
-  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, rct::RangeProofPaddedBulletproof); \
+  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, ct::RangeProofPaddedBulletproof); \
   VEC_EVENTS.push_back(TX_NAME);
 
 #define MAKE_TX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, HEAD) MAKE_TX_MIX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, 0, HEAD)
@@ -951,7 +951,7 @@ inline bool do_replay_file(const std::string& filename)
   }
 
 #define MAKE_TX_MIX_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD) \
-        MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, rct::RangeProofPaddedBulletproof, 4)
+        MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
 #define MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, RCT_TYPE, BP_VER)  \
   {                                                                                      \
     cryptonote::transaction t;                                                           \
@@ -961,7 +961,7 @@ inline bool do_replay_file(const std::string& filename)
   }
 
 #define MAKE_TX_MIX_DEST_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD)            \
-        MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, rct::RangeProofPaddedBulletproof, 4)
+        MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
 #define MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, RCT_TYPE, BP_VER)  \
   {                                                                                      \
     cryptonote::transaction t;                                                           \

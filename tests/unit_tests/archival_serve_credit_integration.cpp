@@ -632,10 +632,10 @@ TEST(archival_serve_credit, full_tx_bytes_match_the_rust_oracle)
   txin_archival_serve_credit_response vin{};
   vin.canonical_bytes = bytes_from_hex(k.kept_wire_hex);
   tx.vin.push_back(vin);
-  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
-  tx.rct_signatures.txnFee = 0;
-  tx.rct_signatures.p.curve_trees_tree_depth = 0;
-  tx.rct_signatures.p.serve_credit_pruned = {bytes_from_hex(k.pruned_hex)};
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {bytes_from_hex(k.pruned_hex)};
 
   blobdata blob;
   ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
@@ -653,8 +653,8 @@ TEST(archival_serve_credit, full_tx_bytes_match_the_rust_oracle)
   ASSERT_TRUE(std::holds_alternative<txin_archival_serve_credit_response>(parsed.vin[0]));
   EXPECT_EQ(std::get<txin_archival_serve_credit_response>(parsed.vin[0]).canonical_bytes,
             bytes_from_hex(k.kept_wire_hex));
-  ASSERT_EQ(parsed.rct_signatures.p.serve_credit_pruned.size(), 1u);
-  EXPECT_EQ(parsed.rct_signatures.p.serve_credit_pruned[0], bytes_from_hex(k.pruned_hex));
+  ASSERT_EQ(parsed.ct_signatures.p.serve_credit_pruned.size(), 1u);
+  EXPECT_EQ(parsed.ct_signatures.p.serve_credit_pruned[0], bytes_from_hex(k.pruned_hex));
   EXPECT_TRUE(parsed.pqc_auths.empty());
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
       << "tx id differs across languages";

@@ -32,7 +32,7 @@
 #pragma once
 
 #include <vector>
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "fcmp/multiexp.h"
 
 enum test_multiexp_algorithm
@@ -53,18 +53,18 @@ public:
   bool init()
   {
     data.resize(npoints);
-    res = rct::identity();
+    res = ct::identity();
     for (size_t n = 0; n < npoints; ++n)
     {
-      data[n].scalar = rct::skGen();
-      rct::key point = rct::scalarmultBase(rct::skGen());
+      data[n].scalar = ct::skGen();
+      ct::key point = ct::scalarmultBase(ct::skGen());
       if (ge_frombytes_vartime(&data[n].point, point.bytes))
         return false;
-      rct::key kn = rct::scalarmultKey(point, data[n].scalar);
-      res = rct::addKeys(res, kn);
+      ct::key kn = ct::scalarmultKey(point, data[n].scalar);
+      res = ct::addKeys(res, kn);
     }
-    straus_cache = rct::straus_init_cache(data);
-    pippenger_cache = rct::pippenger_init_cache(data);
+    straus_cache = ct::straus_init_cache(data);
+    pippenger_cache = ct::pippenger_init_cache(data);
     return true;
   }
 
@@ -88,8 +88,8 @@ public:
   }
 
 private:
-  std::vector<rct::MultiexpData> data;
-  std::shared_ptr<rct::straus_cached_data> straus_cache;
-  std::shared_ptr<rct::pippenger_cached_data> pippenger_cache;
-  rct::key res;
+  std::vector<ct::MultiexpData> data;
+  std::shared_ptr<ct::straus_cached_data> straus_cache;
+  std::shared_ptr<ct::pippenger_cached_data> pippenger_cache;
+  ct::key res;
 };

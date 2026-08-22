@@ -31,7 +31,7 @@
 
 #include "crypto/crypto.h"
 #include "crypto/chacha.h"
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include "cryptonote_config.h"
 
 
@@ -167,8 +167,8 @@ namespace hw {
         /*                            DERIVATION & KEY                             */
         /* ======================================================================= */
         virtual bool  verify_keys(const crypto::secret_key &secret_key, const crypto::public_key &public_key) = 0;
-        virtual bool  scalarmultKey(rct::key & aP, const rct::key &P, const rct::key &a) = 0;
-        virtual bool  scalarmultBase(rct::key &aG, const rct::key &a) = 0;
+        virtual bool  scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) = 0;
+        virtual bool  scalarmultBase(ct::key &aG, const ct::key &a) = 0;
         virtual bool  sc_secret_add( crypto::secret_key &r, const crypto::secret_key &a, const crypto::secret_key &b) = 0;
         virtual crypto::secret_key  generate_keys(crypto::public_key &pub, crypto::secret_key &sec, const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false) = 0;
         virtual bool  generate_key_derivation(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_derivation &derivation) = 0;
@@ -176,16 +176,16 @@ namespace hw {
         virtual bool  secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) = 0;
         virtual bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) = 0;
         // alternative prototypes available in libfcmp
-        rct::key scalarmultKey(const rct::key &P, const rct::key &a)
+        ct::key scalarmultKey(const ct::key &P, const ct::key &a)
         {
-            rct::key aP;
+            ct::key aP;
             scalarmultKey(aP, P, a);
             return aP;
         }
 
-        rct::key scalarmultBase(const rct::key &a)
+        ct::key scalarmultBase(const ct::key &a)
         {
-            rct::key aG;
+            ct::key aG;
             scalarmultBase(aG, a);
             return aG;
         }
@@ -208,18 +208,18 @@ namespace hw {
         }
 
 
-        virtual bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) = 0;
-        virtual bool  tx_prepare(const rct::key &H, const rct::key &xx, rct::key &a, rct::key &aG, rct::key &aHP, rct::key &rvII) = 0;
-        virtual bool  tx_prepare(rct::key &a, rct::key &aG) = 0;
-        virtual bool  tx_hash(const rct::keyV &long_message, rct::key &c) = 0;
-        virtual bool  tx_sign(const rct::key &c, const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss) = 0;
+        virtual bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const ct::keyV &hashes, const ct::ctkeyV &outPk, ct::key &prehash) = 0;
+        virtual bool  tx_prepare(const ct::key &H, const ct::key &xx, ct::key &a, ct::key &aG, ct::key &aHP, ct::key &rvII) = 0;
+        virtual bool  tx_prepare(ct::key &a, ct::key &aG) = 0;
+        virtual bool  tx_hash(const ct::keyV &long_message, ct::key &c) = 0;
+        virtual bool  tx_sign(const ct::key &c, const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss) = 0;
 
         /* ======================================================================= */
         /*                                 FCMP++                                  */
         /* ======================================================================= */
-        virtual bool fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) { return false; }
+        virtual bool fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) { return false; }
         virtual bool fcmp_proof_start(size_t num_inputs) { return false; }
-        virtual bool fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) { return false; }
+        virtual bool fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) { return false; }
 
         virtual bool  close_tx(void) = 0;
 

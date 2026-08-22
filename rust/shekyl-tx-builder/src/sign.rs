@@ -120,7 +120,7 @@ pub fn sign_transaction_with_terms(
     // consensus convention `rv.outPk[i].mask = scalarmult8(bp.V[i])` (the BP+
     // V is the C/8 form, so scalarmult8 recovers the real C) and the
     // pseudo-out side `genC(...)` (also real C). The balance check
-    // `sum(pseudoOuts) == sum(outPk) + fee*H` (`verRctSemanticsSimple`) sums
+    // `sum(pseudoOuts) == sum(outPk) + fee*H` (`verCtSemanticsSimple`) sums
     // these points directly, so both sides must be the real ×1 commitment;
     // `pseudo_outs` below are `C_tilde = a*G + amount_in*H` (real ×1), so the
     // output side must not be cofactor-scaled.

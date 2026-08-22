@@ -14,8 +14,8 @@ This is dev tooling. It is *not* run in CI — its output
 Regenerate only when the consensus leaf/root rules change (see README).
 
 Why daemon JSON rather than a Rust block decode: Shekyl's coinbase
-serializes a real `outPk` under `CTTypeNull` (`rctTypes.h`
-`serialize_rctsig_base`), which `shekyl-oxide`'s coinbase model
+serializes a real `outPk` under `CTTypeNull` (`ct_types.h`
+`serialize_ctsig_base`), which `shekyl-oxide`'s coinbase model
 (`proofs: None`) does not parse. Until that gap closes (FOLLOWUPS),
 the authoritative leaf inputs come from the daemon's structured block
 JSON, which serializes `outPk`/vout/extra correctly.

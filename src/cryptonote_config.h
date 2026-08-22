@@ -424,9 +424,9 @@ namespace config
   constexpr size_t ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 1 + 32 + 10 + 10 + 64;
   static_assert(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117, "twin of shekyl-wire's ceiling");
   // The PRUNED-record ceiling deliberately does NOT live here. It is enforced
-  // in rct::CtSigPrunable (rctTypes.h), which cannot include this header
+  // in ct::CtSigPrunable (ct_types.h), which cannot include this header
   // without a layering regression, so that is its one C++ home
-  // (`rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES`, pinned to the same
+  // (`ct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES`, pinned to the same
   // literal as shekyl-wire's). A copy here would have been a third site that
   // only declared -- a duplicate across a boundary that is inconvenient, not
   // impossible, to cross, which is not the kind rule 17 licenses.

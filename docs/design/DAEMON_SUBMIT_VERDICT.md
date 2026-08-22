@@ -1271,9 +1271,9 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | N3 | Weight ≤ ½ min block weight (Rule 4) | `:78-84` | `too_big` | **C** ⚠ — weight from I3, limit from snapshot |
 | N4 | `check_tx_semantic` (Rule 5) | `:87` | various | rows M1–M8 |
 | N5 | `check_tx_outputs` (Rule 6) | `:91` | `invalid_output` | rows O1–O6 |
-| N6 | Serve-credit fee-only RCT shape | `:120-139` | `invalid_input` | **A** ⚠ — `shekyl-wire::validate` arm-mixing + fee-only shape; confirm field-for-field parity incl. `verRctSemanticsFeeOnly` |
-| N7 | Bond-post RCT shape (`verRctSemanticsBondPost`) | `:140-163` | `invalid_input` | **C** ⚠ — port or bind bond-post semantics check; KAT |
-| N8 | BP+ canonical layout + batch semantics (`verRctSemanticsSimple`, Rule 7) | `:170-175`, `:194-239` | `invalid_input` | **C** ⚠ — resolve whether BP+/CT-balance verification is already Rust-backed (shekyl-oxide/shekyl-proofs) or needs binding; KAT either way |
+| N6 | Serve-credit fee-only RCT shape | `:120-139` | `invalid_input` | **A** ⚠ — `shekyl-wire::validate` arm-mixing + fee-only shape; confirm field-for-field parity incl. `verCtSemanticsFeeOnly` |
+| N7 | Bond-post RCT shape (`verCtSemanticsBondPost`) | `:140-163` | `invalid_input` | **C** ⚠ — port or bind bond-post semantics check; KAT |
+| N8 | BP+ canonical layout + batch semantics (`verCtSemanticsSimple`, Rule 7) | `:170-175`, `:194-239` | `invalid_input` | **C** ⚠ — resolve whether BP+/CT-balance verification is already Rust-backed (shekyl-oxide/shekyl-proofs) or needs binding; KAT either way |
 
 ### 8.4 `core::check_tx_semantic` (`cryptonote_core.cpp:842-923`)
 
@@ -1431,7 +1431,7 @@ nobody files it as a hole later.
 The §8.7.1 matrix (F36) predates the C-1 emission arm; these rows extend it
 with the same discipline. Sources: `ver_non_input_consensus`'s emission
 branch (`tx_verification_utils.cpp`, `verCtSemanticsEmission` →
-`rctSigs.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
+`ct_semantics.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
 branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
 (`shekyl-archival-retention::emission_verify` — the witness-minting
 `emission_vin_verify_claims` / `_backing` / `_auth` + the assembling

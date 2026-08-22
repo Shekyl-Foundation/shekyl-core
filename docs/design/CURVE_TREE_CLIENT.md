@@ -300,7 +300,7 @@ impl CurveTreeClient {
 
 `ReferenceBlock = { height, curve_tree_root, block_hash }` (the implemented
 shape — `block_hash` is echoed into `TreeContext::reference_block` for the
-eventual `rctSig.referenceBlock`, supplied by the caller alongside the root so
+eventual `CtSig.referenceBlock`, supplied by the caller alongside the root so
 the anchor is one value, not a loose positional `[u8; 32]`);
 `tree_depth` is **derived** during assembly (`build_layers(stream).len()`, F4),
 not carried on `ReferenceBlock`, and packed into `TreeContext`. The C3 invariant

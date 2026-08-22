@@ -35,9 +35,9 @@
 //! the same shape on the other side of the ledger: a `pqc_auths` slot, no
 //! pseudo-out, its cleartext `total_reward` entering the CT balance input-side
 //! (`Σ pseudoOuts + total_reward·H = Σ out_masks + fee·H`,
-//! `src/fcmp/rctSigs.cpp` `verCtSemanticsEmission`). For a pure spend
+//! `src/fcmp/ct_semantics.cpp` `verCtSemanticsEmission`). For a pure spend
 //! `n_spend == nvin`, so the counts only diverge on bond-post / emission txs.
-//! Source: `src/fcmp/rctTypes.h` (`serialize_rctsig_base` / `serialize_rctsig_prunable`,
+//! Source: `src/fcmp/ct_types.h` (`serialize_ctsig_base` / `serialize_ctsig_prunable`,
 //! `BulletproofPlus`), `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`,
 //! tx-level between base and prunable).
 
@@ -110,7 +110,7 @@ pub const MAX_OUTPUTS: usize = 16;
 /// Max Bp+ `|L|` / `|R|` — `6 + log2(MAX_OUTPUTS)`. A well-formed aggregated Bp+
 /// has `|L| == |R| == 6 + ceil(log2(n_padded))` with `n_padded ≤ MAX_OUTPUTS`, so
 /// this is the largest length any valid proof carries; the C++ deserializer
-/// rejects above it (`n_bulletproof_plus_max_amounts`, rctTypes.cpp: `L_size <=
+/// rejects above it (`n_bulletproof_plus_max_amounts`, ct_types.cpp: `L_size <=
 /// 6 + extra_bits`). The exact per-tx value is output-count-coupled and enforced
 /// by [`Transaction::validate`].
 pub const MAX_BP_LR_LEN: usize = 6 + MAX_OUTPUTS.ilog2() as usize;
@@ -772,8 +772,8 @@ impl Output {
 /// The committed confidential-transaction base arrays, sized by output count.
 ///
 /// Present for **both** the coinbase `Null` type and the `Fcmp` spend — the C++
-/// `serialize_rctsig_base` writes `enc_amounts` / `enc_labels` / `outPk` for both
-/// so every output gets a tree-leaf commitment (rctTypes.h:209-280).
+/// `serialize_ctsig_base` writes `enc_amounts` / `enc_labels` / `outPk` for both
+/// so every output gets a tree-leaf commitment (ct_types.h:209-280).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CtBase {
     /// Per-output encrypted amounts (8-byte value + 1-byte tag).
@@ -872,7 +872,7 @@ impl PqcAuth {
     }
 }
 
-/// An aggregated Bulletproof+ (`rctTypes.h` `BulletproofPlus`). `V` is not
+/// An aggregated Bulletproof+ (`ct_types.h` `BulletproofPlus`). `V` is not
 /// serialized (restored from `outPk`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BpPlus {
@@ -936,8 +936,8 @@ impl BpPlus {
         let r1 = read_array(r)?;
         let s1 = read_array(r)?;
         let d1 = read_array(r)?;
-        // Parse-parity with the C++ deserializer: `serialize_rctsig_prunable`
-        // (rctTypes.h:338) fails deserialization unless every proof has
+        // Parse-parity with the C++ deserializer: `serialize_ctsig_prunable`
+        // (ct_types.h:338) fails deserialization unless every proof has
         // `6 <= |L| == |R| <= 6 + log2(BULLETPROOF_PLUS_MAX_OUTPUTS)`
         // (`n_bulletproof_plus_max_amounts` returns 0 otherwise). The remaining
         // output-count coupling — `|L| == 6 + ceil(log2(next_pow2(n_out)))` —
@@ -969,7 +969,7 @@ impl BpPlus {
     }
 }
 
-/// FCMP++ prunable proof data (`rctTypes.h` `serialize_rctsig_prunable`).
+/// FCMP++ prunable proof data (`ct_types.h` `serialize_ctsig_prunable`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Prunable {
     /// Bulletproof+ proofs (genesis: exactly one — `nbp == 1`).
@@ -1985,9 +1985,9 @@ impl Transaction {
                     // `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))`. The daemon
                     // enforces both directions: `n_padded >= n_out` at parse
                     // (`n_bulletproof_plus_max_amounts < outputs` fails
-                    // deserialization, rctTypes.h:338) and `n_padded < 2·n_out` at
+                    // deserialization, ct_types.h:338) and `n_padded < 2·n_out` at
                     // verify (`n_bulletproof_amounts_base`'s V/L tightness,
-                    // rctTypes.cpp:234-235, with `V` restored from outPk == n_out).
+                    // ct_types.cpp:234-235, with `V` restored from outPk == n_out).
                     // Without this a tx with a valid output count but an
                     // inconsistent `|L|` passes local validation and dies at the
                     // daemon — a local↔daemon divergence surfacing at submit.

@@ -314,7 +314,7 @@ pub struct OutputInfo {
 /// crate was created to fix.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
-    /// Hash of the reference block (stored in rctSig.referenceBlock).
+    /// Hash of the reference block (stored in CtSig.referenceBlock).
     #[serde(with = "hex_bytes32")]
     pub reference_block: [u8; 32],
     /// Curve tree root at the reference block height (passed to prover).
@@ -340,10 +340,10 @@ pub struct PqcAuth {
     pub public_key: Vec<u8>,
 }
 
-/// Result of signing: everything needed to populate rctSig and pqc_auths.
+/// Result of signing: everything needed to populate CtSig and pqc_auths.
 ///
 /// The caller takes these fields and inserts them into the transaction's
-/// `rct_signatures` and `pqc_auths` at the protocol layer. The `SignedProofs`
+/// `ct_signatures` and `pqc_auths` at the protocol layer. The `SignedProofs`
 /// struct intentionally does *not* know about the full transaction format —
 /// it only produces the cryptographic material.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -374,9 +374,9 @@ pub struct SignedProofs {
     pub fcmp_proof: Vec<u8>,
     /// Per-input PQC authentication (ML-DSA-65 hybrid signatures).
     pub pqc_auths: Vec<PqcAuth>,
-    /// Reference block hash (echo back for rctSig).
+    /// Reference block hash (echo back for CtSig).
     #[serde(with = "hex_bytes32")]
     pub reference_block: [u8; 32],
-    /// Tree depth (echo back for rctSig).
+    /// Tree depth (echo back for CtSig).
     pub tree_depth: u8,
 }

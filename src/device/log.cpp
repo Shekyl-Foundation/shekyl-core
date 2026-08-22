@@ -115,8 +115,8 @@ namespace hw {
        return x;
     }
 
-    rct::key  decrypt(const rct::key &sec)  {
-         rct::key  x = sec;
+    ct::key  decrypt(const ct::key &sec)  {
+         ct::key  x = sec;
        decrypt((char*)x.bytes, 32);
        return x;
     }
@@ -127,8 +127,8 @@ namespace hw {
        return x;
     }
 
-    rct::keyV decrypt(const rct::keyV &keys) {
-        rct::keyV x ;
+    ct::keyV decrypt(const ct::keyV &keys) {
+        ct::keyV x ;
         x.reserve(keys.size());
         for (unsigned int j = 0; j<keys.size(); j++) {
             x.push_back(decrypt(keys[j]));

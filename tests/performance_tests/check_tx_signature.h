@@ -36,7 +36,7 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/crypto.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 
 #include "multi_tx_test_base.h"
 
@@ -82,7 +82,7 @@ public:
   {
     if (rct)
     {
-      return rct::verRctSemanticsSimple(m_tx.rct_signatures);
+      return ct::verCtSemanticsSimple(m_tx.ct_signatures);
     }
     else
     {
@@ -150,11 +150,11 @@ public:
 
   bool test()
   {
-    std::vector<const rct::rctSig*> rvv;
+    std::vector<const ct::CtSig*> rvv;
     rvv.reserve(m_txes.size());
     for (size_t n = 0; n < m_txes.size(); ++n)
-      rvv.push_back(&m_txes[n].rct_signatures);
-    return rct::verRctSemanticsSimple(rvv);
+      rvv.push_back(&m_txes[n].ct_signatures);
+    return ct::verCtSemanticsSimple(rvv);
   }
 
 private:

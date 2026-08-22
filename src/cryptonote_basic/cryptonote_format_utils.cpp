@@ -38,7 +38,7 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace epee;
@@ -131,15 +131,15 @@ namespace cryptonote
   {
     if (tx.version >= 2 && !is_coinbase(tx))
     {
-      rct::rctSig &rv = tx.rct_signatures;
-      if (rv.type == rct::CTTypeNull)
+      ct::CtSig &rv = tx.ct_signatures;
+      if (rv.type == ct::CTTypeNull)
         return true;
       if (rv.outPk.size() != tx.vout.size())
       {
         LOG_PRINT_L1("Failed to parse transaction from blob, bad outPk size in tx " << get_transaction_hash(tx));
         return false;
       }
-      for (size_t n = 0; n < tx.rct_signatures.outPk.size(); ++n)
+      for (size_t n = 0; n < tx.ct_signatures.outPk.size(); ++n)
       {
         crypto::public_key output_public_key;
         if (!get_output_public_key(tx.vout[n], output_public_key))
@@ -147,7 +147,7 @@ namespace cryptonote
           LOG_PRINT_L1("Failed to get output public key for output " << n << " in tx " << get_transaction_hash(tx));
           return false;
         }
-        rv.outPk[n].dest = rct::pk2rct(output_public_key);
+        rv.outPk[n].dest = ct::pk2rct(output_public_key);
       }
 
       if (!base_only)
@@ -167,7 +167,7 @@ namespace cryptonote
         // be absent from the struct.
         const bool serve_credit_shape =
           classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only;
-        if (rct::is_rct_bulletproof_plus(rv.type) && !serve_credit_shape)
+        if (ct::is_ct_bulletproof_plus(rv.type) && !serve_credit_shape)
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -179,7 +179,7 @@ namespace cryptonote
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus L size in tx " << get_transaction_hash(tx));
             return false;
           }
-          const size_t max_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus[0]);
+          const size_t max_outputs = ct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus[0]);
           if (max_outputs < tx.vout.size())
           {
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus max outputs in tx " << get_transaction_hash(tx));
@@ -189,7 +189,7 @@ namespace cryptonote
           CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
           rv.p.bulletproofs_plus[0].V.resize(n_amounts);
           for (size_t i = 0; i < n_amounts; ++i)
-            rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
+            rv.p.bulletproofs_plus[0].V[i] = ct::scalarmultKey(rv.outPk[i].mask, ct::INV_EIGHT);
         }
       }
     }
@@ -322,10 +322,10 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(!tx.pruned, std::numeric_limits<uint64_t>::max(), "get_transaction_weight does not support pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 3, blob_size, "Shekyl requires tx version >= 3");
-    const rct::rctSig &rv = tx.rct_signatures;
-    if (!rct::is_rct_bulletproof_plus(rv.type))
+    const ct::CtSig &rv = tx.ct_signatures;
+    if (!ct::is_ct_bulletproof_plus(rv.type))
       return blob_size;
-    const size_t n_padded_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
+    const size_t n_padded_outputs = ct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
     uint64_t bp_clawback = get_transaction_weight_clawback(tx, n_padded_outputs);
     CHECK_AND_ASSERT_THROW_MES_L1(bp_clawback <= std::numeric_limits<uint64_t>::max() - blob_size, "Weight overflow");
     return blob_size + bp_clawback;
@@ -335,8 +335,8 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc,
-        std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
+    CHECK_AND_ASSERT_MES(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc,
+        std::numeric_limits<uint64_t>::max(), "Unsupported ct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
 
     // get pruned data size
@@ -424,7 +424,7 @@ namespace cryptonote
   {
     if (tx.version > 1)
     {
-      fee = tx.rct_signatures.txnFee;
+      fee = tx.ct_signatures.txnFee;
       return true;
     }
     uint64_t amount_in = 0;
@@ -1196,7 +1196,7 @@ namespace cryptonote
       // pseudoOuts are sized by the spend subset, not vin.size() — see
       // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_ctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
+      bool r = tt.ct_signatures.p.serialize_ctsig_prunable(ba, t.ct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }
@@ -1235,20 +1235,20 @@ namespace cryptonote
     get_transaction_prefix_hash(t, prefix_hash);
 
     // base rct
-    crypto::hash base_rct_hash;
+    crypto::hash base_ct_hash;
     {
       std::stringstream ss;
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize rct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
+      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
+      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize ct signatures base");
+      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
     }
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::CTTypeNull)
+    if (t.ct_signatures.type == ct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
       prunable_hash = pruned_data_hash;
@@ -1265,13 +1265,13 @@ namespace cryptonote
       CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
-      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
     else
     {
       // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
 
@@ -1302,21 +1302,21 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
 
     // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auths follows)
-    crypto::hash base_rct_hash;
+    crypto::hash base_ct_hash;
     {
       transaction &tt = const_cast<transaction&>(t);
       std::stringstream ss;
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
+      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize ct signatures base");
+      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
     }
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::CTTypeNull)
+    if (t.ct_signatures.type == ct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
     {
@@ -1335,13 +1335,13 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
-      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
     else
     {
       // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
 

@@ -126,7 +126,7 @@ visitor. The closest existing shape is `txin_archival_bond_post` (carries
 
 - **`tx_verification_utils.cpp` `check_tx_semantics`** — RCT-semantics gate;
   has dedicated branches for serve-credit (fee-only) and bond-post
-  (`verRctSemanticsBondPost`), and a `skip_rct_semantics_batch` path for
+  (`verCtSemanticsBondPost`), and a `skip_rct_semantics_batch` path for
   stake-claim-only txs.
 - **`blockchain.cpp` `check_tx_inputs`** — tx-class detection
   (`is_stake_claim_only`, `is_archival_serve_credit_only`,
