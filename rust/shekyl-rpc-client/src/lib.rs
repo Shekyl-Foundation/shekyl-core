@@ -365,11 +365,18 @@ pub trait Rpc: Sync + Clone {
         async move {
             // The wire type is `shekyl-rpc-types`'s (RK-D1): one definition for
             // the daemon that serves it and the wallet that reads it.
-            let res = self
+            let reply = self
                 .rpc_call::<Option<()>, shekyl_rpc_types::GetHeightResponse>("get_height", None)
-                .await?
-                .height;
-            let res = usize::try_from(res)
+                .await?;
+            // A non-OK status is a refusal, whatever the other fields hold —
+            // the same rule the daemon's own console applies to this reply.
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_height refused: {}",
+                    reply.status.0
+                )));
+            }
+            let res = usize::try_from(reply.height)
                 .map_err(|_| RpcError::InvalidNode("height does not fit usize".to_string()))?;
             if res == 0 {
                 Err(RpcError::InvalidNode(
