@@ -15107,8 +15107,8 @@ becomes a project.
 **Reopening criterion:** before `ANON_ZONE_TRANSIT_MEASURED_MS` is composed into
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
-finding that it is small. **DISCHARGED 2026-08-21 via the second branch — see
-§94.9.**
+finding that it is small. **DISCHARGED 2026-08-21 via the first branch —
+measured on the floor device (`skl-pi`); see §94.9.**
 
 ### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
 

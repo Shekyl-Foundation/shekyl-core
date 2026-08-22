@@ -553,15 +553,26 @@ mod tests {
         // per-cell running digest + the node<->guard TLS record layer, counted
         // in BOTH directions, with slack — 10 passes over the message bytes.
         const PASSES: f64 = 10.0;
-        // MEASURED floor AES-128-CTR at 8 KB on `skl-pi` (the reference Pi 4
-        // Model B), 2026-08-21: 0.139 GB/s. The Cortex-A72 has NO ARMv8 crypto
-        // extension (cpuinfo Features: fp asimd evtstrm crc32 cpuid — no aes),
-        // so this is software AES, ~94x slower than the x86 reference. An
-        // earlier draft ASSUMED hardware AES and bounded it at 0.8 GB/s; the
-        // floor measurement (§94.9) refuted that by 5.8x, which is why this is
-        // a measured constant, not a bound.
+        // MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
+        // 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in
+        // 1000s of bytes per second"; the 8 KB-block figure was 138993.66k =
+        // 138_993_660 B/s ≈ 0.139 × 10^9 B/s. The Cortex-A72 has NO ARMv8 crypto
+        // extension (cpuinfo Features: `fp asimd evtstrm crc32 cpuid` — no aes),
+        // so this is software AES, ~94x slower than the x86 reference. An earlier
+        // draft ASSUMED hardware AES and bounded it at 0.8 GB/s; the floor
+        // measurement (§94.9) refuted that by 5.8x — hence a measured constant,
+        // decimal-GB explicit because the 1% bar is tight enough for a GiB-vs-GB
+        // slip (7.4%) to matter.
         const PI4_AES_BYTES_PER_SEC: f64 = 0.139e9;
-        // The larger admissible message, so the bound covers the worst case.
+
+        // The max-admissible transaction's NOTIFY size (§94.5(b)) — an EMPIRICAL
+        // worst-case message, not a protocol constant, and it deliberately is not
+        // imported from `shekyl-tor-transit-spike` (a disposable spike this
+        // foundational crate must not depend on, rule 25). Because it is not
+        // canonical, a change to it is a §94.9-revisit trigger, and the check
+        // below makes that dependency explicit rather than silent: it asserts the
+        // size sits below the point where the fraction would breach the bar, and
+        // reports the headroom, so a size increase reds this for the right reason.
         const MAX_ADMISSIBLE_MSG_BYTES: f64 = 16_651.0;
 
         let node_crypto_ms = (MAX_ADMISSIBLE_MSG_BYTES * PASSES) / PI4_AES_BYTES_PER_SEC * 1_000.0;
@@ -571,22 +582,28 @@ mod tests {
         // large as it can honestly be.
         let min_hop_ms = SPEC_VERIFY_COST.f_ms(1, GENESIS_TREE_DEPTH).unwrap();
 
+        // 1% is the negligibility bar, checked against the SMALLEST possible hop
+        // (verify floor with transit -> 0 — no real anon hop reaches it), which
+        // makes the fraction as large as it can honestly be. Against a realistic
+        // transit-bearing hop (§94's ~500 ms) it is ~0.19% (§94.9 table).
+        const BAR: f64 = 0.01;
         let fraction = node_crypto_ms / min_hop_ms;
-        // 1% is the negligibility bar. The stacked worst case here — max message,
-        // both hop endpoints on the floor device, hop = verify floor with
-        // transit -> 0 (no real anon hop reaches it), at the MEASURED floor AES
-        // rate — lands at ~0.96%. Against a realistic transit-bearing hop (§94's
-        // ~500 ms) the fraction is ~0.19% (§94.9 table). The bar sits just above
-        // the worst-case fiction so the check reds if the term drifts further —
-        // which it did once, at a 0.5% bar on a wrong (5.8x optimistic) rate.
+        // The message size at which the fraction would hit the bar. Reporting it
+        // turns "goes red if the message size drifts" from a claim into a number:
+        // the bound tolerates messages up to `breach_bytes`; the max-admissible
+        // sits below it with the headroom printed. A future size past this point
+        // reds the assertion for exactly the intended reason.
+        let breach_bytes = BAR * PI4_AES_BYTES_PER_SEC * (min_hop_ms / 1_000.0) / PASSES;
         assert!(
-            fraction < 0.01,
-            "§94.9: per-hop node crypto is {node_crypto_ms:.3} ms against the minimum \
-             hop of {min_hop_ms:.1} ms = {:.3}% — over the 1% bar, no longer \
-             negligible. Re-examine the \
-             ruling (or measure the term on a floor device) before it composes into \
-             a shipped hop.",
-            fraction * 100.0
+            MAX_ADMISSIBLE_MSG_BYTES < breach_bytes,
+            "§94.9: at {MAX_ADMISSIBLE_MSG_BYTES:.0} B the per-hop node crypto is \
+             {node_crypto_ms:.3} ms = {:.3}% of the {min_hop_ms:.1} ms minimum hop, \
+             at/over the {}% bar (breach at {breach_bytes:.0} B). The max message \
+             grew past what the negligibility bound tolerates — revisit §94.9 (or \
+             measure the term end-to-end on the floor device) before it composes \
+             into a shipped hop.",
+            fraction * 100.0,
+            BAR * 100.0
         );
     }
 }
