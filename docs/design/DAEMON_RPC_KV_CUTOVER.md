@@ -130,14 +130,23 @@ reaches `handle_block_found`), so it carries the pre-flight pass.
 ### 3.1 Types — `shekyl-rpc-types`
 
 ```rust
-/// GET/POST /get_height (alias /getheight). Response only; the request is empty.
+/// Response of `GET|POST /get_height` (alias `/getheight`). The request body
+/// is empty (and ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetHeightResponse {
-    pub status: RpcStatus,          // the `status` string every reply carries
-    pub height: u64,                // chain height = top block height + 1
-    pub hash: BlockHashHex,         // top block hash, 64 hex chars
+    pub status: RpcStatus,  // the `status` string every reply carries
+    pub height: u64,        // chain height = top block height + 1
+    pub hash: String,       // top block hash, 64 lowercase hex chars
 }
 ```
+
+(Verbatim from `shekyl-rpc-types/src/chain.rs`; the snippet is a mirror,
+not a second definition.) `hash` is a `String` in RK-1 on purpose:
+`shekyl-types::BlockHash` serializes as a byte array, not hex, so it cannot
+sit on this wire directly, and a hex-serde newtype for one field is
+pre-provisioning. RK-3 — block headers, where hashes multiply — introduces
+that newtype (`HashHex`, hex serde over `BlockHash`) and migrates this
+field to it; until then the string's shape is pinned by the oracle vector.
 
 Rules, all test-pinned in the crate: field names are the wire names; `u64`
 serializes as a JSON number (epee does); hashes are lowercase hex strings
@@ -191,11 +200,27 @@ vectors.
 
 ### 3.4 Console
 
-`shekyl_daemon_console_run(const char* const* argv, size_t argc, core_rpc_handle* live_or_null, const char* address_or_null, uint8_t** out, size_t* out_len) -> int32_t` renders
-`print_height` / `version` in Rust. The C++ executor's two entries forward
-to it and the C++ bodies go. `shekyld <cmd>`'s exit status still derives
-from the sticky failure flag (#533); the Rust renderer returns non-zero on a
-failed request and the flag is set from that.
+The exported ABI (`src/shekyl/shekyl_ffi.h`, Rust in
+`shekyl-daemon-rpc/src/console.rs`):
+
+```c
+int32_t shekyl_daemon_console_run(
+    const char* const* argv, size_t argc,   // argv[0] selects the command
+    void* rpc_server_ptr,                   // live core_rpc_server in-process, else NULL
+    const char* address,                    // "host:port" as `shekyld <cmd>`, else NULL
+    uint64_t timeout_secs,                  // remote-arm request bound
+    uint8_t** out_ptr, size_t* out_len);    // text on OK, reason on ERR_REQUEST
+// 0 OK · -1 ERR_NULL_PTR · -2 ERR_UNKNOWN · -3 ERR_REQUEST · -4 ERR_AMBIGUOUS_SOURCE
+```
+
+Exactly one of `rpc_server_ptr` / `address` is set (both → `-4`, refused
+before either is touched). The live arm calls the native method directly;
+the remote arm posts through `shekyl_daemon_ctl_post`'s transport and
+renders the typed reply. RK-1 renders `print_height`; each later slice adds
+its commands here and deletes the C++ bodies, which become one-line
+forwards until RK-C removes the C++ console. `shekyld <cmd>`'s exit status
+still derives from the sticky failure flag (#533): a non-zero return sets
+it.
 
 ### 3.5 Oracle vectors
 
