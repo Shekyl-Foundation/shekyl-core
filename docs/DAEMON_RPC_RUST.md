@@ -247,7 +247,8 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 
 | Surface | Axum | FFI | Live consumer | Disposition |
 |---------|------|-----|---------------|-------------|
-| JSON REST (info, height, txs, pool, …) | yes | yes | wallets / CLI | keep |
+| `/get_height` (+ `/getheight`), `get_version` | yes | **native Rust** (RK-1: `shekyl-daemon-rpc::methods` over `shekyl_rpc_chain_tip` / `shekyl_rpc_hardforks`) | wallets / console | migrated 2026-08-21 |
+| JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
 | Binary sync (`/get_blocks.bin`, hashes, indexes) | yes | yes | wallet refresh | keep |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |
 | `POST /submit_transaction` | native Rust | n/a | wallets | keep |
@@ -258,10 +259,17 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
 | epee HTTP client (`http_client.h`, `http_auth`, `net_helper`, `http_abstract_invoke.h`) + dead server parser | n/a | n/a | none (control client → `shekyl_daemon_ctl_post`; bootstrap forward deleted) | deleted 2026-08-21 |
 
-## Phase 2 (KV serialization)
+## Phase 2 (KV cutover)
 
-Replace epee portable-storage in `core_rpc_ffi.cpp` with a Rust-native
-codec. Out of scope for the Phase 1 transport deletion.
+Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md)
+(family `RK-`). The Phase-1 sentence "replace epee portable-storage in
+`core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
+codec cannot serialize C++ structs without a `#[repr(C)]` façade of every
+wire type (rule 40), so the wire type and the handler of each method move to
+Rust **together**, over coarse `shekyl_rpc_*_facts` FFI, with the console
+rendering following the method. epee KV leaves the RPC path method by method
+and `core_rpc_server.*` / `core_rpc_server_commands_defs.h` / the dispatch
+tables here are deleted at RK-X.
 
 ## Thread Safety
 

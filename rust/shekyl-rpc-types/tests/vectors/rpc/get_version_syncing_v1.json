@@ -1,0 +1,14 @@
+{
+  "current_height": 1000,
+  "hard_forks": [{
+    "height": 0,
+    "hf_version": 1
+  },{
+    "height": 5000,
+    "hf_version": 2
+  }],
+  "release": true,
+  "status": "OK",
+  "target_height": 2000000,
+  "version": 196630
+}

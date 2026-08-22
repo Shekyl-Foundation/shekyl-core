@@ -63,7 +63,7 @@ char* core_rpc_ffi_stem_tallies(core_rpc_handle* h);
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json);
 
-// Binary endpoints (/get_blocks.bin, /get_outs.bin, etc.).
+// Binary endpoints (/get_blocks.bin, /get_hashes.bin, etc.).
 // On success: sets *out_buf and *out_len, returns 0. Caller frees with core_rpc_ffi_free_buf.
 // On failure: returns -1 (unknown URI or deserialization error).
 int core_rpc_ffi_bin_endpoint(core_rpc_handle* h,

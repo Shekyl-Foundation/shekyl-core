@@ -86,16 +86,8 @@ namespace cryptonote
 // whether they can talk to a given daemon without having to know in
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
-#define CORE_RPC_VERSION_MAJOR 3
-// 3.22: drop `untrusted` from every response; drop get_info bootstrap
-// fields; delete set_bootstrap_daemon and get_public_nodes; drop the
-// advertised `rpc_port` / `rpc_credits_per_hash` from get_peer_list's
-// `peer` and get_connections' `connection_info` (RPC is
-// operator-to-operator — no foreign-daemon discovery or silent forward,
-// and no readout of strangers' advertised RPC endpoints).
-#define CORE_RPC_VERSION_MINOR 22
-#define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
-#define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
+// CORE_RPC_VERSION (3.22) lives in rust/shekyl-rpc-types/src/chain.rs since
+// RK-1: get_version, its only reader, is served natively.
 
   struct rpc_request_base
   {
@@ -110,30 +102,6 @@ namespace cryptonote
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(status)
     END_KV_SERIALIZE_MAP()
-  };
-
-  struct COMMAND_RPC_GET_HEIGHT
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t 	 height;
-      std::string hash;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE(hash)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
   };
 
   struct COMMAND_RPC_GET_BLOCKS_FAST
@@ -460,105 +428,8 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
+
   //-----------------------------------------------
-  struct get_outputs_out
-  {
-    uint64_t amount;
-    uint64_t index;
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(amount)
-      KV_SERIALIZE(index)
-    END_KV_SERIALIZE_MAP()
-  };
-
-  struct COMMAND_RPC_GET_OUTPUTS_BIN
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<get_outputs_out> outputs;
-      bool get_txid;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(outputs)
-        KV_SERIALIZE_OPT(get_txid, true)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct outkey
-    {
-      crypto::public_key key;
-      ct::key mask;
-      bool unlocked;
-      uint64_t height;
-      crypto::hash txid;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_VAL_POD_AS_BLOB(key)
-        KV_SERIALIZE_VAL_POD_AS_BLOB(mask)
-        KV_SERIALIZE(unlocked)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE_VAL_POD_AS_BLOB(txid)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<outkey> outs;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(outs)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-  //-----------------------------------------------
-  struct COMMAND_RPC_GET_OUTPUTS
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<get_outputs_out> outputs;
-      bool get_txid;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(outputs)
-        KV_SERIALIZE(get_txid)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct outkey
-    {
-      std::string key;
-      std::string mask;
-      bool unlocked;
-      uint64_t height;
-      std::string txid;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(key)
-        KV_SERIALIZE(mask)
-        KV_SERIALIZE(unlocked)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE(txid)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<outkey> outs;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(outs)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
   //-----------------------------------------------
   // Epee marshaling mirror of the typed submit contract
   // (docs/design/DAEMON_SUBMIT_VERDICT.md §2.4; authoritative Rust
@@ -1722,24 +1593,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
   
-  struct COMMAND_RPC_FAST_EXIT
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-    
-    struct response_t: public rpc_response_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
   
   struct COMMAND_RPC_GET_LIMIT
   {
@@ -2054,49 +1907,6 @@ namespace cryptonote
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(histogram)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_GET_VERSION
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct hf_entry
-    {
-      uint8_t hf_version;
-      uint64_t height;
-
-      bool operator==(const hf_entry& hfe) const { return hf_version == hfe.hf_version && height == hfe.height; }
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(hf_version)
-        KV_SERIALIZE(height)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      uint32_t version;
-      bool release;
-      uint64_t current_height;
-      uint64_t target_height;
-      std::vector<hf_entry> hard_forks;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(version)
-        KV_SERIALIZE(release)
-        KV_SERIALIZE_OPT(current_height, (uint64_t)0)
-        KV_SERIALIZE_OPT(target_height, (uint64_t)0)
-        KV_SERIALIZE_OPT(hard_forks, std::vector<hf_entry>())
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

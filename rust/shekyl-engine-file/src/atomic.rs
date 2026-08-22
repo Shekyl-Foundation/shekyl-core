@@ -57,10 +57,14 @@
 //!
 //! # What this module does *not* do
 //!
-//! - It does **not** take the advisory lock. Locking is the caller's
+//! - It does **not** take the keys-file lock. Locking is the caller's
 //!   job — a save-state path locks the keys file once at open time and
 //!   holds it across many auto-saves, so `atomic_write_file` has no
-//!   business re-acquiring per-write.
+//!   business re-acquiring per-write. What it does offer is a hook
+//!   *between* the fsync and the rename ([`atomic_write_file_with`]): a
+//!   lock is held on an inode, and this module replaces inodes, so a
+//!   caller that must stay locked across a replacement locks the staged
+//!   file through that hook, before the path names it.
 //! - It does **not** enforce write-once. That is a handle-level
 //!   invariant (see [`crate::error::WalletFileError::KeysFileWriteOnceViolation`])
 //!   unrelated to whether the write itself is atomic.
@@ -121,6 +125,22 @@ pub(crate) fn atomic_write_file(
     target: &Path,
     bytes: &[u8],
 ) -> Result<Durability, WalletFileError> {
+    atomic_write_file_with(target, bytes, |_| Ok(())).map(|((), durability)| durability)
+}
+
+/// [`atomic_write_file`] with a hook that runs after the staged file is
+/// complete and fsynced and **before** it is renamed into place, receiving
+/// the staged path. Whatever the hook returns is handed back beside the
+/// [`Durability`]; if the rename then fails, it is dropped with the error
+/// and the target is untouched.
+///
+/// The one caller is password rotation, which locks the staged file here
+/// so the keys-file lock follows the inode the path is about to name.
+pub(crate) fn atomic_write_file_with<T>(
+    target: &Path,
+    bytes: &[u8],
+    before_persist: impl FnOnce(&Path) -> Result<T, WalletFileError>,
+) -> Result<(T, Durability), WalletFileError> {
     let parent = target.parent().ok_or_else(|| {
         WalletFileError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -153,6 +173,11 @@ pub(crate) fn atomic_write_file(
         file_ref.sync_all()?;
     }
 
+    // The staged file is complete and durable; the caller may now attach
+    // whatever must travel with it into place (the keys-file lock). If this
+    // fails, `tempfile` unlinks the staged file and the target is untouched.
+    let staged = before_persist(tmp.path())?;
+
     // Persist into place; on any error, `tempfile` cleans up the temp.
     tmp.persist(target)
         .map_err(|e| WalletFileError::rename(target.to_path_buf(), e.error))?;
@@ -164,8 +189,8 @@ pub(crate) fn atomic_write_file(
     // a failure a caller must unwind an already-applied write around. Report
     // it in the return value instead of as an error.
     match fsync_parent_dir(parent) {
-        Ok(()) => Ok(Durability::Confirmed),
-        Err(_) => Ok(Durability::Unconfirmed),
+        Ok(()) => Ok((staged, Durability::Confirmed)),
+        Err(_) => Ok((staged, Durability::Unconfirmed)),
     }
 }
 

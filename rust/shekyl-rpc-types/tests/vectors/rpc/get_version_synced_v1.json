@@ -1,0 +1,10 @@
+{
+  "current_height": 1234567,
+  "hard_forks": [{
+    "height": 0,
+    "hf_version": 1
+  }],
+  "release": false,
+  "status": "OK",
+  "version": 196630
+}

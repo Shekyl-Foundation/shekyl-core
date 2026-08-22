@@ -610,13 +610,6 @@ namespace cryptonote
      difficulty_type get_block_cumulative_difficulty(uint64_t height) const;
 
      /**
-      * @copydoc Blockchain::get_outs
-      *
-      * @note see Blockchain::get_outs
-      */
-     bool get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const;
-
-     /**
       * @copydoc Blockchain::get_output_distribution
       *
       * @brief get per block distribution of outputs of a given amount

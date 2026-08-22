@@ -4,6 +4,27 @@
 
 ### Changed
 
+- **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
+  natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
+  wire types are now `shekyl-rpc-types::{GetHeightResponse,
+  GetVersionResponse}` — one definition for the daemon that serves them,
+  the wallet that reads them and the console that renders them — and the
+  handlers read core state through a typed facts FFI
+  (`shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks`) instead of C++
+  `COMMAND_RPC_*` structs marshaled by epee. Parity with the old handlers
+  is pinned by oracle vectors captured from epee before the C++ was
+  deleted; the JSON documents are parsed-equal (same keys, values and
+  `KV_SERIALIZE_OPT` omissions; key order and whitespace are no longer
+  epee's). `CORE_RPC_VERSION` (3.22, unchanged) moved to Rust with its
+  only reader. The console's `print_height` renders in Rust on both arms
+  (`shekyld print_height` and the interactive console). Also deleted as
+  dead: `COMMAND_RPC_GET_OUTPUTS{,_BIN}`, `COMMAND_RPC_FAST_EXIT` and the
+  `core::get_outs` / `Blockchain::get_outs` chain behind them — none had
+  a dispatch row or a caller. No change to any reply a client parses; the
+  reason text inside a transport-level failure (the 500 envelope's `error`
+  string) now names what actually failed instead of "FFI dispatch failed"
+  — diagnostic text, not contract (RK-D8 scope).
+
 - **The legacy FCMP++ prove seam is gone.** `genRctFcmpPlusPlus` — the C++ end
   of the retired C++ → Rust → C++ → Rust proving round-trip — had no caller:
   production signing moved to `shekyl_sign_fcmp_transaction` (one call), and
@@ -29,7 +50,6 @@
   `fill_construct_tx_rct_stub` is deliberately **not** deleted: the
   `construct_tx*` chain that calls it is the C++ consensus oracle's transaction
   factory, and retiring that is the oracle lane's work.
-
 - **`shekyl-wallet-rpc` refuses two listen configurations it used to
   accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
   A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
@@ -147,6 +167,44 @@
   in `shekyl-economics`, beside the math it selects.
 
 ### Fixed
+
+- **Opening a wallet on Windows failed with an internal error (`-32603`)
+  on every attempt.** `WalletFile::open` took the keys-file lock and then
+  read the file through a *second* handle (`std::fs::read`). The lock is
+  `fd-lock` over `LockFileEx`, which on Windows is a **mandatory**
+  byte-range lock — the locked byte cannot be read through any other
+  handle, the same process included — so the read failed with
+  `ERROR_LOCK_VIOLATION`, surfaced as a generic I/O detail, and reached
+  the RPC as `-32603`. POSIX `flock` is advisory, so nothing on Linux or
+  macOS could see it; the Windows CI scouting run of PR #526 did, on the
+  first wallet `open` ever executed there. The read now goes through the
+  handle that holds the lock (`KeysFileLock::acquire_and_read`) — one
+  handle, and the bytes of the file that was locked rather than whatever
+  sits at the path a moment later. A unit test pins the platform fact
+  (a path read while locked fails on Windows, succeeds on POSIX), and
+  `lock.rs` no longer claims the lock is advisory everywhere. The review
+  of that fix found the sibling: `WalletFile::verify_password` — the
+  first-stake entry's verify-before-close — read the path lock-free *by
+  design*, which is the same second handle, so every first stake on
+  Windows would have failed the same way. Verification now runs on a
+  snapshot of the sealed envelope taken from the open handle
+  (`WalletFile::sealed_keys_envelope`) — the keys bytes that handle read
+  under its lock — and, in the RPC, only after the engine lock that guards
+  the handle is released, so the Argon2id derivation never holds the
+  engine's writers up. Review then found the lock's oldest gap: it is held
+  on an inode, and a password rotation replaces the keys file's inode, so
+  after `change_password` a second open of the same wallet succeeded on
+  POSIX. The rotation now locks the staged file before renaming it into
+  place (the atomic writer gained a pre-persist hook), so the lock follows
+  the file; a regression test pins it.
+
+  The Windows scouting step that found it reported **success** on the run
+  page — `continue-on-error` hides its command's result — with the failure
+  ~8,000 log lines deep. It now runs every command, publishes a per-command
+  exit table to the job summary, and fails the step (still non-blocking)
+  when any command failed. Results recorded in
+  `docs/design/WINDOWS_WALLET_PROBE_SHEET.md` §4.3: P-16 passed first
+  time; the self-hosted pipe under axum served its first real request.
 
 - **`shekyld <command>` exits `1` when the request failed.** A recognized
   command whose RPC could not be completed — daemon not running, connection
