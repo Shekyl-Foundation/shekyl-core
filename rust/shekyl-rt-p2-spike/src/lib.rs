@@ -747,7 +747,8 @@ pub enum DialError {
     /// TCP connect failed — no TLS was attempted.
     Connect(std::io::Error),
     /// `TlsConnector::connect` failed: the handshake did not complete and
-    /// nothing was written. Use [`rustls_error_in`] to recover the typed
+    /// no application byte was written (the handshake itself is bytes on the
+    /// wire). Use [`rustls_error_in`] to recover the typed
     /// rustls error it usually wraps, and [`pin_error_of`] on that for a pin
     /// mismatch.
     Handshake(std::io::Error),

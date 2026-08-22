@@ -178,9 +178,10 @@ impl std::fmt::Debug for ServerConfig {
 pub struct AppState {
     /// Tenant / wallet-dir state.
     pub tenants: tokio::sync::Mutex<TenantState>,
-    /// Auth config: the one owned copy, shared by refcount with the
-    /// middlewares that read it (a second owned copy would be a second
-    /// credential in memory for the router's lifetime).
+    /// Auth config: the one owned copy — [`AppState::new`] takes the
+    /// `ServerConfig` by value and moves the credential out, so the config's
+    /// copy does not outlive construction — shared by refcount with the
+    /// middlewares that read it.
     pub auth: Arc<AuthConfig>,
     /// Argon2id cost for create / rotate.
     pub kdf: KdfParams,
@@ -192,17 +193,20 @@ pub struct AppState {
 // state without going through `ServerConfig` bind.
 
 impl AppState {
-    fn new(config: &ServerConfig) -> Arc<Self> {
+    /// Consumes the config: the credential moves in, and nothing else holds
+    /// it afterwards. Callers bind the listener before calling this — the
+    /// one thing that needs the config after validation.
+    fn new(config: ServerConfig) -> Arc<Self> {
         Arc::new(Self {
             tenants: tokio::sync::Mutex::new(TenantState::new(
-                config.wallet_dir.clone(),
+                config.wallet_dir,
                 config.network,
                 DaemonEndpoint {
-                    address: config.daemon_address.clone(),
-                    proxy: config.proxy.clone(),
+                    address: config.daemon_address,
+                    proxy: config.proxy,
                 },
             )),
-            auth: Arc::new(config.auth.clone()),
+            auth: Arc::new(config.auth),
             kdf: config.kdf,
             shutdown: Arc::new(Notify::new()),
         })
@@ -234,22 +238,34 @@ const JSON_MEDIA_TYPE: &str = "application/json";
 /// carries one in its `Host` — and a wallet bound to a numeric address has
 /// no legitimate reason to be addressed by a name other than `localhost`.
 /// Accepted: an IP literal (`127.0.0.1:29500`, `[::1]:29500`) or `localhost`,
-/// port optional, case folded. Anything else is a request that was routed
-/// here by a name this server never answered to.
+/// port optional, case folded — parsed as an authority, strictly: a
+/// bracketed IPv6 literal may be followed by nothing or `:<port>`, and so
+/// may an IPv4 literal or `localhost`, with the port numeric. Anything else
+/// — a name DNS could re-point, or non-authority syntax such as
+/// `[::1]evil` — is a request that was routed here by a name this server
+/// never answered to.
 ///
 /// Applied only where authentication is disabled — the loopback exception,
 /// where the browser boundary is the only gate. On an authenticated leg the
 /// credential is the gate and an operator's `wallet.lan:29500` keeps working.
 fn host_is_unrebindable(host: &str) -> bool {
+    /// Nothing, or `:<u16>` — the only suffix an authority's host may carry.
+    fn port_suffix_ok(suffix: &str) -> bool {
+        suffix.is_empty()
+            || suffix
+                .strip_prefix(':')
+                .is_some_and(|port| port.parse::<u16>().is_ok())
+    }
     let host = host.trim();
     if let Some(rest) = host.strip_prefix('[') {
         // `[v6]` or `[v6]:port`; the brackets are the v6 literal's syntax.
-        return rest
-            .split_once(']')
-            .is_some_and(|(inner, _)| inner.parse::<std::net::Ipv6Addr>().is_ok());
+        return rest.split_once(']').is_some_and(|(inner, after)| {
+            inner.parse::<std::net::Ipv6Addr>().is_ok() && port_suffix_ok(after)
+        });
     }
-    let name = host.rsplit_once(':').map_or(host, |(name, _port)| name);
-    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok()
+    let (name, suffix) = host.split_at(host.find(':').unwrap_or(host.len()));
+    (name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok())
+        && port_suffix_ok(suffix)
 }
 
 /// `Content-Type` media type, parameters (`; charset=utf-8`) ignored, case
@@ -481,11 +497,11 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
-    let state = AppState::new(&config);
+    let bound = BoundListener::bind(&config.listen).await?;
+    let state = AppState::new(config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
 
-    let bound = BoundListener::bind(&config.listen).await?;
     bound.log_ready("shekyl-wallet-rpc listening")?;
     bound.serve(app, shutdown).await?;
     Ok(())
@@ -876,11 +892,11 @@ fn private_config(
 pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
-    let state = AppState::new(&config);
+    let bound = BoundListener::bind(&config.listen).await?;
+    let state = AppState::new(config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
 
-    let bound = BoundListener::bind(&config.listen).await?;
     let listen = bound.endpoint()?;
     bound.log_ready("shekyl-wallet-rpc in-process server started")?;
     let join = tokio::spawn(bound.serve(app, shutdown));
@@ -1083,6 +1099,13 @@ mod tests {
             "127.0.0.1.evil.example",
             "[evil.example]:29500",
             "::1",
+            // Non-authority syntax: the boundary must not be parsable around.
+            "[::1]evil",
+            "[::1]:notaport",
+            "[::1]:",
+            "127.0.0.1:notaport",
+            "localhost:",
+            "localhost:29500:evil",
         ] {
             assert!(!host_is_unrebindable(bad), "{bad:?}");
         }
