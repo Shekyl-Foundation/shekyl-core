@@ -3,16 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Advisory lock on the keys file, held across the lifetime of a
-//! `WalletFile`.
+//! Exclusive lock on the keys file, held across the lifetime of a
+//! `WalletFile`. Advisory on POSIX; on Windows it also denies access to
+//! the locked byte (see *Platform semantics*).
 //!
-//! # Why advisory, and why on the keys file
+//! # Why a lock, and why on the keys file
 //!
 //! The wallet pair `(.wallet.keys, .wallet)` is logically one wallet.
 //! Two processes mutating the same wallet concurrently would race on
 //! the `.wallet` auto-save path and potentially corrupt the region-2
-//! AEAD sequencing. The advisory lock enforces "one live handle per
-//! wallet on this host" without needing cross-process IPC.
+//! AEAD sequencing. The lock enforces "one live handle per wallet on
+//! this host" without needing cross-process IPC.
 //!
 //! We pin the lock to `.wallet.keys` rather than `.wallet` because:
 //!
@@ -27,22 +28,23 @@
 //!    there is the earliest point in the open sequence where contention
 //!    can be detected loudly.
 //!
+//! # Platform semantics
+//!
 //! The lock is *advisory* on POSIX (`flock(2)`): the OS does not enforce
 //! it, and a malicious process can always race. **On Windows it is
 //! not.** `LockFileEx` is a mandatory byte-range lock: the byte it covers
 //! cannot be read or written through any *other* handle — a second
 //! handle in the same process included — until the locking handle
-//! closes. `fd-lock` locks byte 0. That single fact shaped the API
-//! below: **every read of the keys file while the lock is held goes
-//! through the handle that holds it** ([`KeysFileLock::acquire_and_read`]),
-//! and `WalletFile::verify_password` is a method on the open handle rather
-//! than a path function for the same reason.
-//! The first `open` of a wallet on Windows failed with
-//! `ERROR_LOCK_VIOLATION` because it did `acquire` and then
-//! `std::fs::read(path)` — a second handle — and that surfaced as a
-//! `-32603` at the RPC, not as a locking error anyone could read (the
-//! Windows CI scouting run of PR #526, 2026-08-21). What the lock buys
-//! on both platforms:
+//! closes. `fd-lock` locks byte 0. That single fact is the contract the
+//! API below is built on: **every read of the keys file while the lock
+//! is held goes through the handle that holds it**
+//! ([`KeysFileLock::acquire_and_read`]), and a caller that needs the keys
+//! bytes while a wallet is open takes them from the open handle
+//! (`WalletFile::sealed_keys_envelope`) rather than from the path. A unit
+//! test below pins the platform fact; the incident that established it
+//! (the first Windows `open`, failing with `ERROR_LOCK_VIOLATION`) is
+//! recorded in `docs/design/WINDOWS_WALLET_PROBE_SHEET.md` §4.3 and the
+//! CHANGELOG. What the lock buys on both platforms:
 //!
 //! - Accidental double-open from the same user (e.g. two wallet GUIs,
 //!   a GUI + a CLI refresh) fails loudly instead of silently corrupting.
@@ -108,8 +110,9 @@ use fd_lock::RwLock;
 
 use crate::error::WalletFileError;
 
-/// Advisory exclusive lock held on a `.wallet.keys` file for the lifetime
-/// of a wallet handle. The underlying `File` is kept open inside the
+/// Exclusive lock held on a `.wallet.keys` file for the lifetime of a
+/// wallet handle — advisory on POSIX, access-denying on Windows (module
+/// doc, *Platform semantics*). The underlying `File` is kept open inside the
 /// [`fd_lock::RwLock`] so that on `Drop` the handle closes and the OS
 /// releases the lock.
 pub(crate) struct KeysFileLock {
@@ -129,9 +132,8 @@ impl std::fmt::Debug for KeysFileLock {
 }
 
 impl KeysFileLock {
-    /// Acquire a non-blocking exclusive advisory lock on `path`. On
-    /// contention returns [`WalletFileError::AlreadyLocked`] rather
-    /// than blocking.
+    /// Acquire a non-blocking exclusive lock on `path`. On contention
+    /// returns [`WalletFileError::AlreadyLocked`] rather than blocking.
     ///
     /// The keys file must already exist (the caller is responsible for
     /// either creating it first, or failing with a more precise error

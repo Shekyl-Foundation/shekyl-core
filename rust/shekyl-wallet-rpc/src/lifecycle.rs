@@ -968,21 +968,23 @@ async fn reopen_with_first_stake_intent(
         )
     };
 
-    // Verify-then-close through the OPEN handle (envelope KDF + AEAD auth
-    // against the keys bytes it read under its lock; see
-    // `WalletFile::verify_password`): the common failure — a wrong
-    // password — refuses HERE, wallet still open. No second handle on the
-    // keys file is opened: on Windows the open handle's lock is mandatory,
-    // and a path read here failed every stake attempt.
-    {
-        let engine = shared.read().await;
-        tokio::task::block_in_place(|| engine.file().verify_password(password.as_slice()))
-    }
-    .map_err(|e| match e {
-        shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
-        other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
-    })?;
+    // Verify-then-close: the common failure — a wrong password — refuses
+    // HERE, wallet still open. The sealed envelope is the one the OPEN
+    // handle read under its lock (no second handle on the keys file: on
+    // Windows that lock is mandatory, and a path read here failed every
+    // stake attempt), snapshotted under the engine read lock and verified
+    // — an Argon2id derivation — only after that lock is released, so the
+    // KDF never holds the engine's writers up.
+    let envelope = shared.read().await.file().sealed_keys_envelope();
     drop(shared);
+    tokio::task::block_in_place(|| envelope.verify_password(password.as_slice())).map_err(|e| {
+        match e {
+            shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
+            other => {
+                WalletRpcError::InternalError(format!("stake: password verification: {other}"))
+            }
+        }
+    })?;
     // Connect-then-close: a daemon refusal also lands pre-close.
     let daemon = make_daemon(&endpoint).await?;
 

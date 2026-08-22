@@ -34,11 +34,11 @@
 //! by the caller. Concurrent reads of the cached `OpenedKeysFile`
 //! metadata are safe (all fields are immutable bytes). Two handles
 //! against the same wallet pair cannot coexist in the same process by
-//! construction: the advisory lock will refuse the second `acquire`.
+//! construction: the keys-file lock will refuse the second `acquire`.
 //!
 //! # Backup and quiescent copy (G4)
 //!
-//! Do not copy the wallet directory while the advisory lock on the keys file
+//! Do not copy the wallet directory while the lock on the keys file
 //! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
 //! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
 //! close flush) and copy from the filesystem, or [`Self::save_as`] to a
@@ -196,8 +196,32 @@ pub struct CreateParams<'a> {
     pub initial_ledger: &'a WalletLedger,
 }
 
+/// A point-in-time copy of an open wallet's sealed `.wallet.keys` bytes,
+/// from [`WalletFile::sealed_keys_envelope`]. Ciphertext as it sits on
+/// disk — not a secret — that can verify a password without the handle,
+/// the file, or any lock.
+#[derive(Clone)]
+pub struct SealedKeysEnvelope(Vec<u8>);
+
+impl SealedKeysEnvelope {
+    /// Verify `password` against the envelope: the full KDF + AEAD auth
+    /// check, after which the opened material drops (zeroize-on-drop). A
+    /// wrong password surfaces as the same envelope error
+    /// [`WalletFile::open`] would produce.
+    ///
+    /// The intended caller is a credentialed close-and-reopen choreography
+    /// (the RPC first-stake entry), which must refuse a wrong password
+    /// **before** tearing down the open wallet it is about to reopen —
+    /// verify-then-close, so a mistyped password can never log the user
+    /// out. Read-only: nothing is created, written, or locked.
+    pub fn verify_password(&self, password: &[u8]) -> Result<(), WalletFileError> {
+        let _opened = open_keys_file(password, &self.0)?;
+        Ok(())
+    }
+}
+
 /// Opaque handle representing one opened wallet pair. Drop releases
-/// the advisory lock.
+/// the keys-file lock.
 ///
 /// Mutable on-disk coordination: keys-file bytes updated by
 /// [`rotate_password`](WalletFile::rotate_password). Held behind a
@@ -300,7 +324,7 @@ impl WalletFile {
     ///
     /// 1. Refuse if the keys file already exists.
     /// 2. Seal the keys file in memory and write it atomically.
-    /// 3. Acquire the advisory lock on the newly-written keys file.
+    /// 3. Acquire the lock on the newly-written keys file.
     /// 4. Seal the initial state file (keys bytes + SWSP-framed
     ///    postcard payload) and write it atomically.
     ///
@@ -542,36 +566,32 @@ impl WalletFile {
         Ok((handle, outcome))
     }
 
-    /// Verify `password` against this open wallet's keys envelope
-    /// **without** re-reading the file: the handle's cached keys bytes are
-    /// the bytes it read under its lock at open (kept current by
-    /// [`Self::rotate_password`]), so this checks exactly the envelope a
-    /// fresh open would see. Runs the full KDF + AEAD auth check, then
-    /// drops the opened material (zeroize-on-drop). A wrong password
-    /// surfaces as the same envelope error [`Self::open`] would produce.
+    /// The sealed keys envelope as this open handle holds it: the bytes it
+    /// read under its lock at open, kept current by
+    /// [`Self::rotate_password`] — exactly the envelope a fresh open would
+    /// see, without re-reading the file. A snapshot, so a rotation after
+    /// it is taken is not reflected; take it when it is needed.
     ///
-    /// This is a method on the open handle, not a path function, for the
-    /// reason `lock.rs` records: on Windows the lock this handle holds is
-    /// mandatory for the locked byte, so a path read here — a second
-    /// handle — fails with `ERROR_LOCK_VIOLATION` for every password, right
-    /// or wrong. The first version of this function did exactly that and
-    /// was reachable only from the RPC first-stake entry, so the bug was
-    /// "stake is impossible on Windows", surfaced as an internal error.
-    ///
-    /// The intended caller is that credentialed close-and-reopen
-    /// choreography, which must refuse a wrong password **before** tearing
-    /// down the open wallet it is about to reopen — verify-then-close, so a
-    /// mistyped password can never log the user out. Read-only: nothing is
-    /// created, written, or re-locked.
-    pub fn verify_password(&self, password: &[u8]) -> Result<(), WalletFileError> {
-        let keys_file_bytes = self
-            .state
-            .lock()
-            .expect("wallet file mutex poisoned")
-            .keys_file_bytes
-            .clone();
-        let _opened = open_keys_file(password, &keys_file_bytes)?;
-        Ok(())
+    /// Handed out as a value rather than verified in place for two reasons
+    /// `lock.rs` records. On Windows the lock this handle holds is
+    /// mandatory for the locked byte, so a path read — a second handle —
+    /// fails with `ERROR_LOCK_VIOLATION` for every password, right or
+    /// wrong; the first version of password verification did exactly that,
+    /// reachable only from the RPC first-stake entry, so the bug was "stake
+    /// is impossible on Windows". And the verification is an Argon2id
+    /// derivation: a caller that reaches this handle through a lock of its
+    /// own (the RPC's engine lock) takes the snapshot under that lock and
+    /// verifies after releasing it, so the KDF never holds the handle's
+    /// other users up.
+    #[must_use]
+    pub fn sealed_keys_envelope(&self) -> SealedKeysEnvelope {
+        SealedKeysEnvelope(
+            self.state
+                .lock()
+                .expect("wallet file mutex poisoned")
+                .keys_file_bytes
+                .clone(),
+        )
     }
 
     /// Rewrite `.wallet` with the given ledger state. Does **not**
@@ -786,7 +806,7 @@ impl WalletFile {
     /// 3. Pre-encode the state file (preflight invariants + postcard +
     ///    SWSP frame + AEAD seal) so a failure here leaves the original
     ///    pair untouched.
-    /// 4. `rename(self.keys_path, new_keys_path)`. Atomic. The advisory
+    /// 4. `rename(self.keys_path, new_keys_path)`. Atomic. The keys-file
     ///    lock follows the open file description through the rename
     ///    (POSIX `flock(2)` is per-OFD, Windows `LockFileEx` is per-
     ///    handle), so we do **not** need to release-and-reacquire.
@@ -1293,7 +1313,7 @@ mod tests {
             let params = make_params(&fx, &base, b"correct horse battery staple", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
-        // Drop the handle so the advisory lock is released for open.
+        // Drop the handle so the keys-file lock is released for open.
         drop(handle);
 
         let (handle2, outcome) = WalletFile::open(
@@ -1584,17 +1604,19 @@ mod tests {
             .expect("open-with-new-pw");
     }
 
-    /// `verify_password` answers from the bytes the open handle holds: the
-    /// open password passes, a wrong one is the envelope error `open` gives
-    /// (the RPC maps it to `InvalidPassword`), and a rotation moves the
-    /// answer with it without a reopen. It takes no path, so there is no
-    /// second handle to collide with the mandatory lock on Windows; that
-    /// property is the signature's, not something this Linux-run test
+    /// The envelope snapshot answers from the bytes the open handle holds:
+    /// the open password passes, a wrong one is the envelope error `open`
+    /// gives (the RPC maps it to `InvalidPassword`), and a snapshot taken
+    /// after a rotation moves the answer with it, without a reopen — while
+    /// the snapshot taken before it still answers for the old password,
+    /// which is what "point in time" means. No path is involved, so there
+    /// is no second handle to collide with the mandatory lock on Windows;
+    /// that property is the signature's, not something this Linux-run test
     /// observes — the first version read the path and was found by the
     /// Windows scouting run, not by a test. The edit that turns this red
-    /// is verifying against stale bytes (skipping the rotate update).
+    /// is `rotate_password` not updating the cached bytes.
     #[test]
-    fn verify_password_reads_through_the_open_handle() {
+    fn sealed_keys_envelope_verifies_through_the_open_handle() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -1605,12 +1627,13 @@ mod tests {
             WalletFile::create(&params).expect("create")
         };
 
-        handle
+        let before = handle.sealed_keys_envelope();
+        before
             .verify_password(b"old")
             .expect("the open password verifies");
         assert!(
             matches!(
-                handle.verify_password(b"wrong"),
+                before.verify_password(b"wrong"),
                 Err(WalletFileError::Envelope(_))
             ),
             "a wrong password must be the envelope error the RPC maps to InvalidPassword"
@@ -1619,16 +1642,20 @@ mod tests {
         handle
             .rotate_password(b"old", b"new", None)
             .expect("rotate");
-        handle
+        let after = handle.sealed_keys_envelope();
+        after
             .verify_password(b"new")
             .expect("the rotated password verifies through the same handle");
         assert!(
             matches!(
-                handle.verify_password(b"old"),
+                after.verify_password(b"old"),
                 Err(WalletFileError::Envelope(_))
             ),
             "the pre-rotation password must no longer verify"
         );
+        before
+            .verify_password(b"old")
+            .expect("a snapshot is a point in time: the earlier one still answers for then");
     }
 
     #[test]

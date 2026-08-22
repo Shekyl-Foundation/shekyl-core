@@ -70,8 +70,12 @@
   of that fix found the sibling: `WalletFile::verify_password` — the
   first-stake entry's verify-before-close — read the path lock-free *by
   design*, which is the same second handle, so every first stake on
-  Windows would have failed the same way. It is now a method on the open
-  handle, checking the keys bytes that handle read under its lock.
+  Windows would have failed the same way. Verification now runs on a
+  snapshot of the sealed envelope taken from the open handle
+  (`WalletFile::sealed_keys_envelope`) — the keys bytes that handle read
+  under its lock — and, in the RPC, only after the engine lock that guards
+  the handle is released, so the Argon2id derivation never holds the
+  engine's writers up.
 
   The Windows scouting step that found it reported **success** on the run
   page — `continue-on-error` hides its command's result — with the failure

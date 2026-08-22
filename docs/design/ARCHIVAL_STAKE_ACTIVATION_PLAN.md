@@ -434,10 +434,11 @@ regression test:
   value can mint or re-activate).
 - **Verify-then-close (`stake` RPC).** The intent reopen closed the wallet before the
   password was ever checked — a mistyped password logged the user out. Now the
-  password is verified against the sealed envelope (`WalletFile::verify_password`,
-  a method on the open handle: it checks the keys bytes that handle read under its
-  lock, because on Windows the lock is mandatory and a second handle cannot read
-  the file) and the daemon connected **before** the close; post-close reopen
+  password is verified against a snapshot of the sealed envelope taken from the
+  open handle (`WalletFile::sealed_keys_envelope`: the keys bytes that handle read
+  under its lock, because on Windows the lock is mandatory and a second handle
+  cannot read the file; verified after the engine lock is released so the KDF
+  blocks nothing) and the daemon connected **before** the close; post-close reopen
   faults attempt a best-effort plain restore reopen. The close is also name-bound
   (`take_and_close_tenant(expected_name)`), and the continuation runs on the exact
   engine arc inspected/installed — no tenant re-acquire a concurrent open could swap.
