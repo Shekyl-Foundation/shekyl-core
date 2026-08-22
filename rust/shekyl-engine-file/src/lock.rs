@@ -83,6 +83,16 @@
 //!    forgetting it leaks nothing; what it skips is the explicit unlock,
 //!    which step 4 below makes unnecessary.
 //!
+//! A lock is held on an *inode*, and `.wallet.keys` is replaced by a
+//! fresh inode on every password rotation (`atomic_write_file`: tmp,
+//! fsync, rename). A lock left on the old inode would guard nothing once
+//! the path names the new one — a second `open` would succeed. So the
+//! rotation locks the staged file **before** it is renamed into place
+//! ([`KeysFileLock::acquire_staged`], through the atomic writer's
+//! pre-persist hook) and drops the old lock afterwards: from the instant
+//! the path names the new file, it is already locked. A rename of the
+//! *path* (relocation) keeps the inode and needs nothing.
+//!
 //! Lock release on `Drop` is guaranteed without an explicit
 //! `UnlockFileEx`/`flock(LOCK_UN)` call: dropping the inner `File`
 //! closes the underlying OS handle, and both POSIX (open-file-
@@ -136,6 +146,22 @@ impl std::fmt::Debug for KeysFileLock {
 }
 
 impl KeysFileLock {
+    /// Acquire the lock on a **staged** file that is about to be renamed
+    /// to `final_path` — the replacement inode of a password rotation —
+    /// recording `final_path` as the lock's path, since that is what the
+    /// file is about to be. Contention here means something else has our
+    /// private, random-named staged file open, which is not a wallet
+    /// double-open; it is reported as the same [`WalletFileError::AlreadyLocked`]
+    /// for want of a truer word, and is not expected.
+    pub(crate) fn acquire_staged(
+        staged: &Path,
+        final_path: &Path,
+    ) -> Result<Self, WalletFileError> {
+        let mut lock = Self::acquire(staged)?;
+        lock.path = final_path.to_path_buf();
+        Ok(lock)
+    }
+
     /// Acquire a non-blocking exclusive lock on `path`. On contention
     /// returns [`WalletFileError::AlreadyLocked`] rather than blocking.
     ///

@@ -72,7 +72,7 @@ use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
 
-use crate::atomic::atomic_write_file;
+use crate::atomic::{atomic_write_file, atomic_write_file_with};
 use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
@@ -233,6 +233,11 @@ struct WalletFileState {
     /// key, but an offline guessing target, and redacted from `Debug` for
     /// the same reason.
     keys_file_bytes: Zeroizing<Vec<u8>>,
+    /// The keys-file lock. Under the same mutex as the bytes because a
+    /// password rotation replaces both together: the lock is held on an
+    /// inode, rotation replaces the inode, so the lock on the staged file
+    /// is swapped in with the cache update, in one critical section.
+    lock: KeysFileLock,
 }
 
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
@@ -271,8 +276,6 @@ pub struct WalletFile {
     /// HKDF-derived region-2 wrap key, cached for the session so
     /// [`Self::save_state`] does not re-run Argon2id.
     wrap_key_region_2: Zeroizing<[u8; FILE_KEK_BYTES]>,
-    /// Held for Drop semantics; not read after construction.
-    _lock: KeysFileLock,
 }
 
 impl std::fmt::Debug for WalletFile {
@@ -289,7 +292,6 @@ impl std::fmt::Debug for WalletFile {
             .field("overrides", &self.overrides)
             .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("wrap_key_region_2", &"<redacted>")
-            .field("_lock", &self._lock)
             .finish()
     }
 }
@@ -421,6 +423,7 @@ impl WalletFile {
             pending_path,
             state: Mutex::new(WalletFileState {
                 keys_file_bytes: Zeroizing::new(keys_bytes),
+                lock,
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -429,7 +432,6 @@ impl WalletFile {
             overrides: SafetyOverrides::none(),
             prefs_hmac_key,
             wrap_key_region_2,
-            _lock: lock,
         })
     }
 
@@ -558,6 +560,7 @@ impl WalletFile {
             pending_path,
             state: Mutex::new(WalletFileState {
                 keys_file_bytes: keys_bytes,
+                lock,
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -565,7 +568,6 @@ impl WalletFile {
             overrides,
             prefs_hmac_key,
             wrap_key_region_2,
-            _lock: lock,
         };
         Ok((handle, outcome))
     }
@@ -785,8 +787,19 @@ impl WalletFile {
         let mut state = self.state.lock().expect("wallet file mutex poisoned");
         let new_keys_bytes =
             rewrap_keys_file_password(old_password, new_password, &state.keys_file_bytes, new_kdf)?;
-        atomic_write_file(&self.keys_path, &new_keys_bytes)?;
+        // The lock must follow the inode. The atomic write replaces the file
+        // at `keys_path` with a fresh one, and a lock on the old inode guards
+        // nothing once the path names another — a second `open` after
+        // rotation used to succeed. The staged file is locked before it is
+        // renamed into place, so from the instant the path names it, it is
+        // already ours; the old lock drops when `state.lock` is replaced,
+        // on an inode the path no longer names.
+        let (new_lock, _durability) =
+            atomic_write_file_with(&self.keys_path, &new_keys_bytes, |staged| {
+                KeysFileLock::acquire_staged(staged, &self.keys_path)
+            })?;
         state.keys_file_bytes = Zeroizing::new(new_keys_bytes);
+        state.lock = new_lock;
         Ok(())
     }
 
@@ -1721,6 +1734,41 @@ mod tests {
             }
             other => panic!("expected AlreadyLocked, got {other:?}"),
         }
+    }
+
+    /// The lock must follow the keys file across a password rotation: the
+    /// rotation replaces the inode at the path (tmp → fsync → rename), and
+    /// a lock left on the old inode guards nothing once the path names a
+    /// new one — a second `open` would succeed and two handles would mutate
+    /// one wallet. The staged file is therefore locked before it is renamed
+    /// into place. Observed red before that fix: the second open succeeded.
+    /// The edit that turns this red again is locking after the rename (or
+    /// not at all) in `rotate_password`.
+    #[test]
+    fn second_open_after_rotation_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let handle = {
+            let params = make_params(&fx, &base, b"old", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+        handle
+            .rotate_password(b"old", b"new", None)
+            .expect("rotate");
+
+        let err = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+            .expect_err("a second open after rotation must still be refused");
+        assert!(
+            matches!(err, WalletFileError::AlreadyLocked { .. }),
+            "expected AlreadyLocked after rotation, got {err:?}"
+        );
+
+        drop(handle);
+        let (_, _) = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+            .expect("once the first handle drops, the rotated wallet opens");
     }
 
     /// Recovery path per spec §4.5: `.wallet.keys` is intact but
