@@ -467,23 +467,77 @@ jobs:
       # What it observes as of WP-W2: the `cfg(windows)` arms of
       # `shekyl-wallet-rpc` and `shekyl-cli` — the named-pipe listener seam
       # and the verified dial — which no Linux box can compile (their graphs
-      # reach `ring`). If the check passes, the two end-to-end tests run in
-      # the same step: the first execution, anywhere, of the self-hosted pipe
-      # under axum (the probe sheet's P-10). They are informational for the
-      # same reason and end the same way — WP-W5 turns the wallet test lane
-      # blocking. Exit codes are read directly, never through a pipe
-      # (rule 46).
+      # reach `ring`), plus the two end-to-end tests, which run in the same
+      # step regardless of whether the check or each other passed (see
+      # REPORTING below). Coverage as of the keys-file fix: the wallet-rpc
+      # end-to-end test HAS executed on this runner — the self-hosted pipe
+      # under axum served its first request there, and the mandatory-lock
+      # bug was found there (WINDOWS_WALLET_PROBE_SHEET.md §4.3); the
+      # shekyl-cli end-to-end test has NOT yet executed here, because the
+      # earlier form of this step stopped at the first failure before
+      # reaching it, so its next run is its first. They are informational
+      # for the same reason as the check and end the same way — WP-W5 turns
+      # the wallet test lane blocking.
+      #
+      # REPORTING (2026-08-21). A `continue-on-error` step shows
+      # `conclusion: success` on the run page whatever its command did; the
+      # first real Windows-only wallet bug (the mandatory keys-file lock,
+      # WINDOWS_WALLET_PROBE_SHEET.md §4.3) was found ~8,000 log lines deep
+      # under a green tick. So: every command runs regardless of the earlier
+      # ones (a compile stops at the first error per crate; this step must
+      # not stop at the first error per command), each exit code lands in a
+      # table on the job summary, and the step fails — still non-blocking —
+      # when any of them did. Exit codes are read directly from
+      # $LASTEXITCODE, never through a pipe (rule 46).
       - name: "WP-W5 scouting: remaining Windows errors + pipe e2e (informational)"
         shell: pwsh
         working-directory: rust
         continue-on-error: true
         run: |
-          cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p shekyl-wallet-rpc --test http_get_version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p shekyl-cli --test rpc_session_e2e
-          exit $LASTEXITCODE
+          # Commands are argument arrays invoked through the call operator,
+          # not strings through Invoke-Expression: no quoting to reason about,
+          # and nothing that becomes code execution if an argument ever stops
+          # being a constant. The step's exit is the FIRST non-zero code — with
+          # run-everything semantics the earliest failure is the informative
+          # one (a failed check makes the test results moot); every command's
+          # own code is in the table regardless.
+          #
+          # A non-zero cargo exit is DATA here, not an error: it has to reach
+          # $LASTEXITCODE and the table. The daemon-binary step below records
+          # that on this runner $PSNativeCommandUseErrorActionPreference has
+          # promoted expected non-zero native exits into terminating errors
+          # before $LASTEXITCODE could be read; under $ErrorActionPreference
+          # 'Stop' (the Actions pwsh default) that would end this block at
+          # the first failing command and skip the remaining commands, the
+          # table, the summary and the explicit exit. Turning the preference
+          # off for this block is the direct control; `cmd /c` isolation
+          # would work too but would put the commands back into strings.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $results = @()
+          $first_failure = 0
+          foreach ($argv in @(
+            @('cargo', 'check', '--locked', '-p', 'shekyl-engine-core', '-p', 'shekyl-wallet-rpc', '-p', 'shekyl-cli'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-wallet-rpc', '--test', 'http_get_version'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-cli', '--test', 'rpc_session_e2e')
+          )) {
+            $shown = $argv -join ' '
+            Write-Host "::group::$shown"
+            & $argv[0] @($argv[1..($argv.Length - 1)])
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            $results += [pscustomobject]@{ Command = $shown; Exit = $code }
+            if ($code -ne 0 -and $first_failure -eq 0) { $first_failure = $code }
+          }
+          $lines = @('## WP-W5 scouting (informational, Windows)', '', '| Command | Exit |', '|---|---|')
+          foreach ($r in $results) {
+            $mark = if ($r.Exit -eq 0) { 'PASS' } else { "FAIL ($($r.Exit))" }
+            $lines += "| ``$($r.Command)`` | $mark |"
+          }
+          $lines += ''
+          $lines += 'Non-blocking until WP-W5 flips it; a FAIL here is a finding to read, not a flake to rerun.'
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+          exit $first_failure
 
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5

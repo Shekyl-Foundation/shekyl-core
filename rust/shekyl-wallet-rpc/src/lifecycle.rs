@@ -958,22 +958,51 @@ async fn reopen_with_first_stake_intent(
     password: Zeroizing<Vec<u8>>,
     slot: u32,
 ) -> Result<SharedEngine, WalletRpcError> {
-    let (base, network, endpoint) = {
+    let (base, network, endpoint, shared) = {
         let state = tenants.lock().await;
         (
             wallet_base(&state.wallet_dir, expected_name),
             state.network,
             state.daemon.clone(),
+            state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?,
         )
     };
 
-    // Verify-then-close (envelope KDF + AEAD auth, lock-free read; see
-    // `WalletFile::verify_password`): the common failure — a wrong
-    // password — refuses HERE, wallet still open.
-    tokio::task::block_in_place(|| {
-        shekyl_engine_file::WalletFile::verify_password(&base, password.as_slice())
+    // Verify-then-close: the common failure — a wrong password — refuses
+    // HERE, wallet still open. The sealed envelope is the one the OPEN
+    // handle read under its lock (no second handle on the keys file: on
+    // Windows that lock is mandatory, and a path read here failed every
+    // stake attempt), snapshotted under the engine read lock and verified
+    // — an Argon2id derivation — on the blocking pool after that lock is
+    // released, so the KDF holds up neither the engine's writers nor a
+    // runtime worker (and does not require a multi-thread runtime, as
+    // `block_in_place` would).
+    let envelope = {
+        let engine = shared.read().await;
+        engine.file().sealed_keys_envelope()
+    };
+    // The Arc, not the guard: `take_and_close_tenant` below unwraps the
+    // engine's Arc, so a live clone held here would fail the close.
+    drop(shared);
+    // The password travels into the blocking task and comes back with the
+    // verdict: the reopen below still needs it, and one owned buffer at a
+    // time is the whole point of not cloning it.
+    let (verdict, password) = tokio::task::spawn_blocking(move || {
+        let verdict = envelope.verify_password(password.as_slice());
+        (verdict, password)
     })
-    .map_err(|e| match e {
+    .await
+    .map_err(|e| {
+        // A panic is a bug in the verifier; a cancellation is the runtime
+        // shutting down under us. Name which, so the log says which.
+        let how = if e.is_panic() {
+            "panicked"
+        } else {
+            "was cancelled"
+        };
+        WalletRpcError::InternalError(format!("stake: password verification task {how}: {e}"))
+    })?;
+    verdict.map_err(|e| match e {
         shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
         other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
     })?;
