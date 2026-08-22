@@ -56,7 +56,7 @@ pub fn transfer_id(td: &TransferDetails) -> String {
 /// has a single home.
 ///
 /// Accepts exactly the canonical form `transfer_id` emits (64 lowercase hex
-/// chars per the crate's shared [`parse_hex32`] rule, `:`, decimal index
+/// chars per the crate's shared `params::parse_hex32` rule, `:`, decimal index
 /// with no leading zeros or sign). Anything else returns `None` — the same
 /// ids that per-row string equality against [`transfer_id`] output would
 /// have failed to match, so lookups by the parsed parts preserve match

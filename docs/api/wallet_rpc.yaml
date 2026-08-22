@@ -212,7 +212,12 @@ servers:
       owner-only named pipe that no URL names, and uds:// is refused at parse
       (docs/design/WINDOWS_WALLET_SUPPORT.md §8.1).
   - url: "http://127.0.0.1:29500"
-    description: Loopback HTTP with basic auth, for tooling compatibility.
+    description: >-
+      Loopback HTTP with basic auth, for tooling compatibility. The server
+      refuses to start on a wildcard address (0.0.0.0, ::) and refuses a
+      non-loopback TCP/IP bind without --rpc-login (a uds:// socket or the
+      Windows pipe carry their authorization in the transport). Design record:
+      docs/design/RPC_TRANSPORT_POSTURE.md, RT-1 and RT-2.
 
 paths:
   /:
@@ -221,6 +226,14 @@ paths:
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
       requestBody:
         required: true
+        description: >-
+          `application/json` is the only accepted Content-Type; any other
+          (or none) is refused with HTTP 415 before authentication. This is
+          the browser boundary: a non-JSON POST is one a web page can make
+          a browser send cross-origin without a preflight. Where the server
+          runs without authentication, the `Host` must be an IP literal or
+          `localhost` (421 otherwise): a hostname can be rebound to the
+          machine by a web page.
         content:
           application/json:
             schema:
