@@ -15107,7 +15107,8 @@ becomes a project.
 **Reopening criterion:** before `ANON_ZONE_TRANSIT_MEASURED_MS` is composed into
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
-finding that it is small.
+finding that it is small. **DISCHARGED 2026-08-21 via the first branch —
+measured on the floor device (`skl-pi`); see §94.9.**
 
 ### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
 
@@ -15190,3 +15191,60 @@ This changes no constant. It aligns the transit round with §44.3's resolved
 policy instead of re-deriving a contradiction of it, and fixes the axis
 (posture) and the superseded keeper (§89.2) so the re-derivation composes against
 one coherent rule.
+
+### 94.9 The fourth hop term is DISCHARGED — measured on the floor device (2026-08-21)
+
+§94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
+*or* a negligibility ruling with a number. **It is measured on the floor device
+(`skl-pi`, the reference Raspberry Pi 4 Model B), which is the criterion's first
+and stronger branch** — and a first draft of this section, which took the second
+branch on a *bounded* Pi rate, got the bound wrong in a way only the measurement
+caught. That correction is kept in view below, because it is the case for
+measuring on the actual floor rather than reasoning about it.
+
+**The term splits, and only one half is per-hop.** Circuit **construction** (the
+ntor / Curve25519 handshake) is amortised apparatus — built once, carried across
+the whole stem — and is excluded for the same reason §94.2(a) excludes it from
+transit. The genuine per-hop term is per-message **symmetric** crypto: onion-layer
+AES on the cells, the per-cell running digest, and the node↔guard TLS record layer.
+
+**The measurement, and the claim it refuted.** The draft asserted the Pi 4's
+Cortex-A72 "has the ARMv8-A AES hardware extension" and bounded its AES at a
+"conservative" 0.8 GB/s. **Both are false.** The Cortex-A72 in the Pi 4 carries
+**no** ARMv8 crypto extension — `/proc/cpuinfo` Features reads
+`fp asimd evtstrm crc32 cpuid`, with no `aes`/`sha`/`pmull`, and forcing
+`OPENSSL_armcap=0` barely moves the number — so AES runs in **software**. Measured
+AES-128-CTR at 8 KB: **0.139 GB/s** on the floor, against 13.04 GB/s on the
+reference x86 (AES-NI) — a **~94×** gap, not the 5.36–5.75× the *verification*
+surface sees (that ratio is FCMP++ field arithmetic, and does not transfer to AES).
+The draft's bound was optimistic by 5.8×.
+
+**The number, corrected.** A generous **10-pass** model (3 onion layers + digest +
+TLS, both hop endpoints on the floor device) at the measured 0.139 GB/s:
+
+| message / denominator | per-hop node crypto | fraction |
+| --- | --- | --- |
+| modal, realistic hop (~500 ms transit + 124.5 ms verify) | 0.60 ms | **0.10 %** |
+| max-admissible, realistic hop | 1.20 ms | **0.19 %** |
+| max-admissible, verify floor alone (124.5 ms, transit→0 — no real Tor hop) | 1.20 ms | 0.96 % |
+
+**Negligible against any real hop (0.1–0.2 %)**, rising toward ~1 % only against
+the verify floor with transit driven to zero, which no anonymity-zone hop reaches.
+The margin is ~2–3 orders against a realistic hop — **not** the ~4 orders the draft
+claimed on its wrong rate. It stays excluded from `hop`: carrying a 0.1–0.2 % term
+while transit itself is measured with far larger spread would be false precision.
+
+**Why the correction matters more than the result.** The disposition (negligible,
+excluded) is unchanged, but the draft reached it through a hardware assumption
+that was wrong and a rate that was 5.8× off, and only measuring on `skl-pi`
+surfaced either. A grep that had found the host earlier would have replaced a
+plausible-but-wrong bound with the measurement three steps sooner — the same
+ground-at-source lesson this arc keeps re-learning.
+
+**Armed, not prose.** `node_crypto_hop_fraction_is_negligible` pins the stacked
+worst case (max message, both endpoints on the floor, verify-floor-only
+denominator) under a **1 % bar** using the **measured** 0.139 GB/s floor rate. It
+goes red if the model, the message size, or the floor rate drifts the term toward
+the hop — and it already fired once, catching the draft's <0.1 % claim (true only
+on the wrong rate; the honest worst case is 0.96 %).
+
