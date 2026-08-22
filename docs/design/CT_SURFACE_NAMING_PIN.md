@@ -72,6 +72,26 @@ its deletion is unblocked and cascades into
 (`cryptonote_tx_utils.cpp:637`) and needs that stub construction moved to the
 Rust signing path first. Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0).
 
+**Surviving `rct`-spelled long tail — outside this pin's scope, and named
+here so §6 is not misread.** The sweep's subject was this pin's: the
+`src/fcmp/` module, the `rct_signatures` field, and their serializer /
+verifier families. A `grep -i rct` across `src/` and `tests/` still returns
+matches, and none is a miss:
+
+| Family | Where | Disposition |
+|--------|-------|-------------|
+| `num_rct_outs`, `bi_cum_rct`, `pre_rct_outkey` | `src/blockchain_db/lmdb` | **Persisted-schema identifiers** — a different validation surface from a C++ rename ([`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)); renaming them belongs with the LMDB/blockchain-db port, not here |
+| `get_block_cumulative_rct_outputs` | `src/blockchain_db` | Reads the above; moves with them |
+| `arg_rct_only` / `opt_rct_only` | `src/blockchain_utilities` | A CLI flag on the export tool — user-visible surface, renamed when that tool is touched |
+| `od_rct` | `src/rpc` | Local variable holding an `ct::key`; rule 93 rename-on-touch |
+| `_rct_data`, `construct_tx_rct` | `src/cryptonote_core` | Construction path; rename-on-touch, and partly dies with the step-1 deletions |
+| `rct_txes`, `RCT_TYPE`, `a_rct`, `rctx` | `tests/` | Test-local helpers and fixtures; rename-on-touch |
+
+§6's accretion criterion is family-scoped to `rctSigs` / `rct::` / `rctSig*` —
+the names this pin renamed. It does not assert that the string `rct` is absent
+from the tree, and the rows above are not precedent for reintroducing the
+renamed families.
+
 **Supersedes (partially).** April 2026 `ct_signatures = rct::rctSig` alias
 ([`STRUCTURAL_TODO.md`](../STRUCTURAL_TODO.md) §"`rct_signatures` field name is
 a Monero-era misnomer") — retained as the C++ type bridge, not as the module or

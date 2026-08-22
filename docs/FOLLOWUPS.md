@@ -48,23 +48,23 @@ sustainability is unaffected by the recalibration.
 ## V3.0 — wallet stack greenfield Rust rewrite
 
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
-  names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed the three
-  RCT-named symbols it edited (`serialize_rctsig_prunable` →
+  names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the
+  three RCT-named symbols it happened to edit (`serialize_rctsig_prunable` →
   `serialize_ctsig_prunable`, `verRctSemanticsFeeOnly` →
   `verCtSemanticsFeeOnly`, `rctSigPrunable` → `CtSigPrunable`); the first of
   those was emitting an archive tag already named `ctsig_prunable`, so the
   function disagreed with its own bytes. The remaining three families
-  (`rct_signatures` 224 sites, `rctSig` 56, `namespace rct` 10) landed here as
-  the mechanical sweep that would have swamped that PR's review surface —
-  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md) §5 **step 2**.
-  Rename-only: the `binary_archive` variant tags are numeric (`0x90`–`0xa0`,
-  untouched), so no consensus byte moved; the `json_archive` / `debug_archive`
-  tag *strings* changed with the type names, the same JSON-visible public
-  surface the 2026-07-11 slice disclosed.
-  **Step 1 of the pin's sequence is still owed** — see the deletion item
-  below; §5 permits landing step 2 first ("if not already gone"), and
-  §6's accretion criterion is now armed: any new `rct::` / `rctSigs` C++
-  surface is an immediate rename PR, not a deferral.
+  (`rct_signatures` 224 sites, `rctSig` 56, `namespace rct` 10) landed as the
+  mechanical sweep that would have swamped that PR's review surface.
+  **Full record — including the was→now table, the byte-invariance argument
+  and what is still owed — is the V3.2 entry "Rename inherited `rct::` /
+  `rctSig` / `rctSigs` C++ surface after `wallet2` cutover", also marked
+  [Done 2026-08-21]; this entry is the V3.0-scoped duplicate of it and is kept
+  only so the V3.0 reader is not left with an open item that silently moved.**
+  One thing to carry from here: this entry's "~290 sites" is the count of
+  *those three families*, not of the string `rct` in the tree — see the
+  surviving-long-tail note in
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md).
 
 - **Delete the two legacy C++ construction stand-ins `genRctFcmpPlusPlus` and
   `fill_construct_tx_rct_stub`** (filed 2026-08-21 as the remaining half of the
