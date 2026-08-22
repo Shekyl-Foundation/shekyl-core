@@ -137,4 +137,22 @@ int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* fact
   return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 
+void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  out->version = static_cast<uint8_t>(field_value(seed, 0));
+  out->height = field_value(seed, 1);
+}
+
+int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed)
+{
+  if (!entry)
+    return -1;
+  shekyl_rpc_hardfork_entry expected;
+  shekyl_rpc_hardfork_entry_test_fill(&expected, seed);
+  return std::memcmp(entry, &expected, sizeof(expected)) == 0 ? 0 : -1;
+}
+
 } // extern "C"

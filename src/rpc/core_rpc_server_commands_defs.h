@@ -428,17 +428,6 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
-  //-----------------------------------------------
-  struct get_outputs_out
-  {
-    uint64_t amount;
-    uint64_t index;
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(amount)
-      KV_SERIALIZE(index)
-    END_KV_SERIALIZE_MAP()
-  };
 
   //-----------------------------------------------
   //-----------------------------------------------

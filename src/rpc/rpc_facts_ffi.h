@@ -57,6 +57,8 @@ void shekyl_rpc_hardforks_free(void* owner);
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
+void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
+int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"
