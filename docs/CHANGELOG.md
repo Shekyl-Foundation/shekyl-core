@@ -20,7 +20,10 @@
   (`shekyld print_height` and the interactive console). Also deleted as
   dead: `COMMAND_RPC_GET_OUTPUTS{,_BIN}`, `COMMAND_RPC_FAST_EXIT` and the
   `core::get_outs` / `Blockchain::get_outs` chain behind them — none had
-  a dispatch row or a caller. No wire change.
+  a dispatch row or a caller. No change to any reply a client parses; the
+  reason text inside a transport-level failure (the 500 envelope's `error`
+  string) now names what actually failed instead of "FFI dispatch failed"
+  — diagnostic text, not contract (RK-D8 scope).
 - **`shekyl-wallet-rpc` refuses two listen configurations it used to
   accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
   A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
