@@ -43,11 +43,6 @@
 #include <cstddef>
 #include <cstdint>
 
-/// Witness header size for the legacy FCMP++ prove path (shekyl_fcmp_prove).
-/// Used only by genRctFcmpPlusPlus in core_tests/chaingen.cpp.
-/// Production signing uses shekyl_sign_fcmp_transaction (collapsed path).
-#define SHEKYL_PROVE_WITNESS_HEADER_BYTES 256
-
 /// m_pqc_public_key canonical layout: X25519_pub[32] || ML-KEM-768_ek[1184].
 #define SHEKYL_PQC_PUBLIC_KEY_BYTES 1216
 #define SHEKYL_X25519_PK_BYTES 32
@@ -426,35 +421,6 @@ uint8_t shekyl_derive_view_tag_prefilter(
     const uint8_t* ml_kem_ss_ptr,
     uint64_t output_index);
 
-/// Expected proof size for given inputs and tree depth.
-size_t shekyl_fcmp_proof_len(uint32_t num_inputs, uint8_t tree_depth);
-
-/// FCMP++ prove result (proof blob + pseudo-outs).
-struct ShekylFcmpProveResult {
-    ShekylBuffer proof;
-    ShekylBuffer pseudo_outs;    // num_inputs * 32 bytes (C_tilde compressed)
-    bool success;
-};
-
-/// Construct FCMP++ proof from variable-length witness blob.
-/// witness_ptr / witness_len: serialized witness for all inputs.
-/// Per input: fixed header (256 bytes) + leaf chunk + C1/C2 branch layers.
-/// Header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
-///   y = SAL output-key secret (0 for legacy one-time addresses)
-///   z = Pedersen commitment mask
-///   a = desired pseudo-out blinding factor
-/// See shekyl-ffi crate docs for the full wire format specification.
-///
-/// tree_depth: upstream library `layers` count (= LMDB depth + 1).
-/// C++ callers must convert: layers = lmdb_depth + 1.
-ShekylFcmpProveResult shekyl_fcmp_prove(
-    const uint8_t* witness_ptr,
-    size_t witness_len,
-    uint32_t num_inputs,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth,
-    const uint8_t* signable_tx_hash_ptr);
-
 /// Verify FCMP++ proof with batch verification.
 ///
 /// Returns 0 on success, or a nonzero VerifyError discriminant (1-7) on failure:
@@ -598,24 +564,6 @@ bool shekyl_decode_blob(
     size_t* data_len_out);
 
 // ─── Output Construction / Scanning / PQC Signing ────────────────────────────
-
-/// Typed struct for FCMP++ prover inputs (replaces hand-counted memcpy offsets).
-struct ProveInputFields {
-    uint8_t output_key[32];
-    uint8_t key_image_gen[32];
-    uint8_t commitment[32];
-    uint8_t h_pqc[32];
-    uint8_t spend_key_x[32];
-    uint8_t spend_key_y[32];
-    uint8_t commitment_mask[32];
-    uint8_t pseudo_out_blind[32];
-};
-
-/// Build the 256-byte witness header from a typed ProveInputFields.
-/// out_buf must point to at least 256 writable bytes.
-bool shekyl_fcmp_build_witness_header(
-    const ProveInputFields* input,
-    uint8_t* out_buf);
 
 /// Result of construct_output.
 struct ShekylOutputData {

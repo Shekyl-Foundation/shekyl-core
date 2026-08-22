@@ -16,10 +16,12 @@ pub struct ShekylBuffer {
     pub len: usize,
 }
 
+#[cfg_attr(not(feature = "multisig"), allow(dead_code))]
 pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 256;
 
 /// Typed struct for passing FCMP++ prover inputs across FFI.
 /// C++ fills named fields instead of writing at hand-counted byte offsets.
+#[cfg(feature = "multisig")]
 #[repr(C)]
 pub struct ProveInputFields {
     pub output_key: [u8; 32],
