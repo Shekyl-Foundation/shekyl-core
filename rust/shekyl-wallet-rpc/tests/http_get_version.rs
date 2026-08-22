@@ -42,7 +42,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth,
+        auth: Arc::new(auth),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })
@@ -58,7 +58,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth: AuthConfig::Disabled,
+        auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })

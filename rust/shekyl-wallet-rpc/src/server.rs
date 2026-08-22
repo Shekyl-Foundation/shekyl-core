@@ -178,8 +178,10 @@ impl std::fmt::Debug for ServerConfig {
 pub struct AppState {
     /// Tenant / wallet-dir state.
     pub tenants: tokio::sync::Mutex<TenantState>,
-    /// Auth config (also injected as middleware state).
-    pub auth: AuthConfig,
+    /// Auth config: the one owned copy, shared by refcount with the
+    /// middlewares that read it (a second owned copy would be a second
+    /// credential in memory for the router's lifetime).
+    pub auth: Arc<AuthConfig>,
     /// Argon2id cost for create / rotate.
     pub kdf: KdfParams,
     /// Signalled to request graceful shutdown.
@@ -200,7 +202,7 @@ impl AppState {
                     proxy: config.proxy.clone(),
                 },
             )),
-            auth: config.auth.clone(),
+            auth: Arc::new(config.auth.clone()),
             kdf: config.kdf,
             shutdown: Arc::new(Notify::new()),
         })
@@ -312,7 +314,7 @@ async fn browser_boundary(
 /// boundary before a credential is compared; a non-JSON request never
 /// reaches the handler.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    let auth = Arc::new(state.auth.clone());
+    let auth = Arc::clone(&state.auth);
     Router::new()
         .route("/", post(json_rpc_handler))
         .layer(axum::middleware::from_fn_with_state(

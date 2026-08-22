@@ -52,7 +52,7 @@ fn state(dir: &TempDir) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth: AuthConfig::Disabled,
+        auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })
