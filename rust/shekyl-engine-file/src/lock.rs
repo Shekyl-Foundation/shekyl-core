@@ -107,6 +107,7 @@ use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use fd_lock::RwLock;
+use zeroize::Zeroizing;
 
 use crate::error::WalletFileError;
 
@@ -151,10 +152,15 @@ impl KeysFileLock {
     /// fails with `ERROR_LOCK_VIOLATION`, and every wallet `open` did
     /// until this existed. Reading through the handle that holds the
     /// lock is correct on both platforms, and it reads the file that was
-    /// locked rather than whatever sits at the path a moment later.
-    pub(crate) fn acquire_and_read(path: &Path) -> Result<(Self, Vec<u8>), WalletFileError> {
+    /// locked rather than whatever sits at the path a moment later. The
+    /// bytes come back in a wiping buffer: they are the sealed envelope,
+    /// an offline guessing target, and no unwrapped copy should exist
+    /// between this handle and the cache that holds them.
+    pub(crate) fn acquire_and_read(
+        path: &Path,
+    ) -> Result<(Self, Zeroizing<Vec<u8>>), WalletFileError> {
         Self::acquire_with(path, |file| {
-            let mut bytes = Vec::new();
+            let mut bytes = Zeroizing::new(Vec::new());
             file.read_to_end(&mut bytes)?;
             Ok(bytes)
         })
@@ -246,7 +252,7 @@ mod tests {
         std::fs::write(&path, b"keys-file-bytes").unwrap();
 
         let (_lock, bytes) = KeysFileLock::acquire_and_read(&path).expect("acquire + read");
-        assert_eq!(bytes, b"keys-file-bytes");
+        assert_eq!(bytes.as_slice(), b"keys-file-bytes");
         assert!(
             matches!(
                 KeysFileLock::acquire(&path),
@@ -258,11 +264,15 @@ mod tests {
 
     /// The platform fact this module's API is built around, pinned rather
     /// than remembered: while the lock is held, a read of the same path
-    /// through a **second** handle fails on Windows (`LockFileEx` is
-    /// mandatory for the locked byte) and succeeds on POSIX (`flock` is
-    /// advisory). The edit that turns the Windows arm red is `fd-lock`
-    /// or std changing how the lock or the read is issued; the edit that
-    /// turns the POSIX arm red is someone making the lock mandatory there.
+    /// through a **second** handle fails on Windows with exactly
+    /// `ERROR_LOCK_VIOLATION` (`LockFileEx` is mandatory for the locked
+    /// byte) and on POSIX returns the bytes that were written (`flock` is
+    /// advisory). Pinned to the specific error and the specific bytes so an
+    /// unrelated failure — a missing file, a permission problem — cannot
+    /// pass as the platform fact. The edit that turns the Windows arm red
+    /// is `fd-lock` or std changing how the lock or the read is issued;
+    /// the edit that turns the POSIX arm red is someone making the lock
+    /// mandatory there.
     #[test]
     fn path_read_while_locked_is_platform_dependent() {
         let dir = tempfile::tempdir().unwrap();
@@ -271,15 +281,24 @@ mod tests {
         let _lock = KeysFileLock::acquire(&path).expect("acquire");
         let second_handle = std::fs::read(&path);
         #[cfg(windows)]
-        assert!(
-            second_handle.is_err(),
-            "Windows: a path read while locked must fail — if it passes, the \
-             mandatory-lock premise behind acquire_and_read no longer holds"
-        );
+        {
+            /// `winerror.h`: the locked byte range cannot be accessed.
+            const ERROR_LOCK_VIOLATION: i32 = 33;
+            let err = second_handle.expect_err(
+                "Windows: a path read while locked must fail — if it passes, the \
+                 mandatory-lock premise behind acquire_and_read no longer holds",
+            );
+            assert_eq!(
+                err.raw_os_error(),
+                Some(ERROR_LOCK_VIOLATION),
+                "Windows: the failure must be the lock violation, not something else: {err}"
+            );
+        }
         #[cfg(unix)]
-        assert!(
-            second_handle.is_ok(),
-            "POSIX: flock is advisory; a path read while locked must succeed"
+        assert_eq!(
+            second_handle.expect("POSIX: flock is advisory; a path read while locked succeeds"),
+            b"placeholder",
+            "POSIX: the second handle reads the bytes that were written"
         );
     }
 

@@ -973,8 +973,10 @@ async fn reopen_with_first_stake_intent(
     // handle read under its lock (no second handle on the keys file: on
     // Windows that lock is mandatory, and a path read here failed every
     // stake attempt), snapshotted under the engine read lock and verified
-    // — an Argon2id derivation — only after that lock is released, so the
-    // KDF never holds the engine's writers up.
+    // — an Argon2id derivation — on the blocking pool after that lock is
+    // released, so the KDF holds up neither the engine's writers nor a
+    // runtime worker (and does not require a multi-thread runtime, as
+    // `block_in_place` would).
     let envelope = {
         let engine = shared.read().await;
         engine.file().sealed_keys_envelope()
@@ -982,14 +984,18 @@ async fn reopen_with_first_stake_intent(
     // The Arc, not the guard: `take_and_close_tenant` below unwraps the
     // engine's Arc, so a live clone held here would fail the close.
     drop(shared);
-    tokio::task::block_in_place(|| envelope.verify_password(password.as_slice())).map_err(|e| {
-        match e {
+    let attempt = password.clone();
+    tokio::task::spawn_blocking(move || envelope.verify_password(&attempt))
+        .await
+        .map_err(|e| {
+            WalletRpcError::InternalError(format!("stake: password verification task: {e}"))
+        })?
+        .map_err(|e| match e {
             shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
             other => {
                 WalletRpcError::InternalError(format!("stake: password verification: {other}"))
             }
-        }
-    })?;
+        })?;
     // Connect-then-close: a daemon refusal also lands pre-close.
     let daemon = make_daemon(&endpoint).await?;
 

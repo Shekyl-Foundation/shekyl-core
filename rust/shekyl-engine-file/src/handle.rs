@@ -557,7 +557,7 @@ impl WalletFile {
             pscan_path,
             pending_path,
             state: Mutex::new(WalletFileState {
-                keys_file_bytes: Zeroizing::new(keys_bytes),
+                keys_file_bytes: keys_bytes,
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
