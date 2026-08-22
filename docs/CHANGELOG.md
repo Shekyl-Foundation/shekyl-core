@@ -75,7 +75,12 @@
   (`WalletFile::sealed_keys_envelope`) — the keys bytes that handle read
   under its lock — and, in the RPC, only after the engine lock that guards
   the handle is released, so the Argon2id derivation never holds the
-  engine's writers up.
+  engine's writers up. Review then found the lock's oldest gap: it is held
+  on an inode, and a password rotation replaces the keys file's inode, so
+  after `change_password` a second open of the same wallet succeeded on
+  POSIX. The rotation now locks the staged file before renaming it into
+  place (the atomic writer gained a pre-persist hook), so the lock follows
+  the file; a regression test pins it.
 
   The Windows scouting step that found it reported **success** on the run
   page — `continue-on-error` hides its command's result — with the failure
