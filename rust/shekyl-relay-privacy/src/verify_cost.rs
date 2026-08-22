@@ -539,10 +539,11 @@ mod tests {
     }
 
     /// §94.9: the fourth `hop` term — the node's own Tor/TLS/circuit crypto —
-    /// is ruled negligible with a number rather than measured on a floor
-    /// device. This arms that ruling: it goes RED if the model or the message
-    /// size ever drifts the per-hop node crypto toward the hop, forcing a
-    /// re-examination instead of letting a stale "negligible" stand.
+    /// is ruled negligible using a **measured floor rate**, taken on the
+    /// reference Pi 4 (`skl-pi`). This arms that ruling: it goes RED if the
+    /// model, the message size, or the floor rate ever drifts the per-hop node
+    /// crypto toward the hop, forcing a re-examination instead of letting a
+    /// stale "negligible" stand.
     ///
     /// The check is deliberately generous on the cost side and conservative on
     /// the hop side, so passing means negligible under assumptions that favour
@@ -555,15 +556,20 @@ mod tests {
         const PASSES: f64 = 10.0;
         // MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
         // 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in
-        // 1000s of bytes per second"; the 8 KB-block figure was 138993.66k =
-        // 138_993_660 B/s ≈ 0.139 × 10^9 B/s. The Cortex-A72 has NO ARMv8 crypto
-        // extension (cpuinfo Features: `fp asimd evtstrm crc32 cpuid` — no aes),
-        // so this is software AES, ~94x slower than the x86 reference. An earlier
-        // draft ASSUMED hardware AES and bounded it at 0.8 GB/s; the floor
-        // measurement (§94.9) refuted that by 5.8x — hence a measured constant,
-        // decimal-GB explicit because the 1% bar is tight enough for a GiB-vs-GB
-        // slip (7.4%) to matter.
-        const PI4_AES_BYTES_PER_SEC: f64 = 0.139e9;
+        // 1000s of bytes per second"; the 8 KB-block figure was `138993.66k`, so
+        // 138_993.66 * 1000 = 138_993_660 B/s — used EXACTLY, not rounded to
+        // 0.139e9. Rounding a measured rate *up* makes the crypto look cheaper
+        // and the guardrail weaker, which is the wrong direction for a bound
+        // whose whole job is to fail safe; when this is re-measured, replace the
+        // literal rather than tidying it.
+        //
+        // The Cortex-A72 has NO ARMv8 crypto extension (cpuinfo Features:
+        // `fp asimd evtstrm crc32 cpuid` — no aes), so this is software AES,
+        // ~94x slower than the x86 reference. An earlier draft ASSUMED hardware
+        // AES and bounded it at 0.8 GB/s; the floor measurement (§94.9) refuted
+        // that by 5.8x. Decimal-GB is called out because the 1% bar is tight
+        // enough for a GiB-vs-GB slip (7.4%) to matter.
+        const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 
         // The max-admissible transaction's NOTIFY size (§94.5(b)) — an EMPIRICAL
         // worst-case message, not a protocol constant, and it deliberately is not
@@ -573,9 +579,13 @@ mod tests {
         // below makes that dependency explicit rather than silent: it asserts the
         // size sits below the point where the fraction would breach the bar, and
         // reports the headroom, so a size increase reds this for the right reason.
-        const MAX_ADMISSIBLE_MSG_BYTES: f64 = 16_651.0;
+        // A byte COUNT, so it is an integer type — `f64` here would invite a
+        // fractional byte and blurs count-vs-rate. Converted once, at the
+        // arithmetic site.
+        const MAX_ADMISSIBLE_MSG_BYTES: u32 = 16_651;
+        let msg_bytes = f64::from(MAX_ADMISSIBLE_MSG_BYTES);
 
-        let node_crypto_ms = (MAX_ADMISSIBLE_MSG_BYTES * PASSES) / PI4_AES_BYTES_PER_SEC * 1_000.0;
+        let node_crypto_ms = (msg_bytes * PASSES) / PI4_AES_BYTES_PER_SEC * 1_000.0;
 
         // Compare against the SMALLEST possible hop: the genesis verify floor
         // alone (transit >= 0). Using the minimum hop makes the fraction as
@@ -584,8 +594,21 @@ mod tests {
 
         // 1% is the negligibility bar, checked against the SMALLEST possible hop
         // (verify floor with transit -> 0 — no real anon hop reaches it), which
-        // makes the fraction as large as it can honestly be. Against a realistic
-        // transit-bearing hop (§94's ~500 ms) it is ~0.19% (§94.9 table).
+        // makes the fraction as large as it can honestly be.
+        //
+        // READ THE TIGHTNESS CORRECTLY: at the max-admissible message this sits
+        // at 0.962% — only ~4% under the bar — and that narrowness is an artifact
+        // of the fictional denominator, NOT of the term nearly mattering. Against
+        // real hops the margin is 5-15x:
+        //
+        //   verify floor only, transit -> 0 (fiction)   0.962%   1.04x
+        //   + measured transit (~500 ms)                0.192%   5.21x
+        //   + 8-input depth-7 verify (~1292 ms)         0.093%  10.78x
+        //   + the 1625 ms transit assumption            0.068%  14.60x
+        //
+        // The strict denominator is deliberate — a bound that only holds against
+        // a generous hop is not a bound — so the bar stays at 1% rather than
+        // being loosened to buy comfort.
         const BAR: f64 = 0.01;
         let fraction = node_crypto_ms / min_hop_ms;
         // The message size at which the fraction would hit the bar. Reporting it
@@ -595,8 +618,8 @@ mod tests {
         // reds the assertion for exactly the intended reason.
         let breach_bytes = BAR * PI4_AES_BYTES_PER_SEC * (min_hop_ms / 1_000.0) / PASSES;
         assert!(
-            MAX_ADMISSIBLE_MSG_BYTES < breach_bytes,
-            "§94.9: at {MAX_ADMISSIBLE_MSG_BYTES:.0} B the per-hop node crypto is \
+            msg_bytes < breach_bytes,
+            "§94.9: at {MAX_ADMISSIBLE_MSG_BYTES} B the per-hop node crypto is \
              {node_crypto_ms:.3} ms = {:.3}% of the {min_hop_ms:.1} ms minimum hop, \
              at/over the {}% bar (breach at {breach_bytes:.0} B). The max message \
              grew past what the negligibility bound tolerates — revisit §94.9 (or \
