@@ -984,18 +984,21 @@ async fn reopen_with_first_stake_intent(
     // The Arc, not the guard: `take_and_close_tenant` below unwraps the
     // engine's Arc, so a live clone held here would fail the close.
     drop(shared);
-    let attempt = password.clone();
-    tokio::task::spawn_blocking(move || envelope.verify_password(&attempt))
-        .await
-        .map_err(|e| {
-            WalletRpcError::InternalError(format!("stake: password verification task: {e}"))
-        })?
-        .map_err(|e| match e {
-            shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
-            other => {
-                WalletRpcError::InternalError(format!("stake: password verification: {other}"))
-            }
-        })?;
+    // The password travels into the blocking task and comes back with the
+    // verdict: the reopen below still needs it, and one owned buffer at a
+    // time is the whole point of not cloning it.
+    let (verdict, password) = tokio::task::spawn_blocking(move || {
+        let verdict = envelope.verify_password(&password);
+        (verdict, password)
+    })
+    .await
+    .map_err(|e| {
+        WalletRpcError::InternalError(format!("stake: password verification task: {e}"))
+    })?;
+    verdict.map_err(|e| match e {
+        shekyl_engine_file::WalletFileError::Envelope(_) => WalletRpcError::InvalidPassword,
+        other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
+    })?;
     // Connect-then-close: a daemon refusal also lands pre-close.
     let daemon = make_daemon(&endpoint).await?;
 

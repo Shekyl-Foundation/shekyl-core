@@ -78,7 +78,10 @@
 //!    lock stays held until the owning [`KeysFileLock`] drops. Storing
 //!    the guard directly inside the struct would require a self-
 //!    referential borrow (guard borrows from the `RwLock` in the same
-//!    struct); `mem::forget` is the safe Rust alternative.
+//!    struct); `mem::forget` is the safe Rust alternative. The guard is
+//!    that borrow and nothing else — it owns no allocation — so
+//!    forgetting it leaks nothing; what it skips is the explicit unlock,
+//!    which step 4 below makes unnecessary.
 //!
 //! Lock release on `Drop` is guaranteed without an explicit
 //! `UnlockFileEx`/`flock(LOCK_UN)` call: dropping the inner `File`
