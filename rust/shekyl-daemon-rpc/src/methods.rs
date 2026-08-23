@@ -166,9 +166,12 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
 /// optional fields, so "expected height" would misdescribe a request whose
 /// height was fine and whose `fill_pow_hash` was not. A refusal names the
 /// shape the method actually accepts.
-const WRONG_HEADER_PARAMS: &str =
-    "Wrong parameters, expected an object with optional height (number) \
-     and fill_pow_hash (boolean)";
+///
+/// "non-negative integer" rather than "number": `height` is a `u64`, so
+/// `-1` and `1.5` are JSON numbers this refuses, and a caller told the
+/// accepted type was "number" would have no idea why.
+const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected an object with optional height \
+     (non-negative integer) and fill_pow_hash (boolean)";
 
 /// The params of `get_block_header_by_height`, or the refusal an unusable
 /// params value earns.
