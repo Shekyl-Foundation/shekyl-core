@@ -4,6 +4,37 @@
 
 ### Changed
 
+- **`get_block_header_by_height` is served natively in Rust (RK-3,
+  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `shekyl-daemon-rpc::methods` over a new facts export that reads the
+  bound, the block, its weights and both difficulties under **one**
+  acquisition of the chain lock, so every field of a header describes the
+  same chain state. The reply is unchanged, pinned by oracle vectors
+  captured from epee first — including the wire's three-field rendering of
+  each 128-bit difficulty and the asymmetry where `block_weight` and
+  `long_term_weight` vanish at zero while `block_size`, filled from the
+  same source, stays. A height past the tip keeps its `-2` refusal naming
+  the top height; a store that reports a height it cannot produce the
+  block for keeps the contract's `-5` and wording, and is logged. The
+  wallet client's private header struct retires for the shared type and
+  now rejects a non-OK `status` instead of reading past it. This carries
+  the shared `BlockHeader` that the remaining header methods will reuse;
+  they stay in C++ for now because each is read by a console command that
+  also needs `get_info` (see the design's console matrix).
+- **Hash fields on the daemon RPC wire are typed (`HashHex`).** Every
+  32-byte hash the RPC carries was a `String`, which admitted "not a hash
+  at all" as a value and left each consumer to parse hex for itself.
+  `HashHex` moves that parse into the deserializer once: 64 hex characters
+  of either case in, always lowercase out, anything else refused. It is a
+  wire-level type over raw bytes, not a wrapper around a domain hash — a
+  single `block_header` carries block, transaction, root and
+  proof-of-work hashes, so consumers name the kind at their edge, where
+  they know it. `block_header.pow_hash` becomes `Option<HashHex>`, keeping
+  the daemon's "was it filled?" flag alive to the wire while emitting the
+  same `""` epee did. Emitted bytes are unchanged throughout, which the
+  oracle vectors check. Two hand-written test fixtures that described
+  replies the daemon could never send were caught by the new type and now
+  build through it.
 - **`--daemon-address` says §1's thing at the point of configuration
   (RT-W7).** A daemon address that is not loopback now draws the operator
   statement of `RPC_TRANSPORT_POSTURE.md` §1 when the wallet starts —

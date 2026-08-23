@@ -18,19 +18,22 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    GetBlockCountResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus,
-    CORE_RPC_VERSION,
+    BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetHeightResponse,
+    GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_VERSION,
 };
+
+/// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
+fn tagged_hash(tag: u8) -> HashHex {
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        let i = u8::try_from(i).expect("32 fits u8");
+        *byte = i.wrapping_mul(7).wrapping_add(tag);
+    }
+    HashHex::from_bytes(bytes)
+}
 
 fn parsed(json: &str) -> Value {
     serde_json::from_str(json).expect("vector / output is JSON")
-}
-
-/// The hash `rpc_oracle_vectors.cpp::patterned_hash` used: byte i = (i*7+3) & 0xff.
-fn patterned_hash_hex() -> String {
-    (0..32u32)
-        .map(|i| format!("{:02x}", (i * 7 + 3) & 0xff))
-        .collect()
 }
 
 fn assert_parity<T>(vector: &str, built: &T)
@@ -55,7 +58,7 @@ fn get_height_matches_the_oracle() {
     let built = GetHeightResponse {
         status: RpcStatus::ok(),
         height: 1_234_567,
-        hash: patterned_hash_hex(),
+        hash: tagged_hash(3),
     };
     assert_parity(include_str!("vectors/rpc/get_height_v1.json"), &built);
 }
@@ -145,12 +148,97 @@ fn get_block_count_matches_the_oracle() {
 /// Wrapping the reply in an object turns this red.
 #[test]
 fn get_block_hash_matches_the_oracle() {
-    let built = patterned_hash_hex();
+    let built = tagged_hash(3);
     assert_parity(include_str!("vectors/rpc/get_block_hash_v1.json"), &built);
     assert!(
         parsed(include_str!("vectors/rpc/get_block_hash_v1.json")).is_string(),
         "the reply document is a lone JSON string"
     );
+}
+
+/// The full header: every field populated, a difficulty above 2^64, a filled
+/// pow hash. Parsed-equal to what epee emitted from the same facts.
+#[test]
+fn block_header_full_matches_the_oracle() {
+    let built = GetBlockHeaderByHeightResponse {
+        status: RpcStatus::ok(),
+        block_header: BlockHeader {
+            major_version: 1,
+            minor_version: 2,
+            timestamp: 1_700_000_000,
+            prev_hash: tagged_hash(3),
+            nonce: 305_419_896,
+            orphan_status: true,
+            height: 1_234_567,
+            depth: 42,
+            hash: tagged_hash(11),
+            difficulty: 12345,
+            wide_difficulty: "0x400000000000003039".to_owned(),
+            difficulty_top64: 64,
+            cumulative_difficulty: 99,
+            wide_cumulative_difficulty: "0x800000000000000063".to_owned(),
+            cumulative_difficulty_top64: 128,
+            reward: 600_000_000_000,
+            block_size: 98765,
+            block_weight: 98765,
+            num_txes: 7,
+            pow_hash: Some(tagged_hash(23)),
+            long_term_weight: 87654,
+            miner_tx_hash: tagged_hash(31),
+            curve_tree_root: tagged_hash(41),
+            attestation_root: tagged_hash(53),
+        },
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_block_header_by_height_full_v1.json"),
+        &built,
+    );
+}
+
+/// The defaults case pins the OPT asymmetry: `block_weight` and
+/// `long_term_weight` are omitted at zero while `block_size` — filled from the
+/// same source but not OPT — stays, and `pow_hash` is an empty string rather
+/// than absent.
+#[test]
+fn block_header_defaults_matches_the_oracle() {
+    let built = GetBlockHeaderByHeightResponse {
+        status: RpcStatus::ok(),
+        block_header: BlockHeader {
+            major_version: 1,
+            minor_version: 1,
+            timestamp: 1_500_000_000,
+            prev_hash: HashHex::ZERO,
+            nonce: 0,
+            orphan_status: false,
+            height: 0,
+            depth: 0,
+            hash: tagged_hash(11),
+            difficulty: 1,
+            wide_difficulty: "0x1".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1,
+            wide_cumulative_difficulty: "0x1".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 0,
+            block_size: 0,
+            block_weight: 0,
+            num_txes: 0,
+            pow_hash: None,
+            long_term_weight: 0,
+            miner_tx_hash: tagged_hash(31),
+            curve_tree_root: HashHex::ZERO,
+            attestation_root: HashHex::ZERO,
+        },
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_block_header_by_height_defaults_v1.json"),
+        &built,
+    );
+    let wire = serde_json::to_string(&built).unwrap();
+    assert!(!wire.contains("block_weight"), "omitted at zero");
+    assert!(!wire.contains("long_term_weight"), "omitted at zero");
+    assert!(wire.contains("\"block_size\":0"), "kept at zero");
+    assert!(wire.contains("\"pow_hash\":\"\""), "empty, not absent");
 }
 
 /// Numbers stay numbers: a client that typed `height` as an integer keeps

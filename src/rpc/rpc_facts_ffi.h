@@ -69,6 +69,45 @@ typedef struct shekyl_rpc_block_hash_facts {
 int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     shekyl_rpc_block_hash_facts* out);
 
+// The block-header projection (RK-3): every field of the wire's
+// `block_header_response` in raw form — hashes as bytes, the 128-bit
+// difficulties as (lo, hi) pairs — leaving hex and the wide-decimal
+// rendering to Rust. One call per header, so the block, its weights and its
+// difficulties come from one acquisition of the chain lock.
+typedef struct shekyl_rpc_block_header_facts {
+    uint8_t  hash[32];
+    uint8_t  prev_hash[32];
+    uint8_t  miner_tx_hash[32];
+    uint8_t  curve_tree_root[32];
+    uint8_t  attestation_root[32];
+    uint8_t  pow_hash[32];        // zero unless pow_hash_filled
+    uint64_t height;
+    uint64_t depth;               // chain_height - height - 1
+    uint64_t chain_height;        // so a refusal can name the top height
+    uint64_t timestamp;
+    uint64_t difficulty_lo;
+    uint64_t difficulty_hi;
+    uint64_t cumulative_difficulty_lo;
+    uint64_t cumulative_difficulty_hi;
+    uint64_t reward;              // sum of the miner tx's outputs
+    uint64_t block_weight;
+    uint64_t long_term_weight;
+    uint64_t num_txes;
+    uint32_t nonce;
+    uint8_t  major_version;
+    uint8_t  minor_version;
+    uint8_t  orphan_status;
+    uint8_t  pow_hash_filled;
+    uint8_t  found;               // 0 iff height >= chain_height (past the tip)
+    uint8_t  reserved[7];
+} shekyl_rpc_block_header_facts;
+
+// `fill_pow_hash` is the caller's request AND its right to ask (the
+// restricted listener never sets it): computing the long hash is the
+// expensive part of this call and is skipped unless asked.
+int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
+    uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
@@ -76,6 +115,8 @@ void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_
 int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
 int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
+void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
+int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -100,6 +141,9 @@ namespace daemon_rpc_facts {
 
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
     shekyl_rpc_block_hash_facts* out) noexcept;
+
+int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
+    bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
 
 } // namespace daemon_rpc_facts
 

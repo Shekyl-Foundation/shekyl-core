@@ -321,7 +321,7 @@ mod check_workflows {
                 "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
                     status: shekyl_rpc_types::RpcStatus::ok(),
                     height: self.height as u64,
-                    hash: "00".repeat(32),
+                    hash: shekyl_rpc_types::HashHex::ZERO,
                 })
                 .expect("wire type serializes"),
                 "is_key_image_spent" => {

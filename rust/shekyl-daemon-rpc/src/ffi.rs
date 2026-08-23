@@ -270,6 +270,69 @@ pub struct BlockHashFactsFfi {
     pub reserved: [u8; 7],
 }
 
+/// Twin of `shekyl_rpc_block_header_facts` (RK-3).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockHeaderFactsFfi {
+    pub hash: [u8; 32],
+    pub prev_hash: [u8; 32],
+    pub miner_tx_hash: [u8; 32],
+    pub curve_tree_root: [u8; 32],
+    pub attestation_root: [u8; 32],
+    pub pow_hash: [u8; 32],
+    pub height: u64,
+    pub depth: u64,
+    pub chain_height: u64,
+    pub timestamp: u64,
+    pub difficulty_lo: u64,
+    pub difficulty_hi: u64,
+    pub cumulative_difficulty_lo: u64,
+    pub cumulative_difficulty_hi: u64,
+    pub reward: u64,
+    pub block_weight: u64,
+    pub long_term_weight: u64,
+    pub num_txes: u64,
+    pub nonce: u32,
+    pub major_version: u8,
+    pub minor_version: u8,
+    pub orphan_status: u8,
+    pub pow_hash_filled: u8,
+    pub found: u8,
+    pub reserved: [u8; 7],
+}
+
+impl BlockHeaderFactsFfi {
+    pub(crate) const fn zeroed() -> Self {
+        Self {
+            hash: [0; 32],
+            prev_hash: [0; 32],
+            miner_tx_hash: [0; 32],
+            curve_tree_root: [0; 32],
+            attestation_root: [0; 32],
+            pow_hash: [0; 32],
+            height: 0,
+            depth: 0,
+            chain_height: 0,
+            timestamp: 0,
+            difficulty_lo: 0,
+            difficulty_hi: 0,
+            cumulative_difficulty_lo: 0,
+            cumulative_difficulty_hi: 0,
+            reward: 0,
+            block_weight: 0,
+            long_term_weight: 0,
+            num_txes: 0,
+            nonce: 0,
+            major_version: 0,
+            minor_version: 0,
+            orphan_status: 0,
+            pow_hash_filled: 0,
+            found: 0,
+            reserved: [0; 7],
+        }
+    }
+}
+
 /// Twin of `shekyl_rpc_hardfork_entry`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,6 +357,12 @@ extern "C" {
         h: *mut CoreRpcHandle,
         height: u64,
         out: *mut BlockHashFactsFfi,
+    ) -> i32;
+    pub fn shekyl_rpc_block_header_at(
+        h: *mut CoreRpcHandle,
+        height: u64,
+        fill_pow_hash: u8,
+        out: *mut BlockHeaderFactsFfi,
     ) -> i32;
 }
 
@@ -426,6 +495,15 @@ mod unit_test_link_stubs {
         _h: *mut CoreRpcHandle,
         _height: u64,
         _out: *mut BlockHashFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_block_header_at(
+        _h: *mut CoreRpcHandle,
+        _height: u64,
+        _fill_pow_hash: u8,
+        _out: *mut BlockHeaderFactsFfi,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }

@@ -1,7 +1,8 @@
 # Daemon RPC — Phase 2: the KV cutover (native Rust handlers over facts FFI)
 
-**Status:** **RK-1 landed** (the pattern slice, PR #534) and **RK-2 landed**
-(count + hash-by-height); design **open for RK-3**. Census and binding
+**Status:** **RK-1, RK-2 and RK-3 landed** (the pattern slice, PR #534;
+count + hash-by-height, PR #540; the block-header projection); design **open
+for RK-3b**. Census and binding
 decisions verified at source against `dev` **`077d97c4e`** (PR #528 merge);
 every `file:line` below was read at that commit. RK-2's own census rows and
 consumer set were re-verified at **`c5ca208e9`** (PR #534 merge), the commit
@@ -83,6 +84,7 @@ cutover, scheduled by validation surface
 | **RK-D7** | **Store-agnostic handlers.** Each family's facts arrive through a trait (`ChainFacts`, `PoolFacts`, `PeerFacts`, … — the `SubmitStateShim` shape), with the FFI shim as today's only impl. When DRS-E lands the Rust store, a second impl reads it directly and the C++ shim is deleted; handlers and tests do not change. | DRS is the long pole; RPC must not wait for it, and must not be rewritten after it. |
 | **RK-D8** | **One variable at a time: the cutover preserves each reply's shape; wire cleanup is its own slice.** Pre-genesis there is **no external wire contract** — every client of this RPC is in this tree (wallet, CLI, GUI, console, test framework) and ships with the daemon. The shape-preservation rule is therefore a *sequencing* discipline, not a compatibility promise: the epee oracle vectors can only pin a reply whose shape did not move, and a slice that both migrates a handler and changes its wire cannot be bisected. So each RK slice keeps field sets, names, defaults, aliases and status values as they were; the Monero-era quirks that survive the cutover — the `status` string doubling as an error channel, `KV_SERIALIZE_OPT` omissions, positional JSON-RPC (`get_block_count`'s list request), the `/getheight`-style aliases — are **queued for RK-W**, a wire-cleanup slice after RK-X that redesigns the surface once, with every in-tree client updated in the same PR. `CORE_RPC_VERSION` stays a cheap skew guard between a wallet and a daemon from different builds (§2.3 of `DAEMON_SUBMIT_VERDICT.md`), bumped when a reply a client parses changes; it is not a ceremony. Diagnostic text inside a transport failure is neither shape nor status and may change at any time. | Parity needs a fixed shape; bisection needs one variable; nothing outside the tree needs the old shape. |
 | **RK-D9** | **`rpc_target_wire_contract.cpp` is re-pinned, not preserved.** It asserts epee's pretty-printed `"block_target": 120` byte form on the claim that "offline grep-based monitoring relies on the canonical form". No such monitoring exists in the tree. When `mining_status` / `get_info` move (RK-5/RK-7) the test becomes a Rust test that the *value* is `SHEKYL_DAA_TARGET_SECONDS`. Reopen: a named monitoring consumer of the whitespace form. | A check whose subject is a formatter we are deleting is decorative. |
+| **RK-D10** | **A hash on this wire is `HashHex` — 32 bytes, 64 lowercase hex characters, wire-level.** Every 32-byte hash the RPC carries is one type, which validates the hex once in the deserializer instead of leaving each consumer to parse it. It wraps raw bytes, **not** a domain newtype: a single `block_header` carries hashes of four kinds (block identity, transaction identity, two roots, a proof-of-work hash), so typing the wire field as `BlockHash` — §3.1's original sketch — would recreate on the wire the confusion `shekyl-types`' `hash32!` newtypes exist to prevent, and a generic `HashHex<T>` would need a trait plus newtypes for the roots and the PoW hash that this tree does not have. Consumers name the kind at their edge (rule 18), as `shekyl-wire::BlockHeader` already does with both roots. Where the wire's absent form is `""` rather than a missing field (`block_header.pow_hash`), the type is `Option<HashHex>` with an explicit `""`-as-absent serde, so the daemon's "was it filled?" flag survives to the wire; that quirk retires with the rest in RK-W. Landed in RK-3 — see the §7 log entry of 2026-08-23 for the rejected alternatives. | One definition, one parse, and no field that claims to be a kind of hash it is not. |
 
 ---
 
@@ -99,9 +101,10 @@ calls in the handler (`core_rpc_server.cpp`).
 | --- | --- | --- | --- | --- | --- |
 | **RK-1** — **landed** (this branch; PR #, sha stamped at merge) | Chain tip + version (the pattern slice) | `/get_height` `/getheight` · `get_version` | 8 + 15 | `shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks` (`src/rpc/rpc_facts_ffi.cpp`) | W K P |
 | **RK-2** — **landed** (this branch; PR #, sha stamped at merge) | Block count + hash-by-height | `get_block_count` (`getblockcount`) · `on_get_block_hash` (`on_getblockhash`) | 4 + — (the hash reply is a bare JSON string) | `shekyl_rpc_chain_tip` (reused from RK-1), `shekyl_rpc_block_hash_at` | P (python-rpc, stressnet) |
-| **RK-3** | Block headers / blocks | `get_last_block_header` · `get_block_header_by_hash` · `…_by_height` · `get_block_headers_range` · `get_block` | 8 + 11 + 9 + 10 + 22 (+ shared `block_header_response`, 25) | `get_block_by_hash`, `get_block_id_by_height`, reward/weight fills | W C G K R P |
+| **RK-3** — **landed** (this branch; PR #, sha stamped at merge) | The **block-header projection**; `HashHex` (RK-D10) | `get_block_header_by_height` (+ `getblockheaderbyheight`) | 9 (+ the shared 24-field `block_header_response`) | `shekyl_rpc_block_header_at` | W (`shekyl-rpc-client`) P |
+| **RK-3b** | Whole blocks | `get_block` (+ `getblock`) — header + blob + json + tx hashes, and the console's `print_block_by_hash` / `_by_height`, which read **only** this method | 22 | header facts + block blob | W C K R P |
 | **RK-4** | Wallet sync (binary + its JSON siblings) | `/get_blocks.bin` `/getblocks.bin` · `/get_blocks_by_height.bin` · `/get_hashes.bin` · `/get_o_indexes.bin` · `/get_transactions` · `/is_key_image_spent` · `get_fee_estimate` | 33 + 15 + 11 + 12 + 31 + 8 + 10 | `find_blockchain_supplement`, `get_pool_info`, `get_tx_outputs_gindexs`, `get_split_transactions_blobs`, `are_key_images_spent[_in_pool]`, `get_dynamic_base_fee_estimate_*` | **W** (the wallet's refresh path) K P R |
-| **RK-5** | Node state (+ `hard_fork_info`, moved here — see below) | `/get_info` `/getinfo` · `get_info` · `sync_info` · `/get_net_stats` · `get_connections` · `/get_peer_list` · `hard_fork_info` | 48 + 24 + 11 + 7 (+ `connection_info`) + 10 + 15 | 26 distinct core/p2p reads for `get_info`; `get_connections`, peerlist, throttle stats; hard-fork voting info | W C G K P F |
+| **RK-5** | Node state — **the hub** (see the console matrix below); also `hard_fork_info`, `get_last_block_header`, `get_block_header_by_hash`, `get_block_headers_range`, each moved here for a named reason | `/get_info` `/getinfo` · `get_info` · `sync_info` · `/get_net_stats` · `get_connections` · `/get_peer_list` · `hard_fork_info` · the three header methods above | 48 + 24 + 11 + 7 (+ `connection_info`) + 10 + 15 + 8 + 11 + 10 | 26 distinct core/p2p reads for `get_info`; peerlist, throttle stats; hard-fork voting info; **the p2p double** this slice must build | W C G K P F |
 | **RK-6** | Mempool | `/get_transaction_pool` · `/get_transaction_pool_hashes[.bin]` · `/get_transaction_pool_stats` · `get_txpool_backlog` · `flush_txpool` · `relay_tx` | 8 + 7 + 7 + 7 + 26 + 7 + 7 | pool reads, `flush_txes_from_pool`, `get_protocol().relay_transactions` | K P |
 | **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `add_aux_pow` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 7 + 19 + 17 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P |
 | **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · `prune_blockchain` · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · `get_output_histogram` | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 9 + 7 + 17 + 14 + 18 | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, pruning, alt chains, histogram | K P R |
@@ -128,6 +131,38 @@ definition of the reply for the console to parse, or a console command that
 cannot be built. Its validation surface *is* `status`'s, so it migrates when
 `status` does. RK-2 keeps the two methods with **no** console consumer at
 all, which is why it needs no console work.
+
+### 2.1 The console matrix — what actually bounds a slice
+
+A method's C++ struct cannot be deleted while a console command still reads
+it, and a console command can only move to Rust once **every** method it reads
+has a Rust type. So the slice boundary is not the method — it is the console
+command's read set. Enumerated from `rpc_command_executor.cpp` at `64ee608ca`:
+
+| Console command | Methods it reads |
+| --- | --- |
+| `print_block_by_hash`, `print_block_by_height` | `get_block` **only** |
+| `print_blockchain_info` | `get_block_headers_range`, **`get_info`** |
+| `print_blockchain_dynamic_stats` | `get_block_headers_range`, `hard_fork_info`, `get_fee_estimate`, **`get_info`** |
+| `alt_chain_info` | `get_block_header_by_hash`, `get_alternate_chains`, **`get_info`** |
+| `show_status` | `hard_fork_info`, `mining_status`, **`get_info`** |
+| `show_difficulty`, `version`, `print_transaction_pool_stats` | **`get_info`** (+ their own) |
+| every other command | exactly one method |
+
+**`get_info` is the hub**: six commands read it, and *every* console command
+that touches a header method also touches it. That is why the header methods
+split the way they do — a method whose only console reader is self-contained
+can move now; one whose reader also needs `get_info` moves when `get_info`
+does. The alternative — migrating the handler while a C++ struct stays behind
+for the console to parse the Rust reply with — is the cross-language
+duplication RK-D1 exists to prevent, and it is exactly what was refused for
+`hard_fork_info`.
+
+A second constraint is testability: `check_core_ready()` reads
+`is_synchronized()` off the p2p payload object, which has no double in this
+tree. A method that consults it cannot have its facts export driven by a unit
+test (§3.2), so `get_last_block_header` — which does — waits for RK-5, the
+slice that must build that double for `get_info` anyway.
 
 **Ordering rationale.** RK-1 is small and exercises both framings (REST
 JSON, JSON-RPC), an OPT field, a vector field, a facts POD, the console
@@ -157,19 +192,21 @@ migrated method's; this is not the list):
 /// is empty (and ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetHeightResponse {
-    pub status: RpcStatus,  // the `status` string every reply carries
-    pub height: u64,        // chain height = top block height + 1
-    pub hash: String,       // top block hash, 64 lowercase hex chars
+    pub status: RpcStatus,
+    /// Chain height: the top block's height **plus one** (a chain holding
+    /// only the genesis block reports `1`).
+    pub height: u64,
+    /// The top block's hash.
+    pub hash: HashHex,
 }
 ```
 
 (Verbatim from `shekyl-rpc-types/src/chain.rs`; the snippet is a mirror,
-not a second definition.) `hash` is a `String` in RK-1 on purpose:
-`shekyl-types::BlockHash` serializes as a byte array, not hex, so it cannot
-sit on this wire directly, and a hex-serde newtype for one field is
-pre-provisioning. RK-3 — block headers, where hashes multiply — introduces
-that newtype (`HashHex`, hex serde over `BlockHash`) and migrates this
-field to it; until then the string's shape is pinned by the oracle vector.
+not a second definition — when they disagree the code is right and this
+block is stale.) `hash` was a `String` in RK-1 on purpose: a hex-serde
+newtype for one field is pre-provisioning. RK-3 — block headers, where
+hashes multiply to six fields — introduced `HashHex` and migrated this
+field to it, per **RK-D10** below.
 
 Rules, all test-pinned in the crate: field names are the wire names; `u64`
 serializes as a JSON number (epee does); hashes are lowercase hex strings
@@ -333,6 +370,7 @@ downstream depends on it either way.
 | `on_get_height`, `on_get_version`, their structs, 3 dispatch rows, console bodies for `print_height` / `version`; `CORE_RPC_VERSION*` in C++; `rpc-client::HeightResponse` | RK-1 | oracle vectors committed first |
 | each slice's handlers / structs / rows / console bodies / client duplicates | its slice | same |
 | `rpc_target_wire_contract.cpp` | RK-5 / RK-7 | re-pinned in Rust (RK-D9) |
+| `block_header_response`, `fill_block_header_response`, and `core_rpc_server::get_block_reward` | RK-5 | the four remaining header methods move. `get_block_reward` is a private third copy of `cryptonote::get_outs_money_amount` whose name collides with the consensus `cryptonote::get_block_reward(median_weight, …)` (subsidy, not a coinbase sum); its single caller is `fill_block_header_response`, so it dies with it. Nothing new calls it — RK-3's facts export uses `get_outs_money_amount`. |
 | `src/daemon/rpc_client.h` (#533) + the C++ executor/parser/command server | RK-C | every console command renders in Rust |
 | `core_rpc_server.{h,cpp}`, `core_rpc_server_commands_defs.h`, `core_rpc_ffi.cpp` dispatch + `core_rpc_ffi_json_endpoint` / `_bin_endpoint` / `_json_rpc`, `rpc_handler.*`, `json_object.cpp` RPC arms, `message_data_structs.h` RPC half; FOLLOWUPS dual-list item | RK-X | zero C++ handlers left |
 | every `shekyl_rpc_*_facts` shim | post-DRS-E | Rust store impl of each facts trait lands (RK-D7) |
@@ -361,6 +399,11 @@ downstream depends on it either way.
 
 | Date | Entry |
 | --- | --- |
+| 2026-08-23 | **A caller's type error must not become a plausible answer (deliberate divergence).** epee's `KV_SERIALIZE` *discards* the load's result, so `get_block_header_by_height` treated a missing field and a wrong-typed one identically: `{"height": "nope"}` left `height` at its `struct_init` zero and was answered with the **genesis header**. Absence keeping its default is worth preserving (`{}` means height 0, and tightening it is RK-W's wire change); silently answering a type error is not — it converts a client bug into a wrong answer rather than a loud one, and pre-genesis is exactly when that is cheap to fix. `on_get_block_hash` already refuses unparseable params with `-1 CORE_RPC_ERROR_CODE_WRONG_PARAM` (RK-2), and two sibling methods must not disagree about what a bad parameter means, so the wording is shared. Params must also be an **object**: serde's derive reads a struct out of a sequence, which would have handed this method a positional form nobody designed — and positional is `on_get_block_hash`'s shape, not this one's. Same class as RK-2's negative-height divergence: recorded, not silent. | An error a client can see beats an answer it cannot tell is wrong. |
+| 2026-08-23 | **Work moved out of a lock must take its chain reads with it.** RK-3's projection lock was widened for atomicity, which swept the RandomX long hash inside it — ~1.2 s measured on a cold genesis block in a debug build — the figure is not the point, seconds-scale rather than microseconds is — i.e. that long with block handling and p2p stalled, reachable by any unrestricted caller or the operator's own `print_block`. Moving the hash out is only half the fix: `get_block_longhash(…, seed_hash = nullptr)` resolves the seed *itself*, via `Blockchain::get_pending_block_id_by_height`, which reads `m_prepare_height` / `m_prepare_blocks` with **no lock of its own**. Left implicit, the seed would be read after the unlock — pairing the locked block with a seed from another chain state, and racing the prepare-state members. **Landed:** the seed is read inside the lock (where `prepare_handle_incoming_blocks` writes those members, so the read is race-free) and passed to `get_block_longhash` explicitly; only the hashing itself is outside. RK-3b and RK-5 fill pow hashes too and must do the same. | Moving expensive work out of a critical section is only safe once the state it reads moves in. |
+| 2026-08-23 | **RK-D10 supersedes §3.1's `HashHex` sketch.** §3.1 (RK-1) proposed `HashHex` as "hex serde over `BlockHash`". Building it in RK-3 showed that shape to be wrong: one `block_header` carries hashes of **four** kinds — a block identity (×2), a transaction identity, two Merkle-ish roots, and a proof-of-work hash — so typing the wire field as `BlockHash` would recreate on the wire exactly the confusion `shekyl-types`' `hash32!` newtypes exist to prevent. A generic `HashHex<T>` was rejected for the other direction: it needs a `Hash32` trait plus minted newtypes for the roots and the PoW hash that this tree does not have (`shekyl-wire::BlockHeader` types both roots as `[u8; 32]`, and `attestation_root()` / `selene_hash_init()` return raw arrays) — pre-provisioning, and a wider blast radius than this slice scoped. **Landed:** `HashHex` is a wire-level `[u8; 32]` with 64-lowercase-hex serde, and consumers convert at the edge into whichever domain hash they know they hold — the rule that rule 18 already states and `shekyl-wire` already follows. `shekyl-rpc-types`' production dependency surface therefore stays serde alone. The wire bytes are unchanged; the oracle vectors are the proof. | The wire's job is to carry bytes; naming their kind is the edge's job, where the kind is known. |
+| 2026-08-23 | **`""` is a value on this wire, so `Option` is the honest type for it.** `block_header.pow_hash` is `""` unless the caller asked and was entitled; RK-3 models it as `Option<HashHex>` with an explicit `""`-as-absent serde rather than a `String` that might or might not be empty, which keeps the daemon's `pow_hash_filled` flag alive from the facts POD all the way to the wire. Emitted bytes unchanged. `GetHeightResponse.hash` needs no such treatment: its only producer is RK-1's Rust handler, which fills it on every reply it emits, and its failures leave through the error envelope. The `""`-as-absent quirk retires with the rest in RK-W. | A type that can represent a state the wire cannot produce is as wrong as one that cannot represent a state it does. |
+| 2026-08-23 | **RK-3 landed**: `get_block_header_by_height` (+ `getblockheaderbyheight`) served natively, carrying the shared 24-field `BlockHeader` that RK-3b and RK-5's three deferred header methods reuse. New facts export `shekyl_rpc_block_header_at` — one lock for the bound, the block, its weights and both difficulties, so the whole projection describes one chain state — as a thin adapter over `daemon_rpc_facts::block_header_at(Blockchain&, …)`, driven by `rpc_facts_shims.cpp` against a test DB that serves real blocks. The 128-bit difficulties keep the wire's three-field rendering (`split_128`: low word, `0x`-hex whole, high word); `block_weight` / `long_term_weight` keep their OPT omission while `block_size`, filled from the same source, does not. A store that cannot produce an in-range block keeps the C++ contract's `INTERNAL_ERROR` (-5) and wording rather than becoming a generic internal error — the shim has already logged it. `pow_hash_entitled` names the `fill_pow_hash && !restricted` policy the C++ handler enforced inline, with its truth table pinned. `shekyl-rpc-client`'s private `BlockHeaderByHeightResponse` retires for the shared type, and now checks `status`. C++ `block_header_response` and `fill_block_header_response` stay: the four header methods still in C++ use them, and — unlike the `hard_fork_info` case — no console command parses a Rust-produced reply with them, so the two definitions never meet. |
 | 2026-08-22 | **RK-2 landed**: `get_block_count` (+ `getblockcount`) and `on_get_block_hash` (+ `on_getblockhash`) served natively. Adds the two mechanisms RK-1 had no occasion to exercise — positional JSON-RPC params, typed as `GetBlockHashParams([u64; 1])` so arity/type refusals are the deserializer's (not a hand-written parser's), and `RpcFault::Refused(RpcRefusal { code, message })`, which carries `CORE_RPC_ERROR_CODE_WRONG_PARAM` / `_TOO_BIG_HEIGHT` onto the wire instead of collapsing to `-32603`; a refusal is normal traffic and is not logged as a daemon fault. New facts export `shekyl_rpc_block_hash_at` (POD + layout twins), which reads the tip and the hash in **one** call so the `TOO_BIG_HEIGHT` message cannot name a height that disagrees with the bound it failed. `get_block_count` needed no new facts — it is RK-1's `chain_tip().chain_height`. **One deliberate divergence:** a negative height is now `WRONG_PARAM`, where the C++ dispatcher's hand-rolled `std::stoull` parse wrapped it to a huge `u64` and answered `TOO_BIG_HEIGHT` — a parser artifact, not a decision. |
 | 2026-08-21 | **RK-1 landed** on the design's own branch: `shekyl-rpc-types::chain` (GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus, CORE_RPC_VERSION); `shekyl-daemon-rpc::{chain_facts, methods, console}`; `src/rpc/rpc_facts_ffi.{h,cpp}` + layout-twin test; oracle vectors captured from the C++ handlers before they, `COMMAND_RPC_GET_HEIGHT` / `_GET_VERSION`, the three handler-less structs (`GET_OUTPUTS`, `GET_OUTPUTS_BIN` — and the dead `core::get_outs` / `Blockchain::get_outs` chain behind it — `FAST_EXIT`) and the C++ `CORE_RPC_VERSION` macros were deleted. Console `print_height` renders in Rust on both arms. `shekyl-rpc-client`'s private `HeightResponse` retired for the shared type. |
 | 2026-08-21 | Document opened after #533 (epee HTTP surface gone). Census at `077d97c4e`: 65 structs / 872 KV fields / 59 dispatch rows; per-handler core/p2p facts counted; consumers mapped (W/C/G/K/P/F/R). RK-D1…D9 bound. Phase 2 re-scoped from "Rust codec in `core_rpc_ffi.cpp`" (unbuildable without a façade) to method-wise native handlers over facts FFI. Slices RK-1…RK-9, RK-C, RK-X. RK-1 = `get_height` + `get_version` + deletion of the three handler-less structs. |

@@ -186,12 +186,25 @@ pub async fn handle(
 
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
 /// table. Each arm is one `methods::*` call framed as a JSON value.
+/// Whether to compute a block's proof-of-work hash: only if the caller asked
+/// **and** the listener is unrestricted — the C++ handler's
+/// `req.fill_pow_hash && !restricted`.
+///
+/// Its own function because it is a policy, not an expression: computing the
+/// long hash is the expensive part of a header read, and a restricted
+/// listener is exactly the one that must not be made to do it on request.
+/// Dropping the `!restricted` here fails [`pow_hash_is_never_computed_for_a_restricted_listener`].
+fn pow_hash_entitled(requested: bool, restricted: bool) -> bool {
+    requested && !restricted
+}
+
 /// A JSON-RPC method this crate serves itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeMethod {
     Version,
     BlockCount,
     BlockHash,
+    BlockHeaderByHeight,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -206,6 +219,9 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         "get_version" => NativeMethod::Version,
         "get_block_count" | "getblockcount" => NativeMethod::BlockCount,
         "on_get_block_hash" | "on_getblockhash" => NativeMethod::BlockHash,
+        "get_block_header_by_height" | "getblockheaderbyheight" => {
+            NativeMethod::BlockHeaderByHeight
+        }
         _ => return None,
     })
 }
@@ -245,6 +261,22 @@ async fn native_method(
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiChainFacts::new(core);
                 crate::methods::get_block_hash(&facts, height)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::BlockHeaderByHeight => {
+            // The params parse is pure and its refusal needs no core, so it
+            // happens before a worker is taken — as `on_get_block_hash`'s does.
+            let request = match crate::methods::block_header_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_header_by_height(&facts, request.height, fill_pow_hash)
             })
             .await;
             Some(frame_native(out))
@@ -329,6 +361,11 @@ mod tests {
         ("getblockcount", NativeMethod::BlockCount),
         ("on_get_block_hash", NativeMethod::BlockHash),
         ("on_getblockhash", NativeMethod::BlockHash),
+        (
+            "get_block_header_by_height",
+            NativeMethod::BlockHeaderByHeight,
+        ),
+        ("getblockheaderbyheight", NativeMethod::BlockHeaderByHeight),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -352,7 +389,6 @@ mod tests {
             "sync_info",
             "hard_fork_info",
             "get_block",
-            "get_block_header_by_height",
             "getblockcount2",
             "",
         ] {
@@ -361,6 +397,17 @@ mod tests {
                 "{name} must fall through to the C++ dispatch table"
             );
         }
+    }
+
+    /// The restricted listener never computes a pow hash, however the request
+    /// is phrased — the whole truth table, since only one of its four cells
+    /// may be true.
+    #[test]
+    fn pow_hash_is_never_computed_for_a_restricted_listener() {
+        assert!(pow_hash_entitled(true, false), "asked for, unrestricted");
+        assert!(!pow_hash_entitled(true, true), "asked for, but restricted");
+        assert!(!pow_hash_entitled(false, false), "not asked for");
+        assert!(!pow_hash_entitled(false, true), "not asked for, restricted");
     }
 
     /// None of the natively-served names is admin-only, so the restricted
