@@ -13660,6 +13660,32 @@ zone to alias onto.
 
 ### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
 
+> **NOTED 2026-08-23 — the same question one axis over: `hop`, not zone.**
+> `derive_embargo` steps discontinuously when `hop` is near a multiple of the
+> embargo tick: it accumulates `div_ceil(h * hop + F, tick)` over the
+> stem-length sum, and at `hop ≈ n * tick` every term crosses a boundary at
+> once. Measured at `tick = 250` ms: **+12 s of embargo for a 1 ms hop change**
+> at hop 251/501/751/1001, against +4–5 s elsewhere. Mechanism and clearances
+> are carried by `derive::resonance_clearance_ms` and pinned in
+> `tests/carrier_window.rs`.
+>
+> **Because `hop` includes `f_ms(n_in, depth)`, different transaction shapes sit
+> at different distances from a resonance.** At the §94 candidate the modal
+> genesis shape is 35.0 ms clear (4.9 %) and the 8-input one **6.9 ms (0.7 %)**.
+> A re-measurement could put one shape on a resonance and another off it, making
+> the embargo **discontinuous across shapes** rather than across zones.
+>
+> **Raised, not ruled.** Whether it discloses anything depends on whether
+> embargo firing times are observable at all — fires are ~10 % of transactions
+> and shape is public from the transaction anyway, so the likely answer is no.
+> Recorded here because this section already owns the zone-shaped version of the
+> question, and a future reader asking it about shapes should find the numbers
+> rather than re-derive them.
+>
+> **The shipped interim is the live instance**: 1625 + 125.4 = 1750.4 ms, which
+> is **0.6 ms** from a resonance. Inert only because §89.8.4 arms no anonymity
+> embargo.
+
 Per-zone means the two zones draw from different means, and a different mean is
 in principle an observable. This is the mirror of the `vin.size()` question D
 answered, so it got the same treatment rather than an argument:

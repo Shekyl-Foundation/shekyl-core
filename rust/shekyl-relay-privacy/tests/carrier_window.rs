@@ -165,3 +165,107 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     }
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
+
+/// Where every hop sits on the embargo's resonance grid.
+///
+/// # The mechanism
+///
+/// `resonance_clearance_ms` documents it: `derive_embargo` accumulates
+/// `div_ceil(h * hop + F, tick)` over the stem-length sum, and when `hop` is
+/// near a multiple of `tick` every term steps at once. At `tick = 250` ms that
+/// is **+12 s of embargo for a 1 ms hop change** at hop 251/501/751/1001,
+/// against +4-5 s elsewhere.
+///
+/// # A record, not a gate — and the finding it carries
+///
+/// Nothing in the design picks a hop for its clearance, so a threshold here
+/// would be another self-invented bar. What this prevents is a hop moving onto
+/// a resonance silently.
+///
+/// | hop | value | clear of next resonance |
+/// | --- | --- | --- |
+/// | clearnet modal | 175.4 ms | 75.6 ms (43.1 %) |
+/// | **SHIPPED anon modal** (interim 1625) | **1750.4 ms** | **0.6 ms (0.03 %)** |
+/// | SHIPPED anon 8-input | 2028.5 ms | 222.5 ms (11.0 %) |
+/// | §94 candidate anon modal | 716.0 ms | 35.0 ms (4.9 %) |
+/// | **§94 candidate anon 8-input** | **994.1 ms** | **6.9 ms (0.7 %)** |
+///
+/// **The shipped interim hop is sitting on a resonance** — 0.6 ms clear, so one
+/// further millisecond moves its embargo 499 -> 510 s. It is inert today
+/// (§89.8.4 arms no anonymity embargo), which is the only reason this is a
+/// record rather than a defect.
+///
+/// **The shape-dependence question is concrete, not hypothetical.** `hop`
+/// includes `f_ms(n_in, depth)`, so shapes land at different clearances: at the
+/// §94 candidate the two genesis shapes differ by 4.2 points, the 8-input one
+/// 0.7 % clear. A re-measurement could put one shape on a resonance and another
+/// off it, making the embargo discontinuous **across transaction shapes**.
+/// Whether that is observable is §89.3's disclosure question one axis over, and
+/// it is noted there rather than ruled here.
+///
+/// What edit reds this: any change to a transit assumption, a verify-cost cell,
+/// or `DEFAULT_EMBARGO_TICK_MILLIS`.
+#[test]
+fn the_hops_clearance_of_the_resonance_grid_is_recorded() {
+    use shekyl_relay_privacy::derive::resonance_clearance_ms;
+    use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
+    use shekyl_relay_privacy::verify_cost::{
+        ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH,
+        SPEC_VERIFY_COST,
+    };
+
+    // The §94 round's candidate anonymity transit. A local literal ON PURPOSE:
+    // it is BANKED, NOT ADOPTED — the flood-suite re-baseline is its
+    // prerequisite — so there is no tree constant to read. When it lands this
+    // becomes a read and the band below is re-derived with it.
+    const CANDIDATE_ANON_TRANSIT_MS: f64 = 590.6;
+
+    let f1 = SPEC_VERIFY_COST
+        .f_ms(1, GENESIS_TREE_DEPTH)
+        .expect("populated");
+    let f8 = SPEC_VERIFY_COST
+        .f_ms(8, GENESIS_TREE_DEPTH)
+        .expect("populated");
+
+    for (label, hop, lo, hi) in [
+        (
+            "clearnet modal",
+            ADOPTED_TRANSIT_ASSUMPTION_MS + f1,
+            75.0,
+            76.5,
+        ),
+        (
+            "SHIPPED anon modal",
+            ANON_ZONE_TRANSIT_ASSUMPTION_MS + f1,
+            0.0,
+            1.5,
+        ),
+        (
+            "SHIPPED anon 8-input",
+            ANON_ZONE_TRANSIT_ASSUMPTION_MS + f8,
+            222.0,
+            223.5,
+        ),
+        (
+            "candidate anon modal",
+            CANDIDATE_ANON_TRANSIT_MS + f1,
+            34.0,
+            36.0,
+        ),
+        (
+            "candidate anon 8-input",
+            CANDIDATE_ANON_TRANSIT_MS + f8,
+            6.0,
+            8.0,
+        ),
+    ] {
+        let clear = resonance_clearance_ms(hop, DEFAULT_EMBARGO_TICK_MILLIS);
+        assert!(
+            (lo..hi).contains(&clear),
+            "{label}: hop {hop:.1} ms is {clear:.1} ms clear of the next embargo \
+             resonance, outside the recorded {lo}..{hi} ms band — a hop moved \
+             onto or off a resonance, where derive_embargo steps ~12 s for a \
+             1 ms input change"
+        );
+    }
+}

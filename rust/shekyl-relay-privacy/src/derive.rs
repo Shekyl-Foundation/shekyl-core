@@ -260,6 +260,41 @@ pub fn derive_embargo(
     })
 }
 
+/// Milliseconds from `hop_ms` up to the next embargo **resonance** — the hop
+/// values where [`derive_embargo`] steps discontinuously.
+///
+/// # The mechanism, and it is arithmetic rather than a solver artifact
+///
+/// [`full_travel_probability`] accumulates `div_ceil(h * hop + F, tick)` over
+/// every `h` in the stem-length sum. Each `h` contributes a ceiling that steps
+/// whenever `h * hop + F` crosses a tick boundary. Normally those crossings are
+/// scattered — `h * hop` hits a boundary at a different hop for each `h`, so the
+/// aggregate is smooth. **When `hop` is near a multiple of `tick`,
+/// `h * hop mod tick` is constant across `h` and every term steps at once.**
+///
+/// Measured at `tick = 250` ms: full resonances at hop **251, 501, 751, 1001**
+/// move the embargo **+12 s** for a 1 ms hop change, against +4-5 s at
+/// neighbouring values; half-resonances at 376, 626, 876, 1126 move it +5 s.
+///
+/// # Why this is exported rather than left as a comment
+///
+/// **A sensitivity table built by interpolating [`derive_embargo`] is wrong
+/// near a resonance.** The re-derivation round must call it at the actual hop
+/// rather than scaling a nearby result, and when a re-measurement lands, this
+/// says whether the landing sits somewhere the value moves smoothly. A hop
+/// within a tick or two of `n * tick` is a flag to check, not a number to
+/// accept.
+#[must_use]
+pub fn resonance_clearance_ms(hop_ms: f64, tick_millis: u64) -> f64 {
+    let tick = tick_millis as f64;
+    // Resonances sit at `n * tick + 1`. Find the smallest one strictly above
+    // `hop_ms`. Deriving `n` from `hop_ms / tick` alone would SKIP the
+    // resonance a hop in `(n * tick, n * tick + 1]` is about to hit — the case
+    // that matters most, because that hop is as close to a step as it gets.
+    let n = ((hop_ms - 1.0) / tick).floor() + 1.0;
+    (n * tick + 1.0) - hop_ms
+}
+
 /// Integer ceiling division.
 const fn div_ceil(numerator: u64, denominator: u64) -> u64 {
     numerator.div_ceil(denominator)
