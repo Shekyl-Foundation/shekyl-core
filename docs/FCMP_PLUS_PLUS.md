@@ -1317,8 +1317,8 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | FROST DKG key management (`frost_dkg.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `ct_semantics.h/cpp` (test-only; production uses collapsed Rust signing) |
+| FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export is gone with the legacy prove seam; the witness format survives as `parse_prove_witness` / `shekyl_fcmp_build_witness_header` in `rust/shekyl-ffi/src/legacy_fcmp.rs` and `legacy_tx.rs`, both `#[cfg(feature = "multisig")]` and read by the FROST coordinator |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deleted 2026-08-22** | Had no caller; production signing is `shekyl_sign_fcmp_transaction` (`CT_SURFACE_NAMING_PIN.md` §5 step 1) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
@@ -1754,8 +1754,17 @@ serialized immediately after `enc_amounts` and before `outPk`:
   verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
   cleartext sentinel-vs-tag discriminator).
 - Included in `serialize_ctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
-- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
-- `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
+- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_ctsig_base_prehash`.
+- ~~`genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test
+  device mode~~ — **the guard was deleted with its host, 2026-08-22, and
+  nothing replaced it.** No live coverage was lost: `genRctFcmpPlusPlus` had
+  no caller, so the check was unreachable and enforced nothing. But the
+  invariant it *stated* is real — an all-zero `enc_label` is trivially
+  distinguishable, which the §5.7.10 indistinguishability requirement forbids
+  — and the Rust signing path takes `enc_label` as a plain `[u8; 9]`
+  (`shekyl-tx-builder/src/types.rs`) with no zero-check. Filed in
+  `FOLLOWUPS.md`; recorded here rather than dropped, because a deletion that
+  retires an unreachable check must not also retire the invariant silently.
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 - **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`

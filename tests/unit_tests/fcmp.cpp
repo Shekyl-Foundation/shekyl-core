@@ -238,7 +238,7 @@ TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 
 // enc_label integrity is prehash-bound (no Pedersen commitment backstop).
 // Tampering enc_labels must change serialize_ctsig_base → get_tx_prehash input.
-TEST(fcmp, enc_label_binds_rctsig_base_prehash)
+TEST(fcmp, enc_label_binds_ctsig_base_prehash)
 {
   ct::CtSig rv;
   rv.type = ct::CTTypeFcmpPlusPlusPqc;

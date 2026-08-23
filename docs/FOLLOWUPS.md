@@ -47,6 +47,29 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Nothing rejects an all-zero `enc_label` on the production signing path**
+  (surfaced 2026-08-22 while deleting the legacy prove seam). The only stated
+  enforcement was in `genRctFcmpPlusPlus`, which rejected all-zero
+  `enc_labels` outside fake/test device mode — "the stub builder must not
+  reach production". That function had **no caller**, so the guard was
+  unreachable and enforced nothing; deleting it lost no live coverage, and
+  this item exists so the *invariant* is not retired along with the dead check.
+
+  The invariant is privacy-relevant, not hygiene: `SUBADDRESS_UNDER_PQC.md`
+  §5.7.10 requires `enc_label` octets to be computationally indistinguishable
+  from random, and an all-zero label is trivially distinguishable — it would
+  mark its outputs to any observer. The Rust signing path takes `enc_label` as
+  a plain `[u8; 9]` (`shekyl-tx-builder/src/types.rs`, consumed by
+  `sign.rs`), so a zeroed label is representable and unrejected.
+
+  Two candidate shapes, to be chosen when this is taken up rather than now: a
+  refusal at the builder boundary, or — better, per
+  [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc) — a type
+  that cannot hold the stub value, so the check is structural instead of a
+  runtime test that a future path can bypass. **Target: V3.0** (pre-genesis;
+  a privacy invariant with no enforcement is exactly what
+  [`00-mission`](../.cursor/rules/00-mission.mdc) ranks above convenience).
+
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the
   three RCT-named symbols it happened to edit (`serialize_rctsig_prunable` →

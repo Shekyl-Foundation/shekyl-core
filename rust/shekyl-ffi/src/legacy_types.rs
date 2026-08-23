@@ -23,8 +23,10 @@ pub struct ShekylBuffer {
 #[cfg(feature = "multisig")]
 pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 256;
 
-/// Typed struct for passing FCMP++ prover inputs across FFI.
-/// C++ fills named fields instead of writing at hand-counted byte offsets.
+/// Typed struct for passing FCMP++ prover inputs across the C ABI.
+/// A caller fills named fields instead of writing at hand-counted byte
+/// offsets. No C++ caller remains — the C++ declaration went with the legacy
+/// prove seam — so this serves the multisig witness seam only.
 #[cfg(feature = "multisig")]
 #[repr(C)]
 pub struct ProveInputFields {

@@ -197,9 +197,14 @@ pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
 ///   Fixed header (SHEKYL_PROVE_WITNESS_HEADER_BYTES = 256 bytes, 8 fields):
 ///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][z:32][a:32]
 ///     O, I, C are compressed Ed25519 output points.
-///     z is the Pedersen commitment mask.
+///     z is the Pedersen commitment mask (C = z*G + amount*H).
 ///     a is the desired blinding factor for this input's pseudo-out
-///       commitment (r_c = a - spend_y).
+///       commitment. The rerandomization scalar is `r_c = a - z`, giving
+///       `C_tilde = (z + r_c)*G + amount*H = a*G + amount*H` — see
+///       `shekyl_fcmp::proof::ProveInput::pseudo_out_blind`, which computes
+///       it. It is `z`, never `spend_y`: the commitment mask is independent
+///       of the SAL output-key T-component (`FCMP_PLUS_PLUS.md`
+///       §"Commitment Mask Independence").
 ///   Leaf chunk (variable):
 ///     leaf_chunk_count: u32
 ///     For each entry (128 bytes):

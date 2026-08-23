@@ -1567,7 +1567,7 @@ walkthroughs **cannot** detect violations of these rules.
   matches the amount discipline (XOR + prehash, commitment where available).
 - **CI obligation:** flip one byte of `enc_label` on a signed tx fixture and
   assert verification fails (`tests/unit_tests/fcmp.cpp`:
-  `enc_label_binds_rctsig_base_prehash`). Prehash wiring without this test is
+  `enc_label_binds_ctsig_base_prehash`). Prehash wiring without this test is
   inspection-only; the test makes the binding durable across refactors.
 - **Stub prohibition:** `fill_construct_tx_rct_stub` zero-fills `enc_labels`
   (uniformity break if it reached production). `genRctFcmpPlusPlus` rejects
