@@ -347,6 +347,59 @@ pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_check(
     }
 }
 
+// Narrow fields on purpose (see chain_tip_facts_filled).
+#[allow(clippy::cast_possible_truncation)]
+fn block_hash_facts_filled(seed: u64) -> crate::ffi::BlockHashFactsFfi {
+    let mut hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 0);
+    for (i, byte) in hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::BlockHashFactsFfi {
+        hash,
+        chain_height: submit_facts_field_value(seed, 1),
+        found: submit_facts_field_value(seed, 2) as u8,
+        reserved: [0; 7],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_block_hash_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_block_hash_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_hash_facts_rust_fill(
+    out: *mut crate::ffi::BlockHashFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(block_hash_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_block_hash_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_block_hash_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_hash_facts_rust_check(
+    facts: *const crate::ffi::BlockHashFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == block_hash_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
 // Narrow field on purpose (see chain_tip_facts_filled).
 #[allow(clippy::cast_possible_truncation)]
 fn hardfork_entry_filled(seed: u64) -> crate::ffi::HardforkEntryFfi {

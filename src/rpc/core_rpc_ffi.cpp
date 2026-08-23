@@ -233,47 +233,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
     return t;
 }
 
-// Specialized dispatch for GETBLOCKHASH: request=vector<uint64_t>, response=string
-char* dispatch_getblockhash(core_rpc_server& rpc, const char* params_json) {
-    COMMAND_RPC_GETBLOCKHASH::request req;
-    COMMAND_RPC_GETBLOCKHASH::response res;
-    epee::json_rpc::error error_resp{};
-
-    if (params_json && params_json[0]) {
-        // params is a JSON array of uint64_t, e.g. [12345]
-        // Parse manually since it's not a KV-serializable struct
-        epee::serialization::portable_storage ps;
-        if (ps.load_from_json(std::string(params_json))) {
-            // The JSON-RPC spec sends params as array
-        }
-        // Fallback: try parsing as JSON array directly
-        std::string s(params_json);
-        // Remove [ ] if present
-        auto start = s.find('[');
-        auto end = s.rfind(']');
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string inner = s.substr(start + 1, end - start - 1);
-            std::istringstream iss(inner);
-            std::string token;
-            while (std::getline(iss, token, ',')) {
-                try { req.push_back(std::stoull(token)); } catch (...) {}
-            }
-        }
-    }
-
-    bool ok = rpc.on_getblockhash(req, res, error_resp, nullptr);
-    std::ostringstream oss;
-    if (ok && error_resp.code == 0) {
-        oss << R"({"ok":true,"result":")" << res << R"("})";
-    } else {
-        int code = error_resp.code ? error_resp.code : -32603;
-        std::string msg = error_resp.message.empty() ? "Internal error" : error_resp.message;
-        oss << R"({"ok":false,"error_code":)" << code
-            << R"(,"error_message":")" << msg << R"("})";
-    }
-    return strdup(oss.str().c_str());
-}
-
 // Specialized dispatch for SUBMITBLOCK: request=vector<string>, response has response_t
 char* dispatch_submitblock(core_rpc_server& rpc, const char* params_json) {
     COMMAND_RPC_SUBMITBLOCK::request req;
@@ -336,29 +295,9 @@ char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json) {
     return strdup(oss.str().c_str());
 }
 
-// Specialized dispatch for GETBLOCKCOUNT: request=list<string>, response has response_t
-char* dispatch_getblockcount(core_rpc_server& rpc, const char* /*params_json*/) {
-    COMMAND_RPC_GETBLOCKCOUNT::request req;
-    COMMAND_RPC_GETBLOCKCOUNT::response res;
-    bool ok = rpc.on_getblockcount(req, res, nullptr);
-    std::ostringstream oss;
-    if (ok) {
-        std::string result_json;
-        epee::serialization::store_t_to_json(static_cast<const COMMAND_RPC_GETBLOCKCOUNT::response_t&>(res), result_json);
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        oss << R"({"ok":false,"error_code":-32603,"error_message":"Internal error"})";
-    }
-    return strdup(oss.str().c_str());
-}
-
 const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
     static const std::unordered_map<std::string, jsonrpc_fn> t = {
         // Non-standard request/response commands: manual dispatch
-        {"get_block_count",  [](core_rpc_server& rpc, const char* p) { return dispatch_getblockcount(rpc, p); }},
-        {"getblockcount",    [](core_rpc_server& rpc, const char* p) { return dispatch_getblockcount(rpc, p); }},
-        {"on_get_block_hash",  [](core_rpc_server& rpc, const char* p) { return dispatch_getblockhash(rpc, p); }},
-        {"on_getblockhash",    [](core_rpc_server& rpc, const char* p) { return dispatch_getblockhash(rpc, p); }},
         {"submit_block",       [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"submitblock",        [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"calc_pow",           [](core_rpc_server& rpc, const char* p) { return dispatch_calcpow(rpc, p); }},

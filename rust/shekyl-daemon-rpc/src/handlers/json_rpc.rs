@@ -90,9 +90,16 @@ pub async fn handle(
 
     // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
     // never reach the C++ dispatch table.
-    if let Some(native) = native_method(&state, &method).await {
+    if let Some(native) = native_method(&state, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
+            // A refusal is the method answering — a bad request, or a height
+            // the chain does not hold. Normal traffic: it carries its own
+            // code and message and is not logged as a daemon problem.
+            Err(RpcFault::Refused(refusal)) => (
+                StatusCode::OK,
+                Json(JsonRpcResponse::error(id, refusal.code, refusal.message)),
+            ),
             Err(fault) => {
                 warn!(method = %method, ?fault, "native JSON-RPC method failed");
                 (
@@ -179,12 +186,37 @@ pub async fn handle(
 
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
 /// table. Each arm is one `methods::*` call framed as a JSON value.
+/// A JSON-RPC method this crate serves itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeMethod {
+    Version,
+    BlockCount,
+    BlockHash,
+}
+
+/// The names each native method answers to — every alias the C++ dispatch
+/// table carried, since dropping one 404s a name the daemon has always
+/// answered.
+///
+/// The single source: [`native_method`] dispatches on what this returns, so a
+/// name missing here is not served, and the test that checks the alias set
+/// exercises the same function the request path does.
+fn native_method_for(method: &str) -> Option<NativeMethod> {
+    Some(match method {
+        "get_version" => NativeMethod::Version,
+        "get_block_count" | "getblockcount" => NativeMethod::BlockCount,
+        "on_get_block_hash" | "on_getblockhash" => NativeMethod::BlockHash,
+        _ => return None,
+    })
+}
+
 async fn native_method(
     state: &Arc<AppState>,
     method: &str,
-) -> Option<Result<serde_json::Value, crate::methods::RpcFault>> {
-    match method {
-        "get_version" => {
+    params: &serde_json::Value,
+) -> Option<Result<serde_json::Value, RpcFault>> {
+    match native_method_for(method)? {
+        NativeMethod::Version => {
             let core = state.core.clone();
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiChainFacts::new(core);
@@ -193,7 +225,30 @@ async fn native_method(
             .await;
             Some(frame_native(out))
         }
-        _ => None,
+        NativeMethod::BlockCount => {
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_count(&facts)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::BlockHash => {
+            // The params parse is pure and its refusal needs no core, so it
+            // happens before a worker is taken.
+            let height = match crate::methods::get_block_hash_height(params) {
+                Ok(height) => height,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_hash(&facts, height)
+            })
+            .await;
+            Some(frame_native(out))
+        }
     }
 }
 
@@ -266,6 +321,60 @@ mod tests {
         "prune_blockchain",
         "flush_cache",
     ];
+
+    /// Every name the daemon serves natively, and the method each belongs to.
+    const SPECIFIED_NATIVE_METHODS: &[(&str, NativeMethod)] = &[
+        ("get_version", NativeMethod::Version),
+        ("get_block_count", NativeMethod::BlockCount),
+        ("getblockcount", NativeMethod::BlockCount),
+        ("on_get_block_hash", NativeMethod::BlockHash),
+        ("on_getblockhash", NativeMethod::BlockHash),
+    ];
+
+    /// The dispatcher's own recognizer answers every specified name and
+    /// nothing else. This calls `native_method_for` — the function
+    /// [`native_method`] dispatches on — so deleting or renaming an alias
+    /// arm turns it red, which an assertion about the restricted list alone
+    /// could not do.
+    #[test]
+    fn native_dispatch_answers_every_alias_and_no_foreign_name() {
+        for (name, expected) in SPECIFIED_NATIVE_METHODS {
+            assert_eq!(
+                native_method_for(name),
+                Some(*expected),
+                "{name} must dispatch natively"
+            );
+        }
+        // Still the C++ table's: recognizing one here would serve it from a
+        // handler that does not exist yet.
+        for name in [
+            "get_info",
+            "sync_info",
+            "hard_fork_info",
+            "get_block",
+            "get_block_header_by_height",
+            "getblockcount2",
+            "",
+        ] {
+            assert!(
+                native_method_for(name).is_none(),
+                "{name} must fall through to the C++ dispatch table"
+            );
+        }
+    }
+
+    /// None of the natively-served names is admin-only, so the restricted
+    /// listener serves them too — asserted through `method_is_gated`, the
+    /// function `handle` calls, not through the list it reads.
+    #[test]
+    fn native_methods_are_never_gated() {
+        for (name, _) in SPECIFIED_NATIVE_METHODS {
+            assert!(
+                !method_is_gated(true, name),
+                "{name} must answer on the restricted listener"
+            );
+        }
+    }
 
     /// Dual-armed, because *refused when restricted* alone passes for a method
     /// that is refused everywhere — including one that does not exist.

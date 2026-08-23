@@ -145,6 +145,27 @@ impl CoreRpc {
         }
     }
 
+    /// Block hash at `height` plus the tip as of the same read
+    /// (`shekyl_rpc_block_hash_at`); `Err(code)` on a non-OK return.
+    pub fn block_hash_at(&self, height: u64) -> Result<ffi::BlockHashFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::BlockHashFactsFfi {
+            hash: [0; 32],
+            chain_height: 0,
+            found: 0,
+            reserved: [0; 7],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_block_hash_at(self.handle, height, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
     /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
     /// C++-owned view before it is released.
     pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {
