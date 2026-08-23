@@ -129,14 +129,28 @@ const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 /// tight spin without logging or changing response shape.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
 
-/// Bound on discarding a peer's unread request bytes before close, in time
-/// and in bytes. Deliberately small: the in-flight permit is still held, so
-/// a generous drain would hand back the slot-squatting [`MAX_INFLIGHT`]
-/// exists to prevent.
+/// Bound on discarding a peer's unread request bytes before close.
+///
+/// **Time only, deliberately.** The in-flight permit is still held during the
+/// drain, so the drain must be bounded — but slot-squatting is a *duration*
+/// property, and this is the bound that measures it. A byte bound does not:
+/// a peer trickling a few kilobytes slowly squats the full timeout anyway,
+/// while a peer that sent one honest large request gets its drain cut short.
+///
+/// The invariant [`close_gracefully`] is defending is **an empty receive queue
+/// at drop**, not EOF as such: Linux sends RST rather than FIN when a socket
+/// is dropped with unread bytes queued, and the RST discards the response
+/// still in the send buffer. EOF is simply the one condition that *positively*
+/// establishes the queue will stay empty, so the loop reads until it.
+///
+/// Hitting this timeout is therefore a normal outcome, not a failure: a peer
+/// that stops sending but holds its write half open leaves `read` pending on
+/// an already-drained queue, and dropping there is clean. What is not safe is
+/// stopping while bytes remain — which is what a *byte* bound does. An 8 KiB
+/// cap guaranteed the reset for every peer that sent more than 8 KiB, the
+/// exact failure this drain exists to prevent, reintroduced by its own bound.
+/// Do not add one back.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Byte bound on the same drain.
-const MAX_DRAIN_BYTES: usize = 8 * 1024;
 
 /// A running loopback serve endpoint for one persona.
 ///
@@ -376,12 +390,15 @@ async fn handle_connection(
 async fn close_gracefully(stream: &mut TcpStream) {
     stream.shutdown().await.ok();
     let mut sink = [0u8; 1024];
-    let mut drained = 0usize;
     tokio::time::timeout(DRAIN_TIMEOUT, async {
-        while drained < MAX_DRAIN_BYTES {
+        // Discard until the queue is drained: EOF ends the loop, and a peer
+        // that merely stops sending leaves `read` pending on an empty queue
+        // until DRAIN_TIMEOUT — both are safe to drop on. Stopping while
+        // bytes remain is the RST case. See DRAIN_TIMEOUT.
+        loop {
             match stream.read(&mut sink).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => drained += n,
+                Ok(_) => {}
             }
         }
     })
