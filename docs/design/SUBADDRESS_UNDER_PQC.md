@@ -1569,9 +1569,23 @@ walkthroughs **cannot** detect violations of these rules.
   assert verification fails (`tests/unit_tests/fcmp.cpp`:
   `enc_label_binds_ctsig_base_prehash`). Prehash wiring without this test is
   inspection-only; the test makes the binding durable across refactors.
-- **Stub prohibition:** `fill_construct_tx_rct_stub` zero-fills `enc_labels`
-  (uniformity break if it reached production). `genRctFcmpPlusPlus` rejects
-  all-zero `enc_labels` outside `TRANSACTION_CREATE_FAKE` device mode.
+- **Stub prohibition — stated, not currently enforced (2026-08-22).**
+  `fill_construct_tx_rct_stub` zero-fills `enc_labels`; those bytes never went
+  through `encrypt_label_plaintext`, so they are a literal constant on the wire
+  rather than a ciphertext, and they would break §5.7.10 uniformity for exactly
+  the outputs carrying them. The stated enforcement was that
+  `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside
+  `TRANSACTION_CREATE_FAKE` device mode; **that function was deleted 2026-08-22
+  and nothing replaced the check.** No live exposure follows — the stub's zeros
+  are placeholders that `construct_tx_with_tx_key` overwrites from
+  `v3_rct_data`, on a branch that is always taken pre-genesis
+  (`HF_VERSION_FCMP_PLUS_PLUS_PQC` is 1 and Shekyl is v3-from-genesis) — but
+  the *window* is real and the invariant now rests on that overwrite rather
+  than on any assertion. Tracked in `FOLLOWUPS.md`, where the fix named is a
+  type whose only constructor is the encryption, so an unencrypted label is
+  unrepresentable rather than rejected after the fact. Note the check must not
+  be re-added as "reject zeros": that admits any other unencrypted constant and
+  can fire on a legitimate ciphertext that happens to be zero.
 - **KAT obligation:** `PQC_OUTPUT_SECRETS.json` records `enc_label_sentinel`
   and `enc_label_sentinel_9` (on-wire octets for sentinel plaintext) so
   independent implementations reproduce byte-exact wire encoding, not just HKDF

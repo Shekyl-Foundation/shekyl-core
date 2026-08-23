@@ -95,6 +95,19 @@ sustainability is unaffected by the recalibration.
   (`shekyl-tx-builder/src/types.rs`, consumed by `sign.rs`), so an unencrypted
   value is representable there too.
 
+  **The live path is Rust, and that is where the fix belongs.** `wallet2.cpp`
+  was deleted 2026-08-19, so the C++ `construct_tx*` chain that calls the stub
+  has no production caller at all and is now only the consensus-oracle
+  harness's transaction factory (tracked separately below). Production
+  transaction construction is `shekyl-tx-builder`. Two consequences: the C++
+  stub's window is a *test-path* window today and cannot leak to a user, and
+  the Rust builder inherits the same shape with none of the C++ side's
+  accidental protection — no `v3_rct_data` overwrite stands behind it, and
+  `OutputInfo::enc_label` is a bare `[u8; 9]` any caller can fill by hand.
+  **So this is not a C++ curiosity to retire with the oracle; it is an open
+  obligation on the builder that ships.** Whoever migrates the harness off the
+  C++ builder must not carry the write-then-fill pattern across with it.
+
   **Therefore do not fix this by rejecting zeros.** A zeroed field is one
   symptom; a check for it still admits any other unencrypted constant, and
   rejects a legitimate ciphertext that happens to be zero (probability 2⁻⁶⁴,
