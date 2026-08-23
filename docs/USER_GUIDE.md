@@ -158,11 +158,10 @@ example.
 | Flag | Description |
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
-| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
+| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. Another machine of yours reaches this node through its onion service |
 | `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
 | `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
-| `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
 
 shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
 plaintext). Use loopback locally; for remote access prefer an onion service

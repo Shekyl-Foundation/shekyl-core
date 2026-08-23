@@ -29,7 +29,6 @@
 #include "rpc_args.h"
 
 #include <boost/algorithm/string.hpp>
-#include <boost/asio/ip/address.hpp>
 #include <functional>
 #include "common/command_line.h"
 #include "common/i18n.h"
@@ -96,7 +95,6 @@ namespace cryptonote
      , rpc_use_ipv6({"rpc-use-ipv6", rpc_args::tr("Allow IPv6 for RPC"), false})
      , rpc_ignore_ipv4({"rpc-ignore-ipv4", rpc_args::tr("Ignore unsuccessful IPv4 bind for RPC"), false})
      , rpc_login({"rpc-login", rpc_args::tr("Specify username[:password] required for RPC server"), "", true})
-     , confirm_external_bind({"confirm-external-bind", rpc_args::tr("Confirm rpc-bind-ip value is NOT a loopback (local) IP")})
      , rpc_access_control_origins({"rpc-access-control-origins", rpc_args::tr("Specify a comma separated list of origins to allow cross origin resource sharing"), ""})
      , rpc_ssl({"rpc-ssl", rpc_args::tr("Enable SSL on RPC connections: enabled|disabled|autodetect"), "autodetect"})
      , rpc_ssl_private_key({"rpc-ssl-private-key", rpc_args::tr("Path to a PEM format private key"), ""})
@@ -122,7 +120,6 @@ namespace cryptonote
     command_line::add_arg(desc, arg.rpc_restricted_bind_ipv6_address);
     command_line::add_arg(desc, arg.rpc_use_ipv6);
     command_line::add_arg(desc, arg.rpc_ignore_ipv4);
-    command_line::add_arg(desc, arg.confirm_external_bind);
     command_line::add_arg(desc, arg.rpc_access_control_origins);
     command_line::add_arg(desc, arg.disable_rpc_ban);
     if (include_listener_tls_auth)
@@ -154,83 +151,13 @@ namespace cryptonote
     config.use_ipv6 = command_line::get_arg(vm, arg.rpc_use_ipv6);
     config.require_ipv4 = !command_line::get_arg(vm, arg.rpc_ignore_ipv4);
     config.disable_rpc_ban = command_line::get_arg(vm, arg.disable_rpc_ban);
-    if (!config.bind_ip.empty())
-    {
-      // always parse IP here for error consistency
-      boost::system::error_code ec{};
-      const auto parsed_ip = boost::asio::ip::make_address(config.bind_ip, ec);
-      if (ec)
-      {
-        LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_bind_ip.name);
-        return std::nullopt;
-      }
-
-      if (!parsed_ip.is_loopback() && !command_line::get_arg(vm, arg.confirm_external_bind))
-      {
-        LOG_ERROR(
-          "--" << arg.rpc_bind_ip.name <<
-          tr(" permits inbound unencrypted external connections. Consider SSH tunnel or SSL proxy instead. Override with --") <<
-          arg.confirm_external_bind.name
-        );
-        return std::nullopt;
-      }
-    }
-    if (!config.bind_ipv6_address.empty())
-    {
-      // allow square braces, but remove them here if present
-      if (config.bind_ipv6_address.find('[') != std::string::npos)
-      {
-        config.bind_ipv6_address = config.bind_ipv6_address.substr(1, config.bind_ipv6_address.size() - 2);
-      }
-
-
-      // always parse IP here for error consistency
-      boost::system::error_code ec{};
-      const auto parsed_ip = boost::asio::ip::make_address(config.bind_ipv6_address, ec);
-      if (ec)
-      {
-        LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_bind_ipv6_address.name);
-        return std::nullopt;
-      }
-
-      if (!parsed_ip.is_loopback() && !command_line::get_arg(vm, arg.confirm_external_bind))
-      {
-        LOG_ERROR(
-          "--" << arg.rpc_bind_ipv6_address.name <<
-          tr(" permits inbound unencrypted external connections. Consider SSH tunnel or SSL proxy instead. Override with --") <<
-          arg.confirm_external_bind.name
-        );
-        return std::nullopt;
-      }
-    }
-    if (!config.restricted_bind_ip.empty())
-    {
-      // always parse IP here for error consistency
-      boost::system::error_code ec{};
-      boost::asio::ip::make_address(config.restricted_bind_ip, ec);
-      if (ec)
-      {
-        LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_restricted_bind_ip.name);
-        return std::nullopt;
-      }
-    }
-    if (!config.restricted_bind_ipv6_address.empty())
-    {
-      // allow square braces, but remove them here if present
-      if (config.restricted_bind_ipv6_address.find('[') != std::string::npos)
-      {
-        config.restricted_bind_ipv6_address = config.restricted_bind_ipv6_address.substr(1, config.restricted_bind_ipv6_address.size() - 2);
-      }
-
-      // always parse IP here for error consistency
-      boost::system::error_code ec{};
-      boost::asio::ip::make_address(config.restricted_bind_ipv6_address, ec);
-      if (ec)
-      {
-        LOG_ERROR(tr("Invalid IP address given for --") << arg.rpc_restricted_bind_ipv6_address.name);
-        return std::nullopt;
-      }
-    }
+    // The bind addresses (main and restricted, v4 and v6) are passed to the
+    // Rust listener as given. It is the one parser — numeric IP, brackets
+    // around an IPv6 literal tolerated, hostnames refused by name — and the
+    // one place the listen posture is decided (wildcard and network binds
+    // refused: RPC_TRANSPORT_POSTURE.md RT-1/RT-2, slice RT-W2). The parse
+    // "for error consistency" that used to live here was a second copy of
+    // that decision.
 
     if (include_listener_tls_auth)
     {

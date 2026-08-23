@@ -257,11 +257,10 @@ bool Daemon::run(bool interactive)
     {
       auto * server = rpc.server.get();
       // Honors --rpc-bind-ip / --rpc-restricted-bind-ip. IPv6 dual-bind
-      // parity is tracked in FOLLOWUPS; Axum binds the configured host here.
-      std::string host = rpc.bind_host.empty() ? "127.0.0.1" : rpc.bind_host;
-      std::string bind_addr = (host.find(':') != std::string::npos)
-        ? ("[" + host + "]:" + rpc.bind_port)
-        : (host + ":" + rpc.bind_port);
+      // parity is tracked in FOLLOWUPS. The host and port go to Rust as the
+      // operator gave them: Rust parses them and decides the listen posture
+      // (RPC_TRANSPORT_POSTURE.md RT-W2); nothing is composed here.
+      const std::string bind_addr = rpc.bind_host + ":" + rpc.bind_port; // for messages only
       // Comma-joined CORS allow-list for Axum (empty = default-deny).
       std::string cors_origins;
       {
@@ -273,7 +272,7 @@ bool Daemon::run(bool interactive)
         }
       }
       auto * rust_handle = shekyl_daemon_rpc_start(
-        static_cast<void*>(server), bind_addr.c_str(), rpc.restricted,
+        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(), rpc.restricted,
         cors_origins.empty() ? nullptr : cors_origins.c_str(),
         server->get_rpc_max_connections(),
         server->get_rpc_max_connections_per_public_ip(),
@@ -281,7 +280,8 @@ bool Daemon::run(bool interactive)
       if (!rust_handle)
       {
         throw std::runtime_error(
-          "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
+          "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr +
+          " (the reason is logged just above)");
       }
       MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description);
       mp_internals->rust_rpc_handles.push_back(rust_handle);

@@ -4,6 +4,22 @@
 
 ### Changed
 
+- **The daemon RPC binds loopback only; `--confirm-external-bind` is
+  retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
+  spellings) is refused unconditionally — consent to interfaces that do
+  not exist yet — and a bind on a specific network address is refused
+  because the daemon RPC has no authentication of any kind: every RPC leg
+  is operator-to-operator, and the remote legs are the onion service and
+  the pinned-TLS leg of `RPC_TRANSPORT_POSTURE.md` (RT-4). The refusal
+  lives at the one Rust seam every daemon listener passes through
+  (`shekyl-daemon-rpc::bind_listener`, the restricted listener included —
+  it had no gate at all), on a strictly parsed address (hostnames are not
+  resolved), and is logged with its reason before the daemon exits.
+  `--confirm-external-bind`, a permission slip for exactly these binds,
+  is refused by name through the removed-flags shim: confirmation is not
+  refusal. One listen classifier, `shekyl_rpc_transport::listen`, now
+  serves the wallet RPC and the daemon RPC, so "wildcard" and "loopback"
+  mean one thing across the tree.
 - **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
   natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
   wire types are now `shekyl-rpc-types::{GetHeightResponse,

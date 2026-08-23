@@ -94,12 +94,9 @@ impl ListenAddr {
         if let Some(path) = s.strip_prefix("uds://") {
             return Self::uds(path);
         }
-        s.parse::<SocketAddr>().map(Self::Tcp).map_err(|e| {
-            format!(
-                "invalid listen address '{s}': {e}. Use a numeric IP:PORT such as \
-                 127.0.0.1:29500 or [::1]:29500 — hostnames are not resolved"
-            )
-        })
+        shekyl_rpc_transport::listen::parse_listen_addr(s)
+            .map(Self::Tcp)
+            .map_err(|e| e.to_string())
     }
 
     /// The `uds://` form on Unix: a non-empty path.
@@ -452,8 +449,10 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         #[cfg(windows)]
         ListenAddr::SelfHostedPipe(_) => return Ok(()),
     };
-    let ip = addr.ip().to_canonical();
-    if ip.is_unspecified() {
+    // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
+    // so the wallet and the daemon cannot disagree on what a spelling names.
+    let class = shekyl_rpc_transport::listen::classify_listen(*addr);
+    if class == shekyl_rpc_transport::listen::ListenClass::Wildcard {
         return Err(format!(
             "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
              bind every interface, including ones that do not exist yet (a VPN that comes up \
@@ -464,7 +463,7 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         )
         .into());
     }
-    if ip.is_loopback() {
+    if class == shekyl_rpc_transport::listen::ListenClass::Loopback {
         return Ok(());
     }
     // RT-2. `Basic` always carries a real credential: `BasicCredential` has no

@@ -40,32 +40,59 @@ pub struct ShekylDaemonRpcHandle {
 ///
 /// - `rpc_server_ptr` must be a valid pointer to an initialized `core_rpc_server`,
 ///   or null (returns null immediately).
-/// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
+/// - `bind_host` and `bind_port` must be valid null-terminated C strings, or
+///   null (returns null): the operator's `--rpc-bind-ip` / `--rpc-bind-port`
+///   values as given. Rust parses them (`server::parse_bind`) and decides the
+///   listen posture (`server::bind_listener`); C++ composes nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
 ///   `max_connections_per_private_ip` are the concurrent-connection caps
-///   (0 = unlimited), already parsed and cross-validated by
-///   `core_rpc_server::init`.
+///   (0 = unlimited) as given; `ConnLimits::checked` validates them here.
+///
+/// Every refusal is logged with its reason before the null handle is
+/// returned, so the operator reads why, not "failed to start".
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
-    bind_addr: *const c_char,
+    bind_host: *const c_char,
+    bind_port: *const c_char,
     restricted: bool,
     cors_origins: *const c_char,
     max_connections: u64,
     max_connections_per_public_ip: u64,
     max_connections_per_private_ip: u64,
 ) -> *mut ShekylDaemonRpcHandle {
-    if rpc_server_ptr.is_null() || bind_addr.is_null() {
+    if rpc_server_ptr.is_null() || bind_host.is_null() || bind_port.is_null() {
         return std::ptr::null_mut();
     }
 
-    let bind = match std::ffi::CStr::from_ptr(bind_addr).to_str() {
-        Ok(s) => s.to_owned(),
-        Err(_) => return std::ptr::null_mut(),
+    let (Ok(host), Ok(port)) = (
+        std::ffi::CStr::from_ptr(bind_host).to_str(),
+        std::ffi::CStr::from_ptr(bind_port).to_str(),
+    ) else {
+        tracing::error!("daemon-rpc: --rpc-bind-ip / --rpc-bind-port are not valid UTF-8");
+        return std::ptr::null_mut();
+    };
+    let bind = match crate::server::parse_bind(host, port) {
+        Ok(addr) => addr,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    let conn_limits = match crate::conn_limit::ConnLimits::checked(
+        max_connections,
+        max_connections_per_public_ip,
+        max_connections_per_private_ip,
+    ) {
+        Ok(limits) => limits,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
     };
 
     let cors = if cors_origins.is_null() {
@@ -111,25 +138,20 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     };
 
     let config = crate::server::ServerConfig {
-        bind_address: bind,
+        bind_addr: bind,
         restricted,
         cors_origins: cors,
-        // Caps parsed and validated by core_rpc_server::init (0 = unlimited).
-        conn_limits: crate::conn_limit::ConnLimits {
-            max_total: max_connections,
-            max_per_public_ip: max_connections_per_public_ip,
-            max_per_private_ip: max_connections_per_private_ip,
-        },
+        conn_limits,
         ..Default::default()
     };
 
     // Bind synchronously so a failure (EADDRINUSE, bad address) is reported to
     // the caller as a null handle rather than logged-and-dropped inside the
     // spawned serve task. The runtime is dropped on the early return.
-    let listener = match rt.block_on(crate::server::bind_listener(&config.bind_address)) {
+    let listener = match rt.block_on(crate::server::bind_listener(config.bind_addr)) {
         Ok(l) => l,
         Err(e) => {
-            tracing::error!("daemon-rpc bind failed on {}: {e}", config.bind_address);
+            tracing::error!("daemon-rpc bind failed on {}: {e}", config.bind_addr);
             return std::ptr::null_mut();
         }
     };

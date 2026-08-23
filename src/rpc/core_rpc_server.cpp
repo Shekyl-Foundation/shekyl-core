@@ -155,26 +155,12 @@ namespace cryptonote
     m_access_control_origins = rpc_config->access_control_origins;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
 
-    // Connection-limit args: cross-validate here, then hand the values to the
-    // Rust Axum listener (via shekyl_daemon_rpc_start), which enforces them.
-    const auto max_connections_public = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
-    const auto max_connections_private = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
-    const auto max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
-
-    if (max_connections < max_connections_public)
-    {
-      MFATAL(arg_rpc_max_connections_per_public_ip.name << " is bigger than " << arg_rpc_max_connections.name);
-      return false;
-    }
-    if (max_connections < max_connections_private)
-    {
-      MFATAL(arg_rpc_max_connections_per_private_ip.name << " is bigger than " << arg_rpc_max_connections.name);
-      return false;
-    }
-
-    m_rpc_max_connections = max_connections;
-    m_rpc_max_connections_per_public_ip = max_connections_public;
-    m_rpc_max_connections_per_private_ip = max_connections_private;
+    // Connection-limit args go to the Rust Axum listener as given; it
+    // validates them (ConnLimits::checked) where it enforces them, and logs
+    // the reason if they contradict each other.
+    m_rpc_max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
+    m_rpc_max_connections_per_public_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
+    m_rpc_max_connections_per_private_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
 
     return true;
   }

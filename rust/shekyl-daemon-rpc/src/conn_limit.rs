@@ -59,6 +59,40 @@ pub struct ConnLimits {
     pub max_per_private_ip: u64,
 }
 
+impl ConnLimits {
+    /// The caps as the operator gave them (`0` = unlimited), checked for the
+    /// one way they can contradict each other: a per-IP cap above a bounded
+    /// total can never be reached, so it is a misconfiguration named by flag.
+    /// An unbounded total (`0`) contradicts nothing. This check used to live
+    /// in C++ `core_rpc_server::init`, where it also refused a per-IP cap
+    /// under an unbounded total; the rule is stated once, here, where the
+    /// caps are enforced.
+    pub fn checked(
+        max_total: u64,
+        max_per_public_ip: u64,
+        max_per_private_ip: u64,
+    ) -> Result<Self, String> {
+        if max_total != 0 {
+            for (name, cap) in [
+                ("--rpc-max-connections-per-public-ip", max_per_public_ip),
+                ("--rpc-max-connections-per-private-ip", max_per_private_ip),
+            ] {
+                if cap > max_total {
+                    return Err(format!(
+                        "{name} ({cap}) is bigger than --rpc-max-connections ({max_total}): the \
+                         per-IP cap could never be reached"
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            max_total,
+            max_per_public_ip,
+            max_per_private_ip,
+        })
+    }
+}
+
 /// Shared connection accounting for one listener.
 ///
 /// Constructed via [`ConnTracker::new`], which returns an `Arc` because the
@@ -301,6 +335,28 @@ impl AsyncWrite for CountedStream {
 
 #[cfg(test)]
 mod tests {
+    /// The cap rule, stated once: a per-IP cap above a bounded total is a
+    /// contradiction named by flag; an unbounded total contradicts nothing.
+    #[test]
+    fn caps_are_checked_where_they_are_enforced() {
+        assert!(super::ConnLimits::checked(100, 10, 50).is_ok());
+        assert!(
+            super::ConnLimits::checked(0, 10, 50).is_ok(),
+            "unbounded total"
+        );
+        assert!(
+            super::ConnLimits::checked(100, 0, 0).is_ok(),
+            "unbounded per-IP"
+        );
+        let err = super::ConnLimits::checked(10, 11, 5).expect_err("public cap over total");
+        assert!(err.contains("--rpc-max-connections-per-public-ip"), "{err}");
+        let err = super::ConnLimits::checked(10, 5, 11).expect_err("private cap over total");
+        assert!(
+            err.contains("--rpc-max-connections-per-private-ip"),
+            "{err}"
+        );
+    }
+
     use super::*;
 
     fn ip(s: &str) -> IpAddr {
