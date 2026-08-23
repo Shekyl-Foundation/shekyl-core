@@ -230,7 +230,15 @@ takes no other lock cannot create an ordering cycle).
 Twins in `shekyl-daemon-rpc/src/ffi.rs`; layout pinned both directions by
 `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` (seed-derived per-field
 values, the F26 pattern) — **every** POD in the family, which is what RK-D3
-requires. Return codes: `0` ok, `-1` null handle, `-2`
+requires.
+
+**Three states, three answers.** A facts export that can be absent needs
+absence to mean one thing. For the block hash: past the tip is *data*
+(`found == 0` → the method's `TOO_BIG_HEIGHT` refusal); in range and present
+is the hash; in range and absent is neither — it is the store contradicting
+itself, and it gets its own code (`-4`, logged and alertable) rather than
+being folded into the too-big refusal, which would tell the caller their
+height exceeded a tip it is below. Return codes: `0` ok, `-1` null handle, `-2`
 core not ready, `-3` a core/P2P read threw (every export is an exception
 barrier — logged in C++, a code to Rust, never an unwind across the C ABI,
 which would abort the daemon). The shim reads; it does not decide.

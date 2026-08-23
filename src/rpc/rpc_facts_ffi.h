@@ -27,6 +27,7 @@ enum {
     SHEKYL_RPC_FACTS_ERR_NULL = -1,       // null handle or null out pointer
     SHEKYL_RPC_FACTS_ERR_NOT_READY = -2,  // core not initialized
     SHEKYL_RPC_FACTS_ERR_INTERNAL = -3,   // a core/P2P read threw; logged, never propagated across the C ABI
+    SHEKYL_RPC_FACTS_ERR_INCONSISTENT = -4, // the store reported a height it cannot produce the block for
 };
 
 // Chain tip + the one build fact get_version reports (RK-1).
@@ -59,7 +60,9 @@ void shekyl_rpc_hardforks_free(void* owner);
 typedef struct shekyl_rpc_block_hash_facts {
     uint8_t  hash[32];
     uint64_t chain_height;   // top block height + 1
-    uint8_t  found;          // 0 when height >= chain_height; hash is then zero
+    uint8_t  found;          // 0 iff height >= chain_height; hash is then zero. An
+                             // in-range height that resolves to nothing is
+                             // SHEKYL_RPC_FACTS_ERR_INCONSISTENT, never found == 0.
     uint8_t  reserved[7];
 } shekyl_rpc_block_hash_facts;
 

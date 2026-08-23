@@ -42,8 +42,10 @@ pub struct ChainTip {
     pub release_build: bool,
 }
 
-/// What the chain holds at one height: the block's hash, or `None` when the
-/// height is at or past the tip. `chain_height` is the tip as of the same
+/// What the chain holds at one height: the block's hash, or `None` when — and
+/// only when — the height is at or past the tip. An in-range height the store
+/// cannot produce a block for is [`FactsFault::Inconsistent`], not `None`, so
+/// `None` always means exactly one thing to the handler. `chain_height` is the tip as of the same
 /// read, so a refusal can name the top height without a second call (and
 /// without a window in which the two disagree).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +74,10 @@ pub enum FactsFault {
     /// exception text); the shim's exception barrier turned it into a
     /// code instead of an unwind across the C ABI.
     Internal,
+    /// The store reported a height it cannot produce the block for (the C++
+    /// shim logs which height). This daemon's data is inconsistent — never
+    /// reported to the caller as a fact about their request.
+    Inconsistent,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),
@@ -83,6 +89,7 @@ impl FactsFault {
             ffi::SHEKYL_RPC_FACTS_ERR_NULL => Self::NullHandle,
             ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY => Self::NotReady,
             ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
+            ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT => Self::Inconsistent,
             other => Self::Unknown(other),
         }
     }
@@ -162,6 +169,10 @@ mod tests {
         assert_eq!(
             FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL),
             FactsFault::Internal
+        );
+        assert_eq!(
+            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT),
+            FactsFault::Inconsistent
         );
         assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
     }

@@ -236,6 +236,9 @@ pub const SHEKYL_RPC_FACTS_ERR_NOT_READY: i32 = -2;
 /// A core / P2P read threw inside the shim; logged there, reported here —
 /// never an unwind across the C ABI.
 pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
+/// The store reported a height it cannot produce the block for — a
+/// data-integrity fault of this daemon, distinct from a read that threw.
+pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
 
 /// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
 /// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via

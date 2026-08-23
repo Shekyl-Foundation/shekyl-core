@@ -144,14 +144,24 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     if (height < chain_height)
     {
       const crypto::hash id = bc.get_block_id_by_height(height);
-      // Under the lock an in-range height should always resolve; if it does
-      // not, the chain does not hold that block and reporting a zero hash as
-      // its identity would be a lie. Refuse instead (`found` stays 0).
-      if (id != crypto::null_hash)
+      // `get_block_id_by_height` answers a nonexistent height with a null
+      // hash rather than throwing, and an unwound or degraded chain reaches
+      // that (see the seedhash guard in `Blockchain::pop_block`). Under the
+      // lock, an *in-range* height that resolves to nothing means the store
+      // reported a height it cannot produce the block for: a data-integrity
+      // fault of this daemon, not a fact about the caller's request. It gets
+      // its own code so it is logged and alertable — reporting the zero hash
+      // as an identity would be a lie, and answering "height greater than the
+      // tip" would be a different lie about a height that is below it.
+      if (id == crypto::null_hash)
       {
-        std::memcpy(out->hash, id.data, sizeof(out->hash));
-        out->found = 1;
+        MERROR("block hash facts: chain height " << chain_height
+          << " but no block at in-range height " << height);
+        std::memset(out, 0, sizeof(*out));
+        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
       }
+      std::memcpy(out->hash, id.data, sizeof(out->hash));
+      out->found = 1;
     }
     return SHEKYL_RPC_FACTS_OK;
   }
