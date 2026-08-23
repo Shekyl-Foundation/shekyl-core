@@ -634,8 +634,8 @@ pub mod inherited {
     /// Windows an epoch of `min_epoch_secs` affords at the slowest noise
     /// cadence (`NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`).
     ///
-    /// Integer division: one second under [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS) `*
-    /// per_send` drops a whole window. A full-size message that still
+    /// Integer division: one second under `MAX_FRAGMENTS * per_send` drops a
+    /// whole window (see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS)). A full-size message that still
     /// occupies a window when the epoch rolls is discarded by CV-1 and never
     /// arrives.
     ///
@@ -730,8 +730,14 @@ pub mod carrier {
     ///
     /// A correctness bound: `ceil(S_max / WINDOW_BYTES)`, where `S_max` is the
     /// **structural** maximum message — the largest transaction the wire admits
-    /// (8-in/16-out at `MAX_TREE_DEPTH`, 97,969 B) plus its envelope. That is
+    /// (8-in/16-out at `MAX_TREE_DEPTH`) plus its levin envelope, which is
     /// `ceil(98_046 / 20_480) = 5`.
+    ///
+    /// The transaction alone is **97,964 B at a realistic fee and 97,969 B at
+    /// `u64::MAX`** — the fee is a varint, so its width moves with its value.
+    /// Both figures appear in this round's notes and they are the same
+    /// transaction. The bound is taken at the wider one, because a bound
+    /// evaluated at a plausible fee is one a large fee can cross.
     ///
     /// The structural max is the right basis *here*, where it is a correctness
     /// bound that does not drift as the tree deepens — unlike the window, which

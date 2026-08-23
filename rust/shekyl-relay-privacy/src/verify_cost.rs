@@ -104,17 +104,47 @@ pub struct VerifyCell {
     pub provenance: Provenance,
     /// Which tree the number was measured against.
     pub basis: TreeBasis,
-    /// Wire bytes of the `NOTIFY_NEW_TRANSACTIONS` carrying this shape —
-    /// transaction plus levin envelope.
+    /// Wire bytes of the `NOTIFY_NEW_TRANSACTIONS` carrying this cell's shape —
+    /// transaction plus levin envelope, at the cell's own `n_out = 2`.
     ///
     /// **Derived, not measured**, and deliberately a separate field from
     /// [`Self::millis`]: `millis` carries a [`Provenance`], and folding a
     /// computed term into a measured one would put a synthesized number under
     /// a `MeasuredPi4` label — the exact confusion `Provenance` exists to
-    /// prevent (§87.2). The node-crypto term is computed from this by
-    /// [`SpecVerifyCost::f_ms`]; the value itself is pinned against
-    /// `predict_size_and_weight` + a real `notify` in
-    /// `tests/carrier_window.rs`.
+    /// prevent (§87.2).
+    ///
+    /// # The output axis: a NAMED GAP, not a silent one — and not a cushion
+    ///
+    /// `millis` excludes the output count because §72.3 measured verification
+    /// at ~0.07 ms per output, genuinely unable to move the constant. **Message
+    /// size is not like that**: each output adds ~2.4 KiB of wire, so at the
+    /// same `(n_in, depth)` a 16-output transaction is **27–134 % larger** than
+    /// the 2-output one, and its crypto term is larger by the same factor.
+    ///
+    /// **This field is nonetheless pinned at the cell's own `n_out = 2`, and
+    /// the reason is coherence.** A cell whose `millis` measured a 2-output
+    /// transaction and whose `msg_bytes` described a 16-output one would
+    /// describe a transaction that **cannot exist** — which is precisely the
+    /// mispairing that produced §94.9's wrong disposition, one field over.
+    /// Provisioning a term at the worst case is sound when the term stands
+    /// alone; inside a cell that already names its shape, it is a mismatch.
+    ///
+    /// So the surface prices the `n_out = 2` shape, as it always did, and the
+    /// output axis is **unpriced rather than approximated**. That is the same
+    /// answer this table gives past [`MAX_TABLE_DEPTH`]: it refuses instead of
+    /// extrapolating. Closing the gap means **measuring** wider-output cells on
+    /// the spec machine (§84.2), never scaling these.
+    ///
+    /// Recorded because it is a real under-provision in the privacy-losing
+    /// direction (§65, §66): a wider transaction's hop is understated, which
+    /// shortens its derived embargo. It is bounded — the embargo is a
+    /// network-wide constant derived at the modal shape, and the term is ~1 ms
+    /// against a ~700 ms hop — but it is a gap, and it is named here rather
+    /// than left for someone to rediscover.
+    ///
+    /// Pinned against `predict_size_and_weight` + a real `notify` in
+    /// `tests/carrier_window.rs`; nothing here is a literal that check could
+    /// agree with by construction.
     pub msg_bytes: u32,
 }
 
@@ -188,6 +218,10 @@ pub struct SpecVerifyCost {
 /// The node's own symmetric-crypto cost over a message of `msg_bytes`, on the
 /// floor device.
 ///
+/// Crate-internal: [`SpecVerifyCost::f_ms`] is the only consumer, and the
+/// public surface is the summed hop term rather than its parts. A caller that
+/// wants the split has [`SpecVerifyCost::verify_only_ms`].
+///
 /// `const` because [`SpecVerifyCost::f_ms`] is, and that is not incidental:
 /// `f_ms` is consumed in `const` contexts (`spec_decision_matrix.rs` binds its
 /// results to `const` items), so a runtime-only term here would have forced
@@ -196,9 +230,8 @@ pub struct SpecVerifyCost {
 /// The cast is exact: `msg_bytes` is a `u32` and every value below `2^53` is
 /// representable in `f64`. `f64::from` would be the idiomatic form but is not
 /// `const`.
-#[must_use]
 #[allow(clippy::cast_lossless)]
-pub const fn node_crypto_ms(msg_bytes: u32) -> f64 {
+const fn node_crypto_ms(msg_bytes: u32) -> f64 {
     msg_bytes as f64 * NODE_CRYPTO_PASSES / PI4_AES_BYTES_PER_SEC * 1_000.0
 }
 
@@ -212,9 +245,12 @@ const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
 }
 
 /// Passes an emitted message's bytes take through symmetric crypto on the
-/// node's own hop — Tor cell layer plus TLS, counted in BOTH directions with
+/// node's own hop.
+///
+/// Crate-internal for the same reason as [`node_crypto_ms`]: it is an input to
+/// the summed term, not part of the surface — Tor cell layer plus TLS, counted in BOTH directions with
 /// slack.
-pub const NODE_CRYPTO_PASSES: f64 = 10.0;
+const NODE_CRYPTO_PASSES: f64 = 10.0;
 
 /// MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
 /// 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in 1000s
@@ -228,7 +264,7 @@ pub const NODE_CRYPTO_PASSES: f64 = 10.0;
 /// `fp asimd evtstrm crc32 cpuid` — no aes), so this is software AES, ~94×
 /// slower than the x86 reference. An earlier draft ASSUMED hardware AES and
 /// bounded it at 0.8 GB/s; the floor measurement (§94.9) refuted that by 5.8×.
-pub const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
+const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 
 /// A populated cell must be a plausible per-hop verification cost: positive,
 /// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
@@ -680,7 +716,8 @@ mod tests {
                 .expect("populated");
             assert!(
                 total > measured,
-                "f_ms({n_in}, {depth}) returned {total} ms and verify_only_ms                  returned {measured} ms — the node-crypto term is not in the sum"
+                "f_ms({n_in}, {depth}) returned {total} ms and verify_only_ms returned \
+                 {measured} ms — the node-crypto term is not in the sum"
             );
             let delta = total - measured;
             let expected = node_crypto_ms(cell.msg_bytes);
@@ -688,7 +725,8 @@ mod tests {
             // order than this test does, so the two differ in the last ulp.
             assert!(
                 (delta - expected).abs() <= expected * 1e-12,
-                "f_ms({n_in}, {depth}) adds {delta} ms of crypto but the cell's                  {} B message implies {expected} ms",
+                "f_ms({n_in}, {depth}) adds {delta} ms of crypto but the cell's {} B \
+                 message implies {expected} ms",
                 cell.msg_bytes
             );
         }

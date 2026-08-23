@@ -166,48 +166,40 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
 
-/// Where every hop sits on the embargo's resonance grid.
+/// How far each shipped hop is from the next embargo step, and how big it is.
 ///
-/// # The mechanism
+/// # A record, not a gate
 ///
-/// `resonance_clearance_ms` documents it: `derive_embargo` accumulates
-/// `div_ceil(h * hop + F, tick)` over the stem-length sum, and when `hop` is
-/// near a multiple of `tick` every term steps at once. At `tick = 250` ms that
-/// is **+12 s of embargo for a 1 ms hop change** at hop 251/501/751/1001,
-/// against +4-5 s elsewhere.
+/// Nothing in the design picks a hop for its distance from a step, so a
+/// threshold here would be another self-invented bar. What this prevents is a
+/// hop moving onto a step silently — the bands go red when a distance changes,
+/// which tells the next reader something happened, where a bar would only tell
+/// them someone once had an opinion.
 ///
-/// # A record, not a gate — and the finding it carries
+/// # What it measures, and why it is a search
 ///
-/// Nothing in the design picks a hop for its clearance, so a threshold here
-/// would be another self-invented bar. What this prevents is a hop moving onto
-/// a resonance silently.
+/// `derive_embargo` accumulates `div_ceil(h * hop + F, tick)` over the
+/// stem-length sum, so the embargo steps where many `h` cross a tick boundary
+/// together. `next_embargo_step` searches for the real next change rather than
+/// modelling a grid: the structure has harmonics from larger `h` and it moves
+/// with `F`, so a closed form for the `h = 1` family alone is wrong in both
+/// directions.
 ///
-/// | hop | value | clear of next resonance |
-/// | --- | --- | --- |
-/// | clearnet modal | 175.4 ms | 75.6 ms (43.1 %) |
-/// | **SHIPPED anon modal** (interim 1625) | **1750.4 ms** | **0.6 ms (0.03 %)** |
-/// | SHIPPED anon 8-input | 2028.5 ms | 222.5 ms (11.0 %) |
-/// | §94 candidate anon modal | 716.0 ms | 35.0 ms (4.9 %) |
-/// | **§94 candidate anon 8-input** | **994.1 ms** | **6.9 ms (0.7 %)** |
+/// # The finding this carries
 ///
-/// **The shipped interim hop is sitting on a resonance** — 0.6 ms clear, so one
-/// further millisecond moves its embargo 499 -> 510 s. It is inert today
-/// (§89.8.4 arms no anonymity embargo), which is the only reason this is a
-/// record rather than a defect.
+/// The **shipped interim** anonymity hop is 1 ms from a 12-second step. It is
+/// inert today only because §89.8.4 arms no anonymity embargo.
 ///
-/// **The shape-dependence question is concrete, not hypothetical.** `hop`
-/// includes `f_ms(n_in, depth)`, so shapes land at different clearances: at the
-/// §94 candidate the two genesis shapes differ by 4.2 points, the 8-input one
-/// 0.7 % clear. A re-measurement could put one shape on a resonance and another
-/// off it, making the embargo discontinuous **across transaction shapes**.
-/// Whether that is observable is §89.3's disclosure question one axis over, and
-/// it is noted there rather than ruled here.
+/// And the two genesis shapes sit at different distances, so **hop sensitivity
+/// is shape-dependent** — §89.3's zone-disclosure question one axis over, with
+/// numbers instead of a hypothesis. Raised there, not ruled here.
 ///
 /// What edit reds this: any change to a transit assumption, a verify-cost cell,
-/// or `DEFAULT_EMBARGO_TICK_MILLIS`.
+/// `fluff_return_ms`, or `DEFAULT_EMBARGO_TICK_MILLIS`.
 #[test]
-fn the_hops_clearance_of_the_resonance_grid_is_recorded() {
-    use shekyl_relay_privacy::derive::resonance_clearance_ms;
+fn the_distance_from_each_shipped_hop_to_the_next_embargo_step_is_recorded() {
+    use shekyl_relay_privacy::derive::next_embargo_step;
+    use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
     use shekyl_relay_privacy::verify_cost::{
         ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH,
@@ -216,9 +208,9 @@ fn the_hops_clearance_of_the_resonance_grid_is_recorded() {
 
     // The §94 round's candidate anonymity transit. A local literal ON PURPOSE:
     // it is BANKED, NOT ADOPTED — the flood-suite re-baseline is its
-    // prerequisite — so there is no tree constant to read. When it lands this
-    // becomes a read and the band below is re-derived with it.
+    // prerequisite — so there is no tree constant to read.
     const CANDIDATE_ANON_TRANSIT_MS: f64 = 590.6;
+    const SEARCH_MS: u32 = 400;
 
     let f1 = SPEC_VERIFY_COST
         .f_ms(1, GENESIS_TREE_DEPTH)
@@ -227,45 +219,64 @@ fn the_hops_clearance_of_the_resonance_grid_is_recorded() {
         .f_ms(8, GENESIS_TREE_DEPTH)
         .expect("populated");
 
-    for (label, hop, lo, hi) in [
-        (
-            "clearnet modal",
-            ADOPTED_TRANSIT_ASSUMPTION_MS + f1,
-            75.0,
-            76.5,
-        ),
-        (
-            "SHIPPED anon modal",
-            ANON_ZONE_TRANSIT_ASSUMPTION_MS + f1,
-            0.0,
-            1.5,
-        ),
-        (
-            "SHIPPED anon 8-input",
-            ANON_ZONE_TRANSIT_ASSUMPTION_MS + f8,
-            222.0,
-            223.5,
-        ),
-        (
-            "candidate anon modal",
-            CANDIDATE_ANON_TRANSIT_MS + f1,
-            34.0,
-            36.0,
-        ),
-        (
-            "candidate anon 8-input",
-            CANDIDATE_ANON_TRANSIT_MS + f8,
-            6.0,
-            8.0,
-        ),
+    let mut seen = Vec::new();
+    for (label, hop) in [
+        ("clearnet modal", ADOPTED_TRANSIT_ASSUMPTION_MS + f1),
+        ("SHIPPED anon modal", ANON_ZONE_TRANSIT_ASSUMPTION_MS + f1),
+        ("SHIPPED anon 8-input", ANON_ZONE_TRANSIT_ASSUMPTION_MS + f8),
+        ("candidate anon modal", CANDIDATE_ANON_TRANSIT_MS + f1),
+        ("candidate anon 8-input", CANDIDATE_ANON_TRANSIT_MS + f8),
     ] {
-        let clear = resonance_clearance_ms(hop, DEFAULT_EMBARGO_TICK_MILLIS);
-        assert!(
-            (lo..hi).contains(&clear),
-            "{label}: hop {hop:.1} ms is {clear:.1} ms clear of the next embargo \
-             resonance, outside the recorded {lo}..{hi} ms band — a hop moved \
-             onto or off a resonance, where derive_embargo steps ~12 s for a \
-             1 ms input change"
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let hop_ms = hop.round() as u32;
+        let params = DandelionParams {
+            time_between_hop_ms: hop_ms,
+            ..DandelionParams::inherited()
+        };
+        let step = next_embargo_step(
+            &params,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            SEARCH_MS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        );
+        seen.push((label, hop_ms, step));
+    }
+
+    let rendered: Vec<String> = seen
+        .iter()
+        .map(|(l, h, s)| match s {
+            Some((d, delta)) => format!("{l} (hop {h} ms): +{d} ms -> {delta:+} s"),
+            None => format!("{l} (hop {h} ms): stable over {SEARCH_MS} ms"),
+        })
+        .collect();
+
+    // The recorded distances. Each is the measured answer, not a chosen one.
+    // Measured, not chosen. The magnitude matters as much as the distance: a
+    // +1 s step is the ordinary quantization of a solver that answers in whole
+    // seconds, while a +12 s step is the resonance — many `h` crossing a tick
+    // boundary together.
+    let want = [
+        ("clearnet modal", 4_u32, 1_i64),
+        // THE SHIPPED INTERIM, and the reason this test exists: one
+        // millisecond from an eleven-second jump. Inert only because §89.8.4
+        // arms no anonymity embargo.
+        ("SHIPPED anon modal", 1, 11),
+        ("SHIPPED anon 8-input", 4, 1),
+        ("candidate anon modal", 3, 1),
+        // And the shape-dependence, live at the candidate: the modal shape is
+        // 3 ms from a 1 s step while this one is 7 ms from a 12 s step.
+        ("candidate anon 8-input", 7, 12),
+    ];
+    for ((label, _, step), (want_label, want_d, want_delta)) in seen.iter().zip(want) {
+        assert_eq!(*label, want_label, "row order");
+        let (d, delta) = step.expect("a step exists inside the search window");
+        assert_eq!(
+            (d, delta),
+            (want_d, want_delta),
+            "{label}: the next embargo step is {d} ms away and moves {delta} s; \
+             recorded {want_d} ms / {want_delta} s — a hop moved relative to the \
+             step structure.\nAll rows:\n  {}",
+            rendered.join("\n  ")
         );
     }
 }

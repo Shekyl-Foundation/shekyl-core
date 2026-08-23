@@ -260,55 +260,79 @@ pub fn derive_embargo(
     })
 }
 
-/// Milliseconds from `hop_ms` up to the next embargo **resonance** — the hop
-/// values where [`derive_embargo`] steps discontinuously.
+/// Distance to the next hop at which [`derive_embargo`] changes its answer,
+/// and by how much — searched, not modelled.
 ///
-/// # The mechanism, and it is arithmetic rather than a solver artifact
+/// Returns `(distance_ms, delta_secs)` for the first hop above
+/// `params.time_between_hop_ms` whose derived embargo differs, or `None` if it
+/// is stable for the whole `search_ms` window.
+///
+/// # The mechanism this measures
 ///
 /// [`full_travel_probability`] accumulates `div_ceil(h * hop + F, tick)` over
-/// every `h` in the stem-length sum. Each `h` contributes a ceiling that steps
-/// whenever `h * hop + F` crosses a tick boundary. Normally those crossings are
-/// scattered — `h * hop` hits a boundary at a different hop for each `h`, so the
-/// aggregate is smooth. **When `hop` is near a multiple of `tick`,
-/// `h * hop mod tick` is constant across `h` and every term steps at once.**
+/// every `h` in the stem-length sum. Each `h` steps when `h * hop + F` crosses
+/// a tick boundary. Normally those crossings are scattered; **when many `h`
+/// cross together the embargo jumps.** At `tick = 250` ms and the inherited
+/// `F`, the largest jumps are +11/+12 s at hop 251/501/751 against +4-5 s
+/// elsewhere, with smaller +5 s and +3 s families between them.
 ///
-/// Measured at `tick = 250` ms: full resonances at hop **251, 501, 751, 1001**
-/// move the embargo **+12 s** for a 1 ms hop change, against +4-5 s at
-/// neighbouring values; half-resonances at 376, 626, 876, 1126 move it +5 s.
+/// # Why this searches instead of computing a grid
+///
+/// A first version returned the distance to `n * tick + 1`, and it was wrong
+/// three ways. It modelled **only** the `h = 1` family, missing the +5 s and
+/// +3 s harmonics at `tick / 2`, `tick / 3` and `tick / 6` that come from
+/// larger `h`. It **ignored `F`**, which shifts every boundary — moving `F` by
+/// 125 ms relocates the whole structure (376/626/876 instead of
+/// 251/501/751). And its arithmetic truncated, so a hop just *below* a
+/// boundary was assigned the boundary it had already passed and reported the
+/// distance to the far side: **the smallest true clearance produced the
+/// largest reported one**, which is maximally wrong in the one case the
+/// function exists to detect.
+///
+/// Searching removes all three. `derive_embargo` is a binary search over a
+/// closed form, so calling it per millisecond is cheap, and the answer is
+/// exact for whatever `params` actually holds — no grid to keep in sync with
+/// the solver, no threshold deciding what counts as a resonance.
 ///
 /// # Why the grid is 250 ms, and what coarsening the tick would cost
 ///
-/// [`crate::schedule::DEFAULT_EMBARGO_TICK_MILLIS`] is 250 for a reason that
-/// has nothing to do with resonances: the inherited embargo ticked in **whole
-/// seconds**, which is too coarse against a stem completing in ~700 ms — at a
-/// one-second tick, *fires within the first tick* collapses to *fires at zero*,
-/// and a measurable share of draws preempt instantly for no reason but
-/// rounding.
+/// [`crate::schedule::DEFAULT_EMBARGO_TICK_MILLIS`] is 250 for a reason
+/// unrelated to resonances: the inherited embargo ticked in **whole seconds**,
+/// too coarse against a stem completing in ~700 ms — at a one-second tick,
+/// *fires within the first tick* collapses to *fires at zero*, and a
+/// measurable share of draws preempt instantly for no reason but rounding.
 ///
-/// **That choice also made the resonance grid four times denser.** Anyone
-/// proposing to coarsen the tick for efficiency is proposing to quadruple the
-/// spacing between resonances — which sounds like an improvement and is not:
-/// it re-breaks the instant-preemption problem 250 ms was chosen to fix, and
-/// moves every shipped hop onto a different grid. The two effects pull opposite
-/// ways and the discretization one is the reason the constant exists.
+/// **That choice also made the steps four times denser.** Anyone proposing to
+/// coarsen the tick for efficiency is proposing to quadruple the spacing
+/// between them — which sounds like an improvement and is not: it re-breaks
+/// the instant-preemption problem 250 ms exists to fix, and moves every
+/// shipped hop onto a different grid.
 ///
-/// # Why this is exported rather than left as a comment
+/// # Why this is exported
 ///
 /// **A sensitivity table built by interpolating [`derive_embargo`] is wrong
-/// near a resonance.** The re-derivation round must call it at the actual hop
+/// near a step.** The re-derivation round must call it at the actual hop
 /// rather than scaling a nearby result, and when a re-measurement lands, this
-/// says whether the landing sits somewhere the value moves smoothly. A hop
-/// within a tick or two of `n * tick` is a flag to check, not a number to
-/// accept.
+/// says whether the landing sits somewhere the value moves smoothly.
 #[must_use]
-pub fn resonance_clearance_ms(hop_ms: f64, tick_millis: u64) -> f64 {
-    let tick = tick_millis as f64;
-    // Resonances sit at `n * tick + 1`. Find the smallest one strictly above
-    // `hop_ms`. Deriving `n` from `hop_ms / tick` alone would SKIP the
-    // resonance a hop in `(n * tick, n * tick + 1]` is about to hit — the case
-    // that matters most, because that hop is as close to a step as it gets.
-    let n = ((hop_ms - 1.0) / tick).floor() + 1.0;
-    (n * tick + 1.0) - hop_ms
+pub fn next_embargo_step(
+    params: &DandelionParams,
+    tick_millis: u64,
+    search_ms: u32,
+    target: f64,
+) -> Option<(u32, i64)> {
+    let here = derive_embargo(params, tick_millis, target)?.mean_secs();
+    for d in 1..=search_ms {
+        let probe = DandelionParams {
+            time_between_hop_ms: params.time_between_hop_ms.checked_add(d)?,
+            ..*params
+        };
+        let there = derive_embargo(&probe, tick_millis, target)?.mean_secs();
+        if there != here {
+            return Some((d, i64::from(there) - i64::from(here)));
+        }
+    }
+    None
 }
 
 /// Integer ceiling division.

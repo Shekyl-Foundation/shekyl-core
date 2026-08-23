@@ -13661,19 +13661,21 @@ zone to alias onto.
 ### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
 
 > **NOTED 2026-08-23 — the same question one axis over: `hop`, not zone.**
-> `derive_embargo` steps discontinuously when `hop` is near a multiple of the
-> embargo tick: it accumulates `div_ceil(h * hop + F, tick)` over the
-> stem-length sum, and at `hop ≈ n * tick` every term crosses a boundary at
-> once. Measured at `tick = 250` ms: **+12 s of embargo for a 1 ms hop change**
-> at hop 251/501/751/1001, against +4–5 s elsewhere. Mechanism and clearances
-> are carried by `derive::resonance_clearance_ms` and pinned in
+> `derive_embargo` steps discontinuously: it accumulates
+> `div_ceil(h * hop + F, tick)` over the stem-length sum, and where many `h`
+> cross a tick boundary together the answer jumps. At `tick = 250` ms and the
+> inherited `F` the largest jumps are **+11/+12 s for a 1 ms hop change** at
+> hop 251/501/751, with smaller +5 s and +3 s families between them from larger
+> `h`, and the whole structure **moves with `F`**. Measured rather than
+> modelled by `derive::next_embargo_step` and pinned in
 > `tests/carrier_window.rs`.
 >
 > **Because `hop` includes `f_ms(n_in, depth)`, different transaction shapes sit
-> at different distances from a resonance.** At the §94 candidate the modal
-> genesis shape is 35.0 ms clear (4.9 %) and the 8-input one **6.9 ms (0.7 %)**.
-> A re-measurement could put one shape on a resonance and another off it, making
-> the embargo **discontinuous across shapes** rather than across zones.
+> at different distances from a step, and of different sizes.** At the §94
+> candidate the modal genesis shape is 3 ms from a **1-second** step while the
+> 8-input one is 7 ms from a **12-second** one. A re-measurement could move
+> either across a large step independently, making the embargo
+> **discontinuous across shapes** rather than across zones.
 >
 > **Raised, not ruled.** Whether it discloses anything depends on whether
 > embargo firing times are observable at all — fires are ~10 % of transactions
@@ -13682,9 +13684,14 @@ zone to alias onto.
 > question, and a future reader asking it about shapes should find the numbers
 > rather than re-derive them.
 >
-> **The shipped interim is the live instance**: 1625 + 125.4 = 1750.4 ms, which
-> is **0.6 ms** from a resonance. Inert only because §89.8.4 arms no anonymity
-> embargo.
+> **The shipped interim is the live instance**: hop 1750 ms, **1 ms** from an
+> 11-second step. Inert only because §89.8.4 arms no anonymity embargo.
+>
+> *(Method note: an earlier draft of this section computed distances from a
+> closed form for the `h = 1` family alone. That form missed the harmonics from
+> larger `h`, ignored `fluff_return_ms` — which shifts every boundary — and
+> truncated in a way that reported the LARGEST distance for the SMALLEST true
+> one. The numbers here are searched, not modelled.)*
 
 Per-zone means the two zones draw from different means, and a different mean is
 in principle an observable. This is the mirror of the `vin.size()` question D
@@ -14106,10 +14113,10 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 > 1. §89.8.2's premise — a transaction entering an anonymity stem completing it
 >    there — whose constant says it *"becomes live when the txpool gains an
 >    origin zone."*
-> 2. The shipped interim hop sits **0.6 ms** from an embargo resonance
->    (1625 + 125.4 = 1750.4 ms; resonances at n·250 + 1). One further
->    millisecond of hop moves its embargo 499 -> 510 s. See
->    `derive::resonance_clearance_ms`.
+> 2. The shipped interim anonymity hop (1750 ms) is **1 ms from an 11-second
+>    embargo step** — the embargo jumps where many stem lengths cross a tick
+>    boundary together. Measured by `derive::next_embargo_step` and pinned in
+>    `tests/carrier_window.rs`.
 >
 > **So arming is not merely a gate on one number — it is the event that
 > converts several recorded latencies into behaviour at once.** Whatever commit
