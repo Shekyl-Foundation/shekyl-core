@@ -47,6 +47,79 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Nothing forces an `enc_label` through encryption on the production signing
+  path** (surfaced 2026-08-22 while deleting the legacy prove seam). The only
+  stated enforcement was in `genRctFcmpPlusPlus`, which rejected all-zero
+  `enc_labels` outside fake/test device mode — "the stub builder must not reach
+  production". That function had **no caller**, so the guard was unreachable
+  and enforced nothing; deleting it lost no live coverage, and this item exists
+  so the *invariant* is not retired along with the dead check.
+
+  **State the hazard precisely, because the obvious reading is wrong.** An
+  all-zero *plaintext* is harmless: `enc_label = 0x00…00 XOR k_label[..8]` =
+  `k_label[..8]`, which is uniform, so §5.7.10 holds for it exactly as for the
+  `0xFF…` sentinel — "XOR of a constant with a uniform key is uniform" covers
+  every fixed plaintext. Nothing about the keying is weak either, and there is
+  no IV to be weak: `k_label` is a **one-time per-output key**
+  (`HKDF-Expand(prk, "shekyl-output-label-key" || idx_le64, 32)` over a
+  `combined_ss` produced by that output's own KEM encapsulation), so keystream
+  reuse would need two outputs sharing both secret and index.
+
+  **Reachability, established 2026-08-22 — this is latent, not live.** The
+  stub's zeros are *placeholders*, overwritten about eight lines later:
+  `construct_tx_with_tx_key` copies the real HKDF-derived values out of
+  `v3_rct_data` (`enc_labels[i] = v3_rct_data[i].enc_label_with_tag`), which
+  `shekyl_construct_output` produced. The overwrite is conditional
+  (`if (!v3_rct_data.empty())`), but the condition cannot fail in a way that
+  exposes anything: `v3_rct_data` is filled whenever
+  `hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC`, that constant is **1**
+  (`cryptonote_config.h`), and Shekyl is v3-from-genesis — the same
+  always-true-gate shape as the `HF_VERSION_SHEKYL_NG` comparison. With zero
+  destinations the vector is empty but there are no outputs to carry a label.
+  So no unencrypted label reaches a transaction today, and this item is about
+  removing the *window*, not closing an active leak.
+
+  Note also that the stub **cannot** simply "encrypt properly": `k_label` comes
+  from the per-output `combined_ss` produced by `shekyl_construct_output`, on
+  the caller's side. The stub runs before those values are available, which is
+  why it writes placeholders at all. Fixing it means removing the placeholder
+  phase, not giving the stub a keystream.
+
+  The hazard is a path that writes the field **without encrypting it at all**.
+  `fill_construct_tx_rct_stub` resizes `enc_labels` to value-initialized
+  `std::array<uint8_t, 9>` and never calls the label encryption, so its outputs
+  carry a literal `00×9` — identical across every output and every transaction,
+  and with the `label_tag` byte zero where a derived tag would be uniform.
+  That is trivially distinguishable, and it marks precisely the outputs it
+  touches. The Rust signing path takes `enc_label` as a plain `[u8; 9]`
+  (`shekyl-tx-builder/src/types.rs`, consumed by `sign.rs`), so an unencrypted
+  value is representable there too.
+
+  **The live path is Rust, and that is where the fix belongs.** `wallet2.cpp`
+  was deleted 2026-08-19, so the C++ `construct_tx*` chain that calls the stub
+  has no production caller at all and is now only the consensus-oracle
+  harness's transaction factory (tracked separately below). Production
+  transaction construction is `shekyl-tx-builder`. Two consequences: the C++
+  stub's window is a *test-path* window today and cannot leak to a user, and
+  the Rust builder inherits the same shape with none of the C++ side's
+  accidental protection — no `v3_rct_data` overwrite stands behind it, and
+  `OutputInfo::enc_label` is a bare `[u8; 9]` any caller can fill by hand.
+  **So this is not a C++ curiosity to retire with the oracle; it is an open
+  obligation on the builder that ships.** Whoever migrates the harness off the
+  C++ builder must not carry the write-then-fill pattern across with it.
+
+  **Therefore do not fix this by rejecting zeros.** A zeroed field is one
+  symptom; a check for it still admits any other unencrypted constant, and
+  rejects a legitimate ciphertext that happens to be zero (probability 2⁻⁶⁴,
+  but a refusal that can fire on a valid transaction is worse than the bug).
+  The fix is type-level per
+  [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc): a wire
+  type whose only constructor is `encrypt_label_plaintext`, so bytes that never
+  passed through the encryption are unrepresentable rather than merely
+  detected. **Target: V3.0** (pre-genesis; §5.7.10 is a privacy invariant with
+  no enforcement, and [`00-mission`](../.cursor/rules/00-mission.mdc) ranks
+  that above convenience).
+
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the
   three RCT-named symbols it happened to edit (`serialize_rctsig_prunable` →
@@ -66,36 +139,52 @@ sustainability is unaffected by the recalibration.
   surviving-long-tail note in
   [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md).
 
-- **Delete the two legacy C++ construction stand-ins `genRctFcmpPlusPlus` and
-  `fill_construct_tx_rct_stub`** (filed 2026-08-21 as the remaining half of the
-  CT-naming sequence). [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)
-  §2 and §5 step 1 classify both as **deletion targets, not rename
-  targets**, which is why the step-2 sweep left their names untouched — they
-  are the only `Rct`-spelled identifiers deliberately surviving in `src/fcmp/`,
-  and renaming them would have made the debt look discharged. The two are **not
-  equally blocked**, established at source while scoping the sweep:
+- **Delete `fill_construct_tx_rct_stub`** — the remaining half of the CT-naming
+  sequence's step 1 ([`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)
+  §2, §5 step 1). Its sibling `genRctFcmpPlusPlus` **was deleted 2026-08-22**
+  along with the legacy prove seam; this one is the blocked half, and the
+  blocker is not what this item first claimed.
 
-  - **`genRctFcmpPlusPlus` has no caller at all.** `grep` across `src/` and
-    `tests/` finds only its own definition (`ct_semantics.cpp:449`),
-    declaration (`ct_semantics.h:79`), and internal log lines.
-    `shekyl_ffi.h:47`'s "used only by `genRctFcmpPlusPlus` in
-    `core_tests/chaingen.cpp`" is **stale** — `chaingen.cpp` references it zero
-    times (the `gen_fcmp_*` tests that called it were deleted). So the deletion
-    is *unblocked today*, and it cascades: `SHEKYL_PROVE_WITNESS_HEADER_BYTES`
-    and the legacy `shekyl_fcmp_prove` witness path lose their last C++
-    consumer with it. That cascade — an FFI-surface reduction — is why this is
-    its own PR and not a rider on a rename ([`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)),
-    not because anything blocks it.
-  - **`fill_construct_tx_rct_stub` has one live production caller**
-    (`cryptonote_tx_utils.cpp:637`), which builds the serializable `CtSig` stub
-    that the wallet later overwrites via `shekyl_sign_fcmp_transaction`. That
-    caller is the real blocker: deleting the stub means moving stub
-    construction to the Rust signing path, which is transform work, not
-    deletion.
+  **Correction (2026-08-22).** This item previously said the stub "has one live
+  production caller (`cryptonote_tx_utils.cpp:637`)". The call site is real, but
+  it sits inside `construct_tx_with_tx_key`, and grounding the deletion showed
+  that **whole chain has no production caller**: `construct_tx_with_tx_key` has
+  none, and `construct_tx` / `construct_tx_and_get_tx_key` are reached only from
+  `tests/core_tests/` and `tests/performance_tests/`. (`construct_miner_tx`, in
+  the same file, *is* production — `blockchain.cpp` — and is a different
+  function.) The claim was formed from the call site without walking up to its
+  callers; recorded here rather than quietly edited, because the wrong blocker
+  would have sent the next reader looking for a production path to migrate.
+
+  **The real blocker.** The C++ transaction builder outlived `wallet2` because
+  it was never wallet code: it lives in `src/cryptonote_core/cryptonote_tx_utils.cpp`,
+  and the Phase-5 deletion of `src/wallet/` correctly did not touch it. wallet2
+  was one *consumer*; the other is `tests/core_tests/chaingen.cpp`, which wraps
+  it (as `construct_tx_rct`) to synthesize transactions for the consensus test
+  chains. So the builder is now **test-only, serving the C++ consensus oracle**.
+  Deleting the stub means giving that harness another way to build transactions —
+  presumably `shekyl-tx-builder` over FFI — which is oracle-retirement work, not
+  naming cleanup, and is owned by the lane that retires the C++ oracle
+  ([`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)).
 
   **Target: V3.0** (pre-genesis; a deletion target that outlives its deletion
   trigger is debt that compounds,
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)).
+
+- **The C++ transaction builder is test-only and nothing tracked that.**
+  `construct_tx`, `construct_tx_with_tx_key` and `construct_tx_and_get_tx_key`
+  (`src/cryptonote_core/cryptonote_tx_utils.cpp`) have had no production caller
+  since `wallet2` was deleted (2026-08-19); their only callers are
+  `tests/core_tests/` and `tests/performance_tests/`. That is a wallet-shaped
+  transaction *builder* living in the daemon tree, kept alive solely by the
+  consensus-oracle harness — exactly the inherited-architecture shape
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  says to migrate rather than rationalise, and the thing rule 20 says new work
+  must not thicken. Filed 2026-08-22 as its own item because it is larger than
+  any one deletion: retiring it means the C++ oracle builds its test
+  transactions through the Rust builder. Blocks
+  `fill_construct_tx_rct_stub` above. **Target: V3.x**, with the oracle
+  retirement.
 
 
 - **`combined_shared_secret` gate is vacuous: delete it or re-point it**

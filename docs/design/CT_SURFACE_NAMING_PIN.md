@@ -59,18 +59,44 @@ not new.
 in `cryptonote_basic.h` had no users; post-rename it would have read `using
 ct_signatures = ct::CtSig;`, a self-referential no-op. It is gone.
 
-**Not landed — §5 step 1.** `genRctFcmpPlusPlus` and
-`fill_construct_tx_rct_stub` are **deletion** targets, so the sweep left their
-names untouched on purpose: they are now the only `Rct`-spelled identifiers
-under `src/fcmp/`, which keeps the remaining debt legible instead of
-laundering it into `Ct` spelling. Grounding done while scoping the sweep:
-`genRctFcmpPlusPlus` has **zero callers** (the `shekyl_ffi.h` comment naming
-`core_tests/chaingen.cpp` is stale — that file references it zero times), so
-its deletion is unblocked and cascades into
-`SHEKYL_PROVE_WITNESS_HEADER_BYTES` / the legacy `shekyl_fcmp_prove` path;
-`fill_construct_tx_rct_stub` has one live production caller
-(`cryptonote_tx_utils.cpp:637`) and needs that stub construction moved to the
-Rust signing path first. Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0).
+**UPDATE 2026-08-22 — §5 step 1 half landed.** `genRctFcmpPlusPlus` is
+**deleted**, together with the legacy prove seam it was the sole C++ end of:
+the Rust exports `shekyl_fcmp_prove` and `shekyl_fcmp_proof_len`, and the C++
+declarations of those plus `shekyl_fcmp_build_witness_header`,
+`SHEKYL_PROVE_WITNESS_HEADER_BYTES`, `ShekylFcmpProveResult` and
+`ProveInputFields`. This is the retired C++ → Rust → C++ → Rust round-trip that
+`shekyl_sign_fcmp_transaction` replaced with one call; production proving was
+never affected, and the Rust prover is untouched.
+
+Two things the grounding corrected, recorded because both were wrong in the
+2026-08-21 entry above:
+
+- **The cascade was over-stated.** That entry said the deletion "cascades:
+  `SHEKYL_PROVE_WITNESS_HEADER_BYTES` and the legacy `shekyl_fcmp_prove`
+  witness path lose their last C++ consumer". Only the two exports actually
+  died. The witness *format* — `parse_prove_witness`, its helpers, the byte
+  constant, `ProveInputFields`, the `shekyl_fcmp_build_witness_header` writer,
+  and the `WITNESS_HEADER.json` round-trip test — is read by the FROST
+  coordinator (`shekyl_frost_coordinator_aggregate_and_prove`), a designed
+  seam of the multisig lane. Deleting it would have unwired a seam whose
+  absence of callers is its design, not its death. It is instead now
+  `#[cfg(feature = "multisig")]`, which states the dependency where the
+  compiler enforces it.
+- **The relocated wire-format spec was wrong and is fixed.** The doc block on
+  the deleted `shekyl_fcmp_prove` was the only prose description of the witness
+  layout, so it moved to `parse_prove_witness`, which now owns the format. It
+  specified a **224-byte, 7-field** header, omitting the commitment mask `z`;
+  the real header is **256 bytes, 8 fields**, as the parser, `ProveInputFields`
+  and the JSON vectors all agree. Copying it verbatim would have enshrined a
+  spec that misaligns every input after the first.
+
+**Still open — the other half of step 1.** `fill_construct_tx_rct_stub` keeps
+its name. Its caller `construct_tx_with_tx_key` has no production caller either
+(the 2026-08-21 claim that it had one was wrong; corrected in
+[`FOLLOWUPS.md`](../FOLLOWUPS.md)), but the `construct_tx*` chain is the C++
+consensus oracle's transaction factory, reached from `tests/core_tests/` and
+`tests/performance_tests/`. Retiring it is oracle work, not naming work.
+Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0).
 
 **Surviving `rct`-spelled long tail — outside this pin's scope, and named
 here so §6 is not misread.** The sweep's subject was this pin's: the
@@ -124,8 +150,9 @@ Production FCMP++ proving is Rust (`shekyl_sign_fcmp_transaction`). The C++
 module retains semantic verification (balance equations, Bulletproof+ batch
 verify, fee-only / bond-post variants, `get_tx_prehash`) — which is why its
 rename target was `ct_semantics`, and what it is called since 2026-08-21.
-Deprecated `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` are deletion
-targets, not rename targets.
+Deprecated `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` were deletion
+targets, not rename targets; the first was deleted 2026-08-22 and the second
+remains (see the UPDATE above).
 
 ---
 
@@ -139,7 +166,8 @@ One inherited module name covers two roles. They diverge at rename time.
 | `rctOps.h`, `rctCryptoOps.h` | Field / point arithmetic | **Done** — `ct_ops.h` and `ct_crypto_ops.h`; the "split TBD" resolved as *keep the existing split*, since the C shim (`.c`) and the C++ ops are separate translation units |
 | `rctSigs.h` / `.cpp` | **Semantics verification** | **Done** — `ct_semantics.h` / `.cpp` |
 | `rct::rctSig` (field type) | Passive wire container | **Done** — `ct::CtSig`; the `ct_signatures` alias was deleted (dead after the 2026-07-11 field rename) |
-| `genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with `wallet2` / chaingen migration — do not rename |
+| `genRctFcmpPlusPlus` | Legacy C++ construction | **Done — deleted 2026-08-22** (no caller) |
+| `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with the chaingen / test-construction migration — do not rename |
 | `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **DELETED (standalone pre-sweep PR)** (see below) |
 
 **`rctSigBase::pseudoOuts` — DELETED in a standalone pre-sweep PR
@@ -278,8 +306,10 @@ binding trigger**, not upstream cherry-pick calendar.
 **At cutover (separate PRs, scoped):**
 
 1. Delete `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` (if not already
-   gone). **Still open** — step 2 landed first, which §5 permits; see the
-   2026-08-21 UPDATE for each one's actual blocker (they differ).
+   gone). **Half landed** — `genRctFcmpPlusPlus` deleted 2026-08-22 (it had no
+   caller); `fill_construct_tx_rct_stub` remains, blocked on the C++
+   test-construction harness. Step 2 landed before either, which §5 permits;
+   see the 2026-08-22 UPDATE.
 2. C++ namespace/module rename (`rct::` → `ct::`, `rctSigs` → `ct_semantics`,
    etc.) — rename-only, gated on tx blob round-trip / determinism CI. **Scope
    note:** `rctSigBase::pseudoOuts` no longer exists — it was deleted in the
@@ -310,9 +340,9 @@ Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clau
 - **Accretion (ARMED 2026-08-21).** With the sweep landed there is no
   remaining licence for the old spelling: any new production Rust module or
   C++ surface named `rctSigs` / `rct::` / `rctSig*` is a regression → immediate
-  rename PR, not further deferral. The two deliberate survivors are the §5
-  step-1 deletion targets (`genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub`)
-  and they are not precedent.
+  rename PR, not further deferral. The one deliberate survivor is the
+  remaining §5 step-1 deletion target, `fill_construct_tx_rct_stub`, and it is
+  not precedent.
 - **Substrate:** *moot* — this criterion existed to shrink the rename PR's
   scope if verifier logic migrated to Rust before Phase 5. The rename has
   landed, so there is no scope left to shrink. Verifier migration continues on
