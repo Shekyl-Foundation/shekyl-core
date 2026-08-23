@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **`get_block_count` and `on_get_block_hash` are served natively in Rust
+  (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
+  (`getblockcount`, `on_getblockhash`) answer from
+  `shekyl-daemon-rpc::methods` over the typed facts FFI; the C++ handlers,
+  their `COMMAND_RPC_*` structs and the hand-rolled JSON-array parser in
+  `core_rpc_ffi.cpp` are deleted. Replies are unchanged, pinned by oracle
+  vectors captured from epee first — including that `on_get_block_hash`
+  answers with a bare JSON string rather than an object. Its refusals keep
+  their JSON-RPC codes (`-1` wrong parameter, `-2` height too large) and
+  messages; the too-large message still names the top height, now read in
+  the same call as the hash so the two cannot disagree. **One deliberate
+  change:** a *negative* height is answered `-1` (wrong parameter) instead
+  of `-2` — the old classification came from `std::stoull` wrapping the
+  value in the deleted parser, not from a decision.
 - **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
   natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
   wire types are now `shekyl-rpc-types::{GetHeightResponse,

@@ -90,9 +90,16 @@ pub async fn handle(
 
     // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
     // never reach the C++ dispatch table.
-    if let Some(native) = native_method(&state, &method).await {
+    if let Some(native) = native_method(&state, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
+            // A refusal is the method answering — a bad request, or a height
+            // the chain does not hold. Normal traffic: it carries its own
+            // code and message and is not logged as a daemon problem.
+            Err(RpcFault::Refused(refusal)) => (
+                StatusCode::OK,
+                Json(JsonRpcResponse::error(id, refusal.code, refusal.message)),
+            ),
             Err(fault) => {
                 warn!(method = %method, ?fault, "native JSON-RPC method failed");
                 (
@@ -179,16 +186,43 @@ pub async fn handle(
 
 /// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
 /// table. Each arm is one `methods::*` call framed as a JSON value.
+/// Every alias the C++ dispatch table carried is matched here; dropping one
+/// would 404 a name the daemon has always answered.
 async fn native_method(
     state: &Arc<AppState>,
     method: &str,
-) -> Option<Result<serde_json::Value, crate::methods::RpcFault>> {
+    params: &serde_json::Value,
+) -> Option<Result<serde_json::Value, RpcFault>> {
     match method {
         "get_version" => {
             let core = state.core.clone();
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiChainFacts::new(core);
                 crate::methods::get_version(&facts)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        "get_block_count" | "getblockcount" => {
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_count(&facts)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        "on_get_block_hash" | "on_getblockhash" => {
+            // The params parse is pure and its refusal needs no core, so it
+            // happens before a worker is taken.
+            let height = match crate::methods::get_block_hash_height(params) {
+                Ok(height) => height,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_hash(&facts, height)
             })
             .await;
             Some(frame_native(out))
@@ -266,6 +300,33 @@ mod tests {
         "prune_blockchain",
         "flush_cache",
     ];
+
+    /// Natively-served methods keep every alias the C++ table answered, and
+    /// none of them is admin-only — so the restricted listener serves them
+    /// too. Dropping an alias from `native_method` is a 404 on a name the
+    /// daemon has always answered; adding one of these to
+    /// `RESTRICTED_METHODS` is caught by the first assertion. The second is
+    /// not a restatement of it: it exercises the function `handle` actually
+    /// calls, so a gate that started refusing everything fails here too.
+    #[test]
+    fn native_methods_are_public_and_keep_their_aliases() {
+        for method in [
+            "get_version",
+            "get_block_count",
+            "getblockcount",
+            "on_get_block_hash",
+            "on_getblockhash",
+        ] {
+            assert!(
+                !RESTRICTED_METHODS.contains(&method),
+                "{method} is served natively and is not admin-only"
+            );
+            assert!(
+                !method_is_gated(true, method),
+                "{method} must answer on the restricted listener"
+            );
+        }
+    }
 
     /// Dual-armed, because *refused when restricted* alone passes for a method
     /// that is refused everywhere — including one that does not exist.

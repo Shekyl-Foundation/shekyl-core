@@ -42,6 +42,16 @@ pub struct ChainTip {
     pub release_build: bool,
 }
 
+/// What the chain holds at one height: the block's hash, or `None` when the
+/// height is at or past the tip. `chain_height` is the tip as of the same
+/// read, so a refusal can name the top height without a second call (and
+/// without a window in which the two disagree).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHashAt {
+    pub hash: Option<BlockHash>,
+    pub chain_height: BlockHeight,
+}
+
 /// One row of the hard-fork schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HardFork {
@@ -82,6 +92,9 @@ impl FactsFault {
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
     fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
+    /// The block hash at `height`, with the tip as of the same read.
+    /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
+    fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
 }
 
 /// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
@@ -106,6 +119,17 @@ impl ChainFacts for FfiChainFacts {
             target_height: BlockHeight::from_raw(pod.target_height),
             synchronized: pod.synchronized != 0,
             release_build: pod.release_build != 0,
+        })
+    }
+
+    fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
+        let pod = self
+            .core
+            .block_hash_at(height.to_raw())
+            .map_err(FactsFault::from_code)?;
+        Ok(BlockHashAt {
+            hash: (pod.found != 0).then(|| BlockHash::from_bytes(pod.hash)),
+            chain_height: BlockHeight::from_raw(pod.chain_height),
         })
     }
 

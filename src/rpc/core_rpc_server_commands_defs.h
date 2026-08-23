@@ -731,28 +731,7 @@ namespace cryptonote
   };
   
   //
-  struct COMMAND_RPC_GETBLOCKCOUNT
-  {
-    typedef std::list<std::string> request;
 
-    struct response_t: public rpc_response_base
-    {
-      uint64_t count;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(count)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_GETBLOCKHASH
-  {
-    typedef std::vector<uint64_t> request;
-
-    typedef std::string response;
-  };
 
 
   struct COMMAND_RPC_GETBLOCKTEMPLATE

@@ -54,11 +54,25 @@ int shekyl_rpc_hardforks(core_rpc_handle* h,
     const shekyl_rpc_hardfork_entry** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_hardforks_free(void* owner);
 
+// Block hash at a height, with the tip as of the same read (RK-2), so a
+// refusal can name the top height without a second call.
+typedef struct shekyl_rpc_block_hash_facts {
+    uint8_t  hash[32];
+    uint64_t chain_height;   // top block height + 1
+    uint8_t  found;          // 0 when height >= chain_height; hash is then zero
+    uint8_t  reserved[7];
+} shekyl_rpc_block_hash_facts;
+
+int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
+    shekyl_rpc_block_hash_facts* out);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
 void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
 int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
+void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
+int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"

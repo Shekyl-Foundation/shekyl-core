@@ -253,6 +253,20 @@ pub struct ChainTipFactsFfi {
     pub reserved: [u8; 6],
 }
 
+/// Twin of `shekyl_rpc_block_hash_facts` (RK-2). Layout pinned both
+/// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
+/// `shekyl_rpc_block_hash_facts_rust_{fill,check}`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockHashFactsFfi {
+    pub hash: [u8; 32],
+    /// Chain height at the moment of the read (top block height + 1).
+    pub chain_height: u64,
+    /// `0` when `height` was at or past `chain_height` — `hash` is then zero.
+    pub found: u8,
+    pub reserved: [u8; 7],
+}
+
 /// Twin of `shekyl_rpc_hardfork_entry`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +287,11 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_hardforks_free(owner: *mut std::ffi::c_void);
+    pub fn shekyl_rpc_block_hash_at(
+        h: *mut CoreRpcHandle,
+        height: u64,
+        out: *mut BlockHashFactsFfi,
+    ) -> i32;
 }
 
 extern "C" {
@@ -399,4 +418,12 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_hardforks_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_block_hash_at(
+        _h: *mut CoreRpcHandle,
+        _height: u64,
+        _out: *mut BlockHashFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
 }

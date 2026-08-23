@@ -115,6 +115,41 @@ void shekyl_rpc_hardforks_free(void* owner)
   delete static_cast<std::vector<shekyl_rpc_hardfork_entry>*>(owner);
 }
 
+int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
+  shekyl_rpc_block_hash_facts* out)
+{
+  if (!h || !h->rpc || !out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    cryptonote::core& core = h->rpc->get_core();
+    // One read of the tip serves both the bound and the message that names
+    // the top height, so the two cannot disagree.
+    const uint64_t chain_height = core.get_current_blockchain_height();
+    out->chain_height = chain_height;
+    if (height < chain_height)
+    {
+      const crypto::hash id = core.get_block_id_by_height(height);
+      std::memcpy(out->hash, id.data, sizeof(out->hash));
+      out->found = 1;
+    }
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("block hash facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("block hash facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed)
 {
   if (!out)
@@ -153,6 +188,26 @@ int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry,
   shekyl_rpc_hardfork_entry expected;
   shekyl_rpc_hardfork_entry_test_fill(&expected, seed);
   return std::memcmp(entry, &expected, sizeof(expected)) == 0 ? 0 : -1;
+}
+
+void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  for (size_t i = 0; i < sizeof(out->hash); ++i)
+    out->hash[i] = static_cast<uint8_t>(field_value(seed, 0) >> ((i % 8) * 8));
+  out->chain_height = field_value(seed, 1);
+  out->found = static_cast<uint8_t>(field_value(seed, 2));
+}
+
+int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed)
+{
+  if (!facts)
+    return -1;
+  shekyl_rpc_block_hash_facts expected;
+  shekyl_rpc_block_hash_facts_test_fill(&expected, seed);
+  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 
 } // extern "C"
