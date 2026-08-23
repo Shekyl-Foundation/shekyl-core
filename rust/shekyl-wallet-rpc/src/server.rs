@@ -939,6 +939,7 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
 mod tests {
     use super::*;
     use crate::tenant::DaemonEndpoint;
+    use tracing::instrument::WithSubscriber as _;
 
     /// The credential-redaction pin: no `Debug` of server configuration —
     /// the shapes that reach logs and panic output — renders the digest
@@ -1108,6 +1109,14 @@ mod tests {
     /// `run_server`. This test holds the listen port first, so `run_server`
     /// returns (address in use) right after the disclosure — no timer to
     /// wait out, and "said before bound" is pinned with it.
+    ///
+    /// The subscriber rides the future (`with_subscriber`) rather than the
+    /// thread (`subscriber::set_default`): it is the default on whatever
+    /// polls it. Both work here — an awaited future is polled by `block_on`
+    /// on this thread, under either runtime flavor — but that is an ambient
+    /// fact about the runtime, and no assertion in this test checks it. A
+    /// capture that cannot be broken by where the future runs needs one
+    /// fewer thing held true elsewhere.
     #[tokio::test]
     async fn run_server_logs_the_operator_statement_before_binding() {
         #[derive(Clone)]
@@ -1127,13 +1136,13 @@ mod tests {
             .with_writer(move || writer.clone())
             .with_ansi(false)
             .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
 
         let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
         let port = held.local_addr().expect("local addr").port();
         let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
         config.daemon_address = "http://203.0.113.7:11029".into();
         let err = run_server(config)
+            .with_subscriber(subscriber)
             .await
             .expect_err("the held port refuses the bind");
         drop(held);

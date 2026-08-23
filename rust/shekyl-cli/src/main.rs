@@ -56,7 +56,10 @@ pub struct ReplArgs {
     #[arg(long)]
     rpc_url: Option<String>,
 
-    /// Network type: mainnet, testnet, stagenet. Ignored with --rpc-url.
+    /// Network the self-hosted wallet server binds to: mainnet, testnet,
+    /// stagenet. With --rpc-url that server is not started, and the flag is
+    /// then read only to supply the default daemon port (so a run that names
+    /// its own --daemon-address never consults it).
     #[arg(long, default_value = "mainnet")]
     network: String,
 
@@ -89,8 +92,10 @@ pub struct ReplArgs {
 impl ReplArgs {
     /// The daemon address this invocation dials: the flag as given, or the
     /// loopback daemon at `--network`'s RPC port — the wallet knows the
-    /// protocol's ports so the operator need not. An unknown `--network`
-    /// fails here, before anything is dialed.
+    /// protocol's ports so the operator need not. `--network` is parsed
+    /// **here**, which is why this is only called for a run that opens a
+    /// daemon connection: an unknown network must not fail a run that never
+    /// needed a default port. Failing here is before anything is dialed.
     fn daemon_address(&self) -> Result<String, String> {
         match &self.daemon_address {
             Some(given) => Ok(given.clone()),
@@ -98,6 +103,76 @@ impl ReplArgs {
                 "127.0.0.1:{}",
                 parse_network(&self.network)?.daemon_rpc_port()
             )),
+        }
+    }
+}
+
+/// The daemon connection this invocation opens: where it dials, and how the
+/// transport that dials it resolves a hostname under `--proxy` — which is
+/// what decides whether the DNS-leak half of the disclosure is true of it.
+struct Daemon {
+    address: String,
+    resolution: ProxyResolution,
+}
+
+/// Every endpoint this invocation opens, decided once from the flags.
+///
+/// `--rpc-url` and `--daemon-address` are separately configurable and the
+/// mode decides which are dialed; three things need that answer (the
+/// session, the disclosure, and the REPL's daemon client), and deriving it
+/// three times is how a run came to resolve — and fail on — a daemon
+/// address it never used.
+enum Endpoints {
+    /// `--rpc-url`: an external wallet-RPC server does the wallet work. The
+    /// REPL additionally opens its own daemon client, so it carries a
+    /// daemon; a scripted run opens no daemon of its own and therefore
+    /// never consults `--network`.
+    External { url: String, daemon: Option<Daemon> },
+    /// The default: a wallet-RPC server hosted in this process, scanning
+    /// over its own daemon connection.
+    SelfHosted { network: Network, daemon: Daemon },
+}
+
+impl Endpoints {
+    /// Resolve the flags for a run. `opens_direct_daemon` is `true` for the
+    /// REPL, which builds a `DaemonClient` of its own in addition to the
+    /// session.
+    ///
+    /// The proxy resolution follows the transport that will dial: the
+    /// in-process server's bulk scan hands the hostname to the proxy
+    /// regardless of scheme (`AlwaysRemote`), while the REPL's ureq client
+    /// honors it (`socks5://` resolves locally — the leak). Where both open
+    /// they share an endpoint and a proxy, and the scheme-honoring one
+    /// decides.
+    fn resolve(cli: &ReplArgs, opens_direct_daemon: bool) -> Result<Self, String> {
+        let resolution = if opens_direct_daemon {
+            ProxyResolution::HonorsScheme
+        } else {
+            ProxyResolution::AlwaysRemote
+        };
+        let daemon = |cli: &ReplArgs| -> Result<Daemon, String> {
+            Ok(Daemon {
+                address: cli.daemon_address()?,
+                resolution,
+            })
+        };
+        match &cli.rpc_url {
+            Some(url) => Ok(Self::External {
+                url: url.clone(),
+                daemon: opens_direct_daemon.then(|| daemon(cli)).transpose()?,
+            }),
+            None => Ok(Self::SelfHosted {
+                network: parse_network(&cli.network)?,
+                daemon: daemon(cli)?,
+            }),
+        }
+    }
+
+    /// The daemon this run dials, if it dials one.
+    fn daemon(&self) -> Option<&Daemon> {
+        match self {
+            Self::External { daemon, .. } => daemon.as_ref(),
+            Self::SelfHosted { daemon, .. } => Some(daemon),
         }
     }
 }
@@ -129,18 +204,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// Both endpoints are checked because they are separately configurable and
 /// carry different exposure: `--rpc-url` reaches a wallet-RPC server (which
-/// sees balances, addresses, and commands), `--daemon-address` reaches a node.
-/// `opens_direct_daemon` is `true` for the REPL, which builds its own
-/// `DaemonClient` from `--daemon-address` **in addition to** the RPC session —
-/// so with `--rpc-url` set the REPL has two distinct live endpoints, and both
-/// must be disclosed; a scripted run against an external server opens no
-/// daemon endpoint of its own and says nothing about one.
+/// sees balances, addresses, and commands), a daemon address reaches a node.
+/// With `--rpc-url` set the REPL has two distinct live endpoints and both are
+/// disclosed; a scripted run against an external server opens no daemon of
+/// its own ([`Endpoints`]) and says nothing about one.
 ///
 /// Called after the session is built, so what is said is about an endpoint
 /// this run will use: the self-hosted server has validated the daemon
 /// endpoint by then and a refused address is never announced (the same
 /// order `shekyl-wallet-rpc` keeps in `run_server`).
-fn disclose_network_posture(cli: &ReplArgs, daemon_address: &str, opens_direct_daemon: bool) {
+fn disclose_network_posture(cli: &ReplArgs, endpoints: &Endpoints) {
     // The module says what is true; this binary says it on stderr, where
     // the operator who typed the flag is looking.
     fn say(warnings: impl IntoIterator<Item = String>) {
@@ -150,7 +223,7 @@ fn disclose_network_posture(cli: &ReplArgs, daemon_address: &str, opens_direct_d
     }
 
     let proxy = cli.proxy.as_deref();
-    if let Some(url) = &cli.rpc_url {
+    if let Endpoints::External { url, .. } = endpoints {
         // Only disclose a --rpc-url that connect() will accept: an
         // unsupported scheme is rejected before any endpoint is opened, so
         // warning about it would contradict "endpoints actually used". The
@@ -165,29 +238,12 @@ fn disclose_network_posture(cli: &ReplArgs, daemon_address: &str, opens_direct_d
         }
     }
 
-    // Which daemon transport this run opens decides how a hostname resolves
-    // under --proxy, and so whether the DNS-leak half of the disclosure is
-    // true. The in-process server's bulk scan honors --proxy with SOCKS5h
-    // semantics regardless of scheme — it never resolves the daemon hostname
-    // locally. The REPL *additionally* opens a direct ureq daemon client on
-    // the same address, and that client does honor the scheme (socks5:// =
-    // local resolve). So: the REPL discloses as scheme-honoring; a scripted
-    // self-hosted run as always-remote (warning there would assert a lookup
-    // no opened transport performs — §15 warns only on established
-    // weaknesses); a scripted run against an external server opens no
-    // daemon endpoint at all. One disclosure covers both REPL transports,
-    // since they share endpoint and proxy.
-    let daemon = match (&cli.rpc_url, opens_direct_daemon) {
-        (_, true) => Some(ProxyResolution::HonorsScheme),
-        (None, false) => Some(ProxyResolution::AlwaysRemote),
-        (Some(_), false) => None,
-    };
-    if let Some(resolution) = daemon {
+    if let Some(daemon) = endpoints.daemon() {
         say(network_posture::daemon_disclosures(
             "daemon address",
-            daemon_address,
+            &daemon.address,
             proxy,
-            resolution,
+            daemon.resolution,
         ));
     }
 }
@@ -196,24 +252,21 @@ fn disclose_network_posture(cli: &ReplArgs, daemon_address: &str, opens_direct_d
 /// daemon when `--rpc-url` is set, otherwise a self-hosted in-process server.
 fn build_session(
     cli: &ReplArgs,
-    daemon_address: &str,
+    endpoints: &Endpoints,
 ) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
-    match &cli.rpc_url {
-        Some(url) => Ok(rpc_client::RpcSession::connect(
+    match endpoints {
+        Endpoints::External { url, .. } => Ok(rpc_client::RpcSession::connect(
             url,
             cli.proxy.as_deref(),
             cli.debug,
         )?),
-        None => {
-            let network = parse_network(&cli.network)?;
-            Ok(rpc_client::RpcSession::host_in_process(
-                std::path::PathBuf::from(&cli.engine_dir),
-                network,
-                daemon::daemon_url(daemon_address),
-                cli.proxy.clone(),
-                cli.debug,
-            )?)
-        }
+        Endpoints::SelfHosted { network, daemon } => Ok(rpc_client::RpcSession::host_in_process(
+            std::path::PathBuf::from(&cli.engine_dir),
+            *network,
+            daemon::daemon_url(&daemon.address),
+            cli.proxy.clone(),
+            cli.debug,
+        )?),
     }
 }
 
@@ -225,9 +278,9 @@ where
     F: FnOnce(&rpc_client::RpcSession) -> Result<(), Box<dyn std::error::Error>>,
 {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
-    let daemon_address = conn.daemon_address()?;
-    let rpc = build_session(conn, &daemon_address)?;
-    disclose_network_posture(conn, &daemon_address, false);
+    let endpoints = Endpoints::resolve(conn, false)?;
+    let rpc = build_session(conn, &endpoints)?;
+    disclose_network_posture(conn, &endpoints);
     let outcome = run(&rpc);
     rpc.shutdown();
     if let Err(e) = outcome {
@@ -263,22 +316,27 @@ fn parse_network(s: &str) -> Result<Network, String> {
 fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
-    let daemon_address = cli.daemon_address()?;
-    let rpc = build_session(cli, &daemon_address)?;
-    disclose_network_posture(cli, &daemon_address, true);
+    let endpoints = Endpoints::resolve(cli, true)?;
+    let rpc = build_session(cli, &endpoints)?;
+    disclose_network_posture(cli, &endpoints);
 
-    let daemon_client = match daemon::DaemonClient::new(
-        &daemon_address,
-        cli.proxy.as_deref(),
-        cli.daemon_ca_cert.as_deref(),
-    ) {
-        Ok(dc) => Some(dc),
-        Err(daemon::DaemonError::NotConfigured) => None,
-        Err(e) => {
-            eprintln!("Warning: daemon client init failed: {e}");
-            None
+    // No daemon endpoint, no daemon client — the REPL always resolves one,
+    // so this reads as the total form of "dial what was resolved" rather
+    // than as a case that happens here.
+    let daemon_client = endpoints.daemon().and_then(|daemon| {
+        match daemon::DaemonClient::new(
+            &daemon.address,
+            cli.proxy.as_deref(),
+            cli.daemon_ca_cert.as_deref(),
+        ) {
+            Ok(dc) => Some(dc),
+            Err(daemon::DaemonError::NotConfigured) => None,
+            Err(e) => {
+                eprintln!("Warning: daemon client init failed: {e}");
+                None
+            }
         }
-    };
+    });
 
     if let Some(ref filename) = cli.engine_file {
         // The password lives in this inner scope and nowhere else, so it is
@@ -354,5 +412,45 @@ mod tests {
         assert!(args(&["shekyl-cli", "--network", "bogus"])
             .daemon_address()
             .is_err());
+    }
+
+    /// A scripted run against an external wallet-RPC server opens no daemon
+    /// of its own, so it never consults `--network` — the flag's own help
+    /// says the server it configures is not started. The edit that turns
+    /// this red is resolving the daemon unconditionally (which is what
+    /// `--network` parsing hangs off): `Endpoints::resolve` then fails on a
+    /// network this run had no use for.
+    #[test]
+    fn a_scripted_external_run_resolves_no_daemon_and_no_network() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        let external = args(&[
+            "shekyl-cli",
+            "--rpc-url",
+            "http://127.0.0.1:29500",
+            "--network",
+            "bogus",
+        ]);
+
+        let scripted = Endpoints::resolve(&external, false)
+            .expect("no daemon is opened, so the network is never parsed");
+        assert!(scripted.daemon().is_none(), "no daemon endpoint is dialed");
+
+        // The REPL *does* open a daemon client, and with no --daemon-address
+        // the port has to come from the network — so there the bad value is
+        // fatal, at the point it is actually needed.
+        assert!(Endpoints::resolve(&external, true).is_err());
+
+        // ...and naming the daemon removes even that need.
+        let named = args(&[
+            "shekyl-cli",
+            "--rpc-url",
+            "http://127.0.0.1:29500",
+            "--network",
+            "bogus",
+            "--daemon-address",
+            "127.0.0.1:11029",
+        ]);
+        let repl = Endpoints::resolve(&named, true).expect("the daemon is named");
+        assert_eq!(repl.daemon().expect("a daemon").address, "127.0.0.1:11029");
     }
 }
