@@ -134,7 +134,6 @@
 // inherited mirrors transcribe.
 #define CRYPTONOTE_NOISE_MIN_DELAY                      10     // seconds
 #define CRYPTONOTE_NOISE_DELAY_RANGE                    5      // seconds
-#define CRYPTONOTE_NOISE_BYTES                          3*1024 // 3 KiB
 #define CRYPTONOTE_NOISE_CHANNELS                       2      // Max outgoing connections per zone used for noise/covert sending
 
 /* CRYPTONOTE_FORWARD_DELAY_BASE / _AVERAGE were here, and Q12-U2 deleted them
@@ -160,7 +159,6 @@
    dies with them and is not inherited by anything: the covert cadence defends
    the wire observer and keeps its own constants below, untouched. */
 
-#define CRYPTONOTE_MAX_FRAGMENTS                        20 // ~20 * NOISE_BYTES max payload size for covert/noise send
 
 #define COMMAND_RPC_GET_BLOCKS_FAST_MAX_BLOCK_COUNT     1000
 #define COMMAND_RPC_GET_BLOCKS_FAST_MAX_TX_COUNT        20000

@@ -6,7 +6,7 @@
 use super::*;
 use std::sync::Arc;
 
-use shekyl_relay_privacy::params::{inherited, DandelionParams};
+use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::{LinkSecrecy, RelayZone};
 
@@ -944,7 +944,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     let mut rng = SplitMix64::new(0x0820);
     let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
     let mut short = DandelionParams::inherited();
-    short.min_epoch_secs = inherited::MAX_FRAGMENTS * per_send - 1;
+    short.min_epoch_secs = carrier::MAX_FRAGMENTS * per_send - 1;
     match Zone::new(
         short,
         CHANNELS,
@@ -955,8 +955,8 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         &mut rng,
     ) {
         Err(ZoneNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
-            assert_eq!(needs, inherited::MAX_FRAGMENTS);
-            assert_eq!(affords, inherited::MAX_FRAGMENTS - 1);
+            assert_eq!(needs, carrier::MAX_FRAGMENTS);
+            assert_eq!(affords, carrier::MAX_FRAGMENTS - 1);
         }
         other => panic!("expected a one-epoch refusal, got {other:?}"),
     }
