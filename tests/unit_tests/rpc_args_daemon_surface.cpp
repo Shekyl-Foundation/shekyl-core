@@ -30,6 +30,8 @@ TEST(RpcArgsDaemonSurface, DaemonOmitsLoginAndSslFlags)
   cryptonote::rpc_args::init_options(desc, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
 
   EXPECT_TRUE(has_option(desc, "rpc-bind-ip"));
+  EXPECT_TRUE(has_option(desc, "rpc-bind-ipv6-address"));
+  EXPECT_TRUE(has_option(desc, "rpc-use-ipv6"));
   EXPECT_TRUE(has_option(desc, "rpc-access-control-origins"));
   // Retired with RT-W2: confirmation is not refusal. The flag now reaches
   // the removed-flags shim, which refuses it by name.

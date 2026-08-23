@@ -42,16 +42,23 @@ pub struct ShekylDaemonRpcHandle {
 ///   or null (returns null immediately).
 /// - `bind_host` and `bind_port` must be valid null-terminated C strings, or
 ///   null (returns null): the operator's `--rpc-bind-ip` / `--rpc-bind-port`
-///   values as given. Rust parses them (`server::parse_bind`) and decides the
-///   listen posture (`server::bind_listener`); C++ composes nothing.
+///   values as given.
+/// - `bind_host_v6` is the operator's `--rpc-bind-ipv6-address` (or the
+///   restricted twin) when `--rpc-use-ipv6` is set, or null. Rust parses it
+///   with the same port, classifies it, and binds a second socket on this
+///   handle when it is a different address; C++ does not start a second
+///   server.
+///   Rust parses both (`bind::parse_bind` / `bind::listen_addrs`) and
+///   decides the listen posture (`bind::bind_listener`); C++ composes
+///   nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
 ///   `max_connections_per_private_ip` are the concurrent-connection caps
 ///   (0 = unlimited) as given; `ConnLimits::checked` validates them here.
 ///
-/// Every refusal is logged with its reason before the null handle is
-/// returned, so the operator reads why, not "failed to start".
+/// Parse, cap, and bind refusals are logged with their reason before the
+/// null handle is returned, so the operator reads why, not "failed to start".
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
@@ -59,6 +66,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
     bind_host: *const c_char,
     bind_port: *const c_char,
+    bind_host_v6: *const c_char,
     restricted: bool,
     cors_origins: *const c_char,
     max_connections: u64,
@@ -76,8 +84,19 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         tracing::error!("daemon-rpc: --rpc-bind-ip / --rpc-bind-port are not valid UTF-8");
         return std::ptr::null_mut();
     };
-    let bind = match crate::server::parse_bind(host, port) {
-        Ok(addr) => addr,
+    let host_v6 = if bind_host_v6.is_null() {
+        None
+    } else {
+        match std::ffi::CStr::from_ptr(bind_host_v6).to_str() {
+            Ok(s) => Some(s),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-bind-ipv6-address is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
+        }
+    };
+    let addrs = match crate::bind::listen_addrs(host, port, host_v6) {
+        Ok(addrs) => addrs,
         Err(e) => {
             tracing::error!("daemon-rpc: {e}");
             return std::ptr::null_mut();
@@ -120,13 +139,19 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
                 }
                 parsed
             }
-            Err(_) => return std::ptr::null_mut(),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-access-control-origins is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
         }
     };
 
     let core = match crate::core::CoreRpc::from_raw(rpc_server_ptr) {
         Some(c) => std::sync::Arc::new(c),
-        None => return std::ptr::null_mut(),
+        None => {
+            tracing::error!("daemon-rpc: core_rpc_server pointer was not a live core");
+            return std::ptr::null_mut();
+        }
     };
 
     let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
@@ -134,36 +159,83 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         .thread_name("daemon-rpc")
         .build()
     else {
+        tracing::error!("daemon-rpc: failed to build the tokio runtime");
         return std::ptr::null_mut();
     };
 
-    let config = crate::server::ServerConfig {
-        bind_addr: bind,
-        restricted,
-        cors_origins: cors,
-        conn_limits,
-        ..Default::default()
-    };
-
-    // Bind synchronously so a failure (EADDRINUSE, bad address) is reported to
-    // the caller as a null handle rather than logged-and-dropped inside the
-    // spawned serve task. The runtime is dropped on the early return.
-    let listener = match rt.block_on(crate::server::bind_listener(config.bind_addr)) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("daemon-rpc bind failed on {}: {e}", config.bind_addr);
-            return std::ptr::null_mut();
+    // Bind every family synchronously so a refusal or EADDRINUSE is a null
+    // handle, not a log inside a spawned task. A later family failing drops
+    // the sockets already bound on this return.
+    let mut bound = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        match rt.block_on(crate::bind::bind_listener(addr)) {
+            Ok(listener) => bound.push((addr, listener)),
+            Err(e) => {
+                tracing::error!("daemon-rpc bind failed on {addr}: {e}");
+                return std::ptr::null_mut();
+            }
         }
-    };
+    }
 
     let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
     let shutdown_for_server = shutdown.clone();
 
     let serve = rt.spawn(async move {
-        if let Err(e) =
-            crate::server::serve_with_listener(core, config, listener, shutdown_for_server).await
-        {
-            tracing::error!("daemon-rpc server error: {e}");
+        let mut bound = bound.into_iter();
+        let (addr, listener) = bound
+            .next()
+            .expect("listen_addrs yields at least the primary");
+        let config = crate::server::ServerConfig {
+            bind_addr: addr,
+            restricted,
+            cors_origins: cors.clone(),
+            conn_limits,
+            ..Default::default()
+        };
+        let extra = bound.next().map(|(addr, listener)| {
+            (
+                crate::server::ServerConfig {
+                    bind_addr: addr,
+                    restricted,
+                    cors_origins: cors.clone(),
+                    conn_limits,
+                    ..Default::default()
+                },
+                listener,
+            )
+        });
+        let log_err = |e| tracing::error!("daemon-rpc server error: {e}");
+        match extra {
+            None => {
+                if let Err(e) =
+                    crate::server::serve_with_listener(core, config, listener, shutdown_for_server)
+                        .await
+                {
+                    log_err(e);
+                }
+            }
+            Some((config_v6, listener_v6)) => {
+                let (a, b) = tokio::join!(
+                    crate::server::serve_with_listener(
+                        core.clone(),
+                        config,
+                        listener,
+                        shutdown_for_server.clone(),
+                    ),
+                    crate::server::serve_with_listener(
+                        core,
+                        config_v6,
+                        listener_v6,
+                        shutdown_for_server,
+                    ),
+                );
+                if let Err(e) = a {
+                    log_err(e);
+                }
+                if let Err(e) = b {
+                    log_err(e);
+                }
+            }
         }
     });
 
@@ -194,7 +266,9 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
     // blocking pool, whose closure holds live references into the C++ core.
     if !handle.shutdown.is_null() {
         let notify = std::sync::Arc::from_raw(handle.shutdown);
-        notify.notify_one();
+        // One waiter today, two when --rpc-use-ipv6 bound a second family
+        // on this handle. `notify_one` would leave the other serving.
+        notify.notify_waiters();
     }
 
     if !handle.rt.is_null() {

@@ -12,17 +12,22 @@
   is operator-to-operator, and the remote legs are the onion service and
   the pinned-TLS leg of `RPC_TRANSPORT_POSTURE.md` (RT-4). The refusal
   lives at the one Rust seam every daemon listener passes through
-  (`shekyl-daemon-rpc::bind_listener`, the restricted listener included —
+  (`shekyl-daemon-rpc::bind::bind_listener`, the restricted listener included —
   it had no gate at all), on a strictly parsed address (hostnames are not
   resolved), and is logged with its reason before the daemon exits.
   `--confirm-external-bind`, a permission slip for exactly these binds,
   is refused by name through the removed-flags shim: confirmation is not
   refusal. One listen classifier, `shekyl_rpc_transport::listen`, now
   serves the wallet RPC and the daemon RPC, so "wildcard" and "loopback"
-  mean one thing across the tree. **The FFI boundary moves with it:** the
-  daemon's `--rpc-bind-ip` / `--rpc-bind-port` go to Rust as given, which
-  parses them and validates the connection caps; the C++ IP-parse blocks,
-  bracket stripping, `host:port` composition and cap checks are deleted.
+  mean one thing across the tree. IPv6 is a first-class family: `::1` is
+  loopback; `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` (default
+  `::1`) as a second socket on the same FFI start, not a second C++
+  server. A network IPv6 bind is refused for the same reason as IPv4 —
+  no authentication. **The FFI boundary moves with it:** the daemon's
+  `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to
+  Rust as given, which parses them and validates the connection caps;
+  the C++ IP-parse blocks, bracket stripping, `host:port` composition
+  and cap checks are deleted.
   **One behaviour change in that move is a fix, not a port:** the C++
   cap check refused any `--rpc-max-connections-per-public-ip` /
   `-per-private-ip` value under `--rpc-max-connections 0` (unlimited) as

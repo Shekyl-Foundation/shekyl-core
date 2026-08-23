@@ -53,10 +53,12 @@ Pruned nodes use `--prune-blockchain`.
 ### 1. Start the nodes
 
 ```bash
-# On each machine (adjust peer addresses):
-shekyld --testnet --no-igd --confirm-external-bind \
+# On each machine (adjust peer addresses). RPC is loopback only
+# (RPC_TRANSPORT_POSTURE.md RT-1/RT-2); a wildcard bind is refused.
+# Cross-machine RPC checks go through the node's onion service, not 0.0.0.0.
+shekyld --testnet --no-igd \
   --add-peer=NODE1_IP:12021 --add-peer=NODE2_IP:12021 \
-  --rpc-bind-ip=0.0.0.0 --rpc-bind-port=12029
+  --rpc-bind-port=12029
 ```
 
 For pruned nodes, add `--prune-blockchain`.

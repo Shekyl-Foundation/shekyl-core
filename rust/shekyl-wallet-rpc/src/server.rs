@@ -451,9 +451,9 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     };
     // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
     // so the wallet and the daemon cannot disagree on what a spelling names.
-    let class = shekyl_rpc_transport::listen::classify_listen(*addr);
-    if class == shekyl_rpc_transport::listen::ListenClass::Wildcard {
-        return Err(format!(
+    use shekyl_rpc_transport::listen::ListenClass;
+    match shekyl_rpc_transport::listen::classify_listen(*addr) {
+        ListenClass::Wildcard => Err(format!(
             "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
              bind every interface, including ones that do not exist yet (a VPN that comes up \
              later, a hotspot, a container bridge). Bind a specific IP address instead: \
@@ -461,34 +461,34 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
              of the one interface your clients are on (which also requires --rpc-login \
              NAME:PASSWORD)."
         )
-        .into());
+        .into()),
+        ListenClass::Loopback => Ok(()),
+        ListenClass::Addressed => {
+            // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
+            // public fields and its constructor refuses a blank half, so the seam
+            // does not re-inspect it — the guarantee is the type's. The only way
+            // to reach this arm is to have asked for no authentication.
+            if matches!(config.auth, AuthConfig::Disabled) {
+                return Err(format!(
+                    "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
+                     not set, or --disable-rpc-login given): the address is reachable from the \
+                     network and every request, spends included, would be honoured. Bind 127.0.0.1 \
+                     or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
+                )
+                .into());
+            }
+            // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
+            // lands, a network-reachable bind carries the credential in the clear.
+            warn!(
+                %addr,
+                "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
+                 credential travels in every request and any network path between a client \
+                 and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
+                 you control; the encrypted remote leg is RT-W4."
+            );
+            Ok(())
+        }
     }
-    if class == shekyl_rpc_transport::listen::ListenClass::Loopback {
-        return Ok(());
-    }
-    // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
-    // public fields and its constructor refuses a blank half, so the seam
-    // does not re-inspect it — the guarantee is the type's. The only way
-    // to reach this arm is to have asked for no authentication.
-    if matches!(config.auth, AuthConfig::Disabled) {
-        return Err(format!(
-            "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
-             not set, or --disable-rpc-login given): the address is reachable from the \
-             network and every request, spends included, would be honoured. Bind 127.0.0.1 \
-             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
-        )
-        .into());
-    }
-    // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
-    // lands, a network-reachable bind carries the credential in the clear.
-    warn!(
-        %addr,
-        "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
-         credential travels in every request and any network path between a client \
-         and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
-         you control; the encrypted remote leg is RT-W4."
-    );
-    Ok(())
 }
 
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or

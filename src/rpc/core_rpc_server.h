@@ -89,15 +89,19 @@ namespace cryptonote
     //! (ConnTracker) and injected into get_info's rpc_connections_count there.
     size_t get_connections_count() const { return 0; }
     network_type nettype() const { return m_core.get_nettype(); }
-    // Resolved listen host for this server, valid after init(). Used by the
-    // daemon to build the Axum bind address. Empty until init() runs.
+    // Resolved listen host for this server, valid after init(). Passed to
+    // Rust as --rpc-bind-ip / --rpc-restricted-bind-ip; Rust parses it.
     const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
+    // --rpc-bind-ipv6-address (or the restricted twin). Passed to Rust when
+    // get_rpc_use_ipv6(); empty until init() runs.
+    const std::string& get_rpc_bind_ipv6() const { return m_rpc_bind_ipv6; }
+    bool get_rpc_use_ipv6() const { return m_rpc_use_ipv6; }
     const std::vector<std::string>& get_access_control_origins() const {
       return m_access_control_origins;
     }
-    // Connection caps parsed + cross-validated in init() (0 = unlimited).
-    // Passed to the Rust Axum listener via shekyl_daemon_rpc_start, which owns
-    // enforcement; valid after init() runs.
+    // Connection caps (0 = unlimited). Passed to the Rust Axum listener via
+    // shekyl_daemon_rpc_start, which validates (ConnLimits::checked) and
+    // enforces them; valid after init() runs.
     std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
     std::size_t get_rpc_max_connections_per_public_ip() const { return m_rpc_max_connections_per_public_ip; }
     std::size_t get_rpc_max_connections_per_private_ip() const { return m_rpc_max_connections_per_private_ip; }
@@ -191,9 +195,11 @@ private:
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;
     bool disable_rpc_ban;
-    // Resolved listen host for this server (restricted variant uses its own
-    // bind IP). Recorded in init() for the Axum transport bind address.
+    // Resolved listen hosts for this server (restricted variant uses its own).
+    // Recorded in init(); Rust parses and binds.
     std::string m_rpc_bind_ip;
+    std::string m_rpc_bind_ipv6;
+    bool m_rpc_use_ipv6 = false;
     // CORS allow-list from --rpc-access-control-origins (empty = deny).
     std::vector<std::string> m_access_control_origins;
     // Connection caps (0 = unlimited); set in init(), enforced by the Rust

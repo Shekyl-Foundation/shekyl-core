@@ -142,6 +142,7 @@ namespace cryptonote
       return false;
 
     std::string bind_ip_str = rpc_config->bind_ip;
+    std::string bind_ipv6_str = rpc_config->bind_ipv6_address;
     if (restricted)
     {
       const auto restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
@@ -149,9 +150,12 @@ namespace cryptonote
       if (has_restricted_rpc_port_arg && port == command_line::get_arg(vm, restricted_rpc_port_arg))
       {
         bind_ip_str = rpc_config->restricted_bind_ip;
+        bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
       }
     }
     m_rpc_bind_ip = bind_ip_str;
+    m_rpc_bind_ipv6 = bind_ipv6_str;
+    m_rpc_use_ipv6 = rpc_config->use_ipv6;
     m_access_control_origins = rpc_config->access_control_origins;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
 

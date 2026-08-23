@@ -151,13 +151,13 @@ namespace cryptonote
     config.use_ipv6 = command_line::get_arg(vm, arg.rpc_use_ipv6);
     config.require_ipv4 = !command_line::get_arg(vm, arg.rpc_ignore_ipv4);
     config.disable_rpc_ban = command_line::get_arg(vm, arg.disable_rpc_ban);
-    // The bind addresses (main and restricted, v4 and v6) are passed to the
-    // Rust listener as given. It is the one parser — numeric IP, brackets
-    // around an IPv6 literal tolerated, hostnames refused by name — and the
-    // one place the listen posture is decided (wildcard and network binds
-    // refused: RPC_TRANSPORT_POSTURE.md RT-1/RT-2, slice RT-W2). The parse
-    // "for error consistency" that used to live here was a second copy of
-    // that decision.
+    // Bind addresses are passed to Rust as given. The one parser (numeric IP,
+    // one bracket pair around an IPv6 literal, hostnames refused by name) and
+    // the listen posture (wildcard and network binds refused: RT-1/RT-2, slice
+    // RT-W2) live on the Rust side of shekyl_daemon_rpc_start. --rpc-use-ipv6
+    // is a second family on that same start, not a second C++ server. The
+    // parse "for error consistency" that used to live here was a second copy
+    // of that decision.
 
     if (include_listener_tls_auth)
     {

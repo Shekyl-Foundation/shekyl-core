@@ -63,8 +63,9 @@ shekyld [options] [command]
 | `--max-log-file-size <bytes>` | Rotate the log file at this size (default ~100 MB) |
 | `--max-log-files <n>` | Number of rotated archives to retain (default 50; `0` disables pruning) |
 | `--non-interactive` | Disable interactive console (for use under a service manager) |
-| `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`); loopback only — a wildcard or a network address is refused at start (`RPC_TRANSPORT_POSTURE.md` RT-1/RT-2) |
+| `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`); IPv4 or IPv6 (`::1`). Loopback only — a wildcard or a network address is refused at start (`RPC_TRANSPORT_POSTURE.md` RT-1/RT-2) |
 | `--rpc-bind-port <port>` | RPC listen port (default per network, see table above); Axum sole transport |
+| `--rpc-use-ipv6` | Also bind `--rpc-bind-ipv6-address` (default `::1`) on the same RPC start; same loopback-only refusals. Not a second security model |
 | `--restricted-rpc` | Restrict RPC to view-only / safe methods |
 | `--rpc-restricted-bind-port <port>` | Separate restricted RPC listener |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |

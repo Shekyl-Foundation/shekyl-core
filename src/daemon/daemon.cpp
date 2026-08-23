@@ -256,11 +256,24 @@ bool Daemon::run(bool interactive)
     for (auto & rpc : mp_internals->rpcs)
     {
       auto * server = rpc.server.get();
-      // Honors --rpc-bind-ip / --rpc-restricted-bind-ip. IPv6 dual-bind
-      // parity is tracked in FOLLOWUPS. The host and port go to Rust as the
-      // operator gave them: Rust parses them and decides the listen posture
-      // (RPC_TRANSPORT_POSTURE.md RT-W2); nothing is composed here.
-      const std::string bind_addr = rpc.bind_host + ":" + rpc.bind_port; // for messages only
+      // Hosts and port go to Rust as the operator gave them. Rust parses both
+      // families, classifies, and binds (RPC_TRANSPORT_POSTURE.md RT-W2);
+      // nothing is composed or decided here. bind_host_v6 is NULL when
+      // --rpc-use-ipv6 is off.
+      auto bind_label = [](std::string const & host, std::string const & port) -> std::string {
+        if (!host.empty() && host.front() != '[' && host.find(':') != std::string::npos)
+          return "[" + host + "]:" + port;
+        return host + ":" + port;
+      };
+      std::string where = bind_label(rpc.bind_host, rpc.bind_port);
+      char const * bind_host_v6 = nullptr;
+      if (server->get_rpc_use_ipv6())
+      {
+        bind_host_v6 = server->get_rpc_bind_ipv6().c_str();
+        if (!server->get_rpc_bind_ipv6().empty()
+            && server->get_rpc_bind_ipv6() != rpc.bind_host)
+          where += " and " + bind_label(server->get_rpc_bind_ipv6(), rpc.bind_port);
+      }
       // Comma-joined CORS allow-list for Axum (empty = default-deny).
       std::string cors_origins;
       {
@@ -272,7 +285,8 @@ bool Daemon::run(bool interactive)
         }
       }
       auto * rust_handle = shekyl_daemon_rpc_start(
-        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(), rpc.restricted,
+        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(), bind_host_v6,
+        rpc.restricted,
         cors_origins.empty() ? nullptr : cors_origins.c_str(),
         server->get_rpc_max_connections(),
         server->get_rpc_max_connections_per_public_ip(),
@@ -280,10 +294,10 @@ bool Daemon::run(bool interactive)
       if (!rust_handle)
       {
         throw std::runtime_error(
-          "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr +
+          "Failed to start Axum RPC for " + rpc.description + " on " + where +
           " (the reason is logged just above)");
       }
-      MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description);
+      MGINFO("Axum RPC listening on " << where << " for " << rpc.description);
       mp_internals->rust_rpc_handles.push_back(rust_handle);
     }
 

@@ -179,7 +179,7 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 
 | Context | Story |
 |---------|--------|
-| Local | Plaintext loopback (`127.0.0.1`), and loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2; `--confirm-external-bind` retired). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
+| Local | Plaintext loopback (`127.0.0.1` or `::1`), and loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2; `--confirm-external-bind` retired). `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` on the same start. shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
 | Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
 | CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |

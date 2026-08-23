@@ -158,7 +158,7 @@ example.
 | Flag | Description |
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
-| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. Another machine of yours reaches this node through its onion service |
+| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). IPv4 or IPv6 (`::1`). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. `--rpc-use-ipv6` also binds `--rpc-bind-ipv6-address` (default `::1`) on the same start. Another machine of yours reaches this node through its onion service |
 | `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
 | `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |

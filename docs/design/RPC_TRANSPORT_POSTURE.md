@@ -36,6 +36,49 @@ and the software must not make it convenient, discoverable, or advertised.
 We cannot prevent a determined user from pointing a wallet at a stranger's
 node. We can decline to build the road.
 
+### 1.1 End-state transports — the list, corrected 2026-08-22
+
+§1 is the premise. The three transports below are how it is enforced on
+each platform. They are the destination; today's daemon RPC is still
+plaintext loopback TCP (RT-W2), and the wallet's remote TCP still carries
+HTTP Basic until RT-W4.
+
+0. **Operator-to-operator.** Every RPC leg connects two machines the same
+   person controls. The adversary is the network path, never the peer.
+   There is no recommended configuration involving a foreign daemon.
+1. **Unix — UDS.** Socket `0600`, inside a `0700` pid-scoped parent
+   directory. Both halves matter: the `0600` is who may connect, the `0700`
+   parent is containment — nobody else can place an object at the name
+   we're about to dial. That containment is why `AuthConfig::Disabled` is
+   sound here; auth rides the transport.
+2. **Windows — named pipe.** Per-user SID-derived random name, owner-only
+   DACL set atomically at `CreateNamedPipe`, NETWORK (`S-1-5-2`) denied,
+   `first_pipe_instance(true)`, never as a service or SYSTEM. Client-side
+   check on connect: owner SID matches, and integrity level is Medium or
+   above — a floor, not an equality, since a Low-IL process running as you
+   has your SID. That client check is load-bearing, not defense-in-depth:
+   the pipe namespace has no parent directory, so nothing inherits the
+   containment job that (1) gets from the `0700` dir.
+3. **Remote — pinned mutual TLS.** Over TCP to a **specific** address
+   (IPv4 or IPv6; a family is not a reason to refuse), or over an onion
+   service where reachability requires it. Same authentication either way;
+   the onion is NAT traversal, not a second security model (RT-8).
+
+**Key generation.** The daemon does not generate a certificate for the
+wallet. Each endpoint generates its own keypair, locally, and never
+transmits a private key. The direction that is server-side is
+*authorization*, not key generation: the server holds an allowlist of
+client public-key fingerprints, and each client pins the server's
+fingerprint. Exchange is out of band, and only public material ever moves.
+(RT-4 states the mechanism; this paragraph is the correction that the
+server is not a key factory.)
+
+**IPv6.** There is no compelling reason to treat IPv6 as a second stack.
+`::1` is loopback the same way `127.0.0.1` is. A specific network IPv6
+address is a specific address under (3). A wildcard (`::`, mapped forms
+included) is still RT-1. Auth-less network IPv6 on the daemon is still
+RT-2 — no authentication — until RT-4 lands on that listener.
+
 ---
 
 ## 2. Scope — the three legs
@@ -494,7 +537,7 @@ before its green was trusted.**
 | Slice | Contents | Depends on | State |
 |---|---|---|---|
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
-| RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ keeps the IP parse only |
+| RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
 | RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — unblocked |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **authorized 2026-08-21** |

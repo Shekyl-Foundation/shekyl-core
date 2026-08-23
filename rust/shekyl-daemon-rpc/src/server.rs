@@ -55,9 +55,12 @@ pub struct AppState {
     pub conn_tracker: Arc<ConnTracker>,
 }
 
+#[derive(Clone)]
 pub struct ServerConfig {
-    /// The loopback address to bind, already parsed and classified
-    /// ([`parse_bind`] + [`bind_listener`]).
+    /// Bind address. Classification and the RT-1/RT-2 refusals happen in
+    /// [`crate::bind::bind_listener`], not here: this is still a raw
+    /// `SocketAddr` (the filed `ValidatedListen` successor is not due until
+    /// a third bind site).
     pub bind_addr: std::net::SocketAddr,
     pub restricted: bool,
     pub body_limit: usize,
@@ -490,166 +493,6 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
         .with_state(state)
 }
 
-/// Bind the daemon RPC TCP listener — **the** seam every daemon listener
-/// passes through (the restricted one included), so the listen posture is
-/// decided in one place (`RPC_TRANSPORT_POSTURE.md` RT-1, RT-2; slice RT-W2).
-///
-/// - The address is parsed strictly: a numeric `IP:PORT`, hostnames not
-///   resolved (a listen address names an interface; a resolver's answer must
-///   not decide the bind).
-/// - **RT-1:** a wildcard (`0.0.0.0`, `::`, the IPv4-mapped spellings) is
-///   refused unconditionally — consent to interfaces that do not exist yet.
-/// - **RT-2:** a specific network address is refused too. The daemon RPC has
-///   no authentication of any kind, and there is no unauthenticated control
-///   surface on a network; every RPC leg is operator-to-operator, and the
-///   remote legs are the onion service (RT-8) and the pinned-TLS leg (RT-4).
-///   `--confirm-external-bind`, a permission slip for exactly these binds, is
-///   retired: confirmation is not refusal.
-///
-/// Separated from serving so a caller (the FFI start path) can validate the
-/// bind synchronously and fail loudly — the refusal or EADDRINUSE logged
-/// with its reason before any handle is handed back — rather than discovering
-/// the failure asynchronously inside a spawned serve task.
-pub async fn bind_listener(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
-    use shekyl_rpc_transport::listen::{classify_listen, ListenClass};
-    let refusal = match classify_listen(addr) {
-        ListenClass::Loopback => return tokio::net::TcpListener::bind(addr).await,
-        ListenClass::Wildcard => format!(
-            "refusing to bind the daemon RPC to the wildcard address {addr}: 0.0.0.0 and :: \
-             bind every interface, including ones that do not exist yet (a VPN that comes up \
-             later, a hotspot, a container bridge). Bind 127.0.0.1 or [::1]."
-        ),
-        ListenClass::Addressed => format!(
-            "refusing to serve the daemon RPC on {addr}: the address is reachable from the \
-             network and the daemon RPC has no authentication, so every request would be \
-             honoured. Bind 127.0.0.1 or [::1]; for another machine of yours, reach this \
-             node through its onion service (docs/DAEMON_RPC_RUST.md) — the authenticated \
-             network leg is RPC_TRANSPORT_POSTURE.md RT-4."
-        ),
-    };
-    Err(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        refusal,
-    ))
-}
-
-/// The operator's `--rpc-bind-ip` / `--rpc-bind-port` values, as given, to
-/// the address [`bind_listener`] decides on. This is where the C++ side used
-/// to parse the IP "for error consistency", strip IPv6 brackets, and compose
-/// `host:port` by hand; it now passes both strings through untouched and
-/// this is the one parser. Brackets around an IPv6 literal are accepted
-/// (`[::1]` and `::1` name the same interface); a hostname is refused by
-/// name, never resolved; an empty host or a port outside `1..=65535` is
-/// refused with the flag named.
-pub fn parse_bind(host: &str, port: &str) -> Result<std::net::SocketAddr, String> {
-    let host = host.trim();
-    if host.is_empty() {
-        return Err("--rpc-bind-ip is empty: give a numeric IP (127.0.0.1 or ::1)".into());
-    }
-    let ip = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse::<std::net::IpAddr>()
-        .map_err(|_| {
-            format!(
-                "--rpc-bind-ip '{host}' is not a numeric IP address (hostnames are not \
-                 resolved): use 127.0.0.1 or ::1"
-            )
-        })?;
-    let port = port
-        .trim()
-        .parse::<u16>()
-        .ok()
-        .filter(|p| *p != 0)
-        .ok_or_else(|| format!("--rpc-bind-port '{port}' is not a port in 1..=65535"))?;
-    Ok(std::net::SocketAddr::new(ip, port))
-}
-
-#[cfg(test)]
-mod listen_posture_tests {
-    use super::{bind_listener, parse_bind};
-
-    fn addr(s: &str) -> std::net::SocketAddr {
-        s.parse().expect("test address")
-    }
-
-    /// The operator's two strings become one typed address here and nowhere
-    /// else: brackets tolerated, hostnames refused by name, an empty host
-    /// and a bad port refused with the flag named.
-    #[test]
-    fn host_and_port_parse_strictly() {
-        assert_eq!(
-            parse_bind("127.0.0.1", "21029"),
-            Ok(addr("127.0.0.1:21029"))
-        );
-        assert_eq!(parse_bind("[::1]", "21029"), Ok(addr("[::1]:21029")));
-        assert_eq!(parse_bind("::1", "21029"), Ok(addr("[::1]:21029")));
-        assert_eq!(parse_bind(" 0.0.0.0 ", "1"), Ok(addr("0.0.0.0:1")));
-        for (host, port, names) in [
-            ("localhost", "21029", "hostnames are not resolved"),
-            ("", "21029", "--rpc-bind-ip is empty"),
-            ("127.0.0.1", "0", "--rpc-bind-port"),
-            ("127.0.0.1", "70000", "--rpc-bind-port"),
-            ("127.0.0.1", "http", "--rpc-bind-port"),
-        ] {
-            let err = parse_bind(host, port).expect_err(host);
-            assert!(err.contains(names), "{host:?}:{port:?}: {err}");
-        }
-    }
-
-    /// RT-1 at the seam: every wildcard spelling is refused before any
-    /// socket exists, naming the rule. The edit that turns this red is
-    /// binding without classifying.
-    #[tokio::test]
-    async fn wildcard_binds_are_refused() {
-        for addr in ["0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0"] {
-            let err = bind_listener(self::addr(addr))
-                .await
-                .expect_err("a wildcard bind must be refused")
-                .to_string();
-            assert!(err.contains("wildcard"), "{addr}: {err}");
-            assert!(
-                err.contains("127.0.0.1"),
-                "{addr}: must say what to do: {err}"
-            );
-        }
-    }
-
-    /// RT-2 at the seam: a specific network address is refused, naming the
-    /// reason (no authentication) and the remedy (loopback; the onion).
-    /// TEST-NET addresses, so nothing is bound even if the refusal failed.
-    #[tokio::test]
-    async fn network_binds_are_refused() {
-        for addr in ["192.0.2.1:0", "[2001:db8::1]:0", "[::ffff:192.0.2.1]:0"] {
-            let err = bind_listener(self::addr(addr))
-                .await
-                .expect_err("a network bind must be refused")
-                .to_string();
-            assert!(err.contains("no authentication"), "{addr}: {err}");
-            assert!(
-                err.contains("onion"),
-                "{addr}: must name the remote leg: {err}"
-            );
-        }
-    }
-
-    /// The complement: loopback in every spelling binds.
-    #[tokio::test]
-    async fn loopback_binds() {
-        for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
-            let listener = bind_listener(self::addr(addr))
-                .await
-                .unwrap_or_else(|e| panic!("{addr} must bind: {e}"));
-            assert!(listener
-                .local_addr()
-                .unwrap()
-                .ip()
-                .to_canonical()
-                .is_loopback());
-        }
-    }
-}
-
 /// Serve the daemon RPC on an already-bound listener. Blocks until the shutdown
 /// signal fires.
 pub async fn serve_with_listener(
@@ -726,7 +569,7 @@ pub async fn run_server(
     config: ServerConfig,
     shutdown: Arc<Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = bind_listener(config.bind_addr).await?;
+    let listener = crate::bind::bind_listener(config.bind_addr).await?;
     serve_with_listener(core, config, listener, shutdown).await
 }
 
