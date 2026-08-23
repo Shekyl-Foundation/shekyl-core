@@ -19,7 +19,16 @@
   is refused by name through the removed-flags shim: confirmation is not
   refusal. One listen classifier, `shekyl_rpc_transport::listen`, now
   serves the wallet RPC and the daemon RPC, so "wildcard" and "loopback"
-  mean one thing across the tree.
+  mean one thing across the tree. **The FFI boundary moves with it:** the
+  daemon's `--rpc-bind-ip` / `--rpc-bind-port` go to Rust as given, which
+  parses them and validates the connection caps; the C++ IP-parse blocks,
+  bracket stripping, `host:port` composition and cap checks are deleted.
+  **One behaviour change in that move is a fix, not a port:** the C++
+  cap check refused any `--rpc-max-connections-per-public-ip` /
+  `-per-private-ip` value under `--rpc-max-connections 0` (unlimited) as
+  "bigger than" the total; an unbounded total contradicts nothing, so
+  `ConnLimits::checked` accepts it and refuses only a per-IP cap above a
+  *bounded* total, by flag name.
 - **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
   natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
   wire types are now `shekyl-rpc-types::{GetHeightResponse,
