@@ -43,13 +43,25 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
     }
 }
 
+/// Build an [`EncryptedOutputField`] fixture through its `Deserialize` impl —
+/// the same path the FFI JSON boundary uses.
+///
+/// There is deliberately no test-only byte constructor to call instead: a
+/// `test-utils` gate would not have gated one (`shekyl-ffi` enables that
+/// feature in its normal graph and cargo unifies features), so it would have
+/// shipped in the production archive. Going through serde keeps tests unable
+/// to do anything a C++ caller could not.
+fn enc_field_fixture(bytes: [u8; 9]) -> EncryptedOutputField {
+    serde_json::from_str(&format!("\"{}\"", hex::encode(bytes))).expect("fixture hex is valid")
+}
+
 fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
         amount: AtomicUnits::from_raw(amount),
         commitment_mask: [21u8; 32],
-        enc_amount: EncryptedOutputField::from_bytes_for_tests([0u8; 9]),
-        enc_label: EncryptedOutputField::from_bytes_for_tests([0u8; 9]),
+        enc_amount: enc_field_fixture([0u8; 9]),
+        enc_label: enc_field_fixture([0u8; 9]),
     }
 }
 

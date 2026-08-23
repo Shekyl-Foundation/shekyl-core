@@ -105,7 +105,16 @@ use crate::CryptoError;
 ///    non-test caller is the C++ `construct_tx*` chain, which has had no
 ///    production caller since `wallet2` was deleted and dies with the
 ///    consensus-oracle harness; this impl dies with it.
-/// 3. `from_bytes_for_tests`, gated on `feature = "test-utils"`.
+///
+/// That is the whole list. There is deliberately **no** test-only byte
+/// constructor: `feature = "test-utils"` would not have gated one, because
+/// `shekyl-ffi` enables that feature in its *normal* dependency graph and
+/// cargo unifies features across it — this crate's own `Cargo.toml` says so
+/// and adds "do not treat this feature flag as the gate" (FOLLOWUPS F-7 tracks
+/// the structural fix). A constructor behind it would have shipped in the
+/// production archive, which is exactly the state this type exists to prevent.
+/// Tests build fixtures through `Deserialize`, so they can do nothing a C++
+/// caller could not.
 ///
 /// The bytes are public wire data — ciphertext, not key material — so this is
 /// deliberately not `Zeroize`; the secrets it is derived from are wiped by
@@ -150,15 +159,6 @@ impl EncryptedOutputField {
     /// leaves `Deserialize` as the only way to spend it, so the escape is one
     /// visible act at a boundary rather than a function any crate can call.
     const fn from_ffi_json_unverified(bytes: [u8; 9]) -> Self {
-        Self(bytes)
-    }
-
-    /// Build a fixture value from arbitrary bytes. Test-only, and named to say
-    /// so, per this crate's `test-utils` convention: a value that never went
-    /// through encryption must not be constructible in a production build.
-    #[cfg(feature = "test-utils")]
-    #[must_use]
-    pub const fn from_bytes_for_tests(bytes: [u8; 9]) -> Self {
         Self(bytes)
     }
 }
@@ -2579,7 +2579,9 @@ mod tests {
         // pinned here rather than asserted. `shekyl_sign_fcmp_transaction`
         // parses this from C++-produced JSON; a changed encoding would be a
         // silent break of a live boundary.
-        let f = EncryptedOutputField::from_bytes_for_tests([
+        // Private constructor, reachable here because `mod tests` is a child
+        // of this module — not an API any other crate can call.
+        let f = EncryptedOutputField::from_ffi_json_unverified([
             0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xfe, 0xff,
         ]);
         let json = serde_json::to_string(&f).unwrap();
