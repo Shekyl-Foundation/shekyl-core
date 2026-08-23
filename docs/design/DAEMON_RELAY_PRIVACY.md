@@ -14098,6 +14098,26 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 
 ### 89.8.4 The embargo is landed and, on the anonymity zone, unreachable
 
+> **NOTED 2026-08-23 — the arming gap is now load-bearing in a second way.**
+> This section records that no anonymity embargo is armed. That is a
+> prerequisite for landing a measured transit constant, and it is also the
+> **sole reason two separate latent defects are not live**:
+>
+> 1. §89.8.2's premise — a transaction entering an anonymity stem completing it
+>    there — whose constant says it *"becomes live when the txpool gains an
+>    origin zone."*
+> 2. The shipped interim hop sits **0.6 ms** from an embargo resonance
+>    (1625 + 125.4 = 1750.4 ms; resonances at n·250 + 1). One further
+>    millisecond of hop moves its embargo 499 -> 510 s. See
+>    `derive::resonance_clearance_ms`.
+>
+> **So arming is not merely a gate on one number — it is the event that
+> converts several recorded latencies into behaviour at once.** Whatever commit
+> closes the gap exercises everything currently filed as *inert, recorded*, in
+> the same change. That argues for auditing the full set of "inert" entries as
+> part of the arming work rather than discovering them one at a time
+> afterwards.
+
 Stating the composite plainly, because each of the three findings above hides it
 and the review round is where it should be visible:
 

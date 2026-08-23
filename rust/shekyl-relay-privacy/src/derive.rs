@@ -276,6 +276,22 @@ pub fn derive_embargo(
 /// move the embargo **+12 s** for a 1 ms hop change, against +4-5 s at
 /// neighbouring values; half-resonances at 376, 626, 876, 1126 move it +5 s.
 ///
+/// # Why the grid is 250 ms, and what coarsening the tick would cost
+///
+/// [`crate::schedule::DEFAULT_EMBARGO_TICK_MILLIS`] is 250 for a reason that
+/// has nothing to do with resonances: the inherited embargo ticked in **whole
+/// seconds**, which is too coarse against a stem completing in ~700 ms — at a
+/// one-second tick, *fires within the first tick* collapses to *fires at zero*,
+/// and a measurable share of draws preempt instantly for no reason but
+/// rounding.
+///
+/// **That choice also made the resonance grid four times denser.** Anyone
+/// proposing to coarsen the tick for efficiency is proposing to quadruple the
+/// spacing between resonances — which sounds like an improvement and is not:
+/// it re-breaks the instant-preemption problem 250 ms was chosen to fix, and
+/// moves every shipped hop onto a different grid. The two effects pull opposite
+/// ways and the discretization one is the reason the constant exists.
+///
 /// # Why this is exported rather than left as a comment
 ///
 /// **A sensitivity table built by interpolating [`derive_embargo`] is wrong
