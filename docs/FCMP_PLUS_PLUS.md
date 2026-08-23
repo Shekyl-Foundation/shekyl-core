@@ -1759,11 +1759,17 @@ serialized immediately after `enc_amounts` and before `outPk`:
   device mode~~ — **the guard was deleted with its host, 2026-08-22, and
   nothing replaced it.** No live coverage was lost: `genRctFcmpPlusPlus` had
   no caller, so the check was unreachable and enforced nothing. But the
-  invariant it *stated* is real — an all-zero `enc_label` is trivially
-  distinguishable, which the §5.7.10 indistinguishability requirement forbids
-  — and the Rust signing path takes `enc_label` as a plain `[u8; 9]`
-  (`shekyl-tx-builder/src/types.rs`) with no zero-check. Filed in
-  `FOLLOWUPS.md`; recorded here rather than dropped, because a deletion that
+  invariant it *stated* is real, though not for the obvious reason. An all-zero
+  *plaintext* is harmless — `0x00…00 XOR k_label[..8]` is uniform, so §5.7.10
+  holds for it as for the sentinel. What the guard was catching is the stub
+  writing the field **without encrypting it at all**
+  (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
+  the label encryption), which puts a literal `00×9` on the wire, identical
+  across every output, with `label_tag` zero where a derived tag is uniform.
+  The Rust signing path takes `enc_label` as a plain `[u8; 9]`
+  (`shekyl-tx-builder/src/types.rs`), so an unencrypted value is representable
+  there too. Filed in `FOLLOWUPS.md` with a type-level fix rather than a
+  zero-check; recorded here rather than dropped, because a deletion that
   retires an unreachable check must not also retire the invariant silently.
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.

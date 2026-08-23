@@ -47,28 +47,45 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Nothing rejects an all-zero `enc_label` on the production signing path**
-  (surfaced 2026-08-22 while deleting the legacy prove seam). The only stated
-  enforcement was in `genRctFcmpPlusPlus`, which rejected all-zero
-  `enc_labels` outside fake/test device mode — "the stub builder must not
-  reach production". That function had **no caller**, so the guard was
-  unreachable and enforced nothing; deleting it lost no live coverage, and
-  this item exists so the *invariant* is not retired along with the dead check.
+- **Nothing forces an `enc_label` through encryption on the production signing
+  path** (surfaced 2026-08-22 while deleting the legacy prove seam). The only
+  stated enforcement was in `genRctFcmpPlusPlus`, which rejected all-zero
+  `enc_labels` outside fake/test device mode — "the stub builder must not reach
+  production". That function had **no caller**, so the guard was unreachable
+  and enforced nothing; deleting it lost no live coverage, and this item exists
+  so the *invariant* is not retired along with the dead check.
 
-  The invariant is privacy-relevant, not hygiene: `SUBADDRESS_UNDER_PQC.md`
-  §5.7.10 requires `enc_label` octets to be computationally indistinguishable
-  from random, and an all-zero label is trivially distinguishable — it would
-  mark its outputs to any observer. The Rust signing path takes `enc_label` as
-  a plain `[u8; 9]` (`shekyl-tx-builder/src/types.rs`, consumed by
-  `sign.rs`), so a zeroed label is representable and unrejected.
+  **State the hazard precisely, because the obvious reading is wrong.** An
+  all-zero *plaintext* is harmless: `enc_label = 0x00…00 XOR k_label[..8]` =
+  `k_label[..8]`, which is uniform, so §5.7.10 holds for it exactly as for the
+  `0xFF…` sentinel — "XOR of a constant with a uniform key is uniform" covers
+  every fixed plaintext. Nothing about the keying is weak either, and there is
+  no IV to be weak: `k_label` is a **one-time per-output key**
+  (`HKDF-Expand(prk, "shekyl-output-label-key" || idx_le64, 32)` over a
+  `combined_ss` produced by that output's own KEM encapsulation), so keystream
+  reuse would need two outputs sharing both secret and index.
 
-  Two candidate shapes, to be chosen when this is taken up rather than now: a
-  refusal at the builder boundary, or — better, per
-  [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc) — a type
-  that cannot hold the stub value, so the check is structural instead of a
-  runtime test that a future path can bypass. **Target: V3.0** (pre-genesis;
-  a privacy invariant with no enforcement is exactly what
-  [`00-mission`](../.cursor/rules/00-mission.mdc) ranks above convenience).
+  The hazard is a path that writes the field **without encrypting it at all**.
+  `fill_construct_tx_rct_stub` resizes `enc_labels` to value-initialized
+  `std::array<uint8_t, 9>` and never calls the label encryption, so its outputs
+  carry a literal `00×9` — identical across every output and every transaction,
+  and with the `label_tag` byte zero where a derived tag would be uniform.
+  That is trivially distinguishable, and it marks precisely the outputs it
+  touches. The Rust signing path takes `enc_label` as a plain `[u8; 9]`
+  (`shekyl-tx-builder/src/types.rs`, consumed by `sign.rs`), so an unencrypted
+  value is representable there too.
+
+  **Therefore do not fix this by rejecting zeros.** A zeroed field is one
+  symptom; a check for it still admits any other unencrypted constant, and
+  rejects a legitimate ciphertext that happens to be zero (probability 2⁻⁶⁴,
+  but a refusal that can fire on a valid transaction is worse than the bug).
+  The fix is type-level per
+  [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc): a wire
+  type whose only constructor is `encrypt_label_plaintext`, so bytes that never
+  passed through the encryption are unrepresentable rather than merely
+  detected. **Target: V3.0** (pre-genesis; §5.7.10 is a privacy invariant with
+  no enforcement, and [`00-mission`](../.cursor/rules/00-mission.mdc) ranks
+  that above convenience).
 
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the
