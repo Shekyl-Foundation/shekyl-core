@@ -110,7 +110,9 @@ impl ReplArgs {
 /// The daemon connection this invocation opens: where it dials, and how the
 /// transport that dials it resolves a hostname under `--proxy` — which is
 /// what decides whether the DNS-leak half of the disclosure is true of it.
-struct Daemon {
+/// Named for the endpoint, not the daemon: the `daemon` module beside it
+/// holds the client that dials this.
+struct DaemonEndpoint {
     address: String,
     resolution: ProxyResolution,
 }
@@ -127,10 +129,16 @@ enum Endpoints {
     /// REPL additionally opens its own daemon client, so it carries a
     /// daemon; a scripted run opens no daemon of its own and therefore
     /// never consults `--network`.
-    External { url: String, daemon: Option<Daemon> },
+    External {
+        url: String,
+        daemon: Option<DaemonEndpoint>,
+    },
     /// The default: a wallet-RPC server hosted in this process, scanning
     /// over its own daemon connection.
-    SelfHosted { network: Network, daemon: Daemon },
+    SelfHosted {
+        network: Network,
+        daemon: DaemonEndpoint,
+    },
 }
 
 impl Endpoints {
@@ -150,8 +158,8 @@ impl Endpoints {
         } else {
             ProxyResolution::AlwaysRemote
         };
-        let daemon = |cli: &ReplArgs| -> Result<Daemon, String> {
-            Ok(Daemon {
+        let daemon = |cli: &ReplArgs| -> Result<DaemonEndpoint, String> {
+            Ok(DaemonEndpoint {
                 address: cli.daemon_address()?,
                 resolution,
             })
@@ -169,7 +177,7 @@ impl Endpoints {
     }
 
     /// The daemon this run dials, if it dials one.
-    fn daemon(&self) -> Option<&Daemon> {
+    fn daemon(&self) -> Option<&DaemonEndpoint> {
         match self {
             Self::External { daemon, .. } => daemon.as_ref(),
             Self::SelfHosted { daemon, .. } => Some(daemon),
@@ -209,10 +217,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// disclosed; a scripted run against an external server opens no daemon of
 /// its own ([`Endpoints`]) and says nothing about one.
 ///
-/// Called after the session is built, so what is said is about an endpoint
-/// this run will use: the self-hosted server has validated the daemon
-/// endpoint by then and a refused address is never announced (the same
-/// order `shekyl-wallet-rpc` keeps in `run_server`).
+/// Called after the session is built and before the REPL's daemon client:
+/// what is said is what this run is *configured to dial*, said while the
+/// operator can still fix it (rule 82). The session comes first so that an
+/// address the session itself refused is never announced — the self-hosted
+/// server validates the daemon endpoint as it starts, the same order
+/// `shekyl-wallet-rpc` keeps in `run_server`. The REPL's `DaemonClient`
+/// comes after, deliberately: it can fail for reasons that are not the
+/// endpoint's (an unusable `--proxy` or `--daemon-ca-cert`), and such a
+/// failure reports itself without retracting what the configured address
+/// would expose — a disclosure withheld until every dial succeeded would
+/// go missing exactly when a misconfigured run most needs it.
 fn disclose_network_posture(cli: &ReplArgs, endpoints: &Endpoints) {
     // The module says what is true; this binary says it on stderr, where
     // the operator who typed the flag is looking.

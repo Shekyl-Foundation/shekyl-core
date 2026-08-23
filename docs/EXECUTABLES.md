@@ -171,7 +171,7 @@ shekyl-cli [options]
 |--------|-------------|
 | `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
 | `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
-| `--network <type>` | `mainnet` (default), `testnet`, or `stagenet`. Ignored with `--rpc-url` |
+| `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
 | `--engine-dir <path>` | Directory for wallet files (default `.`). Ignored with `--rpc-url` |
 | `--engine-file <name>` | Open a wallet immediately on startup |
 | `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |

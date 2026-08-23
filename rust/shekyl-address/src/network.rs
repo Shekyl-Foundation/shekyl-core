@@ -256,13 +256,19 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/cryptonote_config.h");
         let text = std::fs::read_to_string(&header)
             .unwrap_or_else(|e| panic!("{}: {e}", header.display()));
+        // Every line that *assigns* RPC_DEFAULT_PORT, whatever the spacing
+        // and whatever follows the `;`. Lines that only name the constant —
+        // the struct field declaration and the initialisers that read it —
+        // have no `=` on the left of the name and are skipped, so this
+        // collects declarations and not references.
         let declared: Vec<u16> = text
             .lines()
             .filter_map(|line| {
-                let value = line
-                    .trim()
-                    .strip_prefix("uint16_t const RPC_DEFAULT_PORT = ")?;
-                value.strip_suffix(';')?.parse().ok()
+                let (lhs, rhs) = line.split_once('=')?;
+                if !lhs.contains("RPC_DEFAULT_PORT") {
+                    return None;
+                }
+                rhs.split(';').next()?.trim().parse::<u16>().ok()
             })
             .collect();
         assert_eq!(
@@ -272,7 +278,11 @@ mod tests {
                 Network::Testnet.daemon_rpc_port(),
                 Network::Stagenet.daemon_rpc_port(),
             ],
-            "mainnet, testnet, stagenet: the header's declaration order"
+            "the header declares {declared:?} in order (mainnet, testnet, \
+             stagenet). A different value is drift: fix whichever side is \
+             wrong. A different *count* means the header gained or lost a \
+             network, which this table and `Network` have to gain or lose \
+             with it — the wallet cannot dial a network it cannot name."
         );
     }
 }
