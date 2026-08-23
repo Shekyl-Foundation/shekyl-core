@@ -634,13 +634,13 @@ pub mod inherited {
     /// Windows an epoch of `min_epoch_secs` affords at the slowest noise
     /// cadence (`NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`).
     ///
-    /// Integer division: one second under [`carrier::MAX_FRAGMENTS`] `*
+    /// Integer division: one second under [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS) `*
     /// per_send` drops a whole window. A full-size message that still
     /// occupies a window when the epoch rolls is discarded by CV-1 and never
     /// arrives.
     ///
     /// This is the **ceiling** the fragment cap must stay under, not the cap's
-    /// definition — see [`carrier::MAX_FRAGMENTS`], which the inherited value
+    /// definition — see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS), which the inherited value
     /// was silently set equal to.
     #[must_use]
     pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {

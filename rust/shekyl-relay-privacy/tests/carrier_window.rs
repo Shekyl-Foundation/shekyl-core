@@ -135,3 +135,33 @@ fn the_cap_stays_under_both_ceilings() {
         shekyl_levin::DEFAULT_MAX_PACKET_SIZE,
     );
 }
+
+/// Every populated verify-cost cell carries the message size its shape really
+/// produces.
+///
+/// `VerifyCell::msg_bytes` is what `f_ms` computes the node-crypto term from,
+/// and it is pinned in a crate that cannot reach the wire model — so this is
+/// the only place the pin can be checked against the thing it claims to
+/// describe. Without it, `msg_bytes` is exactly the ungrounded literal this
+/// whole change exists to remove, one field along.
+///
+/// What edit reds this: changing any cell's `msg_bytes`, or a proof-size /
+/// envelope change that moves a shape's real size.
+#[test]
+fn every_verify_cell_carries_its_shapes_real_message_size() {
+    use shekyl_relay_privacy::verify_cost::SPEC_VERIFY_COST;
+
+    let mut checked = 0;
+    for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
+        let real = message_bytes(n_in, 2, u8::try_from(depth).expect("table depth is small"));
+        assert_eq!(
+            usize::try_from(cell.msg_bytes).expect("pinned size is small"),
+            real,
+            "verify-cost cell ({n_in}, {depth}) pins {} B but the shape really \
+             produces {real} B; f_ms derives its node-crypto term from the pin",
+            cell.msg_bytes,
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
+}

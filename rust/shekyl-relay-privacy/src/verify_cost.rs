@@ -104,6 +104,18 @@ pub struct VerifyCell {
     pub provenance: Provenance,
     /// Which tree the number was measured against.
     pub basis: TreeBasis,
+    /// Wire bytes of the `NOTIFY_NEW_TRANSACTIONS` carrying this shape —
+    /// transaction plus levin envelope.
+    ///
+    /// **Derived, not measured**, and deliberately a separate field from
+    /// [`Self::millis`]: `millis` carries a [`Provenance`], and folding a
+    /// computed term into a measured one would put a synthesized number under
+    /// a `MeasuredPi4` label — the exact confusion `Provenance` exists to
+    /// prevent (§87.2). The node-crypto term is computed from this by
+    /// [`SpecVerifyCost::f_ms`]; the value itself is pinned against
+    /// `predict_size_and_weight` + a real `notify` in
+    /// `tests/carrier_window.rs`.
+    pub msg_bytes: u32,
 }
 
 /// The shallowest tree depth the table covers — the genesis tree.
@@ -173,13 +185,50 @@ pub struct SpecVerifyCost {
     cells: [[Option<VerifyCell>; DEPTH_TIERS]; MAX_TABLE_INPUTS],
 }
 
-const fn pi4(millis: f64, basis: TreeBasis) -> VerifyCell {
+/// The node's own symmetric-crypto cost over a message of `msg_bytes`, on the
+/// floor device.
+///
+/// `const` because [`SpecVerifyCost::f_ms`] is, and that is not incidental:
+/// `f_ms` is consumed in `const` contexts (`spec_decision_matrix.rs` binds its
+/// results to `const` items), so a runtime-only term here would have forced
+/// those to become runtime lookups.
+///
+/// The cast is exact: `msg_bytes` is a `u32` and every value below `2^53` is
+/// representable in `f64`. `f64::from` would be the idiomatic form but is not
+/// `const`.
+#[must_use]
+#[allow(clippy::cast_lossless)]
+pub const fn node_crypto_ms(msg_bytes: u32) -> f64 {
+    msg_bytes as f64 * NODE_CRYPTO_PASSES / PI4_AES_BYTES_PER_SEC * 1_000.0
+}
+
+const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
     VerifyCell {
         millis,
         provenance: Provenance::MeasuredPi4,
         basis,
+        msg_bytes,
     }
 }
+
+/// Passes an emitted message's bytes take through symmetric crypto on the
+/// node's own hop — Tor cell layer plus TLS, counted in BOTH directions with
+/// slack.
+pub const NODE_CRYPTO_PASSES: f64 = 10.0;
+
+/// MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
+/// 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in 1000s
+/// of bytes per second"; the 8 KB-block figure was `138993.66k`, so
+/// `138_993.66 * 1000 = 138_993_660` B/s — used EXACTLY, not rounded to
+/// `0.139e9`. Rounding a measured rate *up* makes the crypto look cheaper,
+/// which is the wrong direction; when this is re-measured, replace the literal
+/// rather than tidying it.
+///
+/// The Cortex-A72 has NO ARMv8 crypto extension (cpuinfo Features:
+/// `fp asimd evtstrm crc32 cpuid` — no aes), so this is software AES, ~94×
+/// slower than the x86 reference. An earlier draft ASSUMED hardware AES and
+/// bounded it at 0.8 GB/s; the floor measurement (§94.9) refuted that by 5.8×.
+pub const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 
 /// A populated cell must be a plausible per-hop verification cost: positive,
 /// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
@@ -227,17 +276,42 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];
     let mut cells = [EMPTY_ROW; MAX_TABLE_INPUTS];
     // n_in = 1 (the modal shape): genesis and depth-7 endpoints.
-    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection));
+    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_122));
+    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 15_554));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection));
+    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 59_348));
+    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 63_765));
     SpecVerifyCost { cells }
 };
 
 impl SpecVerifyCost {
-    /// The verification-cost term of `hop` for a transaction of `n_in` inputs
+    /// The **node-local** term of `hop` for a transaction of `n_in` inputs
     /// against a tree of the given depth, in milliseconds — or a refusal.
+    ///
+    /// # Two terms, one axis (2026-08-23)
+    ///
+    /// This is FCMP++ verification **plus the node's own Tor/TLS crypto over
+    /// the emitted message**. The second used to be tracked separately as a
+    /// "fourth hop term" that had to be shown negligible. It is not a fourth
+    /// axis: node-crypto cost scales with message size, message size is a
+    /// function of `(n_in, depth)`, and this function is already a function of
+    /// exactly those. Folding it in **removes the negligibility question**
+    /// rather than answering it — there is no longer a fraction to compare
+    /// against a bar.
+    ///
+    /// The two terms keep separate provenance: [`VerifyCell::millis`] is
+    /// measured on the spec machine, [`VerifyCell::msg_bytes`] is derived from
+    /// the wire model, and only the sum crosses here. Use
+    /// [`Self::verify_only_ms`] for the measured half alone.
+    ///
+    /// # This does NOT price the crypto term across the admissible range
+    ///
+    /// The table refuses past [`MAX_TABLE_DEPTH`] (7) while transactions are
+    /// admissible to `MAX_TREE_DEPTH` (24), so folding a term into this
+    /// function puts it behind the same refusal. That is Option D's
+    /// table-refuses-past-its-edge design working as ruled — but "folded into
+    /// `f_ms`" must not be read as "priced across every shape the consensus
+    /// admits". It is priced exactly where the table answers.
     ///
     /// # Errors
     ///
@@ -245,6 +319,28 @@ impl SpecVerifyCost {
     /// [`VerifyCostRefusal`] for why each refusal is the correct answer and
     /// what harm a fallback would do (§83.3, §87.3).
     pub const fn f_ms(&self, n_in: usize, depth: u32) -> Result<f64, VerifyCostRefusal> {
+        if n_in < 1 || n_in > MAX_TABLE_INPUTS {
+            return Err(VerifyCostRefusal::InputCountOutsideDomain { n_in });
+        }
+        if depth < GENESIS_TREE_DEPTH || depth > MAX_TABLE_DEPTH {
+            return Err(VerifyCostRefusal::DepthOutsideTable { depth });
+        }
+        match self.cells[n_in - 1][(depth - GENESIS_TREE_DEPTH) as usize] {
+            Some(cell) => Ok(cell.millis + node_crypto_ms(cell.msg_bytes)),
+            None => Err(VerifyCostRefusal::UnpopulatedCell { n_in, depth }),
+        }
+    }
+
+    /// The **measured** half of [`Self::f_ms`] alone — FCMP++ verification
+    /// without the derived node-crypto term.
+    ///
+    /// Exists so a caller that needs the measurement can have it without the
+    /// computation mixed in; `f_ms` is what `hop` composes from.
+    ///
+    /// # Errors
+    ///
+    /// Same refusals as [`Self::f_ms`].
+    pub const fn verify_only_ms(&self, n_in: usize, depth: u32) -> Result<f64, VerifyCostRefusal> {
         if n_in < 1 || n_in > MAX_TABLE_INPUTS {
             return Err(VerifyCostRefusal::InputCountOutsideDomain { n_in });
         }
@@ -531,102 +627,114 @@ mod tests {
     /// crossing). Same value, different provenance — which is the entire
     /// point of the landing. If a table cell or the transit assumption
     /// moves, this pin moves with the §80.2 price list, deliberately.
+    ///
+    /// **2026-08-23: the tail endpoint moved 449 -> 453**, and the modal one
+    /// did not move at all. Folding the node-crypto term into `f_ms` adds
+    /// 0.94 ms at the modal shape (175.44, still 175) and 4.26 ms at the
+    /// 8-input shape (453.46, was 449.2). The modal pin surviving is not luck
+    /// — it is the same fact the fold rests on: the crypto term scales with
+    /// message size, so it is small exactly where the message is.
     #[test]
     fn the_adopted_modal_hop_is_the_priced_175() {
         assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(175));
-        // And the tail endpoint at genesis, for the same reason: 399.2 + 50.
-        assert_eq!(adopted_hop_ms(8, GENESIS_TREE_DEPTH), Ok(449));
+        // And the tail endpoint at genesis: 399.2 + 50 + 4.26 ms node crypto
+        // over that shape's 59,348 B message.
+        assert_eq!(adopted_hop_ms(8, GENESIS_TREE_DEPTH), Ok(453));
     }
 
-    /// §94.9: the fourth `hop` term — the node's own Tor/TLS/circuit crypto —
-    /// is ruled negligible using a **measured floor rate**, taken on the
-    /// reference Pi 4 (`skl-pi`). This arms that ruling: it goes RED if the
-    /// model, the message size, or the floor rate ever drifts the per-hop node
-    /// crypto toward the hop, forcing a re-examination instead of letting a
-    /// stale "negligible" stand.
+    /// The node-crypto term is INSIDE [`SpecVerifyCost::f_ms`], and this pins
+    /// that it is — replacing the negligibility check that used to stand here.
     ///
-    /// The check is deliberately generous on the cost side and conservative on
-    /// the hop side, so passing means negligible under assumptions that favour
-    /// the term, not against it.
+    /// # The test this replaces was mispaired, and the mispairing was invisible
+    ///
+    /// `node_crypto_hop_fraction_is_negligible` compared the **largest**
+    /// message against `f_ms(1, GENESIS_TREE_DEPTH)` — the **cheapest**
+    /// verification — and called that conservative, because a smaller
+    /// denominator makes the fraction larger. But a max-size message comes from
+    /// an 8-input transaction, whose verification is `f_ms(8, ·)`. **The two
+    /// describe a transaction that cannot exist**, and a test whose inputs
+    /// describe an impossible transaction cannot tell you anything about a real
+    /// one.
+    ///
+    /// **It survived review because it was pessimistic.** It reported 5.66 %
+    /// where like-for-like pairing gives 1.07 % — a worse number than reality,
+    /// which is the direction nobody double-checks. A conservative-looking
+    /// wrong oracle is harder to catch than an optimistic one, and that is the
+    /// generalisable half of this defect.
+    ///
+    /// # Why there is no bar here now
+    ///
+    /// Node-crypto cost scales with message size; message size is a function of
+    /// `(n_in, depth)`; `f_ms` is already a function of exactly those. Folding
+    /// the term in **removes the question** rather than answering it — there is
+    /// no separate fraction left to compare against a threshold. What this test
+    /// asserts instead is that the fold actually happened.
+    ///
+    /// What edit reds this: making `f_ms` return `cell.millis` alone.
     #[test]
-    fn node_crypto_hop_fraction_is_negligible() {
-        // Generous per-message symmetric-crypto model: 3 onion AES layers + the
-        // per-cell running digest + the node<->guard TLS record layer, counted
-        // in BOTH directions, with slack — 10 passes over the message bytes.
-        const PASSES: f64 = 10.0;
-        // MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
-        // 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in
-        // 1000s of bytes per second"; the 8 KB-block figure was `138993.66k`, so
-        // 138_993.66 * 1000 = 138_993_660 B/s — used EXACTLY, not rounded to
-        // 0.139e9. Rounding a measured rate *up* makes the crypto look cheaper
-        // and the guardrail weaker, which is the wrong direction for a bound
-        // whose whole job is to fail safe; when this is re-measured, replace the
-        // literal rather than tidying it.
-        //
-        // The Cortex-A72 has NO ARMv8 crypto extension (cpuinfo Features:
-        // `fp asimd evtstrm crc32 cpuid` — no aes), so this is software AES,
-        // ~94x slower than the x86 reference. An earlier draft ASSUMED hardware
-        // AES and bounded it at 0.8 GB/s; the floor measurement (§94.9) refuted
-        // that by 5.8x. Decimal-GB is called out because the 1% bar is tight
-        // enough for a GiB-vs-GB slip (7.4%) to matter.
-        const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
+    fn f_ms_carries_the_node_crypto_term_not_just_the_measurement() {
+        for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
+            let total = SPEC_VERIFY_COST.f_ms(n_in, depth).expect("populated");
+            let measured = SPEC_VERIFY_COST
+                .verify_only_ms(n_in, depth)
+                .expect("populated");
+            assert!(
+                total > measured,
+                "f_ms({n_in}, {depth}) returned {total} ms and verify_only_ms                  returned {measured} ms — the node-crypto term is not in the sum"
+            );
+            let delta = total - measured;
+            let expected = node_crypto_ms(cell.msg_bytes);
+            // Relative, not absolute: `f_ms` sums in a different association
+            // order than this test does, so the two differ in the last ulp.
+            assert!(
+                (delta - expected).abs() <= expected * 1e-12,
+                "f_ms({n_in}, {depth}) adds {delta} ms of crypto but the cell's                  {} B message implies {expected} ms",
+                cell.msg_bytes
+            );
+        }
+    }
 
-        // The max-admissible transaction's NOTIFY size (§94.5(b)) — an EMPIRICAL
-        // worst-case message, not a protocol constant, and it deliberately is not
-        // imported from `shekyl-tor-transit-spike` (a disposable spike this
-        // foundational crate must not depend on, rule 25). Because it is not
-        // canonical, a change to it is a §94.9-revisit trigger, and the check
-        // below makes that dependency explicit rather than silent: it asserts the
-        // size sits below the point where the fraction would breach the bar, and
-        // reports the headroom, so a size increase reds this for the right reason.
-        // A byte COUNT, so it is an integer type — `f64` here would invite a
-        // fractional byte and blurs count-vs-rate. Converted once, at the
-        // arithmetic site.
-        const MAX_ADMISSIBLE_MSG_BYTES: u32 = 16_651;
-        let msg_bytes = f64::from(MAX_ADMISSIBLE_MSG_BYTES);
-
-        let node_crypto_ms = (msg_bytes * PASSES) / PI4_AES_BYTES_PER_SEC * 1_000.0;
-
-        // Compare against the SMALLEST possible hop: the genesis verify floor
-        // alone (transit >= 0). Using the minimum hop makes the fraction as
-        // large as it can honestly be.
-        let min_hop_ms = SPEC_VERIFY_COST.f_ms(1, GENESIS_TREE_DEPTH).unwrap();
-
-        // 1% is the negligibility bar, checked against the SMALLEST possible hop
-        // (verify floor with transit -> 0 — no real anon hop reaches it), which
-        // makes the fraction as large as it can honestly be.
-        //
-        // READ THE TIGHTNESS CORRECTLY: at the max-admissible message this sits
-        // at 0.962% — only ~4% under the bar — and that narrowness is an artifact
-        // of the fictional denominator, NOT of the term nearly mattering. Against
-        // real hops the margin is 5-15x:
-        //
-        //   verify floor only, transit -> 0 (fiction)   0.962%   1.04x
-        //   + measured transit (~500 ms)                0.192%   5.21x
-        //   + 8-input depth-7 verify (~1292 ms)         0.093%  10.78x
-        //   + the 1625 ms transit assumption            0.068%  14.60x
-        //
-        // The strict denominator is deliberate — a bound that only holds against
-        // a generous hop is not a bound — so the bar stays at 1% rather than
-        // being loosened to buy comfort.
-        const BAR: f64 = 0.01;
-        let fraction = node_crypto_ms / min_hop_ms;
-        // The message size at which the fraction would hit the bar. Reporting it
-        // turns "goes red if the message size drifts" from a claim into a number:
-        // the bound tolerates messages up to `breach_bytes`; the max-admissible
-        // sits below it with the headroom printed. A future size past this point
-        // reds the assertion for exactly the intended reason.
-        let breach_bytes = BAR * PI4_AES_BYTES_PER_SEC * (min_hop_ms / 1_000.0) / PASSES;
+    /// The crypto term stays a small fraction of the shape it belongs to — a
+    /// REPORT, not a gate.
+    ///
+    /// Deliberately not an assertion with a threshold. §94.9's bar was
+    /// self-invented, and the fold above removes the question it answered; a
+    /// replacement threshold would re-introduce a knob with no derivation
+    /// behind it. What this pins is the ARITHMETIC — that the term is computed
+    /// per-shape from that shape's own message — so the numbers below cannot
+    /// drift silently even though no bar guards them.
+    ///
+    /// For the record, like-for-like at the four populated cells: 0.75 %,
+    /// 0.78 %, **1.07 %** (8-in at genesis depth, the worst), 0.58 %. The worst
+    /// cell is max-inputs-at-min-depth because verification grows faster with
+    /// depth than message size does, so the cheapest verification pairs with an
+    /// already-large message — and it is a shape that exists today.
+    ///
+    /// What edit reds this: changing `NODE_CRYPTO_PASSES`,
+    /// `PI4_AES_BYTES_PER_SEC`, or any cell's `msg_bytes` without updating the
+    /// bounds below.
+    #[test]
+    fn the_node_crypto_fraction_is_reported_per_shape() {
+        let mut worst: (usize, u32, f64) = (0, 0, 0.0);
+        for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
+            let measured = SPEC_VERIFY_COST
+                .verify_only_ms(n_in, depth)
+                .expect("populated");
+            let fraction = node_crypto_ms(cell.msg_bytes) / measured;
+            if fraction > worst.2 {
+                worst = (n_in, depth, fraction);
+            }
+        }
+        assert_eq!(
+            (worst.0, worst.1),
+            (8, GENESIS_TREE_DEPTH),
+            "the worst crypto fraction should be max-inputs at min-depth"
+        );
         assert!(
-            msg_bytes < breach_bytes,
-            "§94.9: at {MAX_ADMISSIBLE_MSG_BYTES} B the per-hop node crypto is \
-             {node_crypto_ms:.3} ms = {:.3}% of the {min_hop_ms:.1} ms minimum hop, \
-             at/over the {}% bar (breach at {breach_bytes:.0} B). The max message \
-             grew past what the negligibility bound tolerates — revisit §94.9 (or \
-             measure the term end-to-end on the floor device) before it composes \
-             into a shipped hop.",
-            fraction * 100.0,
-            BAR * 100.0
+            (0.0105..0.0110).contains(&worst.2),
+            "worst-cell crypto fraction is {:.4} — outside the recorded \
+             1.07 % band, so the arithmetic moved",
+            worst.2
         );
     }
 }

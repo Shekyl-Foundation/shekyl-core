@@ -8485,6 +8485,20 @@ per tick. Today's design spends its bandwidth on **granularity** rather than
 capacity. And the adopted 12.5 s point delivers 2.72 KiB/s against a 2.06 KiB/s
 requirement: **32 % more than "cover everything" needs.**
 
+> **The basis moved, and the conclusion strengthens (2026-08-23).** §42.1's
+> 4.3× was priced at ~8 KiB per transaction. The real modal is **13,042 B**
+> (§94.5(b)'s correction), 1.55× larger, so fluff is **~6.7×** over the
+> inherited carrier rather than 4.3×. That figure is quoted in the retirement
+> argument for fluff-over-carrier; the argument gets stronger, but a quoted
+> number with a stale basis is the shape this arc has now corrected eleven
+> times, so it is corrected here rather than left to be re-derived.
+>
+> The window in the table above is **superseded**: it is sized at 17 KiB, and
+> the derived value is **20,480 B** (`carrier::WINDOW_BYTES`) — the modal
+> transaction at `MAX_TREE_DEPTH` plus its levin envelope plus margin.
+> Bandwidth moves 2.72 → 3.20 KiB/s and the Tor figure 0.27 → 0.32 %, both
+> still far under axis 2's ceiling.
+
 **So the wire-observer recall cell returns to zero for ALL traffic**, and
 §42.4's conceded activity signal closes. The narrowing is not repaired — its
 premise is gone. §42.4 is kept above rather than rewritten, because a reader who

@@ -261,9 +261,11 @@ wallet can ask rather than guess.
 
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
-180 KiB/s circuit-throughput floor. The 17 KiB / 12.5 s design sits at
-**2.72 KiB/s** — a 3× margin, so the ceiling constrains a future cadence proposal
-without constraining this one, which is the right shape for a ceiling.
+180 KiB/s circuit-throughput floor. The derived 20,480 B / 12.5 s design sits at
+**3.20 KiB/s** — a 2.5× margin, so the ceiling constrains a future cadence
+proposal without constraining this one, which is the right shape for a ceiling.
+*(Updated 2026-08-23 from 17 KiB / 2.72 KiB/s when the window was derived rather
+than chosen; the ceiling itself is unchanged.)*
 
 > **Units, stated once because this section mixes bases legitimately.** Byte
 > rates here are **binary** (`KiB/s` = 1024 B/s) — the windows are byte slots
@@ -350,6 +352,33 @@ residual wait is all that remains.
 | --- | --- | --- | --- |
 | 8.4 KiB | whole (`n = 1`) | 2 fragments | **stays** |
 | **17 KiB (adopted)** | whole (`n = 1`) | whole (`n = 1`) | **deletes** |
+
+> **CORRECTED 2026-08-23 — the conclusion survives, the justification does
+> not, and the number moved.** This table was computed on two sizes that were
+> never grounded (§94.5(b)'s correction): no transaction the wire admits
+> produces 8,395 B or 16,651 B. Three consequences:
+>
+> 1. **The 8.4 KiB option is dead on arrival, not a close second.** The
+>    smallest possible transaction is 13,042 B, so an 8.4 KiB window gives
+>    `n >= 2` for **every transaction that can exist** — there is no `n = 1`
+>    case to trade against, and the 2× comparison below had no subject.
+> 2. **The machinery does NOT delete.** At any window sized for the modal
+>    shape, the 8-input tail still fragments (4–5 windows), so
+>    `MAX_FRAGMENTS`, CV-1's discard, epoch-miss and the in-flight remainder
+>    all keep their subject. The "five mechanisms with a defect history"
+>    argument below is **withdrawn** — it was the justification for paying 2×,
+>    and it does not apply.
+> 3. **The window is 20,480 B, not 17 KiB.** 17,408 left only 398 B over the
+>    modal-at-max-depth transaction *before* its levin envelope; the envelope
+>    is 77 B and steps with the length varint, so the window would have
+>    silently flipped to `n = 2` as the curve tree deepened. The derived value
+>    is `carrier::WINDOW_BYTES`, enforced by `tests/carrier_window.rs`.
+>
+> **What survives is the `n = 1` conclusion, for the latency reason it always
+> had**: at `n = 1` only the residual wait remains, so a window that holds the
+> modal transaction whole beats a smaller one at equal bandwidth. The fragment
+> cap carries the structural max separately (`carrier::MAX_FRAGMENTS = 5`) —
+> two constants, two jobs.
 
 **17 KiB is adopted, and the justification is a track record rather than a
 preference.** `CRYPTONOTE_MAX_FRAGMENTS`, CV-1's discard-on-rebind, the

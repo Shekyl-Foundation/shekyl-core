@@ -156,8 +156,16 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*
 /// — and it survives the switch from the scaled stand-ins to the spec
 /// machine's own cells, which is why §80.3's choice does not move with it.
+/// **Re-priced 2026-08-23** when the node-crypto term folded into `f_ms`.
+/// The 1-input column did not move at any transit point; the 8-input column
+/// moved by exactly one second at each. That asymmetry is the fold's own
+/// premise showing up in the output: the crypto term scales with message size,
+/// so it is 0.94 ms at the modal shape's 13,122 B message and 4.26 ms at the
+/// 8-input shape's 59,348 B one. §80.2's "~56 s uncovered across the legal
+/// shape domain" reading is unchanged in substance — the gap between the two
+/// columns moves from 55 s to 56 s at the shipped transit point.
 const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
-    [(25.0, 184, 241), (50.0, 190, 245), (100.0, 198, 250)];
+    [(25.0, 184, 241), (50.0, 190, 246), (100.0, 198, 262)];
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();
