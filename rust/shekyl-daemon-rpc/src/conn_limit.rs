@@ -50,8 +50,10 @@ use axum::serve::Listener;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Per-listener connection caps. `0` means "unlimited" for that dimension,
-/// matching the daemon CLI convention for `--rpc-max-connections*`.
+/// Per-server connection caps — one [`ConnTracker`] for every socket of a
+/// start, so `--rpc-max-connections N` means N, not N per family. `0` means
+/// "unlimited" for that dimension, matching the daemon CLI convention for
+/// `--rpc-max-connections*`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Fields are private: [`ConnLimits::checked`] (or `Default`, all
 /// unlimited) is the only way to build one, so an unchecked cap set cannot
@@ -114,7 +116,8 @@ impl ConnLimits {
     }
 }
 
-/// Shared connection accounting for one listener.
+/// Shared connection accounting for one server — every socket of a start
+/// admits through the same tracker, and `get_info` counts them all.
 ///
 /// Constructed via [`ConnTracker::new`], which returns an `Arc` because the
 /// tracker is shared between the [`LimitedListener`] (admission) and the

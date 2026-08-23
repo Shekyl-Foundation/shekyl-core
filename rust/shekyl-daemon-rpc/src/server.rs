@@ -448,7 +448,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
     }
 }
 
-/// The routed-but-unlayered router for one listener.
+/// The routed-but-unlayered router for one server (every socket of a start).
 ///
 /// Generic over the handler binding **so tests can build the real router**.
 /// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
@@ -561,13 +561,18 @@ pub async fn serve_listeners(
 /// connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
 /// been polled when the signal arrives, which is the ordering that used to
-/// hang `shekyl_daemon_rpc_stop`.
+/// hang `shekyl_daemon_rpc_stop`. An acceptor that fails must not leave the
+/// others serving a half-server until the operator's stop: the first
+/// failure raises an internal stop the healthy acceptors drain on, and is
+/// returned once every acceptor has finished
+/// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
     app: Router,
     conn_tracker: Arc<ConnTracker>,
     listeners: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
     for bound in listeners {
         // The operator's startup line, in the category the daemon shows at
@@ -584,18 +589,37 @@ pub(crate) async fn serve_bound(
         // the one shared tracker.
         let listener = LimitedListener::new(listener, conn_tracker.clone());
         let mut stop = shutdown.clone();
+        let mut fail = fail_rx.clone();
         serves.spawn(
             axum::serve(listener, app.clone())
                 .with_graceful_shutdown(async move {
-                    // Either outcome is a stop: the value turned true, or the
-                    // sender is gone. `wait_for` is level-triggered: a send
-                    // that happened before this future was first polled is
-                    // still observed.
-                    let _signal = stop.wait_for(|&stop| stop).await;
+                    // Either signal is a stop, and either outcome of each is
+                    // too (the value turned true, or its sender is gone).
+                    // `wait_for` is level-triggered: a send that happened
+                    // before this future was first polled is still observed.
+                    tokio::select! {
+                        _signal = stop.wait_for(|&stop| stop) => {}
+                        _signal = fail.wait_for(|&fail| fail) => {}
+                    }
                 })
                 .into_future(),
         );
     }
+    first_error_stops_the_rest(&mut serves, &fail_tx).await
+}
+
+/// Drain a set of acceptors. The first failure — an error, or a task that
+/// panicked or was aborted — raises `stop_rest`, so the healthy acceptors
+/// drain and exit rather than serving a half-server forever; that failure
+/// is returned once every acceptor has finished. No failure: `Ok` once every
+/// acceptor has stopped on the operator's signal.
+pub(crate) async fn first_error_stops_the_rest<E>(
+    serves: &mut tokio::task::JoinSet<Result<(), E>>,
+    stop_rest: &watch::Sender<bool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     let mut first_err: Option<Box<dyn std::error::Error + Send + Sync>> = None;
     while let Some(joined) = serves.join_next().await {
         let failure: Option<Box<dyn std::error::Error + Send + Sync>> = match joined {
@@ -604,7 +628,10 @@ pub(crate) async fn serve_bound(
             Err(join) => Some(Box::new(join)),
         };
         if let Some(e) = failure {
-            first_err.get_or_insert(e);
+            if first_err.is_none() {
+                stop_rest.send_replace(true);
+                first_err = Some(e);
+            }
         }
     }
     first_err.map_or(Ok(()), Err)
@@ -933,7 +960,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::serve_bound;
+    use super::{first_error_stops_the_rest, serve_bound};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -981,6 +1008,36 @@ mod lifecycle_tests {
         .await
         .expect("every acceptor must stop on a signal that preceded it")
         .expect("a clean stop is Ok");
+    }
+
+    /// One acceptor failing must not leave the rest serving a half-server:
+    /// the first failure raises the internal stop, the waiting acceptor
+    /// exits on it, and the failure is returned once both have finished.
+    /// The edit that turns this red is not raising `stop_rest` on the first
+    /// failure — the healthy task then waits forever and the bound fires.
+    #[tokio::test]
+    async fn a_failing_acceptor_stops_the_rest_and_is_reported() {
+        let (fail_tx, fail_rx) = tokio::sync::watch::channel(false);
+        let mut set: tokio::task::JoinSet<Result<(), std::io::Error>> = tokio::task::JoinSet::new();
+        set.spawn(async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Err(std::io::Error::other("acceptor died"))
+        });
+        let mut waits = fail_rx.clone();
+        set.spawn(async move {
+            // The healthy acceptor: ends only when told to.
+            let _signal = waits.wait_for(|&stop| stop).await;
+            Ok(())
+        });
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            first_error_stops_the_rest(&mut set, &fail_tx),
+        )
+        .await
+        .expect("the healthy acceptor must be stopped by the failure")
+        .expect_err("the first failure is reported");
+        assert!(err.to_string().contains("acceptor died"), "{err}");
+        assert!(*fail_rx.borrow(), "the internal stop was raised");
     }
 
     /// The ordinary order, and the other stop: a signal after the acceptors
