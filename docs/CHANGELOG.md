@@ -4,13 +4,41 @@
 
 ### Changed
 
+- **`--daemon-address` says §1's thing at the point of configuration
+  (RT-W7).** A daemon address that is not loopback now draws the operator
+  statement of `RPC_TRANSPORT_POSTURE.md` §1 when the wallet starts —
+  whoever operates that daemon sees which blocks the wallet requests, when,
+  and what it broadcasts; that is what a daemon is told in order to serve,
+  and no proxy or encryption changes it; there is no recommended
+  configuration with a daemon somebody else controls — in `shekyl-cli` (on
+  stderr) and `shekyl-wallet-rpc` (in its log) alike. `--proxy` silences
+  the existing network-path warning, never this one: a proxy hides the
+  path, not the wallet from its daemon. The statement asserts only what an
+  address can say ("is not a loopback address"), so the operator of their
+  own remote node reads it as true of themselves; loopback and unix-socket
+  daemons stay silent, and no configuration draws an assurance. The
+  disclosure module moved from `shekyl-cli` into `shekyl-rpc-transport`
+  (`network_posture`) so both binaries say it in the same words — the
+  outbound twin of the shared `listen` classifier — and it is pure: each
+  binary emits in its own voice. The two sides now share one loopback
+  predicate (`listen::is_loopback_ip`), so `[::ffff:127.0.0.1]` is loopback
+  for a daemon address as it is for a bind; a zone-scoped literal
+  (`fe80::1%eth0`) is a literal, not a name to leak; and bare `socks://`
+  counts as local-resolving, as the dialers that accept it read it.
+  **Also:** both wallets' `--daemon-address` defaults named ports no daemon
+  serves (`localhost:11028`, `http://127.0.0.1:28581`). The flag is now
+  optional and its default follows `--network` — this machine's daemon at
+  that network's RPC port (`Network::daemon_rpc_port`, pinned by a test to
+  the daemon's `cryptonote_config.h`) — so a testnet wallet finds a testnet
+  daemon without the operator knowing the port.
 - **The daemon RPC binds loopback only; `--confirm-external-bind` is
   retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
   spellings) is refused unconditionally — consent to interfaces that do
   not exist yet — and a bind on a specific network address is refused
   because the daemon RPC has no authentication of any kind: every RPC leg
-  is operator-to-operator, and the remote legs are the onion service and
-  the pinned-TLS leg of `RPC_TRANSPORT_POSTURE.md` (RT-4). The refusal
+  is operator-to-operator, and the daemon's remote leg is the onion
+  service or a reverse proxy outside the daemon — the crossing is never
+  the daemon's own socket. The refusal
   lives at the one Rust seam every daemon listener passes through
   (`shekyl-daemon-rpc::bind::bind_listener`, the restricted listener included —
   it had no gate at all), on a strictly parsed address (hostnames are not

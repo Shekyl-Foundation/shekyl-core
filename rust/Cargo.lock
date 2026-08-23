@@ -3800,6 +3800,7 @@ dependencies = [
  "serde_json",
  "shekyl-crypto-pq",
  "shekyl-logging",
+ "shekyl-rpc-transport",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wallet-rpc",
@@ -4682,6 +4683,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "zeroize",
 ]
 

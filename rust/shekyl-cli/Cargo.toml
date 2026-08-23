@@ -14,6 +14,10 @@ path = "src/main.rs"
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
+# The outbound-endpoint disclosure (`network_posture`) and the host extractor
+# `--rpc-url` validation shares with it; already in this binary's graph
+# through shekyl-wallet-rpc.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }

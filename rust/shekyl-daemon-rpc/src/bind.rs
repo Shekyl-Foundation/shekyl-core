@@ -64,8 +64,9 @@ pub fn listen_addrs(
 /// RT-1 / RT-2 for the daemon RPC. Loopback (v4 or v6, mapped forms
 /// included) is the only accepted class: the daemon has no authentication,
 /// so a wildcard or a network address would be an unauthenticated control
-/// surface. The remote legs are the onion service (RT-8) and pinned mutual
-/// TLS (RT-4) — not a cleartext bind.
+/// surface. The daemon's remote leg is the onion service (RT-8) or a
+/// reverse proxy outside the daemon — not a cleartext bind, and not RT-4,
+/// which governs the wallet-RPC leg (L1), not this one.
 pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
     match classify_listen(addr) {
         ListenClass::Loopback => Ok(()),
@@ -76,9 +77,9 @@ pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
         ListenClass::Addressed => Err(format!(
             "refusing to serve the daemon RPC on {addr}: the address is reachable from the \
              network and the daemon RPC has no authentication, so every request would be \
-             honoured. Bind 127.0.0.1 or [::1]; for another machine of yours, reach this \
-             node through its onion service (docs/DAEMON_RPC_RUST.md) — the authenticated \
-             network leg is RPC_TRANSPORT_POSTURE.md RT-4."
+             honoured. Bind 127.0.0.1 or [::1]; to reach this node from another machine \
+             of yours, put the crossing outside the daemon — its onion service, a reverse \
+             proxy, or a forward of this loopback port (docs/DAEMON_RPC_RUST.md)."
         )),
     }
 }
