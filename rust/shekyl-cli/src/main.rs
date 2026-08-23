@@ -12,7 +12,8 @@
 //! There is no wallet2 / FFI path.
 
 use clap::{Parser, Subcommand};
-use shekyl_cli::{commands, daemon, network_posture, prompt_password, rpc_client};
+use shekyl_cli::{commands, daemon, prompt_password, rpc_client};
+use shekyl_rpc_transport::network_posture::{self, ProxyResolution};
 use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
@@ -45,7 +46,7 @@ enum Commands {
 pub struct ReplArgs {
     /// Daemon address the self-hosted wallet RPC connects to
     /// (host:port or full URL). Ignored with --rpc-url.
-    #[arg(long, default_value = "localhost:11028")]
+    #[arg(long, default_value = "127.0.0.1:11029")]
     daemon_address: String,
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
@@ -102,9 +103,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Disclose network exposure for every endpoint this invocation will actually
-/// use — the §15 asymmetric warn-only rule (WI-4 §15, 2026-07-23). Warns on a
-/// clear-network endpoint, silent otherwise, and **never** emits an assurance;
-/// see `network_posture` for why the asymmetry is load-bearing.
+/// use — the §15 asymmetric warn-only rule (WI-4 §15, 2026-07-23) and, for the
+/// daemon, the §1 operator statement (`RPC_TRANSPORT_POSTURE.md`, RT-W7).
+/// Warns on a clear-network endpoint and on a daemon that is not loopback,
+/// silent otherwise, and **never** emits an assurance; see `network_posture`
+/// for why the asymmetry is load-bearing.
 ///
 /// Both endpoints are checked because they are separately configurable and
 /// carry different exposure: `--rpc-url` reaches a wallet-RPC server (which
@@ -115,7 +118,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// must be disclosed. (The flag's "ignored with --rpc-url" note covers only the
 /// self-hosted server's daemon connection, not the REPL's direct client.)
 fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
-    use network_posture::ProxyResolution;
+    // The module says what is true; this binary says it on stderr, where
+    // the operator who typed the flag is looking.
+    fn say(warnings: impl IntoIterator<Item = String>) {
+        for warning in warnings {
+            eprintln!("{warning}");
+        }
+    }
 
     let proxy = cli.proxy.as_deref();
     match &cli.rpc_url {
@@ -123,21 +132,23 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
             // Only disclose a --rpc-url that connect() will accept: an
             // unsupported scheme is rejected before any endpoint is opened, so
             // warning about it would contradict "endpoints actually used".
+            // The far end is a wallet server, not a daemon: the path
+            // disclosure alone.
             if rpc_client::is_supported_rpc_url(url) {
-                network_posture::disclose(
+                say(network_posture::disclose(
                     "wallet-RPC endpoint",
                     url,
                     proxy,
                     ProxyResolution::HonorsScheme,
-                );
+                ));
             }
             if opens_direct_daemon {
-                network_posture::disclose(
+                say(network_posture::daemon_disclosures(
                     "daemon address",
                     &cli.daemon_address,
                     proxy,
                     ProxyResolution::HonorsScheme,
-                );
+                ));
             }
         }
         // Self-hosted: the in-process wallet server does the bulk block scan
@@ -157,7 +168,12 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
             } else {
                 ProxyResolution::AlwaysRemote
             };
-            network_posture::disclose("daemon address", &cli.daemon_address, proxy, resolution);
+            say(network_posture::daemon_disclosures(
+                "daemon address",
+                &cli.daemon_address,
+                proxy,
+                resolution,
+            ));
         }
     }
 }

@@ -3,7 +3,8 @@
 **Status:** R0 — **RULED 2026-08-21.** RT-1…RT-9 ratified as written; RT-O3
 and RT-O4 ruled (§7); RT-O2 closed as a corrected error; RT-O1 stays a
 probe whose result cannot move the mechanism (§7.1). **RT-W1 landed** with
-this round; RT-W2, RT-W5 and RT-W7 are authorized; **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
+this round; **RT-W2 landed** 2026-08-22 (PR #539), **RT-W5 landed** 2026-08-22 (PR #533),
+**RT-W7 landed** 2026-08-23; **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
@@ -476,7 +477,16 @@ again.)
   *network path* (a clear-network daemon address is observable in transit);
   neither side says §1's thing about the *operator*, and
   `shekyl-wallet-rpc`'s own `--daemon-address` discloses nothing. That is
-  slice RT-W7.
+  slice RT-W7 — **landed 2026-08-23**: one pure module,
+  `shekyl_rpc_transport::network_posture` (moved from `shekyl-cli`, the
+  outbound twin of the shared `listen` classifier), whose
+  `operator_warning` both binaries emit for any `--daemon-address` that is
+  not loopback, `--proxy` or not — a proxy hides the path, not the wallet
+  from its daemon. It asserts only what an address can say ("is not a
+  loopback address", never "another machine" or "another operator"), so
+  the operator of their own remote node reads it as true of themselves and
+  it carries no instruction. Loopback and unix-socket daemons stay silent;
+  no configuration draws an assurance.
 
 **Ratified 2026-08-21:** (a) RT-1…RT-9 as rulings, including RT-9's removal
 slice; (b) RT-1 at startup, not parse, not both; (c) RT-O3 as above; (d)
@@ -540,9 +550,9 @@ before its green was trusted.**
 | RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
 | RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — unblocked |
-| RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **authorized 2026-08-21** |
+| RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **LANDED 2026-08-22** (PR #533: `2fb5fad61` removes `--public-node`, `/get_public_nodes`, the P2P advertisement and bumps `CORE_RPC_VERSION`; `7279cf360` deletes the residue — `set_rpc_port`/`m_rpc_port`, `rpc_credits_per_hash`, `print_pl publicrpc`; bootstrap-daemon disposition `20c869b1d`) |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
-| RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **authorized 2026-08-21** |
+| RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **LANDED 2026-08-23** (`shekyl_rpc_transport::network_posture::{operator_warning, daemon_disclosures}`; CLI on stderr, server in its log at `run_server`; the proxied-daemon case and the `run_server` wiring each observed red; verify: `git grep operator_warning rust/`). Carried: the GUI's daemon-URL setting says nothing yet (FOLLOWUPS V3.2) |
 
 RT-W1 is ruled, independent, small, and strictly reduces attack surface. It
 should not wait for the transport design — and did not.

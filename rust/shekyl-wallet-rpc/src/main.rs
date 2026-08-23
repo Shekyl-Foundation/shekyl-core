@@ -68,7 +68,9 @@ struct Cli {
     disable_rpc_login: bool,
 
     /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
-    #[arg(long = "daemon-address", default_value = "http://127.0.0.1:28581")]
+    /// A daemon that is not loopback is disclosed at startup: its operator
+    /// sees what this wallet asks for (RPC_TRANSPORT_POSTURE.md §1).
+    #[arg(long = "daemon-address", default_value = "http://127.0.0.1:11029")]
     daemon_address: String,
 
     /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).

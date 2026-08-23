@@ -61,6 +61,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+# The startup-disclosure wiring test reads what `run_server` logs; the
+# workspace already compiles this version through shekyl-logging.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"

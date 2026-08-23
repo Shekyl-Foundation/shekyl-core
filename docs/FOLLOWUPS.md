@@ -11503,6 +11503,29 @@ one place to confirm each item's relationship to the wallet stack.
   **Target:** none until the trigger fires (rule 21: rejected now, criterion
   named).
 
+- **The GUI's daemon-URL setting carries no §1 statement** (added
+  2026-08-23, RT-W7). `shekyl-cli` and `shekyl-wallet-rpc` now say, for a
+  `--daemon-address` that is not loopback, what a daemon's operator learns
+  by serving (`RPC_TRANSPORT_POSTURE.md` §1). The GUI wallet configures the
+  same address in its Settings panel and drives `shekyl-wallet-rpc`, whose
+  `warn!` lands in a log the GUI user never reads; the panel itself says
+  nothing. The text is one function
+  (`shekyl_rpc_transport::network_posture::operator_warning`); the GUI needs
+  a display surface for it at the point of configuration. **Trigger:** the
+  GUI's next Settings-panel change, or the first report of a foreign daemon
+  URL in use. **Target:** shekyl-gui-wallet, V3.2.
+
+- **`--daemon-address` defaults to the mainnet port only** (added
+  2026-08-23, RT-W7). Both wallets default to `127.0.0.1:11029`, the
+  mainnet daemon's loopback RPC port (corrected in RT-W7 from
+  `localhost:11028` / `http://127.0.0.1:28581`, which no daemon serves);
+  `--network testnet` / `stagenet` still need an explicit address because
+  the per-network RPC ports (`12029`, `13029`) live only in C++
+  `cryptonote_config.h`. A network-derived default belongs with the port
+  constants' move to Rust, not as a second copy (a deliberate duplicate
+  needs an uncrossable boundary). **Trigger:** the daemon's network config
+  moves to Rust. **Target:** V3.2.
+
 - **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
   (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
   the daemon-command client path in `src/daemon/main.cpp`
@@ -16334,7 +16357,8 @@ Retained for citation in review; each links to the canonical record.
   `rpc_client::build_http_agent`) at once; the message names the scheme and the
   `socks5h://` remedy. The persona/`P` path *forces* `resolve_target(false)`
   (deanonymization is fatal there); the principal path is warn-not-force by the
-  same asymmetry. Canonical: `rust/shekyl-cli/src/network_posture.rs`.
+  same asymmetry. Canonical: `rust/shekyl-rpc-transport/src/network_posture.rs`
+  (moved from `shekyl-cli` 2026-08-23, RT-W7, so `shekyl-wallet-rpc` shares it).
 
 - **epee HTTP listener + `--no-rust-rpc` deleted (closed 2026-07-10,
   `chore/delete-epee-http-listener`).** Phase 1 transport cutover:

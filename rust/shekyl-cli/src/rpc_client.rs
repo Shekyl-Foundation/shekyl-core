@@ -580,7 +580,7 @@ enum RpcUrlForm {
 /// network-posture disclosure, parsing the same string properly, warned about an
 /// endpoint with an empty host.
 ///
-/// The host check reuses [`crate::network_posture::host_of`] rather than a
+/// The host check reuses [`shekyl_rpc_transport::network_posture::host_of`] rather than a
 /// second parser, for the same reason: one extractor cannot disagree with
 /// itself about what a host is.
 fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
@@ -588,7 +588,7 @@ fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
         return uds_form(path);
     }
     if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
-        if crate::network_posture::host_of(rpc_url).is_empty() {
+        if shekyl_rpc_transport::network_posture::host_of(rpc_url).is_empty() {
             return Err(format!(
                 "invalid --rpc-url '{rpc_url}': missing host \
                  (expected http://host:port or https://host:port)"

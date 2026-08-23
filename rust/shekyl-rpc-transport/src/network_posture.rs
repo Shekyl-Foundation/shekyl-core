@@ -5,7 +5,16 @@
 
 //! Network-exposure disclosure for the wallet's outbound endpoints — the
 //! **asymmetric warn-only rule** ratified in `ARCHIVAL_BOND_WI4_MEASUREMENT.md`
-//! §15 (2026-07-23), replacing the rejected structural-refusal proposal.
+//! §15 (2026-07-23), replacing the rejected structural-refusal proposal — and
+//! the **operator statement** of `RPC_TRANSPORT_POSTURE.md` §1 (RT-O4's
+//! addition, slice RT-W7).
+//!
+//! This module lives in the transport crate, next to the endpoint parser it
+//! classifies for, so that `shekyl-cli` and `shekyl-wallet-rpc` disclose the
+//! same `--daemon-address` in the same words: the outbound twin of
+//! [`crate::listen`], which serves both binaries' listen addresses. It is
+//! pure — every function returns the text to emit, and each binary says it
+//! in its own voice (the CLI to stderr, the server through `tracing`).
 //!
 //! # The rule, and why it is asymmetric
 //!
@@ -26,6 +35,16 @@
 //!   no opened connection performs, the mirror error of an unearned
 //!   assurance.
 //! - **Loopback, unix socket, or a remote-resolving proxy → silence.**
+//! - **Not loopback → the operator statement, proxy or not.** A daemon sees
+//!   which blocks a wallet requests, when, and what it broadcasts — that is
+//!   what a daemon is told in order to serve — and no transport, proxy or
+//!   encryption changes it; so §1 admits no recommended configuration with a
+//!   daemon somebody else controls. The check sees an address, never who
+//!   controls the far end, so the statement is phrased as the fact about
+//!   daemons and read correctly by the operator of their own remote node
+//!   (the supported case): it is discouragement where it is consumed, not a
+//!   grade. A proxy hides the *path*; it cannot hide the wallet from the
+//!   daemon it is talking to, which is why this warning ignores `--proxy`.
 //! - **No configuration ever draws an assurance.** This is the load-bearing
 //!   half. A positive "your connection is private" claim derived from an
 //!   endpoint check asserts a property the check cannot measure: the check sees
@@ -66,7 +85,7 @@ pub enum ProxyResolution {
     HonorsScheme,
     /// The transport hands the hostname to the proxy regardless of scheme
     /// (SOCKS5h semantics always), so there is no local lookup to disclose.
-    /// The self-hosted scan transport (`shekyl-rpc-transport`) is this.
+    /// The self-hosted scan transport (this crate's `http_client`) is this.
     AlwaysRemote,
 }
 
@@ -246,10 +265,10 @@ pub fn warning_for_dns_leak(label: &str, host: &str, proxy: &str) -> String {
     )
 }
 
-/// Emit the disclosure for one endpoint. Returns the warning that was printed,
-/// if any — `None` means silence, which is the correct output for every case
+/// The network-path disclosure for one endpoint: the warning to emit, if
+/// any — `None` means silence, which is the correct output for every case
 /// this module cannot establish a weakness for (there is deliberately no
-/// "looks good" message).
+/// "looks good" message). Pure: the caller prints or logs it.
 ///
 /// `resolution` names how the dialing transport resolves hostnames under a
 /// proxy: the DNS-leak warning is only *true* for a transport that honors a
@@ -278,18 +297,58 @@ pub fn disclose(
                 && proxy_resolves_locally(proxy)
                 && host.parse::<std::net::IpAddr>().is_err()
             {
-                let msg = warning_for_dns_leak(label, host, proxy);
-                eprintln!("{msg}");
-                return Some(msg);
+                return Some(warning_for_dns_leak(label, host, proxy));
             }
             None
         }
-        Exposure::ClearNetwork { host } => {
-            let msg = warning_for(label, &host);
-            eprintln!("{msg}");
-            Some(msg)
-        }
+        Exposure::ClearNetwork { host } => Some(warning_for(label, &host)),
     }
+}
+
+/// The operator statement of `RPC_TRANSPORT_POSTURE.md` §1 for a daemon
+/// endpoint that is not loopback: what the far end learns by serving, and
+/// that no recommended configuration has it in somebody else's hands.
+///
+/// It asserts only what the syntactic check measures — "not a loopback
+/// address" — never "another machine" or "another operator": a tunnel or
+/// reverse proxy on this host at a LAN address falsifies the former, and
+/// who controls the daemon is exactly what an address cannot say. The
+/// operator of their own remote node reads it as true of themselves, which
+/// is why it carries no instruction; `--proxy` does not silence it because
+/// a proxy hides the path, not the wallet from its daemon.
+#[must_use]
+pub fn operator_warning(label: &str, host: &str) -> String {
+    format!(
+        "Warning: {label} '{host}' is not a loopback address. Whoever operates that \
+         daemon sees which blocks this wallet requests, when it requests them, and \
+         what it broadcasts — that is what a daemon is told in order to serve — and \
+         no proxy or encryption changes it. There is no recommended configuration \
+         in which a Shekyl wallet uses a daemon somebody else controls \
+         (RPC_TRANSPORT_POSTURE.md §1)."
+    )
+}
+
+/// Every disclosure for a **daemon** endpoint, in emission order: the
+/// network-path warning from [`disclose`] (at most one — clear network or
+/// a local-resolving proxy, mutually exclusive), then the operator
+/// statement for anything that is not loopback. Empty for a loopback or
+/// unix-socket endpoint, and for an empty address (nothing is dialed).
+///
+/// Daemon-only by design: the wallet-RPC endpoint (`--rpc-url`) has a
+/// different far end and takes [`disclose`] alone.
+#[must_use]
+pub fn daemon_disclosures(
+    label: &str,
+    endpoint: &str,
+    proxy: Option<&str>,
+    resolution: ProxyResolution,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    warnings.extend(disclose(label, endpoint, proxy, resolution));
+    if classify(endpoint, proxy) != Exposure::Local {
+        warnings.push(operator_warning(label, host_of(endpoint)));
+    }
+    warnings
 }
 
 #[cfg(test)]
@@ -547,7 +606,31 @@ mod tests {
                 ProxyResolution::HonorsScheme,
             ),
         ];
-        for out in outputs.into_iter().flatten() {
+        let daemon_outputs = [
+            daemon_disclosures(
+                "daemon",
+                "127.0.0.1:11028",
+                None,
+                ProxyResolution::AlwaysRemote,
+            ),
+            daemon_disclosures(
+                "daemon",
+                "node.example.com:11028",
+                Some("socks5h://x"),
+                ProxyResolution::AlwaysRemote,
+            ),
+            daemon_disclosures(
+                "daemon",
+                "node.example.com:11028",
+                None,
+                ProxyResolution::HonorsScheme,
+            ),
+        ];
+        for out in outputs
+            .into_iter()
+            .flatten()
+            .chain(daemon_outputs.into_iter().flatten())
+        {
             assert!(
                 out.starts_with("Warning:"),
                 "the only emitted message may be a warning, got: {out}"
@@ -623,6 +706,98 @@ mod tests {
         .expect("a non-loopback daemon with no proxy warns");
         assert!(w.starts_with("Warning:"));
         assert!(w.contains("node.example.com"));
+    }
+
+    /// RT-W7's discriminating behaviour: a proxied non-loopback daemon was
+    /// silent before (the path is covered) and now carries the operator
+    /// statement, because a proxy hides the path and not the wallet from
+    /// the daemon it talks to. The edit that turns this red is making the
+    /// operator statement conditional on `proxy.is_none()`.
+    #[test]
+    fn a_proxy_hides_the_path_not_the_operator() {
+        let proxied = daemon_disclosures(
+            "daemon address",
+            "node.example.com:11028",
+            Some("socks5h://127.0.0.1:9050"),
+            ProxyResolution::AlwaysRemote,
+        );
+        assert_eq!(proxied.len(), 1, "operator statement only: {proxied:?}");
+        assert!(proxied[0].contains("operates that daemon"), "{proxied:?}");
+        assert!(proxied[0].contains("node.example.com"));
+
+        // Without a proxy both fire, path first — the order the operator
+        // reads them in: what the network sees, then what the daemon sees.
+        let direct = daemon_disclosures(
+            "daemon address",
+            "node.example.com:11028",
+            None,
+            ProxyResolution::AlwaysRemote,
+        );
+        assert_eq!(direct.len(), 2, "{direct:?}");
+        assert!(direct[0].contains("no proxy is configured"), "{direct:?}");
+        assert!(direct[1].contains("operates that daemon"), "{direct:?}");
+
+        // An onion address is not loopback: the daemon behind it still sees
+        // everything it serves. Silence here would be the assurance §15
+        // forbids.
+        let onion = daemon_disclosures(
+            "daemon address",
+            "abcdefghijklmnop.onion:11028",
+            Some("socks5h://127.0.0.1:9050"),
+            ProxyResolution::AlwaysRemote,
+        );
+        assert_eq!(onion.len(), 1, "{onion:?}");
+        assert!(onion[0].contains("operates that daemon"));
+    }
+
+    /// Where there is no daemon on a network path there is nothing to say:
+    /// loopback in every spelling, a unix socket, and an unset address.
+    #[test]
+    fn the_operator_statement_is_silent_for_a_local_daemon() {
+        for ep in [
+            "localhost:11028",
+            "127.0.0.1:11028",
+            "http://127.0.0.1:28581",
+            "[::1]:11028",
+            "uds:///run/shekyl/daemon.sock",
+            "",
+        ] {
+            let out = daemon_disclosures(
+                "daemon address",
+                ep,
+                Some("socks5://127.0.0.1:9050"),
+                ProxyResolution::HonorsScheme,
+            );
+            assert!(out.is_empty(), "{ep}: {out:?}");
+        }
+    }
+
+    /// The operator statement asserts the one fact the check measures and
+    /// the §1 consequence — not a location, not a grade, and no instruction
+    /// (the operator of their own remote node is the supported case and
+    /// reads it as true of themselves).
+    #[test]
+    fn operator_statement_asserts_only_what_an_address_can_say() {
+        let w = operator_warning("daemon address", "203.0.113.7");
+        assert!(w.starts_with("Warning:"));
+        assert!(w.contains("daemon address"));
+        assert!(w.contains("203.0.113.7"));
+        assert!(w.contains("is not a loopback address"), "{w}");
+        assert!(w.contains("which blocks this wallet requests"), "{w}");
+        assert!(w.contains("what it broadcasts"), "{w}");
+        assert!(w.contains("no proxy or encryption changes it"), "{w}");
+        assert!(w.contains("somebody else controls"), "{w}");
+        let lower = w.to_lowercase();
+        for forbidden in [
+            "another machine",
+            "remote",
+            "secure",
+            "safe",
+            "private",
+            "point it",
+        ] {
+            assert!(!lower.contains(forbidden), "{forbidden:?} in: {w}");
+        }
     }
 
     #[test]

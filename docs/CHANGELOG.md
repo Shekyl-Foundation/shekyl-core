@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **`--daemon-address` says §1's thing at the point of configuration
+  (RT-W7).** A daemon address that is not loopback now draws the operator
+  statement of `RPC_TRANSPORT_POSTURE.md` §1 when the wallet starts —
+  whoever operates that daemon sees which blocks the wallet requests, when,
+  and what it broadcasts; that is what a daemon is told in order to serve,
+  and no proxy or encryption changes it; there is no recommended
+  configuration with a daemon somebody else controls — in `shekyl-cli` (on
+  stderr) and `shekyl-wallet-rpc` (in its log) alike. `--proxy` silences
+  the existing network-path warning, never this one: a proxy hides the
+  path, not the wallet from its daemon. The statement asserts only what an
+  address can say ("is not a loopback address"), so the operator of their
+  own remote node reads it as true of themselves; loopback and unix-socket
+  daemons stay silent, and no configuration draws an assurance. The
+  disclosure module moved from `shekyl-cli` into `shekyl-rpc-transport`
+  (`network_posture`) so both binaries say it in the same words — the
+  outbound twin of the shared `listen` classifier — and it is pure: each
+  binary emits in its own voice. **Also:** both wallets' `--daemon-address`
+  defaults named ports no daemon serves (`localhost:11028`,
+  `http://127.0.0.1:28581`); they are now the mainnet daemon's loopback RPC
+  port, `127.0.0.1:11029`.
 - **The daemon RPC binds loopback only; `--confirm-external-bind` is
   retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
   spellings) is refused unconditionally — consent to interfaces that do
