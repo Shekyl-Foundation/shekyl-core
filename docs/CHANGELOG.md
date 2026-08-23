@@ -36,8 +36,9 @@
   spellings) is refused unconditionally — consent to interfaces that do
   not exist yet — and a bind on a specific network address is refused
   because the daemon RPC has no authentication of any kind: every RPC leg
-  is operator-to-operator, and the remote legs are the onion service and
-  the pinned-TLS leg of `RPC_TRANSPORT_POSTURE.md` (RT-4). The refusal
+  is operator-to-operator, and the daemon's remote leg is the onion
+  service or a reverse proxy outside the daemon — the crossing is never
+  the daemon's own socket. The refusal
   lives at the one Rust seam every daemon listener passes through
   (`shekyl-daemon-rpc::bind::bind_listener`, the restricted listener included —
   it had no gate at all), on a strictly parsed address (hostnames are not
