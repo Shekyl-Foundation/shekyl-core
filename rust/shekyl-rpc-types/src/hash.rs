@@ -94,7 +94,9 @@ impl HashHex {
 /// Why a string was not a [`HashHex`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashHexError {
-    /// Not 64 characters; carries the length seen.
+    /// Not 64 hex characters; carries the input's length **in bytes**, which
+    /// is what the check reads — a multi-byte string is longer in bytes than
+    /// in characters, and is refused for exactly that reason.
     Length(usize),
     /// A character outside `[0-9a-fA-F]`; carries the byte seen.
     NotHex(u8),
@@ -104,7 +106,10 @@ impl fmt::Display for HashHexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Length(n) => {
-                write!(f, "expected 64 hex characters (32 bytes), got {n} bytes")
+                write!(
+                    f,
+                    "expected 64 hex characters (32 bytes), got a {n}-byte string"
+                )
             }
             Self::NotHex(b) => write!(
                 f,

@@ -156,11 +156,14 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       out->cumulative_difficulty_hi =
         ((cumulative >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
 
-      // `core_rpc_server::get_block_reward`: the sum of the miner tx's outputs.
-      uint64_t reward = 0;
-      for (const cryptonote::tx_out& o : blk.miner_tx.vout)
-        reward += o.amount;
-      out->reward = reward;
+      // The block's reward is the sum of its coinbase outputs, and
+      // `get_outs_money_amount` is this tree's one definition of that sum.
+      // NB `core_rpc_server::get_block_reward` is a private third copy of the
+      // same loop, and its name collides with the *consensus*
+      // `cryptonote::get_block_reward(median_weight, ...)`, which computes the
+      // subsidy rather than reading a block. It dies with
+      // `fill_block_header_response` in RK-5; nothing new should call it.
+      out->reward = cryptonote::get_outs_money_amount(blk.miner_tx);
 
       out->block_weight = bc.get_db().get_block_weight(height);
       out->long_term_weight = bc.get_db().get_block_long_term_weight(height);

@@ -370,6 +370,7 @@ downstream depends on it either way.
 | `on_get_height`, `on_get_version`, their structs, 3 dispatch rows, console bodies for `print_height` / `version`; `CORE_RPC_VERSION*` in C++; `rpc-client::HeightResponse` | RK-1 | oracle vectors committed first |
 | each slice's handlers / structs / rows / console bodies / client duplicates | its slice | same |
 | `rpc_target_wire_contract.cpp` | RK-5 / RK-7 | re-pinned in Rust (RK-D9) |
+| `block_header_response`, `fill_block_header_response`, and `core_rpc_server::get_block_reward` | RK-5 | the four remaining header methods move. `get_block_reward` is a private third copy of `cryptonote::get_outs_money_amount` whose name collides with the consensus `cryptonote::get_block_reward(median_weight, …)` (subsidy, not a coinbase sum); its single caller is `fill_block_header_response`, so it dies with it. Nothing new calls it — RK-3's facts export uses `get_outs_money_amount`. |
 | `src/daemon/rpc_client.h` (#533) + the C++ executor/parser/command server | RK-C | every console command renders in Rust |
 | `core_rpc_server.{h,cpp}`, `core_rpc_server_commands_defs.h`, `core_rpc_ffi.cpp` dispatch + `core_rpc_ffi_json_endpoint` / `_bin_endpoint` / `_json_rpc`, `rpc_handler.*`, `json_object.cpp` RPC arms, `message_data_structs.h` RPC half; FOLLOWUPS dual-list item | RK-X | zero C++ handlers left |
 | every `shekyl_rpc_*_facts` shim | post-DRS-E | Rust store impl of each facts trait lands (RK-D7) |

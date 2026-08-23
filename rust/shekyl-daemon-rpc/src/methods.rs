@@ -521,10 +521,13 @@ pub(crate) mod tests {
 
     /// A chain whose tip is 42 blocks above the header the oracle vector was
     /// captured at, so `depth` and the bound are both meaningful.
-    fn header_facts(fill_pow: bool) -> FakeFacts {
+    ///
+    /// Whether a pow hash comes back is not a property of the fixture: the
+    /// fake computes one exactly when the handler asks for one, so the tests
+    /// vary `get_block_header_by_height`'s own `fill_pow_hash` argument.
+    fn header_facts() -> FakeFacts {
         let mut f = facts(true, 0);
         f.hash_chain_height = 1_234_610; // 1_234_567 + depth 42 + 1
-        let _ = fill_pow;
         f
     }
 
@@ -544,7 +547,7 @@ pub(crate) mod tests {
     /// fixed facts — every field, the 128-bit split, and the pow hash.
     #[test]
     fn header_reproduces_the_full_oracle_vector() {
-        let f = header_facts(true);
+        let f = header_facts();
         let out = get_block_header_by_height(&f, 1_234_567, true).unwrap();
         assert!(
             f.asked_pow.load(Ordering::Relaxed),
@@ -557,7 +560,7 @@ pub(crate) mod tests {
     /// facts layer is never asked to compute one.
     #[test]
     fn pow_hash_is_empty_and_uncomputed_when_not_requested() {
-        let f = header_facts(false);
+        let f = header_facts();
         let out = get_block_header_by_height(&f, 1_234_567, false).unwrap();
         assert!(!f.asked_pow.load(Ordering::Relaxed));
         assert_eq!(out.block_header.pow_hash, None);
@@ -581,7 +584,7 @@ pub(crate) mod tests {
     /// top height — the same wording `on_get_block_hash` uses.
     #[test]
     fn header_past_the_tip_is_refused() {
-        let f = header_facts(false);
+        let f = header_facts();
         let err = get_block_header_by_height(&f, 9_000_000, false).unwrap_err();
         assert_eq!(
             err,
@@ -599,7 +602,7 @@ pub(crate) mod tests {
     /// bare facts fault would get.
     #[test]
     fn header_inconsistent_store_keeps_the_contract_error() {
-        let mut f = header_facts(false);
+        let mut f = header_facts();
         f.hash_fault = Some(FactsFault::Inconsistent);
         let err = get_block_header_by_height(&f, 5, false).unwrap_err();
         assert_eq!(
@@ -615,7 +618,7 @@ pub(crate) mod tests {
     /// never a claim about the caller's height.
     #[test]
     fn header_other_faults_are_not_rendered_as_contract_errors() {
-        let mut f = header_facts(false);
+        let mut f = header_facts();
         f.hash_fault = Some(FactsFault::NotReady);
         assert_eq!(
             get_block_header_by_height(&f, 5, false),
