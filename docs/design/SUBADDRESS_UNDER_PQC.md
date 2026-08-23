@@ -1573,10 +1573,10 @@ walkthroughs **cannot** detect violations of these rules.
   Rust path an `enc_label` can only come from `OutputData::enc_label_wire()`
   (`EncryptedOutputField`, `shekyl-crypto-pq/src/output.rs`), so bytes that
   never went through `encrypt_label_plaintext` are **unrepresentable** rather
-  than merely rejected. The one named exception is
-  `from_ffi_json_unverified`, the `shekyl_sign_fcmp_transaction` JSON boundary,
-  whose only non-test caller is the C++ `construct_tx*` chain and which dies
-  with the consensus-oracle harness. Note the check was deliberately *not*
+  than merely rejected. The one exception is the type's `Deserialize` impl —
+  the `shekyl_sign_fcmp_transaction` JSON boundary, whose byte constructor is
+  private to the defining module, whose only non-test caller is the C++
+  `construct_tx*` chain, and which dies with the consensus-oracle harness. Note the check was deliberately *not*
   implemented as "reject all-zero": that treats one symptom, admits any other
   unencrypted constant, and can fire on a legitimate ciphertext that happens to
   be zero. Historical note follows.

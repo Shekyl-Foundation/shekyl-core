@@ -68,12 +68,15 @@
   the remedy: it treats one symptom, admits any other unencrypted constant, and
   can fire on a legitimate ciphertext that happens to be zero.
 
-  One named exception survives: `from_ffi_json_unverified`, used only where
-  `shekyl_sign_fcmp_transaction` takes its outputs as JSON and the far side
-  computed the encryption. Its only non-test caller is the C++ `construct_tx*`
-  chain, which has had no production caller since `wallet2` was deleted, and it
-  goes with the consensus-oracle harness. The JSON encoding itself is
-  unchanged — still a 9-byte hex string — so the FFI contract is untouched.
+  One exception survives, and it is a boundary rather than a constructor: the
+  type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its
+  outputs as JSON and the far side computed the encryption. The byte
+  constructor behind it is private to the defining module, so no crate can
+  call it. That path's only non-test caller is the C++ `construct_tx*` chain,
+  which has had no production caller since `wallet2` was deleted, and it goes
+  with the consensus-oracle harness. The JSON encoding is unchanged — still an
+  18-character lowercase hex string, now pinned by a test — so the FFI contract
+  is untouched.
 - **`get_block_count` and `on_get_block_hash` are served natively in Rust
   (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
   (`getblockcount`, `on_getblockhash`) answer from

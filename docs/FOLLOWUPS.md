@@ -74,14 +74,15 @@ sustainability is unaffected by the recalibration.
   difference in blast radius, not in shape.)
 
   **The guarantee, at its true width:** on the in-process Rust path an
-  unencrypted field is not representable, and that is compiler-enforced. One
-  hole remains, named so it cannot be used by accident —
-  `from_ffi_json_unverified`, reached only from the
-  `shekyl_sign_fcmp_transaction` JSON boundary, where the far side computed the
-  encryption and this crate cannot re-derive it. Its only non-test caller is
-  the C++ `construct_tx*` chain, which has had no production caller since
-  `wallet2` was deleted; it dies with the consensus-oracle harness, and the
-  constructor dies with it.
+  unencrypted field is not representable, and that is compiler-enforced. The
+  byte constructor is **private to the defining module**, so the one remaining
+  way in is the type's `Deserialize` impl — the `shekyl_sign_fcmp_transaction`
+  JSON boundary, where the far side computed the encryption and this crate
+  cannot re-derive it. Deserializing is a visibly deliberate act at a boundary
+  rather than a function any crate can call. Its only non-test caller is the
+  C++ `construct_tx*` chain, which has had no production caller since `wallet2`
+  was deleted; it dies with the consensus-oracle harness, and the impl dies
+  with it.
 
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the

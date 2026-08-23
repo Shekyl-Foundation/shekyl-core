@@ -21,6 +21,10 @@ test-utils = []
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+# Hex codec for the `EncryptedOutputField` wire form. Already a production
+# dependency of shekyl-tx-builder and shekyl-engine-core, so this adds no new
+# supply-chain surface to any binary that links this crate (17-dependency-discipline).
+hex = "0.4"
 zeroize = { workspace = true }
 rand = "0.8"
 rand_chacha = "0.3"

@@ -89,10 +89,23 @@ use crate::CryptoError;
 ///
 /// **Deliberately not built with the `shekyl-types` newtype macro.** That
 /// convention gives every newtype an open `from_bytes` edge constructor, which
-/// is precisely the forgery path this type exists to remove. The only
-/// constructors here are [`OutputData::enc_label_wire`] and
-/// [`OutputData::enc_amount_wire`], which can only be reached from a real
-/// derivation.
+/// is precisely the forgery path this type exists to remove.
+///
+/// **Every way to obtain one, stated exhaustively** — a guarantee doc that
+/// omits a path is worse than none:
+///
+/// 1. [`OutputData::enc_label_wire`] / [`OutputData::enc_amount_wire`], which
+///    can only be reached from a real derivation. This is the only path open
+///    to in-process Rust.
+/// 2. `Deserialize`, which exists solely because
+///    `shekyl_sign_fcmp_transaction` takes its outputs as JSON and the far
+///    side computed the encryption. Its byte constructor is private to this
+///    module, so deserializing is the *only* way to spend that path, and it is
+///    a visibly deliberate act rather than a constructor call. Its only
+///    non-test caller is the C++ `construct_tx*` chain, which has had no
+///    production caller since `wallet2` was deleted and dies with the
+///    consensus-oracle harness; this impl dies with it.
+/// 3. `from_bytes_for_tests`, gated on `feature = "test-utils"`.
 ///
 /// The bytes are public wire data — ciphertext, not key material — so this is
 /// deliberately not `Zeroize`; the secrets it is derived from are wiped by
@@ -131,18 +144,12 @@ impl EncryptedOutputField {
     /// Rebuild from bytes that arrived over the FFI JSON boundary, where the
     /// caller — not this crate — computed the encryption.
     ///
-    /// **This is the one hole in the guarantee above, and it is named so it
-    /// cannot be used by accident.** It exists because
-    /// `shekyl_sign_fcmp_transaction` takes its outputs as JSON, so the bytes
-    /// were produced by a `shekyl_construct_output` call on the far side and
-    /// this crate cannot re-derive them. Its only non-test caller is the C++
-    /// `construct_tx*` chain, which has had no production caller since
-    /// `wallet2` was deleted and is scheduled to go with the consensus-oracle
-    /// harness (`FOLLOWUPS.md`). When that lands, this constructor goes with
-    /// it. Do not reach for it from Rust: use the [`OutputData`] accessors.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn from_ffi_json_unverified(bytes: [u8; 9]) -> Self {
+    /// **Private on purpose.** It was `pub` in the first cut of this type,
+    /// which made the guarantee above false: a `#[doc(hidden)]` public
+    /// constructor is still a public constructor. Confining it to this module
+    /// leaves `Deserialize` as the only way to spend it, so the escape is one
+    /// visible act at a boundary rather than a function any crate can call.
+    const fn from_ffi_json_unverified(bytes: [u8; 9]) -> Self {
         Self(bytes)
     }
 
@@ -153,6 +160,41 @@ impl EncryptedOutputField {
     #[must_use]
     pub const fn from_bytes_for_tests(bytes: [u8; 9]) -> Self {
         Self(bytes)
+    }
+}
+
+/// Wire encoding is the 18-character lowercase hex string the FFI JSON contract
+/// already spoke when this field was a plain `[u8; 9]` — moving the codec into
+/// this crate changed no bytes.
+impl serde::Serialize for EncryptedOutputField {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut buf = [0u8; 18];
+        hex::encode_to_slice(self.0, &mut buf).map_err(serde::ser::Error::custom)?;
+        // `encode_to_slice` writes only ASCII hex.
+        serializer.serialize_str(std::str::from_utf8(&buf).map_err(serde::ser::Error::custom)?)
+    }
+}
+
+/// **This impl is the FFI JSON trust boundary**, and the only way to reach
+/// [`EncryptedOutputField::from_ffi_json_unverified`]. See the type docs for
+/// why it exists and when it goes away.
+///
+/// Decodes straight into the fixed-size buffer: the length is known, so
+/// neither the intermediate `Vec` nor a heap `String` is needed, and a wrong
+/// length is refused by the exact-size borrow rather than after allocating.
+impl<'de> serde::Deserialize<'de> for EncryptedOutputField {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let s = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        let mut bytes = [0u8; 9];
+        if s.len() != 18 {
+            return Err(D::Error::custom(format!(
+                "expected 18 hex characters (9 bytes), got {}",
+                s.len()
+            )));
+        }
+        hex::decode_to_slice(s.as_ref(), &mut bytes).map_err(D::Error::custom)?;
+        Ok(Self::from_ffi_json_unverified(bytes))
     }
 }
 
@@ -2531,6 +2573,40 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_field_json_is_the_same_18_char_hex_the_ffi_already_spoke() {
+        // The codec moved from tx-builder's `hex_bytes9` helper into this type,
+        // so "the FFI contract is untouched" is a claim about bytes and is
+        // pinned here rather than asserted. `shekyl_sign_fcmp_transaction`
+        // parses this from C++-produced JSON; a changed encoding would be a
+        // silent break of a live boundary.
+        let f = EncryptedOutputField::from_bytes_for_tests([
+            0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xfe, 0xff,
+        ]);
+        let json = serde_json::to_string(&f).unwrap();
+        assert_eq!(
+            json, "\"00010f107f80abfeff\"",
+            "18 lowercase hex characters, no separators"
+        );
+
+        let back: EncryptedOutputField = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.to_bytes(), f.to_bytes(), "round-trip must be exact");
+
+        // Both malformed directions are refused rather than truncated or padded.
+        assert!(
+            serde_json::from_str::<EncryptedOutputField>("\"00010f107f80abfe\"").is_err(),
+            "16 hex characters (8 bytes) must be refused"
+        );
+        assert!(
+            serde_json::from_str::<EncryptedOutputField>("\"00010f107f80abfeffff\"").is_err(),
+            "20 hex characters (10 bytes) must be refused"
+        );
+        assert!(
+            serde_json::from_str::<EncryptedOutputField>("\"zz010f107f80abfeff\"").is_err(),
+            "non-hex characters must be refused"
+        );
+    }
+
+    #[test]
     fn wire_fields_are_ciphertext_then_tag_and_carry_no_plaintext() {
         // Pins the byte order the accessors assemble. `derivation.rs`'s KAT
         // pins the same order against the locked `enc_label_sentinel_9` vector
@@ -2561,14 +2637,23 @@ mod tests {
         );
         assert_eq!(amount.as_bytes()[8], od.amount_tag, "amount tag last");
 
-        // The label ciphertext must not be the sentinel plaintext in the clear:
-        // that is the "written without encrypting" shape this type exists to
-        // make unrepresentable, and it is what an all-0xFF or all-zero field
-        // would look like.
-        assert_ne!(
-            &label.as_bytes()[..8],
-            &sentinel_plaintext(),
-            "sentinel must reach the wire encrypted, never as cleartext"
+        // The label bytes must be a real ciphertext of the sentinel, not the
+        // sentinel in the clear — the "written without encrypting" shape this
+        // type exists to make unrepresentable.
+        //
+        // Asserted by decrypting rather than by `assert_ne!(ct, plaintext)`.
+        // That inequality is what this test first used and it was wrong twice
+        // over: it is probabilistic (a uniform ciphertext equals any fixed
+        // plaintext with probability 2^-64, so the test could flake), and it is
+        // weak (it passes for *any* value that merely differs from the
+        // sentinel, including a hand-written constant). Decrypting is
+        // deterministic and states the property actually wanted.
+        let mut ct = [0u8; 8];
+        ct.copy_from_slice(&label.as_bytes()[..8]);
+        assert_eq!(
+            decrypt_label_plaintext(&ct, &od.k_label),
+            sentinel_plaintext(),
+            "the wire label must decrypt to the sentinel under this output's k_label"
         );
     }
 
