@@ -15,7 +15,9 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_ffi.h"
 #include "version.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -113,6 +115,7 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
   {
     std::memset(out, 0, sizeof(*out));
     cryptonote::block blk;
+    crypto::hash seed = crypto::null_hash;
     {
       // One acquisition for the whole projection: the bound, the block, its
       // weights and its difficulties all describe the same chain state (see
@@ -174,17 +177,30 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       // Reached by height, so never an alt block.
       out->orphan_status = 0;
       out->found = 1;
+
+      // The long hash is computed after this scope, but its RandomX seed is
+      // chain state and belongs to *this* snapshot, so it is read here.
+      // `get_pending_block_id_by_height` reads the prepare-state members
+      // (`m_prepare_height` / `m_prepare_blocks`) with no lock of its own;
+      // `prepare_handle_incoming_blocks` writes them holding this lock, so
+      // reading them here is both race-free and consistent with the block
+      // above. Left to resolve itself inside `get_block_longhash`, the seed
+      // would be read after the unlock — pairing this block with a seed from
+      // another chain state.
+      if (fill_pow_hash)
+        seed = bc.get_pending_block_id_by_height(
+          shekyl_pow_randomx_v2_seedheight(height));
     }
 
-    // Outside the lock, as the C++ handler had it. The long hash is a pure
-    // function of the block and its height, so it needs none of the chain
-    // state the projection had to read atomically — and it is by far the
-    // expensive part of this call: a block in a different seed epoch makes
-    // RandomX rebuild its cache, which would otherwise stall block handling
-    // and p2p for as long as that takes.
+    // Outside the lock: with the seed passed explicitly, the hash is a pure
+    // function of values already copied out, so it needs nothing the lock
+    // protects — and it is by far the expensive part of this call. A block in
+    // a different seed epoch makes RandomX rebuild its cache, which under the
+    // lock would stall block handling and p2p for as long as that takes
+    // (~1.2 s measured on a cold genesis block).
     if (fill_pow_hash)
     {
-      const crypto::hash pow = get_block_longhash(&bc, blk, height, 0);
+      const crypto::hash pow = get_block_longhash(&bc, blk, height, &seed);
       std::memcpy(out->pow_hash, pow.data, sizeof(out->pow_hash));
       out->pow_hash_filled = 1;
     }
