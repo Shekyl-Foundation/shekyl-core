@@ -79,7 +79,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // consumed directly as a Rust crate now, with no `extern "C"` edge to bound.
     ("legacy_core.rs", 4, 0),
     ("legacy_curve_tree.rs", 4, 0),
-    ("legacy_fcmp.rs", 1, 6),
+    // 6 -> 5: the legacy `shekyl_fcmp_prove` entry point was deleted with the
+    // C++ wrapper that was its only caller, taking one reservation with it.
+    // Tightened so the win cannot grow back.
+    ("legacy_fcmp.rs", 1, 5),
     ("legacy_frost.rs", 2, 3),
     ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),

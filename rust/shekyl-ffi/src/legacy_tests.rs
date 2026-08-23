@@ -225,7 +225,7 @@ fn membership_only_verify_rejects_malformed_and_mismatched_inputs() {
     assert_eq!(r, 1, "oversized count must reject without dereferencing");
 
     // Boundary: a within-`usize`, matched count just over MAX_INPUTS must reject via the
-    // arity cap (mirrors shekyl_fcmp_prove) before allocating the per-input Vecs. Buffers
+    // arity cap before allocating the per-input Vecs. Buffers
     // are sized to the declared count so there is no out-of-bounds read on the reject path.
     let over = shekyl_fcmp::MAX_INPUTS + 1;
     let big = vec![3u8; over * 32];
@@ -584,6 +584,7 @@ fn test_frost_sal_get_rerand_null_returns_empty() {
 // parse_prove_witness (reader) agree byte-for-byte on all 8 header
 // fields, using locked vectors from docs/test_vectors/WITNESS_HEADER.json.
 
+#[cfg(feature = "multisig")]
 #[derive(serde::Deserialize)]
 struct WitnessHeaderVector {
     output_key: String,
@@ -596,11 +597,13 @@ struct WitnessHeaderVector {
     pseudo_out_blind: String,
 }
 
+#[cfg(feature = "multisig")]
 #[derive(serde::Deserialize)]
 struct WitnessHeaderFile {
     vectors: Vec<WitnessHeaderVector>,
 }
 
+#[cfg(feature = "multisig")]
 fn decode_32(hex_str: &str, label: &str, vec_idx: usize) -> [u8; 32] {
     let bytes = hex::decode(hex_str)
         .unwrap_or_else(|_| panic!("vector {vec_idx}: invalid hex for {label}"));
@@ -610,6 +613,7 @@ fn decode_32(hex_str: &str, label: &str, vec_idx: usize) -> [u8; 32] {
         .unwrap_or_else(|_| panic!("vector {vec_idx}: {label} not 32 bytes"))
 }
 
+#[cfg(feature = "multisig")]
 #[test]
 fn witness_header_build_then_parse_roundtrip() {
     let json = include_str!("../../../docs/test_vectors/WITNESS_HEADER.json");

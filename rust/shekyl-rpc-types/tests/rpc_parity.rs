@@ -18,7 +18,8 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus, CORE_RPC_VERSION,
+    GetBlockCountResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus,
+    CORE_RPC_VERSION,
 };
 
 fn parsed(json: &str) -> Value {
@@ -128,6 +129,28 @@ fn get_version_all_defaults_matches_the_oracle() {
             "{omitted} must be omitted when default"
         );
     }
+}
+
+#[test]
+fn get_block_count_matches_the_oracle() {
+    let built = GetBlockCountResponse {
+        status: RpcStatus::ok(),
+        count: 1_234_567,
+    };
+    assert_parity(include_str!("vectors/rpc/get_block_count_v1.json"), &built);
+}
+
+/// `on_get_block_hash` answers with a bare JSON string — no object, no
+/// `status` — so the "type" is `String` and the vector is that document.
+/// Wrapping the reply in an object turns this red.
+#[test]
+fn get_block_hash_matches_the_oracle() {
+    let built = patterned_hash_hex();
+    assert_parity(include_str!("vectors/rpc/get_block_hash_v1.json"), &built);
+    assert!(
+        parsed(include_str!("vectors/rpc/get_block_hash_v1.json")).is_string(),
+        "the reply document is a lone JSON string"
+    );
 }
 
 /// Numbers stay numbers: a client that typed `height` as an integer keeps

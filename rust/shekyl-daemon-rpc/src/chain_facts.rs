@@ -42,6 +42,18 @@ pub struct ChainTip {
     pub release_build: bool,
 }
 
+/// What the chain holds at one height: the block's hash, or `None` when — and
+/// only when — the height is at or past the tip. An in-range height the store
+/// cannot produce a block for is [`FactsFault::Inconsistent`], not `None`, so
+/// `None` always means exactly one thing to the handler. `chain_height` is the tip as of the same
+/// read, so a refusal can name the top height without a second call (and
+/// without a window in which the two disagree).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHashAt {
+    pub hash: Option<BlockHash>,
+    pub chain_height: BlockHeight,
+}
+
 /// One row of the hard-fork schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HardFork {
@@ -62,6 +74,10 @@ pub enum FactsFault {
     /// exception text); the shim's exception barrier turned it into a
     /// code instead of an unwind across the C ABI.
     Internal,
+    /// The store reported a height it cannot produce the block for (the C++
+    /// shim logs which height). This daemon's data is inconsistent — never
+    /// reported to the caller as a fact about their request.
+    Inconsistent,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),
@@ -73,6 +89,7 @@ impl FactsFault {
             ffi::SHEKYL_RPC_FACTS_ERR_NULL => Self::NullHandle,
             ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY => Self::NotReady,
             ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
+            ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT => Self::Inconsistent,
             other => Self::Unknown(other),
         }
     }
@@ -82,6 +99,9 @@ impl FactsFault {
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
     fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
+    /// The block hash at `height`, with the tip as of the same read.
+    /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
+    fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
 }
 
 /// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
@@ -106,6 +126,17 @@ impl ChainFacts for FfiChainFacts {
             target_height: BlockHeight::from_raw(pod.target_height),
             synchronized: pod.synchronized != 0,
             release_build: pod.release_build != 0,
+        })
+    }
+
+    fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
+        let pod = self
+            .core
+            .block_hash_at(height.to_raw())
+            .map_err(FactsFault::from_code)?;
+        Ok(BlockHashAt {
+            hash: (pod.found != 0).then(|| BlockHash::from_bytes(pod.hash)),
+            chain_height: BlockHeight::from_raw(pod.chain_height),
         })
     }
 
@@ -138,6 +169,10 @@ mod tests {
         assert_eq!(
             FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL),
             FactsFault::Internal
+        );
+        assert_eq!(
+            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT),
+            FactsFault::Inconsistent
         );
         assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
     }

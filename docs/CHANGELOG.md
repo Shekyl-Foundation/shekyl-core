@@ -48,6 +48,20 @@
   "bigger than" the total; an unbounded total contradicts nothing, so
   `ConnLimits::checked` accepts it and refuses only a per-IP cap above a
   *bounded* total, by flag name.
+- **`get_block_count` and `on_get_block_hash` are served natively in Rust
+  (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
+  (`getblockcount`, `on_getblockhash`) answer from
+  `shekyl-daemon-rpc::methods` over the typed facts FFI; the C++ handlers,
+  their `COMMAND_RPC_*` structs and the hand-rolled JSON-array parser in
+  `core_rpc_ffi.cpp` are deleted. Replies are unchanged, pinned by oracle
+  vectors captured from epee first — including that `on_get_block_hash`
+  answers with a bare JSON string rather than an object. Its refusals keep
+  their JSON-RPC codes (`-1` wrong parameter, `-2` height too large) and
+  messages; the too-large message still names the top height, now read in
+  the same call as the hash so the two cannot disagree. **One deliberate
+  change:** a *negative* height is answered `-1` (wrong parameter) instead
+  of `-2` — the old classification came from `std::stoull` wrapping the
+  value in the deleted parser, not from a decision.
 - **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
   natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
   wire types are now `shekyl-rpc-types::{GetHeightResponse,
@@ -68,6 +82,32 @@
   reason text inside a transport-level failure (the 500 envelope's `error`
   string) now names what actually failed instead of "FFI dispatch failed"
   — diagnostic text, not contract (RK-D8 scope).
+
+- **The legacy FCMP++ prove seam is gone.** `genRctFcmpPlusPlus` — the C++ end
+  of the retired C++ → Rust → C++ → Rust proving round-trip — had no caller:
+  production signing moved to `shekyl_sign_fcmp_transaction` (one call), and
+  `core_tests/chaingen.cpp` stopped calling it when the `gen_fcmp_*` tests were
+  deleted. It is deleted with the exports that existed only to serve it
+  (`shekyl_fcmp_prove`, `shekyl_fcmp_proof_len`) and their C++ declarations,
+  including `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, `ShekylFcmpProveResult` and
+  `ProveInputFields`. **No production path changes** — the Rust prover is
+  untouched; this removes a C++ orchestration wrapper and an FFI surface, per
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md) §5 step 1.
+
+  The witness *format* survives and moved rather than died: the FROST multisig
+  coordinator still parses it, so `parse_prove_witness`, its helpers,
+  `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, the `shekyl_fcmp_build_witness_header`
+  writer, `ProveInputFields` and the `WITNESS_HEADER.json` round-trip test are
+  all now `#[cfg(feature = "multisig")]`,
+  which puts the dependency where the compiler enforces it instead of leaving a
+  parser that nothing in a default build reads. Its wire-format spec — the only
+  prose description of the layout — moved onto `parse_prove_witness` **with a
+  correction**: it had documented a 224-byte, 7-field header, omitting the
+  commitment mask, where the real header is 256 bytes and 8 fields.
+
+  `fill_construct_tx_rct_stub` is deliberately **not** deleted: the
+  `construct_tx*` chain that calls it is the C++ consensus oracle's transaction
+  factory, and retiring that is the oracle lane's work.
 - **`shekyl-wallet-rpc` refuses two listen configurations it used to
   accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
   A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped

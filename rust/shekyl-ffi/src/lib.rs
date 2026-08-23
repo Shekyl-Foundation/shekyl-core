@@ -149,7 +149,7 @@ pub use legacy_types::*;
 #[allow(unused_imports)]
 pub use legacy_util::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "multisig"))]
 pub(crate) use legacy_fcmp::parse_prove_witness;
 
 #[cfg(test)]

@@ -135,7 +135,8 @@ both to be compromised simultaneously.
 ### FCMP++ Membership Proof
 
 The proof blob (`fcmp_pp_proof` in `CtSigPrunable`) is an opaque byte
-array produced by the Rust `shekyl_fcmp_prove()` function. It encodes:
+array produced by the Rust prover (`shekyl_fcmp::proof::prove`), reached in
+production through `shekyl_sign_fcmp_transaction`. It encodes:
 
 - Generalized Schnorr Protocol (GSP) transcripts for each input
 - Curve tree path commitments across Helios/Selene layers
@@ -540,9 +541,7 @@ rust/
 | C function | Rust source | Purpose |
 |-----------|-------------|---------|
 | `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
-| `shekyl_fcmp_prove()` | `shekyl-ffi/src/lib.rs` | Generate FCMP++ proof (variable-length witness) |
-| `shekyl_fcmp_verify()` | `shekyl-ffi/src/lib.rs` | Verify FCMP++ proof |
-| `shekyl_fcmp_proof_len()` | `shekyl-ffi/src/lib.rs` | Estimate proof byte length |
+| `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
 | `shekyl_derive_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Derive h_pqc from combined_ss (secret stays in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/lib.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
@@ -596,16 +595,21 @@ and must be preserved by any code that touches the FFI boundary.
    and depth 1 means "one Helios layer above Selene leaves." The upstream
    FCMP++ library's `layers` parameter is a 1-indexed count including the
    leaf layer. **C++ callers are responsible for the conversion:** they
-   must pass `static_cast<uint8_t>(lmdb_depth + 1)` to `shekyl_fcmp_prove`
-   and `shekyl_fcmp_verify`. The FFI functions accept `layers` directly
-   and do not adjust. For `shekyl_sign_fcmp_transaction`, the C++ wallet
-   passes LMDB depth; the Rust signing path converts internally.
+   must pass `static_cast<uint8_t>(lmdb_depth + 1)` to `shekyl_fcmp_verify`,
+   which accepts `layers` directly and does not adjust. For
+   `shekyl_sign_fcmp_transaction` the caller passes LMDB depth and the Rust
+   signing path converts internally. (`shekyl_fcmp_prove` was the third
+   function on this edge and was deleted 2026-08-22 with the legacy prove
+   seam; the multisig witness path carries the same convention in
+   `parse_prove_witness`.)
 
 2. **Branch assembly must include all layers up to and including the root.**
    For a tree with `depth = D`, the witness must contain branch data for
    layers 1 through D inclusive. The loop condition is `layer <= depth`,
-   not `layer < depth`. This applies to `genRctFcmpPlusPlus` (prover) and
-   `assemble_tree_path_for_output` (test/RPC path assembly).
+   not `layer < depth`. This applies to `assemble_tree_path_for_output`
+   (test/RPC path assembly) and to any witness built for the multisig
+   coordinator. (It also applied to `genRctFcmpPlusPlus`, deleted
+   2026-08-22.)
 
 3. **LMDB stores raw curve points; the witness needs cycle scalars.**
    Each LMDB layer stores 32-byte hashes that are points on the
@@ -1226,9 +1230,9 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Key image y-normalization check | **Done** | `blockchain.cpp` |
 | FCMP++ proof FFI call | **Done** | `blockchain.cpp` → `shekyl_fcmp_verify()` |
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
-| `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `ct_semantics.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
-| Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
-| PQC key rederivation from stored secret | **Done** (legacy C++ scan cache; deletion target at rewrite Phase 5) | `wallet2.cpp` |
+| `genRctFcmpPlusPlus` (wallet-side proof) | **Deleted 2026-08-22** | Had no caller; production uses `shekyl_sign_fcmp_transaction` |
+| Wallet tree-path precomputation | **Migrated to Rust** | `wallet2.cpp` was deleted 2026-08-19; the wallet stack is `shekyl-engine-*` / `shekyl-tx-builder` |
+| PQC key rederivation from stored secret | **Deleted 2026-08-19** with `wallet2.cpp` (it was the Phase-5 deletion target named here) | — |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
@@ -1308,17 +1312,17 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Staking tier edge-case tests (Rust) | **Done** | `rust/shekyl-staking/src/tiers.rs` |
 | Real `prove()` in `shekyl-fcmp` (SAL + FCMP circuit + pseudo-outs) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | Real `verify()` in `shekyl-fcmp` (batch verifiers: Ed25519/Selene/Helios) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
-| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Deleted 2026-08-22** | Export gone with the legacy prove seam; `ShekylFcmpProveResult` survives as the multisig coordinator's return type (`legacy_frost.rs`) |
 | FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| C++ callers updated for new FFI signatures | **Done** | `ct_semantics.cpp`, `blockchain.cpp`, `wallet2.cpp` |
+| C++ callers updated for new FFI signatures | **Done** | `ct_semantics.cpp`, `blockchain.cpp` (`wallet2.cpp` deleted 2026-08-19) |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
 | FROST SAL module (`frost_sal.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | `prove_with_sal()` for multisig proof construction | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | FROST DKG key management (`frost_dkg.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `ct_semantics.h/cpp` (test-only; production uses collapsed Rust signing) |
+| FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export is gone with the legacy prove seam; the witness format survives as `parse_prove_witness` / `shekyl_fcmp_build_witness_header` in `rust/shekyl-ffi/src/legacy_fcmp.rs` and `legacy_tx.rs`, both `#[cfg(feature = "multisig")]` and read by the FROST coordinator |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deleted 2026-08-22** | Had no caller; production signing is `shekyl_sign_fcmp_transaction` (`CT_SURFACE_NAMING_PIN.md` §5 step 1) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
@@ -1754,8 +1758,23 @@ serialized immediately after `enc_amounts` and before `outPk`:
   verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
   cleartext sentinel-vs-tag discriminator).
 - Included in `serialize_ctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
-- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
-- `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
+- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_ctsig_base_prehash`.
+- ~~`genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test
+  device mode~~ — **the guard was deleted with its host, 2026-08-22, and
+  nothing replaced it.** No live coverage was lost: `genRctFcmpPlusPlus` had
+  no caller, so the check was unreachable and enforced nothing. But the
+  invariant it *stated* is real, though not for the obvious reason. An all-zero
+  *plaintext* is harmless — `0x00…00 XOR k_label[..8]` is uniform, so §5.7.10
+  holds for it as for the sentinel. What the guard was catching is the stub
+  writing the field **without encrypting it at all**
+  (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
+  the label encryption), which puts a literal `00×9` on the wire, identical
+  across every output, with `label_tag` zero where a derived tag is uniform.
+  The Rust signing path takes `enc_label` as a plain `[u8; 9]`
+  (`shekyl-tx-builder/src/types.rs`), so an unencrypted value is representable
+  there too. Filed in `FOLLOWUPS.md` with a type-level fix rather than a
+  zero-check; recorded here rather than dropped, because a deletion that
+  retires an unreachable check must not also retire the invariant silently.
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 - **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`
@@ -1958,6 +1977,6 @@ assert that `enc_amount` comes from chain lookup, not from the proof.
 - `docs/AUDIT_SCOPE.md` — 4-scalar leaf circuit security audit scope
 - `tests/stressnet/README.md` — stressnet operational guide (pre-audit gate)
 - `src/shekyl/shekyl_ffi.h` — FFI declarations
-- `src/fcmp/ct_semantics.h` — `genRctFcmpPlusPlus` declaration
+- `src/fcmp/ct_semantics.h` — CT semantics verification declarations (`verCtSemantics*`, `get_tx_prehash`)
 - `rust/shekyl-fcmp/` — Rust FCMP++ proof implementation
 - `rust/shekyl-crypto-pq/` — PQC primitives, KEM, address encoding

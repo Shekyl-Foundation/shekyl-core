@@ -11,9 +11,12 @@ use super::legacy_util::*;
 /// Generate FCMP++ transaction proofs in a single call (BP+, FCMP++, ECDH,
 /// pseudo-outs).
 ///
-/// This replaces the old C++ → Rust → C++ → Rust round-trip through
+/// This replaced the old C++ → Rust → C++ → Rust round-trip through
 /// `genRctFcmpPlusPlus` + `shekyl_fcmp_prove` + `shekyl_pqc_sign` with a
-/// single FFI entry point.
+/// single FFI entry point. The first two of those no longer exist — they were
+/// deleted once this entry point had been the only production path for long
+/// enough that their last caller went away; `shekyl_pqc_sign` remains, still
+/// exercised by `tests/unit_tests/fcmp.cpp`.
 ///
 /// # Parameters
 ///
@@ -347,6 +350,11 @@ fn curve25519_scalar_from_bytes(bytes: &[u8; 32]) -> Option<curve25519_dalek::Sc
 
 // ─── Output Construction / Scanning / PQC Signing ────────────────────────────
 
+// Writer half of the witness seam. Its reader (`parse_prove_witness`) serves
+// only the multisig coordinator, so both sit under the same feature: a default
+// build exporting a writer would offer to produce bytes nothing in that build
+// can consume.
+#[cfg(feature = "multisig")]
 /// Build the 256-byte witness header from a typed struct.
 ///
 /// # Safety

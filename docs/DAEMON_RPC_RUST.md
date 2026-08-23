@@ -248,6 +248,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | Surface | Axum | FFI | Live consumer | Disposition |
 |---------|------|-----|---------------|-------------|
 | `/get_height` (+ `/getheight`), `get_version` | yes | **native Rust** (RK-1: `shekyl-daemon-rpc::methods` over `shekyl_rpc_chain_tip` / `shekyl_rpc_hardforks`) | wallets / console | migrated 2026-08-21 |
+| `get_block_count` (+ `getblockcount`), `on_get_block_hash` (+ `on_getblockhash`) | `/json_rpc` | **native Rust** (RK-2: over `shekyl_rpc_chain_tip` / `shekyl_rpc_block_hash_at`) | python-rpc, stressnet | migrated 2026-08-22 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
 | Binary sync (`/get_blocks.bin`, hashes, indexes) | yes | yes | wallet refresh | keep |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |

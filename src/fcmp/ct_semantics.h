@@ -65,30 +65,6 @@ namespace hw {
 
 namespace ct {
 
-    // Per-output data in a leaf chunk (compressed Ed25519 points + PQC hash).
-    struct fcmp_chunk_entry {
-        key output_key;    // O
-        key key_image_gen; // I = Hp(O)
-        key commitment;    // C
-        key h_pqc;         // H(pqc_pk)
-    };
-
-    // DEPRECATED: Production wallet code now uses shekyl_sign_fcmp_transaction (Rust FFI).
-    // Retained only for core_tests/chaingen.cpp test infrastructure until that is migrated.
-    // TODO(PR-wallet): migrate chaingen.cpp to shekyl_sign_fcmp_transaction and delete this.
-    CtSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
-                               const keyV &destinations, const std::vector<xmr_amount> &inamounts,
-                               const std::vector<xmr_amount> &outamounts,
-                               const keyV &commitment_masks,
-                               const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
-                               const std::vector<std::array<uint8_t, 9>> &enc_labels_precomputed,
-                               const keyV &spend_key_y,
-                               xmr_amount txnFee, const crypto::hash &referenceBlock,
-                               const key &tree_root, uint8_t tree_depth,
-                               const std::vector<std::vector<uint8_t>> &tree_paths,
-                               const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
-                               const std::vector<key> &pqc_pk_hashes, hw::device &hwdev);
-
     /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
     void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,

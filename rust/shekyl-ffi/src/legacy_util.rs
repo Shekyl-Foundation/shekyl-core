@@ -74,6 +74,12 @@ pub(crate) unsafe fn array_from_ptr<const N: usize>(ptr: *const u8) -> Option<[u
 /// `stride`-byte elements. Wire-embedded counts must go through this;
 /// a raw `with_capacity(wire_count)` is the host-abort class SA-R-7
 /// clause 2 names. `stride == 0` is a caller bug and refuses.
+// Ratchet-mandated allocation path (`tests/ffi_boundary_ratchet.rs`), so it stays
+// ungated and available to any future wire parser. Its only non-test callers today
+// are the multisig witness parsers, so allow dead code exactly in the build where
+// that is true — the allow disappears under `--features multisig`, where a genuine
+// disuse would still fail the build.
+#[cfg_attr(not(feature = "multisig"), allow(dead_code))]
 pub(crate) fn bounded_capacity<T>(count: usize, stride: usize, remaining: usize) -> Option<Vec<T>> {
     if stride == 0 || count > remaining / stride {
         return None;

@@ -16,10 +16,18 @@ pub struct ShekylBuffer {
     pub len: usize,
 }
 
+// Part of the witness seam, not a general constant: every reference to it —
+// parser, writer, tests — is multisig-gated, so it carries the same cfg.
+// This replaces an allow(dead_code): a suppression that hides the fact was
+// worse than a cfg that states it, and the pin documents the seam as gated.
+#[cfg(feature = "multisig")]
 pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 256;
 
-/// Typed struct for passing FCMP++ prover inputs across FFI.
-/// C++ fills named fields instead of writing at hand-counted byte offsets.
+/// Typed struct for passing FCMP++ prover inputs across the C ABI.
+/// A caller fills named fields instead of writing at hand-counted byte
+/// offsets. No C++ caller remains — the C++ declaration went with the legacy
+/// prove seam — so this serves the multisig witness seam only.
+#[cfg(feature = "multisig")]
 #[repr(C)]
 pub struct ProveInputFields {
     pub output_key: [u8; 32],

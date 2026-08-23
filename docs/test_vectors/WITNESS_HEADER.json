@@ -1,5 +1,5 @@
 {
-  "description": "Locked test vectors for FCMP++ witness header round-trip. The 256-byte header layout is [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]. C++ writes via shekyl_fcmp_build_witness_header, Rust parses via parse_prove_witness. Any change to this file is a consensus change.",
+  "description": "Locked test vectors for FCMP++ witness header round-trip. The 256-byte header layout is [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]. Written via shekyl_fcmp_build_witness_header and parsed via parse_prove_witness, both Rust and both gated on feature=multisig; the C++ declarations were deleted with the legacy prove seam. Any change to this file is a consensus change.",
   "header_size_bytes": 256,
   "field_layout": [
     {"name": "output_key",      "offset": 0,   "size": 32, "description": "O: output public key"},

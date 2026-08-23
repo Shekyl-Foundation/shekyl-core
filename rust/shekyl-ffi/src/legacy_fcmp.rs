@@ -176,25 +176,35 @@ pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
     shekyl_crypto_pq::derivation::derive_view_tag_prefilter(&ss, output_index)
 }
 
-/// Compute the expected FCMP++ proof size given input count and tree depth.
-#[no_mangle]
-pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usize {
-    shekyl_fcmp::tree::proof_size(num_inputs as usize, tree_depth as usize)
-}
-
-/// Construct an FCMP++ proof from a variable-length witness blob.
+// Witness parsing exists for one consumer: the FROST multisig coordinator
+// in `legacy_frost`, whose entire surface is `feature = "multisig"`. The
+// same cfg here is the compiler-enforced statement of that: the default
+// build has no witness reader because nothing in it reads a witness.
+#[cfg(feature = "multisig")]
+/// Parse the serialized FCMP++ prove witness into typed prove inputs.
 ///
-/// `witness_ptr` / `witness_len`: the complete serialized witness for all inputs.
+/// This function owns the witness wire format. It is consumed by the FROST
+/// multisig coordinator (`shekyl_frost_coordinator_aggregate_and_prove`),
+/// which is the only remaining reader; the C-ABI writer for the fixed header
+/// is `shekyl_fcmp_build_witness_header`, and the two are pinned against each
+/// other by `witness_header_build_then_parse_roundtrip` over
+/// `docs/test_vectors/WITNESS_HEADER.json`.
 ///
 /// Wire format (all multi-byte integers are little-endian):
 ///
 /// ```text
 /// For each of `num_inputs` inputs, sequentially:
-///   Fixed header (224 bytes):
-///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][pseudo_out_blind:32]
+///   Fixed header (SHEKYL_PROVE_WITNESS_HEADER_BYTES = 256 bytes, 8 fields):
+///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][z:32][a:32]
 ///     O, I, C are compressed Ed25519 output points.
-///     pseudo_out_blind is the desired blinding factor a_i for this input's
-///     pseudo-out commitment (r_c = a_i - spend_y).
+///     z is the Pedersen commitment mask (C = z*G + amount*H).
+///     a is the desired blinding factor for this input's pseudo-out
+///       commitment. The rerandomization scalar is `r_c = a - z`, giving
+///       `C_tilde = (z + r_c)*G + amount*H = a*G + amount*H` — see
+///       `shekyl_fcmp::proof::ProveInput::pseudo_out_blind`, which computes
+///       it. It is `z`, never `spend_y`: the commitment mask is independent
+///       of the SAL output-key T-component (`FCMP_PLUS_PLUS.md`
+///       §"Commitment Mask Independence").
 ///   Leaf chunk (variable):
 ///     leaf_chunk_count: u32
 ///     For each entry (128 bytes):
@@ -211,80 +221,9 @@ pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usiz
 ///       siblings: sibling_count * 32 bytes (Helios scalars)
 /// ```
 ///
-/// `tree_root_ptr`: 32-byte curve tree root.
-/// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_fcmp_prove(
-    witness_ptr: *const u8,
-    witness_len: usize,
-    num_inputs: u32,
-    tree_root_ptr: *const u8,
-    tree_depth: u8,
-    signable_tx_hash_ptr: *const u8,
-) -> ShekylFcmpProveResult {
-    let fail = ShekylFcmpProveResult {
-        proof: ShekylBuffer::null(),
-        pseudo_outs: ShekylBuffer::null(),
-        success: false,
-    };
-
-    if witness_ptr.is_null() || tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
-        return fail;
-    }
-
-    let n = num_inputs as usize;
-    if n == 0 || n > shekyl_fcmp::MAX_INPUTS {
-        return fail;
-    }
-
-    let Some(witness) = (unsafe { slice_from_ptr(witness_ptr, witness_len) }) else {
-        return fail;
-    };
-    let tree_root: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-    let signable_tx_hash: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-
-    let Some(inputs) = parse_prove_witness(witness, n) else {
-        return fail;
-    };
-
-    // The `tree_depth` parameter is the upstream library's `layers` count:
-    // the total number of tree layers including the leaf layer. C++ callers
-    // are responsible for converting LMDB depth to layers (depth + 1) before
-    // calling this function. See FCMP_PLUS_PLUS.md §FFI Invariants.
-    //
-    //   layers 1 = single Selene root (degenerate, root IS the leaf hash).
-    //   layers 2 = Selene leaves → Helios root.
-    //   layers 3 = Selene leaves → Helios → Selene root.
-    //
-    //   Root curve parity: layers % 2 == 1 → C1 (Selene), == 0 → C2 (Helios).
-
-    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth, signable_tx_hash) {
-        Ok(result) => {
-            let mut po_flat = Vec::with_capacity(n * 32);
-            for po in &result.pseudo_outs {
-                po_flat.extend_from_slice(po);
-            }
-            ShekylFcmpProveResult {
-                proof: ShekylBuffer::from_vec(result.proof.data),
-                pseudo_outs: ShekylBuffer::from_vec(po_flat),
-                success: true,
-            }
-        }
-        Err(_) => fail,
-    }
-}
-
+/// The field list is the authority for `ProveInputFields` and for the JSON
+/// vectors; all three must agree, and the round-trip test is what makes a
+/// disagreement fail rather than silently misalign every subsequent input.
 pub(crate) fn parse_prove_witness(
     data: &[u8],
     num_inputs: usize,
@@ -340,14 +279,17 @@ pub(crate) fn parse_prove_witness(
     Some(inputs)
 }
 
+#[cfg(feature = "multisig")]
 fn read_u32_le(data: &[u8], offset: &mut usize) -> Option<usize> {
     let bytes = data.get(*offset..*offset + 4)?;
     *offset += 4;
     Some(u32::from_le_bytes(bytes.try_into().ok()?) as usize)
 }
 
+#[cfg(feature = "multisig")]
 type LeafChunkOutput = ([u8; 32], [u8; 32], [u8; 32]);
 
+#[cfg(feature = "multisig")]
 fn parse_leaf_chunks(
     data: &[u8],
     offset: &mut usize,
@@ -376,6 +318,7 @@ fn parse_leaf_chunks(
 /// C1 and C2 branch layers share a wire shape: a u32 layer count, then
 /// per layer a u32 sibling count and that many 32-byte scalars. One
 /// parser so the sibling-count reserve goes through [`bounded_capacity`].
+#[cfg(feature = "multisig")]
 fn parse_branch_layers(
     data: &[u8],
     offset: &mut usize,
@@ -478,9 +421,11 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         buf
     };
 
-    // The `tree_depth` parameter is the upstream library's `layers` count.
-    // C++ callers convert LMDB depth to layers (depth + 1) before calling.
-    // See convention comment in shekyl_fcmp_prove.
+    // The `tree_depth` parameter is the upstream library's `layers` count,
+    // not the LMDB tree depth: callers convert with `layers = lmdb_depth + 1`
+    // before calling. Stated here rather than cross-referenced -- this was the
+    // convention's only remaining statement after the legacy prove entry point
+    // that used to document it was deleted.
 
     let proof = shekyl_fcmp::proof::ShekylFcmpProof {
         data: proof_bytes.to_vec(),
@@ -558,7 +503,7 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     if po_count != pqc_hash_count {
         return 8; // VerifyError::InputCountMismatch
     }
-    // Cap the per-input arity at MAX_INPUTS, mirroring `shekyl_fcmp_prove`: a valid proof never
+    // Cap the per-input arity at MAX_INPUTS: a valid proof never
     // exceeds it, so this rejects an oversized attacker-controlled count before any allocation,
     // bounds the `.collect()`s below, and makes `po_count as u32` a lossless narrowing (no
     // truncation). `po_count == pqc_hash_count` is already established, so this bounds both.
@@ -672,7 +617,9 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
     ShekylBuffer::from_vec(serialized)
 }
 
-#[cfg(test)]
+// Both tests here exercise `parse_prove_witness`, so they carry its feature:
+// the hostile-count attack surface exists exactly where the parser does.
+#[cfg(all(test, feature = "multisig"))]
 mod tests {
     use super::*;
 

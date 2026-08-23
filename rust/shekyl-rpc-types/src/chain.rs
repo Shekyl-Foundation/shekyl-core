@@ -61,6 +61,17 @@ impl RpcStatus {
     }
 }
 
+/// JSON-RPC error code for a malformed request (`CORE_RPC_ERROR_CODE_WRONG_PARAM`).
+///
+/// This and [`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`] are the codes a client
+/// branches on, so they live with the wire types. `src/rpc/core_rpc_server_error_codes.h`
+/// still spells them for the ~26 handlers that remain in C++; that header is
+/// deleted at RK-X, leaving these as the only definition.
+pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
+/// JSON-RPC error code for a height at or past the chain tip
+/// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
+pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
+
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
 /// names what failed (diagnostic text — RK-D8 scope — not contract). The
@@ -83,6 +94,28 @@ pub struct GetHeightResponse {
     /// The top block's hash, 64 lowercase hex characters.
     pub hash: String,
 }
+
+/// Result of the `get_block_count` JSON-RPC method (alias `getblockcount`).
+/// Params are ignored, as the C++ handler ignored its positional list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockCountResponse {
+    pub status: RpcStatus,
+    /// Chain height — the block *count*, i.e. top block height plus one.
+    pub count: u64,
+}
+
+/// Positional params of `on_get_block_hash` (alias `on_getblockhash`):
+/// exactly one height, e.g. `[1234]`.
+///
+/// The arity and element type are the deserializer's job, not a hand-written
+/// parser's: `[u64; 1]` refuses `[]`, `[1,2]`, `["1"]` and `[-1]` structurally,
+/// and each of those is the method's `WRONG_PARAM` refusal.
+///
+/// The reply has no type of its own — `on_get_block_hash` answers with a bare
+/// JSON string (the block hash as 64 lowercase hex characters), not an object,
+/// and carries no `status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockHashParams(pub [u64; 1]);
 
 /// One row of [`GetVersionResponse::hard_forks`]: the version that activates
 /// at `height`.
@@ -144,6 +177,22 @@ mod tests {
         let back: RestErrorEnvelope = serde_json::from_str(&wire).unwrap();
         assert_eq!(back, e);
         assert!(!back.status.is_ok());
+    }
+
+    /// The params type is the arity/type check: every shape the C++ handler
+    /// answered `WRONG_PARAM` for is a deserialize failure here, and a valid
+    /// `[height]` is the height. Widening the type (to `Vec<u64>`, say) turns
+    /// the refusal cases green — which is the edit this guards.
+    #[test]
+    fn block_hash_params_accept_one_height_and_nothing_else() {
+        let ok: GetBlockHashParams = serde_json::from_str("[1234]").unwrap();
+        assert_eq!(ok.0[0], 1234);
+        for bad in ["[]", "[1,2]", r#"["1"]"#, "[-1]", "1234", "{}", "null"] {
+            assert!(
+                serde_json::from_str::<GetBlockHashParams>(bad).is_err(),
+                "{bad} must not parse as one height"
+            );
+        }
     }
 
     #[test]
