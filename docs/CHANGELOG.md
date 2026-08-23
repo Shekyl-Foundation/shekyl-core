@@ -20,10 +20,17 @@
   disclosure module moved from `shekyl-cli` into `shekyl-rpc-transport`
   (`network_posture`) so both binaries say it in the same words — the
   outbound twin of the shared `listen` classifier — and it is pure: each
-  binary emits in its own voice. **Also:** both wallets' `--daemon-address`
-  defaults named ports no daemon serves (`localhost:11028`,
-  `http://127.0.0.1:28581`); they are now the mainnet daemon's loopback RPC
-  port, `127.0.0.1:11029`.
+  binary emits in its own voice. The two sides now share one loopback
+  predicate (`listen::is_loopback_ip`), so `[::ffff:127.0.0.1]` is loopback
+  for a daemon address as it is for a bind; a zone-scoped literal
+  (`fe80::1%eth0`) is a literal, not a name to leak; and bare `socks://`
+  counts as local-resolving, as the dialers that accept it read it.
+  **Also:** both wallets' `--daemon-address` defaults named ports no daemon
+  serves (`localhost:11028`, `http://127.0.0.1:28581`). The flag is now
+  optional and its default follows `--network` — this machine's daemon at
+  that network's RPC port (`Network::daemon_rpc_port`, pinned by a test to
+  the daemon's `cryptonote_config.h`) — so a testnet wallet finds a testnet
+  daemon without the operator knowing the port.
 - **The daemon RPC binds loopback only; `--confirm-external-bind` is
   retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
   spellings) is refused unconditionally — consent to interfaces that do

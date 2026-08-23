@@ -1969,7 +1969,7 @@ grounds, any one sufficient:
 **The ratified replacement**, in two parts with different build states:
 
 **(a) The asymmetric warn-only disclosure — BUILT (2026-07-23, post-#358).**
-`shekyl-cli`'s `network_posture` module classifies each endpoint the process
+The `network_posture` module (in `shekyl-rpc-transport` since 2026-08-23, RT-W7; in `shekyl-cli` before) classifies each endpoint the process
 actually opens and emits *at most* a warning: non-loopback with no proxy
 warns; loopback, unix socket, or any configured proxy is silent; **no
 configuration ever draws an assurance** (the load-bearing half — a positive

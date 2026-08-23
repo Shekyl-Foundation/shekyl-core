@@ -169,7 +169,7 @@ shekyl-cli [options]
 
 | Option | Description |
 |--------|-------------|
-| `--daemon-address <host:port\|url>` | Daemon the self-hosted wallet RPC connects to (default `127.0.0.1:11029`, the mainnet daemon's loopback RPC port). Ignored with `--rpc-url`. A daemon that is not loopback is said out loud at startup: whoever operates it sees which blocks the wallet requests and what it broadcasts, and no proxy or encryption changes that — there is no recommended configuration with a daemon you do not control (`RPC_TRANSPORT_POSTURE.md` §1) |
+| `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
 | `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
 | `--network <type>` | `mainnet` (default), `testnet`, or `stagenet`. Ignored with `--rpc-url` |
 | `--engine-dir <path>` | Directory for wallet files (default `.`). Ignored with `--rpc-url` |
@@ -259,11 +259,11 @@ shekyl-cli [options]
 
 ```bash
 # Create a new wallet interactively
-shekyl-cli --wallet-dir ~/wallets
+shekyl-cli --engine-dir ~/wallets
 
-# Open an existing wallet against a testnet daemon
-shekyl-cli --network testnet --wallet-file ~/wallets/testnet \
-           --daemon-address 127.0.0.1:12029
+# Open an existing wallet against the testnet daemon on this machine (the
+# default daemon address follows --network)
+shekyl-cli --network testnet --engine-dir ~/wallets --engine-file testnet
 
 # Reach a node of yours on another machine through its onion service
 shekyl-cli --proxy socks5h://127.0.0.1:9050 \
@@ -298,7 +298,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
 | `--rpc-login <user:pass>` | HTTP basic authentication, `NAME:PASSWORD` with **both halves non-empty** — a value without `:`, or with a blank half, is refused at startup. Required for any non-loopback `--rpc-bind` (where the server also logs that Basic travels in the clear until the TLS leg lands); omitted = auth disabled, accepted only on loopback or a UDS socket |
 | `--disable-rpc-login` | Run without authentication. Refused on a non-loopback bind, and refused together with `--rpc-login` (a contradiction, not a precedence) |
-| `--daemon-address <url>` | Daemon JSON-RPC base URL (default `http://127.0.0.1:11029`, the mainnet daemon's loopback RPC port). A daemon that is not loopback is disclosed in the log at startup: its operator sees which blocks the wallet requests and what it broadcasts, `--proxy` or not (`RPC_TRANSPORT_POSTURE.md` §1) |
+| `--daemon-address <url>` | Daemon JSON-RPC base URL. Default: this machine's daemon at the RPC port for `--network` (`http://127.0.0.1:11029` on mainnet). A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (`RPC_TRANSPORT_POSTURE.md` §1) |
 | `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
 | `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
 | `--log-file <path>` | Optional file sink for `tracing` events |

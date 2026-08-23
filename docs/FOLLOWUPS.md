@@ -11503,28 +11503,30 @@ one place to confirm each item's relationship to the wallet stack.
   **Target:** none until the trigger fires (rule 21: rejected now, criterion
   named).
 
-- **The GUI's daemon-URL setting carries no §1 statement** (added
-  2026-08-23, RT-W7). `shekyl-cli` and `shekyl-wallet-rpc` now say, for a
-  `--daemon-address` that is not loopback, what a daemon's operator learns
-  by serving (`RPC_TRANSPORT_POSTURE.md` §1). The GUI wallet configures the
-  same address in its Settings panel and drives `shekyl-wallet-rpc`, whose
-  `warn!` lands in a log the GUI user never reads; the panel itself says
-  nothing. The text is one function
-  (`shekyl_rpc_transport::network_posture::operator_warning`); the GUI needs
-  a display surface for it at the point of configuration. **Trigger:** the
-  GUI's next Settings-panel change, or the first report of a foreign daemon
-  URL in use. **Target:** shekyl-gui-wallet, V3.2.
-
-- **`--daemon-address` defaults to the mainnet port only** (added
-  2026-08-23, RT-W7). Both wallets default to `127.0.0.1:11029`, the
-  mainnet daemon's loopback RPC port (corrected in RT-W7 from
-  `localhost:11028` / `http://127.0.0.1:28581`, which no daemon serves);
-  `--network testnet` / `stagenet` still need an explicit address because
-  the per-network RPC ports (`12029`, `13029`) live only in C++
-  `cryptonote_config.h`. A network-derived default belongs with the port
-  constants' move to Rust, not as a second copy (a deliberate duplicate
-  needs an uncrossable boundary). **Trigger:** the daemon's network config
-  moves to Rust. **Target:** V3.2.
+- **The GUI dials its daemon with nothing said — and a dial that says
+  nothing is constructible** (added 2026-08-23, RT-W7). `shekyl-cli` and
+  `shekyl-wallet-rpc` now disclose a `--daemon-address` that is not
+  loopback (`RPC_TRANSPORT_POSTURE.md` §1), each at its own call site. The
+  GUI wallet does not run `shekyl-wallet-rpc`: it dials the daemon itself
+  (`shekyl-gui-wallet/src-tauri/src/engine_session.rs`,
+  `shekyl_rpc_transport::HttpRpc::new(url)`) and its `set_daemon_connection`
+  stores the URL unclassified, so on that path there is no statement
+  anywhere — not one in the wrong place. Two parts. *Now, in the GUI repo:*
+  it already depends on `shekyl-rpc-transport`, so
+  `network_posture::daemon_disclosures(.., None, AlwaysRemote)` at
+  `set_daemon_connection`, rendered in the Settings panel, is one call —
+  the sibling sweep after RT-W7 merges. *The seam:* RT-W1 filed
+  `ValidatedListen` with the trigger "a third bind site or an
+  out-of-workspace embedder"; the outbound analogue's trigger has fired (the
+  GUI is that embedder, and `spawn_in_process_with` already relies on a
+  comment for its coverage). The form: `validate_endpoint` returns a
+  `ValidatedEndpoint` carrying its `DaemonDisclosures`, and
+  `HttpRpc::new` takes it, so a daemon dial cannot be constructed without
+  the statements having passed through the caller's hands — each binary
+  still emits in its own voice. Touches `engine-core`'s `make_daemon`, the
+  wallet-rpc `DaemonEndpoint`, and the GUI: its own validation surface
+  (rule 19), so its own PR. **Target:** V3.2, next in the RT lane after the
+  GUI call.
 
 - **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
   (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
@@ -12632,7 +12634,7 @@ one place to confirm each item's relationship to the wallet stack.
   2026-07-23** (WI-4 §15 head banner: the endpoint check errs in both directions and
   removes choice on a proxy signal; the ratified replacement is the asymmetric warn-only
   rule + circuit isolation — persona side already built; the warn-only disclosure BUILT
-  2026-07-23 (`shekyl-cli::network_posture`), the principal-side Tor default flip still open). The §4.3.1/§13.1 in-model ceiling
+  2026-07-23 (`shekyl_rpc_transport::network_posture`, in `shekyl-cli` until RT-W7, 2026-08-23), the principal-side Tor default flip still open). The §4.3.1/§13.1 in-model ceiling
   is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
   strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
   posture converted from policy to structure under the global-and-blind constraint (sort on

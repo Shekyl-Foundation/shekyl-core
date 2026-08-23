@@ -66,6 +66,19 @@ pub struct DaemonClient {
     agent: ureq::Agent,
 }
 
+/// Normalize a daemon address to the URL form the transports expect: a
+/// scheme-less `host:port` is `http://host:port`; a URL is itself. The one
+/// reading of `--daemon-address`, for the self-hosted server's scan
+/// transport and the REPL's direct client alike.
+#[must_use]
+pub fn daemon_url(daemon_address: &str) -> String {
+    if daemon_address.contains("://") {
+        daemon_address.to_owned()
+    } else {
+        format!("http://{daemon_address}")
+    }
+}
+
 impl DaemonClient {
     /// Build a new daemon client.
     ///
@@ -84,11 +97,7 @@ impl DaemonClient {
             return Err(DaemonError::NotConfigured);
         }
 
-        let url = if daemon_address.contains("://") {
-            daemon_address.to_string()
-        } else {
-            format!("http://{daemon_address}")
-        };
+        let url = daemon_url(daemon_address);
 
         let mut config_builder = ureq::Agent::config_builder();
 

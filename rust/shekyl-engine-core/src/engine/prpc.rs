@@ -197,15 +197,11 @@ impl LocalNodeRpc {
         } else {
             authority.rsplit_once(':').map_or(authority, |(h, _)| h)
         };
-        // The loopback pin proper: parse to an address and use the standard
-        // classifier (the `conn_limit.rs` idiom) — a literal allowlist would
-        // wrongly refuse legitimate loopback forms like `127.0.0.2`.
-        // `localhost` is the one accepted non-numeric form.
-        let is_loopback = host == "localhost"
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        if !is_loopback {
+        // The loopback pin proper: the one loopback predicate the tree has
+        // (`localhost`, and any literal the listen side classifies as
+        // loopback, IPv4-mapped spellings included) — a literal allowlist
+        // would wrongly refuse legitimate loopback forms like `127.0.0.2`.
+        if !shekyl_rpc_transport::network_posture::is_loopback_host(host) {
             return Err(RpcError::ConnectionError(format!(
                 "local-posture transport refuses non-loopback host {host:?} \
                  (the shared-network-identity argument only holds on the \

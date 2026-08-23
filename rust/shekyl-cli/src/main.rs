@@ -44,10 +44,12 @@ enum Commands {
 
 #[derive(Parser)]
 pub struct ReplArgs {
-    /// Daemon address the self-hosted wallet RPC connects to
-    /// (host:port or full URL). Ignored with --rpc-url.
-    #[arg(long, default_value = "127.0.0.1:11029")]
-    daemon_address: String,
+    /// Daemon address (host:port or full URL). Default: this machine's
+    /// daemon at the RPC port for --network. With --rpc-url the self-hosted
+    /// wallet RPC is not started, but the REPL still queries the daemon at
+    /// this address directly.
+    #[arg(long)]
+    daemon_address: Option<String>,
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
     /// self-hosting one (http://host:port, or uds:///path/to.sock on Unix).
@@ -84,6 +86,22 @@ pub struct ReplArgs {
     pub debug: bool,
 }
 
+impl ReplArgs {
+    /// The daemon address this invocation dials: the flag as given, or the
+    /// loopback daemon at `--network`'s RPC port — the wallet knows the
+    /// protocol's ports so the operator need not. An unknown `--network`
+    /// fails here, before anything is dialed.
+    fn daemon_address(&self) -> Result<String, String> {
+        match &self.daemon_address {
+            Some(given) => Ok(given.clone()),
+            None => Ok(format!(
+                "127.0.0.1:{}",
+                parse_network(&self.network)?.daemon_rpc_port()
+            )),
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -115,9 +133,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// `opens_direct_daemon` is `true` for the REPL, which builds its own
 /// `DaemonClient` from `--daemon-address` **in addition to** the RPC session —
 /// so with `--rpc-url` set the REPL has two distinct live endpoints, and both
-/// must be disclosed. (The flag's "ignored with --rpc-url" note covers only the
-/// self-hosted server's daemon connection, not the REPL's direct client.)
-fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
+/// must be disclosed; a scripted run against an external server opens no
+/// daemon endpoint of its own and says nothing about one.
+///
+/// Called after the session is built, so what is said is about an endpoint
+/// this run will use: the self-hosted server has validated the daemon
+/// endpoint by then and a refused address is never announced (the same
+/// order `shekyl-wallet-rpc` keeps in `run_server`).
+fn disclose_network_posture(cli: &ReplArgs, daemon_address: &str, opens_direct_daemon: bool) {
     // The module says what is true; this binary says it on stderr, where
     // the operator who typed the flag is looking.
     fn say(warnings: impl IntoIterator<Item = String>) {
@@ -127,60 +150,54 @@ fn disclose_network_posture(cli: &ReplArgs, opens_direct_daemon: bool) {
     }
 
     let proxy = cli.proxy.as_deref();
-    match &cli.rpc_url {
-        Some(url) => {
-            // Only disclose a --rpc-url that connect() will accept: an
-            // unsupported scheme is rejected before any endpoint is opened, so
-            // warning about it would contradict "endpoints actually used".
-            // The far end is a wallet server, not a daemon: the path
-            // disclosure alone.
-            if rpc_client::is_supported_rpc_url(url) {
-                say(network_posture::disclose(
-                    "wallet-RPC endpoint",
-                    url,
-                    proxy,
-                    ProxyResolution::HonorsScheme,
-                ));
-            }
-            if opens_direct_daemon {
-                say(network_posture::daemon_disclosures(
-                    "daemon address",
-                    &cli.daemon_address,
-                    proxy,
-                    ProxyResolution::HonorsScheme,
-                ));
-            }
-        }
-        // Self-hosted: the in-process wallet server does the bulk block scan
-        // to the daemon, and that transport honors --proxy with SOCKS5h
-        // semantics regardless of scheme — it never resolves the daemon
-        // hostname locally. The REPL *additionally* opens a direct ureq
-        // daemon client on the same address, and that client does honor the
-        // scheme (socks5:// = local resolve). So the DNS-leak disclosure
-        // applies exactly when the REPL client will open: on a scripted run
-        // the only connection is the always-remote scan, and warning would
-        // assert a lookup no opened transport performs (§15 warns only on
-        // established weaknesses). One disclosure covers both transports,
-        // since they share endpoint and proxy.
-        None => {
-            let resolution = if opens_direct_daemon {
-                ProxyResolution::HonorsScheme
-            } else {
-                ProxyResolution::AlwaysRemote
-            };
-            say(network_posture::daemon_disclosures(
-                "daemon address",
-                &cli.daemon_address,
+    if let Some(url) = &cli.rpc_url {
+        // Only disclose a --rpc-url that connect() will accept: an
+        // unsupported scheme is rejected before any endpoint is opened, so
+        // warning about it would contradict "endpoints actually used". The
+        // far end is a wallet server, not a daemon: the path disclosure alone.
+        if rpc_client::is_supported_rpc_url(url) {
+            say(network_posture::disclose(
+                "wallet-RPC endpoint",
+                url,
                 proxy,
-                resolution,
+                ProxyResolution::HonorsScheme,
             ));
         }
+    }
+
+    // Which daemon transport this run opens decides how a hostname resolves
+    // under --proxy, and so whether the DNS-leak half of the disclosure is
+    // true. The in-process server's bulk scan honors --proxy with SOCKS5h
+    // semantics regardless of scheme — it never resolves the daemon hostname
+    // locally. The REPL *additionally* opens a direct ureq daemon client on
+    // the same address, and that client does honor the scheme (socks5:// =
+    // local resolve). So: the REPL discloses as scheme-honoring; a scripted
+    // self-hosted run as always-remote (warning there would assert a lookup
+    // no opened transport performs — §15 warns only on established
+    // weaknesses); a scripted run against an external server opens no
+    // daemon endpoint at all. One disclosure covers both REPL transports,
+    // since they share endpoint and proxy.
+    let daemon = match (&cli.rpc_url, opens_direct_daemon) {
+        (_, true) => Some(ProxyResolution::HonorsScheme),
+        (None, false) => Some(ProxyResolution::AlwaysRemote),
+        (Some(_), false) => None,
+    };
+    if let Some(resolution) = daemon {
+        say(network_posture::daemon_disclosures(
+            "daemon address",
+            daemon_address,
+            proxy,
+            resolution,
+        ));
     }
 }
 
 /// Build the wallet-RPC session from the shared connection flags: an external
 /// daemon when `--rpc-url` is set, otherwise a self-hosted in-process server.
-fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
+fn build_session(
+    cli: &ReplArgs,
+    daemon_address: &str,
+) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
     match &cli.rpc_url {
         Some(url) => Ok(rpc_client::RpcSession::connect(
             url,
@@ -192,7 +209,7 @@ fn build_session(cli: &ReplArgs) -> Result<rpc_client::RpcSession, Box<dyn std::
             Ok(rpc_client::RpcSession::host_in_process(
                 std::path::PathBuf::from(&cli.engine_dir),
                 network,
-                daemon_url(&cli.daemon_address),
+                daemon::daemon_url(daemon_address),
                 cli.proxy.clone(),
                 cli.debug,
             )?)
@@ -208,8 +225,9 @@ where
     F: FnOnce(&rpc_client::RpcSession) -> Result<(), Box<dyn std::error::Error>>,
 {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
-    disclose_network_posture(conn, false);
-    let rpc = build_session(conn)?;
+    let daemon_address = conn.daemon_address()?;
+    let rpc = build_session(conn, &daemon_address)?;
+    disclose_network_posture(conn, &daemon_address, false);
     let outcome = run(&rpc);
     rpc.shutdown();
     if let Err(e) = outcome {
@@ -242,24 +260,15 @@ fn parse_network(s: &str) -> Result<Network, String> {
     }
 }
 
-/// Normalize a daemon address to the URL form the wallet RPC expects.
-fn daemon_url(daemon_address: &str) -> String {
-    if daemon_address.contains("://") {
-        daemon_address.to_owned()
-    } else {
-        format!("http://{daemon_address}")
-    }
-}
-
 fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
-    disclose_network_posture(cli, true);
-
-    let rpc = build_session(cli)?;
+    let daemon_address = cli.daemon_address()?;
+    let rpc = build_session(cli, &daemon_address)?;
+    disclose_network_posture(cli, &daemon_address, true);
 
     let daemon_client = match daemon::DaemonClient::new(
-        &cli.daemon_address,
+        &daemon_address,
         cli.proxy.as_deref(),
         cli.daemon_ca_cert.as_deref(),
     ) {
@@ -302,4 +311,48 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     commands::repl(rpc, daemon_client.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default daemon address follows `--network`: the wallet knows the
+    /// daemon's ports so the operator need not; a given address is taken as
+    /// given; an unknown network fails before anything is dialed.
+    #[test]
+    fn the_default_daemon_address_follows_the_network() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        assert_eq!(
+            args(&["shekyl-cli"]).daemon_address().unwrap(),
+            "127.0.0.1:11029"
+        );
+        assert_eq!(
+            args(&["shekyl-cli", "--network", "testnet"])
+                .daemon_address()
+                .unwrap(),
+            "127.0.0.1:12029"
+        );
+        assert_eq!(
+            args(&["shekyl-cli", "--network", "stagenet"])
+                .daemon_address()
+                .unwrap(),
+            "127.0.0.1:13029"
+        );
+        assert_eq!(
+            args(&[
+                "shekyl-cli",
+                "--network",
+                "testnet",
+                "--daemon-address",
+                "node.example.com:11029"
+            ])
+            .daemon_address()
+            .unwrap(),
+            "node.example.com:11029"
+        );
+        assert!(args(&["shekyl-cli", "--network", "bogus"])
+            .daemon_address()
+            .is_err());
+    }
 }

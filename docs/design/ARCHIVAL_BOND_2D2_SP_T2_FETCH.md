@@ -156,7 +156,7 @@ and no code path constructs ③ from a failure of ①/② (a dead local node is 
 not a silent re-posture).
 
 *Audited at source (2026-07-02): the property holds today by absence* — every production default is
-loopback (CLI `--daemon-address` → `localhost:11028`, `main.rs:43`; GUI → `127.0.0.1:{port}` +
+loopback (CLI `--daemon-address` → `localhost:11028`, `main.rs:43` — as of 2026-08-23, RT-W7: the loopback daemon at `--network`'s RPC port, `ReplArgs::daemon_address`; GUI → `127.0.0.1:{port}` +
 detect-local-else-spawn-local sidecar, `daemon_manager.rs:92-160`; the engine library never picks a
 URL — `DaemonClient::new` wraps what the embedder passes); no public-node default, no
 auto-discovery, no localhost-else-remote fallback anywhere; `WalletPrefs` deliberately carries no

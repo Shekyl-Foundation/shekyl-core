@@ -18,6 +18,20 @@ pub enum Network {
 }
 
 impl Network {
+    /// The daemon's default RPC port on this network — what a wallet dials
+    /// when no `--daemon-address` is given. The numbers are the C++
+    /// daemon's (`src/cryptonote_config.h`, `RPC_DEFAULT_PORT` per
+    /// network); a test in this module pins them to that header, so the
+    /// wallet cannot drift from the daemon it is for.
+    #[must_use]
+    pub const fn daemon_rpc_port(self) -> u16 {
+        match self {
+            Network::Mainnet => 11029,
+            Network::Testnet => 12029,
+            Network::Stagenet => 13029,
+        }
+    }
+
     /// Numeric discriminant used across FFI (0=mainnet, 1=testnet, 2=stagenet).
     pub fn as_u8(self) -> u8 {
         match self {
@@ -229,5 +243,36 @@ mod tests {
             Some((Network::Testnet, AddressKind::Multisig))
         );
         assert_eq!(network_and_kind_from_hrp("bitcoin"), None);
+    }
+
+    /// The daemon's ports are declared once, in C++ (`cryptonote_config.h`,
+    /// `RPC_DEFAULT_PORT` in the `config`, `config::testnet` and
+    /// `config::stagenet` namespaces, in that order); `daemon_rpc_port` is
+    /// the wallet-side twin and this pin is what makes a twin safe. The edit
+    /// that turns it red is changing a port on either side alone.
+    #[test]
+    fn daemon_rpc_ports_match_the_daemon_header() {
+        let header =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/cryptonote_config.h");
+        let text = std::fs::read_to_string(&header)
+            .unwrap_or_else(|e| panic!("{}: {e}", header.display()));
+        let declared: Vec<u16> = text
+            .lines()
+            .filter_map(|line| {
+                let value = line
+                    .trim()
+                    .strip_prefix("uint16_t const RPC_DEFAULT_PORT = ")?;
+                value.strip_suffix(';')?.parse().ok()
+            })
+            .collect();
+        assert_eq!(
+            declared,
+            vec![
+                Network::Mainnet.daemon_rpc_port(),
+                Network::Testnet.daemon_rpc_port(),
+                Network::Stagenet.daemon_rpc_port(),
+            ],
+            "mainnet, testnet, stagenet: the header's declaration order"
+        );
     }
 }

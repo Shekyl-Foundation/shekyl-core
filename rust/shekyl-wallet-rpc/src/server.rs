@@ -29,7 +29,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
-use shekyl_rpc_transport::network_posture::ProxyResolution;
+use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -416,14 +416,14 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 /// and, for a daemon that is not loopback, the §1 operator statement
 /// (`RPC_TRANSPORT_POSTURE.md`, RT-W7) — discouragement at the point of
 /// configuration, which for this binary is the moment it starts. Pure; the
-/// caller logs each line. The daemon transport resolves hostnames at the
+/// caller logs each statement. The daemon transport resolves hostnames at the
 /// proxy regardless of scheme, so the local-DNS-leak warning never applies
 /// here ([`ProxyResolution::AlwaysRemote`]).
 ///
 /// Runs after [`validate_daemon_endpoint`]: an address that is refused is
 /// not an endpoint this server uses, so there is nothing to disclose about
 /// it. Empty for the loopback default.
-fn daemon_disclosures(config: &ServerConfig) -> Vec<String> {
+fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
     shekyl_rpc_transport::network_posture::daemon_disclosures(
         "--daemon-address",
         &config.daemon_address,
@@ -1075,39 +1075,41 @@ mod tests {
         assert!(err.contains("wildcard"), "run_server: {err}");
     }
 
-    /// RT-W7: a `--daemon-address` that is not loopback draws the §1 operator
-    /// statement; the loopback default draws nothing. The predicate is the
-    /// transport module's; this pins the binary's label and proxy handling
-    /// (the daemon transport resolves at the proxy, so a `socks5://` scheme
-    /// is not a DNS leak here and must not be reported as one).
+    /// RT-W7's binary-specific facts — the predicate itself is pinned in the
+    /// transport module: the label names the flag, the loopback default is
+    /// silent, and the daemon transport resolves at the proxy regardless of
+    /// scheme, so a `socks5://` proxy is not a DNS leak here and must not be
+    /// reported as one.
     #[test]
-    fn a_non_loopback_daemon_address_draws_the_operator_statement() {
+    fn daemon_disclosures_name_the_flag_and_never_a_dns_leak() {
         let mut config = listen_config("127.0.0.1:0", AuthConfig::Disabled);
-        assert!(daemon_disclosures(&config).is_empty(), "loopback is silent");
+        assert!(
+            daemon_disclosures(&config).is_empty(),
+            "the loopback default is silent"
+        );
 
-        config.daemon_address = "http://203.0.113.7:28581".into();
+        config.daemon_address = "http://node.example.com:11029".into();
         let direct = daemon_disclosures(&config);
-        assert_eq!(direct.len(), 2, "{direct:?}");
-        assert!(direct[0].contains("--daemon-address"), "{direct:?}");
-        assert!(direct[0].contains("no proxy is configured"), "{direct:?}");
-        assert!(direct[1].contains("operates that daemon"), "{direct:?}");
+        let path = direct.path.as_deref().expect("path warning");
+        assert!(path.contains("--daemon-address"), "{path}");
+        assert!(direct.operator.is_some(), "{direct:?}");
 
-        config.daemon_address = "http://node.example.com:28581".into();
         config.proxy = Some("socks5://127.0.0.1:9050".into());
         let proxied = daemon_disclosures(&config);
-        assert_eq!(proxied.len(), 1, "a proxy hides the path only: {proxied:?}");
-        assert!(proxied[0].contains("operates that daemon"), "{proxied:?}");
-        assert!(proxied[0].contains("node.example.com"), "{proxied:?}");
+        assert!(
+            proxied.path.is_none(),
+            "the scan transport resolves at the proxy: {proxied:?}"
+        );
+        assert!(proxied.operator.is_some(), "{proxied:?}");
     }
 
-    /// The wiring: `run_server` logs the disclosure before it serves. The
+    /// The wiring: `run_server` logs the disclosure before it binds. The
     /// edit that turns this red is deleting the `daemon_disclosures` loop in
-    /// `run_server`. The server is bound on an ephemeral loopback port and
-    /// cancelled by the timeout once the log line is in; the timeout
-    /// *elapsing* is the expected outcome (the server would otherwise run
-    /// forever), a return is a refusal and a failure.
+    /// `run_server`. This test holds the listen port first, so `run_server`
+    /// returns (address in use) right after the disclosure — no timer to
+    /// wait out, and "said before bound" is pinned with it.
     #[tokio::test]
-    async fn run_server_logs_the_operator_statement_at_startup() {
+    async fn run_server_logs_the_operator_statement_before_binding() {
         #[derive(Clone)]
         struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
@@ -1127,20 +1129,20 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let mut config = listen_config("127.0.0.1:0", AuthConfig::Disabled);
-        config.daemon_address = "http://203.0.113.7:28581".into();
-        let outcome =
-            tokio::time::timeout(std::time::Duration::from_millis(500), run_server(config)).await;
-        assert!(
-            outcome.is_err(),
-            "run_server must bind and serve until cancelled; it returned {outcome:?}"
-        );
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+        let port = held.local_addr().expect("local addr").port();
+        let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
+        config.daemon_address = "http://203.0.113.7:11029".into();
+        let err = run_server(config)
+            .await
+            .expect_err("the held port refuses the bind");
+        drop(held);
 
         let logged = String::from_utf8(sink.0.lock().expect("sink").clone()).expect("utf-8");
-        assert!(logged.contains("WARN"), "{logged}");
-        assert!(logged.contains("--daemon-address"), "{logged}");
-        assert!(logged.contains("203.0.113.7"), "{logged}");
-        assert!(logged.contains("operates that daemon"), "{logged}");
+        assert!(
+            logged.contains("operates that daemon"),
+            "the statement precedes the bind that failed with {err}: {logged}"
+        );
     }
 
     /// The browser boundary's predicate: the JSON media type with or without
