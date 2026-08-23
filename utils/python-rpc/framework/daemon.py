@@ -502,8 +502,11 @@ class Daemon(object):
     getblockcount = get_block_count
 
     def get_block_hash(self, height):
+        # The daemon registers this method as `on_get_block_hash` (and
+        # `on_getblockhash`); it has never answered a bare `get_block_hash`,
+        # so this client had always received -32601.
         get_block_hash = {
-            'method': 'get_block_hash',
+            'method': 'on_get_block_hash',
             'params': [height],
             'jsonrpc': '2.0', 
             'id': '0'

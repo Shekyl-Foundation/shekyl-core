@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "core_rpc_ffi_internal.h"
@@ -123,16 +124,34 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
   try
   {
     std::memset(out, 0, sizeof(*out));
-    cryptonote::core& core = h->rpc->get_core();
-    // One read of the tip serves both the bound and the message that names
-    // the top height, so the two cannot disagree.
-    const uint64_t chain_height = core.get_current_blockchain_height();
+    cryptonote::Blockchain& bc = h->rpc->get_core().get_blockchain_storage();
+    // Both reads under ONE acquisition of the blockchain lock.
+    // `Blockchain::get_block_id_by_height` documents that it takes no lock and
+    // that a caller combining it with a height read must take one
+    // (blockchain.cpp) — precisely this pair. Unlocked, a reorg between them
+    // lets the bound pass and the lookup miss, and a miss is a **null hash**,
+    // not an exception (BLOCK_DNE is swallowed there), so the daemon would
+    // answer 32 zero bytes as a successful block hash.
+    //
+    // Safe to hold: `m_blockchain_lock` is an `epee::critical_section` over a
+    // `boost::recursive_mutex`, so the callees' own acquisitions nest, and
+    // this shim takes no other lock, so no ordering cycle exists. The cost is
+    // that a get-block-hash read can wait behind a block being connected;
+    // that is the right trade for an answer that cannot be a lie.
+    const std::lock_guard<cryptonote::Blockchain> guard(bc);
+    const uint64_t chain_height = bc.get_current_blockchain_height();
     out->chain_height = chain_height;
     if (height < chain_height)
     {
-      const crypto::hash id = core.get_block_id_by_height(height);
-      std::memcpy(out->hash, id.data, sizeof(out->hash));
-      out->found = 1;
+      const crypto::hash id = bc.get_block_id_by_height(height);
+      // Under the lock an in-range height should always resolve; if it does
+      // not, the chain does not hold that block and reporting a zero hash as
+      // its identity would be a lie. Refuse instead (`found` stays 0).
+      if (id != crypto::null_hash)
+      {
+        std::memcpy(out->hash, id.data, sizeof(out->hash));
+        out->found = 1;
+      }
     }
     return SHEKYL_RPC_FACTS_OK;
   }

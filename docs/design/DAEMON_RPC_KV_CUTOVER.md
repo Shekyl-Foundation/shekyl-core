@@ -107,7 +107,7 @@ calls in the handler (`core_rpc_server.cpp`).
 | **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · `prune_blockchain` · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · `get_output_histogram` | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 9 + 7 + 17 + 14 + 18 | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, pruning, alt chains, histogram | K P R |
 | **RK-9** | Curve tree + archival | `get_curve_tree_path` · `get_curve_tree_info` · `get_curve_tree_checkpoint` · `get_archival_emission_claim_source` · `inject_archival_serve_credit` (regtest) | 19 + 10 + 11 + 40 + 35 | `get_db()` reads; the logic is already Rust (`shekyl-curve-tree`, `shekyl-archival-*`) | W G R |
 | **RK-C** | Console retirement | `rpc_command_executor.cpp` / `command_parser_executor.cpp` / `command_server.cpp` → Rust; `src/daemon/rpc_client.h` dies | — | — | K |
-| **RK-W** | Wire cleanup (after RK-X) | Redesign the surface once the handlers are all Rust: retire `status`-as-error-channel in favour of typed errors, drop OPT-omission quirks and positional JSON-RPC, collapse aliases; every in-tree client updated in the same PR; `CORE_RPC_VERSION` 4.0 | — | — | W C G K P |
+| **RK-W** | Wire cleanup (after RK-X) | Redesign the surface once the handlers are all Rust: retire `status`-as-error-channel in favour of typed errors, drop OPT-omission quirks and positional JSON-RPC, collapse aliases (including the `on_`-prefixed names — `on_get_block_hash` is a C++ handler name that leaked onto the wire, and the bare `get_block_hash` a client would reach for has never been served); every in-tree client updated in the same PR; `CORE_RPC_VERSION` 4.0 | — | — | W C G K P |
 | **RK-X** | Final deletion | `core_rpc_server.{h,cpp}`, `core_rpc_server_commands_defs.h`, `core_rpc_ffi.cpp` dispatch tables, `rpc_handler.*`, `message_data_structs.h`'s RPC half, `json_object.cpp`'s RPC (de)serializers; FOLLOWUPS dual-list closed | 872 → 0 | — | — |
 
 Already native (no slice): `POST /submit_transaction` (§2 of
@@ -217,6 +217,15 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
 Absence is **data** (`found == 0`), not a fault: a height past the tip is a
 legitimate query outcome and becomes the method's `TOO_BIG_HEIGHT` refusal,
 never a `FactsFault`.
+
+**Atomicity is the shim's job.** Both reads happen under one acquisition of
+the blockchain lock, because `Blockchain::get_block_id_by_height` takes none
+and documents that a caller combining it with a height read must — and a miss
+there is a *null hash*, not an exception, so the unlocked pair could answer 32
+zero bytes as a successful block hash after a reorg. A facts export that can
+report a value the chain does not hold is worse than one that is slower: any
+export combining reads takes the lock (the mutex is recursive, and a shim that
+takes no other lock cannot create an ordering cycle).
 
 Twins in `shekyl-daemon-rpc/src/ffi.rs`; layout pinned both directions by
 `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` (seed-derived per-field
