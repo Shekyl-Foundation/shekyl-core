@@ -121,6 +121,18 @@ impl fmt::Display for HashHexError {
 
 impl core::error::Error for HashHexError {}
 
+/// What serde completes "expected …" with.
+///
+/// A bare noun phrase, deliberately not the [`Display`] sentence: serde's
+/// message already echoes the offending value, so repeating what was seen
+/// would render as "invalid value: string \"beef\", expected expected 64 hex
+/// characters …". [`Display`] stands alone and does say what it saw.
+impl serde::de::Expected for HashHexError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("64 hex characters (32 bytes)")
+    }
+}
+
 fn hex_nibble(b: u8) -> Result<u8, HashHexError> {
     match b {
         b'0'..=b'9' => Ok(b - b'0'),
@@ -161,10 +173,7 @@ impl<'de> Deserialize<'de> for HashHex {
         // (`serde_json::Value`, or a reader with escapes) must still be able
         // to produce a hash.
         let s = Cow::<'de, str>::deserialize(deserializer)?;
-        Self::from_hex(&s).map_err(|e| {
-            let expected = e.to_string();
-            DeError::invalid_value(Unexpected::Str(&s), &expected.as_str())
-        })
+        Self::from_hex(&s).map_err(|e| DeError::invalid_value(Unexpected::Str(&s), &e))
     }
 }
 
@@ -215,10 +224,9 @@ pub mod empty_string_as_absent {
         if s.is_empty() {
             return Ok(None);
         }
-        HashHex::from_hex(&s).map(Some).map_err(|e| {
-            let expected = e.to_string();
-            Error::invalid_value(Unexpected::Str(&s), &expected.as_str())
-        })
+        HashHex::from_hex(&s)
+            .map(Some)
+            .map_err(|e| Error::invalid_value(Unexpected::Str(&s), &e))
     }
 }
 
@@ -350,6 +358,28 @@ mod tests {
         assert!(!sample().is_zero());
         assert_eq!(HashHex::from_bytes(sample().to_bytes()), sample());
         assert_eq!(sample().as_bytes(), &sample().to_bytes());
+    }
+
+    /// serde completes "expected …" with a noun phrase, so the error type's
+    /// `Expected` must not repeat the word — nor repeat what was seen, which
+    /// serde already echoes. Handing `Display`'s sentence to serde again
+    /// renders "expected expected 64 hex characters …" and turns this red.
+    #[test]
+    fn the_serde_message_does_not_say_expected_twice() {
+        let err = serde_json::from_str::<HashHex>("\"deadbeef\"")
+            .expect_err("a short hex string is not a hash")
+            .to_string();
+        assert_eq!(
+            err,
+            "invalid value: string \"deadbeef\", expected 64 hex characters (32 bytes)"
+        );
+        assert!(!err.contains("expected expected"), "{err}");
+
+        // Standing alone, the error does say what it saw — nothing echoes it.
+        assert_eq!(
+            HashHex::from_hex("deadbeef").unwrap_err().to_string(),
+            "expected 64 hex characters (32 bytes), got a 8-byte string"
+        );
     }
 
     /// `Debug` renders the hex, not 32 numbered bytes.

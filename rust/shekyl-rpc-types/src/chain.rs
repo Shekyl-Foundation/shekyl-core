@@ -176,7 +176,13 @@ pub struct BlockHeader {
 ///
 /// Both fields default, reproducing epee's KV load: a field absent from the
 /// request was left at its default rather than refused, so `{}` asks for
-/// height 0. Making that strict is a wire change and belongs to RK-W.
+/// height 0. Making *that* strict is a wire change and belongs to RK-W.
+///
+/// Only absence defaults, though. epee also swallowed a field of the wrong
+/// type — `KV_SERIALIZE` discards the load's result — and answered
+/// `{"height": "nope"}` with the genesis header; the server refuses that
+/// instead (`daemon_rpc::methods::block_header_request`), which is where the
+/// object-only rule lives too.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetBlockHeaderByHeightRequest {
     #[serde(default)]

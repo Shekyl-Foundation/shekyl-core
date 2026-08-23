@@ -266,11 +266,12 @@ async fn native_method(
             Some(frame_native(out))
         }
         NativeMethod::BlockHeaderByHeight => {
-            // epee's KV load left an absent field at its default, so a
-            // malformed params object is height 0 rather than a refusal
-            // (preserved; see the request type's docs).
-            let request: shekyl_rpc_types::GetBlockHeaderByHeightRequest =
-                serde_json::from_value(params.clone()).unwrap_or_default();
+            // The params parse is pure and its refusal needs no core, so it
+            // happens before a worker is taken — as `on_get_block_hash`'s does.
+            let request = match crate::methods::block_header_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
             let core = state.core.clone();
             let out = tokio::task::spawn_blocking(move || {

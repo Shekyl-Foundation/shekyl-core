@@ -14,9 +14,9 @@
 
 use serde::Deserialize;
 use shekyl_rpc_types::{
-    BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightResponse,
-    GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex, RpcStatus,
-    CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+    BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
+    GetBlockHeaderByHeightResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex,
+    RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
     CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_types::BlockHeight;
@@ -157,6 +157,50 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
         })
 }
 
+/// The refusal message an unusable `get_block_header_by_height` params value
+/// earns — `on_get_block_hash`'s wording, because it is the same failure.
+const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected height";
+
+/// The params of `get_block_header_by_height`, or the refusal an unusable
+/// params value earns.
+///
+/// Absent params (`null`, or no `params` member at all) take epee's
+/// defaults: its `KV_SERIALIZE` discarded the load's result, so a field that
+/// was not there simply stayed zero, and `{}` means height 0. Params that
+/// *are* present and do not parse are refused instead — a deliberate
+/// divergence from epee, which dropped that case on the floor too and so
+/// answered a caller's type error (`{"height": "nope"}`) with a plausible
+/// wrong answer: the genesis header. `get_block_hash_height` above already
+/// refuses its unparseable params this way, and two sibling methods must not
+/// disagree about what a bad parameter means. The params must be an
+/// **object**: serde's derive reads a struct out of a sequence too, which
+/// would hand this method a positional form nobody designed.
+///
+/// Pure, so the refusal costs no worker — and so it is testable without a
+/// core.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not a shape this method accepts.
+pub fn block_header_request(
+    params: &serde_json::Value,
+) -> Result<GetBlockHeaderByHeightRequest, RpcFault> {
+    match params {
+        serde_json::Value::Null => Ok(GetBlockHeaderByHeightRequest::default()),
+        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS))),
+        // Anything else, an array included. serde's derive would happily read
+        // a struct out of a sequence, which would give this method a second,
+        // undesigned positional form — and `on_get_block_hash` is the method
+        // whose params are deliberately positional (`[height]`, RK-2). One
+        // method, one shape.
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
+            WRONG_HEADER_PARAMS,
+        ))),
+    }
+}
+
 /// `on_get_block_hash` (alias `on_getblockhash`): the hash of the block at
 /// `height`, as 64 lowercase hex characters.
 ///
@@ -268,6 +312,7 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, HardFork};
+    use serde_json::json;
     use shekyl_types::{BlockHash, BlockHeight, TxHash};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -564,6 +609,48 @@ pub(crate) mod tests {
         let out = get_block_header_by_height(&f, 1_234_567, false).unwrap();
         assert!(!f.asked_pow.load(Ordering::Relaxed));
         assert_eq!(out.block_header.pow_hash, None);
+    }
+
+    /// Absent params keep epee's defaults; `{}` is height 0, as the live
+    /// daemon answers. Refusing either of these turns this red.
+    #[test]
+    fn absent_params_are_the_defaults_not_a_refusal() {
+        for absent in [json!(null), json!({})] {
+            let request = block_header_request(&absent).expect("absent params are allowed");
+            assert_eq!(request.height, 0, "{absent} must mean height 0");
+            assert!(!request.fill_pow_hash);
+        }
+        let given = block_header_request(&json!({"height": 7, "fill_pow_hash": true}))
+            .expect("well-formed params parse");
+        assert_eq!(given.height, 7);
+        assert!(given.fill_pow_hash);
+    }
+
+    /// Params that are present but unusable are refused rather than read as
+    /// height 0 — epee answered every one of these with the genesis header.
+    /// Restoring `unwrap_or_default()` turns this red.
+    #[test]
+    fn unusable_params_are_refused_not_read_as_genesis() {
+        for bad in [
+            json!({"height": "nope"}),
+            json!({"height": -1}),
+            json!({"height": 1.5}),
+            json!({"fill_pow_hash": "yes"}),
+            // An array is `on_get_block_hash`'s shape, not this method's.
+            json!([0]),
+            json!([7, true]),
+            json!("0"),
+            json!(0),
+            json!(true),
+        ] {
+            let refusal = block_header_request(&bad)
+                .expect_err(&format!("{bad} is not a usable params value"));
+            assert_eq!(
+                refusal,
+                RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS)),
+                "{bad} must earn the same refusal on_get_block_hash gives"
+            );
+        }
     }
 
     /// The 128-bit split is the wire's: low word, `0x`-hex whole, high word.
