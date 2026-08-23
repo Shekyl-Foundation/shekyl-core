@@ -451,15 +451,15 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     };
     // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
     // so the wallet and the daemon cannot disagree on what a spelling names.
-    use shekyl_rpc_transport::listen::ListenClass;
+    use shekyl_rpc_transport::listen::{ListenClass, WILDCARD_REASON};
     match shekyl_rpc_transport::listen::classify_listen(*addr) {
+        // The reason is the one copy every listener shares; the remedy is
+        // this listener's.
         ListenClass::Wildcard => Err(format!(
-            "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
-             bind every interface, including ones that do not exist yet (a VPN that comes up \
-             later, a hotspot, a container bridge). Bind a specific IP address instead: \
-             127.0.0.1 or [::1] for this machine only{LOCAL_ENDPOINT_HINT}, or the address \
-             of the one interface your clients are on (which also requires --rpc-login \
-             NAME:PASSWORD)."
+            "refusing to bind the wallet RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
+             Bind a specific IP address instead: 127.0.0.1 or [::1] for this machine \
+             only{LOCAL_ENDPOINT_HINT}, or the address of the one interface your clients are \
+             on (which also requires --rpc-login NAME:PASSWORD)."
         )
         .into()),
         ListenClass::Loopback => Ok(()),

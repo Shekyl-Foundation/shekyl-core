@@ -275,6 +275,17 @@ bool Daemon::run(bool interactive)
     stop_thread.join();
   });
   tools::signal_handler::install([&stop, &shutdown](int){ stop = shutdown = true; });
+  // Every exit from run() — the normal return, a caught exception, a throw
+  // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
+  // core they hold pointers into. The normal path stops them explicitly
+  // below so "Node stopped" follows the stop; this is the backstop for
+  // every other path (a later listener refusing to start, the command
+  // server or p2p.run() throwing).
+  epee::misc_utils::auto_scope_leave_caller stop_rust_rpcs = epee::misc_utils::create_scope_leave_handler([this](){
+    for (auto * rust_handle : mp_internals->rust_rpc_handles)
+      shekyl_daemon_rpc_stop(rust_handle);
+    mp_internals->rust_rpc_handles.clear();
+  });
 
   try
   {
@@ -309,12 +320,8 @@ bool Daemon::run(bool interactive)
         server->get_rpc_max_connections_per_private_ip());
       if (!rust_handle)
       {
-        // A listener already started on this run is serving on a core that
-        // is about to be torn down: stop it before the throw, so no Rust
-        // task outlives the C++ objects it points into.
-        for (auto * started : mp_internals->rust_rpc_handles)
-          shekyl_daemon_rpc_stop(started);
-        mp_internals->rust_rpc_handles.clear();
+        // A listener already started on this run is stopped by the
+        // scope-leave guard above when this throw leaves run().
         throw std::runtime_error(
           "Failed to start Axum RPC for " + rpc.description + " (" + as_given +
           "); the reason is logged just above");

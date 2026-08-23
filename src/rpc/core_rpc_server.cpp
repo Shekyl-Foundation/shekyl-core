@@ -135,8 +135,9 @@ namespace cryptonote
   {
     m_restricted = restricted;
 
-    // Daemon: no inbound login/ssl flags. Connection-limit CLI args remain
-    // registered for config compatibility but are inert under Axum (FOLLOWUPS).
+    // Daemon: no inbound login/ssl flags. The connection-cap flags are read
+    // below and handed to the Rust listener, which validates
+    // (ConnLimits::checked) and enforces them.
     auto rpc_config = cryptonote::rpc_args::process(vm, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
     if (!rpc_config)
       return false;

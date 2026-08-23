@@ -89,8 +89,8 @@ namespace cryptonote
     //! (ConnTracker) and injected into get_info's rpc_connections_count there.
     size_t get_connections_count() const { return 0; }
     network_type nettype() const { return m_core.get_nettype(); }
-    // Resolved listen host for this server, valid after init(). Passed to
-    // Rust as --rpc-bind-ip / --rpc-restricted-bind-ip; Rust parses it.
+    // The operator's --rpc-bind-ip (or --rpc-restricted-bind-ip) as given,
+    // unparsed; valid after init(). Rust parses, classifies and binds it.
     const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
     // --rpc-bind-ipv6-address (or the restricted twin), as given; meaningful
     // when get_rpc_use_ipv6(). Passed to Rust verbatim — an empty value
@@ -196,8 +196,8 @@ private:
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;
     bool disable_rpc_ban;
-    // Resolved listen hosts for this server (restricted variant uses its own).
-    // Recorded in init(); Rust parses and binds.
+    // The operator's bind strings as given (the restricted variant uses its
+    // own flags); recorded unparsed in init(). Rust parses and binds.
     std::string m_rpc_bind_ip;
     std::string m_rpc_bind_ipv6; // as given; see get_rpc_bind_ipv6()
     bool m_rpc_use_ipv6 = false;
