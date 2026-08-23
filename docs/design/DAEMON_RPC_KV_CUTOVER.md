@@ -99,9 +99,10 @@ calls in the handler (`core_rpc_server.cpp`).
 | --- | --- | --- | --- | --- | --- |
 | **RK-1** — **landed** (this branch; PR #, sha stamped at merge) | Chain tip + version (the pattern slice) | `/get_height` `/getheight` · `get_version` | 8 + 15 | `shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks` (`src/rpc/rpc_facts_ffi.cpp`) | W K P |
 | **RK-2** — **landed** (this branch; PR #, sha stamped at merge) | Block count + hash-by-height | `get_block_count` (`getblockcount`) · `on_get_block_hash` (`on_getblockhash`) | 4 + — (the hash reply is a bare JSON string) | `shekyl_rpc_chain_tip` (reused from RK-1), `shekyl_rpc_block_hash_at` | P (python-rpc, stressnet) |
-| **RK-3** | Block headers / blocks | `get_last_block_header` · `get_block_header_by_hash` · `…_by_height` · `get_block_headers_range` · `get_block` | 8 + 11 + 9 + 10 + 22 (+ shared `block_header_response`, 25) | `get_block_by_hash`, `get_block_id_by_height`, reward/weight fills | W C G K R P |
+| **RK-3** | The **block-header projection** | `get_block_header_by_height` (+ `getblockheaderbyheight`) | 9 (+ the shared 24-field `block_header_response`) | `shekyl_rpc_block_header_at` | W (`shekyl-rpc-client`) P |
+| **RK-3b** | Whole blocks | `get_block` (+ `getblock`) — header + blob + json + tx hashes, and the console's `print_block_by_hash` / `_by_height`, which read **only** this method | 22 | header facts + block blob | W C K R P |
 | **RK-4** | Wallet sync (binary + its JSON siblings) | `/get_blocks.bin` `/getblocks.bin` · `/get_blocks_by_height.bin` · `/get_hashes.bin` · `/get_o_indexes.bin` · `/get_transactions` · `/is_key_image_spent` · `get_fee_estimate` | 33 + 15 + 11 + 12 + 31 + 8 + 10 | `find_blockchain_supplement`, `get_pool_info`, `get_tx_outputs_gindexs`, `get_split_transactions_blobs`, `are_key_images_spent[_in_pool]`, `get_dynamic_base_fee_estimate_*` | **W** (the wallet's refresh path) K P R |
-| **RK-5** | Node state (+ `hard_fork_info`, moved here — see below) | `/get_info` `/getinfo` · `get_info` · `sync_info` · `/get_net_stats` · `get_connections` · `/get_peer_list` · `hard_fork_info` | 48 + 24 + 11 + 7 (+ `connection_info`) + 10 + 15 | 26 distinct core/p2p reads for `get_info`; `get_connections`, peerlist, throttle stats; hard-fork voting info | W C G K P F |
+| **RK-5** | Node state — **the hub** (see the console matrix below); also `hard_fork_info`, `get_last_block_header`, `get_block_header_by_hash`, `get_block_headers_range`, each moved here for a named reason | `/get_info` `/getinfo` · `get_info` · `sync_info` · `/get_net_stats` · `get_connections` · `/get_peer_list` · `hard_fork_info` · the three header methods above | 48 + 24 + 11 + 7 (+ `connection_info`) + 10 + 15 + 8 + 11 + 10 | 26 distinct core/p2p reads for `get_info`; peerlist, throttle stats; hard-fork voting info; **the p2p double** this slice must build | W C G K P F |
 | **RK-6** | Mempool | `/get_transaction_pool` · `/get_transaction_pool_hashes[.bin]` · `/get_transaction_pool_stats` · `get_txpool_backlog` · `flush_txpool` · `relay_tx` | 8 + 7 + 7 + 7 + 26 + 7 + 7 | pool reads, `flush_txes_from_pool`, `get_protocol().relay_transactions` | K P |
 | **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `add_aux_pow` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 7 + 19 + 17 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P |
 | **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · `prune_blockchain` · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · `get_output_histogram` | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 9 + 7 + 17 + 14 + 18 | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, pruning, alt chains, histogram | K P R |
@@ -128,6 +129,38 @@ definition of the reply for the console to parse, or a console command that
 cannot be built. Its validation surface *is* `status`'s, so it migrates when
 `status` does. RK-2 keeps the two methods with **no** console consumer at
 all, which is why it needs no console work.
+
+### 2.1 The console matrix — what actually bounds a slice
+
+A method's C++ struct cannot be deleted while a console command still reads
+it, and a console command can only move to Rust once **every** method it reads
+has a Rust type. So the slice boundary is not the method — it is the console
+command's read set. Enumerated from `rpc_command_executor.cpp` at `64ee608ca`:
+
+| Console command | Methods it reads |
+| --- | --- |
+| `print_block_by_hash`, `print_block_by_height` | `get_block` **only** |
+| `print_blockchain_info` | `get_block_headers_range`, **`get_info`** |
+| `print_blockchain_dynamic_stats` | `get_block_headers_range`, `hard_fork_info`, `get_fee_estimate`, **`get_info`** |
+| `alt_chain_info` | `get_block_header_by_hash`, `get_alternate_chains`, **`get_info`** |
+| `show_status` | `hard_fork_info`, `mining_status`, **`get_info`** |
+| `show_difficulty`, `version`, `print_transaction_pool_stats` | **`get_info`** (+ their own) |
+| every other command | exactly one method |
+
+**`get_info` is the hub**: six commands read it, and *every* console command
+that touches a header method also touches it. That is why the header methods
+split the way they do — a method whose only console reader is self-contained
+can move now; one whose reader also needs `get_info` moves when `get_info`
+does. The alternative — migrating the handler while a C++ struct stays behind
+for the console to parse the Rust reply with — is the cross-language
+duplication RK-D1 exists to prevent, and it is exactly what was refused for
+`hard_fork_info`.
+
+A second constraint is testability: `check_core_ready()` reads
+`is_synchronized()` off the p2p payload object, which has no double in this
+tree. A method that consults it cannot have its facts export driven by a unit
+test (§3.2), so `get_last_block_header` — which does — waits for RK-5, the
+slice that must build that double for `get_info` anyway.
 
 **Ordering rationale.** RK-1 is small and exercises both framings (REST
 JSON, JSON-RPC), an OPT field, a vector field, a facts POD, the console
