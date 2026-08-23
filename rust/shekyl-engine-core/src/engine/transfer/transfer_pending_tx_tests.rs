@@ -2462,18 +2462,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         dest_key: change_out.output_key,
         amount: AtomicUnits::from_raw(change),
         commitment_mask: change_out.z,
-        enc_amount: {
-            let mut enc = [0u8; 9];
-            enc[..8].copy_from_slice(&change_out.enc_amount);
-            enc[8] = change_out.amount_tag;
-            enc
-        },
-        enc_label: {
-            let mut enc = [0u8; 9];
-            enc[..8].copy_from_slice(&change_out.enc_label);
-            enc[8] = change_out.label_tag;
-            enc
-        },
+        enc_amount: change_out.enc_amount_wire(),
+        enc_label: change_out.enc_label_wire(),
     }];
 
     // Amount-level credit-funding rule (§7.3): funding == change + fee + credit.

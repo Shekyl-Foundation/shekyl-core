@@ -100,15 +100,8 @@ pub fn build_genesis_tx(
             view_tag: od.view_tag_prefilter,
         });
 
-        let mut enc_amount = [0u8; 9];
-        enc_amount[..8].copy_from_slice(&od.enc_amount);
-        enc_amount[8] = od.amount_tag;
-        enc_amounts.push(enc_amount);
-
-        let mut enc_label = [0u8; 9];
-        enc_label[..8].copy_from_slice(&od.enc_label);
-        enc_label[8] = od.label_tag;
-        enc_labels.push(enc_label);
+        enc_amounts.push(od.enc_amount_wire().to_bytes());
+        enc_labels.push(od.enc_label_wire().to_bytes());
 
         commitments.push(od.commitment);
 

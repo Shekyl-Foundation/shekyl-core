@@ -134,8 +134,11 @@ pub fn sign_transaction_with_terms(
         .collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
-    let enc_amounts: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_amount).collect();
-    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label).collect();
+    let enc_amounts: Vec<[u8; 9]> = outputs
+        .iter()
+        .map(|out| out.enc_amount.to_bytes())
+        .collect();
+    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label.to_bytes()).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is

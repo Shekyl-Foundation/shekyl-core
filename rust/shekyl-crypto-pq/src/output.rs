@@ -72,6 +72,90 @@ use crate::kem::{
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::CryptoError;
 
+/// A per-output encrypted wire field: 8 ciphertext bytes plus its 1-byte
+/// HKDF-derived tag, in the order the transaction serializer writes them.
+///
+/// **This type exists to make one thing unrepresentable: nine bytes that never
+/// went through encryption.** Both fields it models are XOR ciphertexts under a
+/// one-time per-output key, so any value written by hand is a constant on the
+/// wire rather than a ciphertext. For `enc_label` that is a privacy defect and
+/// a silent one — an unencrypted label is identical across every output that
+/// carries it, which marks exactly those outputs and breaks the §5.7.10
+/// indistinguishability invariant (`SUBADDRESS_UNDER_PQC.md`). For `enc_amount`
+/// it fails loudly instead, at the recipient, whose commitment will not open to
+/// the decrypted value — but the assembly is the same five lines, so both are
+/// typed rather than leaving the copy-paste template alive beside the field
+/// just protected.
+///
+/// **Deliberately not built with the `shekyl-types` newtype macro.** That
+/// convention gives every newtype an open `from_bytes` edge constructor, which
+/// is precisely the forgery path this type exists to remove. The only
+/// constructors here are [`OutputData::enc_label_wire`] and
+/// [`OutputData::enc_amount_wire`], which can only be reached from a real
+/// derivation.
+///
+/// The bytes are public wire data — ciphertext, not key material — so this is
+/// deliberately not `Zeroize`; the secrets it is derived from are wiped by
+/// [`OutputData`]'s own `ZeroizeOnDrop`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct EncryptedOutputField([u8; 9]);
+
+impl EncryptedOutputField {
+    /// Borrow the nine wire bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 9] {
+        &self.0
+    }
+
+    /// Copy out the nine wire bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 9] {
+        self.0
+    }
+
+    /// Assemble from a ciphertext and its tag. Private on purpose: the only
+    /// callers are the two accessors on [`OutputData`], so the value cannot
+    /// exist without a derivation behind it.
+    const fn assemble(ciphertext: [u8; 8], tag: u8) -> Self {
+        let mut buf = [0u8; 9];
+        let mut i = 0;
+        while i < 8 {
+            buf[i] = ciphertext[i];
+            i += 1;
+        }
+        buf[8] = tag;
+        Self(buf)
+    }
+
+    /// Rebuild from bytes that arrived over the FFI JSON boundary, where the
+    /// caller — not this crate — computed the encryption.
+    ///
+    /// **This is the one hole in the guarantee above, and it is named so it
+    /// cannot be used by accident.** It exists because
+    /// `shekyl_sign_fcmp_transaction` takes its outputs as JSON, so the bytes
+    /// were produced by a `shekyl_construct_output` call on the far side and
+    /// this crate cannot re-derive them. Its only non-test caller is the C++
+    /// `construct_tx*` chain, which has had no production caller since
+    /// `wallet2` was deleted and is scheduled to go with the consensus-oracle
+    /// harness (`FOLLOWUPS.md`). When that lands, this constructor goes with
+    /// it. Do not reach for it from Rust: use the [`OutputData`] accessors.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn from_ffi_json_unverified(bytes: [u8; 9]) -> Self {
+        Self(bytes)
+    }
+
+    /// Build a fixture value from arbitrary bytes. Test-only, and named to say
+    /// so, per this crate's `test-utils` convention: a value that never went
+    /// through encryption must not be constructible in a production build.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub const fn from_bytes_for_tests(bytes: [u8; 9]) -> Self {
+        Self(bytes)
+    }
+}
+
 /// All data produced by output construction that the sender needs to build the tx.
 #[derive(ZeroizeOnDrop)]
 pub struct OutputData {
@@ -116,6 +200,25 @@ pub struct OutputData {
     pub k_amount: [u8; 32],
     /// HKDF-derived label encryption key.
     pub k_label: [u8; 32],
+}
+
+impl OutputData {
+    /// The `enc_label` wire field: ciphertext plus its tag, in serializer order.
+    ///
+    /// This is the only way to obtain an [`EncryptedOutputField`] for a label,
+    /// which is what makes an unencrypted one unrepresentable on the in-process
+    /// path. It also replaces the hand-rolled `buf[..8] / buf[8]` assembly that
+    /// was copied at every call site.
+    #[must_use]
+    pub const fn enc_label_wire(&self) -> EncryptedOutputField {
+        EncryptedOutputField::assemble(self.enc_label, self.label_tag)
+    }
+
+    /// The `enc_amount` wire field: ciphertext plus its tag, in serializer order.
+    #[must_use]
+    pub const fn enc_amount_wire(&self) -> EncryptedOutputField {
+        EncryptedOutputField::assemble(self.enc_amount, self.amount_tag)
+    }
 }
 
 // CLIPPY: omitted fields are intentionally redacted (secrets or bulky ciphertexts).
@@ -2425,6 +2528,48 @@ mod tests {
             "_from_ho variant must produce same key image"
         );
         eprintln!("[pipeline] _from_ho variant agrees -- full pipeline passed");
+    }
+
+    #[test]
+    fn wire_fields_are_ciphertext_then_tag_and_carry_no_plaintext() {
+        // Pins the byte order the accessors assemble. `derivation.rs`'s KAT
+        // pins the same order against the locked `enc_label_sentinel_9` vector
+        // but works from `OutputSecrets`, so it cannot reach these accessors —
+        // a swapped order here would pass that KAT and ship. This is the check
+        // that goes red for it.
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+        let od =
+            construct_output(&random_tx_key(), &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+
+        let label = od.enc_label_wire();
+        assert_eq!(
+            &label.as_bytes()[..8],
+            &od.enc_label,
+            "label ciphertext first"
+        );
+        assert_eq!(label.as_bytes()[8], od.label_tag, "label tag last");
+
+        let amount = od.enc_amount_wire();
+        assert_eq!(
+            &amount.as_bytes()[..8],
+            &od.enc_amount,
+            "amount ciphertext first"
+        );
+        assert_eq!(amount.as_bytes()[8], od.amount_tag, "amount tag last");
+
+        // The label ciphertext must not be the sentinel plaintext in the clear:
+        // that is the "written without encrypting" shape this type exists to
+        // make unrepresentable, and it is what an all-0xFF or all-zero field
+        // would look like.
+        assert_ne!(
+            &label.as_bytes()[..8],
+            &sentinel_plaintext(),
+            "sentinel must reach the wire encrypted, never as cleartext"
+        );
     }
 
     #[test]

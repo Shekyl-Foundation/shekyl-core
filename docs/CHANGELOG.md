@@ -4,6 +4,32 @@
 
 ### Changed
 
+- **An unencrypted `enc_label` or `enc_amount` is now unrepresentable, not
+  merely wrong.** Both are XOR ciphertexts under a one-time per-output key, and
+  both were plain `[u8; 9]` fields on `OutputInfo` assembled by a hand-written
+  "copy eight bytes, append the tag" block repeated at eight call sites —
+  including the genesis block builder. The live path was already correct
+  (`sign_bridge.rs` took its values straight from `construct_output`), so this
+  fixes no leak; it removes the possibility. `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/output.rs`) has no public byte constructor: the only
+  ways to obtain one are `OutputData::enc_label_wire()` and
+  `enc_amount_wire()`, which can only be reached from a real derivation.
+
+  The hazard was never a weak plaintext — an all-zero *plaintext* encrypts to
+  `k_label[..8]` and is uniform, exactly as the sentinel does. It was bytes
+  that never met the encryption, which are a constant on the wire and mark
+  every output carrying them, breaking the `SUBADDRESS_UNDER_PQC.md` §5.7.10
+  indistinguishability invariant. "Reject zeros" was considered and rejected as
+  the remedy: it treats one symptom, admits any other unencrypted constant, and
+  can fire on a legitimate ciphertext that happens to be zero.
+
+  One named exception survives: `from_ffi_json_unverified`, used only where
+  `shekyl_sign_fcmp_transaction` takes its outputs as JSON and the far side
+  computed the encryption. Its only non-test caller is the C++ `construct_tx*`
+  chain, which has had no production caller since `wallet2` was deleted, and it
+  goes with the consensus-oracle harness. The JSON encoding itself is
+  unchanged — still a 9-byte hex string — so the FFI contract is untouched.
+
 - **`get_block_count` and `on_get_block_hash` are served natively in Rust
   (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
   (`getblockcount`, `on_getblockhash`) answer from

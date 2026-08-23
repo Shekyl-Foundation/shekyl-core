@@ -8,6 +8,7 @@
 //! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -35,6 +36,35 @@ pub mod hex_bytes32 {
 }
 
 /// Serde helper: hex-encode/decode `[u8; 9]`.
+/// Serde for [`EncryptedOutputField`], byte-identical on the wire to the
+/// plain-`[u8; 9]` hex encoding it replaced — the FFI JSON contract is
+/// unchanged. Deserialization is the FFI trust boundary and routes through the
+/// single named constructor, so `grep from_ffi_json_unverified` finds every
+/// place a field is taken on faith.
+pub mod hex_encrypted_field {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+    use shekyl_crypto_pq::output::EncryptedOutputField;
+
+    pub fn serialize<S>(field: &EncryptedOutputField, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(field.as_bytes()))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<EncryptedOutputField, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+        let bytes: [u8; 9] = v.try_into().map_err(|v: Vec<u8>| {
+            serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
+        })?;
+        Ok(EncryptedOutputField::from_ffi_json_unverified(bytes))
+    }
+}
+
 pub mod hex_bytes9 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
@@ -292,15 +322,22 @@ pub struct OutputInfo {
     #[serde(with = "hex_bytes32")]
     #[zeroize]
     pub commitment_mask: [u8; 32],
-    /// Pre-computed encrypted amount (9 bytes): [0..8] = amount XOR k_amount,
-    /// [8] = amount_tag (HKDF-derived integrity byte).
-    /// Created by `shekyl_construct_output`.
-    #[serde(with = "hex_bytes9")]
-    pub enc_amount: [u8; 9],
-    /// Pre-computed encrypted label (9 bytes): [0..8] = plaintext XOR k_label,
-    /// [8] = label_tag. Sentinel plaintext at V3.0 launch.
-    #[serde(with = "hex_bytes9")]
-    pub enc_label: [u8; 9],
+    /// Encrypted amount (9 bytes): [0..8] = amount XOR k_amount, [8] =
+    /// amount_tag. Obtainable only from `OutputData::enc_amount_wire()`.
+    ///
+    /// Not zeroized, deliberately: this is ciphertext bound for the chain, so
+    /// wiping the local copy protects nothing. The secret it was derived under
+    /// (`k_amount`) is wiped by `OutputData`'s own `ZeroizeOnDrop`.
+    #[serde(with = "hex_encrypted_field")]
+    #[zeroize(skip)]
+    pub enc_amount: EncryptedOutputField,
+    /// Encrypted label (9 bytes): [0..8] = plaintext XOR k_label, [8] =
+    /// label_tag; sentinel plaintext at V3.0 launch. Obtainable only from
+    /// `OutputData::enc_label_wire()`, so an unencrypted label cannot be
+    /// constructed on this path — see [`EncryptedOutputField`].
+    #[serde(with = "hex_encrypted_field")]
+    #[zeroize(skip)]
+    pub enc_label: EncryptedOutputField,
 }
 
 /// Curve tree context at the reference block height.

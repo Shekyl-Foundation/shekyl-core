@@ -13,6 +13,7 @@ use crate::sign::{sign_pqc_auths, sign_transaction};
 use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_units::AtomicUnits;
 
 fn dummy_leaf_entry() -> LeafEntry {
@@ -47,8 +48,8 @@ fn dummy_output(amount: u64) -> OutputInfo {
         dest_key: [20u8; 32],
         amount: AtomicUnits::from_raw(amount),
         commitment_mask: [21u8; 32],
-        enc_amount: [0u8; 9],
-        enc_label: [0u8; 9],
+        enc_amount: EncryptedOutputField::from_bytes_for_tests([0u8; 9]),
+        enc_label: EncryptedOutputField::from_bytes_for_tests([0u8; 9]),
     }
 }
 

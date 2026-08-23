@@ -1772,8 +1772,9 @@ serialized immediately after `enc_amounts` and before `outPk`:
   across every output, with `label_tag` zero where a derived tag is uniform.
   The Rust signing path takes `enc_label` as a plain `[u8; 9]`
   (`shekyl-tx-builder/src/types.rs`), so an unencrypted value is representable
-  there too. Filed in `FOLLOWUPS.md` with a type-level fix rather than a
-  zero-check; recorded here rather than dropped, because a deletion that
+  there too. **Closed 2026-08-23** by the type-level fix rather than a
+  zero-check: `EncryptedOutputField` makes an unencrypted field
+  unrepresentable on the in-process path; recorded here rather than dropped, because a deletion that
   retires an unreachable check must not also retire the invariant silently.
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.

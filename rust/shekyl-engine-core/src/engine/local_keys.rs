@@ -603,18 +603,8 @@ mod tests {
             dest_key: constructed.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
-            enc_amount: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_amount);
-                enc[8] = constructed.amount_tag;
-                enc
-            },
-            enc_label: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_label);
-                enc[8] = constructed.label_tag;
-                enc
-            },
+            enc_amount: constructed.enc_amount_wire(),
+            enc_label: constructed.enc_label_wire(),
         }
     }
 

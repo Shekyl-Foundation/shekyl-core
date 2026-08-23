@@ -98,26 +98,13 @@ pub(super) fn build_output(
     kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
     kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
 
-    let enc_amount = {
-        let mut buf = [0u8; 9];
-        buf[..8].copy_from_slice(&constructed.enc_amount);
-        buf[8] = constructed.amount_tag;
-        buf
-    };
-    let enc_label = {
-        let mut buf = [0u8; 9];
-        buf[..8].copy_from_slice(&constructed.enc_label);
-        buf[8] = constructed.label_tag;
-        buf
-    };
-
     Ok(BuiltOutput {
         info: OutputInfo {
             dest_key: constructed.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
-            enc_amount,
-            enc_label,
+            enc_amount: constructed.enc_amount_wire(),
+            enc_label: constructed.enc_label_wire(),
         },
         output_key: constructed.output_key,
         view_tag: Some(constructed.view_tag_prefilter),
