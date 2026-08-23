@@ -65,6 +65,26 @@ sustainability is unaffected by the recalibration.
   `combined_ss` produced by that output's own KEM encapsulation), so keystream
   reuse would need two outputs sharing both secret and index.
 
+  **Reachability, established 2026-08-22 — this is latent, not live.** The
+  stub's zeros are *placeholders*, overwritten about eight lines later:
+  `construct_tx_with_tx_key` copies the real HKDF-derived values out of
+  `v3_rct_data` (`enc_labels[i] = v3_rct_data[i].enc_label_with_tag`), which
+  `shekyl_construct_output` produced. The overwrite is conditional
+  (`if (!v3_rct_data.empty())`), but the condition cannot fail in a way that
+  exposes anything: `v3_rct_data` is filled whenever
+  `hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC`, that constant is **1**
+  (`cryptonote_config.h`), and Shekyl is v3-from-genesis — the same
+  always-true-gate shape as the `HF_VERSION_SHEKYL_NG` comparison. With zero
+  destinations the vector is empty but there are no outputs to carry a label.
+  So no unencrypted label reaches a transaction today, and this item is about
+  removing the *window*, not closing an active leak.
+
+  Note also that the stub **cannot** simply "encrypt properly": `k_label` comes
+  from the per-output `combined_ss` produced by `shekyl_construct_output`, on
+  the caller's side. The stub runs before those values are available, which is
+  why it writes placeholders at all. Fixing it means removing the placeholder
+  phase, not giving the stub a keystream.
+
   The hazard is a path that writes the field **without encrypting it at all**.
   `fill_construct_tx_rct_stub` resizes `enc_labels` to value-initialized
   `std::array<uint8_t, 9>` and never calls the label encryption, so its outputs
