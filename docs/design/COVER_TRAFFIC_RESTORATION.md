@@ -16,7 +16,8 @@ architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 > a production caller is *the current state of a two-line configuration
 > decision* (§1.1), not evidence of abandonment. The deletion criteria that
 > would actually justify removing this machinery are stated in §1.6, and none
-> of them is "grep found no callers".
+> of them is "grep found no callers". **§1.7 states the criteria for keeping
+> it**, pre-registered 2026-08-23 before the 17 KiB window is built.
 
 ---
 
@@ -167,14 +168,201 @@ re-opening, in writing:
   traffic is what defends the node↔proxy wire; without it the wire-observer row
   of §32.6 is undefended and "supported" weakens.
 - **§42.4** — the carrier's narrowed job (deny the count of *originations*).
+  **Re-opened 2026-08-23** (§42.4a): the narrowing's "4.3× over capacity" was
+  against the carrier's own 492 B/s, so at a window sized to the maximum
+  admissible transaction the job is no longer narrowed. Re-opening §42.4 is
+  therefore *already done* and is no longer a cost of deletion — but the job it
+  restores is **larger**, not smaller.
 - **§32.6's grid** — the wire-observer recall cell, which cover is the only
   mechanism addressing.
 - **Q-11 Unit 2** — `conformance/linkage.rs` is its substrate.
+
+**The symmetry, added 2026-08-23: §1.7 states the conditions under which
+KEEPING it is correct.** §1.6 alone is a one-sided ledger, and a mechanism with
+tests and a design doc accrues inertia that a paper proposal does not — so the
+keep criteria are pre-registered *before* the 17 KiB window is built rather than
+assessed after.
 
 If a future round rules cover traffic out on its merits, deletion follows and
 this document is its record. Until then, **no-production-caller is the design**
 (the P-transport precedent: a designed seam is not unwired because it is not yet
 called).
+
+---
+
+### 1.7 The conditions under which KEEPING it is correct — pre-registered 2026-08-23
+
+§1.6 states what would justify **deleting** the carrier, and nothing states what
+would justify **keeping** it. The asymmetry is the trap: a built mechanism with
+tests and a design doc has inertia a paper proposal does not, so *"build it,
+then decide if we like it"* is exactly the shape pre-registration exists to
+prevent. This section is written **before** the 17 KiB window is built, for the
+same reason §2.8 was written before α was computed.
+
+#### What is being bought — stated, because a cost bound alone decides nothing
+
+A bound on the cost without a statement of the benefit makes the end-of-build
+decision *"is 25.6 minutes acceptable"* with no counterweight, and that is the
+shape in which sunk work wins.
+
+The carrier buys **§20.9's charter: wire-observer recall goes to zero for
+originations** — §32.6's top-left cell, held as a **structural** property rather
+than a statistical one, and it is the only mechanism addressing that cell
+(§1.6). At a window sized to the maximum admissible transaction, §42.4's
+narrowing no longer applies (re-opened 2026-08-23, `DAEMON_RELAY_PRIVACY.md`
+§42.4a), so the cell reads **zero for all traffic** rather than zero-for-
+originations / one-for-activity.
+
+**The end-of-build decision therefore compares two stated quantities**, this
+guarantee against the axis-1 and axis-2 costs below — not one.
+
+#### Axis 1 — the embargo the carrier may cost: **30 minutes, fixed**
+
+Through `derive_embargo` at α = 0.90. Anonymity rows use
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS` at its measured 590.6 ms (§94); the clearnet
+row uses `ADOPTED_TRANSIT_ASSUMPTION_MS` at 50 ms. Both add the 124.5 ms
+verification floor, and the carrier rows add the scheduling wait on top:
+
+| design | hop | anon embargo |
+| --- | --- | --- |
+| clearnet ordinary | 0.2 s | 3.2 min |
+| **anon, no carrier** | 0.7 s | **5.0 min** |
+| anon, 17 KiB / 12.5 s | 7.0 s | **25.6 min** |
+| anon, 17 KiB / 16.5 s | 9.0 s | 32.1 min |
+| anon, 3 KiB / 12.5 s (§42.1's carrier) | 32.0 s | **107.7 min** |
+
+**Hard bound: the anonymity-zone embargo must not exceed 30 minutes.** One
+number, one ground, no soft companion.
+
+**The bound is fixed and derives from no per-zone embargo, and that is the
+point.** An earlier draft bounded it by the wallet-facing failure threshold —
+the interim worst-zone global, 2297 s. **That bound is circular:** 2297 is a
+`max()` over per-zone embargoes, so it rises whenever the quantity it bounds
+rises, and can never bind. Taken literally it *inverts* — today's 107.7-minute
+carrier would not violate it, it would **raise** it to 107.7 minutes and drag
+every clearnet user's failure report along. That is §89.2's objection (*"a 366 s
+embargo sized for a rendezvous path they never touch"*) at eighteen times the
+magnitude.
+
+30 minutes is chosen on §82 grounds, the same ground the discarded soft bound
+used: §89.6.3's middle tier must be able to say *"this may last up to N
+minutes"* in a sentence a user accepts. Two bounds where one is a taste call and
+the other is circular give zero real constraints; one fixed number binds.
+
+**The real incoherence, recorded because it is not the one the circular bound
+described.** A single global wallet timeout **cannot survive a carrier at all**:
+the carrier makes the zones differ by roughly 20×, and a `max()` over a 20×
+spread is unusable for the fast zone. So **§89.6.3's ask-don't-time status query
+moves onto the carrier's critical path** — it is not wallet-track cleanup. A
+fixed wallet-facing threshold plus a 20× zone spread is survivable only if the
+wallet can ask rather than guess.
+
+#### Axis 2 — cover bandwidth per node: **8 KiB/s**, plus an offset commitment
+
+**Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
+rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
+180 KiB/s circuit-throughput floor. The 17 KiB / 12.5 s design sits at
+**2.72 KiB/s** — a 3× margin, so the ceiling constrains a future cadence proposal
+without constraining this one, which is the right shape for a ceiling.
+
+> **Units, stated once because this section mixes bases legitimately.** Byte
+> rates here are **binary** (`KiB/s` = 1024 B/s) — the windows are byte slots
+> sized in KiB, so binary is the base the arithmetic is actually in. Tor network
+> figures are **decimal** (`Gbit/s`), because that is how Tor Metrics reports
+> them. The two never enter the same expression: the Tor percentages are
+> computed from raw B/s, not from the KiB/s column.
+
+**Relative: the carrier's Tor relay-capacity load must remain fully offset by
+committed contribution.** A ratio rather than a fixed number, so it scales with
+adoption, and it is the honest form of the entitlement argument — the claim is
+not "0.27 % is small" but "we contribute more than we consume."
+
+**Caveat on the 4 %, recorded rather than buried.** The 180 KiB/s floor comes
+from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
+statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
+**sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
+are comparable*, which nothing has tested. **The rig spike must hold a circuit
+at 2.72 KiB/s for a full session and confirm it holds**; that is the one input to
+this axis we do not have.
+
+#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**
+
+Ruled now rather than measured later, because after the build it becomes an
+argument about sunk work.
+
+**Relay cover cannot substitute for the carrier at any measured relay traffic
+level**, and the reason is the mission hierarchy rather than a number:
+
+- **Relay operation is optional.** A wire-observer guarantee that holds only for
+  operators who relay **is privacy as a setting**, which mission priority 2
+  forbids. No measurement changes this, because a measurement can only ever
+  describe the operators who opted in.
+- **Mandatory relaying does not rescue it.** The **ramp** is unfixable — a fresh
+  install carries almost nothing for days, precisely the window in which it is
+  most identifiable as a new participant — and rule 76's floor device on a
+  consumer uplink cannot be *required* to relay.
+
+**The standing rule this generalises to:** the protocol's guarantees must hold
+at **zero** relay participation, and **no constant may be derived against an
+assumption of relay cover**. The failure mode is concrete — *"we can lower the
+carrier rate because relay operators have cover underneath it"* — and that is
+the back door mission priority 2 forbids. Held, the co-location benefit is a
+bonus nothing depends on, and the tension between it and constraint (1) below
+dissolves.
+
+**Scope of the ruling, narrowed deliberately.** What is foreclosed is relay
+cover **substituting** for the carrier or **licensing a weaker constant**. Relay
+cover remains available as what operators can do instead **if the carrier fails
+axis 1 or axis 2 on its own merits** — that is a different argument (*"the
+carrier does not work, and here is what operators can do"*), and this ruling
+must not foreclose it by accident.
+
+#### Relay contribution as an operator posture — the four constraints
+
+Recommended, and separate from every guarantee above:
+
+1. **Never route Shekyl traffic through Shekyl-operated relays, and never prefer
+   them.** Path selection stays entirely Tor's. Otherwise an adversary running
+   Shekyl nodes acquires relay positions *on Shekyl circuits*, which is the
+   worst outcome available here.
+2. **Non-exit only** — middle or guard, no exit policy, no abuse handling, no
+   legal exposure. Stated explicitly, because "run a relay" without the
+   qualifier will get an operator an exit and a letter.
+3. **Opt-in, and privacy-neutral by construction** (axis 3's standing rule).
+4. **Separate process, separate lifecycle.** Relay throughput is externally
+   measurable by design — that is how bandwidth authorities work — so a relay
+   sharing a process with the daemon makes its uptime a remote probe of daemon
+   state. The operator must be able to restart either without the other.
+
+Foundation-operated relays declare a **`MyFamily`** in the consensus: Tor's path
+selection then refuses to place two of them in one circuit, and a named family
+makes the contribution legible as a fingerprint rather than an assertion.
+
+### 1.8 The 17 KiB window is a trade, not a free win — recorded 2026-08-23
+
+**The mechanism deletion is free; the hop reduction is bought.** At fixed
+cadence, 3 KiB → 17 KiB is 5.7× the bandwidth for 32 s → 6.25 s. At **fixed
+bandwidth**, a 17 KiB window is **2.06× worse for modal transactions** than an
+8.4 KiB one, because a larger slot forces a longer cadence and at `n = 1` the
+residual wait is all that remains.
+
+| window | modal tx | max admissible | fragmentation machinery |
+| --- | --- | --- | --- |
+| 8.4 KiB | whole (`n = 1`) | 2 fragments | **stays** |
+| **17 KiB (adopted)** | whole (`n = 1`) | whole (`n = 1`) | **deletes** |
+
+**17 KiB is adopted, and the justification is a track record rather than a
+preference.** `CRYPTONOTE_MAX_FRAGMENTS`, CV-1's discard-on-rebind, the
+epoch-miss arithmetic, the in-flight remainder and the length leak have **each
+produced a real defect in this arc**. Paying 2× modal latency to remove five
+mechanisms with that history is an empirical argument; *"fewer moving parts"*
+alone would not be.
+
+**The window is derived, never literal.** `n = 1` holds only because the maximum
+admissible transaction is 16651 B **today**. The window is computed from the
+maximum admissible message size with a compile-time assertion that `n == 1`, so
+a consensus change that breaks the invariant **fails the build** rather than
+silently reintroducing fragmentation into a tree that deleted the code for it.
 
 ---
 
