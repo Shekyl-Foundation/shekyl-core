@@ -66,10 +66,23 @@ pub struct DaemonClient {
     agent: ureq::Agent,
 }
 
+/// Normalize a daemon address to the URL form the transports expect: a
+/// scheme-less `host:port` is `http://host:port`; a URL is itself. The one
+/// reading of `--daemon-address`, for the self-hosted server's scan
+/// transport and the REPL's direct client alike.
+#[must_use]
+pub fn daemon_url(daemon_address: &str) -> String {
+    if daemon_address.contains("://") {
+        daemon_address.to_owned()
+    } else {
+        format!("http://{daemon_address}")
+    }
+}
+
 impl DaemonClient {
     /// Build a new daemon client.
     ///
-    /// - `daemon_address`: e.g. `"http://localhost:11028"` or `"https://remote:11028"`.
+    /// - `daemon_address`: e.g. `"http://127.0.0.1:11029"` or `"https://remote:11029"`.
     /// - `proxy`: optional SOCKS5 proxy address, e.g. `"socks5://127.0.0.1:9050"`.
     ///   When set, the client uses SOCKS auth username `shekyl-cli-daemon` to ensure
     ///   Tor assigns an isolated circuit via `IsolateSOCKSAuth`. Generic SOCKS proxies
@@ -84,11 +97,7 @@ impl DaemonClient {
             return Err(DaemonError::NotConfigured);
         }
 
-        let url = if daemon_address.contains("://") {
-            daemon_address.to_string()
-        } else {
-            format!("http://{daemon_address}")
-        };
+        let url = daemon_url(daemon_address);
 
         let mut config_builder = ureq::Agent::config_builder();
 

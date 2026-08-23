@@ -20,7 +20,7 @@
 //! so the **proxy** resolves the daemon hostname, not the local resolver. A
 //! `socks5` (local-resolving) connector would hand the proxy an IP it resolved
 //! itself, leaking the hostname in cleartext DNS before the proxy is involved —
-//! the exact leak `shekyl-cli::network_posture` warns about. Remote resolution
+//! the exact leak [`crate::network_posture`] warns about. Remote resolution
 //! is the only mode built here.
 //!
 //! This client performs **no** SOCKS authentication: the principal daemon's

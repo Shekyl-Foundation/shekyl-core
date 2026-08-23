@@ -29,6 +29,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -134,7 +135,7 @@ pub struct ServerConfig {
     pub wallet_dir: PathBuf,
     /// Network every create/open binds to.
     pub network: Network,
-    /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:28581`).
+    /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:11029`).
     pub daemon_address: String,
     /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
     pub proxy: Option<String>,
@@ -411,6 +412,26 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
         })
 }
 
+/// What `--daemon-address` discloses at startup: the network-path warning
+/// and, for a daemon that is not loopback, the §1 operator statement
+/// (`RPC_TRANSPORT_POSTURE.md`, RT-W7) — discouragement at the point of
+/// configuration, which for this binary is the moment it starts. Pure; the
+/// caller logs each statement. The daemon transport resolves hostnames at the
+/// proxy regardless of scheme, so the local-DNS-leak warning never applies
+/// here ([`ProxyResolution::AlwaysRemote`]).
+///
+/// Runs after [`validate_daemon_endpoint`]: an address that is refused is
+/// not an endpoint this server uses, so there is nothing to disclose about
+/// it. Empty for the loopback default.
+fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
+    shekyl_rpc_transport::network_posture::daemon_disclosures(
+        "--daemon-address",
+        &config.daemon_address,
+        config.proxy.as_deref(),
+        ProxyResolution::AlwaysRemote,
+    )
+}
+
 /// The local alternative the listen refusals point at, per platform: a
 /// `uds://` socket exists on Unix only, so the hint must not name it
 /// elsewhere. One definition, defined on every target.
@@ -496,6 +517,12 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
+    // The binary's own `--daemon-address`, said once at startup. The
+    // in-process server (`spawn_in_process_with`) does not repeat it: its
+    // host, shekyl-cli, discloses the same address on its own stderr first.
+    for warning in daemon_disclosures(&config) {
+        warn!("{warning}");
+    }
     let bound = BoundListener::bind(&config.listen).await?;
     let state = AppState::new(config);
     let app = build_router(state.clone());
@@ -912,6 +939,7 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
 mod tests {
     use super::*;
     use crate::tenant::DaemonEndpoint;
+    use tracing::instrument::WithSubscriber as _;
 
     /// The credential-redaction pin: no `Debug` of server configuration —
     /// the shapes that reach logs and panic output — renders the digest
@@ -1046,6 +1074,84 @@ mod tests {
             .expect_err("run_server must refuse a wildcard bind")
             .to_string();
         assert!(err.contains("wildcard"), "run_server: {err}");
+    }
+
+    /// RT-W7's binary-specific facts — the predicate itself is pinned in the
+    /// transport module: the label names the flag, the loopback default is
+    /// silent, and the daemon transport resolves at the proxy regardless of
+    /// scheme, so a `socks5://` proxy is not a DNS leak here and must not be
+    /// reported as one.
+    #[test]
+    fn daemon_disclosures_name_the_flag_and_never_a_dns_leak() {
+        let mut config = listen_config("127.0.0.1:0", AuthConfig::Disabled);
+        assert!(
+            daemon_disclosures(&config).is_empty(),
+            "the loopback default is silent"
+        );
+
+        config.daemon_address = "http://node.example.com:11029".into();
+        let direct = daemon_disclosures(&config);
+        let path = direct.path.as_deref().expect("path warning");
+        assert!(path.contains("--daemon-address"), "{path}");
+        assert!(direct.operator.is_some(), "{direct:?}");
+
+        config.proxy = Some("socks5://127.0.0.1:9050".into());
+        let proxied = daemon_disclosures(&config);
+        assert!(
+            proxied.path.is_none(),
+            "the scan transport resolves at the proxy: {proxied:?}"
+        );
+        assert!(proxied.operator.is_some(), "{proxied:?}");
+    }
+
+    /// The wiring: `run_server` logs the disclosure before it binds. The
+    /// edit that turns this red is deleting the `daemon_disclosures` loop in
+    /// `run_server`. This test holds the listen port first, so `run_server`
+    /// returns (address in use) right after the disclosure — no timer to
+    /// wait out, and "said before bound" is pinned with it.
+    ///
+    /// The subscriber rides the future (`with_subscriber`) rather than the
+    /// thread (`subscriber::set_default`): it is the default on whatever
+    /// polls it. Both work here — an awaited future is polled by `block_on`
+    /// on this thread, under either runtime flavor — but that is an ambient
+    /// fact about the runtime, and no assertion in this test checks it. A
+    /// capture that cannot be broken by where the future runs needs one
+    /// fewer thing held true elsewhere.
+    #[tokio::test]
+    async fn run_server_logs_the_operator_statement_before_binding() {
+        #[derive(Clone)]
+        struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("sink").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+
+        let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+        let port = held.local_addr().expect("local addr").port();
+        let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
+        config.daemon_address = "http://203.0.113.7:11029".into();
+        let err = run_server(config)
+            .with_subscriber(subscriber)
+            .await
+            .expect_err("the held port refuses the bind");
+        drop(held);
+
+        let logged = String::from_utf8(sink.0.lock().expect("sink").clone()).expect("utf-8");
+        assert!(
+            logged.contains("operates that daemon"),
+            "the statement precedes the bind that failed with {err}: {logged}"
+        );
     }
 
     /// The browser boundary's predicate: the JSON media type with or without

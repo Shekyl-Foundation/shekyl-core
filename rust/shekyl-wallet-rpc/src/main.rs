@@ -68,8 +68,11 @@ struct Cli {
     disable_rpc_login: bool,
 
     /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
-    #[arg(long = "daemon-address", default_value = "http://127.0.0.1:28581")]
-    daemon_address: String,
+    /// Default: this machine's daemon at the RPC port for --network. A daemon
+    /// that is not loopback is disclosed in the log at startup: its operator
+    /// sees what this wallet asks for.
+    #[arg(long = "daemon-address")]
+    daemon_address: Option<String>,
 
     /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).
     /// The proxy resolves the daemon hostname, so it never reaches the local
@@ -128,12 +131,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let network = Network::from_str(&cli.network)
         .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;
+    // The wallet knows the daemon's ports so the operator need not: absent
+    // the flag, the loopback daemon at this network's RPC port.
+    let daemon_address = cli
+        .daemon_address
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}", network.daemon_rpc_port()));
 
     let server = ServerConfig {
         listen,
         wallet_dir: cli.wallet_dir,
         network,
-        daemon_address: cli.daemon_address,
+        daemon_address,
         proxy: cli.proxy,
         auth,
         kdf: KdfParams::default(),

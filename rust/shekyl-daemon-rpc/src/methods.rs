@@ -158,8 +158,17 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
 }
 
 /// The refusal message an unusable `get_block_header_by_height` params value
-/// earns — `on_get_block_hash`'s wording, because it is the same failure.
-const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected height";
+/// earns.
+///
+/// It shares `on_get_block_hash`'s **code** (`CORE_RPC_ERROR_CODE_WRONG_PARAM`
+/// — the two methods must agree on what a bad parameter *means*) but not its
+/// text: that method takes one positional height, this one an object of two
+/// optional fields, so "expected height" would misdescribe a request whose
+/// height was fine and whose `fill_pow_hash` was not. A refusal names the
+/// shape the method actually accepts.
+const WRONG_HEADER_PARAMS: &str =
+    "Wrong parameters, expected an object with optional height (number) \
+     and fill_pow_hash (boolean)";
 
 /// The params of `get_block_header_by_height`, or the refusal an unusable
 /// params value earns.
@@ -172,9 +181,10 @@ const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected height";
 /// answered a caller's type error (`{"height": "nope"}`) with a plausible
 /// wrong answer: the genesis header. `get_block_hash_height` above already
 /// refuses its unparseable params this way, and two sibling methods must not
-/// disagree about what a bad parameter means. The params must be an
-/// **object**: serde's derive reads a struct out of a sequence too, which
-/// would hand this method a positional form nobody designed.
+/// disagree about what a bad parameter means — though not the same text, see
+/// [`WRONG_HEADER_PARAMS`]. The params must be an **object**: serde's derive
+/// reads a struct out of a sequence too, which would hand this method a
+/// positional form nobody designed.
 ///
 /// Pure, so the refusal costs no worker — and so it is testable without a
 /// core.
@@ -635,6 +645,9 @@ pub(crate) mod tests {
             json!({"height": "nope"}),
             json!({"height": -1}),
             json!({"height": 1.5}),
+            // Height fine, the other field not: the refusal must not claim a
+            // height was expected.
+            json!({"height": 7, "fill_pow_hash": "yes"}),
             json!({"fill_pow_hash": "yes"}),
             // An array is `on_get_block_hash`'s shape, not this method's.
             json!([0]),
@@ -648,7 +661,7 @@ pub(crate) mod tests {
             assert_eq!(
                 refusal,
                 RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS)),
-                "{bad} must earn the same refusal on_get_block_hash gives"
+                "{bad} must be refused, naming this method's own params shape"
             );
         }
     }

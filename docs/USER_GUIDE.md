@@ -313,35 +313,32 @@ For advanced recovery, you can restore from individual keys:
 ### Opening an existing wallet
 
 ```bash
-./shekyl-cli --wallet-file /path/to/mywallet
+./shekyl-cli --engine-file mywallet
 ```
 
 ### Connecting to a daemon
 
-By default, the wallet connects to `localhost:11029`. To connect to a
-different daemon:
+By default the wallet connects to a daemon on this machine, at the RPC
+port for `--network` (`127.0.0.1:11029` on mainnet). `shekyld` serves RPC
+on loopback only, so a node of yours on another machine is reached through
+a Tor onion service you run in front of its loopback RPC (see "Wallet
+through Tor" below), over a SOCKS proxy:
 
 ```bash
-./shekyl-cli --wallet-file /path/to/mywallet \
-    --daemon-address 192.168.1.10:11029 \
-    --trusted-daemon
-```
-
-Use `--trusted-daemon` when you control the daemon (your own machine, or
-another of yours reached over LAN / onion). Shekyl RPC is operator-to-
-operator: there is no recommended configuration in which the wallet talks
-to a daemon someone else controls, and shekyld does not advertise itself
-as a public remote node. `--untrusted-daemon` remains as a refuse-to-trust
-mode if you point the wallet at a daemon anyway; it is not a public-node
-product.
-
-To connect through a SOCKS proxy (e.g. Tor):
-
-```bash
-./shekyl-cli --wallet-file /path/to/mywallet \
-    --proxy socks4a:127.0.0.1:9050 \
+./shekyl-cli --engine-file mywallet \
+    --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
+
+Shekyl RPC is operator-to-operator: there is no recommended configuration
+in which the wallet talks to a daemon someone else controls, and `shekyld`
+does not advertise itself as a public node. A `--daemon-address` that is
+not loopback is said out loud when the wallet starts — whoever operates
+that daemon sees which blocks the wallet requests and what it broadcasts,
+and no proxy or encryption changes that. The warning reads the same for
+your own node: it states what a daemon is told, not who you are talking
+to. Without `--proxy`, a non-loopback address additionally warns that the
+connection itself is visible on the network path.
 
 ### Understanding Bech32m addresses
 
@@ -704,13 +701,15 @@ For I2P:
 ### Wallet through Tor
 
 ```bash
-./shekyl-cli --wallet-file /path/to/wallet \
-    --proxy socks4a:127.0.0.1:9050 \
+./shekyl-cli --engine-file mywallet \
+    --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
 
 The daemon must expose a hidden service for RPC (separate from the P2P
-hidden service).
+hidden service). The wallet still states at startup that the daemon's
+operator sees what it asks for — true of your own node too; see
+"Connecting to a daemon".
 
 ### Key behaviours
 
@@ -792,7 +791,7 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
     --wallet-dir /path/to/wallets \
     --rpc-bind 127.0.0.1:29500 \
     --rpc-login user:password \
-    --daemon-address http://127.0.0.1:28581
+    --daemon-address http://127.0.0.1:11029
 ```
 
 ### Key flags
@@ -803,7 +802,7 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 | `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
 | `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
 | `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
-| `--daemon-address <url>` | Your node's RPC URL |
+| `--daemon-address <url>` | Your node's RPC URL. Default: this machine's daemon at the RPC port for `--network`. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (see "Connecting to a daemon" above) |
 | `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
 | `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
 

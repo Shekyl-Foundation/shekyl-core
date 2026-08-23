@@ -39,6 +39,17 @@ pub enum ListenClass {
     Addressed,
 }
 
+/// `true` for a loopback address after folding IPv4-mapped IPv6 to IPv4
+/// (`::ffff:127.0.0.1` is `127.0.0.1`), so every spelling of the same
+/// address answers the same way. The one loopback predicate, for listen
+/// addresses here and for outbound endpoints in
+/// [`crate::network_posture`] — the two sides cannot disagree about what
+/// loopback is.
+#[must_use]
+pub fn is_loopback_ip(ip: IpAddr) -> bool {
+    ip.to_canonical().is_loopback()
+}
+
 /// Classify `addr` after folding IPv4-mapped IPv6 to IPv4, so every
 /// spelling of the same address classifies the same way.
 #[must_use]
@@ -46,7 +57,7 @@ pub fn classify_listen(addr: SocketAddr) -> ListenClass {
     let ip = addr.ip().to_canonical();
     if ip.is_unspecified() {
         ListenClass::Wildcard
-    } else if ip.is_loopback() {
+    } else if is_loopback_ip(ip) {
         ListenClass::Loopback
     } else {
         ListenClass::Addressed

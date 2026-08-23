@@ -197,7 +197,7 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
     // protects — and it is by far the expensive part of this call. A block in
     // a different seed epoch makes RandomX rebuild its cache, which under the
     // lock would stall block handling and p2p for as long as that takes
-    // (~1.2 s measured on a cold genesis block).
+    // (seconds, not microseconds: ~1.2 s on a cold genesis block here).
     if (fill_pow_hash)
     {
       const crypto::hash pow = get_block_longhash(&bc, blk, height, &seed);

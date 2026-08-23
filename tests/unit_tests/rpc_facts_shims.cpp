@@ -48,8 +48,10 @@
 // cryptonote_core.h defines cryptonote::test_options (blockchain.h only
 // forward-declares it), needed by init_blockchain's fakechain options.
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
 #include "rpc/rpc_facts_ffi.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
@@ -322,6 +324,53 @@ TEST(rpc_facts_shims, header_projection_reads_the_block_at_that_height)
   EXPECT_EQ(0, f.pow_hash_filled);
   shekyl_rpc_block_hash_facts zero{};
   EXPECT_EQ(0, std::memcmp(f.pow_hash, zero.hash, sizeof(f.pow_hash)));
+}
+
+// The only automated exercise of the real `fill_pow_hash` branch: the Rust
+// tests stop at `FakeFacts`, so without this nothing in CI ever calls
+// `get_block_longhash` through this export at all.
+//
+// It pins WHICH seed the projection uses — the block id at
+// `shekyl_pow_randomx_v2_seedheight(height)` — by recomputing the hash from
+// that seed explicitly and requiring the same answer. Changing the seed
+// height, or sourcing the seed from somewhere else, turns this red.
+//
+// What it deliberately does NOT claim: that the seed is read *inside* the
+// projection's lock. Single-threaded, an implicit seed resolved after the
+// unlock yields the identical value, so no assertion here can separate the
+// two. That property is structural — it is why the seed is read in the
+// locked scope and passed explicitly — and the comment at the call site is
+// its record.
+TEST(rpc_facts_shims, header_pow_hash_is_computed_from_the_seed_at_its_seed_height)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t height = 4;
+  shekyl_rpc_block_header_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, height, /*fill_pow_hash=*/true, &f));
+
+  ASSERT_EQ(1, f.found);
+  EXPECT_EQ(1, f.pow_hash_filled);
+  const shekyl_rpc_block_header_facts zero{};
+  EXPECT_NE(0, std::memcmp(f.pow_hash, zero.pow_hash, sizeof(f.pow_hash)))
+    << "a filled pow hash is not 32 zero bytes";
+
+  // The same block, hashed against the seed this height is supposed to use.
+  const crypto::hash seed =
+    bap.bc.get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height));
+  const cryptonote::block blk = block_at(height);
+  const crypto::hash expected = get_block_longhash(&bap.bc, blk, height, &seed);
+  EXPECT_EQ(0, std::memcmp(f.pow_hash, expected.data, sizeof(f.pow_hash)))
+    << "the projection hashed against a different seed than the one at its seed height";
+
+  // Every other field still describes the same block, so asking for the pow
+  // hash does not disturb the projection.
+  EXPECT_EQ(height, f.height);
+  EXPECT_EQ(CHAIN_HEIGHT, f.chain_height);
+  const crypto::hash id = hash_at(height);
+  EXPECT_EQ(0, std::memcmp(f.hash, id.data, sizeof(f.hash)));
 }
 
 TEST(rpc_facts_shims, header_past_the_tip_is_absent_and_names_the_chain_height)
