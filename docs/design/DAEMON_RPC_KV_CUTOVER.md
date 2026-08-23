@@ -211,7 +211,12 @@ field to it, per **RK-D10** below.
 Rules, all test-pinned in the crate: field names are the wire names; `u64`
 serializes as a JSON number (epee does); hashes are lowercase hex strings
 (epee `pod_to_hex`); `KV_SERIALIZE_OPT(f, d)` becomes
-`#[serde(default, skip_serializing_if = "is_<d>")]`; unknown fields are
+`#[serde(default, skip_serializing_if = "is_<d>")]`; **an empty sequence is
+dropped from the document even when its member is a plain `KV_SERIALIZE`** —
+`get_block`'s `tx_hashes` vanishes for a block with no transactions, which is
+not an OPT declaration but epee's treatment of empty arrays, so it too needs
+`skip_serializing_if` (captured, not assumed: RK-3b's `no_txes` vector);
+unknown fields are
 tolerated on deserialize (no `deny_unknown_fields` — older/newer wallets);
 `status` is a typed newtype so `"OK"` / `"BUSY"` / free-text errors are one
 type, not three string constants in three crates.
