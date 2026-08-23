@@ -6,7 +6,7 @@ version = "0.1.0"
 # SemVer contract on its public surface. Owns a small hyper client (see `http_client`)
 # re-absorbed from `simple-request` so it can add an optional SOCKS5h proxy connector.
 publish = false
-description = "RPC connection to a Shekyl daemon via a hyper client with optional SOCKS5h proxy"
+description = "Shekyl RPC transport: hyper client (optional SOCKS5h) plus the shared listen-address classifier (RT-1/RT-2)"
 license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]

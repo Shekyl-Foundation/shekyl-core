@@ -8239,19 +8239,15 @@ sustainability is unaffected by the recalibration.
   **Target:** V3.1. **Ref:**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
 
-- **Axum daemon RPC: IPv6 dual-bind parity with epee (PR #103).** When the
-  Rust/Axum transport is the sole RPC server, `daemon.cpp` `run()` binds a
-  single listener on the resolved IPv4 host (`--rpc-bind-ip` /
-  `--rpc-restricted-bind-ip`, now honored). The epee acceptor additionally bound
-  the IPv6 address (`--rpc-bind-ipv6-address`, default `::1`) when `use_ipv6`;
-  the Axum path drops that second listener. **Work:** start a second Axum
-  listener (or dual-stack bind) for the configured IPv6 address when IPv6 is
-  enabled, and plumb the resolved IPv6 host the way `get_rpc_bind_ip()` plumbs
-  the IPv4 host. **Target:** V3.1. **Reopen when:** the daemon-RPC hardening
-  pass runs, or a user reports the missing IPv6 listener.
-  **Ref:** [`src/daemon/daemon.cpp`](../src/daemon/daemon.cpp) `run()`;
-  [`src/rpc/core_rpc_server.cpp`](../src/rpc/core_rpc_server.cpp)
-  `core_rpc_server::init` (bind-IP resolution).
+- **Axum daemon RPC: IPv6 dual-bind parity with epee (PR #103).** **CLOSED
+  2026-08-22 with RT-W2.** `--rpc-use-ipv6` passes `--rpc-bind-ipv6-address`
+  (default `::1`) into the same `shekyl_daemon_rpc_start`; Rust parses,
+  classifies, and binds a second socket on that handle when the address is
+  distinct. Loopback IPv6 is accepted; network/wildcard IPv6 is RT-1/RT-2.
+  `--rpc-ignore-ipv4` is retired by name (removed-flags shim): a loopback
+  bind failing is a refusal, not something to ignore.
+  **Reopen when:** an operator needs "IPv6-only, ignore a failed v4 bind"
+  as a supported configuration.
 
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).**
   Users sync `~/.shekyl` via Dropbox/iCloud; encrypted blobs still leak to
@@ -11453,6 +11449,35 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.2 — Rust cutover and cleanup
+
+- **A UDS listener for the daemon RPC (posture 1 on the daemon)** (added
+  2026-08-22, RT-W2 review). Posture 1 — a `0600` socket in a `0700`
+  pid-scoped directory — is implemented for `shekyl-wallet-rpc` only
+  (`restrict_socket_perms` / `private_socket_dir`); the daemon RPC is
+  TCP-loopback only (`bind.rs`: `BoundListener` over a `TcpListener`). The
+  container recipe needs no such listener: `--network host` makes the
+  container's loopback the host's. If built, `BoundListener` becomes an enum
+  over TCP and UDS, `serve_bound` already iterates a `Vec` into a `JoinSet`,
+  and the wallet's permission helpers port over; three constraints travel
+  with it — the socket must live on a bind mount, the UID must match across
+  the boundary (`userns-remap` breaks `0600`), and Docker Desktop's VM
+  filesystems have not carried Unix sockets. **Trigger:** a deployment that
+  needs the daemon RPC across a container boundary without host networking.
+  **Target:** none until the trigger fires (rule 21: rejected now, criterion
+  named).
+
+- **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
+  (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
+  the daemon-command client path in `src/daemon/main.cpp`
+  (`get_ip_int32_from_string` → `t_command_server{rpc_ip, rpc_port}`) refuses
+  it with "Invalid IP", so `shekyld --rpc-bind-ip=::1 status` exits 1 against
+  a daemon that is listening on `::1`. **Blocker:** `command_server` composes
+  the control address in C++ from a `uint32_t`; the fix is that composition
+  moving to the Rust ctl client (`shekyl-daemon-rpc/src/ctl_client.rs`, which
+  already owns the transport) with the host passed as given — the same move
+  RT-W2 made for the listener. **Target:** the ctl path's Rust cutover (this
+  section). **Reopen when:** that cutover lands, or an operator runs a v6-only
+  control plane.
 
 - **Legacy spend-graph analysis utilities: audit against FCMP++, then delete
   the dead ones.** `src/blockchain_utilities/` still builds

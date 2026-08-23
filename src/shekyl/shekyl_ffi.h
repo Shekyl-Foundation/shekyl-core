@@ -1294,18 +1294,27 @@ typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 
 /// Start the Axum daemon RPC server on a dedicated Tokio runtime.
 /// rpc_server_ptr: pointer to an initialized core_rpc_server.
-/// bind_addr: "ip:port" C string.
+/// bind_host / bind_port: the operator's --rpc-bind-ip / --rpc-bind-port
+///   values as given.
+/// bind_host_v6: the operator's --rpc-bind-ipv6-address (or the restricted
+///   twin) when --rpc-use-ipv6 is set; NULL otherwise. Rust parses both
+///   families, classifies them, and binds a second socket on this handle
+///   when the v6 address is distinct — C++ does not start a second server.
+///   Wildcard and network binds are refused (RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
+///   C++ composes and validates nothing.
 /// restricted: true to block admin-only endpoints.
 /// cors_origins: optional comma-separated allow-list from
 ///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
 /// max_connections / max_connections_per_public_ip /
 ///   max_connections_per_private_ip: concurrent-connection caps enforced by the
-///   Rust listener (0 = unlimited), already cross-validated by
-///   core_rpc_server::init.
-/// Returns an opaque handle, or NULL on failure.
+///   Rust listener (0 = unlimited), validated there.
+/// Returns an opaque handle, or NULL on failure; parse/cap/bind refusals are
+/// logged with their reason by the Rust side before NULL is returned.
 ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
     void* rpc_server_ptr,
-    const char* bind_addr,
+    const char* bind_host,
+    const char* bind_port,
+    const char* bind_host_v6,
     bool restricted,
     const char* cors_origins,
     uint64_t max_connections,

@@ -6,6 +6,13 @@ duration_weeks: 4
 nodes:
   full_archival: 3
   pruned: 2
+  # Daemon RPC is loopback only (RPC_TRANSPORT_POSTURE.md RT-1/RT-2): a node
+  # refuses a wildcard or network bind, so these hostnames are reachable only
+  # from inside each node's network namespace (run the load generator and
+  # monitor on the node, with http://127.0.0.1:12029) or through the node's
+  # onion service (RT-8). The names below document the topology; they are
+  # not clear-network endpoints. The cross-machine rig is retired pending
+  # RT-4 (the authenticated remote leg).
   rpc_endpoints:
     - http://node-1:12029
     - http://node-2:12029

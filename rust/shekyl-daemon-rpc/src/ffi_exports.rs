@@ -15,7 +15,8 @@ use std::os::raw::c_char;
 /// Opaque handle returned to C++ for a running daemon RPC server.
 #[repr(C)]
 pub struct ShekylDaemonRpcHandle {
-    shutdown: *const tokio::sync::Notify,
+    /// Level-triggered stop signal for every acceptor on this handle.
+    shutdown: *const tokio::sync::watch::Sender<bool>,
     rt: *const tokio::runtime::Runtime,
     /// The serve task's join handle. `shekyl_daemon_rpc_stop` blocks on it so
     /// the graceful-shutdown drain of in-flight handlers (which hold live
@@ -40,32 +41,82 @@ pub struct ShekylDaemonRpcHandle {
 ///
 /// - `rpc_server_ptr` must be a valid pointer to an initialized `core_rpc_server`,
 ///   or null (returns null immediately).
-/// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
+/// - `bind_host` and `bind_port` must be valid null-terminated C strings, or
+///   null (returns null): the operator's `--rpc-bind-ip` / `--rpc-bind-port`
+///   values as given.
+/// - `bind_host_v6` is the operator's `--rpc-bind-ipv6-address` (or the
+///   restricted twin) **as given** when `--rpc-use-ipv6` is set — an empty
+///   value included, so Rust refuses it rather than C++ silently dropping the
+///   family — or null when the flag is off. Rust parses it with the same
+///   port, classifies it, and binds a second socket on this handle when it
+///   names a different interface; one server serves every socket
+///   (`server::serve_listeners`). C++ composes nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
 ///   `max_connections_per_private_ip` are the concurrent-connection caps
-///   (0 = unlimited), already parsed and cross-validated by
-///   `core_rpc_server::init`.
+///   (0 = unlimited) as given; `ConnLimits::checked` validates them here.
+///
+/// Parse, cap, and bind refusals are logged with their reason before the
+/// null handle is returned, so the operator reads why, not "failed to start".
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
-    bind_addr: *const c_char,
+    bind_host: *const c_char,
+    bind_port: *const c_char,
+    bind_host_v6: *const c_char,
     restricted: bool,
     cors_origins: *const c_char,
     max_connections: u64,
     max_connections_per_public_ip: u64,
     max_connections_per_private_ip: u64,
 ) -> *mut ShekylDaemonRpcHandle {
-    if rpc_server_ptr.is_null() || bind_addr.is_null() {
+    if rpc_server_ptr.is_null() || bind_host.is_null() || bind_port.is_null() {
+        // A caller bug, not an operator value — logged all the same, so no
+        // null handle is ever silent.
+        tracing::error!(
+            "daemon-rpc: start called with a null core, bind-host or bind-port pointer"
+        );
         return std::ptr::null_mut();
     }
 
-    let bind = match std::ffi::CStr::from_ptr(bind_addr).to_str() {
-        Ok(s) => s.to_owned(),
-        Err(_) => return std::ptr::null_mut(),
+    let (Ok(host), Ok(port)) = (
+        std::ffi::CStr::from_ptr(bind_host).to_str(),
+        std::ffi::CStr::from_ptr(bind_port).to_str(),
+    ) else {
+        tracing::error!("daemon-rpc: --rpc-bind-ip / --rpc-bind-port are not valid UTF-8");
+        return std::ptr::null_mut();
+    };
+    let host_v6 = if bind_host_v6.is_null() {
+        None
+    } else {
+        match std::ffi::CStr::from_ptr(bind_host_v6).to_str() {
+            Ok(s) => Some(s),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-bind-ipv6-address is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
+        }
+    };
+    let addrs = match crate::bind::listen_addrs(host, port, host_v6) {
+        Ok(addrs) => addrs,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    let conn_limits = match crate::conn_limit::ConnLimits::checked(
+        max_connections,
+        max_connections_per_public_ip,
+        max_connections_per_private_ip,
+    ) {
+        Ok(limits) => limits,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
     };
 
     let cors = if cors_origins.is_null() {
@@ -93,13 +144,19 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
                 }
                 parsed
             }
-            Err(_) => return std::ptr::null_mut(),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-access-control-origins is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
         }
     };
 
     let core = match crate::core::CoreRpc::from_raw(rpc_server_ptr) {
         Some(c) => std::sync::Arc::new(c),
-        None => return std::ptr::null_mut(),
+        None => {
+            tracing::error!("daemon-rpc: core_rpc_server pointer was not a live core");
+            return std::ptr::null_mut();
+        }
     };
 
     let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
@@ -107,46 +164,42 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         .thread_name("daemon-rpc")
         .build()
     else {
+        tracing::error!("daemon-rpc: failed to build the tokio runtime");
         return std::ptr::null_mut();
     };
 
+    // Bind every family synchronously so a refusal or EADDRINUSE is a null
+    // handle, not a log inside a spawned task. A later family failing drops
+    // the sockets already bound on this return.
+    let mut bound = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        match rt.block_on(crate::bind::bind_listener(addr)) {
+            Ok(listener) => bound.push(listener),
+            Err(e) => {
+                tracing::error!("daemon-rpc bind failed on {addr}: {e}");
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
     let config = crate::server::ServerConfig {
-        bind_address: bind,
         restricted,
         cors_origins: cors,
-        // Caps parsed and validated by core_rpc_server::init (0 = unlimited).
-        conn_limits: crate::conn_limit::ConnLimits {
-            max_total: max_connections,
-            max_per_public_ip: max_connections_per_public_ip,
-            max_per_private_ip: max_connections_per_private_ip,
-        },
+        conn_limits,
         ..Default::default()
     };
-
-    // Bind synchronously so a failure (EADDRINUSE, bad address) is reported to
-    // the caller as a null handle rather than logged-and-dropped inside the
-    // spawned serve task. The runtime is dropped on the early return.
-    let listener = match rt.block_on(crate::server::bind_listener(&config.bind_address)) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("daemon-rpc bind failed on {}: {e}", config.bind_address);
-            return std::ptr::null_mut();
-        }
-    };
-
-    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
-    let shutdown_for_server = shutdown.clone();
-
+    // Level-triggered: a `stop` that lands before any acceptor has polled
+    // is still observed by `wait_for` (a `Notify` stored no permit and lost
+    // it). One sender, cloned into every acceptor by `serve_listeners`.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let serve = rt.spawn(async move {
-        if let Err(e) =
-            crate::server::serve_with_listener(core, config, listener, shutdown_for_server).await
-        {
+        if let Err(e) = crate::server::serve_listeners(core, config, bound, shutdown_rx).await {
             tracing::error!("daemon-rpc server error: {e}");
         }
     });
 
     let handle = Box::new(ShekylDaemonRpcHandle {
-        shutdown: std::sync::Arc::into_raw(shutdown),
+        shutdown: Box::into_raw(Box::new(shutdown_tx)).cast_const(),
         rt: Box::into_raw(Box::new(rt)).cast_const(),
         serve: Box::into_raw(Box::new(serve)),
     });
@@ -170,9 +223,12 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
     // Signal graceful shutdown: axum stops accepting and lets in-flight
     // handlers run to completion — including a submit mid-Phase-C on the
     // blocking pool, whose closure holds live references into the C++ core.
-    if !handle.shutdown.is_null() {
-        let notify = std::sync::Arc::from_raw(handle.shutdown);
-        notify.notify_one();
+    let shutdown = (!handle.shutdown.is_null()).then(|| Box::from_raw(handle.shutdown.cast_mut()));
+    if let Some(tx) = &shutdown {
+        // Every acceptor on this handle observes this, whether or not it has
+        // been polled yet (`watch` is level-triggered; `notify_waiters` was
+        // not and could lose a stop that landed first).
+        tx.send_replace(true);
     }
 
     if !handle.rt.is_null() {
@@ -188,6 +244,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
             drop(rt.block_on(serve));
         }
         drop(rt);
+        drop(shutdown);
     } else if !handle.serve.is_null() {
         // No runtime to drive the join (should not happen): reclaim the box
         // so it is not leaked. The task cannot be awaited without a runtime.
