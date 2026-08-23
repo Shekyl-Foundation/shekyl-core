@@ -51,6 +51,7 @@
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
 #include "rpc/core_rpc_server.h"
+#include "rpc/rpc_args.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
 
@@ -78,11 +79,28 @@ namespace {
     // Rust/Axum transport so it enforces restricted-mode filtering; a separately
     // bound --rpc-restricted-bind-port must not expose admin-only endpoints.
     bool restricted = false;
+    // The flags this instance's host/port/IPv6 address came from, so a
+    // diagnostic names the option the operator must change: the main
+    // listener's (even when --restricted-rpc makes it restricted) or the
+    // separate restricted listener's twins.
+    char const * flag_ip = "";
+    char const * flag_port = "";
+    char const * flag_ipv6 = "";
 
     rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
       : server(new cryptonote::core_rpc_server{core, p2p})
       , description(std::move(desc))
     {}
+
+    // The flags as the operator gave them, for messages only: nothing is
+    // composed or decided from this string.
+    std::string as_given() const
+    {
+      std::string s = std::string("--") + flag_ip + "=" + bind_host + " --" + flag_port + "=" + bind_port;
+      if (server->get_rpc_use_ipv6())
+        s += std::string(" --") + flag_ipv6 + "=" + server->get_rpc_bind_ipv6();
+      return s;
+    }
   };
 }
 
@@ -157,10 +175,14 @@ struct t_internals {
     auto const & restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
     const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
 
+    const cryptonote::rpc_args::descriptors rpc_arg{};
     {
       rpcs.emplace_back(core, p2p, "core");
       rpcs.back().bind_port = main_rpc_port;
       rpcs.back().restricted = restricted;
+      rpcs.back().flag_ip = rpc_arg.rpc_bind_ip.name;
+      rpcs.back().flag_port = cryptonote::core_rpc_server::arg_rpc_bind_port.name;
+      rpcs.back().flag_ipv6 = rpc_arg.rpc_bind_ipv6_address.name;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
       if (!rpcs.back().server->init(vm, restricted, main_rpc_port))
       {
@@ -177,6 +199,9 @@ struct t_internals {
       rpcs.emplace_back(core, p2p, "restricted");
       rpcs.back().bind_port = restricted_rpc_port;
       rpcs.back().restricted = true;
+      rpcs.back().flag_ip = rpc_arg.rpc_restricted_bind_ip.name;
+      rpcs.back().flag_port = restricted_rpc_port_arg.name;
+      rpcs.back().flag_ipv6 = rpc_arg.rpc_restricted_bind_ipv6_address.name;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
       if (!rpcs.back().server->init(vm, true, restricted_rpc_port))
       {
@@ -259,10 +284,12 @@ bool Daemon::run(bool interactive)
       // Hosts and port go to Rust as the operator gave them: Rust parses both
       // families, classifies, binds, and logs each socket it bound
       // (RPC_TRANSPORT_POSTURE.md RT-W2). Nothing is composed or decided
-      // here; `as_given` is the flags verbatim, for messages only.
-      std::string const & bind_host_v6 = server->get_rpc_bind_ipv6(); // empty = --rpc-use-ipv6 off
-      std::string const as_given = "--rpc-bind-ip=" + rpc.bind_host + " --rpc-bind-port=" + rpc.bind_port +
-        (bind_host_v6.empty() ? std::string() : " --rpc-bind-ipv6-address=" + bind_host_v6);
+      // here. The IPv6 address is passed verbatim whenever the family is
+      // enabled — an empty value included, so Rust refuses it — and NULL only
+      // when --rpc-use-ipv6 is off.
+      char const * const bind_host_v6 =
+        server->get_rpc_use_ipv6() ? server->get_rpc_bind_ipv6().c_str() : nullptr;
+      std::string const as_given = rpc.as_given();
       // Comma-joined CORS allow-list for Axum (empty = default-deny).
       std::string cors_origins;
       {
@@ -275,7 +302,7 @@ bool Daemon::run(bool interactive)
       }
       auto * rust_handle = shekyl_daemon_rpc_start(
         static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(),
-        bind_host_v6.empty() ? nullptr : bind_host_v6.c_str(), rpc.restricted,
+        bind_host_v6, rpc.restricted,
         cors_origins.empty() ? nullptr : cors_origins.c_str(),
         server->get_rpc_max_connections(),
         server->get_rpc_max_connections_per_public_ip(),

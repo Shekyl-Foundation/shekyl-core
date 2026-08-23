@@ -38,11 +38,13 @@ pub fn parse_bind(host: &str, port: &str) -> Result<SocketAddr, String> {
 }
 
 /// Addresses one FFI start will bind: the primary host, and — when `host_v6`
-/// is present and names a *different* interface — that family too. Deduped
-/// on what is bound, not on how it was spelled: `::1` and `[::1]` are one
-/// socket, and so are `127.0.0.1` and `::ffff:127.0.0.1` (the kernel answers
-/// the second with EADDRINUSE). C++ does not compose, classify, or decide to
-/// skip; it passes the operator's strings through.
+/// is present (the family is enabled) and names a *different* interface —
+/// that family too. `Some("")` is an enabled family with an empty address
+/// and is refused like any empty host, not skipped: C++ does not compose,
+/// classify, or decide to skip; it passes the operator's strings through.
+/// Deduped on what is bound, not on how it was spelled: `::1` and `[::1]`
+/// are one socket, and so are `127.0.0.1` and `::ffff:127.0.0.1` (the kernel
+/// answers the second with EADDRINUSE).
 pub fn listen_addrs(
     host: &str,
     port: &str,
@@ -50,7 +52,7 @@ pub fn listen_addrs(
 ) -> Result<Vec<SocketAddr>, String> {
     let primary = parse_bind(host, port)?;
     let mut addrs = vec![primary];
-    if let Some(v6) = host_v6.map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(v6) = host_v6 {
         let second = parse_bind(v6, port)?;
         if second.ip().to_canonical() != primary.ip().to_canonical() {
             addrs.push(second);
@@ -194,7 +196,9 @@ mod tests {
             "the mapped spelling of the same loopback is the same socket"
         );
         for empty in [Some(""), Some("  ")] {
-            assert_eq!(listen_addrs("127.0.0.1", "21029", empty).unwrap().len(), 1);
+            let err = listen_addrs("127.0.0.1", "21029", empty)
+                .expect_err("an enabled family with an empty address is refused, not skipped");
+            assert!(err.contains("is empty"), "{err}");
         }
     }
 

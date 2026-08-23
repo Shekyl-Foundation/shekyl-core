@@ -507,6 +507,11 @@ pub async fn serve_listeners(
         FfiSubmitShim::new(core.clone()),
         DaemonTxVerifier,
     ));
+    // ONE tracker per server, shared by every socket: the caps are per
+    // server, as the flags say, and `get_info` must count every family. A
+    // tracker per listener made `--rpc-max-connections N` admit 2N — the
+    // same mistake `submit/gate.rs` records for the F39 verification cap
+    // ("one cap per daemon, not per listener"), re-made here once already.
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let state = Arc::new(AppState {
         core,
@@ -515,11 +520,15 @@ pub async fn serve_listeners(
         conn_tracker: conn_tracker.clone(),
     });
     let app = build_router(state, &config.cors_origins);
-    let mode = if config.restricted {
-        "restricted"
-    } else {
-        "unrestricted"
-    };
+    info!(
+        target: "global",
+        "shekyl-daemon-rpc ({}) starting",
+        if config.restricted {
+            "restricted"
+        } else {
+            "unrestricted"
+        }
+    );
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
     // from the old permissive reflection, so make it observable rather than a
@@ -544,6 +553,21 @@ pub async fn serve_listeners(
         );
     }
 
+    serve_bound(app, conn_tracker, listeners, shutdown).await
+}
+
+/// The lifecycle half of [`serve_listeners`], independent of the core so it
+/// can be tested as one: one `axum::serve` per bound socket, every accepted
+/// connection admitted through the shared tracker, and every acceptor
+/// stopped by the same level-triggered signal — including one that has not
+/// been polled when the signal arrives, which is the ordering that used to
+/// hang `shekyl_daemon_rpc_stop`.
+pub(crate) async fn serve_bound(
+    app: Router,
+    conn_tracker: Arc<ConnTracker>,
+    listeners: Vec<BoundListener>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut serves = tokio::task::JoinSet::new();
     for bound in listeners {
         // The operator's startup line, in the category the daemon shows at
@@ -552,7 +576,7 @@ pub async fn serve_listeners(
         // there, and a bound socket must not need --log-level 1 to be seen.
         info!(
             target: "global",
-            "shekyl-daemon-rpc ({mode}) listening on {}",
+            "shekyl-daemon-rpc listening on {}",
             bound.local_addr()
         );
         let (_, listener) = bound.into_parts();
@@ -564,7 +588,9 @@ pub async fn serve_listeners(
             axum::serve(listener, app.clone())
                 .with_graceful_shutdown(async move {
                     // Either outcome is a stop: the value turned true, or the
-                    // sender is gone.
+                    // sender is gone. `wait_for` is level-triggered: a send
+                    // that happened before this future was first polled is
+                    // still observed.
                     let _signal = stop.wait_for(|&stop| stop).await;
                 })
                 .into_future(),
@@ -902,5 +928,85 @@ mod tests {
         // Operators: point a client at a local shekyld RPC and exercise
         // /get_info + /getblocks.bin. In-lane coverage is the oneshot/CORS
         // tests above plus RpcArgsDaemonSurface.
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::serve_bound;
+    use crate::bind::bind_listener;
+    use crate::conn_limit::{ConnLimits, ConnTracker};
+    use std::time::Duration;
+
+    async fn two_loopback_listeners() -> Vec<crate::bind::BoundListener> {
+        let mut out = Vec::new();
+        for addr in ["127.0.0.1:0", "[::1]:0"] {
+            out.push(
+                bind_listener(addr.parse().unwrap())
+                    .await
+                    .unwrap_or_else(|e| panic!("{addr} must bind: {e}")),
+            );
+        }
+        out
+    }
+
+    fn router() -> axum::Router {
+        axum::Router::new().route("/", axum::routing::get(|| async { "ok" }))
+    }
+
+    /// The stop is level-triggered: a waiter that did not exist when the
+    /// stop was sent still stops — the ordering that once hung
+    /// `shekyl_daemon_rpc_stop`, when a `Notify` stored no permit for a
+    /// waiter registered after the signal. Modelled exactly: the acceptors'
+    /// receiver is subscribed *after* the send. The edit that turns this red
+    /// is waiting with `changed()` (edge-triggered, waits for a *next*
+    /// change) instead of `wait_for` (level-triggered, reads the value that
+    /// is already there): the late receiver never sees an edge and the
+    /// timeout fires.
+    #[tokio::test]
+    async fn a_stop_sent_before_the_acceptors_poll_still_stops_them() {
+        let listeners = two_loopback_listeners().await;
+        let (tx, _rx0) = tokio::sync::watch::channel(false);
+        tx.send_replace(true);
+        let rx = tx.subscribe();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            serve_bound(
+                router(),
+                ConnTracker::new(ConnLimits::default()),
+                listeners,
+                rx,
+            ),
+        )
+        .await
+        .expect("every acceptor must stop on a signal that preceded it")
+        .expect("a clean stop is Ok");
+    }
+
+    /// The ordinary order, and the other stop: a signal after the acceptors
+    /// are running stops both, and so does dropping the sender.
+    #[tokio::test]
+    async fn a_stop_sent_later_and_a_dropped_sender_both_stop_every_acceptor() {
+        for drop_instead in [false, true] {
+            let listeners = two_loopback_listeners().await;
+            let (tx, rx) = tokio::sync::watch::channel(false);
+            let serving = tokio::spawn(serve_bound(
+                router(),
+                ConnTracker::new(ConnLimits::default()),
+                listeners,
+                rx,
+            ));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if drop_instead {
+                drop(tx);
+            } else {
+                tx.send_replace(true);
+            }
+            tokio::time::timeout(Duration::from_secs(5), serving)
+                .await
+                .expect("every acceptor must stop")
+                .expect("the serve task must not panic")
+                .expect("a clean stop is Ok");
+        }
     }
 }

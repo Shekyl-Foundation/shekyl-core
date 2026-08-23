@@ -11398,6 +11398,22 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **A UDS listener for the daemon RPC (posture 1 on the daemon)** (added
+  2026-08-22, RT-W2 review). Posture 1 — a `0600` socket in a `0700`
+  pid-scoped directory — is implemented for `shekyl-wallet-rpc` only
+  (`restrict_socket_perms` / `private_socket_dir`); the daemon RPC is
+  TCP-loopback only (`bind.rs`: `BoundListener` over a `TcpListener`). The
+  container recipe needs no such listener: `--network host` makes the
+  container's loopback the host's. If built, `BoundListener` becomes an enum
+  over TCP and UDS, `serve_bound` already iterates a `Vec` into a `JoinSet`,
+  and the wallet's permission helpers port over; three constraints travel
+  with it — the socket must live on a bind mount, the UID must match across
+  the boundary (`userns-remap` breaks `0600`), and Docker Desktop's VM
+  filesystems have not carried Unix sockets. **Trigger:** a deployment that
+  needs the daemon RPC across a container boundary without host networking.
+  **Target:** none until the trigger fires (rule 21: rejected now, criterion
+  named).
+
 - **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
   (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
   the daemon-command client path in `src/daemon/main.cpp`

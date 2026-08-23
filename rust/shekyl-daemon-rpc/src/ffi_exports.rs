@@ -45,10 +45,12 @@ pub struct ShekylDaemonRpcHandle {
 ///   null (returns null): the operator's `--rpc-bind-ip` / `--rpc-bind-port`
 ///   values as given.
 /// - `bind_host_v6` is the operator's `--rpc-bind-ipv6-address` (or the
-///   restricted twin) when `--rpc-use-ipv6` is set, or null. Rust parses it
-///   with the same port, classifies it, and binds a second socket on this
-///   handle when it names a different interface; one server serves every
-///   socket (`server::serve_listeners`). C++ composes nothing.
+///   restricted twin) **as given** when `--rpc-use-ipv6` is set — an empty
+///   value included, so Rust refuses it rather than C++ silently dropping the
+///   family — or null when the flag is off. Rust parses it with the same
+///   port, classifies it, and binds a second socket on this handle when it
+///   names a different interface; one server serves every socket
+///   (`server::serve_listeners`). C++ composes nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
@@ -72,6 +74,11 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     max_connections_per_private_ip: u64,
 ) -> *mut ShekylDaemonRpcHandle {
     if rpc_server_ptr.is_null() || bind_host.is_null() || bind_port.is_null() {
+        // A caller bug, not an operator value — logged all the same, so no
+        // null handle is ever silent.
+        tracing::error!(
+            "daemon-rpc: start called with a null core, bind-host or bind-port pointer"
+        );
         return std::ptr::null_mut();
     }
 

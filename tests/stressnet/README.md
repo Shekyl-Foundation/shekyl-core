@@ -65,14 +65,19 @@ For pruned nodes, add `--prune-blockchain`.
 
 ### 2. Verify genesis consensus
 
+Each node's RPC is reachable only from that node (loopback) or through its
+onion service: a clear-network URL such as `http://NODE1:12029` points at a
+bind the node refuses (RT-1/RT-2). Run the check **on each node** against its
+own loopback, and compare the printed hashes:
+
 ```bash
-python3 scripts/check_testnet_genesis_consensus.py \
-  --rpc http://NODE1:12029 \
-  --rpc http://NODE2:12029 \
-  --rpc http://NODE3:12029 \
-  --rpc http://NODE4:12029 \
-  --rpc http://NODE5:12029
+# on every node
+python3 scripts/check_testnet_genesis_consensus.py --rpc http://127.0.0.1:12029
 ```
+
+(One invocation listing every node's `--rpc` works only when each URL is an
+onion service the node runs, reached through a SOCKS proxy — RT-8 — or when
+the consumers run inside the nodes' network namespaces.)
 
 All nodes must report identical block 0 hash and miner tx hash.
 

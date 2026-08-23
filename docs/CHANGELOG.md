@@ -35,7 +35,13 @@
   field nothing read — is retired by name alongside
   `--confirm-external-bind`, and the removed-flags shim now answers for a
   config-file flag too, the route every shipped unit file uses. The
-  container image binds RPC on loopback and no longer exposes 11029.
+  container image binds RPC on loopback and no longer exposes 11029; the
+  documented recipe is `docker run --network host`, so the container's
+  loopback is the host's and nothing in the daemon changes (a daemon UDS
+  listener is filed with its trigger, not built). An explicitly empty
+  `--rpc-bind-ipv6-address` under `--rpc-use-ipv6` is refused by name
+  rather than silently dropped, and a refusal on the separate restricted
+  listener names the `--rpc-restricted-bind-*` flags it came from.
   **One behaviour change in that move is a fix, not a port:** the C++
   cap check refused any `--rpc-max-connections-per-public-ip` /
   `-per-private-ip` value under `--rpc-max-connections 0` (unlimited) as
