@@ -79,4 +79,28 @@ int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* fa
 
 #ifdef __cplusplus
 } // extern "C"
-#endif
+
+// The exports' bodies, over the core objects they read. Same shape as
+// `daemon_submit::snapshot_facts` (daemon_submit_ffi.h): the extern "C" entry
+// point unwraps the handle and delegates here, so the logic — the lock, the
+// reads, and the classification — is reachable from a unit test with a
+// controlled chain (tests/unit_tests/rpc_facts_shims.cpp) instead of needing
+// a core_rpc_server. A facts export shaped as one opaque block would be
+// testable only through a live daemon; new exports take this shape.
+//
+// `shekyl_rpc_chain_tip` is not split this way yet: it reads
+// `is_synchronized()` off the p2p payload object, for which this tree has no
+// test double, so splitting it would move the untestable dependency rather
+// than remove it. It is covered by the live daemon check until a p2p double
+// exists (RK-5 builds one for `get_info`, which needs the same object).
+
+namespace cryptonote { class Blockchain; }
+
+namespace daemon_rpc_facts {
+
+int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
+    shekyl_rpc_block_hash_facts* out) noexcept;
+
+} // namespace daemon_rpc_facts
+
+#endif // __cplusplus

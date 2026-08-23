@@ -232,6 +232,19 @@ Twins in `shekyl-daemon-rpc/src/ffi.rs`; layout pinned both directions by
 values, the F26 pattern) — **every** POD in the family, which is what RK-D3
 requires.
 
+**An export is a thin adapter over a free function.** The `extern "C"` entry
+point unwraps the handle; the body takes the core objects it reads
+(`block_hash_at(Blockchain&, …)`), exactly as `daemon_submit::snapshot_facts`
+does. That is what makes the decisions — bounds, lookups, classification —
+reachable from a unit test with a controlled chain
+(`tests/unit_tests/rpc_facts_shims.cpp`, a `BaseTestDB` under a real
+`Blockchain`) instead of only through a live daemon. An export written as one
+opaque block is testable only end-to-end, which is how a bound or a branch
+ships unexercised; every new export takes this shape. (`shekyl_rpc_chain_tip`
+is the one that does not yet: it reads `is_synchronized()` off the p2p payload
+object, for which this tree has no double — RK-5 needs one for `get_info` and
+takes it then.)
+
 **Three states, three answers.** A facts export that can be absent needs
 absence to mean one thing. For the block hash: past the tip is *data*
 (`found == 0` → the method's `TOO_BIG_HEIGHT` refusal); in range and present
