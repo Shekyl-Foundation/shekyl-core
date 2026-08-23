@@ -36,6 +36,9 @@ TEST(RpcArgsDaemonSurface, DaemonOmitsLoginAndSslFlags)
   // Retired with RT-W2: confirmation is not refusal. The flag now reaches
   // the removed-flags shim, which refuses it by name.
   EXPECT_FALSE(has_option(desc, "confirm-external-bind"));
+  // Retired with it: the flag parsed into a field nothing read, and a loopback
+  // bind failing is a refusal, not something to ignore.
+  EXPECT_FALSE(has_option(desc, "rpc-ignore-ipv4"));
 
   EXPECT_FALSE(has_option(desc, "rpc-login"));
   EXPECT_FALSE(has_option(desc, "rpc-ssl"));

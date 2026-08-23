@@ -28,6 +28,7 @@
 
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
+use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
 use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
@@ -37,8 +38,9 @@ use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitE
 use axum::http::{HeaderValue, Method};
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
+use std::future::IntoFuture as _;
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
@@ -49,19 +51,12 @@ pub struct AppState {
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
     pub restricted: bool,
-    pub shutdown: Arc<Notify>,
     /// Live connection accounting; shared with the [`LimitedListener`] and read
     /// by `get_info` to report `rpc_connections_count`.
     pub conn_tracker: Arc<ConnTracker>,
 }
 
-#[derive(Clone)]
 pub struct ServerConfig {
-    /// Bind address. Classification and the RT-1/RT-2 refusals happen in
-    /// [`crate::bind::bind_listener`], not here: this is still a raw
-    /// `SocketAddr` (the filed `ValidatedListen` successor is not due until
-    /// a third bind site).
-    pub bind_addr: std::net::SocketAddr,
     pub restricted: bool,
     pub body_limit: usize,
     /// Allow-list from `--rpc-access-control-origins`. Empty = CORS default-deny.
@@ -73,7 +68,6 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_addr: std::net::SocketAddr::from(([127, 0, 0, 1], 21029)),
             restricted: false,
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
@@ -493,39 +487,39 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
         .with_state(state)
 }
 
-/// Serve the daemon RPC on an already-bound listener. Blocks until the shutdown
-/// signal fires.
-pub async fn serve_with_listener(
+/// Serve the daemon RPC on the listeners that passed the bind seam — **one
+/// server, N sockets**: one [`ConnTracker`] (the caps are per server, as the
+/// flags say, and `get_info` counts every family), one submit engine, one
+/// router, and one `axum::serve` per socket. Only a [`BoundListener`] is
+/// accepted, so a socket that skipped the refusal cannot be served.
+///
+/// Returns when every acceptor has drained after `shutdown` turns true (or
+/// its sender is dropped). A `watch` rather than a `Notify`: `wait_for` is
+/// level-triggered, so a stop that lands before an acceptor has been polled
+/// is still observed — `notify_waiters` stored no permit and lost it.
+pub async fn serve_listeners(
     core: Arc<CoreRpc>,
     config: ServerConfig,
-    listener: tokio::net::TcpListener,
-    shutdown: Arc<Notify>,
+    listeners: Vec<BoundListener>,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let submit_engine = Arc::new(SubmitEngine::new(
         FfiSubmitShim::new(core.clone()),
         DaemonTxVerifier,
     ));
-    // One tracker per listener, shared between admission (the LimitedListener)
-    // and reporting (`get_info`'s rpc_connections_count).
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let state = Arc::new(AppState {
         core,
         submit_engine,
         restricted: config.restricted,
-        shutdown: shutdown.clone(),
         conn_tracker: conn_tracker.clone(),
     });
-
     let app = build_router(state, &config.cors_origins);
-    info!(
-        "shekyl-daemon-rpc ({}) listening on {}",
-        if config.restricted {
-            "restricted"
-        } else {
-            "unrestricted"
-        },
-        config.bind_addr
-    );
+    let mode = if config.restricted {
+        "restricted"
+    } else {
+        "unrestricted"
+    };
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
     // from the old permissive reflection, so make it observable rather than a
@@ -541,36 +535,53 @@ pub async fn serve_with_listener(
             config.cors_origins.len()
         );
     }
-
     if config.conn_limits != ConnLimits::default() {
         info!(
             "RPC connection caps: total={}, per-public-ip={}, per-private-ip={} (0 = unlimited)",
-            config.conn_limits.max_total,
-            config.conn_limits.max_per_public_ip,
-            config.conn_limits.max_per_private_ip
+            config.conn_limits.max_total(),
+            config.conn_limits.max_per_public_ip(),
+            config.conn_limits.max_per_private_ip()
         );
     }
 
-    // Wrap the bound listener so every accepted connection is admitted through
-    // (and accounted in) the shared tracker. The graceful-shutdown path is
-    // unchanged — only the listener is adapted.
-    let listener = LimitedListener::new(listener, conn_tracker);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown.notified().await })
-        .await?;
-
-    Ok(())
-}
-
-/// Start the Axum daemon RPC server (bind + serve). Blocks until the shutdown
-/// signal fires.
-pub async fn run_server(
-    core: Arc<CoreRpc>,
-    config: ServerConfig,
-    shutdown: Arc<Notify>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = crate::bind::bind_listener(config.bind_addr).await?;
-    serve_with_listener(core, config, listener, shutdown).await
+    let mut serves = tokio::task::JoinSet::new();
+    for bound in listeners {
+        // The operator's startup line, in the category the daemon shows at
+        // default verbosity (`global=info`, where the C++ `MGINFO` this
+        // replaced lived); this crate's own target is filtered to errors
+        // there, and a bound socket must not need --log-level 1 to be seen.
+        info!(
+            target: "global",
+            "shekyl-daemon-rpc ({mode}) listening on {}",
+            bound.local_addr()
+        );
+        let (_, listener) = bound.into_parts();
+        // Every accepted connection is admitted through (and accounted in)
+        // the one shared tracker.
+        let listener = LimitedListener::new(listener, conn_tracker.clone());
+        let mut stop = shutdown.clone();
+        serves.spawn(
+            axum::serve(listener, app.clone())
+                .with_graceful_shutdown(async move {
+                    // Either outcome is a stop: the value turned true, or the
+                    // sender is gone.
+                    let _signal = stop.wait_for(|&stop| stop).await;
+                })
+                .into_future(),
+        );
+    }
+    let mut first_err: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+    while let Some(joined) = serves.join_next().await {
+        let failure: Option<Box<dyn std::error::Error + Send + Sync>> = match joined {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(Box::new(e)),
+            Err(join) => Some(Box::new(join)),
+        };
+        if let Some(e) = failure {
+            first_err.get_or_insert(e);
+        }
+    }
+    first_err.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

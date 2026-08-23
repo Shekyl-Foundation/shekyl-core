@@ -256,24 +256,13 @@ bool Daemon::run(bool interactive)
     for (auto & rpc : mp_internals->rpcs)
     {
       auto * server = rpc.server.get();
-      // Hosts and port go to Rust as the operator gave them. Rust parses both
-      // families, classifies, and binds (RPC_TRANSPORT_POSTURE.md RT-W2);
-      // nothing is composed or decided here. bind_host_v6 is NULL when
-      // --rpc-use-ipv6 is off.
-      auto bind_label = [](std::string const & host, std::string const & port) -> std::string {
-        if (!host.empty() && host.front() != '[' && host.find(':') != std::string::npos)
-          return "[" + host + "]:" + port;
-        return host + ":" + port;
-      };
-      std::string where = bind_label(rpc.bind_host, rpc.bind_port);
-      char const * bind_host_v6 = nullptr;
-      if (server->get_rpc_use_ipv6())
-      {
-        bind_host_v6 = server->get_rpc_bind_ipv6().c_str();
-        if (!server->get_rpc_bind_ipv6().empty()
-            && server->get_rpc_bind_ipv6() != rpc.bind_host)
-          where += " and " + bind_label(server->get_rpc_bind_ipv6(), rpc.bind_port);
-      }
+      // Hosts and port go to Rust as the operator gave them: Rust parses both
+      // families, classifies, binds, and logs each socket it bound
+      // (RPC_TRANSPORT_POSTURE.md RT-W2). Nothing is composed or decided
+      // here; `as_given` is the flags verbatim, for messages only.
+      std::string const & bind_host_v6 = server->get_rpc_bind_ipv6(); // empty = --rpc-use-ipv6 off
+      std::string const as_given = "--rpc-bind-ip=" + rpc.bind_host + " --rpc-bind-port=" + rpc.bind_port +
+        (bind_host_v6.empty() ? std::string() : " --rpc-bind-ipv6-address=" + bind_host_v6);
       // Comma-joined CORS allow-list for Axum (empty = default-deny).
       std::string cors_origins;
       {
@@ -285,19 +274,26 @@ bool Daemon::run(bool interactive)
         }
       }
       auto * rust_handle = shekyl_daemon_rpc_start(
-        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(), bind_host_v6,
-        rpc.restricted,
+        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(),
+        bind_host_v6.empty() ? nullptr : bind_host_v6.c_str(), rpc.restricted,
         cors_origins.empty() ? nullptr : cors_origins.c_str(),
         server->get_rpc_max_connections(),
         server->get_rpc_max_connections_per_public_ip(),
         server->get_rpc_max_connections_per_private_ip());
       if (!rust_handle)
       {
+        // A listener already started on this run is serving on a core that
+        // is about to be torn down: stop it before the throw, so no Rust
+        // task outlives the C++ objects it points into.
+        for (auto * started : mp_internals->rust_rpc_handles)
+          shekyl_daemon_rpc_stop(started);
+        mp_internals->rust_rpc_handles.clear();
         throw std::runtime_error(
-          "Failed to start Axum RPC for " + rpc.description + " on " + where +
-          " (the reason is logged just above)");
+          "Failed to start Axum RPC for " + rpc.description + " (" + as_given +
+          "); the reason is logged just above");
       }
-      MGINFO("Axum RPC listening on " << where << " for " << rpc.description);
+      MGINFO("Axum RPC started for " << rpc.description << " (" << as_given
+        << "); each bound socket is logged by the Rust listener");
       mp_internals->rust_rpc_handles.push_back(rust_handle);
     }
 

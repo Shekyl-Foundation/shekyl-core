@@ -27,7 +27,15 @@
   `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to
   Rust as given, which parses them and validates the connection caps;
   the C++ IP-parse blocks, bracket stripping, `host:port` composition
-  and cap checks are deleted.
+  and cap checks are deleted. One server serves every socket of a start
+  (`serve_listeners`): the connection caps are per server as the flags
+  say, `get_info` counts every family, and the stop signal is a
+  level-triggered `watch`, so a stop cannot be lost to an acceptor that
+  has not been polled yet. `--rpc-ignore-ipv4` — which parsed into a
+  field nothing read — is retired by name alongside
+  `--confirm-external-bind`, and the removed-flags shim now answers for a
+  config-file flag too, the route every shipped unit file uses. The
+  container image binds RPC on loopback and no longer exposes 11029.
   **One behaviour change in that move is a fix, not a port:** the C++
   cap check refused any `--rpc-max-connections-per-public-ip` /
   `-per-private-ip` value under `--rpc-max-connections 0` (unlimited) as

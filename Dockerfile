@@ -52,9 +52,12 @@ VOLUME /home/shekyl/.shekyl
 VOLUME /wallet
 
 EXPOSE 11021
-EXPOSE 11029
+# No RPC port: shekyld serves RPC on loopback only (RPC_TRANSPORT_POSTURE.md
+# RT-1/RT-2) — a wildcard or network bind is refused at start. Reach it from
+# inside the container's network namespace (e.g. --network host, or a wallet
+# in the same pod); the remote leg is the onion service / pinned TLS.
 
 USER shekyl
 
 ENTRYPOINT ["shekyld"]
-CMD ["--p2p-bind-ip=0.0.0.0", "--p2p-bind-port=11021", "--rpc-bind-ip=0.0.0.0", "--rpc-bind-port=11029", "--non-interactive", "--confirm-external-bind", "--restricted-rpc"]
+CMD ["--p2p-bind-ip=0.0.0.0", "--p2p-bind-port=11021", "--rpc-bind-port=11029", "--non-interactive", "--restricted-rpc"]

@@ -93,7 +93,6 @@ namespace cryptonote
      , rpc_restricted_bind_ip({"rpc-restricted-bind-ip", rpc_args::tr("Specify IP to bind restricted RPC server"), "127.0.0.1"})
      , rpc_restricted_bind_ipv6_address({"rpc-restricted-bind-ipv6-address", rpc_args::tr("Specify IPv6 address to bind restricted RPC server"), "::1"})
      , rpc_use_ipv6({"rpc-use-ipv6", rpc_args::tr("Allow IPv6 for RPC"), false})
-     , rpc_ignore_ipv4({"rpc-ignore-ipv4", rpc_args::tr("Ignore unsuccessful IPv4 bind for RPC"), false})
      , rpc_login({"rpc-login", rpc_args::tr("Specify username[:password] required for RPC server"), "", true})
      , rpc_access_control_origins({"rpc-access-control-origins", rpc_args::tr("Specify a comma separated list of origins to allow cross origin resource sharing"), ""})
      , rpc_ssl({"rpc-ssl", rpc_args::tr("Enable SSL on RPC connections: enabled|disabled|autodetect"), "autodetect"})
@@ -119,7 +118,6 @@ namespace cryptonote
     command_line::add_arg(desc, arg.rpc_restricted_bind_ip);
     command_line::add_arg(desc, arg.rpc_restricted_bind_ipv6_address);
     command_line::add_arg(desc, arg.rpc_use_ipv6);
-    command_line::add_arg(desc, arg.rpc_ignore_ipv4);
     command_line::add_arg(desc, arg.rpc_access_control_origins);
     command_line::add_arg(desc, arg.disable_rpc_ban);
     if (include_listener_tls_auth)
@@ -149,15 +147,9 @@ namespace cryptonote
     config.restricted_bind_ip = command_line::get_arg(vm, arg.rpc_restricted_bind_ip);
     config.restricted_bind_ipv6_address = command_line::get_arg(vm, arg.rpc_restricted_bind_ipv6_address);
     config.use_ipv6 = command_line::get_arg(vm, arg.rpc_use_ipv6);
-    config.require_ipv4 = !command_line::get_arg(vm, arg.rpc_ignore_ipv4);
     config.disable_rpc_ban = command_line::get_arg(vm, arg.disable_rpc_ban);
-    // Bind addresses are passed to Rust as given. The one parser (numeric IP,
-    // one bracket pair around an IPv6 literal, hostnames refused by name) and
-    // the listen posture (wildcard and network binds refused: RT-1/RT-2, slice
-    // RT-W2) live on the Rust side of shekyl_daemon_rpc_start. --rpc-use-ipv6
-    // is a second family on that same start, not a second C++ server. The
-    // parse "for error consistency" that used to live here was a second copy
-    // of that decision.
+    // Bind addresses go to Rust as given; parsing and RT-1/RT-2 live in
+    // shekyl-daemon-rpc::bind (see shekyl_daemon_rpc_start in shekyl_ffi.h).
 
     if (include_listener_tls_auth)
     {

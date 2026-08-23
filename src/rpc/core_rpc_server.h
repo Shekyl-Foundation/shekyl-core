@@ -92,10 +92,9 @@ namespace cryptonote
     // Resolved listen host for this server, valid after init(). Passed to
     // Rust as --rpc-bind-ip / --rpc-restricted-bind-ip; Rust parses it.
     const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
-    // --rpc-bind-ipv6-address (or the restricted twin). Passed to Rust when
-    // get_rpc_use_ipv6(); empty until init() runs.
+    // --rpc-bind-ipv6-address (or the restricted twin) when --rpc-use-ipv6 is
+    // set; empty otherwise (and until init() runs). Passed to Rust as given.
     const std::string& get_rpc_bind_ipv6() const { return m_rpc_bind_ipv6; }
-    bool get_rpc_use_ipv6() const { return m_rpc_use_ipv6; }
     const std::vector<std::string>& get_access_control_origins() const {
       return m_access_control_origins;
     }
@@ -198,8 +197,7 @@ private:
     // Resolved listen hosts for this server (restricted variant uses its own).
     // Recorded in init(); Rust parses and binds.
     std::string m_rpc_bind_ip;
-    std::string m_rpc_bind_ipv6;
-    bool m_rpc_use_ipv6 = false;
+    std::string m_rpc_bind_ipv6; // empty = --rpc-use-ipv6 off
     // CORS allow-list from --rpc-access-control-origins (empty = deny).
     std::vector<std::string> m_access_control_origins;
     // Connection caps (0 = unlimited); set in init(), enforced by the Rust

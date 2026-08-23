@@ -15,7 +15,8 @@ use std::os::raw::c_char;
 /// Opaque handle returned to C++ for a running daemon RPC server.
 #[repr(C)]
 pub struct ShekylDaemonRpcHandle {
-    shutdown: *const tokio::sync::Notify,
+    /// Level-triggered stop signal for every acceptor on this handle.
+    shutdown: *const tokio::sync::watch::Sender<bool>,
     rt: *const tokio::runtime::Runtime,
     /// The serve task's join handle. `shekyl_daemon_rpc_stop` blocks on it so
     /// the graceful-shutdown drain of in-flight handlers (which hold live
@@ -46,11 +47,8 @@ pub struct ShekylDaemonRpcHandle {
 /// - `bind_host_v6` is the operator's `--rpc-bind-ipv6-address` (or the
 ///   restricted twin) when `--rpc-use-ipv6` is set, or null. Rust parses it
 ///   with the same port, classifies it, and binds a second socket on this
-///   handle when it is a different address; C++ does not start a second
-///   server.
-///   Rust parses both (`bind::parse_bind` / `bind::listen_addrs`) and
-///   decides the listen posture (`bind::bind_listener`); C++ composes
-///   nothing.
+///   handle when it names a different interface; one server serves every
+///   socket (`server::serve_listeners`). C++ composes nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
@@ -169,7 +167,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     let mut bound = Vec::with_capacity(addrs.len());
     for addr in addrs {
         match rt.block_on(crate::bind::bind_listener(addr)) {
-            Ok(listener) => bound.push((addr, listener)),
+            Ok(listener) => bound.push(listener),
             Err(e) => {
                 tracing::error!("daemon-rpc bind failed on {addr}: {e}");
                 return std::ptr::null_mut();
@@ -177,70 +175,24 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         }
     }
 
-    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
-    let shutdown_for_server = shutdown.clone();
-
+    let config = crate::server::ServerConfig {
+        restricted,
+        cors_origins: cors,
+        conn_limits,
+        ..Default::default()
+    };
+    // Level-triggered: a `stop` that lands before any acceptor has polled
+    // is still observed by `wait_for` (a `Notify` stored no permit and lost
+    // it). One sender, cloned into every acceptor by `serve_listeners`.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let serve = rt.spawn(async move {
-        let mut bound = bound.into_iter();
-        let (addr, listener) = bound
-            .next()
-            .expect("listen_addrs yields at least the primary");
-        let config = crate::server::ServerConfig {
-            bind_addr: addr,
-            restricted,
-            cors_origins: cors.clone(),
-            conn_limits,
-            ..Default::default()
-        };
-        let extra = bound.next().map(|(addr, listener)| {
-            (
-                crate::server::ServerConfig {
-                    bind_addr: addr,
-                    restricted,
-                    cors_origins: cors.clone(),
-                    conn_limits,
-                    ..Default::default()
-                },
-                listener,
-            )
-        });
-        let log_err = |e| tracing::error!("daemon-rpc server error: {e}");
-        match extra {
-            None => {
-                if let Err(e) =
-                    crate::server::serve_with_listener(core, config, listener, shutdown_for_server)
-                        .await
-                {
-                    log_err(e);
-                }
-            }
-            Some((config_v6, listener_v6)) => {
-                let (a, b) = tokio::join!(
-                    crate::server::serve_with_listener(
-                        core.clone(),
-                        config,
-                        listener,
-                        shutdown_for_server.clone(),
-                    ),
-                    crate::server::serve_with_listener(
-                        core,
-                        config_v6,
-                        listener_v6,
-                        shutdown_for_server,
-                    ),
-                );
-                if let Err(e) = a {
-                    log_err(e);
-                }
-                if let Err(e) = b {
-                    log_err(e);
-                }
-            }
+        if let Err(e) = crate::server::serve_listeners(core, config, bound, shutdown_rx).await {
+            tracing::error!("daemon-rpc server error: {e}");
         }
     });
 
     let handle = Box::new(ShekylDaemonRpcHandle {
-        shutdown: std::sync::Arc::into_raw(shutdown),
+        shutdown: Box::into_raw(Box::new(shutdown_tx)).cast_const(),
         rt: Box::into_raw(Box::new(rt)).cast_const(),
         serve: Box::into_raw(Box::new(serve)),
     });
@@ -264,11 +216,12 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
     // Signal graceful shutdown: axum stops accepting and lets in-flight
     // handlers run to completion — including a submit mid-Phase-C on the
     // blocking pool, whose closure holds live references into the C++ core.
-    if !handle.shutdown.is_null() {
-        let notify = std::sync::Arc::from_raw(handle.shutdown);
-        // One waiter today, two when --rpc-use-ipv6 bound a second family
-        // on this handle. `notify_one` would leave the other serving.
-        notify.notify_waiters();
+    let shutdown = (!handle.shutdown.is_null()).then(|| Box::from_raw(handle.shutdown.cast_mut()));
+    if let Some(tx) = &shutdown {
+        // Every acceptor on this handle observes this, whether or not it has
+        // been polled yet (`watch` is level-triggered; `notify_waiters` was
+        // not and could lose a stop that landed first).
+        tx.send_replace(true);
     }
 
     if !handle.rt.is_null() {
@@ -284,6 +237,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
             drop(rt.block_on(serve));
         }
         drop(rt);
+        drop(shutdown);
     } else if !handle.serve.is_null() {
         // No runtime to drive the join (should not happen): reclaim the box
         // so it is not leaked. The task cannot be awaited without a runtime.

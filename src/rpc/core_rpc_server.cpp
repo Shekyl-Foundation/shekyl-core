@@ -154,8 +154,9 @@ namespace cryptonote
       }
     }
     m_rpc_bind_ip = bind_ip_str;
-    m_rpc_bind_ipv6 = bind_ipv6_str;
-    m_rpc_use_ipv6 = rpc_config->use_ipv6;
+    // One field: empty means --rpc-use-ipv6 is off. Rust binds the second
+    // family only when this is non-empty.
+    m_rpc_bind_ipv6 = rpc_config->use_ipv6 ? bind_ipv6_str : std::string();
     m_access_control_origins = rpc_config->access_control_origins;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
 

@@ -1,81 +1,48 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without modification, are
-// permitted provided that the following conditions are met:
-//
-// 1. Redistributions of source code must retain the above copyright notice, this list of
-//    conditions and the following disclaimer.
-//
-// 2. Redistributions in binary form must reproduce the above copyright notice, this list
-//    of conditions and the following disclaimer in the documentation and/or other
-//    materials provided with the distribution.
-//
-// 3. Neither the name of the copyright holder nor the names of its contributors may be
-//    used to endorse or promote products derived from this software without specific
-//    prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
-// THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// BSD-3-Clause
 
 //! Daemon RPC bind seam (`RPC_TRANSPORT_POSTURE.md` RT-1, RT-2; slice RT-W2).
 //!
 //! Every daemon listener — main, restricted, IPv4, IPv6 — passes through
 //! [`bind_listener`]. Policy is pure ([`refuse_non_loopback`]); I/O is the
-//! bind. IPv6 is a first-class family: `::1` is loopback the same way
-//! `127.0.0.1` is. Network IPv6 is refused for the same reason as network
+//! bind; and what comes out is a [`BoundListener`], the only thing the server
+//! will serve — so a socket that skipped the refusal is a type error, not a
+//! review finding. IPv6 is a first-class family: `::1` is loopback the same
+//! way `127.0.0.1` is. Network IPv6 is refused for the same reason as network
 //! IPv4 — the daemon RPC has no authentication.
 
-use std::net::{IpAddr, SocketAddr};
+use std::fmt;
+use std::net::SocketAddr;
 
-use shekyl_rpc_transport::listen::{classify_listen, ListenClass};
-
-/// One pair of IPv6 brackets, if present. `[::1]` and `::1` name the same
-/// interface; `[[::1]]` and unbalanced brackets are not a literal.
-fn strip_one_bracket_pair(host: &str) -> &str {
-    host.strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-        .unwrap_or(host)
-}
+use shekyl_rpc_transport::listen::{
+    classify_listen, parse_listen_host, parse_listen_port, ListenClass, WILDCARD_REASON,
+};
 
 /// The operator's bind-host / bind-port strings, as given, to the address
-/// [`bind_listener`] decides on. C++ composes nothing. A hostname is refused
-/// by name, never resolved; an empty host or a port outside `1..=65535` is
-/// refused. IPv4 and IPv6 are the same parser (`IpAddr`).
+/// [`bind_listener`] decides on. C++ composes nothing. One parser for every
+/// Shekyl listener (`shekyl_rpc_transport::listen`): a hostname is refused by
+/// name, never resolved; one bracket pair around an IPv6 literal is
+/// notation; an empty host or a port outside `1..=65535` is refused.
 pub fn parse_bind(host: &str, port: &str) -> Result<SocketAddr, String> {
-    let host = host.trim();
-    if host.is_empty() {
-        return Err("RPC bind address is empty: give a numeric IP (127.0.0.1 or ::1)".into());
+    let ip = parse_listen_host(host).map_err(|e| format!("RPC bind address: {e}"))?;
+    let port = parse_listen_port(port).map_err(|e| format!("RPC bind port: {e}"))?;
+    if port == 0 {
+        // "Any free port" is for a listener that reads back what it got; the
+        // daemon's port comes from a flag the operator and the wallet must
+        // agree on.
+        return Err("RPC bind port: '0' is not a port in 1..=65535".into());
     }
-    let ip = strip_one_bracket_pair(host)
-        .parse::<IpAddr>()
-        .map_err(|_| {
-            format!(
-                "RPC bind address '{host}' is not a numeric IP address (hostnames are not \
-                 resolved): use 127.0.0.1 or ::1"
-            )
-        })?;
-    let port = port
-        .trim()
-        .parse::<u16>()
-        .ok()
-        .filter(|p| *p != 0)
-        .ok_or_else(|| format!("RPC bind port '{port}' is not a port in 1..=65535"))?;
     Ok(SocketAddr::new(ip, port))
 }
 
 /// Addresses one FFI start will bind: the primary host, and — when `host_v6`
-/// is present and parses to a *different* address — that family too.
-/// `::1` and `[::1]` are one socket. C++ does not compose, classify, or
-/// decide to skip; it passes the operator's strings through.
+/// is present and names a *different* interface — that family too. Deduped
+/// on what is bound, not on how it was spelled: `::1` and `[::1]` are one
+/// socket, and so are `127.0.0.1` and `::ffff:127.0.0.1` (the kernel answers
+/// the second with EADDRINUSE). C++ does not compose, classify, or decide to
+/// skip; it passes the operator's strings through.
 pub fn listen_addrs(
     host: &str,
     port: &str,
@@ -85,7 +52,7 @@ pub fn listen_addrs(
     let mut addrs = vec![primary];
     if let Some(v6) = host_v6.map(str::trim).filter(|s| !s.is_empty()) {
         let second = parse_bind(v6, port)?;
-        if second != primary {
+        if second.ip().to_canonical() != primary.ip().to_canonical() {
             addrs.push(second);
         }
     }
@@ -101,9 +68,8 @@ pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
     match classify_listen(addr) {
         ListenClass::Loopback => Ok(()),
         ListenClass::Wildcard => Err(format!(
-            "refusing to bind the daemon RPC to the wildcard address {addr}: 0.0.0.0 and :: \
-             bind every interface, including ones that do not exist yet (a VPN that comes up \
-             later, a hotspot, a container bridge). Bind 127.0.0.1 or [::1]."
+            "refusing to bind the daemon RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
+             Bind 127.0.0.1 or [::1]."
         )),
         ListenClass::Addressed => Err(format!(
             "refusing to serve the daemon RPC on {addr}: the address is reachable from the \
@@ -115,6 +81,34 @@ pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
     }
 }
 
+/// A TCP listener that passed the daemon's listen posture. Constructible only
+/// through [`bind_listener`], and the only thing `serve_listeners` accepts,
+/// so there is no way to serve a socket that was not refused first.
+pub struct BoundListener {
+    addr: SocketAddr,
+    listener: tokio::net::TcpListener,
+}
+
+impl BoundListener {
+    /// The address actually bound (a port of 0 has been resolved by the OS).
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub(crate) fn into_parts(self) -> (SocketAddr, tokio::net::TcpListener) {
+        (self.addr, self.listener)
+    }
+}
+
+impl fmt::Debug for BoundListener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoundListener")
+            .field("addr", &self.addr)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Bind the daemon RPC TCP listener — **the** seam every daemon listener
 /// passes through (the restricted one included, IPv6 included).
 ///
@@ -122,14 +116,16 @@ pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
 /// bind synchronously and fail loudly — the refusal or EADDRINUSE logged
 /// with its reason before any handle is handed back — rather than discovering
 /// the failure asynchronously inside a spawned serve task.
-pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
-    match refuse_non_loopback(addr) {
-        Ok(()) => tokio::net::TcpListener::bind(addr).await,
-        Err(refusal) => Err(std::io::Error::new(
+pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<BoundListener> {
+    if let Err(refusal) = refuse_non_loopback(addr) {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             refusal,
-        )),
+        ));
     }
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let addr = listener.local_addr()?;
+    Ok(BoundListener { addr, listener })
 }
 
 #[cfg(test)]
@@ -142,7 +138,8 @@ mod tests {
 
     /// The operator's two strings become one typed address here and nowhere
     /// else: one bracket pair tolerated, hostnames refused by name, an empty
-    /// host and a bad port refused, IPv4 and IPv6 the same parser.
+    /// host and a bad port refused with the flag named, IPv4 and IPv6 the
+    /// same parser.
     #[test]
     fn host_and_port_parse_strictly() {
         assert_eq!(
@@ -159,7 +156,7 @@ mod tests {
         );
         for (host, port, names) in [
             ("localhost", "21029", "hostnames are not resolved"),
-            ("", "21029", "RPC bind address is empty"),
+            ("", "21029", "RPC bind address: listen address is empty"),
             ("127.0.0.1", "0", "RPC bind port"),
             ("127.0.0.1", "70000", "RPC bind port"),
             ("127.0.0.1", "http", "RPC bind port"),
@@ -172,8 +169,9 @@ mod tests {
         }
     }
 
-    /// The second family is a second address, not a C++ second start: same
-    /// address after parse is one socket; IPv4 + ::1 is two.
+    /// The second family is a second address, not a C++ second start: the
+    /// same interface after parse is one socket (brackets, and the
+    /// IPv4-mapped spelling of the same loopback); IPv4 + `::1` is two.
     #[test]
     fn second_family_is_deduped_after_parse() {
         assert_eq!(listen_addrs("127.0.0.1", "21029", None).unwrap().len(), 1);
@@ -189,20 +187,19 @@ mod tests {
             "brackets are notation"
         );
         assert_eq!(
-            listen_addrs("127.0.0.1", "21029", Some("")).unwrap().len(),
-            1
-        );
-        assert_eq!(
-            listen_addrs("127.0.0.1", "21029", Some("  "))
+            listen_addrs("127.0.0.1", "21029", Some("::ffff:127.0.0.1"))
                 .unwrap()
                 .len(),
-            1
+            1,
+            "the mapped spelling of the same loopback is the same socket"
         );
+        for empty in [Some(""), Some("  ")] {
+            assert_eq!(listen_addrs("127.0.0.1", "21029", empty).unwrap().len(), 1);
+        }
     }
 
-    /// RT-1: every wildcard spelling is refused before any socket exists.
-    /// The edit that turns this red is classifying as loopback, or binding
-    /// without classifying.
+    /// RT-1 as policy: every wildcard spelling is refused. (The seam that
+    /// applies the policy is tested below.)
     #[test]
     fn wildcard_binds_are_refused() {
         for addr in ["0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0"] {
@@ -216,9 +213,9 @@ mod tests {
         }
     }
 
-    /// RT-2: a specific network address is refused, v4 and v6 the same
-    /// reason (no authentication) and the same remedy (loopback; the onion).
-    /// TEST-NET addresses, so nothing is bound even if the refusal failed.
+    /// RT-2 as policy: a specific network address is refused, v4 and v6 the
+    /// same reason (no authentication) and the same remedy (loopback; the
+    /// onion).
     #[test]
     fn network_binds_are_refused() {
         for addr in ["192.0.2.1:0", "[2001:db8::1]:0", "[::ffff:192.0.2.1]:0"] {
@@ -240,19 +237,36 @@ mod tests {
         refuse_non_loopback(addr("[::ffff:127.0.0.1]:0")).expect("mapped loopback");
     }
 
-    /// The complement: loopback in every spelling binds.
+    /// The seam, not the policy: `bind_listener` applies the refusal before
+    /// any socket exists. The edit that turns this red is binding without
+    /// refusing. Wildcard and TEST-NET addresses with port 0, so even a
+    /// failed refusal binds nothing anyone could reach by accident.
+    #[tokio::test]
+    async fn the_seam_refuses_before_binding() {
+        for (addr, names) in [
+            ("0.0.0.0:0", "wildcard"),
+            ("[::]:0", "wildcard"),
+            ("192.0.2.1:0", "no authentication"),
+            ("[2001:db8::1]:0", "no authentication"),
+        ] {
+            let err = bind_listener(self::addr(addr))
+                .await
+                .expect_err("the seam must refuse")
+                .to_string();
+            assert!(err.contains(names), "{addr}: {err}");
+        }
+    }
+
+    /// The complement: loopback in every spelling binds, and what comes back
+    /// knows its own (resolved) address.
     #[tokio::test]
     async fn loopback_binds() {
         for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
-            let listener = bind_listener(self::addr(addr))
+            let bound = bind_listener(self::addr(addr))
                 .await
                 .unwrap_or_else(|e| panic!("{addr} must bind: {e}"));
-            assert!(listener
-                .local_addr()
-                .unwrap()
-                .ip()
-                .to_canonical()
-                .is_loopback());
+            assert!(bound.local_addr().ip().to_canonical().is_loopback());
+            assert_ne!(bound.local_addr().port(), 0, "port 0 resolved by the OS");
         }
     }
 }

@@ -8192,7 +8192,8 @@ sustainability is unaffected by the recalibration.
   (default `::1`) into the same `shekyl_daemon_rpc_start`; Rust parses,
   classifies, and binds a second socket on that handle when the address is
   distinct. Loopback IPv6 is accepted; network/wildcard IPv6 is RT-1/RT-2.
-  `--rpc-ignore-ipv4` remains unused (a v4 loopback bind failure is fatal).
+  `--rpc-ignore-ipv4` is retired by name (removed-flags shim): a loopback
+  bind failing is a refusal, not something to ignore.
   **Reopen when:** an operator needs "IPv6-only, ignore a failed v4 bind"
   as a supported configuration.
 
@@ -11396,6 +11397,19 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.2 — Rust cutover and cleanup
+
+- **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
+  (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
+  the daemon-command client path in `src/daemon/main.cpp`
+  (`get_ip_int32_from_string` → `t_command_server{rpc_ip, rpc_port}`) refuses
+  it with "Invalid IP", so `shekyld --rpc-bind-ip=::1 status` exits 1 against
+  a daemon that is listening on `::1`. **Blocker:** `command_server` composes
+  the control address in C++ from a `uint32_t`; the fix is that composition
+  moving to the Rust ctl client (`shekyl-daemon-rpc/src/ctl_client.rs`, which
+  already owns the transport) with the host passed as given — the same move
+  RT-W2 made for the listener. **Target:** the ctl path's Rust cutover (this
+  section). **Reopen when:** that cutover lands, or an operator runs a v6-only
+  control plane.
 
 - **Legacy spend-graph analysis utilities: audit against FCMP++, then delete
   the dead ones.** `src/blockchain_utilities/` still builds
