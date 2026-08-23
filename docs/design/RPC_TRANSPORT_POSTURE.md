@@ -4,7 +4,7 @@
 and RT-O4 ruled (§7); RT-O2 closed as a corrected error; RT-O1 stays a
 probe whose result cannot move the mechanism (§7.1). **RT-W1 landed** with
 this round; **RT-W2 landed** 2026-08-22 (PR #539), **RT-W5 landed** 2026-08-22 (PR #533),
-**RT-W7 landed on the branch** 2026-08-23 (PR pending); **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
+**RT-W7 landed** 2026-08-23 (PR #542); **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
@@ -558,7 +558,7 @@ before its green was trusted.**
 | RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — unblocked |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **LANDED 2026-08-22** (PR #533: `2fb5fad61` removes `--public-node`, `/get_public_nodes`, the P2P advertisement and bumps `CORE_RPC_VERSION`; `7279cf360` deletes the residue — `set_rpc_port`/`m_rpc_port`, `rpc_credits_per_hash`, `print_pl publicrpc`; bootstrap-daemon disposition `20c869b1d`) |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
-| RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **LANDED on the branch 2026-08-23** (PR pending; `shekyl_rpc_transport::network_posture::{operator_warning, daemon_disclosures}`; CLI on stderr after its session validates the address, server in its log at `run_server` before it binds; the proxied-daemon case, the mapped-loopback cross-pin with `listen`, and both wirings — the server's under a capturing subscriber, the CLI's on the built binary — each observed red; verify: `git grep operator_warning rust/`). Carried, with its trigger already fired: the GUI dials `HttpRpc::new` directly and says nothing; the one-call GUI fix and the outbound `ValidatedEndpoint` seam are FOLLOWUPS V3.2 |
+| RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **LANDED 2026-08-23** (PR #542; `shekyl_rpc_transport::network_posture::{operator_warning, daemon_disclosures}`; CLI on stderr after its session validates the address, server in its log at `run_server` before it binds; the proxied-daemon case, the mapped-loopback cross-pin with `listen`, and both wirings — the server's under a capturing subscriber, the CLI's on the built binary — each observed red; verify: `git grep operator_warning rust/`). Carried, with its trigger already fired: the GUI dials `HttpRpc::new` directly and says nothing; the one-call GUI fix and the outbound `ValidatedEndpoint` seam are FOLLOWUPS V3.2 |
 
 RT-W1 is ruled, independent, small, and strictly reduces attack surface. It
 should not wait for the transport design — and did not.
