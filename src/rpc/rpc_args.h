@@ -56,9 +56,7 @@ namespace cryptonote
       const command_line::arg_descriptor<std::string> rpc_restricted_bind_ip;
       const command_line::arg_descriptor<std::string> rpc_restricted_bind_ipv6_address;
       const command_line::arg_descriptor<bool> rpc_use_ipv6;
-      const command_line::arg_descriptor<bool> rpc_ignore_ipv4;
       const command_line::arg_descriptor<std::string> rpc_login;
-      const command_line::arg_descriptor<bool> confirm_external_bind;
       const command_line::arg_descriptor<std::string> rpc_access_control_origins;
       const command_line::arg_descriptor<std::string> rpc_ssl;
       const command_line::arg_descriptor<std::string> rpc_ssl_private_key;
@@ -95,7 +93,6 @@ namespace cryptonote
     std::string restricted_bind_ip;
     std::string restricted_bind_ipv6_address;
     bool use_ipv6;
-    bool require_ipv4;
     std::vector<std::string> access_control_origins;
     std::optional<tools::login> login; // currently `std::nullopt` if unspecified by user
     epee::net_utils::ssl_options_t ssl_options = epee::net_utils::ssl_support_t::e_ssl_support_enabled;
