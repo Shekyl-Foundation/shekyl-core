@@ -166,6 +166,33 @@ impl CoreRpc {
         }
     }
 
+    /// The block-header projection at `height` (`shekyl_rpc_block_header_at`);
+    /// `Err(code)` on a non-OK return.
+    pub fn block_header_at(
+        &self,
+        height: u64,
+        fill_pow_hash: bool,
+    ) -> Result<ffi::BlockHeaderFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::BlockHeaderFactsFfi::zeroed();
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe {
+            ffi::shekyl_rpc_block_header_at(
+                self.handle,
+                height,
+                u8::from(fill_pow_hash),
+                &raw mut pod,
+            )
+        };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
     /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
     /// C++-owned view before it is released.
     pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {

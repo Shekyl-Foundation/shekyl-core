@@ -357,7 +357,7 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Get the height of the Monero blockchain.
+    /// Get the height of the Shekyl blockchain.
     ///
     /// The height is defined as the amount of blocks on the blockchain. For a blockchain with only
     /// its genesis block, the height will be 1.
@@ -396,22 +396,22 @@ pub trait Rpc: Sync + Clone {
         number: usize,
     ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct BlockHeaderResponse {
-                hash: String,
-            }
-            #[derive(Debug, Deserialize)]
-            struct BlockHeaderByHeightResponse {
-                block_header: BlockHeaderResponse,
-            }
-
-            let header: BlockHeaderByHeightResponse = self
+            // The wire type is `shekyl-rpc-types`'s (RK-D1).
+            let reply: shekyl_rpc_types::GetBlockHeaderByHeightResponse = self
                 .json_rpc_call(
                     "get_block_header_by_height",
                     Some(json!({ "height": number })),
                 )
                 .await?;
-            hash_hex(&header.block_header.hash)
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_block_header_by_height refused: {}",
+                    reply.status.0
+                )));
+            }
+            // No re-parse: the wire type already validated the hex on the
+            // way in (RK-3's `HashHex`), so the edge is just naming the bytes.
+            Ok(reply.block_header.hash.to_bytes())
         }
     }
 

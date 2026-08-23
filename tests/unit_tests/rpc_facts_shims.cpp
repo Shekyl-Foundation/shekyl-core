@@ -43,6 +43,7 @@
 #include <limits>
 
 #include "blockchain_db/testdb.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
 // cryptonote_core.h defines cryptonote::test_options (blockchain.h only
 // forward-declares it), needed by init_blockchain's fakechain options.
@@ -63,6 +64,36 @@ namespace
       h.data[i] = static_cast<char>((height >> (i * 8)) & 0xff);
     h.data[8] = 0x5a; // never all-zero, so it cannot be confused with null_hash
     return h;
+  }
+
+  // The block this fake chain holds at `height`: every field the header
+  // projection reads, derived from the height so the test can predict it.
+  cryptonote::block block_at(uint64_t height)
+  {
+    cryptonote::block blk{};
+    blk.major_version = 1;
+    blk.minor_version = 2;
+    blk.timestamp = 1500000000 + height;
+    blk.prev_id = height ? hash_at(height - 1) : crypto::null_hash;
+    blk.nonce = static_cast<uint32_t>(height * 7 + 1);
+    blk.curve_tree_root = hash_at(height + 1000);
+    blk.attestation_root = hash_at(height + 2000);
+
+    cryptonote::transaction miner_tx{};
+    miner_tx.version = 1;
+    miner_tx.unlock_time = height + 60;
+    cryptonote::txin_gen gen{};
+    gen.height = height;
+    miner_tx.vin.push_back(gen);
+    cryptonote::tx_out out{};
+    out.amount = 600000000000 + height;
+    miner_tx.vout.push_back(out);
+    blk.miner_tx = std::move(miner_tx);
+
+    // Two transactions, so `num_txes` is not trivially zero.
+    blk.tx_hashes.push_back(hash_at(height + 3000));
+    blk.tx_hashes.push_back(hash_at(height + 4000));
+    return blk;
   }
 
   // Chain of `m_height` blocks. `m_missing` (when set) is an in-range height
@@ -91,6 +122,38 @@ namespace
       if (block_height)
         *block_height = top;
       return m_height ? hash_at(top) : crypto::null_hash;
+    }
+
+    // `Blockchain::get_block_by_hash` reaches the store through
+    // `BlockchainDB::get_block` -> `get_block_blob`.
+    cryptonote::blobdata get_block_blob(const crypto::hash& h) const override
+    {
+      for (uint64_t i = 0; i < m_height; ++i)
+      {
+        if (i != m_missing && hash_at(i) == h)
+          return cryptonote::t_serializable_object_to_blob(block_at(i));
+      }
+      throw BLOCK_DNE("no block with that hash");
+    }
+
+    size_t get_block_weight(const uint64_t& height) const override { return 1000 + height; }
+    uint64_t get_block_long_term_weight(const uint64_t& height) const override
+    {
+      return 2000 + height;
+    }
+    // A difficulty above 2^64, so the projection's 128-bit split is exercised
+    // through the real path rather than only in the Rust unit test.
+    cryptonote::difficulty_type get_block_difficulty(const uint64_t& height) const override
+    {
+      cryptonote::difficulty_type d = 1;
+      d <<= 70;
+      return d + height;
+    }
+    cryptonote::difficulty_type get_block_cumulative_difficulty(const uint64_t& height) const override
+    {
+      cryptonote::difficulty_type d = 1;
+      d <<= 71;
+      return d + height;
     }
 
     bool block_exists(const crypto::hash& h, uint64_t* height) const override
@@ -212,9 +275,92 @@ TEST(rpc_facts_shims, in_range_height_the_store_cannot_produce_is_inconsistent)
   EXPECT_EQ(1, ok.found);
 }
 
+// The header projection carries what the block and the store say, at the
+// height asked for — the fields the wire's `block_header_response` renders.
+TEST(rpc_facts_shims, header_projection_reads_the_block_at_that_height)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t height = 4;
+  shekyl_rpc_block_header_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, height, /*fill_pow_hash=*/false, &f));
+
+  const cryptonote::block expected = block_at(height);
+  EXPECT_EQ(1, f.found);
+  EXPECT_EQ(height, f.height);
+  EXPECT_EQ(CHAIN_HEIGHT, f.chain_height);
+  EXPECT_EQ(CHAIN_HEIGHT - height - 1, f.depth);
+  EXPECT_EQ(expected.timestamp, f.timestamp);
+  EXPECT_EQ(expected.nonce, f.nonce);
+  EXPECT_EQ(expected.major_version, f.major_version);
+  EXPECT_EQ(expected.minor_version, f.minor_version);
+  EXPECT_EQ(expected.tx_hashes.size(), f.num_txes);
+  EXPECT_EQ(0, f.orphan_status);
+  EXPECT_EQ(expected.miner_tx.vout[0].amount, f.reward);
+  EXPECT_EQ(1000u + height, f.block_weight);
+  EXPECT_EQ(2000u + height, f.long_term_weight);
+
+  // The 128-bit values arrive split, not truncated.
+  EXPECT_EQ(height, f.difficulty_lo);
+  EXPECT_EQ(64u, f.difficulty_hi);          // 2^70 >> 64
+  EXPECT_EQ(height, f.cumulative_difficulty_lo);
+  EXPECT_EQ(128u, f.cumulative_difficulty_hi); // 2^71 >> 64
+
+  const crypto::hash id = hash_at(height);
+  EXPECT_EQ(0, std::memcmp(f.hash, id.data, sizeof(f.hash)));
+  EXPECT_EQ(0, std::memcmp(f.prev_hash, expected.prev_id.data, sizeof(f.prev_hash)));
+  const crypto::hash miner = cryptonote::get_transaction_hash(expected.miner_tx);
+  EXPECT_EQ(0, std::memcmp(f.miner_tx_hash, miner.data, sizeof(f.miner_tx_hash)));
+  EXPECT_EQ(0, std::memcmp(f.curve_tree_root, expected.curve_tree_root.data,
+    sizeof(f.curve_tree_root)));
+  EXPECT_EQ(0, std::memcmp(f.attestation_root, expected.attestation_root.data,
+    sizeof(f.attestation_root)));
+
+  // Not asked for, so not computed and not reported.
+  EXPECT_EQ(0, f.pow_hash_filled);
+  shekyl_rpc_block_hash_facts zero{};
+  EXPECT_EQ(0, std::memcmp(f.pow_hash, zero.hash, sizeof(f.pow_hash)));
+}
+
+TEST(rpc_facts_shims, header_past_the_tip_is_absent_and_names_the_chain_height)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  for (const uint64_t h : {CHAIN_HEIGHT, CHAIN_HEIGHT + 500})
+  {
+    shekyl_rpc_block_header_facts f{};
+    ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, h, false, &f))
+      << "height " << h;
+    EXPECT_EQ(0, f.found) << "height " << h;
+    EXPECT_EQ(CHAIN_HEIGHT, f.chain_height) << "height " << h;
+  }
+}
+
+TEST(rpc_facts_shims, header_for_an_unproducible_in_range_block_is_inconsistent)
+{
+  BlockchainAndPool bap;
+  auto* db = new FactsTestDB(CHAIN_HEIGHT);
+  db->set_missing(3);
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts f{};
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::block_header_at(bap.bc, 3, false, &f));
+  EXPECT_EQ(0, f.found);
+
+  shekyl_rpc_block_header_facts ok{};
+  EXPECT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, 2, false, &ok));
+  EXPECT_EQ(1, ok.found);
+}
+
 TEST(rpc_facts_shims, null_out_pointer_refuses)
 {
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::block_hash_at(bap.bc, 0, nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::block_header_at(bap.bc, 0, false, nullptr));
 }

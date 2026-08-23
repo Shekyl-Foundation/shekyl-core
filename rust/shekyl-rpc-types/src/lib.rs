@@ -60,12 +60,15 @@
 use serde::{Deserialize, Serialize};
 
 pub mod chain;
+pub mod hash;
 pub use chain::{
-    GetBlockCountResponse, GetBlockHashParams, GetHeightResponse, GetVersionResponse,
-    HardForkEntry, RestErrorEnvelope, RpcStatus, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
-    CORE_RPC_VERSION_MINOR,
+    BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
+    GetBlockHeaderByHeightResponse, GetHeightResponse, GetVersionResponse, HardForkEntry,
+    RestErrorEnvelope, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
+    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
+pub use hash::{HashHex, HashHexError};
 
 /// Request body for `POST /submit_transaction` (§2.4).
 ///

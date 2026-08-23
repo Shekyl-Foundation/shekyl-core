@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::hash::HashHex;
+
 /// `CORE_RPC_VERSION_MAJOR` — moved here from
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
@@ -71,6 +73,10 @@ pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
 /// JSON-RPC error code for a height at or past the chain tip
 /// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
 pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
+/// JSON-RPC error code for a daemon-side failure the method has a contract
+/// for (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`) — e.g. a store that reports a
+/// height it cannot produce the block for.
+pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
@@ -91,8 +97,8 @@ pub struct GetHeightResponse {
     /// Chain height: the top block's height **plus one** (a chain holding
     /// only the genesis block reports `1`).
     pub height: u64,
-    /// The top block's hash, 64 lowercase hex characters.
-    pub hash: String,
+    /// The top block's hash.
+    pub hash: HashHex,
 }
 
 /// Result of the `get_block_count` JSON-RPC method (alias `getblockcount`).
@@ -116,6 +122,75 @@ pub struct GetBlockCountResponse {
 /// and carries no `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetBlockHashParams(pub [u64; 1]);
+
+/// The daemon's block header — the wire's `block_header_response`, shared by
+/// every header-bearing method (RK-3 serves `get_block_header_by_height`;
+/// `get_block`, `get_last_block_header`, `…_by_hash` and `…_range` reuse this
+/// type as they migrate).
+///
+/// The 128-bit difficulties are carried the way the C++ wire carried them:
+/// the low 64 bits as a number, the whole value as `0x`-prefixed minimal
+/// lowercase hex, and the top 64 bits separately — three fields, one value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockHeader {
+    pub major_version: u8,
+    pub minor_version: u8,
+    pub timestamp: u64,
+    pub prev_hash: HashHex,
+    pub nonce: u32,
+    pub orphan_status: bool,
+    pub height: u64,
+    /// Distance from the tip: `chain_height - height - 1`.
+    pub depth: u64,
+    pub hash: HashHex,
+    /// Low 64 bits of the block's difficulty.
+    pub difficulty: u64,
+    /// The whole 128-bit difficulty, `0x`-prefixed minimal lowercase hex.
+    pub wide_difficulty: String,
+    /// High 64 bits of the block's difficulty.
+    pub difficulty_top64: u64,
+    pub cumulative_difficulty: u64,
+    pub wide_cumulative_difficulty: String,
+    pub cumulative_difficulty_top64: u64,
+    /// Sum of the miner transaction's outputs.
+    pub reward: u64,
+    /// Always equal to `block_weight`; kept because the wire carries both,
+    /// and unlike `block_weight` it is not omitted at zero.
+    pub block_size: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub block_weight: u64,
+    pub num_txes: u64,
+    /// `None` unless the request asked for it **and** the listener is
+    /// unrestricted. epee renders that absence as `""`, not as a missing
+    /// field — see [`empty_string_as_absent`](crate::hash::empty_string_as_absent).
+    #[serde(with = "crate::hash::empty_string_as_absent")]
+    pub pow_hash: Option<HashHex>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub long_term_weight: u64,
+    pub miner_tx_hash: HashHex,
+    pub curve_tree_root: HashHex,
+    pub attestation_root: HashHex,
+}
+
+/// Params of `get_block_header_by_height` (alias `getblockheaderbyheight`).
+///
+/// Both fields default, reproducing epee's KV load: a field absent from the
+/// request was left at its default rather than refused, so `{}` asks for
+/// height 0. Making that strict is a wire change and belongs to RK-W.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockHeaderByHeightRequest {
+    #[serde(default)]
+    pub height: u64,
+    #[serde(default)]
+    pub fill_pow_hash: bool,
+}
+
+/// Result of `get_block_header_by_height`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockHeaderByHeightResponse {
+    pub status: RpcStatus,
+    pub block_header: BlockHeader,
+}
 
 /// One row of [`GetVersionResponse::hard_forks`]: the version that activates
 /// at `height`.
@@ -193,6 +268,18 @@ mod tests {
                 "{bad} must not parse as one height"
             );
         }
+    }
+
+    /// Absent fields take their defaults, as epee's KV load did — `{}` is a
+    /// request for height 0, not a refusal.
+    #[test]
+    fn header_request_fields_default_like_the_kv_load() {
+        let empty: GetBlockHeaderByHeightRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, GetBlockHeaderByHeightRequest::default());
+        let only_height: GetBlockHeaderByHeightRequest =
+            serde_json::from_str(r#"{"height":9}"#).unwrap();
+        assert_eq!(only_height.height, 9);
+        assert!(!only_height.fill_pow_hash);
     }
 
     #[test]
