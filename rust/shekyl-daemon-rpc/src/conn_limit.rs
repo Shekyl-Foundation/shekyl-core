@@ -50,16 +50,74 @@ use axum::serve::Listener;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Per-listener connection caps. `0` means "unlimited" for that dimension,
-/// matching the daemon CLI convention for `--rpc-max-connections*`.
+/// Per-server connection caps — one [`ConnTracker`] for every socket of a
+/// start, so `--rpc-max-connections N` means N, not N per family. `0` means
+/// "unlimited" for that dimension, matching the daemon CLI convention for
+/// `--rpc-max-connections*`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Fields are private: [`ConnLimits::checked`] (or `Default`, all
+/// unlimited) is the only way to build one, so an unchecked cap set cannot
+/// reach the tracker that enforces it.
 pub struct ConnLimits {
-    pub max_total: u64,
-    pub max_per_public_ip: u64,
-    pub max_per_private_ip: u64,
+    max_total: u64,
+    max_per_public_ip: u64,
+    max_per_private_ip: u64,
 }
 
-/// Shared connection accounting for one listener.
+impl ConnLimits {
+    /// The caps as the operator gave them (`0` = unlimited), checked for the
+    /// one way they can contradict each other: a per-IP cap above a bounded
+    /// total can never be reached, so it is a misconfiguration named by flag.
+    /// An unbounded total (`0`) contradicts nothing. This check used to live
+    /// in C++ `core_rpc_server::init`, where it also refused a per-IP cap
+    /// under an unbounded total; the rule is stated once, here, where the
+    /// caps are enforced.
+    /// `--rpc-max-connections` (0 = unlimited).
+    #[must_use]
+    pub fn max_total(&self) -> u64 {
+        self.max_total
+    }
+
+    /// `--rpc-max-connections-per-public-ip` (0 = unlimited).
+    #[must_use]
+    pub fn max_per_public_ip(&self) -> u64 {
+        self.max_per_public_ip
+    }
+
+    /// `--rpc-max-connections-per-private-ip` (0 = unlimited).
+    #[must_use]
+    pub fn max_per_private_ip(&self) -> u64 {
+        self.max_per_private_ip
+    }
+
+    pub fn checked(
+        max_total: u64,
+        max_per_public_ip: u64,
+        max_per_private_ip: u64,
+    ) -> Result<Self, String> {
+        if max_total != 0 {
+            for (name, cap) in [
+                ("--rpc-max-connections-per-public-ip", max_per_public_ip),
+                ("--rpc-max-connections-per-private-ip", max_per_private_ip),
+            ] {
+                if cap > max_total {
+                    return Err(format!(
+                        "{name} ({cap}) is bigger than --rpc-max-connections ({max_total}): the \
+                         per-IP cap could never be reached"
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            max_total,
+            max_per_public_ip,
+            max_per_private_ip,
+        })
+    }
+}
+
+/// Shared connection accounting for one server — every socket of a start
+/// admits through the same tracker, and `get_info` counts them all.
 ///
 /// Constructed via [`ConnTracker::new`], which returns an `Arc` because the
 /// tracker is shared between the [`LimitedListener`] (admission) and the
@@ -303,16 +361,29 @@ impl AsyncWrite for CountedStream {
 mod tests {
     use super::*;
 
+    /// The cap rule, stated once: a per-IP cap above a bounded total is a
+    /// contradiction named by flag; an unbounded total contradicts nothing.
+    #[test]
+    fn caps_are_checked_where_they_are_enforced() {
+        assert!(ConnLimits::checked(100, 10, 50).is_ok());
+        assert!(ConnLimits::checked(0, 10, 50).is_ok(), "unbounded total");
+        assert!(ConnLimits::checked(100, 0, 0).is_ok(), "unbounded per-IP");
+        let err = ConnLimits::checked(10, 11, 5).expect_err("public cap over total");
+        assert!(err.contains("--rpc-max-connections-per-public-ip"), "{err}");
+        let err = ConnLimits::checked(10, 5, 11).expect_err("private cap over total");
+        assert!(
+            err.contains("--rpc-max-connections-per-private-ip"),
+            "{err}"
+        );
+    }
+
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
     }
 
     #[test]
     fn total_cap_is_enforced_and_released() {
-        let t = ConnTracker::new(ConnLimits {
-            max_total: 2,
-            ..Default::default()
-        });
+        let t = ConnTracker::new(ConnLimits::checked(2, 0, 0).unwrap());
         let g1 = t.try_acquire(ip("1.1.1.1")).unwrap();
         let g2 = t.try_acquire(ip("2.2.2.2")).unwrap();
         assert_eq!(t.active_total(), 2);
@@ -327,10 +398,7 @@ mod tests {
 
     #[test]
     fn per_public_ip_cap_is_enforced_per_ip() {
-        let t = ConnTracker::new(ConnLimits {
-            max_per_public_ip: 1,
-            ..Default::default()
-        });
+        let t = ConnTracker::new(ConnLimits::checked(0, 1, 0).unwrap());
         let _a = t.try_acquire(ip("8.8.8.8")).unwrap();
         assert!(
             t.try_acquire(ip("8.8.8.8")).is_none(),
@@ -344,11 +412,7 @@ mod tests {
 
     #[test]
     fn private_ips_use_the_private_cap_not_the_public_one() {
-        let t = ConnTracker::new(ConnLimits {
-            max_per_public_ip: 1,
-            max_per_private_ip: 3,
-            ..Default::default()
-        });
+        let t = ConnTracker::new(ConnLimits::checked(0, 1, 3).unwrap());
         // Loopback is local, so the private cap (3) applies, not the public (1).
         let _a = t.try_acquire(ip("127.0.0.1")).unwrap();
         let _b = t.try_acquire(ip("127.0.0.1")).unwrap();
@@ -407,10 +471,7 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_and_native_share_one_per_ip_slot() {
-        let t = ConnTracker::new(ConnLimits {
-            max_per_public_ip: 1,
-            ..Default::default()
-        });
+        let t = ConnTracker::new(ConnLimits::checked(0, 1, 0).unwrap());
         let _mapped = t.try_acquire(ip("::ffff:8.8.8.8")).unwrap();
         // The same underlying IPv4, arriving natively, must hit the same slot.
         assert!(

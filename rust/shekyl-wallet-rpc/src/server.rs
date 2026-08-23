@@ -94,12 +94,9 @@ impl ListenAddr {
         if let Some(path) = s.strip_prefix("uds://") {
             return Self::uds(path);
         }
-        s.parse::<SocketAddr>().map(Self::Tcp).map_err(|e| {
-            format!(
-                "invalid listen address '{s}': {e}. Use a numeric IP:PORT such as \
-                 127.0.0.1:29500 or [::1]:29500 — hostnames are not resolved"
-            )
-        })
+        shekyl_rpc_transport::listen::parse_listen_addr(s)
+            .map(Self::Tcp)
+            .map_err(|e| e.to_string())
     }
 
     /// The `uds://` form on Unix: a non-empty path.
@@ -452,44 +449,46 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         #[cfg(windows)]
         ListenAddr::SelfHostedPipe(_) => return Ok(()),
     };
-    let ip = addr.ip().to_canonical();
-    if ip.is_unspecified() {
-        return Err(format!(
-            "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
-             bind every interface, including ones that do not exist yet (a VPN that comes up \
-             later, a hotspot, a container bridge). Bind a specific IP address instead: \
-             127.0.0.1 or [::1] for this machine only{LOCAL_ENDPOINT_HINT}, or the address \
-             of the one interface your clients are on (which also requires --rpc-login \
-             NAME:PASSWORD)."
+    // One classifier for every Shekyl listener (`shekyl_rpc_transport::listen`),
+    // so the wallet and the daemon cannot disagree on what a spelling names.
+    use shekyl_rpc_transport::listen::{ListenClass, WILDCARD_REASON};
+    match shekyl_rpc_transport::listen::classify_listen(*addr) {
+        // The reason is the one copy every listener shares; the remedy is
+        // this listener's.
+        ListenClass::Wildcard => Err(format!(
+            "refusing to bind the wallet RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
+             Bind a specific IP address instead: 127.0.0.1 or [::1] for this machine \
+             only{LOCAL_ENDPOINT_HINT}, or the address of the one interface your clients are \
+             on (which also requires --rpc-login NAME:PASSWORD)."
         )
-        .into());
+        .into()),
+        ListenClass::Loopback => Ok(()),
+        ListenClass::Addressed => {
+            // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
+            // public fields and its constructor refuses a blank half, so the seam
+            // does not re-inspect it — the guarantee is the type's. The only way
+            // to reach this arm is to have asked for no authentication.
+            if matches!(config.auth, AuthConfig::Disabled) {
+                return Err(format!(
+                    "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
+                     not set, or --disable-rpc-login given): the address is reachable from the \
+                     network and every request, spends included, would be honoured. Bind 127.0.0.1 \
+                     or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
+                )
+                .into());
+            }
+            // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
+            // lands, a network-reachable bind carries the credential in the clear.
+            warn!(
+                %addr,
+                "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
+                 credential travels in every request and any network path between a client \
+                 and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
+                 you control; the encrypted remote leg is RT-W4."
+            );
+            Ok(())
+        }
     }
-    if ip.is_loopback() {
-        return Ok(());
-    }
-    // RT-2. `Basic` always carries a real credential: `BasicCredential` has no
-    // public fields and its constructor refuses a blank half, so the seam
-    // does not re-inspect it — the guarantee is the type's. The only way
-    // to reach this arm is to have asked for no authentication.
-    if matches!(config.auth, AuthConfig::Disabled) {
-        return Err(format!(
-            "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
-             not set, or --disable-rpc-login given): the address is reachable from the \
-             network and every request, spends included, would be honoured. Bind 127.0.0.1 \
-             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
-        )
-        .into());
-    }
-    // RT-3. Permitted, and said out loud: until the pinned-TLS leg (RT-W4)
-    // lands, a network-reachable bind carries the credential in the clear.
-    warn!(
-        %addr,
-        "serving the wallet RPC off loopback with HTTP Basic over cleartext: the \
-         credential travels in every request and any network path between a client \
-         and this host can read it (RPC_TRANSPORT_POSTURE.md RT-3). Keep that path one \
-         you control; the encrypted remote leg is RT-W4."
-    );
-    Ok(())
 }
 
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or

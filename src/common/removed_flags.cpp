@@ -51,6 +51,8 @@ enum class removed_reason
   rust_rpc,          // transitional epee HTTP fallback and its opt-out flag
   bootstrap_daemon,  // silent third-party forward of wallet queries
   public_node,       // P2P advertisement as a foreign remote-RPC endpoint
+  bind_confirm,      // permission slip for binds that are now refused (RT-W2)
+  ignore_ipv4,       // tolerated a failed v4 bind; a loopback bind failure is fatal by design
 };
 
 struct removed_flag
@@ -63,7 +65,7 @@ struct removed_flag
 // source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
 // rather than duplicating the list, so editing this array keeps the
 // documentation in sync automatically.
-constexpr std::array<removed_flag, 20> REMOVED_FLAGS = {{
+constexpr std::array<removed_flag, 22> REMOVED_FLAGS = {{
   // Daemonizer, deleted in V3.1 (background execution / service management).
   {"detach",                       removed_reason::daemonizer},
   {"pidfile",                      removed_reason::daemonizer},
@@ -95,6 +97,15 @@ constexpr std::array<removed_flag, 20> REMOVED_FLAGS = {{
   // P2P advertisement of an RPC port for strangers' wallets. Restricted
   // RPC (a second listener for the operator's own wallet) remains.
   {"public-node",                  removed_reason::public_node},
+  // Confirmation gate for a non-loopback RPC bind. Confirmation is not
+  // refusal: a wildcard bind is refused unconditionally and a network
+  // bind is refused because the daemon RPC has no authentication
+  // (RPC_TRANSPORT_POSTURE.md RT-1/RT-2, slice RT-W2).
+  {"confirm-external-bind",        removed_reason::bind_confirm},
+  // Tolerating a failed IPv4 bind. Both loopback families bind on one start
+  // (--rpc-use-ipv6), and a loopback bind failing is a fatal misconfiguration,
+  // not something to ignore; the flag parsed into a field nothing read.
+  {"rpc-ignore-ipv4",              removed_reason::ignore_ipv4},
 }};
 
 // boost::program_options::unknown_option::get_option_name() returns the
@@ -171,6 +182,20 @@ bool handle_removed_flag(
         "both ends are machines you control. Restricted RPC (--restricted-rpc,\n"
         "--rpc-restricted-bind-port) remains, for your own wallet on a less-\n"
         "privileged port. See docs/DAEMON_RPC_RUST.md.\n";
+      break;
+    case removed_reason::bind_confirm:
+      std::cerr <<
+        "Error: '--" << view << "' was removed. Confirmation is not refusal: a\n"
+        "wildcard RPC bind (0.0.0.0, ::) is refused outright, and a bind on a network\n"
+        "address is refused because the daemon RPC has no authentication. Bind\n"
+        "127.0.0.1 or ::1 (the default); see docs/DAEMON_RPC_RUST.md.\n";
+      break;
+    case removed_reason::ignore_ipv4:
+      std::cerr <<
+        "Error: '--" << view << "' was removed. With --rpc-use-ipv6 both loopback\n"
+        "families are bound on one start, and a loopback bind that fails is a\n"
+        "misconfiguration the daemon refuses rather than ignores. See\n"
+        "docs/DAEMON_RPC_RUST.md.\n";
       break;
   }
   std::cerr << binary_name << " exiting.\n";

@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 use shekyl_rpc_client::{Rpc, RpcError};
 
 mod http_client;
+pub mod listen;
 use http_client::{error_chain, HttpClient, TransportTls};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);

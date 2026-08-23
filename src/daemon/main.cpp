@@ -183,6 +183,11 @@ int main(int argc, char const * argv[])
       }
       catch (const po::unknown_option &e)
       {
+        // A retired flag in the config file is refused by name with its
+        // reason, the same as on the command line: every shipped unit file
+        // sends its operator through --config-file.
+        if (shekyl::cli::handle_removed_flag(e, "shekyld"))
+          return 1;
         std::string unrecognized_option = e.get_option_name();
         if (all_options.find_nothrow(unrecognized_option, false))
         {
