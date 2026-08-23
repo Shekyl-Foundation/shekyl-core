@@ -218,8 +218,10 @@ guarantee against the axis-1 and axis-2 costs below — not one.
 
 #### Axis 1 — the embargo the carrier may cost: **30 minutes, fixed**
 
-Through `derive_embargo` at α = 0.90, with `ANON_ZONE_TRANSIT_ASSUMPTION_MS`
-at its measured 590.6 ms (§94) plus the 124.5 ms verification floor:
+Through `derive_embargo` at α = 0.90. Anonymity rows use
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS` at its measured 590.6 ms (§94); the clearnet
+row uses `ADOPTED_TRANSIT_ASSUMPTION_MS` at 50 ms. Both add the 124.5 ms
+verification floor, and the carrier rows add the scheduling wait on top:
 
 | design | hop | anon embargo |
 | --- | --- | --- |
@@ -255,25 +257,32 @@ moves onto the carrier's critical path** — it is not wallet-track cleanup. A
 fixed wallet-facing threshold plus a 20× zone spread is survivable only if the
 wallet can ask rather than guess.
 
-#### Axis 2 — cover bandwidth per node: **8 KB/s**, plus an offset commitment
+#### Axis 2 — cover bandwidth per node: **8 KiB/s**, plus an offset commitment
 
-**Absolute ceiling: 8 KB/s per node**, exceeded only by a new ruling. That is
+**Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
-180 KB/s circuit-throughput floor. The 17 KiB / 12.5 s design sits at
-**2.72 KB/s** — a 3× margin, so the ceiling constrains a future cadence proposal
+180 KiB/s circuit-throughput floor. The 17 KiB / 12.5 s design sits at
+**2.72 KiB/s** — a 3× margin, so the ceiling constrains a future cadence proposal
 without constraining this one, which is the right shape for a ceiling.
+
+> **Units, stated once because this section mixes bases legitimately.** Byte
+> rates here are **binary** (`KiB/s` = 1024 B/s) — the windows are byte slots
+> sized in KiB, so binary is the base the arithmetic is actually in. Tor network
+> figures are **decimal** (`Gbit/s`), because that is how Tor Metrics reports
+> them. The two never enter the same expression: the Tor percentages are
+> computed from raw B/s, not from the KiB/s column.
 
 **Relative: the carrier's Tor relay-capacity load must remain fully offset by
 committed contribution.** A ratio rather than a fixed number, so it scales with
 adoption, and it is the honest form of the entitlement argument — the claim is
 not "0.27 % is small" but "we contribute more than we consume."
 
-**Caveat on the 4 %, recorded rather than buried.** The 180 KB/s floor comes
+**Caveat on the 4 %, recorded rather than buried.** The 180 KiB/s floor comes
 from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
 statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
 **sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
 are comparable*, which nothing has tested. **The rig spike must hold a circuit
-at 2.72 KB/s for a full session and confirm it holds**; that is the one input to
+at 2.72 KiB/s for a full session and confirm it holds**; that is the one input to
 this axis we do not have.
 
 #### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**

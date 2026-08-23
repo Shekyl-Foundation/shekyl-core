@@ -8470,9 +8470,9 @@ narrowing dissolves:**
 
 | design | bandwidth / node | modal **carrier term** | Tor load @ 10 k nodes |
 | --- | --- | --- | --- |
-| 3 KiB / 12.5 s (§42.1's carrier) | 0.48 KB/s | 31.2 s | 0.05 % |
-| 17 KiB / 16.5 s (fluff-covering) | 2.06 KB/s | 8.2 s | 0.21 % |
-| **17 KiB / 12.5 s (adopted)** | **2.72 KB/s** | **6.2 s** | **0.27 %** |
+| 3 KiB / 12.5 s (§42.1's carrier) | 0.48 KiB/s | 31.2 s | 0.05 % |
+| 17 KiB / 16.5 s (fluff-covering) | 2.06 KiB/s | 8.2 s | 0.21 % |
+| **17 KiB / 12.5 s (adopted)** | **2.72 KiB/s** | **6.2 s** | **0.27 %** |
 
 *The carrier term is the scheduling wait alone; the full hop adds transit +
 verification (590.6 + 124.5 ms), which is how `COVER_TRAFFIC_RESTORATION.md`
@@ -8482,7 +8482,7 @@ them across the tables.*
 The fluff-covering carrier runs at a **slower cadence than the one it
 replaces** — 16.5 s against 12.5 s — because a 17 KiB window carries 5.7× more
 per tick. Today's design spends its bandwidth on **granularity** rather than
-capacity. And the adopted 12.5 s point delivers 2.72 KB/s against a 2.06 KB/s
+capacity. And the adopted 12.5 s point delivers 2.72 KiB/s against a 2.06 KiB/s
 requirement: **32 % more than "cover everything" needs.**
 
 **So the wire-observer recall cell returns to zero for ALL traffic**, and
