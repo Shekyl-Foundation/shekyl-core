@@ -42,6 +42,11 @@ jobs:
     # The wallet repository owns the recipe (system libraries, toolchain,
     # what "builds" means for a Tauri crate); this repository owns only the
     # ref to test it against. One definition, called from both sides.
+    # Pinned to the wallet's `dev`, where `core-drift.yml` lives (merged in
+    # shekyl-gui-wallet#14). That repository's default branch is `main`, so
+    # the wallet's own schedule/dispatch entries into that workflow stay
+    # dormant until dev reaches main — this call does not, because it names
+    # the ref it wants.
     uses: Shekyl-Foundation/shekyl-gui-wallet/.github/workflows/core-drift.yml@dev
     with:
       core_repository: ${{ github.repository }}
