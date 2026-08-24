@@ -144,32 +144,48 @@ impl serde::Serialize for EncryptedOutputField {
 /// rustdoc rejects a public doc linking a private item
 /// (`rustdoc::private_intra_doc_links`).
 ///
-/// The FFI contract is an unescaped 18-character hex string. Decoding
-/// borrows that string from the deserializer (`&str`) and writes straight
-/// into a `[u8; 9]` — no intermediate `Vec`, and no heap `String` on the
-/// JSON path `shekyl_sign_fcmp_transaction` actually speaks. A deserializer
-/// that cannot lend a borrowed string is refused rather than allocated for.
+/// The FFI contract is an 18-character hex string. Decoding writes straight
+/// into a `[u8; 9]` from whatever the deserializer hands the visitor, so there
+/// is no intermediate `Vec` and no owned `String` on any path.
+///
+/// A visitor rather than a string type, and the two obvious shortcuts are both
+/// wrong. `&str` accepts only what the deserializer can lend out of its own
+/// buffer, which refuses `from_reader` (no buffer) and every escaped string
+/// (unescaped into a fresh one) despite an identical wire encoding.
+/// `Cow<'de, str>` does not fix that at zero cost the way it reads: serde's
+/// blanket impl is `T::Owned::deserialize(..).map(Cow::Owned)`, so it is always
+/// a heap `String`, never a borrow. A visitor takes both: serde routes borrowed,
+/// transient and owned strings alike through `visit_str`, and the bytes are
+/// consumed there before anything needs to own them.
 impl<'de> serde::Deserialize<'de> for EncryptedOutputField {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error as _;
-        // `Cow`, not `&str`. A borrow-only impl refuses every input the
-        // deserializer cannot lend from its own buffer — `from_reader`, which
-        // has no buffer, and any escaped string, which must be unescaped into a
-        // fresh one — even though the wire encoding is identical. `Cow` borrows
-        // where serde_json can (the FFI's unescaped slice: no allocation) and
-        // owns where it cannot, so the fast path is kept without narrowing the
-        // contract. `deserialize_accepts_input_the_deserializer_cannot_lend`
-        // holds this; it fails with `expected a borrowed string` otherwise.
-        let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(deserializer)?;
-        let mut bytes = [0u8; 9];
-        if s.len() != 18 {
-            return Err(D::Error::custom(format!(
-                "expected 18 hex characters (9 bytes), got {}",
-                s.len()
-            )));
+        struct HexFieldVisitor;
+
+        impl serde::de::Visitor<'_> for HexFieldVisitor {
+            type Value = EncryptedOutputField;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("18 hex characters (9 bytes)")
+            }
+
+            // The only visit method implemented on purpose. serde's defaults
+            // forward `visit_borrowed_str` and `visit_string` here, so every
+            // string shape a deserializer can produce lands in this one place
+            // and is decoded without being kept.
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                let mut bytes = [0u8; 9];
+                if v.len() != 18 {
+                    return Err(E::custom(format!(
+                        "expected 18 hex characters (9 bytes), got {}",
+                        v.len()
+                    )));
+                }
+                hex::decode_to_slice(v, &mut bytes).map_err(E::custom)?;
+                Ok(EncryptedOutputField::from_ffi_json_unverified(bytes))
+            }
         }
-        hex::decode_to_slice(s.as_ref(), &mut bytes).map_err(D::Error::custom)?;
-        Ok(Self::from_ffi_json_unverified(bytes))
+
+        deserializer.deserialize_str(HexFieldVisitor)
     }
 }
 

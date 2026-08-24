@@ -252,12 +252,19 @@ jobs:
           test -f shekyl-engine-core/src/engine/key_dispatch_bench.rs
           grep -F -q 'bench-internals = []' shekyl-engine-core/Cargo.toml
           # Accept the attribute on the declaration's own line or the line
-          # before it, and any visibility. The earlier form required the
+          # before it, and any visibility. An earlier form required the
           # previous-line spelling, so `#[cfg(...)] mod key_dispatch_bench;`
           # would have failed CI for being written differently — a gate that
           # fires on formatting teaches people to route around it.
+          #
+          # The declaration is ANCHORED to the start of the line so that a
+          # commented-out `// pub(crate) mod key_dispatch_bench;` does not
+          # satisfy it. That spelling is how the module would most plausibly
+          # disappear, and matching the text inside a comment would have let the
+          # gate pass with its subject absent — the exact vacuity this assertion
+          # exists to prevent.
           awk '
-            /mod key_dispatch_bench;/ {
+            /^[[:space:]]*(#\[cfg\(feature = "bench-internals"\)\][[:space:]]*)?(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?mod[[:space:]]+key_dispatch_bench[[:space:]]*;/ {
               if ($0 ~ /#\[cfg\(feature = "bench-internals"\)\]/ ||
                   prev ~ /#\[cfg\(feature = "bench-internals"\)\]/) { found=1; exit 0 }
             }
