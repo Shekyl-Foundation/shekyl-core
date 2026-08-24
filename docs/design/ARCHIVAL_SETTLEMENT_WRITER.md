@@ -432,35 +432,65 @@ its predecessor:
 
 ---
 
-## 11. Corrections owed to other documents (found while grounding this round)
+## 11. Corrections to other documents (found while grounding this round, fixed in this PR)
 
-Recorded here rather than fixed silently, because each is a doc that would
-mislead the next reader and three of them point at *landed* work:
+Grounding this round turned up **five** documents describing settled work
+incorrectly. They are fixed here, in their own commits, rather than filed:
+each one, read today, sends the next person to build something that exists or
+delete something that is load-bearing — which is not hypothetical, since two
+of them are how this round started.
 
-1. **`ARCHIVAL_RESPONSE_FORMAT.md:3–4`** reads "`RF-D1`/`RF-D2`/`RF-D4`
-   drafted 2026-08-20 …, implementation pending." All of it landed in PR #522.
-2. **`IMPLEMENTATION_INDEX.md:110`** leads with "**Round OPEN (2026-08-18…)**"
-   while its own tail records `RF-D10` and both artifacts landed. Same defect,
-   second site — the index needs the sweep as much as the prose does.
-3. **`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2** (2026-08-11) calls
+1. **`ARCHIVAL_RESPONSE_FORMAT.md`** read "`RF-D1`/`RF-D2`/`RF-D4` drafted
+   2026-08-20 …, implementation pending", with two disposition headings still
+   marked `(OPEN)`. All of `RF-D1`…`RF-D10` landed by PR #522 on 2026-08-21.
+   The doc led the PR per that round's own practice, and nothing updated the
+   header when the code landed behind it.
+2. **`IMPLEMENTATION_INDEX.md`'s `RF` row** opened with "**Round OPEN
+   (2026-08-18…)**" while its own tail already recorded both artifacts landed
+   — the row contradicted itself, and the leading status is the half a reader
+   trusts. Fixed with (1): correcting the prose and leaving the index is how
+   the next reader still gets the wrong answer.
+3. **`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2** (2026-08-11) called
    `verify_segment_path` / `challenge_leaf_index` "fossil — do not build
-   against it" and puts them on §2's deletion surface, and
-   **`challenge.rs:9–19`** says the module "deletes wholesale with that round's
-   deletion surface". **That round landed and ruled the opposite way**:
-   `RF-D8` ruling (i) kept the opening, so both symbols are now permanent
-   consensus admission code (`blockchain.cpp:5412` → `serve_credit.rs:201`).
-   **This is the dangerous one** — the stated deletion trigger has fired, and
-   following it deletes live consensus code. The code banner is the worse half.
-4. **`FOLLOWUPS.md` §"PRUNABILITY RESOLVED"** says the records ride *the
+   against it" and put them on §2's deletion surface; **`challenge.rs:9–19`**
+   said the module "deletes wholesale with that round's deletion surface",
+   naming the format round as the trigger. **That round landed and ruled the
+   opposite way** — `RF-D8` ruling (i) kept the opening, so both symbols are
+   permanent consensus admission code (`blockchain.cpp:5412` →
+   `serve_credit.rs`). **The dangerous one: the stated trigger has fired, and
+   acting on it deletes live consensus code.** `path.rs` had carried the
+   correction since 2026-08-20 and `challenge.rs` had not, so the two modules
+   disagreed and the stale one is the one a reader reaches first. The doc's
+   item 2 is **struck in place, not rewritten** — someone who already followed
+   the instruction needs the correction where they read it.
+4. **`FOLLOWUPS.md` §"PRUNABILITY RESOLVED"** said the records ride *the
    coinbase transaction's* prunable region. `RF-D10` landed them in the
-   **serve-credit transaction's** prunable region
-   (`serialize_ctsig_prunable`, `ct_types.h:402–411`). Same `k_cap`
-   consequence, different mechanism — and §2 of this round cites the mechanism
-   that shipped.
+   **serve-credit transaction's** (`serialize_ctsig_prunable`, `ct_types.h`).
+   The `k_cap` conclusion survives; the residence does not. Corrected rather
+   than struck, with §2's real magnitudes recorded beside the prediction.
+5. **A dangling anchor, found only by chasing it.** Both §9.6 item 2 and
+   `path.rs` cited the sampled-leaf-insufficiency finding as
+   "`ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6". **That document has no §5.6**,
+   and no other doc in the tree carries it. Dropped rather than repaired: the
+   substance is restated at the one site that keeps it, and a section number
+   that has already drifted once is not worth pinning a second time. Worth
+   noting how it surfaced — it was invisible until the correction *quoted* it,
+   which is the argument for restating a cited claim rather than passing the
+   citation along.
 
-**Also owed:** §9.5's HOLD list still holds "pass-record serialization; the
-response format" — both discharged. `EndpointUpdate` and the settlement writer
-stay held; this round is the second one's discharge in progress.
+**§9.5's HOLD list is discharged with them.** Pass-record serialization
+cleared 2026-08-18 (the carrier round) and the response format 2026-08-21;
+`EndpointUpdate` stays held, and the settlement writer is now held on a round
+rather than a blocker. Discharged in place following the `settle_epoch` entry
+already below it — a HOLD list silently pruned as items clear loses the
+evidence that the sequencing was right.
+
+**The pattern across all five is one thing:** every site was written by
+someone who *had* the correct information, at a moment when it was correct.
+None is a mistake; all are the same omission — the status half of a document
+not updated when the substance half landed. That is what makes them invisible
+to review and findable only by grounding, and it is why this round's §1 reads
+every input at source instead of citing what the last round concluded.
 
 ---
 
