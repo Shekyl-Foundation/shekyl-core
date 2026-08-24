@@ -267,7 +267,11 @@ anything whose size the caller cannot know in advance — the hard-fork table
 back as `(pointer, length, opaque owner)` and freed by its `_free` twin, the
 shape `shekyl_rpc_hardforks` / `shekyl_rpc_hardforks_free` already set. Rust
 copies what it needs and releases the owner in the same function that
-acquired it, so the free cannot be lost to an early return. One rule, one
+acquired it, so the free cannot be lost to an early return. **The export
+clears the owner slot before anything can return**, including its own
+argument validation: it is the one out-parameter whose stale value is
+dangerous rather than merely wrong, because a caller reusing the variable
+across calls would free the previous call's pointer a second time. One rule, one
 mechanism: a second convention for the same problem is how a leak gets
 written. The shim test drives the real acquire/release pair, not a stand-in.
 

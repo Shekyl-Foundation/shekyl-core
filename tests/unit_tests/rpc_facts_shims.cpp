@@ -653,6 +653,33 @@ TEST(rpc_facts_shims, block_with_a_malformed_coinbase_is_inconsistent)
   EXPECT_EQ(1, h.found);
 }
 
+// The `extern "C"` entry points, not the bodies the other tests drive. A null
+// handle returns before any core object is touched, which is the one path
+// where the owner slot could keep a value from a previous call — and a caller
+// that frees what it sees there frees it twice.
+TEST(rpc_facts_shims, a_refused_export_never_leaves_a_stale_owner)
+{
+  void* const stale = reinterpret_cast<void*>(0xdeadbeef);
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+
+  void* owner = stale;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, &owner));
+  EXPECT_EQ(nullptr, owner) << "block_at left the caller a pointer to free twice";
+
+  const shekyl_rpc_hardfork_entry* rows = nullptr;
+  size_t len = 0;
+  owner = stale;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_hardforks(nullptr, &rows, &len, &owner));
+  EXPECT_EQ(nullptr, owner) << "hardforks left the caller a pointer to free twice";
+
+  // A null owner slot is still refused rather than dereferenced.
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, nullptr));
+}
+
 TEST(rpc_facts_shims, block_null_out_pointers_refuse)
 {
   BlockchainAndPool bap;

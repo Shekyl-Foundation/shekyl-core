@@ -428,11 +428,16 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
 int shekyl_rpc_hardforks(core_rpc_handle* h,
   const shekyl_rpc_hardfork_entry** out, size_t* out_len, void** out_owner)
 {
+  // Cleared before anything can return. An owner slot is the one out-param
+  // whose stale value is dangerous rather than merely wrong: a caller reusing
+  // the variable across calls would be left holding — and freeing — the
+  // pointer from the previous one. See `shekyl_rpc_block_at`.
+  if (out_owner)
+    *out_owner = nullptr;
   if (!h || !h->rpc || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
-  *out_owner = nullptr;
   std::unique_ptr<std::vector<shekyl_rpc_hardfork_entry>> rows;
   try
   {
@@ -490,6 +495,14 @@ int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
   shekyl_rpc_block_header_facts* out_header,
   shekyl_rpc_block_payload* out_payload, void** out_owner)
 {
+  // The header promises a null owner on every outcome but a found success,
+  // and this is the earliest point that promise can be kept: a null handle
+  // returns below, and a caller that reuses the slot across calls would
+  // otherwise see the previous call's pointer and free it a second time.
+  // The other out-params are left alone — a stale struct after a non-OK
+  // return is the ordinary C contract and frees nothing.
+  if (out_owner)
+    *out_owner = nullptr;
   if (!h || !h->rpc || !out_header || !out_payload || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   crypto::hash id;
