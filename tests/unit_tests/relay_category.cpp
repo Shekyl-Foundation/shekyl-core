@@ -39,6 +39,7 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <cstddef>
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_protocol/enums.h"
@@ -56,13 +57,36 @@ namespace
     relay_method::fluff,
     relay_method::block};
 
-  /* The one shape assert that belongs HERE rather than at the definition:
-     it guards this file's own tables, not the production classifier. A new
-     `relay_method` is already a compile error in `matches_category`; what
-     that cannot catch is a new member handled there and then missing from
-     `k_methods`, which would leave every loop below silently short a row. */
-  static_assert(unsigned(relay_method::block) == k_methods.size() - 1,
-    "relay_method gained a member; add its row to k_methods and every table below");
+  /* The one guard that belongs HERE rather than at the definition: it proves
+     `k_methods` is the whole domain, which the production classifier cannot.
+     A new `relay_method` is already a compile error in `matches_category`;
+     what that cannot catch is a member handled there and then missing from
+     `k_methods`, leaving every loop below silently short a row.
+
+     The `switch` is what makes it hold, not the return values. An ordinal
+     assert (`block == k_methods.size() - 1`) passes for a member appended
+     AFTER `block` and for explicitly assigned values -- exactly the cases
+     that drop a row -- whereas `-Werror=switch` fails the build on any new
+     member however it is numbered. */
+  constexpr std::size_t k_methods_slot(const relay_method method)
+  {
+    switch (method)
+    {
+      case relay_method::none:  return 0;
+      case relay_method::local: return 1;
+      case relay_method::stem:  return 2;
+      case relay_method::fluff: return 3;
+      case relay_method::block: return 4;
+    }
+    return k_methods.size(); // out-of-domain byte; never an enumerator
+  }
+
+  static_assert(k_methods_slot(k_methods[0]) == 0
+             && k_methods_slot(k_methods[1]) == 1
+             && k_methods_slot(k_methods[2]) == 2
+             && k_methods_slot(k_methods[3]) == 3
+             && k_methods_slot(k_methods[4]) == 4,
+    "k_methods must list every relay_method exactly once, in enum order");
 }
 
 TEST(relay_category, all_admits_every_method)

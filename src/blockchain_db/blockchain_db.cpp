@@ -58,11 +58,19 @@ bool matches_category(relay_method method, relay_category category) noexcept
      the new member whichever arm it was grouped with.
 
      The method table is nested inside the `broadcasted` arm so that both
-     switches can be exhaustive while a byte outside either enum still reaches
-     exactly one exit: the fail-closed `return false` below. Flattening it
-     would let an out-of-domain CATEGORY fall into the method table and answer
-     `true` for a fluff -- "publicly known" is the leaking direction, and it is
-     the one an invalid cast must never produce. */
+     switches can be exhaustive AND an out-of-domain CATEGORY still fails
+     closed. Flattened, a category byte from a bad cast would fall past its own
+     switch into the method table and answer `true` for a fluff -- "publicly
+     known" is the leaking direction and the one an invalid cast must never
+     produce. Nested, it reaches the `return false` below instead.
+
+     That guarantee is about the category, and about the method only under
+     `broadcasted`. `all` answers `true` for any method by definition, and
+     `relayable` answers `method != none`, so both would accept an
+     out-of-domain METHOD byte. Neither is a disclosure gate, and no such byte
+     exists to reach them: `get_relay_method` decodes an unknown bit state to
+     `fluff` rather than to a value outside the enum, and every caller here
+     comes through it. */
   switch (category)
   {
     case relay_category::all:

@@ -141,7 +141,17 @@ enum class relay_category : uint8_t
    is `broadcasted`, and at least one -- `fill_block_template` -- would have
    admitted a do-not-relay transaction into a block template had `none` ever
    been reachable. `matches_category`'s table is pinned exhaustively by
-   `tests/unit_tests/relay_category.cpp`. */
+   `tests/unit_tests/relay_category.cpp`.
+
+   Removing a middle member renumbered `all`, and that is deliberately NOT
+   compensated with an explicit value or a reserved gap. These values have no
+   counterparty: `relay_category` is never cast, never serialized, and never
+   crosses the FFI -- unlike `relay_method`, whose bytes ARE a contract and are
+   pinned by `static_assert` in `cryptonote_protocol/enums.h`. Pinning a value
+   with no reader would tell the next maintainer a wire contract exists, which
+   is the shape of debt this deletion removes. Reopen if `relay_category` ever
+   gains a persisted or FFI representation: the pin then goes beside that
+   representation, as `relay_method`'s does. */
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 
