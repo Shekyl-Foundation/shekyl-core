@@ -4445,8 +4445,10 @@ dependencies = [
 name = "shekyl-rpc-types"
 version = "3.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
+ "shekyl-portable-storage",
  "shekyl-wire",
 ]
 
