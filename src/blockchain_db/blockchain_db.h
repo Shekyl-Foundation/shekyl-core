@@ -114,10 +114,34 @@ extern const command_line::arg_descriptor<bool, false> arg_db_salvage;
 enum class relay_category : uint8_t
 {
   broadcasted = 0,//!< Public txes received via block/fluff
-  relayable,      //!< Every tx not marked `relay_method::none`
-  legacy,         //!< `relay_category::broadcasted` + `relay_method::none` for rpc relay requests or historical reasons
+  /*! Every tx not marked `relay_method::none`.
+
+      Deliberately NOT collapsed into `all`, even though nothing supplies
+      `none` at admission any more: the pool's writers are
+      `handle_incoming_tx` (p2p `stem`/`fluff`, import `block`),
+      `Blockchain`'s reorg re-adds (`block`), and the engine submit
+      (`local`). `none` means "received via RPC with `do_not_relay` set" and
+      Shekyl has no such RPC.
+
+      It survives because it is the ZERO of `relay_method`: a zeroed or
+      short-read pool record decodes to `none`, and this category is what
+      keeps such an entry out of `get_relayable_transactions`. That is a
+      decode guard, not a leftover of the removed RPC flag -- which is why
+      it stays while `legacy` goes. */
+  relayable,
   all             //!< Everything in the db
 };
+
+/* `legacy` was deleted here. It was `broadcasted` + `relay_method::none` --
+   the most public class unioned with the most private one -- and its own
+   doc gave the reason as "rpc relay requests or historical reasons". The
+   history was Monero's pre-Dandelion++ RPC; Shekyl is v3-from-genesis with
+   no such client (rule 60), so the union had no member any caller wanted.
+   Every one of its ten call sites was asking "is this publicly known", which
+   is `broadcasted`, and at least one -- `fill_block_template` -- would have
+   admitted a do-not-relay transaction into a block template had `none` ever
+   been reachable. `matches_category`'s table is pinned by
+   `relay_category.matches_category_table` (tests/unit_tests). */
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 

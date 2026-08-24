@@ -53,8 +53,8 @@ pub enum EngineFault {
 /// full-verify `Accepted` on the public `POST /submit_transaction` would map
 /// the Dandelion++ stem path back toward the origin daemon. `Foreign`
 /// therefore sees only broadcast-visible ([`SubmitFacts::in_pool_broadcast`])
-/// presence — exactly what the legacy `relay_category::legacy` identity check
-/// disclosed.
+/// presence — exactly what the C++ `relay_category::broadcasted` identity
+/// check discloses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitCaller {
     /// Unrestricted/local endpoint — the daemon's own wallet. Sees the

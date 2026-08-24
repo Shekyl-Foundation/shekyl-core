@@ -166,9 +166,9 @@ public:
     return m_txpool.size();
   }
   // Category-honest, mirroring BlockchainLMDB::txpool_has_tx: a fixture that
-  // drops the category would green-light a `legacy` membership query against a
-  // `local` entry — masking exactly the class of bug these shim tests exist to
-  // pin (the post-prune re-check regression found on review).
+  // drops the category would green-light a `broadcasted` membership query
+  // against a `local` entry — masking exactly the class of bug these shim
+  // tests exist to pin (the post-prune re-check regression found on review).
   virtual bool txpool_has_tx(const crypto::hash& txid, relay_category tx_category) const override
   {
     const auto it = m_txpool.find(txid);
@@ -601,7 +601,7 @@ TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)
 }
 
 // F40 regression pin: a just-committed tx sits at relay_method::local
-// (Dandelion++ embargo state, invisible to the `legacy` category). The
+// (Dandelion++ embargo state, invisible to the `broadcasted` category). The
 // presence fact queries at `all`, so the §5.3 status-query probe sees it.
 TEST(daemon_submit_shims, snapshot_sees_embargoed_local_tx_in_pool)
 {
@@ -615,8 +615,8 @@ TEST(daemon_submit_shims, snapshot_sees_embargoed_local_tx_in_pool)
   txpool_tx_meta_t meta;
   ASSERT_TRUE(fx.db->get_txpool_tx_meta(s.txid, meta));
   ASSERT_EQ(meta.get_relay_method(), relay_method::local);
-  ASSERT_FALSE(meta.matches(relay_category::legacy))
-    << "fixture must exercise the embargoed (legacy-invisible) state";
+  ASSERT_FALSE(meta.matches(relay_category::broadcasted))
+    << "fixture must exercise the embargoed (broadcast-invisible) state";
 
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
@@ -659,14 +659,14 @@ TEST(daemon_submit_shims, clean_commit_inserts_attested_pool_entry)
   EXPECT_EQ(meta.do_not_relay, 0);
   EXPECT_EQ(fx.bap.txpool.get_txpool_weight(), s.weight);
   // Regression pin (review finding): the committed entry sits at
-  // relay_method::local, which relay_category::legacy EXCLUDES — so the
+  // relay_method::local, which relay_category::broadcasted EXCLUDES — so the
   // post-prune membership re-check (and any identity question about a
-  // just-inserted tx) must query relay_category::all. A `legacy` query here
-  // would have misreported every accepted tx as pruned-on-insert; the
+  // just-inserted tx) must query relay_category::all. A `broadcasted` query
+  // here would have misreported every accepted tx as pruned-on-insert; the
   // category-honest fixture makes that class of bug fail loudly.
   EXPECT_TRUE(fx.db->txpool_has_tx(s.txid, relay_category::all));
-  EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::legacy))
-    << "a local-method entry must not match legacy; identity checks use `all`";
+  EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::broadcasted))
+    << "a local-method entry is not broadcast-visible; identity checks use `all`";
 }
 
 TEST(daemon_submit_shims, commit_db_failure_rolls_back_key_images)

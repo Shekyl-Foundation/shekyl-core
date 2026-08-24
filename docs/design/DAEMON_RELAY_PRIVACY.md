@@ -9253,8 +9253,8 @@ precision falls to `1/|set|`, and one snapshot per transaction, since the
 first successful probe fluffs it and closes the window for everyone.
 
 **The discriminator's fix cost went up, and a cheaper fix appeared.** Both
-structural facts — `relay_category::legacy` excluding stem
-([`blockchain_db.h:117`](../../src/blockchain_db/blockchain_db.h#L117)) and
+structural facts — `relay_category::broadcasted` excluding stem
+([`blockchain_db.h:116`](../../src/blockchain_db/blockchain_db.h#L116)) and
 `add_tx` taking no peer
 ([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
 **incoming path drops identity, exactly as it dropped the hash (§48)**. Third
@@ -9323,8 +9323,8 @@ both.
 
 **One structural fact is not in question and stands independent of the
 harness**: `tx_memory_pool::add_tx` takes **no peer identity**, and
-`add_new_tx`'s short-circuit uses `relay_category::legacy`
-(= `broadcasted` + `none`), which **excludes stem** — so a re-sent stem-held
+`add_new_tx`'s short-circuit uses `relay_category::broadcasted`, which
+**excludes stem** — so a re-sent stem-held
 tx *does* reach `add_tx` in production, and no identity-based discriminator
 can exist at the decision site because the information is not a parameter
 there. What remains unexecuted is only whether it clears the key-image and
@@ -14767,7 +14767,8 @@ other.** §64 caught it once as the sybil-substitution fallacy. §42.5a caught i
 again in the covert branch. These two rulings separate the axes explicitly and
 name the vocabulary, so the collapse has nowhere left to hide.
 
-The axes are:
+The axes are — **four of six**; §93.4 adds *provenance* and *source*, which
+these two rulings did not turn on:
 
 | axis | values | what it answers |
 | --- | --- | --- |
@@ -14849,6 +14850,99 @@ keeps the word** — "the covert branch" in §42.5a and §93.1 names a historica
 object, and renaming it there would falsify the record rather than correct it.
 A `Covert*` spelling surviving in either place is not evidence of a second
 concept.
+
+### 93.4 The table was scoped to the noise half — `relay_method` holds the rest
+
+**2026-08-24, found while deleting `relay_category::legacy`.** §93's table names
+four axes because §93 was ruling on noise. Two more were already in the code,
+unnamed, and they are the two `relay_method` collapses:
+
+| axis | values | what it answers |
+| --- | --- | --- |
+| **provenance** | ours / arrived, and over what | where did these bytes come from? |
+| **source** | pool / block | what carried this into the node? |
+
+With those the set is six — **network secrecy, phase, carrier, reach,
+provenance, source** — and `LinkSecrecy`'s doc already calls the first by that
+name (*"the network secrecy axis"*), so the vocabulary is settled, not invented
+here.
+
+**`relay_method`'s five variants live on three of them — plus one that is not
+an axis at all:**
+
+| variant | axis | reading |
+| --- | --- | --- |
+| `none` | *(none)* | a `do_not_relay` flag, not a method |
+| `local` | provenance | received via RPC — ours |
+| `stem` | phase | Dandelion++ |
+| `fluff` | phase | Dandelion++ |
+| `block` | source | arrived in a block |
+
+And `upgrade_relay_method` orders all five on **one monotone scale**, as if they
+were degrees of a single quantity.
+
+#### The diagnosis is already in the file, twenty lines below the enum
+
+`forward`'s deletion comment (`cryptonote_protocol/enums.h`) states it exactly:
+
+> It meant *"arrived over i2p/tor; hold on a timer, then broadcast to
+> clearnet"* — that is, **PROVENANCE used as a routing input** […] Q12-D3 rules
+> provenance is not a routing input, so the class had nothing left to express.
+
+**That reasoning was applied to one variant and stopped.** `local` is still
+provenance sitting in a phase enum; `block` is still a source type in the same
+enum. The ruling generalises and was not generalised.
+
+#### Which is why the same defect keeps recurring
+
+Three rounds, three fixes, one cause — and each was called a naming problem:
+
+| round | what was found | the axes that were one word |
+| --- | --- | --- |
+| §92.4 | `Local` is *"two facts with different lifetimes"*, retired together by one ratchet | provenance / re-broadcast liveness |
+| §42.5a → `RelayCarrier` | the covert branch chose a carrier *instead of* a phase | carrier / phase |
+| `LinkSecrecy` extraction | *"reach and secrecy are independent axes that this subsystem keeps collapsing into one word"* | reach / network secrecy |
+
+Two of the three were resolved by **making a type**, after the defect. This
+section exists so the third resolution is deliberate rather than the fourth
+scar.
+
+#### `legacy` is the same shape, one level up
+
+`relay_category::legacy` was `broadcasted` + `relay_method::none`: a *disclosure*
+question unioned with a *policy* flag. It is a Monero-lineage name **whose
+referent does not exist here** — its stated reason was the pre-Dandelion++ RPC,
+and Shekyl is v3-from-genesis with no such client (rule 60). Deleted this round;
+its ten call sites all wanted `broadcasted`.
+
+#### Scope: no rename sweep, and the reason is timing not size
+
+`src/` and `tests/` carry **168** `relay_category` mentions and **330**
+`relay_method` mentions. A mechanical re-spelling across that surface, in code
+that is mid-cutover to Rust, buys nothing the cutover will not redo — and it
+would collide with every in-flight branch touching the relay path.
+
+**What earns its keep is writing the taxonomy down before the cutover**, because
+the cutover is where these types get re-expressed. Rust is where the axes can be
+*separate types* rather than separate documentation, which is the move
+`RelayCarrier`/`RelayDispatch` and `LinkSecrecy` have already made — twice, each
+time after a defect. The cutover's type design now has a spec instead of a set
+of scars.
+
+#### A prediction this makes, stated so it can be tested
+
+**The monotone ratchet only makes sense on the phase axis.** `none` and `block`
+are not phases and `local` is provenance, so if the axes were separate,
+`upgrade_relay_method` would be a **two-value ordering** — `Stem < Fluff` — with
+the rest expressed as independent fields.
+
+That is precisely the unbundling §92.4 reached from the other end: *"an
+originated entry's `Local` class is provenance and is not upgraded by a
+re-arrival of its own transaction; its re-broadcast responsibility is separately
+disarmed."* Two independent derivations landing on the same decomposition is the
+evidence that it is structural rather than stylistic — and it is the thing to
+check first when the cutover reaches this type, because if the prediction is
+wrong the taxonomy is wrong with it.
 
 ---
 

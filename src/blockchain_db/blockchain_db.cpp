@@ -59,23 +59,23 @@ bool matches_category(relay_method method, relay_category category) noexcept
     case relay_category::relayable:
       return method != relay_method::none;
     case relay_category::broadcasted:
-    case relay_category::legacy:
       break;
   }
-  // check for "broadcasted" or "legacy" methods:
+  // `broadcasted` is "the network already knows": block or fluff, nothing
+  // earlier. `none` sits in the false arm explicitly rather than reaching
+  // `default`, because it is the one member the deleted `legacy` category
+  // used to admit here and naming it is what makes the deletion reviewable.
   switch (method)
   {
     default:
+    case relay_method::none:
     case relay_method::local:
     case relay_method::stem:
       return false;
     case relay_method::block:
     case relay_method::fluff:
       return true;
-    case relay_method::none:
-      break;
   }
-  return category == relay_category::legacy;
 }
 
 void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept

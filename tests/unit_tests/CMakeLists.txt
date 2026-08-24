@@ -121,6 +121,7 @@ set(unit_tests_sources
   txpool_ref_age.cpp
   txpool_origin_zone.cpp
   txpool_relay_timers.cpp
+  relay_category.cpp
   pending_tree_fuzz.cpp
   )
 

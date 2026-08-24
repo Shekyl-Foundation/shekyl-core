@@ -462,7 +462,7 @@ local-state duplicates later, lossily (`OK + not_relayed`).
 
 The snapshot therefore carries **two** presence facts (§4.1): `in_pool` at
 `relay_category::all` (the internal truth — duplicate-safety and the owner
-status-query) and `in_pool_broadcast` at `relay_category::legacy` (the
+status-query) and `in_pool_broadcast` at `relay_category::broadcasted` (the
 broadcast-visible, foreign-disclosable fact). They differ exactly for an
 embargoed tx, and the engine discloses by **caller tier**
 ([`SubmitCaller`](../../rust/shekyl-daemon-rpc/src/submit/engine.rs)),
@@ -483,7 +483,7 @@ stem relay (which holds the tx bytes) could probe the public
 full-verify `Accepted` maps the stem path back toward the origin. Relay-state
 visibility tiers exist for *foreign* queries (the same reason
 pool-inspection RPC has them); the fix restores exactly the disclosure the
-legacy `relay_category::legacy` identity check gave a foreign caller, while
+inherited identity check gave a foreign caller, while
 keeping the owner's wider `all`-category view for its own admission engine.
 This was live in V3.0 (own-daemon still exposes the restricted public bind);
 the §11 multi-daemon reopen re-evaluates the residual timing delta (a

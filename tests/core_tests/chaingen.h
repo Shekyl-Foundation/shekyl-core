@@ -117,7 +117,11 @@ struct event_visitor_settings
   enum settings
   {
     set_txs_keeped_by_block = 1 << 0,
-    set_txs_do_not_relay = 1 << 1,
+    // 1 << 1 was `set_txs_do_not_relay`, the harness's only producer of
+    // `relay_method::none`. Removed with tests/core_tests/tx_pool.cpp, its
+    // sole user: `none` means "received via RPC with do_not_relay set" and
+    // Shekyl has no such RPC. The bit is left unused rather than reassigned,
+    // because these masks are boost-serialized into generated event streams.
     set_local_relay = 1 << 2,
     set_txs_stem = 1 << 3
   };
@@ -565,10 +569,6 @@ public:
     else if (settings.mask & event_visitor_settings::set_local_relay)
     {
       m_tx_relay = cryptonote::relay_method::local;
-    }
-    else if (settings.mask & event_visitor_settings::set_txs_do_not_relay)
-    {
-      m_tx_relay = cryptonote::relay_method::none;
     }
     else if (settings.mask & event_visitor_settings::set_txs_stem)
     {

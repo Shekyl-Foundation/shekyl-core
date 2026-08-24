@@ -669,7 +669,7 @@ namespace cryptonote
 
       const bool new_or_previously_private =
         kei_image_set.insert(id).second ||
-        !m_blockchain.txpool_tx_matches_category(id, relay_category::legacy);
+        !m_blockchain.txpool_tx_matches_category(id, relay_category::broadcasted);
       CHECK_AND_ASSERT_MES(new_or_previously_private, false, "internal error: try to insert duplicate iterator in key_image set");
     }
     ++m_cookie;
@@ -1596,7 +1596,7 @@ namespace cryptonote
       // See `insert_key_images`.
       if (1 < found->second.size() || *(found->second.cbegin()) != txid)
         return true;
-      return m_blockchain.txpool_tx_matches_category(txid, relay_category::legacy);
+      return m_blockchain.txpool_tx_matches_category(txid, relay_category::broadcasted);
     }
     return false;
   }
@@ -1968,7 +1968,13 @@ namespace cryptonote
       }
       LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", current coinbase " << print_money(best_coinbase) << ", relay method " << (unsigned)meta.get_relay_method());
 
-      if (!meta.matches(relay_category::legacy) && !(m_mine_stem_txes && meta.get_relay_method() == relay_method::stem))
+      // Broadcast-visible only, plus the operator's opt-in for own stems.
+      // This site asked the deleted `relay_category::legacy`, which also
+      // admitted `relay_method::none` -- mining a transaction whose whole
+      // meaning is "do not put this on the network". Unreachable in practice
+      // (nothing production-writes `none`), wrong on its face, and the reason
+      // the category went rather than being renamed.
+      if (!meta.matches(relay_category::broadcasted) && !(m_mine_stem_txes && meta.get_relay_method() == relay_method::stem))
       {
         LOG_PRINT_L2("  tx relay method is " << (unsigned)meta.get_relay_method());
         continue;
