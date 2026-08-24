@@ -287,6 +287,19 @@ int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
         return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
       }
       block_height = std::get<cryptonote::txin_gen>(blk.miner_tx.vin.front()).height;
+      // The coinbase names its own height, so it can name one this chain has
+      // not reached — an alt block extending past the tip is exactly that.
+      // Every height-keyed read below would then be out of range, and `depth`
+      // would underflow to a value near 2^64 before those reads threw. The
+      // C++ computed that underflow too and relied on the DB throwing
+      // afterwards; checking here makes the failure named instead of
+      // incidental, and the subtraction unable to wrap.
+      if (block_height >= chain_height)
+      {
+        MERROR("block facts: block " << id << " claims coinbase height " << block_height
+          << " at chain height " << chain_height << "; no coherent header can be built");
+        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+      }
 
       std::memcpy(out_header->hash, id.data, sizeof(out_header->hash));
       std::memcpy(out_header->prev_hash, blk.prev_id.data, sizeof(out_header->prev_hash));

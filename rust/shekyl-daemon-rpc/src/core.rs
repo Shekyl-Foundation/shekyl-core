@@ -270,17 +270,32 @@ impl CoreRpc {
                 ))
                 .into_owned()
             };
-            let mut tx_hashes = Vec::with_capacity(payload.tx_hashes_len);
-            if !payload.tx_hashes.is_null() {
-                let bytes =
-                    std::slice::from_raw_parts(payload.tx_hashes, payload.tx_hashes_len * 32);
-                for chunk in bytes.chunks_exact(32) {
-                    let mut one = [0u8; 32];
-                    one.copy_from_slice(chunk);
-                    tx_hashes.push(one);
+            // `len * 32` is the length handed to `from_raw_parts`, where a
+            // wrong value is immediate UB rather than a bad answer — so it is
+            // checked, and the pointer is checked before anything is sized
+            // from the length. Nothing here returns early: the owner must be
+            // released on every path out, so the verdict comes after the free.
+            let tx_bytes = payload.tx_hashes_len.checked_mul(32);
+            let tx_hashes: Vec<[u8; 32]> = match tx_bytes {
+                Some(n) if n > 0 && !payload.tx_hashes.is_null() => {
+                    std::slice::from_raw_parts(payload.tx_hashes, n)
+                        .chunks_exact(32)
+                        .map(|chunk| {
+                            let mut one = [0u8; 32];
+                            one.copy_from_slice(chunk);
+                            one
+                        })
+                        .collect()
                 }
-            }
+                _ => Vec::new(),
+            };
             ffi::shekyl_rpc_block_free(owner);
+            if tx_bytes.is_none() {
+                // Only reachable if the export ever reported a length no
+                // allocation could have produced. Refuse rather than answer
+                // with the block's transactions silently dropped.
+                return Err(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL);
+            }
             Ok((header, blob, json, tx_hashes))
         }
     }

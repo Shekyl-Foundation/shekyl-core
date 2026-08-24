@@ -570,6 +570,36 @@ TEST(rpc_facts_shims, block_off_the_main_chain_is_flagged_orphan)
   EXPECT_EQ(2000u + 2u, h.long_term_weight);
 }
 
+// An alt chain ahead of ours: the block exists, but the height its coinbase
+// names is one this chain has not reached. `depth` would underflow to a value
+// near 2^64 and every height-keyed read would be out of range. The C++
+// computed that subtraction too and relied on the DB throwing afterwards.
+TEST(rpc_facts_shims, block_claiming_a_height_beyond_the_tip_is_refused)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  cryptonote::block ahead = block_at(2);
+  ahead.nonce = 4242;
+  // The coinbase names its own height, and this one is past our tip.
+  ahead.miner_tx.vin.clear();
+  cryptonote::txin_gen gen{};
+  gen.height = CHAIN_HEIGHT + 5;
+  ahead.miner_tx.vin.push_back(gen);
+  db->set_alt_block(ahead);
+  const crypto::hash id = db->alt_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  void* owner = nullptr;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+    daemon_rpc_facts::block_at(bap.bc, &id, 0, false, &h, &p, &owner));
+  EXPECT_EQ(nullptr, owner) << "a refusal hands back nothing to free";
+  // Deleting the guard turns this red: `depth` would come back near 2^64.
+  EXPECT_EQ(0u, h.depth);
+  EXPECT_EQ(0, h.found);
+}
+
 TEST(rpc_facts_shims, block_absent_by_either_lookup_is_data_not_a_fault)
 {
   BlockchainAndPool bap;
