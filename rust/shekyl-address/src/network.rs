@@ -18,6 +18,20 @@ pub enum Network {
 }
 
 impl Network {
+    /// The daemon's default RPC port on this network — what a wallet dials
+    /// when no `--daemon-address` is given. The numbers are the C++
+    /// daemon's (`src/cryptonote_config.h`, `RPC_DEFAULT_PORT` per
+    /// network); a test in this module pins them to that header, so the
+    /// wallet cannot drift from the daemon it is for.
+    #[must_use]
+    pub const fn daemon_rpc_port(self) -> u16 {
+        match self {
+            Network::Mainnet => 11029,
+            Network::Testnet => 12029,
+            Network::Stagenet => 13029,
+        }
+    }
+
     /// Numeric discriminant used across FFI (0=mainnet, 1=testnet, 2=stagenet).
     pub fn as_u8(self) -> u8 {
         match self {
@@ -229,5 +243,46 @@ mod tests {
             Some((Network::Testnet, AddressKind::Multisig))
         );
         assert_eq!(network_and_kind_from_hrp("bitcoin"), None);
+    }
+
+    /// The daemon's ports are declared once, in C++ (`cryptonote_config.h`,
+    /// `RPC_DEFAULT_PORT` in the `config`, `config::testnet` and
+    /// `config::stagenet` namespaces, in that order); `daemon_rpc_port` is
+    /// the wallet-side twin and this pin is what makes a twin safe. The edit
+    /// that turns it red is changing a port on either side alone.
+    #[test]
+    fn daemon_rpc_ports_match_the_daemon_header() {
+        let header =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/cryptonote_config.h");
+        let text = std::fs::read_to_string(&header)
+            .unwrap_or_else(|e| panic!("{}: {e}", header.display()));
+        // Every line that *assigns* RPC_DEFAULT_PORT, whatever the spacing
+        // and whatever follows the `;`. Lines that only name the constant —
+        // the struct field declaration and the initialisers that read it —
+        // have no `=` on the left of the name and are skipped, so this
+        // collects declarations and not references.
+        let declared: Vec<u16> = text
+            .lines()
+            .filter_map(|line| {
+                let (lhs, rhs) = line.split_once('=')?;
+                if !lhs.contains("RPC_DEFAULT_PORT") {
+                    return None;
+                }
+                rhs.split(';').next()?.trim().parse::<u16>().ok()
+            })
+            .collect();
+        assert_eq!(
+            declared,
+            vec![
+                Network::Mainnet.daemon_rpc_port(),
+                Network::Testnet.daemon_rpc_port(),
+                Network::Stagenet.daemon_rpc_port(),
+            ],
+            "the header declares {declared:?} in order (mainnet, testnet, \
+             stagenet). A different value is drift: fix whichever side is \
+             wrong. A different *count* means the header gained or lost a \
+             network, which this table and `Network` have to gain or lose \
+             with it — the wallet cannot dial a network it cannot name."
+        );
     }
 }

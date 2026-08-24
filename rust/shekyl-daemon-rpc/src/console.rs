@@ -169,6 +169,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    use shekyl_rpc_types::{HashHex, RpcStatus};
+
     fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
         let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
         let ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
@@ -199,7 +201,15 @@ mod tests {
     }
 
     /// One-request HTTP acceptor answering `reply` with 200.
-    fn one_shot(reply: &'static str) -> String {
+    /// A reply built through the wire type rather than hand-written, so a
+    /// fixture cannot describe a document the daemon could never send. Two
+    /// of these were hand-written `"hash"` strings that RK-3's `HashHex`
+    /// immediately refused.
+    fn typed_reply<T: serde::Serialize>(reply: &T) -> String {
+        serde_json::to_string(reply).expect("wire type serializes")
+    }
+
+    fn one_shot(reply: String) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
@@ -219,7 +229,11 @@ mod tests {
 
     #[test]
     fn print_height_renders_the_remote_reply() {
-        let address = one_shot(r#"{"status":"OK","height":42,"hash":"00"}"#);
+        let address = one_shot(typed_reply(&GetHeightResponse {
+            status: RpcStatus::ok(),
+            height: 42,
+            hash: HashHex::from_bytes([7u8; 32]),
+        }));
         let (code, text) = run(&["print_height"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{text}");
         assert_eq!(text, "42");
@@ -227,7 +241,11 @@ mod tests {
 
     #[test]
     fn non_ok_status_is_a_request_failure_with_the_status_as_reason() {
-        let address = one_shot(r#"{"status":"BUSY","height":0,"hash":""}"#);
+        let address = one_shot(typed_reply(&GetHeightResponse {
+            status: RpcStatus(RpcStatus::BUSY.to_owned()),
+            height: 0,
+            hash: HashHex::ZERO,
+        }));
         let (code, text) = run(&["print_height"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
         assert_eq!(text, "BUSY");
@@ -238,7 +256,10 @@ mod tests {
     /// complaint about the success type.
     #[test]
     fn error_envelope_reason_is_surfaced() {
-        let address = one_shot(r#"{"status":"ERROR","error":"chain facts unavailable"}"#);
+        let address = one_shot(typed_reply(&RestErrorEnvelope {
+            status: RpcStatus("ERROR".to_owned()),
+            error: "chain facts unavailable".to_owned(),
+        }));
         let (code, text) = run(&["print_height"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
         assert_eq!(text, "get_height failed: chain facts unavailable");
@@ -248,7 +269,8 @@ mod tests {
     /// excerpt of what arrived.
     #[test]
     fn malformed_reply_is_named_as_such() {
-        let address = one_shot(r#"<html>not json</html>"#);
+        // Deliberately raw: this fixture's point is that it is not a reply.
+        let address = one_shot(r#"<html>not json</html>"#.to_owned());
         let (code, text) = run(&["print_height"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
         assert!(

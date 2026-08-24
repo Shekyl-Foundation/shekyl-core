@@ -169,15 +169,14 @@ shekyl-cli [options]
 
 | Option | Description |
 |--------|-------------|
-| `--daemon-address <host:port>` | Daemon to connect to (default `localhost:11028`) |
-| `--daemon-login <user:password>` | Daemon authentication |
-| `--trusted-daemon` | Trust the daemon (skip proof verification) |
-| `--network <type>` | `mainnet`, `testnet`, or `stagenet` |
-| `--wallet-dir <path>` | Directory for wallet files (default `.`) |
-| `--wallet-file <file>` | Open a wallet file on startup |
-| `--proxy <socks5://host:port>` | SOCKS5 proxy with stream isolation |
-| `--daemon-ca-cert <pem>` | PEM CA certificate for self-signed daemon TLS |
-| `--debug` | Show raw error details in stderr or debug log |
+| `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
+| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
+| `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
+| `--engine-dir <path>` | Directory for wallet files (default `.`). Ignored with `--rpc-url` |
+| `--engine-file <name>` | Open a wallet immediately on startup |
+| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |
+| `--daemon-ca-cert <pem>` | PEM CA certificate for an `https://` daemon with a custom CA |
+| `--debug` | Show structured RPC error details on failures |
 
 ### Interactive commands
 
@@ -260,15 +259,15 @@ shekyl-cli [options]
 
 ```bash
 # Create a new wallet interactively
-shekyl-cli --wallet-dir ~/wallets
+shekyl-cli --engine-dir ~/wallets
 
-# Open an existing wallet against a testnet daemon
-shekyl-cli --network testnet --wallet-file ~/wallets/testnet \
-           --daemon-address 127.0.0.1:12029
+# Open an existing wallet against the testnet daemon on this machine (the
+# default daemon address follows --network)
+shekyl-cli --network testnet --engine-dir ~/wallets --engine-file testnet
 
-# Use a Tor proxy for stream-isolated daemon connection
-shekyl-cli --proxy socks5://127.0.0.1:9050 \
-           --daemon-address mynode.onion:11028
+# Reach a node of yours on another machine through its onion service
+shekyl-cli --proxy socks5h://127.0.0.1:9050 \
+           --daemon-address mynode.onion:11029
 ```
 
 ---
@@ -299,7 +298,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
 | `--rpc-login <user:pass>` | HTTP basic authentication, `NAME:PASSWORD` with **both halves non-empty** — a value without `:`, or with a blank half, is refused at startup. Required for any non-loopback `--rpc-bind` (where the server also logs that Basic travels in the clear until the TLS leg lands); omitted = auth disabled, accepted only on loopback or a UDS socket |
 | `--disable-rpc-login` | Run without authentication. Refused on a non-loopback bind, and refused together with `--rpc-login` (a contradiction, not a precedence) |
-| `--daemon-address <url>` | Daemon JSON-RPC base URL (default `http://127.0.0.1:28581`) |
+| `--daemon-address <url>` | Daemon JSON-RPC base URL. Default: this machine's daemon at the RPC port for `--network` (`http://127.0.0.1:11029` on mainnet). A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (`RPC_TRANSPORT_POSTURE.md` §1) |
 | `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
 | `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
 | `--log-file <path>` | Optional file sink for `tracing` events |
@@ -324,7 +323,7 @@ my network" is not a reason to disable authentication. Design record:
 shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-bind 127.0.0.1:29500 \
                   --rpc-login user:password \
-                  --daemon-address http://127.0.0.1:28581
+                  --daemon-address http://127.0.0.1:11029
 
 # Local deployment over a Unix socket (filesystem permissions carry the
 # authorization; auth may be left disabled)

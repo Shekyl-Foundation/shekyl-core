@@ -1,0 +1,53 @@
+# Does shekyl-gui-wallet still build against this branch?
+#
+# The desktop wallet path-depends on `rust/*` crates from this repository
+# (`shekyl-engine-core`, `shekyl-engine-file`, `shekyl-rpc-transport`, …) and
+# builds against `dev`. It is an out-of-workspace consumer: `cargo check`
+# here cannot see it, so "no callers in the workspace" is not "no callers",
+# and a change that compiles cleanly in this repo can still break the wallet.
+#
+# It did. On 2026-08-23 four separate changes from this repository had
+# accumulated in the GUI unnoticed — a deleted `WalletFile::verify_password`
+# (removed on the stated ground that the crate had no consumer outside the
+# workspace), a new `StakePosture` parameter, three new `FirstStakeError`
+# variants, and a new `StakingReadView` field. Each was found by a person
+# reading a diff, weeks late, instead of by the pull request that made it.
+#
+# This job runs the wallet's own drift check against *this* branch, so the
+# change that would break it fails here first. It is not a substitute for
+# the GUI's CI; it is the direction that was missing.
+name: ci/gh-actions/gui-drift
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/gui-drift.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/gui-drift.yml'
+
+concurrency:
+  group: gui-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gui-builds-against-core:
+    name: shekyl-gui-wallet builds against this branch
+    # The wallet repository owns the recipe (system libraries, toolchain,
+    # what "builds" means for a Tauri crate); this repository owns only the
+    # ref to test it against. One definition, called from both sides.
+    # Pinned to the wallet's `dev`, where `core-drift.yml` lives (merged in
+    # shekyl-gui-wallet#14). That repository's default branch is `main`, so
+    # the wallet's own schedule/dispatch entries into that workflow stay
+    # dormant until dev reaches main — this call does not, because it names
+    # the ref it wants.
+    uses: Shekyl-Foundation/shekyl-gui-wallet/.github/workflows/core-drift.yml@dev
+    with:
+      core_repository: ${{ github.repository }}
+      core_ref: ${{ github.head_ref || github.ref_name }}

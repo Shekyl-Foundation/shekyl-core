@@ -11477,6 +11477,31 @@ one place to confirm each item's relationship to the wallet stack.
   **Target:** none until the trigger fires (rule 21: rejected now, criterion
   named).
 
+- **The GUI dials its daemon with nothing said — and a dial that says
+  nothing is constructible** (added 2026-08-23, RT-W7). `shekyl-cli` and
+  `shekyl-wallet-rpc` now disclose a `--daemon-address` that is not
+  loopback (`RPC_TRANSPORT_POSTURE.md` §1), each at its own call site. The
+  GUI wallet does not run `shekyl-wallet-rpc`: it dials the daemon itself
+  (`shekyl-gui-wallet/src-tauri/src/engine_session.rs`,
+  `shekyl_rpc_transport::HttpRpc::new(url)`) and its `set_daemon_connection`
+  stores the URL unclassified, so on that path there is no statement
+  anywhere — not one in the wrong place. Two parts. *Now, in the GUI repo:*
+  it already depends on `shekyl-rpc-transport`, so
+  `network_posture::daemon_disclosures(.., None, AlwaysRemote)` at
+  `set_daemon_connection`, rendered in the Settings panel, is one call —
+  the sibling sweep after RT-W7 merges. *The seam:* RT-W1 filed
+  `ValidatedListen` with the trigger "a third bind site or an
+  out-of-workspace embedder"; the outbound analogue's trigger has fired (the
+  GUI is that embedder, and `spawn_in_process_with` already relies on a
+  comment for its coverage). The form: `validate_endpoint` returns a
+  `ValidatedEndpoint` carrying its `DaemonDisclosures`, and
+  `HttpRpc::new` takes it, so a daemon dial cannot be constructed without
+  the statements having passed through the caller's hands — each binary
+  still emits in its own voice. Touches `engine-core`'s `make_daemon`, the
+  wallet-rpc `DaemonEndpoint`, and the GUI: its own validation surface
+  (rule 19), so its own PR. **Target:** V3.2, next in the RT lane after the
+  GUI call.
+
 - **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
   (added 2026-08-22, RT-W2 review). The listener accepts `::1` (RT-W2), but
   the daemon-command client path in `src/daemon/main.cpp`
@@ -12583,7 +12608,7 @@ one place to confirm each item's relationship to the wallet stack.
   2026-07-23** (WI-4 §15 head banner: the endpoint check errs in both directions and
   removes choice on a proxy signal; the ratified replacement is the asymmetric warn-only
   rule + circuit isolation — persona side already built; the warn-only disclosure BUILT
-  2026-07-23 (`shekyl-cli::network_posture`), the principal-side Tor default flip still open). The §4.3.1/§13.1 in-model ceiling
+  2026-07-23 (`shekyl_rpc_transport::network_posture`, in `shekyl-cli` until RT-W7, 2026-08-23), the principal-side Tor default flip still open). The §4.3.1/§13.1 in-model ceiling
   is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
   strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
   posture converted from policy to structure under the global-and-blind constraint (sort on
@@ -16308,7 +16333,8 @@ Retained for citation in review; each links to the canonical record.
   `rpc_client::build_http_agent`) at once; the message names the scheme and the
   `socks5h://` remedy. The persona/`P` path *forces* `resolve_target(false)`
   (deanonymization is fatal there); the principal path is warn-not-force by the
-  same asymmetry. Canonical: `rust/shekyl-cli/src/network_posture.rs`.
+  same asymmetry. Canonical: `rust/shekyl-rpc-transport/src/network_posture.rs`
+  (moved from `shekyl-cli` 2026-08-23, RT-W7, so `shekyl-wallet-rpc` shares it).
 
 - **epee HTTP listener + `--no-rust-rpc` deleted (closed 2026-07-10,
   `chore/delete-epee-http-listener`).** Phase 1 transport cutover:

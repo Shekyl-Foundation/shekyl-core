@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::core::CoreRpc;
 use crate::ffi;
@@ -51,6 +51,49 @@ pub struct ChainTip {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockHashAt {
     pub hash: Option<BlockHash>,
+    pub chain_height: BlockHeight,
+}
+
+/// One block's header, as the facts layer reads it: raw values, typed —
+/// hex rendering and the wire's three-field difficulty split are the
+/// handler's job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHeaderFacts {
+    pub hash: BlockHash,
+    pub prev_hash: BlockHash,
+    /// The miner transaction's id — a [`TxHash`], not a [`BlockHash`]: typing
+    /// it as the latter is exactly the confusion `shekyl-types`' hash
+    /// newtypes exist to prevent.
+    pub miner_tx_hash: TxHash,
+    /// Raw bytes, like `shekyl-wire::BlockHeader`: neither root has a domain
+    /// newtype in this tree, and minting one here would be pre-provisioning
+    /// (rule 18 — byte layout at the boundary, names where they are known).
+    pub curve_tree_root: [u8; 32],
+    pub attestation_root: [u8; 32],
+    /// `None` unless the caller asked for it and was entitled to. Raw bytes:
+    /// a proof-of-work hash is not any block's identity.
+    pub pow_hash: Option<[u8; 32]>,
+    pub height: BlockHeight,
+    pub depth: u64,
+    pub timestamp: u64,
+    pub difficulty: u128,
+    pub cumulative_difficulty: u128,
+    pub reward: u64,
+    pub block_weight: u64,
+    pub long_term_weight: u64,
+    pub num_txes: u64,
+    pub nonce: u32,
+    pub major_version: u8,
+    pub minor_version: u8,
+    pub orphan_status: bool,
+}
+
+/// The header at one height, with the tip as of the same read — `None` when,
+/// and only when, the height is at or past the tip. An in-range height the
+/// store cannot produce a block for is [`FactsFault::Inconsistent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHeaderAt {
+    pub header: Option<BlockHeaderFacts>,
     pub chain_height: BlockHeight,
 }
 
@@ -102,6 +145,14 @@ pub trait ChainFacts: Send + Sync {
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
+    /// The whole header projection at `height`. `fill_pow_hash` is both the
+    /// request and the entitlement — the caller has already applied the
+    /// restricted-listener rule — and computing it is the expensive part.
+    fn block_header_at(
+        &self,
+        height: BlockHeight,
+        fill_pow_hash: bool,
+    ) -> Result<BlockHeaderAt, FactsFault>;
 }
 
 /// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
@@ -137,6 +188,49 @@ impl ChainFacts for FfiChainFacts {
         Ok(BlockHashAt {
             hash: (pod.found != 0).then(|| BlockHash::from_bytes(pod.hash)),
             chain_height: BlockHeight::from_raw(pod.chain_height),
+        })
+    }
+
+    fn block_header_at(
+        &self,
+        height: BlockHeight,
+        fill_pow_hash: bool,
+    ) -> Result<BlockHeaderAt, FactsFault> {
+        let pod = self
+            .core
+            .block_header_at(height.to_raw(), fill_pow_hash)
+            .map_err(FactsFault::from_code)?;
+        let chain_height = BlockHeight::from_raw(pod.chain_height);
+        if pod.found == 0 {
+            return Ok(BlockHeaderAt {
+                header: None,
+                chain_height,
+            });
+        }
+        Ok(BlockHeaderAt {
+            header: Some(BlockHeaderFacts {
+                hash: BlockHash::from_bytes(pod.hash),
+                prev_hash: BlockHash::from_bytes(pod.prev_hash),
+                miner_tx_hash: TxHash::from_bytes(pod.miner_tx_hash),
+                curve_tree_root: pod.curve_tree_root,
+                attestation_root: pod.attestation_root,
+                pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
+                height: BlockHeight::from_raw(pod.height),
+                depth: pod.depth,
+                timestamp: pod.timestamp,
+                difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
+                cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
+                    | u128::from(pod.cumulative_difficulty_lo),
+                reward: pod.reward,
+                block_weight: pod.block_weight,
+                long_term_weight: pod.long_term_weight,
+                num_txes: pod.num_txes,
+                nonce: pod.nonce,
+                major_version: pod.major_version,
+                minor_version: pod.minor_version,
+                orphan_status: pod.orphan_status != 0,
+            }),
+            chain_height,
         })
     }
 

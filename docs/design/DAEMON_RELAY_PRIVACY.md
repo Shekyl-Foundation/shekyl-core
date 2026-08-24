@@ -8446,6 +8446,63 @@ activity*. Whether that is acceptable is a scope call this round owes, and the
 honest framing is that **the alternative on offer is not "cover everything" —
 that option is 4.3× over capacity and was never available.**
 
+> **RE-OPENED 2026-08-23 — see §42.4a.** The "4.3× over capacity" is against
+> the carrier's own 492 B/s, not any external limit. At a window sized to the
+> maximum admissible transaction the narrowing dissolves and the cell returns
+> to zero for all traffic.
+
+### 42.4a RE-OPENED 2026-08-23 — the narrowing's premise was the carrier's OWN budget
+
+§42.4 above narrowed the carrier's job to *"deny the count of originations, not
+of all traffic"* and conceded the cost: §32.6's wire-observer recall cell goes
+from *zero* to *zero for originations, one for activity*. Its stated reason is
+that the alternative **"is 4.3× over capacity and was never available."**
+
+**That capacity is the carrier's own 492 B/s** — §42.1's
+`300 s / 12.5 s × 2 channels × 3 KiB`. Not the uplink, not the device, not Tor's
+network. The fluff class is 4.3× over a budget set entirely by two inherited
+Monero constants (`CRYPTONOTE_NOISE_BYTES`, `CRYPTONOTE_NOISE_MIN_DELAY`) that
+were never derived — the same pair §20.9 names as the arc's last unexamined
+numbers.
+
+**Sized to the maximum admissible transaction, the budget moves and the
+narrowing dissolves:**
+
+| design | bandwidth / node | modal **carrier term** | Tor load @ 10 k nodes |
+| --- | --- | --- | --- |
+| 3 KiB / 12.5 s (§42.1's carrier) | 0.48 KiB/s | 31.2 s | 0.05 % |
+| 17 KiB / 16.5 s (fluff-covering) | 2.06 KiB/s | 8.2 s | 0.21 % |
+| **17 KiB / 12.5 s (adopted)** | **2.72 KiB/s** | **6.2 s** | **0.27 %** |
+
+*The carrier term is the scheduling wait alone; the full hop adds transit +
+verification (590.6 + 124.5 ms), which is how `COVER_TRAFFIC_RESTORATION.md`
+§1.7's embargo table reports it. Two columns, two quantities — do not compare
+them across the tables.*
+
+The fluff-covering carrier runs at a **slower cadence than the one it
+replaces** — 16.5 s against 12.5 s — because a 17 KiB window carries 5.7× more
+per tick. Today's design spends its bandwidth on **granularity** rather than
+capacity. And the adopted 12.5 s point delivers 2.72 KiB/s against a 2.06 KiB/s
+requirement: **32 % more than "cover everything" needs.**
+
+**So the wire-observer recall cell returns to zero for ALL traffic**, and
+§42.4's conceded activity signal closes. The narrowing is not repaired — its
+premise is gone. §42.4 is kept above rather than rewritten, because a reader who
+finds the cell reading zero needs to know it once did not, and why.
+
+**What this does not change.** The stem/fluff class separation (§42.2, RD-4) is
+unaffected — it was correct independently of the budget, and it is what makes
+the 0.5 % stem utilisation figure true. Only the *conclusion drawn from the
+capacity collision* moves.
+
+> **Tor-load provenance.** ~490 Gbit/s consumed network-wide (Tor Metrics,
+> 2026-08); each carrier byte is forwarded by ~6 relay positions on an
+> onion-to-onion path. The CSVs should be pulled with a date stamp before these
+> figures are cited outside this document.
+
+**The keep-criteria this feeds** are pre-registered at
+`COVER_TRAFFIC_RESTORATION.md` §1.7, written before the window is built.
+
 ### 42.5a The covert branch REFUSES to stem, and that is inherited Monero (2026-08-17)
 
 > **CLOSED 2026-08-19 by deletion, not repair — see §93.** The branch this

@@ -4,13 +4,72 @@
 
 ### Changed
 
+- **`get_block_header_by_height` is served natively in Rust (RK-3,
+  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `shekyl-daemon-rpc::methods` over a new facts export that reads the
+  bound, the block, its weights and both difficulties under **one**
+  acquisition of the chain lock, so every field of a header describes the
+  same chain state. The reply is unchanged, pinned by oracle vectors
+  captured from epee first — including the wire's three-field rendering of
+  each 128-bit difficulty and the asymmetry where `block_weight` and
+  `long_term_weight` vanish at zero while `block_size`, filled from the
+  same source, stays. A height past the tip keeps its `-2` refusal naming
+  the top height; a store that reports a height it cannot produce the
+  block for keeps the contract's `-5` and wording, and is logged. The
+  wallet client's private header struct retires for the shared type and
+  now rejects a non-OK `status` instead of reading past it. This carries
+  the shared `BlockHeader` that the remaining header methods will reuse;
+  they stay in C++ for now because each is read by a console command that
+  also needs `get_info` (see the design's console matrix).
+- **Hash fields on the daemon RPC wire are typed (`HashHex`).** Every
+  32-byte hash the RPC carries was a `String`, which admitted "not a hash
+  at all" as a value and left each consumer to parse hex for itself.
+  `HashHex` moves that parse into the deserializer once: 64 hex characters
+  of either case in, always lowercase out, anything else refused. It is a
+  wire-level type over raw bytes, not a wrapper around a domain hash — a
+  single `block_header` carries block, transaction, root and
+  proof-of-work hashes, so consumers name the kind at their edge, where
+  they know it. `block_header.pow_hash` becomes `Option<HashHex>`, keeping
+  the daemon's "was it filled?" flag alive to the wire while emitting the
+  same `""` epee did. Emitted bytes are unchanged throughout, which the
+  oracle vectors check. Two hand-written test fixtures that described
+  replies the daemon could never send were caught by the new type and now
+  build through it.
+- **`--daemon-address` says §1's thing at the point of configuration
+  (RT-W7).** A daemon address that is not loopback now draws the operator
+  statement of `RPC_TRANSPORT_POSTURE.md` §1 when the wallet starts —
+  whoever operates that daemon sees which blocks the wallet requests, when,
+  and what it broadcasts; that is what a daemon is told in order to serve,
+  and no proxy or encryption changes it; there is no recommended
+  configuration with a daemon somebody else controls — in `shekyl-cli` (on
+  stderr) and `shekyl-wallet-rpc` (in its log) alike. `--proxy` silences
+  the existing network-path warning, never this one: a proxy hides the
+  path, not the wallet from its daemon. The statement asserts only what an
+  address can say ("is not a loopback address"), so the operator of their
+  own remote node reads it as true of themselves; loopback and unix-socket
+  daemons stay silent, and no configuration draws an assurance. The
+  disclosure module moved from `shekyl-cli` into `shekyl-rpc-transport`
+  (`network_posture`) so both binaries say it in the same words — the
+  outbound twin of the shared `listen` classifier — and it is pure: each
+  binary emits in its own voice. The two sides now share one loopback
+  predicate (`listen::is_loopback_ip`), so `[::ffff:127.0.0.1]` is loopback
+  for a daemon address as it is for a bind; a zone-scoped literal
+  (`fe80::1%eth0`) is a literal, not a name to leak; and bare `socks://`
+  counts as local-resolving, as the dialers that accept it read it.
+  **Also:** both wallets' `--daemon-address` defaults named ports no daemon
+  serves (`localhost:11028`, `http://127.0.0.1:28581`). The flag is now
+  optional and its default follows `--network` — this machine's daemon at
+  that network's RPC port (`Network::daemon_rpc_port`, pinned by a test to
+  the daemon's `cryptonote_config.h`) — so a testnet wallet finds a testnet
+  daemon without the operator knowing the port.
 - **The daemon RPC binds loopback only; `--confirm-external-bind` is
   retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
   spellings) is refused unconditionally — consent to interfaces that do
   not exist yet — and a bind on a specific network address is refused
   because the daemon RPC has no authentication of any kind: every RPC leg
-  is operator-to-operator, and the remote legs are the onion service and
-  the pinned-TLS leg of `RPC_TRANSPORT_POSTURE.md` (RT-4). The refusal
+  is operator-to-operator, and the daemon's remote leg is the onion
+  service or a reverse proxy outside the daemon — the crossing is never
+  the daemon's own socket. The refusal
   lives at the one Rust seam every daemon listener passes through
   (`shekyl-daemon-rpc::bind::bind_listener`, the restricted listener included —
   it had no gate at all), on a strictly parsed address (hostnames are not
