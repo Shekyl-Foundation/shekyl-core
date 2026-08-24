@@ -62,6 +62,7 @@ pub mod reward_arithmetic;
 pub mod segment_freeze;
 pub mod serve_credit_decisions;
 pub mod serve_eligibility;
+pub mod settlement_row;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -140,6 +141,10 @@ pub use emission_verify::{
     emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
     BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
     EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
+};
+pub use settlement_row::{
+    RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,
+    SETTLEMENT_ROW_LEN,
 };
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
