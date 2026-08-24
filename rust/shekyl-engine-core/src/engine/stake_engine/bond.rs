@@ -53,8 +53,9 @@ use super::types::*;
 /// [`BondPostPlacement`]: the caller that receives the constructed vin receives
 /// where to place them.
 ///
-/// Dead_code allow: the Engine orchestrator is wired; go-live still needs
-/// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone;
+/// Lint-visible, deliberately: the wired Engine orchestrator consumes this, so
+/// no suppression applies. Go-live still needs SP-R0/2d-1 pruning **and** the
+/// RPC stake entry (rule-21 — neither alone;
 /// half (a) landed 2026-07-18 with SP-R0 arm #1, logic-discharged — half (b)
 /// is the remaining retirement, the staker-activation round).
 pub(crate) struct AssembleBond {
@@ -80,8 +81,8 @@ pub(crate) struct AssembleBond {
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
 ///
-/// Dead_code allow: reply type of the wired orchestrator; same dual gate as
-/// [`AssembleBond`].
+/// Lint-visible, deliberately: reply type of the wired orchestrator, so no
+/// suppression applies. Same dual go-live gate as [`AssembleBond`].
 // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332). The placement carrier is the bare `bond_post_offset_blocks` (the entry-seam plan/order-coin was retired in the GF-7 coin retirement).
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {

@@ -87,14 +87,8 @@ pub(crate) struct AssembleEmissionClaim {
 // lib-target field readers arrive with the RPC stake entry (rule-21, the same
 // retirement condition as the seam's allow); the orchestrator e2e KAT reads
 // every field today.
-//
-// `allow`, not `expect`: usage differs by cfg, so a lint expectation is fulfilled
-// in a lib-only build and *unfulfilled* under `--all-targets` (the tests read the
-// fields), which is what CI builds. Re-check staleness with the lib-only view,
-// which strips the test readers:
-//   cargo clippy -p shekyl-engine-core -- -D warnings
-#[allow(dead_code)]
 #[derive(Debug)]
+#[allow(dead_code)] // 2c: the field readers land with the RPC stake entry (rule-21) / the wallet-side emission-claim builder (EMISSION_CLAIM_BUILDER.md).
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.
     pub bound_tx: PBoundBytes,

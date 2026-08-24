@@ -279,10 +279,7 @@ pub(crate) struct PlanBondPost {
 /// construction and scheduling. The offset is relative; the anchor itself never
 /// leaves the caller. The vin carries no on-vin signature (SA-2b).
 #[derive(Debug)]
-// Dead only in a lib-only build; the production consumer is the 2c-2a assemble /
-// 2d dispatch path. See the note in `claim.rs` for why this is `allow` and not
-// `expect`, and for the command that re-checks it.
-#[allow(dead_code)]
+#[allow(dead_code)] // 2c-2b: the field readers land with the request path — this is `PlanBondPost`'s reply, not `AssembleBond`'s (that is `AssembledBondPost`).
 pub(crate) struct BondPostPlacement {
     /// The constructed JoinMarket bond vin, ready for transaction assembly.
     /// Authorization is the later surface-A `pqc_auths` slot, not an on-vin blob.

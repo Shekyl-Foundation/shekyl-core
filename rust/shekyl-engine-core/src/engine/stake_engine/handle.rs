@@ -157,9 +157,7 @@ impl StakeEngineHandle {
 
     /// Activate the persona named by `handle` and return its public identity.
     /// Activation (with ephemeral-only wipe) when a different slot is active.
-    // Dead only in a lib-only build; the production caller is the 2c-2a assemble wiring .
-    // See `claim.rs` for why this is `allow` and not `expect`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // 2c-2a: the production caller lands with the assemble wiring; today's callers are all `cfg(test)`.
     pub(crate) async fn activate_persona(
         &self,
         handle: PersonaHandle,
@@ -245,9 +243,7 @@ impl StakeEngineHandle {
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
-    // Dead only in a lib-only build; the production caller is the 2c-2b request path .
-    // See `claim.rs` for why this is `allow` and not `expect`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
     pub(crate) async fn plan_bond_post(
         &self,
         handle: PersonaHandle,
@@ -266,9 +262,9 @@ impl StakeEngineHandle {
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
     /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
-    /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
-    /// pruning **and** the RPC stake entry land — neither alone (half (a)
-    /// landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
+    /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
+    /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
+    /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,
@@ -308,8 +304,9 @@ impl StakeEngineHandle {
     /// the pending-drain record are the orchestrator's (DS-PR-2), outside this
     /// builder.
     ///
-    /// Dead_code allow: the assembly is wired; the Engine orchestrator entry
-    /// (DS-PR-2) and the RPC drain entry are the remaining consumers (rule-21).
+    /// The assembly is wired, so this carries no suppression; the Engine
+    /// orchestrator entry (DS-PR-2) and the RPC drain entry are the remaining
+    /// consumers (rule-21).
     pub(crate) async fn assemble_drain(
         &self,
         msg: AssembleDrain,
