@@ -31,9 +31,12 @@
 //! ~1,920 B/record buys.
 //!
 //! Whole-shard fetching by the witness (`shekyl_curve_tree::recompute_segment_r_k`)
-//! remains the **mechanism**; `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6's finding
-//! that sampled-leaf is insufficient as a *standalone* mechanism stands, and
-//! says nothing against an opening carried additively on top. Accordingly
+//! remains the **mechanism**; the standing finding that sampled-leaf is
+//! insufficient as a *standalone* mechanism stands, and says nothing against
+//! an opening carried additively on top. (That finding was cited here as
+//! `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6 until 2026-08-23; **that document
+//! has no §5.6** and the anchor resolved nowhere, so it is dropped rather
+//! than repaired — the substance is restated in that doc's §9.6 item 2.) Accordingly
 //! [`crate::challenge::challenge_leaf_index`] comes **off** §2's deletion
 //! surface: it is the verifier-side derivation the opening is checked against.
 //!
