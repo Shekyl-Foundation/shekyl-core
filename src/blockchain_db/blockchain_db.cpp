@@ -50,32 +50,43 @@ namespace cryptonote
 
 bool matches_category(relay_method method, relay_category category) noexcept
 {
+  /* Neither switch has a `default:`, and that is the enforcement mechanism
+     rather than a style choice: `-Werror=switch` is a project-wide security
+     flag (CMakeLists.txt), so adding a `relay_category` or a `relay_method`
+     without classifying it here is a compile error in EVERY build, not only
+     where the unit tests are built. A `default:` would have silently given
+     the new member whichever arm it was grouped with.
+
+     The method table is nested inside the `broadcasted` arm so that both
+     switches can be exhaustive while a byte outside either enum still reaches
+     exactly one exit: the fail-closed `return false` below. Flattening it
+     would let an out-of-domain CATEGORY fall into the method table and answer
+     `true` for a fluff -- "publicly known" is the leaking direction, and it is
+     the one an invalid cast must never produce. */
   switch (category)
   {
-    default:
-      return false;
     case relay_category::all:
       return true;
     case relay_category::relayable:
       return method != relay_method::none;
     case relay_category::broadcasted:
+      // "The network already knows": block or fluff, nothing earlier. `none`
+      // is named in the false arm rather than left to a fallback, because it
+      // is the one member the deleted `legacy` category used to admit here
+      // and naming it is what makes the deletion reviewable.
+      switch (method)
+      {
+        case relay_method::none:
+        case relay_method::local:
+        case relay_method::stem:
+          return false;
+        case relay_method::block:
+        case relay_method::fluff:
+          return true;
+      }
       break;
   }
-  // `broadcasted` is "the network already knows": block or fluff, nothing
-  // earlier. `none` sits in the false arm explicitly rather than reaching
-  // `default`, because it is the one member the deleted `legacy` category
-  // used to admit here and naming it is what makes the deletion reviewable.
-  switch (method)
-  {
-    default:
-    case relay_method::none:
-    case relay_method::local:
-    case relay_method::stem:
-      return false;
-    case relay_method::block:
-    case relay_method::fluff:
-      return true;
-  }
+  return false;
 }
 
 void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
@@ -100,9 +111,13 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
     case relay_method::block:
       kept_by_block = 1;
       break;
-    default:
     case relay_method::fluff:
+      // Fluff is the all-bits-clear state; the resets above already wrote it.
       break;
+    // No `default:` -- see `matches_category`. Here the mask mattered more: a
+    // new method grouped with `fluff` would encode as the all-clear state and
+    // read back BROADCASTED, so forgetting to encode a new pre-fluff class
+    // would have published it rather than failing.
   }
 }
 

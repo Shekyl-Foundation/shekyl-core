@@ -22,11 +22,13 @@
 //     `only_none_separates_relayable_from_all` goes red.
 //   * let `local` or `stem` match `broadcasted` (the pre-Dandelion++ posture)
 //     and `pre_fluff_methods_are_not_broadcast` goes red.
-//   * re-add a category to the enum and the namespace-scope `static_assert`s
-//     below fail the BUILD -- the value `legacy` vacated is what pins `all`.
-//     That one is deliberately not a `TEST`: a compile-time invariant dressed
-//     as a runtime case can never go red at run time, so presenting it as one
-//     would be a check that cannot fail.
+//   * add a `relay_category` or a `relay_method` and `matches_category` fails
+//     to COMPILE -- neither of its switches carries a `default:`, and
+//     `-Werror=switch` is a project-wide flag, so that one is enforced in
+//     every build rather than only where these tests are built. It lives at
+//     the definition for that reason; a numeric pin here would have been a
+//     weaker copy of it, and `relay_category`'s values have no contract to
+//     pin -- they are never cast, serialized, or sent over the FFI.
 //
 // The categories are not tested as a black box against each other: a table
 // that only asserted `broadcasted` is a subset of `all` would pass with every
@@ -54,18 +56,13 @@ namespace
     relay_method::fluff,
     relay_method::block};
 
+  /* The one shape assert that belongs HERE rather than at the definition:
+     it guards this file's own tables, not the production classifier. A new
+     `relay_method` is already a compile error in `matches_category`; what
+     that cannot catch is a new member handled there and then missing from
+     `k_methods`, which would leave every loop below silently short a row. */
   static_assert(unsigned(relay_method::block) == k_methods.size() - 1,
-    "relay_method gained a member; add its row to every table below");
-
-  /* The enum's shape. `all` is last, and it sits at the value the deleted
-     `legacy` used to occupy, so inserting a category anywhere before it is a
-     build failure rather than a silent renumbering. */
-  static_assert(unsigned(relay_category::broadcasted) == 0,
-    "relay_category::broadcasted must stay first; a category was inserted before it");
-  static_assert(unsigned(relay_category::relayable) == 1,
-    "relay_category::relayable moved; a category was inserted before it");
-  static_assert(unsigned(relay_category::all) == 2,
-    "relay_category::all moved; a category was added -- give it a row in every table below");
+    "relay_method gained a member; add its row to k_methods and every table below");
 }
 
 TEST(relay_category, all_admits_every_method)
