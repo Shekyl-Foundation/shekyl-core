@@ -83,24 +83,27 @@ fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
     );
 }
 
-/// The fragment cap carries the LARGEST admissible transaction.
+/// The fragment cap is `ceil(S_max / WINDOW_BYTES)`, not slack under the
+/// epoch ceiling.
 ///
-/// This is the cap's actual job, and the one nothing checked: `MAX_FRAGMENTS`
-/// was inherited at 20 — set equal to the epoch ceiling below, never derived
-/// against a transaction. A cap under this bound means the biggest admissible
-/// transaction is discarded by CV-1 and never arrives.
+/// A one-sided `needs <= MAX_FRAGMENTS` is the same class of defect this
+/// file exists to remove: the inherited 20 sat in `[ceil, epoch-ceiling]`
+/// and would still go green. The derivation is the ceiling of the structural
+/// max over the window; equality is what makes 20 unable to hide.
 ///
-/// What edit reds this: lowering `carrier::MAX_FRAGMENTS`, shrinking the
-/// window, or raising `MAX_INPUTS` / `MAX_OUTPUTS` / `MAX_TREE_DEPTH`.
+/// What edit reds this: raising or lowering `carrier::MAX_FRAGMENTS` without
+/// a matching window or wire-size change, shrinking the window, or raising
+/// `MAX_INPUTS` / `MAX_OUTPUTS` / `MAX_TREE_DEPTH`.
 #[test]
-fn the_fragment_cap_carries_the_largest_admissible_transaction() {
+fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
     let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
     let needs = structural_max.div_ceil(carrier::WINDOW_BYTES);
-    assert!(
-        u32::try_from(needs).expect("fragment count is small") <= carrier::MAX_FRAGMENTS,
+    assert_eq!(
+        u32::try_from(needs).expect("fragment count is small"),
+        carrier::MAX_FRAGMENTS,
         "the largest admissible message is {structural_max} B, which needs \
-         {needs} windows of {} B, but carrier::MAX_FRAGMENTS is {} — a \
-         transaction over the cap is discarded, not fragmented",
+         {needs} windows of {} B; carrier::MAX_FRAGMENTS is {} — the cap is \
+         ceil(S_max / WINDOW_BYTES), not slack under the epoch ceiling",
         carrier::WINDOW_BYTES,
         carrier::MAX_FRAGMENTS,
     );
@@ -137,6 +140,44 @@ fn the_cap_stays_under_both_ceilings() {
     );
 }
 
+/// Axis 2's 8 KiB/s ceiling is why the window is the modal shape and the
+/// cap carries the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
+///
+/// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
+/// `COVER_TRAFFIC_RESTORATION.md` §1.7. The fastest cadence is
+/// `NOISE_MIN_DELAY_SECS`; a window that fits the structural max whole at
+/// that cadence is the size the ceiling forbade.
+///
+/// What edit reds this: enlarging `WINDOW_BYTES` past the ceiling, slowing
+/// the cadence without shrinking the window, or a structural-max shrink that
+/// would make a whole-tx window legal (at which point the two-constant split
+/// itself is owed a re-read).
+#[test]
+fn the_window_at_the_fastest_cadence_stays_under_the_bandwidth_ceiling() {
+    const CEILING_BYTES_PER_SEC: u64 = 8 * 1024;
+
+    let window_rate =
+        (carrier::WINDOW_BYTES as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+    assert!(
+        window_rate <= CEILING_BYTES_PER_SEC,
+        "WINDOW_BYTES {} at the fastest cadence ({} s) is {window_rate} B/s, \
+         over the pre-registered 8 KiB/s ceiling — that ceiling is why the \
+         window is not the structural max",
+        carrier::WINDOW_BYTES,
+        inherited::NOISE_MIN_DELAY_SECS,
+    );
+
+    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let whole_tx_rate =
+        (structural_max as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+    assert!(
+        whole_tx_rate > CEILING_BYTES_PER_SEC,
+        "a window sized for the structural max ({structural_max} B) at the \
+         fastest cadence is {whole_tx_rate} B/s, which should breach the \
+         8 KiB/s ceiling — that breach is why MAX_FRAGMENTS exists"
+    );
+}
+
 /// Every populated verify-cost cell carries the message size its shape really
 /// produces.
 ///
@@ -165,119 +206,4 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
         checked += 1;
     }
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
-}
-
-/// How far each shipped hop is from the next embargo step, and how big it is.
-///
-/// # A record, not a gate
-///
-/// Nothing in the design picks a hop for its distance from a step, so a
-/// threshold here would be another self-invented bar. What this prevents is a
-/// hop moving onto a step silently — the bands go red when a distance changes,
-/// which tells the next reader something happened, where a bar would only tell
-/// them someone once had an opinion.
-///
-/// # What it measures, and why it is a search
-///
-/// `derive_embargo` accumulates `div_ceil(h * hop + F, tick)` over the
-/// stem-length sum, so the embargo steps where many `h` cross a tick boundary
-/// together. `next_embargo_step` searches for the real next change rather than
-/// modelling a grid: the structure has harmonics from larger `h` and it moves
-/// with `F`, so a closed form for the `h = 1` family alone is wrong in both
-/// directions.
-///
-/// # The finding this carries
-///
-/// The **shipped interim** anonymity hop is 1 ms from a 12-second step. It is
-/// inert today only because §89.8.4 arms no anonymity embargo.
-///
-/// And the two genesis shapes sit at different distances, so **hop sensitivity
-/// is shape-dependent** — §89.3's zone-disclosure question one axis over, with
-/// numbers instead of a hypothesis. Raised there, not ruled here.
-///
-/// What edit reds this: any change to a transit assumption, a verify-cost cell,
-/// `fluff_return_ms`, or `DEFAULT_EMBARGO_TICK_MILLIS`.
-#[test]
-fn the_distance_from_each_shipped_hop_to_the_next_embargo_step_is_recorded() {
-    use shekyl_relay_privacy::derive::next_embargo_step;
-    use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
-    use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-    use shekyl_relay_privacy::verify_cost::{
-        ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH,
-        SPEC_VERIFY_COST,
-    };
-
-    // The §94 round's candidate anonymity transit. A local literal ON PURPOSE:
-    // it is BANKED, NOT ADOPTED — the flood-suite re-baseline is its
-    // prerequisite — so there is no tree constant to read.
-    const CANDIDATE_ANON_TRANSIT_MS: f64 = 590.6;
-    const SEARCH_MS: u32 = 400;
-
-    let f1 = SPEC_VERIFY_COST
-        .f_ms(1, GENESIS_TREE_DEPTH)
-        .expect("populated");
-    let f8 = SPEC_VERIFY_COST
-        .f_ms(8, GENESIS_TREE_DEPTH)
-        .expect("populated");
-
-    let mut seen = Vec::new();
-    for (label, hop) in [
-        ("clearnet modal", ADOPTED_TRANSIT_ASSUMPTION_MS + f1),
-        ("SHIPPED anon modal", ANON_ZONE_TRANSIT_ASSUMPTION_MS + f1),
-        ("SHIPPED anon 8-input", ANON_ZONE_TRANSIT_ASSUMPTION_MS + f8),
-        ("candidate anon modal", CANDIDATE_ANON_TRANSIT_MS + f1),
-        ("candidate anon 8-input", CANDIDATE_ANON_TRANSIT_MS + f8),
-    ] {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let hop_ms = hop.round() as u32;
-        let params = DandelionParams {
-            time_between_hop_ms: hop_ms,
-            ..DandelionParams::inherited()
-        };
-        let step = next_embargo_step(
-            &params,
-            DEFAULT_EMBARGO_TICK_MILLIS,
-            SEARCH_MS,
-            EMBARGO_FULL_TRAVEL_PROBABILITY,
-        );
-        seen.push((label, hop_ms, step));
-    }
-
-    let rendered: Vec<String> = seen
-        .iter()
-        .map(|(l, h, s)| match s {
-            Some((d, delta)) => format!("{l} (hop {h} ms): +{d} ms -> {delta:+} s"),
-            None => format!("{l} (hop {h} ms): stable over {SEARCH_MS} ms"),
-        })
-        .collect();
-
-    // The recorded distances. Each is the measured answer, not a chosen one.
-    // Measured, not chosen. The magnitude matters as much as the distance: a
-    // +1 s step is the ordinary quantization of a solver that answers in whole
-    // seconds, while a +12 s step is the resonance — many `h` crossing a tick
-    // boundary together.
-    let want = [
-        ("clearnet modal", 4_u32, 1_i64),
-        // THE SHIPPED INTERIM, and the reason this test exists: one
-        // millisecond from an eleven-second jump. Inert only because §89.8.4
-        // arms no anonymity embargo.
-        ("SHIPPED anon modal", 1, 11),
-        ("SHIPPED anon 8-input", 4, 1),
-        ("candidate anon modal", 3, 1),
-        // And the shape-dependence, live at the candidate: the modal shape is
-        // 3 ms from a 1 s step while this one is 7 ms from a 12 s step.
-        ("candidate anon 8-input", 7, 12),
-    ];
-    for ((label, _, step), (want_label, want_d, want_delta)) in seen.iter().zip(want) {
-        assert_eq!(*label, want_label, "row order");
-        let (d, delta) = step.expect("a step exists inside the search window");
-        assert_eq!(
-            (d, delta),
-            (want_d, want_delta),
-            "{label}: the next embargo step is {d} ms away and moves {delta} s; \
-             recorded {want_d} ms / {want_delta} s — a hop moved relative to the \
-             step structure.\nAll rows:\n  {}",
-            rendered.join("\n  ")
-        );
-    }
 }

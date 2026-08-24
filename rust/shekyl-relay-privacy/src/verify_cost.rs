@@ -247,8 +247,8 @@ pub struct SpecVerifyCost {
 /// floor device.
 ///
 /// Crate-internal: [`SpecVerifyCost::f_ms`] is the only consumer, and the
-/// public surface is the summed hop term rather than its parts. A caller that
-/// wants the split has [`SpecVerifyCost::verify_only_ms`].
+/// public surface is the summed hop term rather than its parts. The measured
+/// half is [`VerifyCell::millis`], reached via [`SpecVerifyCost::populated`].
 ///
 /// `const` because [`SpecVerifyCost::f_ms`] is, and that is not incidental:
 /// `f_ms` is consumed in `const` contexts (`spec_decision_matrix.rs` binds its
@@ -365,8 +365,8 @@ impl SpecVerifyCost {
     ///
     /// The two terms keep separate provenance: [`VerifyCell::millis`] is
     /// measured on the spec machine, [`VerifyCell::msg_bytes`] is derived from
-    /// the wire model, and only the sum crosses here. Use
-    /// [`Self::verify_only_ms`] for the measured half alone.
+    /// the wire model, and only the sum crosses here. The measured half is
+    /// `cell.millis` from [`Self::populated`].
     ///
     /// # This does NOT price the crypto term across the admissible range
     ///
@@ -383,28 +383,16 @@ impl SpecVerifyCost {
     /// [`VerifyCostRefusal`] for why each refusal is the correct answer and
     /// what harm a fallback would do (§83.3, §87.3).
     pub const fn f_ms(&self, n_in: usize, depth: u32) -> Result<f64, VerifyCostRefusal> {
-        if n_in < 1 || n_in > MAX_TABLE_INPUTS {
-            return Err(VerifyCostRefusal::InputCountOutsideDomain { n_in });
-        }
-        if depth < GENESIS_TREE_DEPTH || depth > MAX_TABLE_DEPTH {
-            return Err(VerifyCostRefusal::DepthOutsideTable { depth });
-        }
-        match self.cells[n_in - 1][(depth - GENESIS_TREE_DEPTH) as usize] {
-            Some(cell) => Ok(cell.millis + node_crypto_ms(cell.msg_bytes)),
-            None => Err(VerifyCostRefusal::UnpopulatedCell { n_in, depth }),
+        // `?` is not yet stable in `const fn` (rustc 1.94).
+        match self.cell(n_in, depth) {
+            Ok(cell) => Ok(cell.millis + node_crypto_ms(cell.msg_bytes)),
+            Err(e) => Err(e),
         }
     }
 
-    /// The **measured** half of [`Self::f_ms`] alone — FCMP++ verification
-    /// without the derived node-crypto term.
-    ///
-    /// Exists so a caller that needs the measurement can have it without the
-    /// computation mixed in; `f_ms` is what `hop` composes from.
-    ///
-    /// # Errors
-    ///
-    /// Same refusals as [`Self::f_ms`].
-    pub const fn verify_only_ms(&self, n_in: usize, depth: u32) -> Result<f64, VerifyCostRefusal> {
+    /// The populated cell at `(n_in, depth)`, or the same refusal [`Self::f_ms`]
+    /// would return. One lookup; `f_ms` is the hop term composed from it.
+    const fn cell(&self, n_in: usize, depth: u32) -> Result<VerifyCell, VerifyCostRefusal> {
         if n_in < 1 || n_in > MAX_TABLE_INPUTS {
             return Err(VerifyCostRefusal::InputCountOutsideDomain { n_in });
         }
@@ -412,7 +400,7 @@ impl SpecVerifyCost {
             return Err(VerifyCostRefusal::DepthOutsideTable { depth });
         }
         match self.cells[n_in - 1][(depth - GENESIS_TREE_DEPTH) as usize] {
-            Some(cell) => Ok(cell.millis),
+            Some(cell) => Ok(cell),
             None => Err(VerifyCostRefusal::UnpopulatedCell { n_in, depth }),
         }
     }
@@ -473,25 +461,26 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// The transit assumption for the **anonymity zones** (i2p/tor), in
 /// milliseconds.
 ///
-/// # THE PREMISE THIS IS DERIVED ON IS NOT SHIPPED — §89.8.2
+/// # THE PREMISE THIS IS DERIVED ON — re-grounded 2026-08-23, see §89.8.4
 ///
 /// > This value is derived on the premise that a transaction entering an
-/// > anonymity zone's stem **completes that stem there**. That premise is not
-/// > shipped. `cryptonote_core.cpp`'s `relay_txpool_transactions` re-relays
-/// > anonymity-arrived traffic to `zone::public_` — a literal, because the
-/// > txpool stores no origin zone and the pool loop runs after the moment that
-/// > knew it. So an anonymity-arrived transaction leaves for clearnet on the
-/// > pool's own cycle, and the remaining hops this constant spaces run on a
-/// > network it is not sized for.
+/// > anonymity zone's stem **completes that stem there**. That premise was
+/// > not shipped when this comment was first written: `relay_txpool_transactions`
+/// > re-relayed anonymity-arrived traffic to `zone::public_` because the
+/// > `forward` class never reached `send_txs` at arrival, and the remaining
+/// > hops this constant spaces ran on a network it is not sized for.
 /// >
-/// > **The constant is inert, not merely unmeasured.** Nothing arms an
-/// > anonymity-zone embargo today (§89.8.4), so marking is sufficient and no
-/// > shipped behaviour depends on this number. It becomes live when the txpool
-/// > gains an origin zone — a mechanism, not a measurement.
+/// > **Q12-U2 closed that path.** Arrivals now enter as `stem`, coherence
+/// > keeps them on the arrival zone (`KeepArrival`), and `set_relayed` draws
+/// > the per-zone embargo — the zone is a parameter beside `tx_relay`, which
+/// > is the input §89.2 already had. Originated traffic still keeps `local`
+/// > and does not draw, by §89.8.3. The checklist at §89.8.4 is the current
+/// > claim; do not restate liveness here.
 /// >
-/// > **Do not read the interim below as awaiting a rendezvous number.** It is
-/// > awaiting the mechanism. When that lands, this value needs *both*: the
-/// > premise made true, and then the measurement that replaces the guess.
+/// > **Do not read the interim below as awaiting a mechanism.** The mechanism
+/// > for relayed arrivals has landed. What this value still awaits is the
+/// > measurement that replaces the guess. The hop-to-step pin (entry 2 of
+/// > that checklist) is live on the relayed path.
 ///
 /// # INTERIM AND UNMEASURED — §89.5
 ///
@@ -739,12 +728,10 @@ mod tests {
     fn f_ms_carries_the_node_crypto_term_not_just_the_measurement() {
         for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
             let total = SPEC_VERIFY_COST.f_ms(n_in, depth).expect("populated");
-            let measured = SPEC_VERIFY_COST
-                .verify_only_ms(n_in, depth)
-                .expect("populated");
+            let measured = cell.millis;
             assert!(
                 total > measured,
-                "f_ms({n_in}, {depth}) returned {total} ms and verify_only_ms returned \
+                "f_ms({n_in}, {depth}) returned {total} ms and the cell's millis is \
                  {measured} ms — the node-crypto term is not in the sum"
             );
             let delta = total - measured;
@@ -783,10 +770,7 @@ mod tests {
     fn the_node_crypto_fraction_is_reported_per_shape() {
         let mut worst: (usize, u32, f64) = (0, 0, 0.0);
         for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
-            let measured = SPEC_VERIFY_COST
-                .verify_only_ms(n_in, depth)
-                .expect("populated");
-            let fraction = node_crypto_ms(cell.msg_bytes) / measured;
+            let fraction = node_crypto_ms(cell.msg_bytes) / cell.millis;
             if fraction > worst.2 {
                 worst = (n_in, depth, fraction);
             }
