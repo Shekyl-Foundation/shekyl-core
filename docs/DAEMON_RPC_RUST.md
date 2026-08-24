@@ -77,6 +77,30 @@ distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
 distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
 with a named caller, never “keep epee.”
 
+### Deleted batch sync (no Axum route)
+
+`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
+`/gethashes.bin`) are deleted, with `COMMAND_RPC_GET_BLOCKS_FAST` and
+`COMMAND_RPC_GET_HASHES_FAST`. They were wallet2's batch sync; `src/wallet/`
+is gone and no caller of any kind remained — not Rust, not C++, not
+`utils/python-rpc`, not `tests/functional_tests`. The Rust wallet fetches one
+block per height over `get_block` (native since RK-3b). Daemon-to-daemon sync
+is unaffected: it is Levin, through the 3-argument
+`find_blockchain_supplement` overload, which stays.
+
+The deletion also retires `core::get_pool_info` and, with it,
+`tx_memory_pool::m_removed_txs_by_time` — a timestamped in-memory record of
+when each transaction *left* the pool, each entry flagged sensitive or not.
+It existed only to serve incremental pool deltas to that batch sync, and it
+is the timing correlate the relay-privacy work spends effort denying. A
+structure of that kind must not outlive its only reader.
+
+**Rule-21 reopen:** iff a named live consumer needs batch block or hash sync
+over RPC. Re-evaluation shape: a design round against what FCMP++ scanning
+actually needs, emitting a typed Rust route with that named caller — never a
+restoration of the epee KV structs or of wallet2's API, whose contract was
+written for ring signatures.
+
 ### Deleted bootstrap-daemon forward (no Axum route, no CLI flag)
 
 `--bootstrap-daemon-address` / `-login` / `-proxy`, the `set_bootstrap_daemon`
@@ -252,7 +276,9 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_block_header_by_height` (+ `getblockheaderbyheight`) | `/json_rpc` | **native Rust** (RK-3: over `shekyl_rpc_block_header_at`) | wallet (`shekyl-rpc-client`), python-rpc, stressnet | migrated 2026-08-23 |
 | `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
-| Binary sync (`/get_blocks.bin`, hashes, indexes) | yes | yes | wallet refresh | keep |
+| `/get_o_indexes.bin` | yes | yes | wallet (`shekyl-rpc-client/src/lib.rs:577`) | keep (RK-4a) |
+| `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | yes | the engine's timing rig (`daemon_observability.rs`) | keep (RK-4b) |
+| `/get_blocks.bin` (+ `/getblocks.bin`), `/get_hashes.bin` (+ `/gethashes.bin`) | **no** | **removed** | none (wallet2's batch sync; `src/wallet/` deleted) | deleted (RK-4x, below) |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |
 | `POST /submit_transaction` | native Rust | n/a | wallets | keep |
 | `get_archival_emission_claim_source` | `/json_rpc` | yes | claim-builder | keep |

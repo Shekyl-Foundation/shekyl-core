@@ -222,12 +222,8 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
 
 const std::unordered_map<std::string, bin_fn>& get_bin_table() {
     static const std::unordered_map<std::string, bin_fn> t = {
-        DBIN("/get_blocks.bin",            on_get_blocks,                  COMMAND_RPC_GET_BLOCKS_FAST),
-        DBIN("/getblocks.bin",             on_get_blocks,                  COMMAND_RPC_GET_BLOCKS_FAST),
         DBIN("/get_blocks_by_height.bin",  on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
         DBIN("/getblocks_by_height.bin",   on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
-        DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
-        DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
     };
     return t;

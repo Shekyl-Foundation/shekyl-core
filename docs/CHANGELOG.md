@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
+  `/gethashes.bin`) are retired (RK-4x).** They were wallet2's batch sync;
+  `src/wallet/` is gone and nothing called them — not Rust, not C++, not
+  the python framework, not the functional tests. The Rust wallet fetches
+  one block per height over `get_block`. Daemon-to-daemon sync is
+  unaffected: that is Levin, through a different
+  `find_blockchain_supplement` overload.
+  The retirement reaches further than the routes. `on_get_blocks` was the
+  only caller of `core::get_pool_info`, which was the only reader of the
+  transaction pool's **departure history** — a timestamped in-memory record
+  of when each transaction left the pool, each entry flagged sensitive or
+  not, kept to serve incremental pool deltas to that batch sync. That is
+  the timing correlate the relay-privacy work exists to deny, and it was
+  being retained for an endpoint nobody called. It is gone, along with the
+  9-argument `find_blockchain_supplement`, `get_pool_info` at both levels,
+  and the two `COMMAND_RPC_GET_BLOCKS_FAST_MAX_*` limits.
+  `CORE_RPC_VERSION` is **3.23**: retiring a served route is a wire change.
+  **Reopen** iff a named live consumer needs batch sync over RPC, and then
+  as a typed Rust route designed against what FCMP++ scanning needs — never
+  a restoration of the epee structs (`docs/DAEMON_RPC_RUST.md`).
+
+### Added
+
+- **A CI gate that makes the RPC liveness rule executable
+  (`ci/rpc-route-liveness`).** `DAEMON_RPC_RUST.md` has always said a
+  method is live iff it has a route *and* a live consumer. Stated in prose,
+  nothing enforced it, which is how two callerless endpoints survived an
+  audit that had the rule written down. The gate now requires every path in
+  the Axum route table to have a reference outside route registration, the
+  FFI dispatch table, and comments — or an allowlist entry stating why it
+  is served without one. It found a third dead route on its first run
+  (`/get_transaction_pool_hashes.bin`, recorded pending disposition).
+
 ### Changed
 
 - **`get_block` is served natively in Rust, and the two console commands

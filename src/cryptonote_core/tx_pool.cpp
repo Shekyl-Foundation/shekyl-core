@@ -165,10 +165,9 @@ namespace cryptonote
       throw std::runtime_error{"Unexpected time_t (system clock) value"};
 
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_start_time = (time_t)0;
-    // We don't set these to "now" already here as we don't know how long it takes from construction
-    // of the pool until it "goes to work". It's safer to set when the first actual txs enter the
-    // corresponding lists.
+    // Not set to "now" here: we don't know how long it takes from construction
+    // of the pool until it "goes to work", so it is safer to set it when the
+    // first actual tx enters the list.
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
@@ -1164,80 +1163,6 @@ namespace cryptonote
     }, false, category);
   }
   //------------------------------------------------------------------
-  bool tx_memory_pool::get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const
-  {
-    CRITICAL_REGION_LOCAL(m_transactions_lock);
-    CRITICAL_REGION_LOCAL1(m_blockchain);
-
-    incremental = true;
-    if (start_time == (time_t)0)
-    {
-      // Giving no start time means give back whole pool
-      incremental = false;
-    }
-    else if ((m_added_txs_start_time != (time_t)0) && (m_removed_txs_start_time != (time_t)0))
-    {
-      if ((start_time <= m_added_txs_start_time) || (start_time <= m_removed_txs_start_time))
-      {
-        // If either of the two lists do not go back far enough it's not possible to
-        // deliver incremental pool info
-        incremental = false;
-      }
-      // The check uses "<=": We cannot be sure to have ALL txs exactly at start_time, only AFTER that time
-    }
-    else
-    {
-      // Some incremental info still missing completely
-      incremental = false;
-    }
-
-    added_txs.clear();
-    remaining_added_txids.clear();
-    removed_txs.clear();
-
-    std::vector<crypto::hash> txids;
-    if (!incremental)
-    {
-      LOG_PRINT_L2("Giving back the whole pool");
-      // Give back the whole pool in 'added_txs'; because calling 'get_transaction_info' right inside the
-      // anonymous method somehow results in an LMDB error with transactions we have to build a list of
-      // ids first and get the full info afterwards
-      get_transaction_hashes(txids, include_sensitive);
-      if (txids.size() > max_tx_count)
-      {
-        remaining_added_txids = std::vector<crypto::hash>(txids.begin() + max_tx_count, txids.end());
-        txids.erase(txids.begin() + max_tx_count, txids.end());
-      }
-      get_transactions_info(txids, added_txs, include_sensitive);
-      return true;
-    }
-
-    // Give back incrementally, based on time of entry into the map
-    for (const auto &pit : m_added_txs_by_id)
-    {
-      if (pit.second >= start_time)
-        txids.push_back(pit.first);
-    }
-    get_transactions_info(txids, added_txs, include_sensitive);
-    if (added_txs.size() > max_tx_count)
-    {
-      remaining_added_txids.reserve(added_txs.size() - max_tx_count);
-      for (size_t i = max_tx_count; i < added_txs.size(); ++i)
-        remaining_added_txids.push_back(added_txs[i].first);
-      added_txs.erase(added_txs.begin() + max_tx_count, added_txs.end());
-    }
-
-    std::multimap<time_t, removed_tx_info>::const_iterator rit = m_removed_txs_by_time.lower_bound(start_time);
-    while (rit != m_removed_txs_by_time.end())
-    {
-      if (include_sensitive || !rit->second.sensitive)
-      {
-        removed_txs.push_back(rit->second.txid);
-      }
-      ++rit;
-    }
-    return true;
-  }
   //------------------------------------------------------------------
   void tx_memory_pool::get_transaction_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive) const
   {
@@ -2094,8 +2019,6 @@ namespace cryptonote
     // Simply throw away incremental info, too difficult to update
     m_added_txs_by_id.clear();
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_by_time.clear();
-    m_removed_txs_start_time = (time_t)0;
 
     MINFO("Validating txpool contents for v" << (unsigned)version);
 
@@ -2188,10 +2111,6 @@ namespace cryptonote
     }
     m_txs_by_fee_and_receive_time.emplace(std::pair<double, time_t>(fee, receive_time), txid);
 
-    // Don't check for "resurrected" txs in case of reorgs i.e. don't check in 'm_removed_txs_by_time'
-    // whether we have that txid there and if yes remove it; this results in possible duplicates
-    // where we return certain txids as deleted AND in the pool at the same time which requires
-    // clients to process deleted ones BEFORE processing pool txs
     if (m_added_txs_start_time == (time_t)0)
     {
       m_added_txs_start_time = now;
@@ -2218,46 +2137,8 @@ namespace cryptonote
     {
       MDEBUG("Removing tx " << txid << " from tx pool, but it was not found in the map of added txs");
     }
-    track_removed_tx(txid, sensitive);
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::track_removed_tx(const crypto::hash& txid, bool sensitive)
-  {
-    time_t now = time(NULL);
-    m_removed_txs_by_time.insert(std::make_pair(now, removed_tx_info{txid, sensitive}));
-    MDEBUG("Transaction removed from pool: txid " << txid << ", total entries in removed list now " << m_removed_txs_by_time.size());
-    if (m_removed_txs_start_time == (time_t)0)
-    {
-      m_removed_txs_start_time = now;
-    }
-
-    // Simple system to make sure the list of removed ids does not swell to an unmanageable size: Set
-    // an absolute size limit plus delete entries that are x minutes old (which is ok because clients
-    // will sync with sensible time intervalls and should not ask for incremental info e.g. 1 hour back)
-    const int MAX_REMOVED = 20000;
-    if (m_removed_txs_by_time.size() > MAX_REMOVED)
-    {
-      auto erase_it = m_removed_txs_by_time.begin();
-      std::advance(erase_it, MAX_REMOVED / 4 + 1);
-      m_removed_txs_by_time.erase(m_removed_txs_by_time.begin(), erase_it);
-      m_removed_txs_start_time = m_removed_txs_by_time.begin()->first;
-      MDEBUG("Erased old transactions from big removed list, leaving " << m_removed_txs_by_time.size());
-    }
-    else
-    {
-      time_t earliest = now - (30 * 60);  // 30 minutes
-      std::map<time_t, removed_tx_info>::iterator from, to;
-      from = m_removed_txs_by_time.begin();
-      to = m_removed_txs_by_time.lower_bound(earliest);
-      int distance = std::distance(from, to);
-      if (distance > 0)
-      {
-        m_removed_txs_by_time.erase(from, to);
-        m_removed_txs_start_time = earliest;
-        MDEBUG("Erased " << distance << " old transactions from removed list, leaving " << m_removed_txs_by_time.size());
-      }
-    }
-  }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_stem_txes)
   {
@@ -2268,8 +2149,6 @@ namespace cryptonote
     m_txs_by_fee_and_receive_time.clear();
     m_added_txs_by_id.clear();
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_by_time.clear();
-    m_removed_txs_start_time = (time_t)0;
     m_spent_key_images.clear();
     m_txpool_weight = 0;
     std::vector<crypto::hash> remove;

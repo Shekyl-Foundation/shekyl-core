@@ -25,12 +25,15 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.22: `untrusted` dropped from every response,
+/// `CORE_RPC_VERSION_MINOR`. 3.23: `/get_blocks.bin` (+ `/getblocks.bin`) and
+/// `/get_hashes.bin` (+ `/gethashes.bin`) retired — wallet2's batch sync,
+/// with no caller left after `src/wallet/` was deleted (RK-4x). Retiring a
+/// served route is a wire change, so it bumps this. 3.22: `untrusted` dropped from every response,
 /// `get_info` bootstrap fields dropped, `set_bootstrap_daemon` /
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 22;
+pub const CORE_RPC_VERSION_MINOR: u32 = 23;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -283,9 +286,9 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 22) == 0x0003_0016 == 196630, the value the
+        // MAKE_CORE_RPC_VERSION(3, 23) == 0x0003_0017 == 196631, the value the
         // captured get_version vectors carry.
-        assert_eq!(CORE_RPC_VERSION, 196_630);
+        assert_eq!(CORE_RPC_VERSION, 196_631);
     }
 
     #[test]

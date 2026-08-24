@@ -586,12 +586,6 @@ namespace cryptonote
      */
     bool get_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) const;
 
-    /**
-     * @brief get info necessary for update of pool-related info in a wallet, preferably incremental
-     *
-     * @return true on success, false on error
-     */
-    bool get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const;
 
 // Same test-visibility idiom as blockchain.h: unit tests drive the private
 // sweep/readiness surface (remove_stuck_transactions,
@@ -709,7 +703,6 @@ namespace cryptonote
 
     void add_tx_to_transient_lists(const crypto::hash& txid, double fee, time_t receive_time);
     void remove_tx_from_transient_lists(const cryptonote::sorted_tx_container::iterator& sorted_it, const crypto::hash& txid, bool sensitive);
-    void track_removed_tx(const crypto::hash& txid, bool sensitive);
 
     //TODO: confirm the below comments and investigate whether or not this
     //      is the desired behavior
@@ -749,19 +742,12 @@ private:
     // Info at what time the pool started to track the adding of transactions
     time_t m_added_txs_start_time;
 
-    struct removed_tx_info
-    {
-      crypto::hash txid;
-      bool sensitive;
-    };
-
-    // Info about transactions that were removed from the pool, ordered by the time
-    // of deletion
-    std::multimap<time_t, removed_tx_info> m_removed_txs_by_time;
-
-    // Info how far back in time the list of removed tx ids currently reaches
-    // (it gets shorted periodically to prevent overflow)
-    time_t m_removed_txs_start_time;
+    // No record is kept of transactions LEAVING the pool. A timestamped
+    // departure history existed here to serve incremental pool deltas to
+    // wallet2's batch sync; that endpoint is gone (RK-4x), and a standing
+    // record of when each transaction left is the timing correlate the relay
+    // privacy work exists to deny. It is not to be reintroduced for a
+    // convenience: see the reopen clause in docs/DAEMON_RPC_RUST.md.
 
     /**
      * @brief get an iterator to a transaction in the sorted container
