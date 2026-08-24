@@ -482,6 +482,7 @@ private:
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) override;
 
+
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const override;
   virtual bool get_archival_bond_value(const crypto::hash& p_id,
@@ -710,6 +711,36 @@ public:
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
 
+  // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
+  //
+  // Public for the same reason apply_archival_slash_one above is: the
+  // production caller is process_archival_slash_for_epoch, a member, and these
+  // are exposed so the table's KATs can drive the path directly. Deliberately
+  // NOT virtual on BlockchainDB. The only writer is
+  // process_archival_slash_for_epoch and the only reverter is
+  // revert_archival_slashes_at_height, both BlockchainLMDB members, so the
+  // dispatch would buy nothing and would break every BlockchainDB test double
+  // for a surface none of them can implement.
+
+  /// Fold (passes, issued) through the Rust encoder and store the row for
+  /// (P_id, shard, E). Refuses rather than storing if the fold refuses.
+  void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch, uint32_t passes, uint32_t issued);
+
+  /// Read a settlement row. Returns false when absent — which SO-D1 defines as
+  /// "never issued", not "missed".
+  bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const;
+
+  /// Drop every settlement row for one epoch — the SO-D6 revert.
+  ///
+  /// A full-table scan filtering the epoch field, because SO-D2's key puts the
+  /// epoch LAST so the outer-window walk can range-scan a pair's epochs in
+  /// order. That trade is inherited, not invented:
+  /// delete_archival_serve_credit_before_epoch scans the same way for the same
+  /// reason. Both callers are rare — a prune, and a reorg crossing a fold.
+  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch);
+
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the
   /// caller contract. Delegates to the windowed form with a width-1 window.
@@ -760,6 +791,7 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+
   void delete_archival_budget_for_epoch(uint64_t settlement_epoch);
   void delete_archival_budget_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_budget_accrual_before_height(uint64_t prune_below_height);
@@ -879,6 +911,15 @@ private:
 
   MDB_dbi m_block_burn;
   MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
+  // Settlement outcomes (SO-D2). SAME 48-byte key as m_archival_serve_credit --
+  // deliberately, so one ArchivalServeCreditKey probes both tables -- but a
+  // 3-byte value (outcome||passes||issued) rather than a presence flag. The two
+  // tables cannot be merged: this one records a NEGATIVE (Missed), and every
+  // consumer of m_archival_serve_credit reads key-presence as "pay this pair"
+  // (old-vin dedup, slash-window walk, fast-path miss, emission gather -- a
+  // pure presence cursor-walk with no value-byte gate), so a Missed cell there
+  // would corrupt vin-dedup and emission at once (SO-D4.3).
+  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B] -> outcome||passes||issued [3B]
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit

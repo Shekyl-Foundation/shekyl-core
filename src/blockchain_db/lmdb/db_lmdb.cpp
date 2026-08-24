@@ -272,64 +272,89 @@ namespace
  *
  * The output_amounts table doesn't use a dummy key, but uses DUPSORT.
  */
-const char* const LMDB_BLOCKS = "blocks";
-const char* const LMDB_BLOCK_HEIGHTS = "block_heights";
-const char* const LMDB_BLOCK_INFO = "block_info";
+// ─── The LMDB table list ───────────────────────────────────────────────────
+//
+// One list, two products: the name constants below and `kLmdbTableCount`, which
+// is what `mdb_env_set_maxdbs` is given. Adding a table means adding a line
+// here — a table cannot be opened without a name, and a name cannot be added
+// without the count following it.
+//
+// This replaced a hand-maintained `48` sitting three hundred lines from the
+// opens it was counting, at the moment the 49th table arrived (`SO-D4`,
+// `ARCHIVAL_SETTLEMENT_WRITER.md`). That overflow fails at **runtime only**: it
+// compiles, links, and passes every test that never opens a fresh environment,
+// then throws `MDB_DBS_FULL` on a real node. A ceiling that cannot notice its
+// own subject is not a ceiling (rule 47).
+#define SHEKYL_LMDB_TABLES(X) \
+  X(LMDB_BLOCKS,                            "blocks") \
+  X(LMDB_BLOCK_HEIGHTS,                     "block_heights") \
+  X(LMDB_BLOCK_INFO,                        "block_info") \
+  \
+  X(LMDB_TXS,                               "txs") \
+  X(LMDB_TXS_PRUNED,                        "txs_pruned") \
+  X(LMDB_TXS_PQC_AUTHS,                     "txs_pqc_auths") \
+  X(LMDB_TXS_PRUNABLE,                      "txs_prunable") \
+  X(LMDB_TXS_PRUNABLE_HASH,                 "txs_prunable_hash") \
+  X(LMDB_TXS_PRUNABLE_TIP,                  "txs_prunable_tip") \
+  X(LMDB_TX_INDICES,                        "tx_indices") \
+  X(LMDB_TX_OUTPUTS,                        "tx_outputs") \
+  \
+  X(LMDB_OUTPUT_TXS,                        "output_txs") \
+  X(LMDB_OUTPUT_AMOUNTS,                    "output_amounts") \
+  X(LMDB_SPENT_KEYS,                        "spent_keys") \
+  \
+  X(LMDB_TXPOOL_META,                       "txpool_meta") \
+  X(LMDB_TXPOOL_BLOB,                       "txpool_blob") \
+  \
+  X(LMDB_ALT_BLOCKS,                        "alt_blocks") \
+  \
+  X(LMDB_HF_STARTING_HEIGHTS,               "hf_starting_heights") \
+  X(LMDB_HF_VERSIONS,                       "hf_versions") \
+  \
+  X(LMDB_PROPERTIES,                        "properties") \
+  \
+  X(LMDB_BLOCK_BURN,                        "block_burn") \
+  X(LMDB_ARCHIVAL_SERVE_CREDIT,             "archival_serve_credit") \
+  X(LMDB_ARCHIVAL_SETTLEMENT,               "archival_settlement") \
+  X(LMDB_ARCHIVAL_ATTESTATION_WITNESS,      "archival_attestation_witness") \
+  X(LMDB_ARCHIVAL_ALT_ATTESTATION_WITNESS,  "archival_alt_attestation_witness") \
+  X(LMDB_ARCHIVAL_BOND,                     "archival_bond") \
+  X(LMDB_ARCHIVAL_SHARD_SEGMENT,            "archival_shard_segment") \
+  X(LMDB_ARCHIVAL_SLASH_APPLIED,            "archival_slash_applied") \
+  X(LMDB_ARCHIVAL_SLASH_LOG,                "archival_slash_log") \
+  X(LMDB_ARCHIVAL_EMISSION_CLAIM_LOG,       "archival_emission_claim_log") \
+  X(LMDB_ARCHIVAL_BOND_UNBOND_LOG,          "archival_bond_unbond_log") \
+  X(LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, "archival_bond_holdings_update_log") \
+  X(LMDB_ARCHIVAL_BOND_REBOND_LOG,          "archival_bond_rebond_log") \
+  X(LMDB_ARCHIVAL_R_MARKET,                 "archival_r_market") \
+  X(LMDB_ARCHIVAL_SIGMA_WORK,               "archival_sigma_work") \
+  X(LMDB_ARCHIVAL_EPOCH_CLOSE_LOG,          "archival_epoch_close_log") \
+  X(LMDB_ARCHIVAL_BUDGET_ACCRUAL,           "archival_budget_accrual") \
+  X(LMDB_ARCHIVAL_BUDGET,                   "archival_budget") \
+  \
+  X(LMDB_PENDING_TREE_LEAVES,               "pending_tree_leaves") \
+  X(LMDB_PENDING_TREE_DRAIN,                "pending_tree_drain") \
+  X(LMDB_BLOCK_PENDING_ADDITIONS,           "block_pending_additions") \
+  X(LMDB_OUTPUT_TO_LEAF,                    "output_to_leaf") \
+  X(LMDB_LEAF_TO_OUTPUT,                    "leaf_to_output") \
+  \
+  X(LMDB_CURVE_TREE_LEAVES,                 "curve_tree_leaves") \
+  X(LMDB_CURVE_TREE_LAYERS,                 "curve_tree_layers") \
+  X(LMDB_CURVE_TREE_META,                   "curve_tree_meta") \
+  X(LMDB_CURVE_TREE_CHECKPOINTS,            "curve_tree_checkpoints") \
+  X(LMDB_CURVE_TREE_ROOTS,                  "curve_tree_roots") \
+  \
+  X(LMDB_OUTPUT_METADATA,                   "output_metadata") \
+  /* end of list */
 
-const char* const LMDB_TXS = "txs";
-const char* const LMDB_TXS_PRUNED = "txs_pruned";
-const char* const LMDB_TXS_PQC_AUTHS = "txs_pqc_auths";
-const char* const LMDB_TXS_PRUNABLE = "txs_prunable";
-const char* const LMDB_TXS_PRUNABLE_HASH = "txs_prunable_hash";
-const char* const LMDB_TXS_PRUNABLE_TIP = "txs_prunable_tip";
-const char* const LMDB_TX_INDICES = "tx_indices";
-const char* const LMDB_TX_OUTPUTS = "tx_outputs";
+#define SHEKYL_LMDB_TABLE_DECL(sym, name) const char* const sym = name;
+SHEKYL_LMDB_TABLES(SHEKYL_LMDB_TABLE_DECL)
+#undef SHEKYL_LMDB_TABLE_DECL
 
-const char* const LMDB_OUTPUT_TXS = "output_txs";
-const char* const LMDB_OUTPUT_AMOUNTS = "output_amounts";
-const char* const LMDB_SPENT_KEYS = "spent_keys";
-
-const char* const LMDB_TXPOOL_META = "txpool_meta";
-const char* const LMDB_TXPOOL_BLOB = "txpool_blob";
-
-const char* const LMDB_ALT_BLOCKS = "alt_blocks";
-
-const char* const LMDB_HF_STARTING_HEIGHTS = "hf_starting_heights";
-const char* const LMDB_HF_VERSIONS = "hf_versions";
-
-const char* const LMDB_PROPERTIES = "properties";
-
-const char* const LMDB_BLOCK_BURN = "block_burn";
-const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
-const char* const LMDB_ARCHIVAL_ATTESTATION_WITNESS = "archival_attestation_witness";
-const char* const LMDB_ARCHIVAL_ALT_ATTESTATION_WITNESS = "archival_alt_attestation_witness";
-const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
-const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
-const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
-const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
-const char* const LMDB_ARCHIVAL_EMISSION_CLAIM_LOG = "archival_emission_claim_log";
-const char* const LMDB_ARCHIVAL_BOND_UNBOND_LOG = "archival_bond_unbond_log";
-const char* const LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG = "archival_bond_holdings_update_log";
-const char* const LMDB_ARCHIVAL_BOND_REBOND_LOG = "archival_bond_rebond_log";
-const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
-const char* const LMDB_ARCHIVAL_SIGMA_WORK = "archival_sigma_work";
-const char* const LMDB_ARCHIVAL_EPOCH_CLOSE_LOG = "archival_epoch_close_log";
-const char* const LMDB_ARCHIVAL_BUDGET_ACCRUAL = "archival_budget_accrual";
-const char* const LMDB_ARCHIVAL_BUDGET = "archival_budget";
-
-const char* const LMDB_PENDING_TREE_LEAVES = "pending_tree_leaves";
-const char* const LMDB_PENDING_TREE_DRAIN = "pending_tree_drain";
-const char* const LMDB_BLOCK_PENDING_ADDITIONS = "block_pending_additions";
-const char* const LMDB_OUTPUT_TO_LEAF = "output_to_leaf";
-const char* const LMDB_LEAF_TO_OUTPUT = "leaf_to_output";
-
-const char* const LMDB_CURVE_TREE_LEAVES = "curve_tree_leaves";
-const char* const LMDB_CURVE_TREE_LAYERS = "curve_tree_layers";
-const char* const LMDB_CURVE_TREE_META   = "curve_tree_meta";
-const char* const LMDB_CURVE_TREE_CHECKPOINTS = "curve_tree_checkpoints";
-const char* const LMDB_CURVE_TREE_ROOTS = "curve_tree_roots";
-
-const char* const LMDB_OUTPUT_METADATA = "output_metadata";
+#define SHEKYL_LMDB_TABLE_COUNT(sym, name) +1
+// Number of named LMDB tables — derived from the list, never counted by hand.
+constexpr unsigned kLmdbTableCount = 0 SHEKYL_LMDB_TABLES(SHEKYL_LMDB_TABLE_COUNT);
+#undef SHEKYL_LMDB_TABLE_COUNT
 
 const char zerokey[8] = {0};
 const MDB_val zerokval = { sizeof(zerokey), (void *)zerokey };
@@ -1590,13 +1615,19 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   // set up lmdb environment
   if ((result = mdb_env_create(&m_env)))
     throw0(DB_ERROR(lmdb_error("Failed to create lmdb environment: ", result).c_str()));
-  // Gate-2/gate-4 archival subdbs (serve-credit, bond, shard segment/leaf,
-  // slash applied/log, the reorg journals — emission-claim, Unbond,
-  // HoldingsUpdate, and the Rebond pre-image log) require headroom above the
-  // v7 curve-tree layout (36). 48 includes the credit-wire
-  // archival_attestation_witness side table plus its reorg-survival
-  // archival_alt_attestation_witness counterpart (ARCHIVAL_CREDIT_WIRE.md §3.2/§4).
-  if ((result = mdb_env_set_maxdbs(m_env, 48)))
+  // Derived from SHEKYL_LMDB_TABLES, never counted by hand: the list that names
+  // the tables is the list that sizes the ceiling, so the two cannot drift. See
+  // that list for why a hand-maintained number was the wrong shape here — the
+  // overflow is a runtime-only failure.
+  //
+  // The prose this replaced enumerated which tables the number covered
+  // ("gate-2/gate-4 archival subdbs ... 48 includes the credit-wire
+  // attestation-witness side table plus its alt counterpart"). Every such
+  // sentence is a second copy of the list, and it was already one table behind
+  // when the settlement table arrived. Deleted rather than extended: the list
+  // is three hundred lines up and is now the only place that answers "which
+  // tables".
+  if ((result = mdb_env_set_maxdbs(m_env, kLmdbTableCount)))
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   int threads = tools::get_max_concurrency();
@@ -1687,6 +1718,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_BLOCK_BURN, MDB_INTEGERKEY | MDB_CREATE, m_block_burn, "Failed to open db handle for m_block_burn");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SERVE_CREDIT, MDB_CREATE, m_archival_serve_credit,
     "Failed to open db handle for m_archival_serve_credit");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_SETTLEMENT, MDB_CREATE, m_archival_settlement,
+    "Failed to open db handle for m_archival_settlement");
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND, MDB_CREATE, m_archival_bond,
     "Failed to open db handle for m_archival_bond");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SHARD_SEGMENT, MDB_CREATE, m_archival_shard_segment,
@@ -7221,6 +7254,96 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_serve_credit cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch, uint32_t passes, uint32_t issued)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival settlement write requires active write txn");
+
+  // Rust owns the value: it folds (passes, issued) and emits the three bytes.
+  // C++ never composes an outcome byte, so a settlement whose outcome
+  // contradicts its counts is not a thing this side can express (SO-D2).
+  std::array<uint8_t, 3> row{};
+  static_assert(sizeof(row) == 3, "settlement row is outcome||passes||issued");
+  if (shekyl_archival_settlement_row_len() != row.size())
+    throw std::runtime_error("FATAL: settlement row length disagrees with the Rust definition");
+
+  const uint8_t rc = shekyl_archival_settlement_row(passes, issued, row.data());
+  if (rc != 0)
+    throw std::runtime_error("FATAL: settlement fold refused (P, shard, E) counts; code "
+      + std::to_string(static_cast<unsigned>(rc)));
+
+  shekyl::db::ArchivalServeCreditKey key(
+    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v{ row.size(), row.data() };
+  const int result = mdb_put(*m_write_txn, m_archival_settlement, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to write archival_settlement row: ", result).c_str()));
+}
+
+bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalServeCreditKey key(
+    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  // Same read helper the serve-credit bit uses -- this table has no dedicated
+  // cursor member, and adding one would be plumbing for a reader that does a
+  // single point lookup.
+  const int result = archival_db_get(m_archival_settlement, &k, &v);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival_settlement row: ", result).c_str()));
+  if (v.mv_size != out_row.size())
+    throw std::runtime_error("FATAL: archival_settlement value size mismatch");
+
+  std::memcpy(out_row.data(), v.mv_data, out_row.size());
+  return true;
+}
+
+void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_epoch)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival settlement revert requires active write txn");
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_settlement, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_settlement cursor for revert: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+      throw std::runtime_error("FATAL: archival_settlement key size mismatch on revert");
+    // Epoch is the last 8 bytes: P_id[32] || BE(shard) || BE(E).
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 40);
+    if (epoch == settlement_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_settlement row on revert: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_settlement cursor error on revert: ", rc).c_str()));
   mdb_cursor_close(cur);
 }
 
