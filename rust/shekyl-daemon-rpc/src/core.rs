@@ -220,6 +220,71 @@ impl CoreRpc {
         }
     }
 
+    /// A whole block by hash, or by height when `block_hash` is `None`.
+    ///
+    /// Returns the header POD alongside owned copies of the three
+    /// variable-length payloads. The C++ owner is released **in this
+    /// function**, before any of the fallible work above it can return early
+    /// — the reason the copies are made rather than the borrows returned.
+    #[allow(clippy::type_complexity)]
+    pub fn block_at(
+        &self,
+        block_hash: Option<&[u8; 32]>,
+        height: u64,
+        fill_pow_hash: bool,
+    ) -> Result<(ffi::BlockHeaderFactsFfi, Vec<u8>, String, Vec<[u8; 32]>), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut header = ffi::BlockHeaderFactsFfi::zeroed();
+        let mut payload = ffi::BlockPayloadFfi::default();
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; the out pointers are valid for the call. On OK
+        // with a found block the payload borrows memory owned by `owner`,
+        // which is released below before this function returns — every copy
+        // is taken first, and nothing fallible runs between.
+        unsafe {
+            let rc = ffi::shekyl_rpc_block_at(
+                self.handle,
+                block_hash.map_or(std::ptr::null(), |h| h.as_ptr()),
+                height,
+                u8::from(fill_pow_hash),
+                &raw mut header,
+                &raw mut payload,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let blob = if payload.blob.is_null() || payload.blob_len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(payload.blob, payload.blob_len).to_vec()
+            };
+            let json = if payload.json.is_null() || payload.json_len == 0 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(std::slice::from_raw_parts(
+                    payload.json.cast::<u8>(),
+                    payload.json_len,
+                ))
+                .into_owned()
+            };
+            let mut tx_hashes = Vec::with_capacity(payload.tx_hashes_len);
+            if !payload.tx_hashes.is_null() {
+                let bytes =
+                    std::slice::from_raw_parts(payload.tx_hashes, payload.tx_hashes_len * 32);
+                for chunk in bytes.chunks_exact(32) {
+                    let mut one = [0u8; 32];
+                    one.copy_from_slice(chunk);
+                    tx_hashes.push(one);
+                }
+            }
+            ffi::shekyl_rpc_block_free(owner);
+            Ok((header, blob, json, tx_hashes))
+        }
+    }
+
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {
