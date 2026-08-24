@@ -18,9 +18,43 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetHeightResponse,
-    GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_VERSION,
+    BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetBlockResponse,
+    GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_VERSION,
 };
+
+/// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
+const BLOB_HEX: &str = "0101a1b2c3d4e5f60708";
+const BLOCK_JSON: &str = "{\n  \"major_version\": 1, \n  \"nonce\": 305419896\n}";
+
+/// The populated header the `full` and `by_hash` block vectors share.
+fn block_vector_header(orphan: bool, pow: Option<HashHex>) -> BlockHeader {
+    BlockHeader {
+        major_version: 1,
+        minor_version: 2,
+        timestamp: 1_700_000_000,
+        prev_hash: tagged_hash(3),
+        nonce: 305_419_896,
+        orphan_status: orphan,
+        height: 1_234_567,
+        depth: 42,
+        hash: tagged_hash(11),
+        difficulty: 12345,
+        wide_difficulty: "0x400000000000003039".to_owned(),
+        difficulty_top64: 64,
+        cumulative_difficulty: 99,
+        wide_cumulative_difficulty: "0x800000000000000063".to_owned(),
+        cumulative_difficulty_top64: 128,
+        reward: 600_000_000_000,
+        block_size: 98765,
+        block_weight: 98765,
+        num_txes: 2,
+        pow_hash: pow,
+        long_term_weight: 87654,
+        miner_tx_hash: tagged_hash(31),
+        curve_tree_root: tagged_hash(41),
+        attestation_root: tagged_hash(53),
+    }
+}
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> HashHex {
@@ -250,4 +284,88 @@ fn integers_are_json_numbers() {
     let v = parsed(include_str!("vectors/rpc/get_version_syncing_v1.json"));
     assert!(v["version"].is_u64());
     assert!(v["hard_forks"][0]["hf_version"].is_u64());
+}
+
+/// A whole block: transactions, a filled pow hash, and `orphan_status` set —
+/// the by-hash lookup can return an alt block, so that flag is a real value
+/// here where RK-3's header method had it constant.
+#[test]
+fn get_block_full_matches_the_oracle() {
+    let built = GetBlockResponse {
+        status: RpcStatus::ok(),
+        block_header: block_vector_header(true, Some(tagged_hash(23))),
+        miner_tx_hash: tagged_hash(31),
+        tx_hashes: vec![tagged_hash(61), tagged_hash(67)],
+        blob: BLOB_HEX.to_owned(),
+        json: BLOCK_JSON.to_owned(),
+    };
+    assert_parity(include_str!("vectors/rpc/get_block_full_v1.json"), &built);
+}
+
+/// The same reply reached by hash rather than by height. The lookup mode is
+/// a request concern; a divergence in the reply would show up here.
+#[test]
+fn get_block_by_hash_matches_the_oracle() {
+    let built = GetBlockResponse {
+        status: RpcStatus::ok(),
+        block_header: block_vector_header(false, None),
+        miner_tx_hash: tagged_hash(31),
+        tx_hashes: vec![tagged_hash(61), tagged_hash(67)],
+        blob: BLOB_HEX.to_owned(),
+        json: BLOCK_JSON.to_owned(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_block_by_hash_v1.json"),
+        &built,
+    );
+}
+
+/// A block with no transactions. epee drops an empty sequence from the
+/// document even for a plain `KV_SERIALIZE` member, so `tx_hashes` must be
+/// absent rather than `[]` — removing the `skip_serializing_if` turns this
+/// red, and nothing in the C++ declaration would have warned us.
+#[test]
+fn get_block_without_transactions_omits_the_list() {
+    let built = GetBlockResponse {
+        status: RpcStatus::ok(),
+        block_header: BlockHeader {
+            major_version: 1,
+            minor_version: 1,
+            timestamp: 1_500_000_000,
+            prev_hash: HashHex::ZERO,
+            nonce: 0,
+            orphan_status: false,
+            height: 0,
+            depth: 0,
+            hash: tagged_hash(11),
+            difficulty: 1,
+            wide_difficulty: "0x1".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1,
+            wide_cumulative_difficulty: "0x1".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 0,
+            block_size: 0,
+            block_weight: 0,
+            num_txes: 0,
+            pow_hash: None,
+            long_term_weight: 0,
+            miner_tx_hash: tagged_hash(31),
+            curve_tree_root: HashHex::ZERO,
+            attestation_root: HashHex::ZERO,
+        },
+        miner_tx_hash: tagged_hash(31),
+        tx_hashes: Vec::new(),
+        blob: BLOB_HEX.to_owned(),
+        json: BLOCK_JSON.to_owned(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_block_no_txes_v1.json"),
+        &built,
+    );
+    let wire = serde_json::to_string(&built).expect("serialize");
+    assert!(
+        !wire.contains("tx_hashes"),
+        "an empty transaction list is dropped, not emitted as []: {wire}"
+    );
 }

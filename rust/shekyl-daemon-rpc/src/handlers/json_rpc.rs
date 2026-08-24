@@ -205,6 +205,7 @@ enum NativeMethod {
     BlockCount,
     BlockHash,
     BlockHeaderByHeight,
+    Block,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -222,6 +223,7 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         "get_block_header_by_height" | "getblockheaderbyheight" => {
             NativeMethod::BlockHeaderByHeight
         }
+        "get_block" | "getblock" => NativeMethod::Block,
         _ => return None,
     })
 }
@@ -261,6 +263,20 @@ async fn native_method(
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiChainFacts::new(core);
                 crate::methods::get_block_hash(&facts, height)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::Block => {
+            let request = match crate::methods::block_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block(&facts, &request, fill_pow_hash)
             })
             .await;
             Some(frame_native(out))
@@ -366,6 +382,8 @@ mod tests {
             NativeMethod::BlockHeaderByHeight,
         ),
         ("getblockheaderbyheight", NativeMethod::BlockHeaderByHeight),
+        ("get_block", NativeMethod::Block),
+        ("getblock", NativeMethod::Block),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -388,7 +406,7 @@ mod tests {
             "get_info",
             "sync_info",
             "hard_fork_info",
-            "get_block",
+            "get_block_by_hash",
             "getblockcount2",
             "",
         ] {

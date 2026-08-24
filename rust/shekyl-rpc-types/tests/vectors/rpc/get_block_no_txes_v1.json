@@ -1,0 +1,30 @@
+{
+  "blob": "0101a1b2c3d4e5f60708",
+  "block_header": {
+    "attestation_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "block_size": 0,
+    "cumulative_difficulty": 1,
+    "cumulative_difficulty_top64": 0,
+    "curve_tree_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "depth": 0,
+    "difficulty": 1,
+    "difficulty_top64": 0,
+    "hash": "0b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4",
+    "height": 0,
+    "major_version": 1,
+    "miner_tx_hash": "1f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8",
+    "minor_version": 1,
+    "nonce": 0,
+    "num_txes": 0,
+    "orphan_status": false,
+    "pow_hash": "",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "reward": 0,
+    "timestamp": 1500000000,
+    "wide_cumulative_difficulty": "0x1",
+    "wide_difficulty": "0x1"
+  },
+  "json": "{\n  \"major_version\": 1, \n  \"nonce\": 305419896\n}",
+  "miner_tx_hash": "1f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8",
+  "status": "OK"
+}

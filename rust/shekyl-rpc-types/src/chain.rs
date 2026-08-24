@@ -172,6 +172,50 @@ pub struct BlockHeader {
     pub attestation_root: HashHex,
 }
 
+/// Params of `get_block` (alias `getblock`).
+///
+/// Two ways to name one block. A non-empty `hash` wins and `height` is
+/// ignored; with `hash` empty the block at `height` is returned, and absent
+/// params mean height 0 — epee's KV load left both fields at their defaults.
+///
+/// `hash` is a `String`, not a [`HashHex`](crate::HashHex), on purpose
+/// (RK-D12): typed, serde would reject a malformed hash into this method's
+/// generic params refusal, where the handler can instead answer the specific
+/// "Failed to parse hex representation of block hash. Hex = …" that names
+/// what the caller actually sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockRequest {
+    #[serde(default)]
+    pub hash: String,
+    #[serde(default)]
+    pub height: u64,
+    #[serde(default)]
+    pub fill_pow_hash: bool,
+}
+
+/// Response of `get_block` (alias `getblock`).
+///
+/// `miner_tx_hash` repeats the header's field of the same name — wire
+/// duplication, preserved; RK-W's to retire.
+///
+/// `json` is epee's rendering of the whole block, produced in C++ and passed
+/// through untouched (RK-D11). It duplicates `blob`, which carries the same
+/// block in the consensus encoding, and both retire together in RK-W.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBlockResponse {
+    pub status: RpcStatus,
+    pub block_header: BlockHeader,
+    pub miner_tx_hash: HashHex,
+    /// Omitted entirely for a block with no transactions: epee drops an
+    /// empty sequence from the document even though this member is a plain
+    /// `KV_SERIALIZE`, not an OPT one (pinned by the `no_txes` vector).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tx_hashes: Vec<HashHex>,
+    /// The block in its consensus encoding, lowercase hex.
+    pub blob: String,
+    pub json: String,
+}
+
 /// Params of `get_block_header_by_height` (alias `getblockheaderbyheight`).
 ///
 /// Both fields default, reproducing epee's KV load: a field absent from the

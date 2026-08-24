@@ -270,6 +270,35 @@ pub struct BlockHashFactsFfi {
     pub reserved: [u8; 7],
 }
 
+/// Twin of `shekyl_rpc_block_payload`: the variable-length half of a
+/// block's facts. Every pointer borrows memory owned by the opaque owner the
+/// export returns, and is invalid the moment `shekyl_rpc_block_free` runs.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BlockPayloadFfi {
+    pub blob: *const u8,
+    pub blob_len: usize,
+    pub json: *const std::os::raw::c_char,
+    pub json_len: usize,
+    /// `tx_hashes_len * 32` contiguous bytes.
+    pub tx_hashes: *const u8,
+    /// Number of hashes, not bytes.
+    pub tx_hashes_len: usize,
+}
+
+impl Default for BlockPayloadFfi {
+    fn default() -> Self {
+        Self {
+            blob: std::ptr::null(),
+            blob_len: 0,
+            json: std::ptr::null(),
+            json_len: 0,
+            tx_hashes: std::ptr::null(),
+            tx_hashes_len: 0,
+        }
+    }
+}
+
 /// Twin of `shekyl_rpc_block_header_facts` (RK-3).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -358,6 +387,19 @@ extern "C" {
         height: u64,
         out: *mut BlockHashFactsFfi,
     ) -> i32;
+    /// A whole block by hash (32 bytes) or, with `block_hash` null, by
+    /// height. On OK with `found == 1` the payload borrows memory owned by
+    /// `*out_owner`, which must be released with `shekyl_rpc_block_free`.
+    pub fn shekyl_rpc_block_at(
+        h: *mut CoreRpcHandle,
+        block_hash: *const u8,
+        height: u64,
+        fill_pow_hash: u8,
+        out_header: *mut BlockHeaderFactsFfi,
+        out_payload: *mut BlockPayloadFfi,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_block_free(owner: *mut std::ffi::c_void);
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -490,6 +532,20 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_hardforks_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_block_at(
+        _h: *mut CoreRpcHandle,
+        _block_hash: *const u8,
+        _height: u64,
+        _fill_pow_hash: u8,
+        _out_header: *mut BlockHeaderFactsFfi,
+        _out_payload: *mut BlockPayloadFfi,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_block_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_hash_at(
         _h: *mut CoreRpcHandle,

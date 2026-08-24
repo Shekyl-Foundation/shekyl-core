@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **`get_block` is served natively in Rust, and the two console commands
+  that read it move with it (RK-3b,
+  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `shekyl-daemon-rpc`, by hash or by height, over a new facts export that
+  reads the block under one acquisition of the chain lock. `print_block`
+  renders in Rust now — the same lines in the same order, with the reward
+  in SKL, the timestamp in UTC keeping its `<unknown>` cutoff, and the
+  difficulty decimalised from the wide form. Porting the console in the
+  same change is the point: it was the last C++ caller that would
+  otherwise have parsed a Rust-produced reply through the old struct.
+  Every refusal keeps its wording as well as its code, including the
+  inherited `Hash = .` a by-height failure produces.
+- **The first variable-length facts payload.** A block's blob, transaction
+  list and rendered `json` have no size the caller can know in advance, so
+  they are owned by one C++ allocation and released by one paired free —
+  the shape the hard-fork table already used, now written down as the rule
+  for every payload of this kind. epee's `json` rendering is carried
+  through untouched rather than reimplemented: it renders the whole
+  transaction structure, and it is already queued for deletion along with
+  the field itself, which duplicates `blob`.
 - **`get_block_header_by_height` is served natively in Rust (RK-3,
   `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
   `shekyl-daemon-rpc::methods` over a new facts export that reads the

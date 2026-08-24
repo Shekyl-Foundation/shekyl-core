@@ -153,6 +153,45 @@ pub trait ChainFacts: Send + Sync {
         height: BlockHeight,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
+    /// A whole block, named either way. Absence is data ([`BlockAt::block`]
+    /// is `None`) for both lookups; the caller knows which it asked for and
+    /// so which refusal to produce.
+    fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault>;
+}
+
+/// How a caller named the block it wants.
+///
+/// A hash reaches blocks off the main chain too, which is why
+/// [`BlockFacts::header`]'s `orphan_status` is a real value and not the
+/// constant [`BlockHeaderAt`]'s is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockLookup {
+    Hash([u8; 32]),
+    Height(BlockHeight),
+}
+
+/// A whole block and the chain bound it was read against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockAt {
+    /// `None` when there is no such block: past the tip, in range but
+    /// unproducible, or a hash the chain does not have.
+    pub block: Option<BlockFacts>,
+    /// Chain height as of the same read — reported even when absent, so a
+    /// height refusal can name the top block.
+    pub chain_height: BlockHeight,
+}
+
+/// The block itself: RK-3's header projection plus what only `get_block`
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockFacts {
+    pub header: BlockHeaderFacts,
+    /// The block in its consensus encoding. Hex is the handler's job.
+    pub blob: Vec<u8>,
+    /// epee's rendering of the whole block, produced in C++ and carried
+    /// through untouched (RK-D11).
+    pub json: String,
+    pub tx_hashes: Vec<TxHash>,
 }
 
 /// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
@@ -165,6 +204,36 @@ pub struct FfiChainFacts {
 impl FfiChainFacts {
     pub fn new(core: Arc<CoreRpc>) -> Self {
         Self { core }
+    }
+}
+
+/// One place where a header POD becomes typed facts.
+///
+/// Two exports fill this same POD — `shekyl_rpc_block_header_at` and
+/// `shekyl_rpc_block_at` — and a second copy of nineteen field assignments
+/// is a second thing to forget when a field is added.
+fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
+    BlockHeaderFacts {
+        hash: BlockHash::from_bytes(pod.hash),
+        prev_hash: BlockHash::from_bytes(pod.prev_hash),
+        miner_tx_hash: TxHash::from_bytes(pod.miner_tx_hash),
+        curve_tree_root: pod.curve_tree_root,
+        attestation_root: pod.attestation_root,
+        pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
+        height: BlockHeight::from_raw(pod.height),
+        depth: pod.depth,
+        timestamp: pod.timestamp,
+        difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
+        cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
+            | u128::from(pod.cumulative_difficulty_lo),
+        reward: pod.reward,
+        block_weight: pod.block_weight,
+        long_term_weight: pod.long_term_weight,
+        num_txes: pod.num_txes,
+        nonce: pod.nonce,
+        major_version: pod.major_version,
+        minor_version: pod.minor_version,
+        orphan_status: pod.orphan_status != 0,
     }
 }
 
@@ -208,27 +277,33 @@ impl ChainFacts for FfiChainFacts {
             });
         }
         Ok(BlockHeaderAt {
-            header: Some(BlockHeaderFacts {
-                hash: BlockHash::from_bytes(pod.hash),
-                prev_hash: BlockHash::from_bytes(pod.prev_hash),
-                miner_tx_hash: TxHash::from_bytes(pod.miner_tx_hash),
-                curve_tree_root: pod.curve_tree_root,
-                attestation_root: pod.attestation_root,
-                pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
-                height: BlockHeight::from_raw(pod.height),
-                depth: pod.depth,
-                timestamp: pod.timestamp,
-                difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
-                cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
-                    | u128::from(pod.cumulative_difficulty_lo),
-                reward: pod.reward,
-                block_weight: pod.block_weight,
-                long_term_weight: pod.long_term_weight,
-                num_txes: pod.num_txes,
-                nonce: pod.nonce,
-                major_version: pod.major_version,
-                minor_version: pod.minor_version,
-                orphan_status: pod.orphan_status != 0,
+            header: Some(header_facts_from_pod(&pod)),
+            chain_height,
+        })
+    }
+
+    fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
+        let (hash, height) = match at {
+            BlockLookup::Hash(h) => (Some(h), 0),
+            BlockLookup::Height(h) => (None, h.to_raw()),
+        };
+        let (pod, blob, json, tx_hashes) = self
+            .core
+            .block_at(hash.as_ref(), height, fill_pow_hash)
+            .map_err(FactsFault::from_code)?;
+        let chain_height = BlockHeight::from_raw(pod.chain_height);
+        if pod.found == 0 {
+            return Ok(BlockAt {
+                block: None,
+                chain_height,
+            });
+        }
+        Ok(BlockAt {
+            block: Some(BlockFacts {
+                header: header_facts_from_pod(&pod),
+                blob,
+                json,
+                tx_hashes: tx_hashes.into_iter().map(TxHash::from_bytes).collect(),
             }),
             chain_height,
         })

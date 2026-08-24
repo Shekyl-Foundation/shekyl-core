@@ -109,6 +109,28 @@ namespace
 
     void set_missing(uint64_t height) { m_missing = height; }
 
+    // An in-range block whose coinbase is not a single `txin_gen` — the
+    // shape `block_at` refuses as a broken block rather than a missing one.
+    void set_bad_coinbase(uint64_t height) { m_bad_coinbase = height; }
+
+    // A block off the main chain, reached only by hash. `Blockchain::
+    // get_block_by_hash` falls through to `get_alt_block` when the main-chain
+    // lookup throws BLOCK_DNE, and sets `orphan` when it hits.
+    void set_alt_block(const cryptonote::block& blk) { m_alt = blk; m_has_alt = true; }
+    crypto::hash alt_hash() const { return cryptonote::get_block_hash(m_alt); }
+
+    bool get_alt_block(const crypto::hash& blkid, cryptonote::alt_block_data_t* data,
+      cryptonote::blobdata* blob) override
+    {
+      if (!m_has_alt || blkid != cryptonote::get_block_hash(m_alt))
+        return false;
+      if (data)
+        *data = cryptonote::alt_block_data_t{};
+      if (blob)
+        *blob = cryptonote::t_serializable_object_to_blob(m_alt);
+      return true;
+    }
+
     uint64_t height() const override { return m_height; }
 
     crypto::hash get_block_hash_from_height(const uint64_t& height) const override
@@ -133,7 +155,12 @@ namespace
       for (uint64_t i = 0; i < m_height; ++i)
       {
         if (i != m_missing && hash_at(i) == h)
-          return cryptonote::t_serializable_object_to_blob(block_at(i));
+        {
+          cryptonote::block blk = block_at(i);
+          if (i == m_bad_coinbase)
+            blk.miner_tx.vin.clear();
+          return cryptonote::t_serializable_object_to_blob(blk);
+        }
       }
       throw BLOCK_DNE("no block with that hash");
     }
@@ -175,6 +202,9 @@ namespace
   private:
     uint64_t m_height;
     uint64_t m_missing = std::numeric_limits<uint64_t>::max();
+    uint64_t m_bad_coinbase = std::numeric_limits<uint64_t>::max();
+    cryptonote::block m_alt{};
+    bool m_has_alt = false;
   };
 
   // Blockchain and its pool refer to each other; construct in this order, as
@@ -412,4 +442,257 @@ TEST(rpc_facts_shims, null_out_pointer_refuses)
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::block_hash_at(bap.bc, 0, nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
     daemon_rpc_facts::block_header_at(bap.bc, 0, false, nullptr));
+}
+
+// ── RK-3b: whole blocks ─────────────────────────────────────────────────────
+//
+// `block_at` is the first export with variable-length payloads, so these
+// tests drive the real allocate/release pair rather than a stand-in: every
+// success path below ends in `shekyl_rpc_block_free`, and the refusal paths
+// assert the owner was never handed out.
+
+namespace
+{
+  // Releases a `block_at` payload however the test leaves, so a failed
+  // EXPECT cannot turn into a leak that only shows up under a sanitizer.
+  struct BlockOwner
+  {
+    void* owner = nullptr;
+    ~BlockOwner() { shekyl_rpc_block_free(owner); }
+  };
+}
+
+TEST(rpc_facts_shims, block_by_height_carries_the_header_and_its_payloads)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t height = 4;
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  BlockOwner owned;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_at(bap.bc, /*block_hash=*/nullptr, height,
+      /*fill_pow_hash=*/false, &h, &p, &owned.owner));
+
+  const cryptonote::block expected = block_at(height);
+  ASSERT_EQ(1, h.found);
+  ASSERT_NE(nullptr, owned.owner) << "a found block must hand back its payload owner";
+  EXPECT_EQ(height, h.height);
+  EXPECT_EQ(CHAIN_HEIGHT, h.chain_height);
+  EXPECT_EQ(0, h.orphan_status) << "reached by height: main chain";
+  EXPECT_EQ(expected.miner_tx.vout[0].amount, h.reward);
+
+  // The blob is the consensus encoding, and round-trips back to the block.
+  ASSERT_NE(nullptr, p.blob);
+  const cryptonote::blobdata blob(reinterpret_cast<const char*>(p.blob), p.blob_len);
+  EXPECT_EQ(cryptonote::t_serializable_object_to_blob(expected), blob);
+  cryptonote::block parsed;
+  ASSERT_TRUE(cryptonote::parse_and_validate_block_from_blob(blob, parsed));
+  EXPECT_EQ(cryptonote::get_block_hash(expected), cryptonote::get_block_hash(parsed));
+
+  // The json is epee's rendering, carried whole (RK-D11) — not parsed here,
+  // because nothing in the daemon parses it either.
+  ASSERT_NE(nullptr, p.json);
+  EXPECT_EQ(cryptonote::obj_to_json_str(const_cast<cryptonote::block&>(expected)), 
+    std::string(p.json, p.json_len));
+  EXPECT_EQ(std::strlen(p.json), p.json_len) << "json_len must match the NUL-terminated string";
+
+  // The tx hashes arrive contiguous, count first.
+  ASSERT_EQ(expected.tx_hashes.size(), p.tx_hashes_len);
+  ASSERT_NE(nullptr, p.tx_hashes);
+  for (size_t i = 0; i < p.tx_hashes_len; ++i)
+  {
+    EXPECT_EQ(0, std::memcmp(p.tx_hashes + i * sizeof(crypto::hash),
+      expected.tx_hashes[i].data, sizeof(crypto::hash))) << "tx hash " << i;
+  }
+}
+
+TEST(rpc_facts_shims, block_by_hash_answers_the_same_block)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t height = 3;
+  const crypto::hash id = hash_at(height);
+  shekyl_rpc_block_header_facts by_hash{};
+  shekyl_rpc_block_payload ph{};
+  BlockOwner owned_hash;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_at(bap.bc, &id, /*height=*/0, false, &by_hash, &ph,
+      &owned_hash.owner));
+
+  shekyl_rpc_block_header_facts by_height{};
+  shekyl_rpc_block_payload pn{};
+  BlockOwner owned_height;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, height, false, &by_height, &pn,
+      &owned_height.owner));
+
+  ASSERT_EQ(1, by_hash.found);
+  // The `height` argument is ignored when a hash is given — 0 above would
+  // otherwise have fetched the genesis block.
+  EXPECT_EQ(height, by_hash.height);
+  EXPECT_EQ(0, std::memcmp(&by_hash, &by_height, sizeof(by_hash)))
+    << "the lookup mode must not change a single field of the header";
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(ph.blob), ph.blob_len),
+    std::string(reinterpret_cast<const char*>(pn.blob), pn.blob_len));
+}
+
+TEST(rpc_facts_shims, block_off_the_main_chain_is_flagged_orphan)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  // An alt block at a height the main chain also has: this is the inherited
+  // quirk (§7, 2026-08-23) — the height comes from the coinbase, and the
+  // height-keyed fields below are then read for the MAIN-chain block there.
+  cryptonote::block alt = block_at(2);
+  alt.nonce = 999999;                     // a different block at the same height
+  alt.timestamp = 1600000000;
+  db->set_alt_block(alt);
+  const crypto::hash alt_id = db->alt_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  BlockOwner owned;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_at(bap.bc, &alt_id, 0, false, &h, &p, &owned.owner));
+
+  ASSERT_EQ(1, h.found);
+  EXPECT_EQ(1, h.orphan_status) << "an alt block must not report as main chain";
+  EXPECT_EQ(0, std::memcmp(h.hash, alt_id.data, sizeof(h.hash)));
+  EXPECT_EQ(2u, h.height) << "the height is the coinbase's, not the lookup's";
+  EXPECT_EQ(alt.timestamp, h.timestamp) << "the header describes the ALT block";
+  // ...but these come from the main-chain block at that height. Preserved
+  // deliberately; if RK-W ever fixes it, this expectation is what changes.
+  EXPECT_EQ(1000u + 2u, h.block_weight) << "main-chain weight at the alt block's height";
+  EXPECT_EQ(2000u + 2u, h.long_term_weight);
+}
+
+// An alt chain ahead of ours: the block exists, but the height its coinbase
+// names is one this chain has not reached. `depth` would underflow to a value
+// near 2^64 and every height-keyed read would be out of range. The C++
+// computed that subtraction too and relied on the DB throwing afterwards.
+TEST(rpc_facts_shims, block_claiming_a_height_beyond_the_tip_is_refused)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  cryptonote::block ahead = block_at(2);
+  ahead.nonce = 4242;
+  // The coinbase names its own height, and this one is past our tip.
+  ahead.miner_tx.vin.clear();
+  cryptonote::txin_gen gen{};
+  gen.height = CHAIN_HEIGHT + 5;
+  ahead.miner_tx.vin.push_back(gen);
+  db->set_alt_block(ahead);
+  const crypto::hash id = db->alt_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  void* owner = nullptr;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+    daemon_rpc_facts::block_at(bap.bc, &id, 0, false, &h, &p, &owner));
+  EXPECT_EQ(nullptr, owner) << "a refusal hands back nothing to free";
+  // Deleting the guard turns this red: `depth` would come back near 2^64.
+  EXPECT_EQ(0u, h.depth);
+  EXPECT_EQ(0, h.found);
+}
+
+TEST(rpc_facts_shims, block_absent_by_either_lookup_is_data_not_a_fault)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  db->set_missing(2);
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  const crypto::hash unknown = hash_at(9999);
+  struct { const crypto::hash* hash; uint64_t height; const char* what; } cases[] = {
+    {nullptr, CHAIN_HEIGHT,     "past the tip"},
+    {nullptr, CHAIN_HEIGHT + 5, "well past the tip"},
+    {nullptr, 2,                "in range, but the store cannot produce it"},
+    {&unknown, 0,               "a hash the chain does not have"},
+  };
+  for (const auto& c : cases)
+  {
+    shekyl_rpc_block_header_facts h{};
+    shekyl_rpc_block_payload p{};
+    void* owner = reinterpret_cast<void*>(0x1);  // must be cleared, not left
+    ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+      daemon_rpc_facts::block_at(bap.bc, c.hash, c.height, false, &h, &p, &owner))
+      << c.what;
+    EXPECT_EQ(0, h.found) << c.what;
+    EXPECT_EQ(CHAIN_HEIGHT, h.chain_height) << c.what << ": the bound is still reported";
+    EXPECT_EQ(nullptr, owner) << c.what << ": nothing was allocated, nothing to free";
+    EXPECT_EQ(nullptr, p.blob) << c.what;
+    EXPECT_EQ(0u, p.tx_hashes_len) << c.what;
+  }
+}
+
+TEST(rpc_facts_shims, block_with_a_malformed_coinbase_is_inconsistent)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  db->set_bad_coinbase(3);
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  void* owner = nullptr;
+  // A block that exists but whose coinbase carries no `txin_gen` is broken,
+  // not missing — the height it reports would otherwise be unreadable.
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, 3, false, &h, &p, &owner));
+  EXPECT_EQ(nullptr, owner);
+
+  // Its neighbours are unaffected.
+  BlockOwner good;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, 2, false, &h, &p, &good.owner));
+  EXPECT_EQ(1, h.found);
+}
+
+// The `extern "C"` entry points, not the bodies the other tests drive. A null
+// handle returns before any core object is touched, which is the one path
+// where the owner slot could keep a value from a previous call — and a caller
+// that frees what it sees there frees it twice.
+TEST(rpc_facts_shims, a_refused_export_never_leaves_a_stale_owner)
+{
+  void* const stale = reinterpret_cast<void*>(0xdeadbeef);
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+
+  void* owner = stale;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, &owner));
+  EXPECT_EQ(nullptr, owner) << "block_at left the caller a pointer to free twice";
+
+  const shekyl_rpc_hardfork_entry* rows = nullptr;
+  size_t len = 0;
+  owner = stale;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_hardforks(nullptr, &rows, &len, &owner));
+  EXPECT_EQ(nullptr, owner) << "hardforks left the caller a pointer to free twice";
+
+  // A null owner slot is still refused rather than dereferenced.
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, nullptr));
+}
+
+TEST(rpc_facts_shims, block_null_out_pointers_refuse)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+  shekyl_rpc_block_header_facts h{};
+  shekyl_rpc_block_payload p{};
+  void* owner = nullptr;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, 0, false, nullptr, &p, &owner));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, 0, false, &h, nullptr, &owner));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::block_at(bap.bc, nullptr, 0, false, &h, &p, nullptr));
+  // Freeing nothing is a no-op, as the header promises.
+  shekyl_rpc_block_free(nullptr);
 }

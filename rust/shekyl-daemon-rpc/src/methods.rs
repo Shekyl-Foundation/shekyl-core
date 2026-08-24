@@ -15,13 +15,13 @@
 use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
-    GetBlockHeaderByHeightResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex,
-    RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
+    GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_types::BlockHeight;
 
-use crate::chain_facts::{ChainFacts, FactsFault};
+use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault};
 
 /// Why a native method could not answer. Maps onto the transport's existing
 /// error envelopes in the handlers (REST: `status`; JSON-RPC: `-32603`), but
@@ -155,6 +155,117 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
         .map_err(|_| {
             RpcFault::Refused(RpcRefusal::wrong_param("Wrong parameters, expected height"))
         })
+}
+
+/// The params of `get_block`, or the refusal an unusable value earns.
+///
+/// Same discipline as [`block_header_request`]: absent params keep epee's
+/// defaults, params that are present and unusable are refused, and the value
+/// must be an object.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not a shape this method accepts.
+pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcFault> {
+    match params {
+        serde_json::Value::Null => Ok(GetBlockRequest::default()),
+        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_BLOCK_PARAMS))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
+            WRONG_BLOCK_PARAMS,
+        ))),
+    }
+}
+
+/// The refusal an unusable `get_block` params value earns. Names this
+/// method's own shape, not `get_block_header_by_height`'s: it accepts a
+/// `hash` as well, and a refusal that omits it would send a caller looking
+/// in the wrong place.
+const WRONG_BLOCK_PARAMS: &str = "Wrong parameters, expected an object with optional \
+     hash (64 hex characters), height (non-negative integer) and \
+     fill_pow_hash (boolean)";
+
+/// `get_block` (alias `getblock`): a whole block, named by hash or by height.
+///
+/// A non-empty `hash` wins and `height` is ignored — the C++ dispatch,
+/// preserved. Each refusal keeps its code *and* its wording:
+///
+/// * an unparseable `hash` is `WRONG_PARAM`, quoting what was sent;
+/// * a height past the tip is `TOO_BIG_HEIGHT`, naming the top height;
+/// * a block that cannot be produced, or whose coinbase is not a single
+///   `txin_gen`, is `INTERNAL_ERROR` with the message the C++ gave.
+///
+/// The empty-`hash` case in the "can't get block by hash" message is
+/// inherited: reached by height, the C++ interpolated `req.hash`, which is
+/// empty, so the message ends "Hash = .". Preserved under RK-D8.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] for the four cases above; [`RpcFault::Facts`] when
+/// the facts layer itself failed.
+pub fn get_block(
+    facts: &dyn ChainFacts,
+    request: &GetBlockRequest,
+    fill_pow_hash: bool,
+) -> Result<GetBlockResponse, RpcFault> {
+    let by_hash = !request.hash.is_empty();
+    let lookup = if by_hash {
+        let parsed = HashHex::from_hex(&request.hash).map_err(|_| {
+            RpcFault::Refused(RpcRefusal::wrong_param(&format!(
+                "Failed to parse hex representation of block hash. Hex = {}.",
+                request.hash
+            )))
+        })?;
+        BlockLookup::Hash(parsed.to_bytes())
+    } else {
+        BlockLookup::Height(BlockHeight::from_raw(request.height))
+    };
+
+    let at = match facts.block_at(lookup, fill_pow_hash) {
+        Ok(at) => at,
+        Err(FactsFault::Inconsistent) => {
+            return Err(RpcFault::Refused(RpcRefusal {
+                code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+                message: "Internal error: coinbase transaction in the block has the wrong type"
+                    .to_owned(),
+            }))
+        }
+        Err(other) => return Err(RpcFault::Facts(other)),
+    };
+
+    let Some(block) = at.block else {
+        // Past the tip is the height refusal; anything else the lookup could
+        // not produce keeps the C++ "can't get block by hash" wording, whose
+        // `Hash = .` for a height lookup is inherited, not a slip.
+        if !by_hash && request.height >= at.chain_height.to_raw() {
+            return Err(too_big_height(request.height, at.chain_height.to_raw()));
+        }
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+            message: format!(
+                "Internal error: can't get block by hash. Hash = {}.",
+                request.hash
+            ),
+        }));
+    };
+
+    let header = block_header(&block.header);
+    Ok(GetBlockResponse {
+        status: RpcStatus::ok(),
+        // The wire carries this twice; duplication preserved, RK-W's to retire.
+        miner_tx_hash: header.miner_tx_hash,
+        block_header: header,
+        tx_hashes: block
+            .tx_hashes
+            .into_iter()
+            .map(|h| HashHex::from_bytes(h.to_bytes()))
+            .collect(),
+        // `hex::encode` is lowercase, which is what this wire uses; the
+        // crate is already a dependency for the submit path's decode.
+        blob: hex::encode(&block.blob),
+        json: block.json,
+    })
 }
 
 /// The refusal message an unusable `get_block_header_by_height` params value
@@ -324,7 +435,9 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::chain_facts::{BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, HardFork};
+    use crate::chain_facts::{
+        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, HardFork,
+    };
     use serde_json::json;
     use shekyl_types::{BlockHash, BlockHeight, TxHash};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -349,6 +462,10 @@ pub(crate) mod tests {
         pub header: BlockHeaderFacts,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
+        /// The hash `block_at` was asked for, when it was asked by hash.
+        pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
+        /// When set, `block_at` faults instead of answering.
+        pub block_fault: Option<FactsFault>,
     }
 
     impl ChainFacts for FakeFacts {
@@ -366,6 +483,47 @@ pub(crate) mod tests {
             Ok(BlockHashAt {
                 hash: (height.to_raw() < self.hash_chain_height).then(patterned_hash),
                 chain_height: BlockHeight::from_raw(self.hash_chain_height),
+            })
+        }
+
+        fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
+            self.asked_pow.store(fill_pow_hash, Ordering::Relaxed);
+            if let Some(fault) = self.block_fault {
+                return Err(fault);
+            }
+            let chain_height = BlockHeight::from_raw(self.hash_chain_height);
+            // The fake applies the same bound the shim does, so a handler that
+            // forgets to check one cannot pass by luck.
+            let present = match at {
+                BlockLookup::Hash(hash) => {
+                    *self.asked_hash.lock().expect("not poisoned") = Some(hash);
+                    // Only the fake chain's one known hash resolves.
+                    hash == patterned_hash().to_bytes()
+                }
+                BlockLookup::Height(height) => {
+                    self.asked_height.store(height.to_raw(), Ordering::Relaxed);
+                    height.to_raw() < self.hash_chain_height
+                }
+            };
+            if !present {
+                return Ok(BlockAt {
+                    block: None,
+                    chain_height,
+                });
+            }
+            let mut header = self.header.clone();
+            header.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
+            Ok(BlockAt {
+                block: Some(BlockFacts {
+                    header,
+                    blob: vec![0x01, 0x02, 0xab, 0xff],
+                    json: "{\n  \"major_version\": 1\n}".to_owned(),
+                    tx_hashes: vec![
+                        TxHash::from_bytes(tagged_bytes(61)),
+                        TxHash::from_bytes(tagged_bytes(67)),
+                    ],
+                }),
+                chain_height,
             })
         }
 
@@ -420,6 +578,8 @@ pub(crate) mod tests {
             asked_height: AtomicU64::new(u64::MAX),
             header: sample_header(),
             asked_pow: AtomicBool::new(false),
+            asked_hash: std::sync::Mutex::new(None),
+            block_fault: None,
         }
     }
 
@@ -510,6 +670,8 @@ pub(crate) mod tests {
             asked_height: AtomicU64::new(u64::MAX),
             header: sample_header(),
             asked_pow: AtomicBool::new(false),
+            asked_hash: std::sync::Mutex::new(None),
+            block_fault: None,
         };
         assert_eq!(get_height(&f), Err(RpcFault::Facts(FactsFault::NotReady)));
         assert_eq!(get_version(&f), Err(RpcFault::Facts(FactsFault::NotReady)));
@@ -665,6 +827,152 @@ pub(crate) mod tests {
                 refusal,
                 RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS)),
                 "{bad} must be refused, naming this method's own params shape"
+            );
+        }
+    }
+
+    fn block_req(hash: &str, height: u64) -> GetBlockRequest {
+        GetBlockRequest {
+            hash: hash.to_owned(),
+            height,
+            fill_pow_hash: false,
+        }
+    }
+
+    /// A whole block by height: the header, both copies of the miner tx
+    /// hash, the hex blob, the json carried through, and the tx list.
+    #[test]
+    fn block_by_height_carries_every_part_of_the_reply() {
+        let f = header_facts();
+        let out = get_block(&f, &block_req("", 1_234_567), false).unwrap();
+        assert!(out.status.is_ok());
+        assert_eq!(out.block_header.height, 1_234_567);
+        assert_eq!(
+            out.miner_tx_hash, out.block_header.miner_tx_hash,
+            "the wire carries the miner tx hash twice, and they must agree"
+        );
+        assert_eq!(
+            out.blob, "0102abff",
+            "the blob is lowercase hex of the bytes"
+        );
+        assert_eq!(out.json, "{\n  \"major_version\": 1\n}");
+        assert_eq!(out.tx_hashes.len(), 2);
+        assert_eq!(out.tx_hashes[0], HashHex::from_bytes(tagged_bytes(61)));
+    }
+
+    /// A hash wins over a height, and the height is not consulted at all —
+    /// passing a past-the-tip height alongside a good hash still answers.
+    #[test]
+    fn a_hash_wins_over_a_height() {
+        let f = header_facts();
+        let hash = patterned_hash().to_string();
+        let out = get_block(&f, &block_req(&hash, 9_000_000), false).unwrap();
+        assert!(out.status.is_ok());
+        assert_eq!(
+            *f.asked_hash.lock().unwrap(),
+            Some(patterned_hash().to_bytes()),
+            "the facts layer must be asked by hash, not by the ignored height"
+        );
+    }
+
+    /// An unparseable hash keeps the C++ diagnostic, which quotes what the
+    /// caller sent — the reason the request field is a `String` (RK-D12).
+    #[test]
+    fn an_unparseable_hash_quotes_what_was_sent() {
+        let f = header_facts();
+        let err = get_block(&f, &block_req("nonsense", 0), false).unwrap_err();
+        assert_eq!(
+            err,
+            RpcFault::Refused(RpcRefusal::wrong_param(
+                "Failed to parse hex representation of block hash. Hex = nonsense."
+            ))
+        );
+    }
+
+    /// Past the tip is the height refusal, naming the top height; a hash the
+    /// chain does not have is the C++'s internal-error wording instead.
+    #[test]
+    fn absence_keeps_the_refusal_that_matches_the_lookup() {
+        let f = header_facts();
+        assert_eq!(
+            get_block(&f, &block_req("", 9_000_000), false).unwrap_err(),
+            too_big_height(9_000_000, f.hash_chain_height)
+        );
+
+        let unknown = HashHex::from_bytes([9u8; 32]).to_string();
+        assert_eq!(
+            get_block(&f, &block_req(&unknown, 0), false).unwrap_err(),
+            RpcFault::Refused(RpcRefusal {
+                code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+                message: format!("Internal error: can't get block by hash. Hash = {unknown}."),
+            })
+        );
+    }
+
+    /// A block whose coinbase is not a single `txin_gen` keeps the C++'s own
+    /// message rather than becoming a generic internal error.
+    #[test]
+    fn a_malformed_coinbase_keeps_its_own_message() {
+        let mut f = header_facts();
+        f.block_fault = Some(FactsFault::Inconsistent);
+        assert_eq!(
+            get_block(&f, &block_req("", 0), false).unwrap_err(),
+            RpcFault::Refused(RpcRefusal {
+                code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+                message: "Internal error: coinbase transaction in the block has the wrong type"
+                    .to_owned(),
+            })
+        );
+    }
+
+    /// The pow hash is asked for only when the caller asked and was allowed.
+    #[test]
+    fn block_pow_hash_follows_the_entitlement() {
+        let f = header_facts();
+        let plain = get_block(&f, &block_req("", 1_234_567), false).unwrap();
+        assert!(!f.asked_pow.load(Ordering::Relaxed));
+        assert_eq!(plain.block_header.pow_hash, None);
+
+        let filled = get_block(&f, &block_req("", 1_234_567), true).unwrap();
+        assert!(f.asked_pow.load(Ordering::Relaxed));
+        assert_eq!(
+            filled.block_header.pow_hash,
+            Some(HashHex::from_bytes(tagged_bytes(23)))
+        );
+    }
+
+    /// This method's params refusal names its own shape — `hash` included,
+    /// which `get_block_header_by_height`'s does not have.
+    #[test]
+    fn block_params_are_refused_naming_this_methods_shape() {
+        assert_eq!(
+            block_request(&json!(null)).unwrap(),
+            GetBlockRequest::default()
+        );
+        assert_eq!(
+            block_request(&json!({})).unwrap(),
+            GetBlockRequest::default()
+        );
+        let parsed = block_request(&json!({"hash": "ab", "height": 7})).unwrap();
+        assert_eq!(parsed.hash, "ab", "the handler parses the hash, not serde");
+        for bad in [
+            json!({"height": -1}),
+            json!({"hash": 7}),
+            json!([0]),
+            json!(0),
+        ] {
+            let refusal = block_request(&bad).unwrap_err();
+            assert_eq!(
+                refusal,
+                RpcFault::Refused(RpcRefusal::wrong_param(WRONG_BLOCK_PARAMS)),
+                "{bad}"
+            );
+            let RpcFault::Refused(r) = refusal else {
+                unreachable!()
+            };
+            assert!(
+                r.message.contains("hash"),
+                "the message names this method's hash field"
             );
         }
     }

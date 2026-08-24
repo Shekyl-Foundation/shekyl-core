@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
+use shekyl_units::AtomicUnits;
 
 use crate::chain_facts::FfiChainFacts;
 use crate::core::CoreRpc;
@@ -63,6 +64,177 @@ fn decode_reply<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Re
             .take(120)
             .collect::<String>()
     ))
+}
+
+/// `%Y-%m-%d %H:%M:%S` in UTC, or `<unknown>` below the same cutoff the C++
+/// used (`tools::get_human_readable_timestamp`). The cutoff is 2009-02-13,
+/// which predates any Shekyl block by years; it is kept so a corrupt or
+/// zero timestamp reads as unknown rather than as 1970.
+fn human_readable_timestamp(ts: u64) -> String {
+    const UNKNOWN_BEFORE: u64 = 1_234_567_890;
+    if ts < UNKNOWN_BEFORE {
+        return "<unknown>".to_owned();
+    }
+    // Civil-from-days (Howard Hinnant's algorithm): no dependency, no libc
+    // `gmtime`, and total for every value a u64 timestamp can hold.
+    let days = i64::try_from(ts / 86_400).unwrap_or(i64::MAX);
+    let secs_of_day = ts % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{year:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
+}
+
+/// The `0x`-prefixed wide difficulty rendered as decimal, which is what the
+/// C++ console printed by constructing a `difficulty_type` from it.
+fn wide_difficulty_decimal(wide: &str) -> String {
+    let digits = wide.strip_prefix("0x").unwrap_or(wide);
+    match u128::from_str_radix(digits, 16) {
+        Ok(value) => value.to_string(),
+        // The daemon produced this field; if it is ever unreadable, showing
+        // it verbatim beats showing nothing.
+        Err(_) => wide.to_owned(),
+    }
+}
+
+/// `print_block_header`'s text, field for field and in its order.
+///
+/// Built as lines and joined: writing to a `String` cannot fail, so
+/// `write!` here would only produce `Result`s to discard.
+fn render_block_header(h: &shekyl_rpc_types::BlockHeader) -> String {
+    let pow_hash = h.pow_hash.map_or_else(String::new, |p| p.to_string());
+    [
+        format!(
+            "timestamp: {} ({})",
+            h.timestamp,
+            human_readable_timestamp(h.timestamp)
+        ),
+        format!("previous hash: {}", h.prev_hash),
+        format!("nonce: {}", h.nonce),
+        // The C++ streamed a bool, which prints as 0/1.
+        format!("is orphan: {}", u8::from(h.orphan_status)),
+        format!("height: {}", h.height),
+        format!("depth: {}", h.depth),
+        format!("hash: {}", h.hash),
+        format!(
+            "difficulty: {}",
+            wide_difficulty_decimal(&h.wide_difficulty)
+        ),
+        format!(
+            "cumulative difficulty: {}",
+            wide_difficulty_decimal(&h.wide_cumulative_difficulty)
+        ),
+        // Empty when it was not asked for or not allowed — the C++ printed
+        // the empty string just the same.
+        format!("POW hash: {pow_hash}"),
+        format!("block size: {}", h.block_size),
+        format!("block weight: {}", h.block_weight),
+        format!("long term weight: {}", h.long_term_weight),
+        format!("num txes: {}", h.num_txes),
+        format!(
+            "reward: {}",
+            AtomicUnits::from_raw(h.reward).to_skl_string()
+        ),
+        format!("miner tx hash: {}", h.miner_tx_hash),
+    ]
+    .join("\n")
+}
+
+/// `print_block_by_hash` / `print_block_by_height`: the two console commands
+/// that read `get_block` and nothing else, which is why they migrate with it
+/// (the design's console matrix, §2.1).
+fn print_block(
+    src: &Source,
+    by_hash: bool,
+    argument: &str,
+    include_hex: bool,
+) -> Result<String, String> {
+    let mut request = shekyl_rpc_types::GetBlockRequest {
+        fill_pow_hash: true,
+        ..Default::default()
+    };
+    if by_hash {
+        request.hash = argument.to_owned();
+    } else {
+        request.height = argument
+            .parse()
+            .map_err(|_| format!("not a block height: {argument}"))?;
+    }
+
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = FfiChainFacts::new(core.clone());
+            // In-process the console is the operator's own terminal, so the
+            // restricted-listener rule does not apply: the C++ passed
+            // `fill_pow_hash` straight through here too.
+            crate::methods::get_block(&facts, &request, true).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_block",
+                "params": request,
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::GetBlockResponse>(&raw, "get_block")?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+
+    // The C++ order: the blob (only with `+hex`) and a blank line, then the
+    // header, then the block's json.
+    let mut out = String::new();
+    if include_hex {
+        out.push_str(&reply.blob);
+        out.push_str("\n\n");
+    }
+    out.push_str(&render_block_header(&reply.block_header));
+    out.push('\n');
+    out.push_str(&reply.json);
+    Ok(out)
+}
+
+/// Unwrap a JSON-RPC 2.0 envelope: the `result`, or the `error`'s message as
+/// the operator's reason. A daemon that refused says why; a body that is
+/// neither is a malformed reply.
+fn json_rpc_result<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
+    let envelope: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
+        format!(
+            "malformed {method} reply: {}",
+            String::from_utf8_lossy(body)
+                .chars()
+                .take(120)
+                .collect::<String>()
+        )
+    })?;
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no reason given");
+        return Err(format!("{method} failed: {message}"));
+    }
+    let result = envelope
+        .get("result")
+        .ok_or_else(|| format!("malformed {method} reply: no result"))?;
+    serde_json::from_value(result.clone()).map_err(|e| format!("malformed {method} reply: {e}"))
 }
 
 fn print_height(src: &Source) -> Result<String, String> {
@@ -148,6 +320,14 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
 
     let result = match args[0].as_str() {
         "print_height" => print_height(&source),
+        "print_block_by_hash" | "print_block_by_height" => {
+            let Some(argument) = args.get(1) else {
+                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
+            };
+            let by_hash = args[0] == "print_block_by_hash";
+            let include_hex = args.get(2).is_some_and(|f| f == "+hex");
+            print_block(&source, by_hash, argument, include_hex)
+        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -225,6 +405,110 @@ mod tests {
             s.write_all(reply.as_bytes()).unwrap();
         });
         address
+    }
+
+    /// The C++ printed `<unknown>` below its cutoff and UTC
+    /// `%Y-%m-%d %H:%M:%S` above it. A genesis block with timestamp 0 is the
+    /// case an operator actually sees.
+    #[test]
+    fn timestamps_render_as_the_cpp_did() {
+        assert_eq!(human_readable_timestamp(0), "<unknown>");
+        assert_eq!(human_readable_timestamp(1_234_567_889), "<unknown>");
+        assert_eq!(
+            human_readable_timestamp(1_234_567_890),
+            "2009-02-13 23:31:30"
+        );
+        assert_eq!(
+            human_readable_timestamp(1_700_000_000),
+            "2023-11-14 22:13:20"
+        );
+        // A leap day, and the end of a year — the civil-from-days arithmetic
+        // is where a hand-rolled calendar goes wrong.
+        assert_eq!(
+            human_readable_timestamp(1_709_164_800),
+            "2024-02-29 00:00:00"
+        );
+        assert_eq!(
+            human_readable_timestamp(1_735_689_599),
+            "2024-12-31 23:59:59"
+        );
+    }
+
+    /// The console showed the difficulty in decimal, which the C++ got by
+    /// constructing a `difficulty_type` from the `0x` wide form.
+    #[test]
+    fn wide_difficulty_renders_in_decimal() {
+        assert_eq!(wide_difficulty_decimal("0x1"), "1");
+        // 2^70 + 12345, the value the oracle emitter used.
+        assert_eq!(
+            wide_difficulty_decimal("0x400000000000003039"),
+            "1180591620717411315769"
+        );
+        // Above 2^64, which is the reason the wide form exists at all.
+        assert_eq!(
+            wide_difficulty_decimal("0x10000000000000000"),
+            "18446744073709551616"
+        );
+        // Unreadable input is shown rather than swallowed.
+        assert_eq!(wide_difficulty_decimal("not-hex"), "not-hex");
+    }
+
+    /// Every line of `print_block_header`, in its order and wording.
+    /// `reward` is SKL with nine fractional digits (`print_money`), `is
+    /// orphan` is the 0/1 a streamed C++ bool produced, and an unfilled
+    /// `pow_hash` prints as nothing after the colon.
+    #[test]
+    fn the_block_header_renders_line_for_line() {
+        let header = shekyl_rpc_types::BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 0,
+            prev_hash: HashHex::ZERO,
+            nonce: 10101,
+            orphan_status: false,
+            height: 0,
+            depth: 0,
+            hash: HashHex::from_bytes([7u8; 32]),
+            difficulty: 1,
+            wide_difficulty: "0x1".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1,
+            wide_cumulative_difficulty: "0x1".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 100_000_000_000_000,
+            block_size: 6263,
+            block_weight: 6263,
+            num_txes: 0,
+            pow_hash: None,
+            long_term_weight: 176_470,
+            miner_tx_hash: HashHex::from_bytes([9u8; 32]),
+            curve_tree_root: HashHex::ZERO,
+            attestation_root: HashHex::ZERO,
+        };
+        let seven = HashHex::from_bytes([7u8; 32]).to_string();
+        let nine = HashHex::from_bytes([9u8; 32]).to_string();
+        let zero = HashHex::ZERO.to_string();
+        assert_eq!(
+            render_block_header(&header),
+            format!(
+                "timestamp: 0 (<unknown>)\n\
+                 previous hash: {zero}\n\
+                 nonce: 10101\n\
+                 is orphan: 0\n\
+                 height: 0\n\
+                 depth: 0\n\
+                 hash: {seven}\n\
+                 difficulty: 1\n\
+                 cumulative difficulty: 1\n\
+                 POW hash: \n\
+                 block size: 6263\n\
+                 block weight: 6263\n\
+                 long term weight: 176470\n\
+                 num txes: 0\n\
+                 reward: 100000.000000000\n\
+                 miner tx hash: {nine}"
+            )
+        );
     }
 
     #[test]
