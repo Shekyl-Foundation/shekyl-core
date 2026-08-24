@@ -18,57 +18,34 @@ name: ci/economics-c2a-prime
 on:
   pull_request:
     branches: [dev]
-    paths:
+    paths: &econ_paths
       - "config/economics_params.json"
       - "cmake/generate_economics_params.py"
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
-      # Conservation-KAT guarded surface: the accrual/burn row write +
-      # pop-removal (blockchain_db), compute_emission_split /
-      # compute_fee_burn (src/shekyl), and the HF_VERSION_* activation
-      # constants (cryptonote_config.h). A regression in any of these must
-      # trigger the gate that exists to catch it.
+      # Conservation-KAT guarded surface. Named by convention, not a
+      # frozen file list and not `src/shekyl/**` / `tests/unit_tests/**`:
+      # those directories also hold FFI/log/secure_mem headers and
+      # archival bond/credit tests that are not this gate. A future
+      # `economics.cpp` or `economics_*.cpp` / `archival_*emission*.cpp`
+      # still fires; `CMakeLists.txt` still fires when a new test is
+      # registered under a name that does not yet match.
       - "src/blockchain_db/**"
-      - "src/shekyl/economics.h"
+      - "src/shekyl/economics.*"
       - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
       - "tests/unit_tests/CMakeLists.txt"
-      - "tests/unit_tests/economics_c2a_prime.cpp"
-      - "tests/unit_tests/economics_b5_fee_coinbase.cpp"
-      - "tests/unit_tests/archival_reward_emission.cpp"
-      - "tests/unit_tests/archival_emission_connect.cpp"
-      - "tests/unit_tests/archival_emission_ct_balance.cpp"
+      - "tests/unit_tests/economics*.cpp"
+      - "tests/unit_tests/archival_*emission*.cpp"
       - "tests/core_tests/**"
       - "scripts/ci/run_economics_c2a_prime.sh"
       - ".github/workflows/economics-c2a-prime.yml"
   push:
     branches: [dev]
-    paths:
-      - "config/economics_params.json"
-      - "cmake/generate_economics_params.py"
-      - "src/cryptonote_basic/**"
-      - "src/cryptonote_core/blockchain.cpp"
-      - "src/cryptonote_core/blockchain.h"
-      # Keep in lockstep with the pull_request paths above (conservation-KAT
-      # guarded surface).
-      - "src/blockchain_db/**"
-      - "src/shekyl/economics.h"
-      - "src/cryptonote_config.h"
-      - "rust/shekyl-economics/**"
-      - "rust/shekyl-economics-sim/**"
-      - "rust/shekyl-ffi/**"
-      - "tests/unit_tests/CMakeLists.txt"
-      - "tests/unit_tests/economics_c2a_prime.cpp"
-      - "tests/unit_tests/economics_b5_fee_coinbase.cpp"
-      - "tests/unit_tests/archival_reward_emission.cpp"
-      - "tests/unit_tests/archival_emission_connect.cpp"
-      - "tests/unit_tests/archival_emission_ct_balance.cpp"
-      - "tests/core_tests/**"
-      - "scripts/ci/run_economics_c2a_prime.sh"
-      - ".github/workflows/economics-c2a-prime.yml"
+    paths: *econ_paths
   workflow_dispatch:
 
 concurrency:

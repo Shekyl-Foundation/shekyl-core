@@ -278,7 +278,18 @@ jobs:
             head -40 <<< "$listing" >&2
             exit 1
           fi
-          echo "OK: artifact contains CTestTestfile.cmake"
+          # Fail closed if the GNU tar excludes above silently missed
+          # (rule 47: absence of CTestTestfile is not the only signal;
+          # CMakeFiles/*.o/*.a must also be absent). Same exclude set
+          # as economics-c2a-prime.yml; this assertion is the check
+          # that they took effect, not a rewrite of the pack command.
+          leaked="$(grep -E '(^|/)CMakeFiles(/|$)|\.(o|a)$' <<< "$listing" || true)"
+          if [ -n "$leaked" ]; then
+            echo "FATAL: ubuntu-24.04-ctest.tar.gz still contains CMakeFiles/*.o/*.a" >&2
+            echo "$leaked" | head -20 >&2
+            exit 1
+          fi
+          echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
       - uses: actions/upload-artifact@v4
         if: matrix.pack_ctest
         with:

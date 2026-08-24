@@ -17,6 +17,7 @@ docs/design/IMPLEMENTATION_INDEX.md:X.md # template placeholder in the how-to-re
 docs/CHANGELOG.md:src/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:rust/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:../../src/... # prose placeholder describing a path pattern
+docs/CHANGELOG.md:../.github/workflows/zeroize-check.yml # released CHANGELOG entry; the workflow was deleted 2026-08-24; the link records what shipped (rule 91)
 docs/FOLLOWUPS.md:rust/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:docs/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:../` # prose example of the fix idiom in the same followup entry

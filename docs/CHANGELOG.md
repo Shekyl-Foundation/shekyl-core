@@ -21,6 +21,11 @@
   or the rust job (the PR event already tested the merge). Dispatch-only
   leftovers: `bench-runner-bisect.yml` deleted; `rust-stable-canary.yml`
   schedule removed until `cargo +stable fmt --check` has an owner.
+  Economics C2a′ paths glob by naming convention
+  (`src/shekyl/economics.*`, `tests/unit_tests/economics*.cpp`,
+  `tests/unit_tests/archival_*emission*.cpp`) rather than a frozen
+  file list or `src/shekyl/**`. The Ubuntu 24.04 CTest-artifact verify
+  step fail-closes if CMakeFiles/objects/archives leak into the tarball.
 - **`get_block` is served natively in Rust, and the two console commands
   that read it move with it (RK-3b,
   `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
