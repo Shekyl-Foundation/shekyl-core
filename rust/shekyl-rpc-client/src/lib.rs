@@ -26,9 +26,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_curve_io::*;
-use shekyl_portable_storage::{
-    load_from_binary, store_to_binary, Array, Limits, Section, Value as StorageValue,
-};
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
@@ -564,36 +561,31 @@ pub trait Rpc: Sync + Clone {
     }
 
     /// Get the output indexes of the specified transaction.
+    ///
+    /// Built through the shared `.bin` command map (RK-4a) rather than
+    /// assembled here: this used to hand-roll a `Section` and walk the reply
+    /// for `status` and `o_indexes`, which is a second definition of a wire
+    /// the daemon also defines. A missing `o_indexes` still reads as an
+    /// empty list — epee drops an empty sequence — but that rule now lives
+    /// in one place, pinned against epee's own bytes.
     fn get_o_indexes(
         &self,
         hash: [u8; 32],
     ) -> impl Send + Future<Output = Result<Vec<u64>, RpcError>> {
         async move {
-            let mut root = Section::new();
-            root.insert("txid", StorageValue::Bytes(hash.to_vec()));
-            let request =
-                store_to_binary(&root).map_err(|e| RpcError::InternalError(e.to_string()))?;
-
-            let indexes_buf = self.bin_call("get_o_indexes.bin", request).await?;
-            let decoded = load_from_binary(&indexes_buf, Limits::HTTP_BIN)
+            let request = shekyl_rpc_types::GetOIndexesRequest { txid: hash }
+                .to_bin()
+                .map_err(|e| RpcError::InternalError(e.to_string()))?;
+            let buf = self.bin_call("get_o_indexes.bin", request).await?;
+            let reply = shekyl_rpc_types::GetOIndexesResponse::from_bin(&buf)
                 .map_err(|e| RpcError::InvalidNode(format!("invalid binary response: {e}")))?;
-
-            match decoded.get("status") {
-                Some(StorageValue::Bytes(status)) if status.as_slice() == b"OK" => {}
-                _ => {
-                    return Err(RpcError::InvalidNode(
-                        "invalid binary response: missing or non-OK status".into(),
-                    ));
-                }
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_o_indexes refused: {}",
+                    reply.status.0
+                )));
             }
-
-            match decoded.get("o_indexes") {
-                None => Ok(vec![]),
-                Some(StorageValue::Array(Array::UInt64(indexes))) => Ok(indexes.clone()),
-                Some(_) => Err(RpcError::InvalidNode(
-                    "invalid binary response: o_indexes was not a uint64 array".into(),
-                )),
-            }
+            Ok(reply.o_indexes)
         }
     }
 }

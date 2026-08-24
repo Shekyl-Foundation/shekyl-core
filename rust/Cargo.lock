@@ -4416,7 +4416,6 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-curve-io",
- "shekyl-portable-storage",
  "shekyl-rpc-types",
  "std-shims",
  "thiserror 2.0.18",

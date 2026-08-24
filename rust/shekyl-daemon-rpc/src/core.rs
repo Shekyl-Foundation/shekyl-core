@@ -300,6 +300,43 @@ impl CoreRpc {
         }
     }
 
+    /// Global output indices of one transaction, and whether the store had
+    /// the transaction at all.
+    ///
+    /// The owner is released in this function, after the copy and before any
+    /// verdict, so no path out can lose the free.
+    pub fn tx_output_indices(&self, txid: &[u8; 32]) -> Result<(Vec<u64>, bool), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const u64 = std::ptr::null();
+        let mut len: usize = 0;
+        let mut found: u8 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; every out pointer is valid for the call. On OK
+        // the view borrows memory owned by `owner`, released below.
+        unsafe {
+            let rc = ffi::shekyl_rpc_tx_output_indices(
+                self.handle,
+                txid.as_ptr(),
+                &raw mut rows,
+                &raw mut len,
+                &raw mut found,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let copied = if rows.is_null() || len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(rows, len).to_vec()
+            };
+            ffi::shekyl_rpc_tx_output_indices_free(owner);
+            Ok((copied, found != 0))
+        }
+    }
+
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {

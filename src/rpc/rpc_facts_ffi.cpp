@@ -385,6 +385,42 @@ int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
   }
 }
 
+// Body of `shekyl_rpc_tx_output_indices`. One read, so no lock is taken
+// here: `Blockchain::get_tx_outputs_gindexs` takes its own, and there is no
+// second value that has to agree with it.
+int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
+  const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!out || !out_len || !out_found || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  *out_found = 0;
+  try
+  {
+    std::unique_ptr<std::vector<uint64_t>> rows(new std::vector<uint64_t>());
+    if (!bc.get_tx_outputs_gindexs(txid, *rows))
+      return SHEKYL_RPC_FACTS_OK;  // no such transaction: data, not a fault
+    *out = rows->empty() ? nullptr : rows->data();
+    *out_len = rows->size();
+    *out_found = 1;
+    *out_owner = rows.release();
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("tx output indices facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("tx output indices facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 } // namespace daemon_rpc_facts
 
 extern "C" {
@@ -511,6 +547,24 @@ int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
   return daemon_rpc_facts::block_at(h->rpc->get_core().get_blockchain_storage(),
     block_hash ? &id : nullptr, height, fill_pow_hash != 0, out_header, out_payload,
     out_owner);
+}
+
+int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
+  const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc || !txid || !out || !out_len || !out_found || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  crypto::hash id;
+  std::memcpy(id.data, txid, sizeof(id.data));
+  return daemon_rpc_facts::tx_output_indices(
+    h->rpc->get_core().get_blockchain_storage(), id, out, out_len, out_found, out_owner);
+}
+
+void shekyl_rpc_tx_output_indices_free(void* owner)
+{
+  delete static_cast<std::vector<uint64_t>*>(owner);
 }
 
 void shekyl_rpc_block_free(void* owner)
