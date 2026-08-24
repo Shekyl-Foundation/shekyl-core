@@ -187,40 +187,17 @@ sustainability is unaffected by the recalibration.
   retirement.
 
 
-- **`combined_shared_secret` gate is vacuous: delete it or re-point it**
-  (added 2026-08-19, Phase-5 follow-up round). The
-  [`rust-audit-test.yml`](../.github/workflows/rust-audit-test.yml) step *"CI
-  grep gate: combined_shared_secret confined to wallet"* searches
-  `src/common/ src/rpc/ src/cryptonote_protocol/` and fails with *"leaked
-  outside wallet boundary"*. There is no wallet boundary — Phase 5 deleted it
-  — and `combined_shared_secret` now has **zero** occurrences anywhere in
-  `src/` or `tests/`. The gate cannot fail and cannot inform.
+- **`combined_shared_secret` gate: closed — deleted (was vacuous)**
+  (added 2026-08-19, Phase-5 follow-up round;
+  closed 2026-08-24, `chore/ci-fanout-cut`).
+  The rust-audit-test.yml step searched `src/common/ src/rpc/
+  src/cryptonote_protocol/` for a C++ wallet-boundary invariant.
+  Phase 5 deleted that boundary; the identifier has zero occurrences
+  in `src/` or `tests/`. Retire-don't-retarget
+  (`WALLET_REWRITE_PLAN.md` §Phase 5): the step was removed, not
+  moved into grep-gates.yml. Re-pointing at a Rust analogue remains
+  FA-6 / view-tag territory — a different claim, not a CI leftover.
 
-  Its fail-open shape was fixed in this round along with the other six, so it
-  is now honest about erroring; that does not make it *meaningful*. **This one
-  needs a decision, not a repair**, and the decision is not mechanical:
-
-  - **Delete it.** The invariant was "the C++ side of this secret stays inside
-    the wallet." The C++ side is gone, so the invariant has no subject.
-  - **Re-point it at Rust.** Only correct if someone establishes that the Rust
-    surface needs this specific bound — which is a different claim, about a
-    different codebase, with a different set of directories that would count
-    as "outside".
-
-  Per the retire-don't-retarget corollary
-  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5), the
-  default is **retire**: a check that measured a deleted C++ surface does not
-  become a check of the Rust one by re-pointing it, because the Rust surface
-  may already be bounded by construction, may not need the bound, or may need
-  a different one. Re-pointing picks one of those by accident.
-
-  **Not deferred for want of effort** — deferred because the answer requires
-  knowing what `combined_shared_secret`'s Rust analogue is and who may hold
-  it, which is FA-6 / view-tag territory, not CI hygiene. **Closed when** the
-  step is either removed or replaced by a bound whose subject exists, with the
-  reasoning recorded. *Target: V3.0 pre-genesis* — it guards an
-  address-freeze-adjacent property, so a placeholder that always passes is
-  worse than no step at all.
 
 - **`src/device/device_ledger.*` may be the next `device_cold.hpp`**
   (added 2026-08-19, Phase-5 follow-up round). Phase 5 deleted
@@ -5715,7 +5692,7 @@ sustainability is unaffected by the recalibration.
   alternative Copilot suggested in the PR #16 review). The
   defense-in-depth that backs the suppression — `Credentials::password_only`
   as the only constructor for authentication material,
-  `.zeroize-allowlist` + the `zeroize-check.yml` workflow audit, and
+  `.zeroize-allowlist` + the grep-gates.yml zeroize step, and
   the wallet-file Argon2id → SHA3-256 → ChaCha20-Poly1305 envelope
   — catches hard-coded production credentials at three stronger
   layers than a single string-literal lint. **Revisit condition**: a
@@ -9818,9 +9795,10 @@ sustainability is unaffected by the recalibration.
   landed in-tree: those benches use Callgrind client requests
   (`EntryPoint::None`, `--instr-atstart=no`) so collection is
   position-based. The gungraun 0.19 migration did not fix it (same
-  toggle scheme). Remaining delete-now work, not a new investigation:
-  - `.github/workflows/bench-runner-bisect.yml` — still pins
-    `iai-callgrind 0.16`; gates nothing; delete in a follow-up commit.
+  toggle scheme).   Remaining delete-now work, not a new investigation:
+  - `.github/workflows/bench-runner-bisect.yml` — **deleted
+    2026-08-24** (`chore/ci-fanout-cut`). It still pinned
+    `iai-callgrind 0.16`, gated nothing, and was dispatch-only.
   - `GUNGRAUN_CAPTURE_ATTEMPTS` (default 3) in
     `scripts/bench/capture_rust_baseline.sh` — keep until a few
     post-fix `capture-pr` / `update-baseline` cycles are clean, then
