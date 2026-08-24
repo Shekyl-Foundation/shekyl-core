@@ -76,8 +76,8 @@ pub struct SubmitFacts {
     /// narrower fact to a foreign caller (restricted/public endpoint), so
     /// `POST /submit_transaction` cannot be probed as a stem-presence oracle:
     /// an embargoed self-tx (`in_pool && !in_pool_broadcast`) is concealed
-    /// from foreigners exactly as the legacy `relay_category::legacy` identity
-    /// check concealed it.
+    /// from foreigners exactly as the inherited identity check concealed it.
+    /// The C++ side asks `relay_category::broadcasted`.
     pub in_pool_broadcast: bool,
     /// `Some(height)` iff the submitted txid is in the main chain,
     /// confirmed at `height` — the F40 confirming-block height, read under

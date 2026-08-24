@@ -1018,7 +1018,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
   {
-    if(m_mempool.have_tx(tx_hash, relay_category::legacy))
+    if(m_mempool.have_tx(tx_hash, relay_category::broadcasted))
     {
       LOG_PRINT_L2("tx " << tx_hash << "already have transaction in tx_pool");
       return true;
@@ -1034,7 +1034,7 @@ namespace cryptonote
     const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version, origin_zone);
 
     // If new incoming tx passed verification and entered the pool, notify subscribers
-    if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::legacy))
+    if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::broadcasted))
     {
       txpool_event evt{};
       evt.tx = tx;
@@ -1163,7 +1163,7 @@ namespace cryptonote
 
     m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, zone, just_broadcasted);
 
-    if (matches_category(tx_relay, relay_category::legacy))
+    if (matches_category(tx_relay, relay_category::broadcasted))
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);
   }
   //-----------------------------------------------------------------------------------------------
@@ -1488,7 +1488,28 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::pool_has_tx(const crypto::hash &id) const
   {
-    return m_mempool.have_tx(id, relay_category::legacy);
+    /* `all`, not `broadcasted`, and the category is the whole content of this
+       function. The one production caller asks a LOCAL question -- fluffy-block
+       reconstruction, "do I already hold these bytes so I need not request
+       them" (`cryptonote_protocol_handler.inl`, the `bvc.m_missing_txs` arm) --
+       and "do I hold it" is `all` by definition. This read was
+       `relay_category::legacy`, which excludes `local` and `stem`, so a node
+       holding an embargoed stem or an originated `local` entry added it to
+       `need_tx_indices` and re-requested a transaction it already had, whenever
+       some OTHER tx in the same block was genuinely absent.
+
+       `all` is what the consumer already uses: `tx_memory_pool::take_tx`
+       fetches the blob at `all`, so every entry this now reports is one the
+       block-add path will in fact take. Answering NARROWER than the consumer
+       was the defect; answering wider than it would be one too.
+
+       No end-to-end witness exists for that arm -- driving it needs the
+       protocol-handler harness `docs/FOLLOWUPS.md` tracks for the arrival leg
+       (DAEMON_RELAY_PRIVACY.md sec 89.7.2), which does not cover reconstruction.
+       That gap is pre-existing and is not widened here: the classifier rows this
+       depends on (`local` and `stem` are in `all`, and not in `broadcasted`) are
+       pinned in `tests/unit_tests/relay_category.cpp`. */
+    return m_mempool.have_tx(id, relay_category::all);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_data) const

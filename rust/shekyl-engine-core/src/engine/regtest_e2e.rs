@@ -1520,7 +1520,7 @@ async fn pscan_until(
 ///
 /// The submit path inserts at `relay_method::local` under the Dandelion++
 /// embargo, and the miner only includes broadcast-visible txs
-/// (`fill_block_template`'s `matches(relay_category::legacy)` gate); the
+/// (`fill_block_template`'s `matches(relay_category::broadcasted)` gate); the
 /// stem cannot send here, so inclusion waits for the embargo to expire and
 /// fluff. Mining in batches rather than assuming one batch suffices. Pass
 /// `blocks_per_batch = 1` when the caller needs the tx's block to be the

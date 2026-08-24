@@ -2393,7 +2393,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       const blobdata &tx_blob = extra_block_tx.second.second;
 
       tx_verification_context tvc{};
-      if ((!m_tx_pool.have_tx(txid, relay_category::legacy) &&
+      if ((!m_tx_pool.have_tx(txid, relay_category::broadcasted) &&
           !m_db->tx_exists(txid) &&
           !m_tx_pool.add_tx(tx, tvc, relay_method::block, /*relayed=*/true, hf_version, /*origin=*/epee::net_utils::zone::invalid, hf_version))
           || tvc.m_verifivation_failed)
@@ -2424,7 +2424,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       cryptonote::tx_memory_pool::tx_details td;
       cryptonote::blobdata blob;
-      if (m_tx_pool.have_tx(txid, relay_category::legacy))
+      if (m_tx_pool.have_tx(txid, relay_category::broadcasted))
       {
         if (m_tx_pool.get_transaction_info(txid, td, true/*include_sensitive_data*/))
         {

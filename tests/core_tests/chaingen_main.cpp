@@ -32,7 +32,6 @@
 #include "chaingen_tests_list.h"
 #include "common/util.h"
 #include "common/command_line.h"
-#include "tx_pool.h"
 #include "transaction_tests.h"
 
 #include <boost/regex.hpp>

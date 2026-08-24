@@ -116,10 +116,19 @@ struct event_visitor_settings
 
   enum settings
   {
+    // `set_txs_do_not_relay` was here. Removed with tests/core_tests/tx_pool.cpp,
+    // its sole user, because `relay_method::none` means "received via RPC with
+    // do_not_relay set" and Shekyl has no such RPC.
+    //
+    // The remaining bits are renumbered rather than left with a gap. These
+    // masks are boost-serialized, but only into a stream that `ctest` generates
+    // and plays back in ONE process (`--generate_and_play_test_data`); no
+    // corpus is committed, and `test_event_entry` is a boost variant whose type
+    // indices shift whenever an event type is added. Reserving a bit here would
+    // claim a compatibility surface the surrounding format does not honour.
     set_txs_keeped_by_block = 1 << 0,
-    set_txs_do_not_relay = 1 << 1,
-    set_local_relay = 1 << 2,
-    set_txs_stem = 1 << 3
+    set_local_relay = 1 << 1,
+    set_txs_stem = 1 << 2
   };
 
   event_visitor_settings(int a_mask = 0)
@@ -565,10 +574,6 @@ public:
     else if (settings.mask & event_visitor_settings::set_local_relay)
     {
       m_tx_relay = cryptonote::relay_method::local;
-    }
-    else if (settings.mask & event_visitor_settings::set_txs_do_not_relay)
-    {
-      m_tx_relay = cryptonote::relay_method::none;
     }
     else if (settings.mask & event_visitor_settings::set_txs_stem)
     {

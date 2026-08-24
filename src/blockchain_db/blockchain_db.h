@@ -114,10 +114,56 @@ extern const command_line::arg_descriptor<bool, false> arg_db_salvage;
 enum class relay_category : uint8_t
 {
   broadcasted = 0,//!< Public txes received via block/fluff
-  relayable,      //!< Every tx not marked `relay_method::none`
-  legacy,         //!< `relay_category::broadcasted` + `relay_method::none` for rpc relay requests or historical reasons
+  /*! Every tx not marked `relay_method::none`.
+
+      Deliberately NOT collapsed into `all`, even though nothing supplies
+      `none` at admission any more: the pool's writers are
+      `handle_incoming_tx` (p2p `stem`/`fluff`, import `block`),
+      `Blockchain`'s reorg re-adds (`block`), and the engine submit
+      (`local`). `none` means "received via RPC with `do_not_relay` set" and
+      Shekyl has no such RPC.
+
+      It is not a zero-decode guard, and it is worth saying so because that is
+      the plausible-sounding reason to keep it: a zeroed record decodes to
+      `fluff`, NOT `none` (`get_relay_method` falls through state 0 to the
+      `fluff` return). Reaching `none` needs `do_not_relay = 1`, which only a
+      build that had a `do_not_relay` writer could have persisted.
+
+      What it actually is: the DB-layer half of a two-layer filter. Its one production
+      reader is `get_relayable_transactions`, which passes it to
+      `for_all_txpool_txes` and *also* tests `!meta.do_not_relay` in the loop
+      body. So this category is not the sole guard against relaying a
+      do-not-relay entry, and no test should be credited for that. It stays
+      because it costs nothing and it is the only filter at the DB read;
+      removing it is a change to the relay loop's iteration, which is a
+      different surface from this classifier. */
+  relayable,
   all             //!< Everything in the db
 };
+
+/* `legacy` was deleted here. It was `broadcasted` + `relay_method::none` --
+   the most public class unioned with the most private one -- and its own
+   doc gave the reason as "rpc relay requests or historical reasons". The
+   history was Monero's pre-Dandelion++ RPC; Shekyl is v3-from-genesis with
+   no such client (rule 60), so the union had no member any caller wanted.
+   Nine of its ten call sites were asking "is this publicly known", which is
+   `broadcasted`, and one of those -- `fill_block_template` -- would have
+   admitted a do-not-relay transaction into a block template had `none` ever
+   been reachable. The tenth, `core::pool_has_tx`, was asking a different
+   question and now says so: it asks `all`, because its caller wants "do I
+   already hold these bytes". See the note at its definition.
+   `matches_category`'s table is pinned exhaustively by
+   `tests/unit_tests/relay_category.cpp`.
+
+   Removing a middle member renumbered `all`, and that is deliberately NOT
+   compensated with an explicit value or a reserved gap. These values have no
+   counterparty: `relay_category` is never cast, never serialized, and never
+   crosses the FFI -- unlike `relay_method`, whose bytes ARE a contract and are
+   pinned by `static_assert` in `cryptonote_protocol/enums.h`. Pinning a value
+   with no reader would tell the next maintainer a wire contract exists, which
+   is the shape of debt this deletion removes. Reopen if `relay_category` ever
+   gains a persisted or FFI representation: the pin then goes beside that
+   representation, as `relay_method`'s does. */
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 

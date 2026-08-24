@@ -183,15 +183,18 @@ namespace {
 //   returning AlreadyInPool. It is also what the commit re-check keys on to
 //   avoid a double-insert.
 //
-//   `in_pool_broadcast` (relay_category::legacy) is the *foreign-disclosable*
+//   `in_pool_broadcast` (relay_category::broadcasted) is the *foreign-disclosable*
 //   truth — presence that carries no embargo secret because the tx has
 //   fluffed. The two differ exactly for an embargoed tx. The Rust engine
 //   discloses `in_pool` only to the owner (unrestricted endpoint) and
 //   `in_pool_broadcast` to a foreign caller (restricted/public endpoint), so
-//   `POST /submit_transaction` is not a stem-presence oracle. The legacy
-//   `have_tx(_, legacy)` identity check disclosed exactly this narrower fact
-//   to foreign callers; an embargoed self-resubmit was caught later and
-//   lossily by add_tx's existing-tx arm (`OK + not_relayed`).
+//   `POST /submit_transaction` is not a stem-presence oracle. The inherited
+//   `have_tx` identity check disclosed exactly this narrower fact to foreign
+//   callers; an embargoed self-resubmit was caught later and lossily by
+//   add_tx's existing-tx arm (`OK + not_relayed`). It asked the deleted
+//   `relay_category::legacy`, whose extra member (`relay_method::none`) this
+//   comment's own justification never covered: a do-not-relay transaction
+//   has not fluffed, so its presence is not free of embargo secret.
 //   `bond_record_probed`/`bond_record_exists` carry the §8.7.1 BP3 fact —
 //   the archival bond record for the bond-post vin's claimed p_canonical_id
 //   (the claim is pinned to the pubkey by the Rust verifier's BP2 leg).
@@ -231,7 +234,7 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   }
 
   facts.in_pool = pool.have_tx(txid, relay_category::all) ? 1 : 0;
-  facts.in_pool_broadcast = pool.have_tx(txid, relay_category::legacy) ? 1 : 0;
+  facts.in_pool_broadcast = pool.have_tx(txid, relay_category::broadcasted) ? 1 : 0;
   facts.in_chain = bc.have_tx(txid) ? 1 : 0;
   // F40: the confirming-block height, read under the same lock scope as the
   // membership fact so the pair cannot be racy (§3.1 Phase B). Valid iff
