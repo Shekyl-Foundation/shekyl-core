@@ -1,0 +1,52 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# RK — RPC route liveness gate.
+#
+# `docs/DAEMON_RPC_RUST.md` states the rule: a method is live iff it has a
+# route **and a live consumer**. Stated in prose it was enforced by nothing,
+# and `/get_blocks.bin` and `/get_hashes.bin` survived a Phase-1 audit and
+# two design rounds with no caller at all — nearly migrated byte-exactly in
+# RK-4 before a census caught them (RK-4x). On its first run this gate found
+# a third, `/get_transaction_pool_hashes.bin`.
+#
+# Triggered on the route table and on anything that could remove the last
+# caller of a route: deleting a consumer is exactly how a route goes dead,
+# and it is silent.
+#
+# Cheap by construction (grep + shell, no toolchain), so it runs on every
+# touch of the surface it guards without competing for build minutes.
+
+name: ci/rpc-route-liveness
+
+on:
+  pull_request:
+    paths: &paths
+      - "rust/shekyl-daemon-rpc/**"
+      - "rust/shekyl-rpc-client/**"
+      - "rust/shekyl-engine-core/**"
+      - "src/rpc/**"
+      - "utils/python-rpc/**"
+      - "scripts/ci/check_rpc_route_liveness.sh"
+      - ".github/workflows/rpc-route-liveness.yml"
+  push:
+    branches: [dev]
+    paths: *paths
+
+concurrency:
+  group: rpc-route-liveness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rpc-route-liveness:
+    name: "RK: every served RPC route has a consumer"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: check RPC route liveness
+        run: ./scripts/ci/check_rpc_route_liveness.sh

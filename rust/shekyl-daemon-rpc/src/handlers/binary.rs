@@ -63,7 +63,5 @@ macro_rules! bin_handler {
     };
 }
 
-bin_handler!(get_blocks, "/get_blocks.bin");
 bin_handler!(get_blocks_by_height, "/get_blocks_by_height.bin");
-bin_handler!(get_hashes, "/get_hashes.bin");
 bin_handler!(get_o_indexes, "/get_o_indexes.bin");

@@ -1182,11 +1182,6 @@ namespace cryptonote
     return m_blockchain_storage.find_blockchain_supplement(qblock_ids, clip_pruned, resp);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_block_count, size_t max_tx_count) const
-  {
-    return m_blockchain_storage.find_blockchain_supplement(req_start_block, qblock_ids, blocks, total_height, start_height, pruned, get_miner_tx_hash, max_block_count, max_tx_count);
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, uint64_t &start_height, std::vector<uint64_t> &distribution, uint64_t &base) const
   {
     return m_blockchain_storage.get_output_distribution(amount, from_height, to_height, start_height, distribution, base);
@@ -1478,11 +1473,6 @@ namespace cryptonote
   {
     m_mempool.get_transaction_hashes(txs, include_sensitive_data);
     return true;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_pool_info(time_t start_time, bool include_sensitive_txes, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const
-  {
-    return m_mempool.get_pool_info(start_time, include_sensitive_txes, max_tx_count, added_txs, remaining_added_txids, removed_txs, incremental);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transaction_stats(struct txpool_stats& stats, bool include_sensitive_data) const

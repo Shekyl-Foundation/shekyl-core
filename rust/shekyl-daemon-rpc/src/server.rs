@@ -168,9 +168,7 @@ pub(crate) enum Endpoint {
     GetTransactionPoolStats,
     GetInfo,
     GetLimit,
-    GetBlocksBin,
     GetBlocksByHeightBin,
-    GetHashesBin,
     GetOIndexesBin,
     GetStemTallies,
     StartMining,
@@ -269,18 +267,8 @@ pub(crate) const ROUTES: &[Route] = &[
     },
     // Binary endpoints.
     Route {
-        endpoint: Endpoint::GetBlocksBin,
-        paths: &["/get_blocks.bin", "/getblocks.bin"],
-        visibility: Visibility::Always,
-    },
-    Route {
         endpoint: Endpoint::GetBlocksByHeightBin,
         paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
-        visibility: Visibility::Always,
-    },
-    Route {
-        endpoint: Endpoint::GetHashesBin,
-        paths: &["/get_hashes.bin", "/gethashes.bin"],
         visibility: Visibility::Always,
     },
     Route {
@@ -424,9 +412,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         }
         Endpoint::GetInfo => get(json::get_info).post(json::get_info),
         Endpoint::GetLimit => get(json::get_limit).post(json::get_limit),
-        Endpoint::GetBlocksBin => post(binary::get_blocks),
         Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
-        Endpoint::GetHashesBin => post(binary::get_hashes),
         Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
         // Admin-only (listener selection is the row's `visibility`, not this
         // match). §55: anonymity graph — the peer set is the sensitive part.
@@ -677,12 +663,8 @@ mod tests {
         "/get_info",
         "/getinfo",
         "/get_limit",
-        "/get_blocks.bin",
-        "/getblocks.bin",
         "/get_blocks_by_height.bin",
         "/getblocks_by_height.bin",
-        "/get_hashes.bin",
-        "/gethashes.bin",
         "/get_o_indexes.bin",
     ];
 
@@ -755,10 +737,23 @@ mod tests {
             served_paths(false).all(|p| p != "/get_output_distribution.bin"),
             "decoy distribution binary route must stay deleted on every listener"
         );
-        assert!(
-            served_paths(true).any(|p| p == "/get_blocks.bin"),
-            "control: live binary surface still served on the restricted listener"
-        );
+        // wallet2's batch sync, retired in RK-4x with the pool departure
+        // history behind it. Re-registering either route turns this red.
+        for path in [
+            "/get_blocks.bin",
+            "/getblocks.bin",
+            "/get_hashes.bin",
+            "/gethashes.bin",
+        ] {
+            assert!(
+                !served_paths(false).any(|p| p == path),
+                "{path} was retired and must not be served"
+            );
+            assert!(
+                !served_paths(true).any(|p| p == path),
+                "{path} was retired and must not be served on the restricted listener"
+            );
+        }
         assert!(
             served_paths(true).any(|p| p == "/get_o_indexes.bin"),
             "control: live binary surface still served on the restricted listener"
@@ -953,7 +948,7 @@ mod tests {
     #[ignore = "requires a running Axum-only shekyld; optional e2e smoke"]
     async fn e2e_axum_only_get_info_smoke() {
         // Operators: point a client at a local shekyld RPC and exercise
-        // /get_info + /getblocks.bin. In-lane coverage is the oneshot/CORS
+        // /get_info + /get_o_indexes.bin. In-lane coverage is the oneshot/CORS
         // tests above plus RpcArgsDaemonSurface.
     }
 }

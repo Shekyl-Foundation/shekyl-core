@@ -85,7 +85,7 @@ impl CoreRpc {
         unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
     }
 
-    /// Dispatch a binary endpoint (e.g. "/get_blocks.bin").
+    /// Dispatch a binary endpoint (e.g. "/get_o_indexes.bin").
     /// Returns `Ok(data)` on success, `Err(rc)` with the FFI error code on failure.
     /// rc -1 = bad request (parse failure), rc -2 = internal error.
     pub fn bin_endpoint(&self, uri: &str, body: &[u8]) -> Result<Vec<u8>, i32> {

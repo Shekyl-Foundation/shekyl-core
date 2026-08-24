@@ -160,8 +160,6 @@
    the wire observer and keeps its own constants below, untouched. */
 
 
-#define COMMAND_RPC_GET_BLOCKS_FAST_MAX_BLOCK_COUNT     1000
-#define COMMAND_RPC_GET_BLOCKS_FAST_MAX_TX_COUNT        20000
 #define DEFAULT_RPC_MAX_CONNECTIONS_PER_PUBLIC_IP       3
 #define DEFAULT_RPC_MAX_CONNECTIONS_PER_PRIVATE_IP      25
 #define DEFAULT_RPC_MAX_CONNECTIONS                     100
