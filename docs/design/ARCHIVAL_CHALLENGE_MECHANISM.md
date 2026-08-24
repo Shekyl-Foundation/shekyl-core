@@ -1481,9 +1481,29 @@ than repealing it:
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
-**HOLD (correctly blocked on the format round):** pass-record
-serialization; the response format; `EndpointUpdate` on the bond wire;
-the settlement writer (item 9's schema is genuinely open).
+**HOLD — two of the four have since cleared (updated 2026-08-23).** The list
+as written was: pass-record serialization; the response format;
+`EndpointUpdate` on the bond wire; the settlement writer (item 9's schema is
+genuinely open).
+
+- **Pass-record serialization — DISCHARGED 2026-08-18.** The carrier round
+  ruled (`ARCHIVAL_PASS_RECORD_CARRIER.md`, `CR-D2`): a record partition, not
+  a signature split.
+- **The response format — DISCHARGED 2026-08-21.** `RF-D1`…`RF-D10` ruled and
+  implemented, PR #522. This entry is what made the other two "correctly
+  blocked", so its clearing is what re-opened the queue.
+- **`EndpointUpdate` on the bond wire — STILL HELD.** Ruled in shape, not in
+  the tree.
+- **The settlement writer — HELD ON A ROUND, NOT ON A BLOCKER, as of
+  2026-08-23.** Its schema is no longer "genuinely open" in the sense meant
+  here: the round is open at `ARCHIVAL_SETTLEMENT_WRITER.md` with `SO-D1`…
+  `SO-D5` and `SO-D7` ruled and `SO-D6` (reorg) the one item outstanding.
+
+**Recorded rather than edited down to the two survivors**, because the list's
+own framing is the useful part: it named a hold whose blocker was *the format
+round*, and the format round landing is precisely what discharged half of it.
+A HOLD list that is silently pruned as items clear loses the evidence that the
+sequencing was right.
 
 **No longer held — the `settle_epoch` rewrite LANDED** (PR #437, merged):
 this list previously carried it as "blocked on a ratification doable in a
