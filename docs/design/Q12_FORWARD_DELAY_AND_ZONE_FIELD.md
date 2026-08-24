@@ -939,7 +939,9 @@ because the premise was not shipped. It is shipped now. Q12-D5a then
 dissolved the measure-`p`-first gate; U3 shipped `p = 0.5` without
 measuring `α`. The per-zone hop constant is live for coherence
 verification. `ANON_ZONE_TRANSIT_ASSUMPTION_MS` keeps its interim
-banner until a measured transit replaces it.
+banner until a measured transit replaces it. Current liveness of the
+arming preconditions is the checklist at `DAEMON_RELAY_PRIVACY.md`
+§89.8.4, not restated here.
 
 ### What the #427 tripwire actually pinned
 

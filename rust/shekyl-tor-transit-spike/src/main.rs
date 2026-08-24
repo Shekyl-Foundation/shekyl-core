@@ -66,11 +66,31 @@ use shekyl_tor::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
-/// The modal Shekyl transaction's serialized `NOTIFY_NEW_TRANSACTIONS` size,
-/// unpadded (`--pad-transactions` defaults to `false`). ~17 Tor cells.
+// # These two sizes are NOT the modal and max-admissible transactions
+//
+// They were labelled that way and are not. Neither was derived: both were
+// asserted in this rig's own commit with no source, and they are coherent
+// only as Tor cell counts (~17 and ~33). Against
+// `shekyl_tx_weight::predict_size_and_weight` — pinned to
+// `Transaction::write` — the smallest transaction the wire admits is
+// **13,042 B** and the structural maximum is **97,964 B** at a realistic fee
+// (97,969 B at `u64::MAX`, which is the basis `carrier::WINDOW_BYTES` is bounded
+// at — the fee is a varint, so its width moves with its value). Either way the
+// labels were off by 1.55× and 5.9×.
+//
+// **The values are deliberately NOT corrected.** §94.2(b) froze the payload
+// before the first sample and the round completed under these two; changing
+// them now would move the instrument after the fact. They are two real
+// payload sizes, honestly measured, and the reading interpolates the true
+// modal — which falls inside the span. What the round may NOT do is carry the
+// null size-slope out to the structural max, 6× outside it (§94.5(b)).
+
+/// The low payload arm, in bytes, unpadded (`--pad-transactions` defaults to
+/// `false`). ~17 Tor cells. **Not** the modal transaction — see the note above.
 const MODAL_BYTES: usize = 8_395;
-/// The max admissible transaction's equivalent. ~33 cells. The second point is
-/// what makes the size *slope* observable rather than assumed away.
+/// The high payload arm. ~33 cells. Two points are what make the size *slope*
+/// observable rather than assumed away. **Not** the max admissible
+/// transaction — see the note above.
 const MAX_ADMISSIBLE_BYTES: usize = 16_651;
 
 /// A **fresh** rig-only onion identity per session.

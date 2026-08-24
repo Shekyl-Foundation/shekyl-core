@@ -631,21 +631,17 @@ pub mod inherited {
          re-identification rate"
     );
 
-    /// `CRYPTONOTE_MAX_FRAGMENTS` — the most windows one real notification
-    /// may occupy on a noise channel.
-    ///
-    /// Live consumer: [`noise_windows_in_epoch`] compared against this at
-    /// `Zone::new`. Q-11 Unit 0 deleted *dead* mirrors; this one has a
-    /// reader. The epoch is not mirrored next to it because the epoch is
-    /// not a constant — it crosses as `min_epoch_secs`.
-    pub const MAX_FRAGMENTS: u32 = 20;
-
     /// Windows an epoch of `min_epoch_secs` affords at the slowest noise
     /// cadence (`NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`).
     ///
-    /// Integer division: one second under `MAX_FRAGMENTS * per_send` drops
-    /// a whole window. A full-size message that still occupies a window
-    /// when the epoch rolls is discarded by CV-1 and never arrives.
+    /// Integer division: one second under `MAX_FRAGMENTS * per_send` drops a
+    /// whole window (see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS)). A full-size message that still
+    /// occupies a window when the epoch rolls is discarded by CV-1 and never
+    /// arrives.
+    ///
+    /// This is the **ceiling** the fragment cap must stay under, not the cap's
+    /// definition — see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS), which the inherited value
+    /// was silently set equal to.
     #[must_use]
     pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
         min_epoch_secs / (NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS)
@@ -655,6 +651,8 @@ pub mod inherited {
     /// for covert sending.
     pub const NOISE_CHANNELS: usize = 2;
 }
+
+pub mod carrier;
 
 #[cfg(test)]
 mod r1_tests {
@@ -690,26 +688,38 @@ mod r1_tests {
         );
     }
 
-    /// The budget `Zone::new` consumes. Arithmetic lives here so a change to
-    /// the delay pair or `MAX_FRAGMENTS` reds without a zone being built.
+    /// The shipped epoch still carries a full-size message, with named slack
+    /// rather than a tautology on integer division.
+    ///
+    /// The historical 300 s / 20-window coincidence (`MAX_FRAGMENTS` was set
+    /// equal to `noise_windows_in_epoch(300)`) is not the derivation. What
+    /// this pins is the live relationship: the inherited epoch is 600 s, it
+    /// affords 40 windows at the slowest cadence, and the derived cap of 5
+    /// sits well under that.
     #[test]
-    fn a_full_noise_message_fits_exactly_at_the_cadence_boundary() {
+    fn the_shipped_epoch_carries_a_full_noise_message_with_named_slack() {
         let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
-        let exact = inherited::MAX_FRAGMENTS * per_send;
+        let shipped = DandelionParams::inherited().min_epoch_secs;
+        assert_eq!(shipped, 600, "CRYPTONOTE_DANDELIONPP_MIN_EPOCH");
         assert_eq!(
-            inherited::noise_windows_in_epoch(exact),
-            inherited::MAX_FRAGMENTS,
-            "the historical noise epoch sat on this boundary"
+            inherited::noise_windows_in_epoch(shipped),
+            shipped / per_send,
+            "the epoch-window budget is integer division of the shipped epoch"
         );
-        assert_eq!(
-            inherited::noise_windows_in_epoch(exact - 1),
-            inherited::MAX_FRAGMENTS - 1,
-            "one second under the boundary drops a whole window"
-        );
+        let affords = inherited::noise_windows_in_epoch(shipped);
         assert!(
-            inherited::noise_windows_in_epoch(DandelionParams::inherited().min_epoch_secs)
-                >= inherited::MAX_FRAGMENTS,
-            "the shipped Dandelion++ epoch must still carry a full message"
+            affords >= carrier::MAX_FRAGMENTS,
+            "a {shipped} s epoch affords {affords} windows; the cap is {} — \
+             slack is {affords} − {}, not a coincidence with the cap",
+            carrier::MAX_FRAGMENTS,
+            carrier::MAX_FRAGMENTS,
+        );
+        assert_eq!(
+            inherited::noise_windows_in_epoch(300),
+            20,
+            "the historical 300 s boundary still affords 20 — that is the \
+             ceiling the inherited cap was silently set equal to, kept so a \
+             cadence change that would have moved that coincidence reds here"
         );
     }
 }

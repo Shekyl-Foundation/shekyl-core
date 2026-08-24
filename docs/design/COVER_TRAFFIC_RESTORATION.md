@@ -60,7 +60,7 @@ what that change would wake up.
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
 | `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
-| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,BYTES,CHANNELS}` / `CRYPTONOTE_MAX_FRAGMENTS` | `cryptonote_config.h` | cadence + fragment window. The epoch pair was deleted with `noise_zone_params`. |
+| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,CHANNELS}` | `cryptonote_config.h` | cadence + channel count. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
 
@@ -69,6 +69,8 @@ what that change would wake up.
 | `CovertSchedule` | `shekyl-relay/src/zone/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
 | `Zone::covert_deadline` / `due_covert_channel` / `covert_deadline_at` / `covert_enabled` | same | complete |
 | `inherited::NOISE_CHANNELS` mirror | `shekyl-relay-privacy/src/params.rs` | pins the C++ constant |
+| `carrier::WINDOW_BYTES` / `MAX_FRAGMENTS` | `shekyl-relay-privacy/src/params/carrier.rs` | derived window and fragment cap; **not** inherited mirrors |
+| `NoiseQueues` | `shekyl-relay/src/noise_queue/mod.rs` | executor; `enqueue` refuses over `MAX_FRAGMENTS` windows |
 | covert linkage instruments | `shekyl-relay-privacy/src/conformance/linkage.rs` | Q-11 Unit 2's substrate |
 
 **The Rust half already models the target architecture** and the C++ half does
@@ -261,9 +263,11 @@ wallet can ask rather than guess.
 
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
-180 KiB/s circuit-throughput floor. The 17 KiB / 12.5 s design sits at
-**2.72 KiB/s** — a 3× margin, so the ceiling constrains a future cadence proposal
-without constraining this one, which is the right shape for a ceiling.
+180 KiB/s circuit-throughput floor. The derived 20,480 B / 12.5 s design sits at
+**3.20 KiB/s** — a 2.5× margin, so the ceiling constrains a future cadence
+proposal without constraining this one, which is the right shape for a ceiling.
+*(Updated 2026-08-23 from 17 KiB / 2.72 KiB/s when the window was derived rather
+than chosen; the ceiling itself is unchanged.)*
 
 > **Units, stated once because this section mixes bases legitimately.** Byte
 > rates here are **binary** (`KiB/s` = 1024 B/s) — the windows are byte slots
@@ -350,6 +354,33 @@ residual wait is all that remains.
 | --- | --- | --- | --- |
 | 8.4 KiB | whole (`n = 1`) | 2 fragments | **stays** |
 | **17 KiB (adopted)** | whole (`n = 1`) | whole (`n = 1`) | **deletes** |
+
+> **CORRECTED 2026-08-23 — the conclusion survives, the justification does
+> not, and the number moved.** This table was computed on two sizes that were
+> never grounded (§94.5(b)'s correction): no transaction the wire admits
+> produces 8,395 B or 16,651 B. Three consequences:
+>
+> 1. **The 8.4 KiB option is dead on arrival, not a close second.** The
+>    smallest possible transaction is 13,042 B, so an 8.4 KiB window gives
+>    `n >= 2` for **every transaction that can exist** — there is no `n = 1`
+>    case to trade against, and the 2× comparison below had no subject.
+> 2. **The machinery does NOT delete.** At any window sized for the modal
+>    shape, the 8-input tail still fragments (4–5 windows), so
+>    `MAX_FRAGMENTS`, CV-1's discard, epoch-miss and the in-flight remainder
+>    all keep their subject. The "five mechanisms with a defect history"
+>    argument below is **withdrawn** — it was the justification for paying 2×,
+>    and it does not apply.
+> 3. **The window is 20,480 B, not 17 KiB.** 17,408 left only 398 B over the
+>    modal-at-max-depth transaction *before* its levin envelope; the envelope
+>    is 77 B and steps with the length varint, so the window would have
+>    silently flipped to `n = 2` as the curve tree deepened. The derived value
+>    is `carrier::WINDOW_BYTES`, enforced by `tests/carrier_window.rs`.
+>
+> **What survives is the `n = 1` conclusion, for the latency reason it always
+> had**: at `n = 1` only the residual wait remains, so a window that holds the
+> modal transaction whole beats a smaller one at equal bandwidth. The fragment
+> cap carries the structural max separately (`carrier::MAX_FRAGMENTS = 5`) —
+> two constants, two jobs.
 
 **17 KiB is adopted, and the justification is a track record rather than a
 preference.** `CRYPTONOTE_MAX_FRAGMENTS`, CV-1's discard-on-rebind, the
@@ -604,6 +635,38 @@ advances that boundary, not on whether the condemned C++ still "works."
 | **3** | **Zone fan-out.** Which configured zones receive a fluff. | C++ `broadcast_all_zones` loop in `net_node.inl`. **Delete target.** | The PR that names the zone set in Rust and reduces C++ to "send these bytes on this zone." The loop in `net_node.inl` does not grow another arm. |
 | **4** | **Production notify.** `send_txs` consumes `plan_dispatch` (phase + carrier + slot in one call). The inherited covert branch — carrier above phase, stem→`local`, all-channels broadcast — is deleted, not repaired. | FFI exists; no C++ caller. That is step 1's seam, not a finished notify path. | Wire the shim, *or* skip if step 5 lands first and notify is already Rust. Do not restructure `levin_notify.cpp` "for a month of life" — §2.6 already discarded that. |
 | **5** | **C++ relay path gone.** `levin_notify.cpp`, `net_node.inl`'s `send_txs` routing, the `zone_route` token in `enums.h`, every `levin.cpp` noise/route oracle, and any `shekyl_relay_zone_*` crossing that exists only for C++. | — | The cutover PR. In-process Rust calls `Zone` / `Driver` directly. A crossing with no remaining C++ consumer is deleted in this step, not kept as a souvenir. **See §2.9a: this step is NOT startable from this series.** |
+
+### 2.9b Step 5 owes the carrier ONE TRANSACTION PER NOTIFICATION (2026-08-23)
+
+**A requirement on the cutover caller, recorded here because the queue cannot
+enforce it and the reason is privacy rather than sizing.** Privacy has to
+lead: it survives changes to the sizing. If the window grows, the size cap
+moves and the batching prohibition does not. A requirement recorded on the
+weaker of two grounds gets re-litigated when that ground moves; recorded on
+the stronger, it does not.
+
+`NOTIFY_NEW_TRANSACTIONS` carries a **vector** — `make_tx_message` takes
+`std::vector<blobdata>&& txs` — so a notification is not one transaction by
+construction. The carrier must normalise to one transaction per notification
+before enqueueing.
+
+**The sizing half is already enforced and is not the argument.**
+`NoiseQueues::enqueue` refuses anything over `carrier::MAX_FRAGMENTS` windows,
+so an oversized batch (two maximum transactions are ~196 KB, ten windows against
+a cap of five) is structurally rejected. That is the queue doing what it can with
+opaque bytes.
+
+**The argument is that batching correlates what the stem exists to separate.**
+Two transactions in one carrier message share **one window, one slot, and one
+successor** — they arrive at the same peer, together, from the same sender. That
+is precisely the pairwise linkage Dandelion++ denies: each stem transaction is
+supposed to carry its own routing decision and its own embargo. A batch makes
+the two indistinguishable from a single sender's paired emission, and no cap
+size fixes that.
+
+So the requirement is **normalisation at the caller**, which is the only place
+that still has transactions rather than bytes. The cap is the backstop, not the
+mechanism.
 
 ### 2.9a Step 5 is gated on a rewrite this series excludes (2026-08-20)
 

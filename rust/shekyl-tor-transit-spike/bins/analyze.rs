@@ -174,6 +174,11 @@ fn main() {
     // the six-hop rendezvous RTT, a scalar transit constant is defensible and
     // §86.1's narrowed premise needs nothing further.
     if let (Some(m), Some(x)) = (p90_by_arm.get("modal"), p90_by_arm.get("max_admissible")) {
+        // The two payload ARMS, not the modal and max-admissible transactions
+        // — those are 13,042 B and 97,964 B at a realistic fee (97,969 B at
+        // `u64::MAX`; the fee is a varint, so its width moves with its value,
+        // and `carrier::WINDOW_BYTES` is bounded at the wider one). The slope
+        // this reports is measured across this span and does not extend past it.
         let d_kib = (16_651.0 - 8_395.0) / 1024.0;
         println!("\n=== size slope (§94.5(b)) ===");
         // A zero modal p90 means the modal arm produced no `ok` samples at all.

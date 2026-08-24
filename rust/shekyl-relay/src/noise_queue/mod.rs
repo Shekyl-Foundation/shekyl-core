@@ -41,6 +41,7 @@
 
 use std::collections::VecDeque;
 
+use shekyl_relay_privacy::params::carrier;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
 /// One channel's pending work.
@@ -229,6 +230,28 @@ impl NoiseQueues {
         // guard untestable, and `false` survives into release where a caller
         // bug is no less a bug.
         if message.is_empty() || !message.len().is_multiple_of(self.window()) {
+            return false;
+        }
+        // CV-1's cap, enforced where work is ACCEPTED rather than only where a
+        // zone is CONSTRUCTED.
+        //
+        // `Zone::new` checks that an epoch affords `MAX_FRAGMENTS` windows, so
+        // a configuration is validated against that many worst-case sends. But
+        // nothing stopped a longer message being enqueued into it: the length
+        // check above admits any whole multiple of the window, so a six-window
+        // message entered a zone validated for five and lost its remainder at
+        // the next epoch roll — silently, since CV-1 discards rather than
+        // reports. Refusing here makes the accepted work match the checked
+        // invariant.
+        //
+        // This is also what bounds a BATCH. `NOTIFY_NEW_TRANSACTIONS` carries a
+        // vector (`make_tx_message` takes `std::vector<blobdata>`), so a
+        // notification is not one transaction by construction — two maximum
+        // transactions are ~196 KB, ten windows, double the cap. The carrier
+        // has no way to parse what it is handed, so the size bound is the
+        // enforcement point: an oversized batch is refused here rather than
+        // truncated later.
+        if message.len() / self.window() > carrier::MAX_FRAGMENTS as usize {
             return false;
         }
         match self.channels.get_mut(channel) {
