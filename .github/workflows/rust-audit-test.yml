@@ -251,10 +251,20 @@ jobs:
         run: |
           test -f shekyl-engine-core/src/engine/key_dispatch_bench.rs
           grep -F -q 'bench-internals = []' shekyl-engine-core/Cargo.toml
+          # Accept the attribute on the declaration's own line or the line
+          # before it, and any visibility. The earlier form required the
+          # previous-line spelling, so `#[cfg(...)] mod key_dispatch_bench;`
+          # would have failed CI for being written differently — a gate that
+          # fires on formatting teaches people to route around it.
           awk '
-            /#\[cfg\(feature = "bench-internals"\)\]/ { cfg=1; next }
-            cfg && /mod key_dispatch_bench;/ { found=1; exit 0 }
-            { cfg=0 }
+            /mod key_dispatch_bench;/ {
+              if ($0 ~ /#\[cfg\(feature = "bench-internals"\)\]/ ||
+                  prev ~ /#\[cfg\(feature = "bench-internals"\)\]/) { found=1; exit 0 }
+            }
+            # Blank and comment lines do not become `prev`: a comment between
+            # an attribute and its item is legal Rust and must not read as an
+            # ungated module.
+            !/^[[:space:]]*(\/\/.*)?$/ { prev = $0 }
             END { if (!found) { print "key_dispatch_bench missing or not cfg-gated" > "/dev/stderr"; exit 1 } }
           ' shekyl-engine-core/src/engine/mod.rs
           cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings

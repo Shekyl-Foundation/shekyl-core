@@ -39,10 +39,13 @@
 ///    `shekyl_sign_fcmp_transaction` takes its outputs as JSON and the far
 ///    side computed the encryption. Its byte constructor is private to this
 ///    module, so deserializing is the *only* way to spend that path, and it is
-///    a visibly deliberate act rather than a constructor call. Its only
-///    non-test caller is the C++ `construct_tx*` chain, which has had no
-///    production caller since `wallet2` was deleted and dies with the
-///    consensus-oracle harness; this impl dies with it.
+///    a visibly deliberate act rather than a constructor call. Being a public
+///    trait impl, it is available to any serde consumer — the scoping below is
+///    a statement about this repository today, not a restriction the compiler
+///    enforces. In this repository its only non-test use is the C++
+///    `construct_tx*` chain, which has had no production caller since
+///    `wallet2` was deleted and dies with the consensus-oracle harness; this
+///    impl dies with it.
 ///
 /// That is the whole list. There is deliberately **no** test-only byte
 /// constructor: `feature = "test-utils"` would not have gated one, because
@@ -149,7 +152,15 @@ impl serde::Serialize for EncryptedOutputField {
 impl<'de> serde::Deserialize<'de> for EncryptedOutputField {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
-        let s = <&str as serde::Deserialize>::deserialize(deserializer)?;
+        // `Cow`, not `&str`. A borrow-only impl refuses every input the
+        // deserializer cannot lend from its own buffer — `from_reader`, which
+        // has no buffer, and any escaped string, which must be unescaped into a
+        // fresh one — even though the wire encoding is identical. `Cow` borrows
+        // where serde_json can (the FFI's unescaped slice: no allocation) and
+        // owns where it cannot, so the fast path is kept without narrowing the
+        // contract. `deserialize_accepts_input_the_deserializer_cannot_lend`
+        // holds this; it fails with `expected a borrowed string` otherwise.
+        let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(deserializer)?;
         let mut bytes = [0u8; 9];
         if s.len() != 18 {
             return Err(D::Error::custom(format!(
@@ -157,7 +168,7 @@ impl<'de> serde::Deserialize<'de> for EncryptedOutputField {
                 s.len()
             )));
         }
-        hex::decode_to_slice(s, &mut bytes).map_err(D::Error::custom)?;
+        hex::decode_to_slice(s.as_ref(), &mut bytes).map_err(D::Error::custom)?;
         Ok(Self::from_ffi_json_unverified(bytes))
     }
 }
@@ -212,5 +223,30 @@ mod tests {
             serde_json::from_str::<EncryptedOutputField>("\"zz010f107f80abfeff\"").is_err(),
             "non-hex characters must be refused"
         );
+    }
+
+    #[test]
+    fn deserialize_accepts_input_the_deserializer_cannot_lend() {
+        // The test above only ever calls `from_str` on an unescaped literal,
+        // which every deserializer can lend a `&str` from — so it passes even
+        // if this impl demands a *borrowed* string. Two ordinary inputs cannot
+        // be lent, and both are refused by a borrow-only impl at runtime while
+        // the wire encoding is unchanged.
+        let bytes = [0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xfe, 0xff];
+        let json = "\"00010f107f80abfeff\"";
+
+        // 1. A streaming source has no buffer to borrow from.
+        let from_reader: EncryptedOutputField =
+            serde_json::from_reader(std::io::Cursor::new(json.as_bytes()))
+                .expect("a reader-backed deserializer must be accepted");
+        assert_eq!(from_reader.to_bytes(), bytes);
+
+        // 2. An escaped string must be unescaped into a fresh buffer first.
+        // `\u0030` is '0', so this is the same 18 characters with the first one
+        // written the long way — valid JSON naming the identical value.
+        let escaped = "\"\\u00300010f107f80abfeff\"";
+        let from_escaped: EncryptedOutputField =
+            serde_json::from_str(escaped).expect("an escaped string must be accepted");
+        assert_eq!(from_escaped.to_bytes(), bytes);
     }
 }
