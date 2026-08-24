@@ -1760,21 +1760,31 @@ serialized immediately after `enc_amounts` and before `outPk`:
 - Included in `serialize_ctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
 - Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_ctsig_base_prehash`.
 - ~~`genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test
-  device mode~~ — **the guard was deleted with its host, 2026-08-22, and
-  nothing replaced it.** No live coverage was lost: `genRctFcmpPlusPlus` had
-  no caller, so the check was unreachable and enforced nothing. But the
-  invariant it *stated* is real, though not for the obvious reason. An all-zero
-  *plaintext* is harmless — `0x00…00 XOR k_label[..8]` is uniform, so §5.7.10
-  holds for it as for the sentinel. What the guard was catching is the stub
-  writing the field **without encrypting it at all**
+  device mode~~ — **superseded 2026-08-23 by a type; the guard itself was
+  deleted 2026-08-22 with its host.** Kept as a record because the invariant
+  outlived both.
+
+  Deleting the guard lost no coverage: `genRctFcmpPlusPlus` had no caller, so
+  the check was unreachable and enforced nothing. The invariant it *stated* was
+  real, though not for the obvious reason — an all-zero *plaintext* is
+  harmless, since `0x00…00 XOR k_label[..8]` is uniform and §5.7.10 holds for
+  it exactly as for the sentinel. What the guard was aimed at is a path that
+  writes the field **without encrypting it at all**
   (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
   the label encryption), which puts a literal `00×9` on the wire, identical
   across every output, with `label_tag` zero where a derived tag is uniform.
-  The Rust signing path takes `enc_label` as a plain `[u8; 9]`
-  (`shekyl-tx-builder/src/types.rs`), so an unencrypted value is representable
-  there too. Filed in `FOLLOWUPS.md` with a type-level fix rather than a
-  zero-check; recorded here rather than dropped, because a deletion that
-  retires an unreachable check must not also retire the invariant silently.
+
+  The Rust signing path *used to* carry the same shape: `enc_label` was a plain
+  `[u8; 9]` on `OutputInfo`, so an unencrypted value was representable there
+  too. It is not any longer. `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`) has no public byte
+  constructor — in-process construction is `OutputData::enc_label_wire()` /
+  `enc_amount_wire()` (the value `construct_output` assembled at encryption),
+  and `Deserialize` serves the FFI JSON boundary — so on the in-process path
+  an unencrypted field is **unrepresentable**, not merely rejected. Deliberately not implemented as "reject zeros": that treats one
+  symptom, admits any other unencrypted constant, and can fire on a legitimate
+  ciphertext that happens to be zero.
+
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 - **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`

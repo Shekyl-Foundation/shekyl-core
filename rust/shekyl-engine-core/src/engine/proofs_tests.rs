@@ -349,15 +349,6 @@ mod check_workflows {
         rpc: MockRpc,
     }
 
-    /// `value[8] ‖ tag[1]` — the wire's 9-byte encrypted-amount /
-    /// encrypted-label form over `construct_output`'s split fields.
-    fn join9(value: [u8; 8], tag: u8) -> [u8; 9] {
-        let mut out = [0u8; 9];
-        out[..8].copy_from_slice(&value);
-        out[8] = tag;
-        out
-    }
-
     fn ciphertext_of(od: &OutputData) -> HybridCiphertext {
         HybridCiphertext {
             x25519: od.kem_ciphertext_x25519,
@@ -422,11 +413,11 @@ mod check_workflows {
                 base: CtBase {
                     enc_amounts: outputs
                         .iter()
-                        .map(|od| join9(od.enc_amount, od.amount_tag))
+                        .map(|od| od.enc_amount_wire().to_bytes())
                         .collect(),
                     enc_labels: outputs
                         .iter()
-                        .map(|od| join9(od.enc_label, od.label_tag))
+                        .map(|od| od.enc_label_wire().to_bytes())
                         .collect(),
                     commitments: outputs.iter().map(|od| od.commitment).collect(),
                 },

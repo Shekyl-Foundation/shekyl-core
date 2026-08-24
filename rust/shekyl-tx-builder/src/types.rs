@@ -8,6 +8,7 @@
 //! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -30,29 +31,6 @@ pub mod hex_bytes32 {
         let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
         v.try_into().map_err(|v: Vec<u8>| {
             serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
-        })
-    }
-}
-
-/// Serde helper: hex-encode/decode `[u8; 9]`.
-pub mod hex_bytes9 {
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8; 9], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 9], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-        v.try_into().map_err(|v: Vec<u8>| {
-            serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
         })
     }
 }
@@ -104,35 +82,6 @@ mod hex_vec32 {
                 let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
                 v.try_into().map_err(|v: Vec<u8>| {
                     serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
-                })
-            })
-            .collect()
-    }
-}
-
-/// Serde helper: hex-encode/decode `Vec<[u8; 9]>`.
-mod hex_vec9 {
-    use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(items: &[[u8; 9]], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let hexes: Vec<String> = items.iter().map(hex::encode).collect();
-        hexes.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 9]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let hexes: Vec<String> = Vec::deserialize(deserializer)?;
-        hexes
-            .into_iter()
-            .map(|s| {
-                let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-                v.try_into().map_err(|v: Vec<u8>| {
-                    serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
                 })
             })
             .collect()
@@ -292,15 +241,25 @@ pub struct OutputInfo {
     #[serde(with = "hex_bytes32")]
     #[zeroize]
     pub commitment_mask: [u8; 32],
-    /// Pre-computed encrypted amount (9 bytes): [0..8] = amount XOR k_amount,
-    /// [8] = amount_tag (HKDF-derived integrity byte).
-    /// Created by `shekyl_construct_output`.
-    #[serde(with = "hex_bytes9")]
-    pub enc_amount: [u8; 9],
-    /// Pre-computed encrypted label (9 bytes): [0..8] = plaintext XOR k_label,
-    /// [8] = label_tag. Sentinel plaintext at V3.0 launch.
-    #[serde(with = "hex_bytes9")]
-    pub enc_label: [u8; 9],
+    /// Encrypted amount (9 bytes): [0..8] = amount XOR k_amount, [8] =
+    /// amount_tag. In process, obtainable only from
+    /// `OutputData::enc_amount_wire()`; the type's `Deserialize` impl is the
+    /// one other route, and it exists for the FFI JSON boundary where the far
+    /// side computed the encryption — see [`EncryptedOutputField`].
+    ///
+    /// Not zeroized, deliberately: this is ciphertext bound for the chain, so
+    /// wiping the local copy protects nothing. The secret it was derived under
+    /// (`k_amount`) is wiped by `OutputData`'s own `ZeroizeOnDrop`.
+    #[zeroize(skip)]
+    pub enc_amount: EncryptedOutputField,
+    /// Encrypted label (9 bytes): [0..8] = plaintext XOR k_label, [8] =
+    /// label_tag; sentinel plaintext at V3.0 launch. In process, obtainable
+    /// only from `OutputData::enc_label_wire()`, so an unencrypted label
+    /// cannot be constructed on this path. The type's `Deserialize` impl is
+    /// the one other route, and it exists for the FFI JSON boundary where the
+    /// far side computed the encryption — see [`EncryptedOutputField`].
+    #[zeroize(skip)]
+    pub enc_label: EncryptedOutputField,
 }
 
 /// Curve tree context at the reference block height.
@@ -361,11 +320,9 @@ pub struct SignedProofs {
     #[serde(with = "hex_vec32")]
     pub commitments: Vec<[u8; 32]>,
     /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
-    #[serde(with = "hex_vec9")]
-    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<EncryptedOutputField>,
     /// Per-output encrypted labels (9 bytes each).
-    #[serde(with = "hex_vec9")]
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     /// Per-input pseudo-output commitments (from FCMP prover).
     #[serde(with = "hex_vec32")]
     pub pseudo_outs: Vec<[u8; 32]>,

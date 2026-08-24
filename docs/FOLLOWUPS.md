@@ -47,78 +47,55 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Nothing forces an `enc_label` through encryption on the production signing
-  path** (surfaced 2026-08-22 while deleting the legacy prove seam). The only
-  stated enforcement was in `genRctFcmpPlusPlus`, which rejected all-zero
-  `enc_labels` outside fake/test device mode — "the stub builder must not reach
-  production". That function had **no caller**, so the guard was unreachable
-  and enforced nothing; deleting it lost no live coverage, and this item exists
-  so the *invariant* is not retired along with the dead check.
+- **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
+  production signing path** (surfaced 2026-08-22 while deleting the legacy
+  prove seam; the only stated enforcement had been an unreachable check inside
+  `genRctFcmpPlusPlus`).
 
-  **State the hazard precisely, because the obvious reading is wrong.** An
-  all-zero *plaintext* is harmless: `enc_label = 0x00…00 XOR k_label[..8]` =
-  `k_label[..8]`, which is uniform, so §5.7.10 holds for it exactly as for the
-  `0xFF…` sentinel — "XOR of a constant with a uniform key is uniform" covers
-  every fixed plaintext. Nothing about the keying is weak either, and there is
-  no IV to be weak: `k_label` is a **one-time per-output key**
-  (`HKDF-Expand(prk, "shekyl-output-label-key" || idx_le64, 32)` over a
-  `combined_ss` produced by that output's own KEM encapsulation), so keystream
-  reuse would need two outputs sharing both secret and index.
+  **The live path was already correct; this made it the only representable
+  one.** `sign_bridge.rs` always took its label straight from
+  `construct_output`, so nothing leaked — but `OutputInfo.enc_label` was a
+  public `[u8; 9]` and the "copy eight bytes, append the tag" assembly was
+  hand-written at eight sites, so an unencrypted constant was one careless
+  caller away. Unencrypted bytes are the hazard, not a weak plaintext: an
+  all-zero *plaintext* encrypts to `k_label[..8]` and is uniform, whereas bytes
+  that never met `encrypt_label_plaintext` are a constant that marks every
+  output carrying it.
 
-  **Reachability, established 2026-08-22 — this is latent, not live.** The
-  stub's zeros are *placeholders*, overwritten about eight lines later:
-  `construct_tx_with_tx_key` copies the real HKDF-derived values out of
-  `v3_rct_data` (`enc_labels[i] = v3_rct_data[i].enc_label_with_tag`), which
-  `shekyl_construct_output` produced. The overwrite is conditional
-  (`if (!v3_rct_data.empty())`), but the condition cannot fail in a way that
-  exposes anything: `v3_rct_data` is filled whenever
-  `hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC`, that constant is **1**
-  (`cryptonote_config.h`), and Shekyl is v3-from-genesis — the same
-  always-true-gate shape as the `HF_VERSION_SHEKYL_NG` comparison. With zero
-  destinations the vector is empty but there are no outputs to carry a label.
-  So no unencrypted label reaches a transaction today, and this item is about
-  removing the *window*, not closing an active leak.
+  Fixed with a type rather than a check: `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`, re-exported from
+  `output`). In-process constructors are `OutputData::enc_label_wire()` /
+  `enc_amount_wire()`, which return the value `construct_output` assembled at
+  encryption — the field on `OutputData` *is* the type, not an 8+1 pair a
+  late accessor re-wraps. `Deserialize` is the other route (the FFI JSON
+  boundary). "Reject zeros" was considered and rejected — it treats one
+  symptom, admits any other unencrypted constant, and can fire on a legitimate
+  ciphertext that happens to be zero. `enc_amount` is typed alongside
+  `enc_label` because the assembly was one five-line template producing both;
+  typing one would have left the copy-paste source alive three lines above the
+  field just protected. (`enc_amount` fails loudly at the recipient rather
+  than silently — a difference in blast radius, not in shape.)
 
-  Note also that the stub **cannot** simply "encrypt properly": `k_label` comes
-  from the per-output `combined_ss` produced by `shekyl_construct_output`, on
-  the caller's side. The stub runs before those values are available, which is
-  why it writes placeholders at all. Fixing it means removing the placeholder
-  phase, not giving the stub a keystream.
-
-  The hazard is a path that writes the field **without encrypting it at all**.
-  `fill_construct_tx_rct_stub` resizes `enc_labels` to value-initialized
-  `std::array<uint8_t, 9>` and never calls the label encryption, so its outputs
-  carry a literal `00×9` — identical across every output and every transaction,
-  and with the `label_tag` byte zero where a derived tag would be uniform.
-  That is trivially distinguishable, and it marks precisely the outputs it
-  touches. The Rust signing path takes `enc_label` as a plain `[u8; 9]`
-  (`shekyl-tx-builder/src/types.rs`, consumed by `sign.rs`), so an unencrypted
-  value is representable there too.
-
-  **The live path is Rust, and that is where the fix belongs.** `wallet2.cpp`
-  was deleted 2026-08-19, so the C++ `construct_tx*` chain that calls the stub
-  has no production caller at all and is now only the consensus-oracle
-  harness's transaction factory (tracked separately below). Production
-  transaction construction is `shekyl-tx-builder`. Two consequences: the C++
-  stub's window is a *test-path* window today and cannot leak to a user, and
-  the Rust builder inherits the same shape with none of the C++ side's
-  accidental protection — no `v3_rct_data` overwrite stands behind it, and
-  `OutputInfo::enc_label` is a bare `[u8; 9]` any caller can fill by hand.
-  **So this is not a C++ curiosity to retire with the oracle; it is an open
-  obligation on the builder that ships.** Whoever migrates the harness off the
-  C++ builder must not carry the write-then-fill pattern across with it.
-
-  **Therefore do not fix this by rejecting zeros.** A zeroed field is one
-  symptom; a check for it still admits any other unencrypted constant, and
-  rejects a legitimate ciphertext that happens to be zero (probability 2⁻⁶⁴,
-  but a refusal that can fire on a valid transaction is worse than the bug).
-  The fix is type-level per
-  [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc): a wire
-  type whose only constructor is `encrypt_label_plaintext`, so bytes that never
-  passed through the encryption are unrepresentable rather than merely
-  detected. **Target: V3.0** (pre-genesis; §5.7.10 is a privacy invariant with
-  no enforcement, and [`00-mission`](../.cursor/rules/00-mission.mdc) ranks
-  that above convenience).
+  **The guarantee, at its true width:** on the in-process Rust path an
+  unencrypted field is not representable, and that is compiler-enforced —
+  which took three review rounds to become true rather than merely claimed.
+  The claim first shipped while a `#[doc(hidden)] pub` constructor existed,
+  then while a `feature = "test-utils"` constructor shipped in the production
+  archive, then while `OutputData`'s ciphertext and tag fields were still
+  `pub` — so a caller could overwrite a real output's bytes and call the
+  accessor, or build a literal. All three are closed. The remaining
+  `pub(crate)` on the two stored fields stops a deserialized FFI-boundary
+  value being written onto a derived output. Widening them, or adding a
+  public byte constructor, is pinned by `shekyl-crypto-pq/tests/trybuild/`
+  (one fixture per route, because a field-privacy error otherwise masks the
+  rest). The byte constructor is **private to the defining module**, so the
+  one remaining way in is the type's `Deserialize` impl — the
+  `shekyl_sign_fcmp_transaction` JSON boundary, where the far side computed
+  the encryption and this crate cannot re-derive it. Deserializing is a
+  visibly deliberate act at a boundary rather than a function any crate can
+  call. Its only non-test caller is the C++ `construct_tx*` chain, which has
+  had no production caller since `wallet2` was deleted; it dies with the
+  consensus-oracle harness, and the impl dies with it.
 
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the

@@ -7,6 +7,7 @@
 //! and the four §3 divergences of the old shekyl-oxide encoder are gone with it.
 
 use shekyl_bulletproofs::Bulletproof;
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
@@ -39,8 +40,8 @@ pub struct WireEncodeInput {
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
     pub fee: u64,
-    pub enc_amounts: Vec<[u8; 9]>,
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<EncryptedOutputField>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     pub out_commitments: Vec<[u8; 32]>,
     pub pseudo_outs: Vec<[u8; 32]>,
     pub bulletproof: Bulletproof,
@@ -227,8 +228,16 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
             fee: input.fee,
             reference_block: input.reference_block,
             base: CtBase {
-                enc_amounts: input.enc_amounts.clone(),
-                enc_labels: input.enc_labels.clone(),
+                // The provenance type ends here, deliberately. `CtBase` is
+                // `shekyl-wire`'s representation, shared with the *parse*
+                // direction, where the nine bytes came off the network and no
+                // one in this process vouches for them. Wrapping those in
+                // `EncryptedOutputField` would launder unverified data into a
+                // type whose whole meaning is "this crate or the FFI boundary
+                // computed these". So the send path stays typed right up to
+                // this private assembly and unwraps only as it becomes wire.
+                enc_amounts: input.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: input.enc_labels.iter().map(|f| f.to_bytes()).collect(),
                 commitments: input.out_commitments.clone(),
             },
             pqc_auths,
@@ -382,8 +391,8 @@ mod tests {
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
-            enc_amounts: vec![[0u8; 9]],
-            enc_labels: vec![[0u8; 9]],
+            enc_amounts: vec![crate::tests::enc_field_fixture([0u8; 9])],
+            enc_labels: vec![crate::tests::enc_field_fixture([0u8; 9])],
             out_commitments: vec![[4u8; 32]],
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
@@ -672,7 +681,9 @@ mod tests {
         // A per-output base array out of step with the output count must fail at the
         // boundary, not serialize a tx the daemon later rejects.
         let mut input = minimal_input();
-        input.enc_amounts.push([0u8; 9]); // 2 enc_amounts vs 1 output
+        input
+            .enc_amounts
+            .push(crate::tests::enc_field_fixture([0u8; 9])); // 2 enc_amounts vs 1 output
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))

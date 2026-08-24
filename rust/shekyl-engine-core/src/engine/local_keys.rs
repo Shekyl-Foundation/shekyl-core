@@ -520,10 +520,10 @@ mod tests {
             output_key: constructed.output_key,
             commitment: constructed.commitment,
             view_tag: ViewTag([constructed.view_tag_prefilter]),
-            enc_amount: constructed.enc_amount,
-            amount_tag_on_chain: constructed.amount_tag,
-            enc_label: constructed.enc_label,
-            label_tag_on_chain: constructed.label_tag,
+            enc_amount: constructed.enc_amount_bytes(),
+            amount_tag_on_chain: constructed.amount_tag(),
+            enc_label: constructed.enc_label_bytes(),
+            label_tag_on_chain: constructed.label_tag(),
             output_index,
             tx_hash,
         };
@@ -603,18 +603,8 @@ mod tests {
             dest_key: constructed.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
-            enc_amount: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_amount);
-                enc[8] = constructed.amount_tag;
-                enc
-            },
-            enc_label: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_label);
-                enc[8] = constructed.label_tag;
-                enc
-            },
+            enc_amount: constructed.enc_amount_wire(),
+            enc_label: constructed.enc_label_wire(),
         }
     }
 
@@ -753,10 +743,10 @@ mod tests {
             output_key: constructed.output_key,
             commitment: constructed.commitment,
             view_tag: ViewTag([constructed.view_tag_prefilter]),
-            enc_amount: constructed.enc_amount,
-            amount_tag_on_chain: constructed.amount_tag,
-            enc_label: constructed.enc_label,
-            label_tag_on_chain: constructed.label_tag,
+            enc_amount: constructed.enc_amount_bytes(),
+            amount_tag_on_chain: constructed.amount_tag(),
+            enc_label: constructed.enc_label_bytes(),
+            label_tag_on_chain: constructed.label_tag(),
             output_index: 0,
             tx_hash: [0u8; 32],
         };
@@ -947,10 +937,10 @@ mod tests {
                 &constructed.kem_ciphertext_ml_kem,
                 &constructed.output_key,
                 &constructed.commitment,
-                &constructed.enc_amount,
-                constructed.amount_tag,
-                &constructed.enc_label,
-                constructed.label_tag,
+                &constructed.enc_amount_bytes(),
+                constructed.amount_tag(),
+                &constructed.enc_label_bytes(),
+                constructed.label_tag(),
                 constructed.view_tag_prefilter,
                 output_index,
             )
@@ -1262,10 +1252,10 @@ mod tests {
                     &constructed.kem_ciphertext_ml_kem,
                     &constructed.output_key,
                     &constructed.commitment,
-                    &constructed.enc_amount,
-                    constructed.amount_tag,
-                    &constructed.enc_label,
-                    constructed.label_tag,
+                    &constructed.enc_amount_bytes(),
+                    constructed.amount_tag(),
+                    &constructed.enc_label_bytes(),
+                    constructed.label_tag(),
                     constructed.view_tag_prefilter,
                     output_index,
                 )

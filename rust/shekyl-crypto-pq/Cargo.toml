@@ -21,6 +21,10 @@ test-utils = []
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+# Hex codec for the `EncryptedOutputField` wire form. Already a production
+# dependency of shekyl-tx-builder and shekyl-engine-core, so this adds no new
+# supply-chain surface to any binary that links this crate (17-dependency-discipline).
+hex = "0.4"
 zeroize = { workspace = true }
 rand = "0.8"
 rand_chacha = "0.3"
@@ -173,7 +177,6 @@ postcard-schema = { version = "0.2", default-features = false, features = ["deri
 # that feature, and a separate integration-test crate cannot see the in-crate
 # `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
 shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
-hex = "0.4"
 # Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two
 # cSHAKE paths agree). It uses `sha3` directly, which is already a normal
@@ -187,6 +190,12 @@ proptest = "1"
 # lint-clean statistics utility (not duplicated as literals, and not a dep on a
 # sim/domain crate); see `rust/shekyl-stats`.
 shekyl-stats = { path = "../shekyl-stats" }
+# Compile-fail harness for `tests/trybuild.rs`: the only way to assert that
+# downstream code *cannot* build an unencrypted `EncryptedOutputField`, since a
+# guarantee enforced by field visibility produces no runtime behaviour to test.
+# Already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock` —
+# this adds no package to the supply chain (`17-dependency-discipline`).
+trybuild = "1"
 
 [[bench]]
 name = "pqc_rederivation"

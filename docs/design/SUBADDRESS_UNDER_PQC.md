@@ -1569,7 +1569,20 @@ walkthroughs **cannot** detect violations of these rules.
   assert verification fails (`tests/unit_tests/fcmp.cpp`:
   `enc_label_binds_ctsig_base_prehash`). Prehash wiring without this test is
   inspection-only; the test makes the binding durable across refactors.
-- **Stub prohibition — stated, not currently enforced (2026-08-22).**
+- **Stub prohibition — enforced by type since 2026-08-23.** On the in-process
+  Rust path an `enc_label` can only come from `OutputData::enc_label_wire()`
+  (`EncryptedOutputField`, `shekyl-crypto-pq/src/encrypted_output_field.rs`),
+  which returns the value `construct_output` assembled at encryption, so bytes
+  that never went through `encrypt_label_plaintext` are **unrepresentable**
+  rather than merely rejected. The one exception is the type's `Deserialize`
+  impl — the `shekyl_sign_fcmp_transaction` JSON boundary, whose byte
+  constructor is private to the defining module, whose only non-test caller is
+  the C++ `construct_tx*` chain, and which dies with the consensus-oracle
+  harness. Note the check was deliberately *not* implemented as "reject
+  all-zero": that treats one symptom, admits any other unencrypted constant,
+  and can fire on a legitimate ciphertext that happens to be zero. Historical
+  note follows.
+- **Stub prohibition — the state this replaced (2026-08-22).**
   `fill_construct_tx_rct_stub` zero-fills `enc_labels`; those bytes never went
   through `encrypt_label_plaintext`, so they are a literal constant on the wire
   rather than a ciphertext, and they would break §5.7.10 uniformity for exactly

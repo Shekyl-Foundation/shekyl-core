@@ -237,16 +237,6 @@ fn fake_spend_key_bytes() -> [u8; 32] {
     two_g.compress().to_bytes()
 }
 
-/// Join a crypto-layer `(value, tag)` amount/label pair into the
-/// `shekyl-wire` `[u8; 9]` on-wire encoding (8-byte value ‖ 1-byte
-/// HKDF tag, GENESIS §9.7) — the inverse of the scanner's `split_enc9`.
-fn join_enc9(value: &[u8; 8], tag: u8) -> [u8; 9] {
-    let mut out = [0u8; 9];
-    out[..8].copy_from_slice(value);
-    out[8] = tag;
-    out
-}
-
 /// Assemble a [`ScannableBlock`] holding a single non-miner
 /// `shekyl-wire` transaction whose N outputs were all constructed via
 /// [`construct_output`] against `recipient_pk`.
@@ -293,8 +283,8 @@ fn assemble_scannable_block(
             view_tag: out.view_tag_prefilter,
         });
         commitments.push(out.commitment);
-        enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
-        enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
+        enc_amounts.push(out.enc_amount_wire().to_bytes());
+        enc_labels.push(out.enc_label_wire().to_bytes());
         // One `X25519_KEM_CT_LEN || ML_KEM_768_CT_LEN` ciphertext per
         // output; `Extra::for_hybrid_transfer` below concatenates them
         // into the single `0x06` field the scanner slices at
@@ -524,10 +514,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             /* output_index */ 0,
         )
@@ -576,10 +566,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 /* output_index */ 0,
             );

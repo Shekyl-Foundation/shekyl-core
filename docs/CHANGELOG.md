@@ -162,6 +162,58 @@
   "bigger than" the total; an unbounded total contradicts nothing, so
   `ConnLimits::checked` accepts it and refuses only a per-IP cap above a
   *bounded* total, by flag name.
+
+- **An unencrypted `enc_label` or `enc_amount` is now unrepresentable, not
+  merely wrong.** Both are XOR ciphertexts under a one-time per-output key, and
+  both were plain `[u8; 9]` fields on `OutputInfo` assembled by a hand-written
+  "copy eight bytes, append the tag" block repeated at eight call sites —
+  including the genesis block builder. The live path was already correct
+  (`sign_bridge.rs` took its values straight from `construct_output`), so this
+  fixes no leak; it removes the possibility. `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`, re-exported from
+  `output`) has no public byte constructor. The in-process constructors are
+  `OutputData::enc_label_wire()` / `enc_amount_wire()`, which return the
+  value `construct_output` assembled at the moment of encryption — the field
+  on `OutputData` *is* the type, not an 8+1 pair a late accessor re-wraps.
+  `Deserialize` is the other route, and it exists for the FFI JSON boundary.
+
+  The hazard was never a weak plaintext — an all-zero *plaintext* encrypts to
+  `k_label[..8]` and is uniform, exactly as the sentinel does. It was bytes
+  that never met the encryption, which are a constant on the wire and mark
+  every output carrying them, breaking the `SUBADDRESS_UNDER_PQC.md` §5.7.10
+  indistinguishability invariant. "Reject zeros" was considered and rejected as
+  the remedy: it treats one symptom, admits any other unencrypted constant, and
+  can fire on a legitimate ciphertext that happens to be zero.
+
+  The guarantee is compiler-enforced on three axes, all verified by attempting
+  the forgery from outside the crate: `EncryptedOutputField([0; 9])` is
+  `E0423` (the inner field is private), overwriting a real `OutputData`'s
+  stored field is `E0616` (`pub(crate)`), and building an `OutputData`
+  literal is `E0451`.
+
+  Those attempts are committed as compile-fail tests
+  (`shekyl-crypto-pq/tests/trybuild/`), which **retracts this entry's earlier
+  judgement** that a `trybuild` harness was not worth adding for them. Two
+  things made that judgement wrong. The cost was overstated — `trybuild` was
+  already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock`,
+  adding no package to the supply chain. And the alternative it chose was
+  documentation: a comment cannot fail, and widening a field back to `pub`
+  would have left every existing test passing while the guarantee evaporated.
+  A property this crate names in its own title deserves a check that goes red.
+
+  The routes live in separate fixtures because a field-privacy error
+  aborts the compilation before later bodies are type-checked — sharing a file,
+  later routes vanish from the snapshot and would have been guarded by nothing.
+
+  One exception survives, and it is a boundary rather than a constructor: the
+  type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its
+  outputs as JSON and the far side computed the encryption. The byte
+  constructor behind it is private to the defining module, so no crate can
+  call it. That path's only non-test caller is the C++ `construct_tx*` chain,
+  which has had no production caller since `wallet2` was deleted, and it goes
+  with the consensus-oracle harness. The JSON encoding is unchanged — still an
+  18-character lowercase hex string, now pinned by a test — so the FFI contract
+  is untouched.
 - **`get_block_count` and `on_get_block_hash` are served natively in Rust
   (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
   (`getblockcount`, `on_getblockhash`) answer from

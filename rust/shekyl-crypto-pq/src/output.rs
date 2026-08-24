@@ -72,6 +72,8 @@ use crate::kem::{
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::CryptoError;
 
+pub use crate::encrypted_output_field::EncryptedOutputField;
+
 /// All data produced by output construction that the sender needs to build the tx.
 #[derive(ZeroizeOnDrop)]
 pub struct OutputData {
@@ -81,18 +83,23 @@ pub struct OutputData {
     /// Compressed Pedersen commitment C = z*G + amount*H.
     #[zeroize(skip)]
     pub commitment: [u8; 32],
-    /// XOR-encrypted amount (8 bytes).
+    /// Encrypted amount (ciphertext ‖ tag), assembled at construction.
+    ///
+    /// **`pub(crate)` is load-bearing, not stylistic.** The field *is* an
+    /// [`EncryptedOutputField`], so there is no 8+1 pair a late accessor
+    /// could re-wrap after a constant overwrite. Keeping it crate-private
+    /// additionally stops a deserialized (FFI-boundary) value being written
+    /// onto a derived output, and makes `OutputData` non-literal-constructible
+    /// from outside the crate (`E0451`). Read access is unaffected: see the
+    /// `*_bytes()` / `*_tag()` / `*_wire()` accessors. `tests/trybuild/`
+    /// attempts the remaining forgeries from outside the crate.
     #[zeroize(skip)]
-    pub enc_amount: [u8; 8],
-    /// 1-byte AAD tag for amount integrity.
+    pub(crate) enc_amount: EncryptedOutputField,
+    /// Encrypted label (ciphertext ‖ tag), assembled at construction.
+    /// Sentinel plaintext at V3.0 launch. Same visibility contract as
+    /// [`Self::enc_amount`].
     #[zeroize(skip)]
-    pub amount_tag: u8,
-    /// XOR-encrypted 8-byte label plaintext (sentinel at launch).
-    #[zeroize(skip)]
-    pub enc_label: [u8; 8],
-    /// 1-byte AAD tag for label integrity.
-    #[zeroize(skip)]
-    pub label_tag: u8,
+    pub(crate) enc_label: EncryptedOutputField,
     /// ML-KEM-keyed view tag for scanner pre-filtering (wire: `view_tag`).
     #[zeroize(skip)]
     pub view_tag_prefilter: u8,
@@ -118,6 +125,57 @@ pub struct OutputData {
     pub k_label: [u8; 32],
 }
 
+impl OutputData {
+    /// The raw `enc_label` ciphertext, without its tag.
+    ///
+    /// Read-only by construction: the field behind it is `pub(crate)` so that
+    /// no code outside this crate can overwrite it with a deserialized
+    /// (FFI-boundary) value. Reading was never the hazard. Returned by value
+    /// because `[u8; 8]` is `Copy` and eight bytes; assignment sites take
+    /// the array, scan sites take `&` of the temporary.
+    #[must_use]
+    pub const fn enc_label_bytes(&self) -> [u8; 8] {
+        *self.enc_label.ciphertext()
+    }
+
+    /// The HKDF-derived label tag.
+    #[must_use]
+    pub const fn label_tag(&self) -> u8 {
+        self.enc_label.tag()
+    }
+
+    /// The raw `enc_amount` ciphertext, without its tag.
+    #[must_use]
+    pub const fn enc_amount_bytes(&self) -> [u8; 8] {
+        *self.enc_amount.ciphertext()
+    }
+
+    /// The HKDF-derived amount tag.
+    #[must_use]
+    pub const fn amount_tag(&self) -> u8 {
+        self.enc_amount.tag()
+    }
+
+    /// The `enc_label` wire field, assembled at construction.
+    ///
+    /// This is the only way to *derive* an [`EncryptedOutputField`] for a
+    /// label, which is what makes an unencrypted one unrepresentable on the
+    /// in-process path. It is not the only way to obtain one — the type's
+    /// `Deserialize` impl rebuilds a field whose encryption the far side of
+    /// the FFI JSON boundary computed — and saying "only way to obtain" here
+    /// would repeat the incomplete enumeration this PR twice had to correct.
+    #[must_use]
+    pub const fn enc_label_wire(&self) -> EncryptedOutputField {
+        self.enc_label
+    }
+
+    /// The `enc_amount` wire field, assembled at construction.
+    #[must_use]
+    pub const fn enc_amount_wire(&self) -> EncryptedOutputField {
+        self.enc_amount
+    }
+}
+
 // CLIPPY: omitted fields are intentionally redacted (secrets or bulky ciphertexts).
 #[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for OutputData {
@@ -125,8 +183,8 @@ impl std::fmt::Debug for OutputData {
         f.debug_struct("OutputData")
             .field("output_key", &self.output_key)
             .field("commitment", &self.commitment)
-            .field("amount_tag", &self.amount_tag)
-            .field("label_tag", &self.label_tag)
+            .field("amount_tag", &self.enc_amount.tag())
+            .field("label_tag", &self.enc_label.tag())
             .field("view_tag_prefilter", &self.view_tag_prefilter)
             .field("y", &"[REDACTED]")
             .field("z", &"[REDACTED]")
@@ -338,10 +396,8 @@ pub fn construct_output_with_label_plaintext(
     Ok(OutputData {
         output_key,
         commitment,
-        enc_amount,
-        amount_tag: secrets.amount_tag,
-        enc_label,
-        label_tag: secrets.label_tag,
+        enc_amount: EncryptedOutputField::assemble(enc_amount, secrets.amount_tag),
+        enc_label: EncryptedOutputField::assemble(enc_label, secrets.label_tag),
         view_tag_prefilter,
         kem_ciphertext_x25519: eph_mont_pub.0,
         kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
@@ -1421,10 +1477,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             output_index,
@@ -1477,10 +1533,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 &spend_key,
                 idx,
@@ -1521,10 +1577,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &wrong_spend_key,
             0,
@@ -1586,10 +1642,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 &spend_key,
                 0,
@@ -1640,7 +1696,7 @@ mod tests {
         )
         .unwrap();
 
-        let bad_tag = out.amount_tag.wrapping_add(1);
+        let bad_tag = out.amount_tag().wrapping_add(1);
         let result = scan_output(
             &recipient_sk.x25519,
             &recipient_sk.ml_kem,
@@ -1648,10 +1704,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
+            &out.enc_amount_bytes(),
             bad_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,
@@ -1706,10 +1762,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,
@@ -1739,10 +1795,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,
@@ -1802,10 +1858,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,
@@ -1883,10 +1939,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,
@@ -1938,7 +1994,8 @@ mod tests {
             "enc_amount must be deterministic"
         );
         assert_eq!(
-            out1.amount_tag, out2.amount_tag,
+            out1.amount_tag(),
+            out2.amount_tag(),
             "amount_tag must be deterministic"
         );
         assert_eq!(
@@ -2154,7 +2211,8 @@ mod tests {
                 rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx as u64).unwrap();
 
             let decrypted =
-                decrypt_amount(&ss.0, &out.enc_amount, out.amount_tag, idx as u64).unwrap();
+                decrypt_amount(&ss.0, &out.enc_amount_bytes(), out.amount_tag(), idx as u64)
+                    .unwrap();
             assert_eq!(
                 decrypted, amount,
                 "decrypted amount must match original (amount={amount}, idx={idx})"
@@ -2176,8 +2234,8 @@ mod tests {
 
         let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, 0).unwrap();
 
-        let bad_tag = out.amount_tag.wrapping_add(1);
-        let result = decrypt_amount(&ss.0, &out.enc_amount, bad_tag, 0);
+        let bad_tag = out.amount_tag().wrapping_add(1);
+        let result = decrypt_amount(&ss.0, &out.enc_amount_bytes(), bad_tag, 0);
         assert!(result.is_err(), "wrong amount_tag must be rejected");
         let err = format!("{}", result.unwrap_err());
         assert!(
@@ -2351,7 +2409,8 @@ mod tests {
         eprintln!("[pipeline] recover_recipient_spend_pubkey round-trips");
 
         // Step 6: Decrypt amount
-        let decrypted = decrypt_amount(&ss_re.0, &out.enc_amount, out.amount_tag, idx).unwrap();
+        let decrypted =
+            decrypt_amount(&ss_re.0, &out.enc_amount_bytes(), out.amount_tag(), idx).unwrap();
         assert_eq!(decrypted, amount, "decrypted amount must match");
         eprintln!("[pipeline] decrypt_amount = {decrypted}");
 
@@ -2363,10 +2422,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             idx,
@@ -2425,6 +2484,34 @@ mod tests {
             "_from_ho variant must produce same key image"
         );
         eprintln!("[pipeline] _from_ho variant agrees -- full pipeline passed");
+    }
+
+    #[test]
+    fn constructed_wire_label_decrypts_to_the_sentinel() {
+        // Byte order of assemble() is pinned next to the type. This test
+        // pins the property assemble cannot: construct_output stored a real
+        // ciphertext of the sentinel, not the sentinel in the clear.
+        //
+        // Asserted by decrypting rather than by `assert_ne!(ct, plaintext)`.
+        // That inequality is what this test first used and it was wrong twice
+        // over: it is probabilistic (a uniform ciphertext equals any fixed
+        // plaintext with probability 2^-64, so the test could flake), and it is
+        // weak (it passes for *any* value that merely differs from the
+        // sentinel, including a hand-written constant). Decrypting is
+        // deterministic and states the property actually wanted.
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+        let od =
+            construct_output(&random_tx_key(), &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+
+        assert_eq!(
+            decrypt_label_plaintext(od.enc_label_wire().ciphertext(), &od.k_label),
+            sentinel_plaintext(),
+            "the wire label must decrypt to the sentinel under this output's k_label"
+        );
     }
 
     #[test]
@@ -2514,10 +2601,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             idx,
         )
@@ -2567,10 +2654,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 idx,
             )
@@ -2650,10 +2737,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 0,
             );
@@ -2730,10 +2817,10 @@ mod tests {
             &garbage_ct,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             &spend_key,
             0,

@@ -224,6 +224,57 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
+      - name: "cargo clippy: bench-internals lane (shekyl-engine-core)"
+        working-directory: rust
+        # Same defect class as the lane above, by a different mechanism. The
+        # §5.3 B9 bench support (`engine/key_dispatch_bench.rs`, the
+        # `__bench_internals` re-exports) is `#[cfg(feature =
+        # "bench-internals")]` with no `test` alternative, and every bench
+        # target that consumes it carries `required-features =
+        # ["bench-internals"]` — which cargo SKIPS SILENTLY when the feature
+        # is off. So the workspace `--all-targets` gate above neither compiles
+        # the module nor reports that it declined to.
+        #
+        # PR #544 paid for that: making `OutputData`'s encrypted fields
+        # `pub(crate)` updated every consumer the gates could see, and this
+        # module — the one they could not — first reported the break in the
+        # 10-minute bench-capture job. This lane reproduces it in seconds.
+        #
+        # Clippy, not test: the module declares no `#[test]`; it is fixture and
+        # harness code whose only failure mode here is failing to compile.
+        #
+        # Subject assertion (47-gate-subject-assertion): clippy with this
+        # feature is green if the module or its cfg vanishes. Assert the file
+        # exists, the feature is declared, and the cfg sits on the module
+        # declaration — not a doc comment inside the file. Each command is
+        # unpiped (46-shell-gate-exits).
+        run: |
+          test -f shekyl-engine-core/src/engine/key_dispatch_bench.rs
+          grep -F -q 'bench-internals = []' shekyl-engine-core/Cargo.toml
+          # Accept the attribute on the declaration's own line or the line
+          # before it, and any visibility. An earlier form required the
+          # previous-line spelling, so `#[cfg(...)] mod key_dispatch_bench;`
+          # would have failed CI for being written differently — a gate that
+          # fires on formatting teaches people to route around it.
+          #
+          # The declaration is ANCHORED to the start of the line so that a
+          # commented-out `// pub(crate) mod key_dispatch_bench;` does not
+          # satisfy it. That spelling is how the module would most plausibly
+          # disappear, and matching the text inside a comment would have let the
+          # gate pass with its subject absent — the exact vacuity this assertion
+          # exists to prevent.
+          awk '
+            /^[[:space:]]*(#\[cfg\(feature = "bench-internals"\)\][[:space:]]*)?(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?mod[[:space:]]+key_dispatch_bench[[:space:]]*;/ {
+              if ($0 ~ /#\[cfg\(feature = "bench-internals"\)\]/ ||
+                  prev ~ /#\[cfg\(feature = "bench-internals"\)\]/) { found=1; exit 0 }
+            }
+            # Blank and comment lines do not become `prev`: a comment between
+            # an attribute and its item is legal Rust and must not read as an
+            # ungated module.
+            !/^[[:space:]]*(\/\/.*)?$/ { prev = $0 }
+            END { if (!found) { print "key_dispatch_bench missing or not cfg-gated" > "/dev/stderr"; exit 1 } }
+          ' shekyl-engine-core/src/engine/mod.rs
+          cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings
       # The probe sheet is a PRE-REGISTRATION: it records which probes exist
       # and which decision each failure revisits. That only means something if
       # the probes it names are implemented.

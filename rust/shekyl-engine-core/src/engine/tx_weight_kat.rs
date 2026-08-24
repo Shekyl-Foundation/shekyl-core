@@ -125,18 +125,8 @@ pub(crate) mod support {
             dest_key: out_constructed.output_key,
             amount: AtomicUnits::from_raw(payment),
             commitment_mask: out_constructed.z,
-            enc_amount: {
-                let mut buf = [0u8; 9];
-                buf[..8].copy_from_slice(&out_constructed.enc_amount);
-                buf[8] = out_constructed.amount_tag;
-                buf
-            },
-            enc_label: {
-                let mut buf = [0u8; 9];
-                buf[..8].copy_from_slice(&out_constructed.enc_label);
-                buf[8] = out_constructed.label_tag;
-                buf
-            },
+            enc_amount: out_constructed.enc_amount_wire(),
+            enc_label: out_constructed.enc_label_wire(),
         };
 
         let tree = TreeContext {

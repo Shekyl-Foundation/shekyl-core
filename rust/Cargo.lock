@@ -3862,6 +3862,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-stats",
  "thiserror 2.0.18",
+ "trybuild",
  "x25519-dalek",
  "zeroize",
 ]
@@ -4604,6 +4605,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
+ "serde_json",
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",

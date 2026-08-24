@@ -212,18 +212,12 @@ fn random_point(rng: &mut ChaCha20Rng) -> [u8; 32] {
 }
 
 fn pack_output_info(out: &OutputData, amount: u64) -> OutputInfo {
-    let mut enc_amount = [0u8; 9];
-    enc_amount[..8].copy_from_slice(&out.enc_amount);
-    enc_amount[8] = out.amount_tag;
-    let mut enc_label = [0u8; 9];
-    enc_label[..8].copy_from_slice(&out.enc_label);
-    enc_label[8] = out.label_tag;
     OutputInfo {
         dest_key: out.output_key,
         amount: AtomicUnits::from_raw(amount),
         commitment_mask: out.z,
-        enc_amount,
-        enc_label,
+        enc_amount: out.enc_amount_wire(),
+        enc_label: out.enc_label_wire(),
     }
 }
 

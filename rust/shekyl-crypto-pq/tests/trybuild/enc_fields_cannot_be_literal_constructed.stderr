@@ -1,0 +1,10 @@
+error[E0451]: fields `enc_amount` and `enc_label` of struct `OutputData` are private
+  --> tests/trybuild/enc_fields_cannot_be_literal_constructed.rs:23:9
+   |
+20 |     OutputData {
+   |     ---------- in this type
+...
+23 |         enc_amount,
+   |         ^^^^^^^^^^ private field
+24 |         enc_label,
+   |         ^^^^^^^^^ private field

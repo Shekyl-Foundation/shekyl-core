@@ -388,18 +388,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     )
     .expect("construct change output");
     let pack_output_info = |out: &OutputData, amount: u64| -> OutputInfo {
-        let mut enc_amount = [0u8; 9];
-        enc_amount[..8].copy_from_slice(&out.enc_amount);
-        enc_amount[8] = out.amount_tag;
-        let mut enc_label = [0u8; 9];
-        enc_label[..8].copy_from_slice(&out.enc_label);
-        enc_label[8] = out.label_tag;
         OutputInfo {
             dest_key: out.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: out.z,
-            enc_amount,
-            enc_label,
+            enc_amount: out.enc_amount_wire(),
+            enc_label: out.enc_label_wire(),
         }
     };
     let outputs = [
@@ -573,8 +567,11 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             fee,
             reference_block: signed.reference_block,
             base: CtBase {
-                enc_amounts: signed.enc_amounts.clone(),
-                enc_labels: signed.enc_labels.clone(),
+                // Same unwrap the private `build_wire_tx` does, at the same
+                // boundary and for the same reason: this is where the send
+                // path stops being provenance-typed and becomes wire.
+                enc_amounts: signed.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: signed.enc_labels.iter().map(|f| f.to_bytes()).collect(),
                 commitments: signed.commitments.clone(),
             },
             pqc_auths: pqc_auths

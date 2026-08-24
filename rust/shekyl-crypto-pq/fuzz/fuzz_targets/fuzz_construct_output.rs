@@ -49,17 +49,17 @@ fuzz_target!(|data: &[u8]| {
         &od.kem_ciphertext_ml_kem,
         &od.output_key,
         &od.commitment,
-        &od.enc_amount,
-        od.amount_tag,
-        &od.enc_label,
-        od.label_tag,
+        &od.enc_amount_bytes(),
+        od.amount_tag(),
+        &od.enc_label_bytes(),
+        od.label_tag(),
         od.view_tag_prefilter,
         &spend_key,
         output_index,
     );
 
     if data.len() >= 48 + 8 {
-        let mut bad_enc = od.enc_amount;
+        let mut bad_enc = od.enc_amount_bytes();
         for (i, &b) in data[48..].iter().take(8).enumerate() {
             bad_enc[i] ^= b;
         }
@@ -71,9 +71,9 @@ fuzz_target!(|data: &[u8]| {
             &od.output_key,
             &od.commitment,
             &bad_enc,
-            od.amount_tag,
-            &od.enc_label,
-            od.label_tag,
+            od.amount_tag(),
+            &od.enc_label_bytes(),
+            od.label_tag(),
             od.view_tag_prefilter,
             &spend_key,
             output_index,
@@ -87,10 +87,10 @@ fuzz_target!(|data: &[u8]| {
         &od.kem_ciphertext_ml_kem,
         &od.output_key,
         &od.commitment,
-        &od.enc_amount,
-        od.amount_tag.wrapping_add(1),
-        &od.enc_label,
-        od.label_tag,
+        &od.enc_amount_bytes(),
+        od.amount_tag().wrapping_add(1),
+        &od.enc_label_bytes(),
+        od.label_tag(),
         od.view_tag_prefilter,
         &spend_key,
         output_index,
