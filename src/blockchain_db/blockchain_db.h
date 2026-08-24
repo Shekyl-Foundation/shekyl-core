@@ -772,7 +772,12 @@ private:
    *
    * @param tx_hash the hash of the transaction to be removed
    */
-  void remove_transaction(const crypto::hash& tx_hash);
+  // `block_height` is the height of the block being popped — supplied by
+  // `pop_block`, never recomputed here. The vin does not carry the block
+  // (PC-D2 makes it implicit), so this function CANNOT rebuild the widened
+  // serve-credit key on its own, and reading ambient chain state would be the
+  // invariant-held-by-circumstance shape §3.4.2 refuses.
+  void remove_transaction(const crypto::hash& tx_hash, uint64_t block_height);
 
   uint64_t num_calls = 0;  //!< a performance metric
   uint64_t time_blk_hash = 0;  //!< a performance metric
@@ -793,7 +798,12 @@ protected:
    * @param tx_hash_ptr the hash of the transaction, if already calculated
    * @param tx_prunable_hash_ptr the hash of the prunable part of the transaction, if already calculated
    */
-  void add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& tx, const crypto::hash* tx_hash_ptr = NULL, const crypto::hash* tx_prunable_hash_ptr = NULL);
+  // `block_height` is the height of the block this tx is being added in
+  // (PC-D4): the serve-credit ledger key carries it, so the add path must be
+  // TOLD the height rather than infer it. `remove_transaction` takes the same
+  // value from `pop_block`, which is what makes the pop delete the key the add
+  // wrote (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
+  void add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& tx, uint64_t block_height, const crypto::hash* tx_hash_ptr = NULL, const crypto::hash* tx_prunable_hash_ptr = NULL);
 
   mutable uint64_t time_tx_exists = 0;  //!< a performance metric
   uint64_t time_commit1 = 0;  //!< a performance metric
@@ -2170,12 +2180,32 @@ public:
 
   // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
 
+  // PC-D4: the ledger is per-CHALLENGE, keyed `(P, shard, E, block_height)`.
+  // A pair-epoch now holds up to CHALLENGES_PER_PAIR_PER_EPOCH rows, one per
+  // block that challenged it, and consensus counts passes by ENUMERATING them
+  // — no field anywhere carries a tally (PC-D1/PC-D5).
+  //
+  // `block_height` is the height of the block the record rides in. It must be
+  // passed by the caller on BOTH the add and the pop path, from the same
+  // source, and never read from ambient chain state: a pop that recomputed the
+  // height from `height()` would delete a key it never wrote
+  // (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const = 0;
+    uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) = 0;
+    uint64_t settlement_epoch, uint64_t block_height) = 0;
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) = 0;
+    uint64_t settlement_epoch, uint64_t block_height) = 0;
+
+  /// Rows recorded for `(P, shard, E)` across every block that challenged it —
+  /// the enumeration `PC-D5` counts, over the key's 48-byte pair-epoch prefix.
+  ///
+  /// Distinct from `has_archival_serve_credit_bit`, which asks the exact
+  /// per-challenge question. Callers that mean "did this pair serve AT ALL
+  /// this epoch" want `> 0` here; under the old 48-byte key those were the
+  /// same question and the same call, which is why they need separating now.
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const = 0;
 
   // Gate-4 / shard-registry substrate (default: false until implemented).
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,

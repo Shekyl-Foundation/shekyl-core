@@ -1528,8 +1528,12 @@ namespace cryptonote
       return false;
     }
 
+    // PC-D4: attribute the injected row to the current tip. The injector is a
+    // fakechain Gate-6 stand-in with no block of its own; the tip is the
+    // honest choice and keeps the row inside the prune's epoch ordering.
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch))
+      p_canonical_id, req.shard_id, req.settlement_epoch,
+      m_core.get_current_blockchain_height()))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";

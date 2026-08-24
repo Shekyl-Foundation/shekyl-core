@@ -5261,7 +5261,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 // consensus-state write, and the core boundary must not trust the RPC
 // layer to have checked the nettype.
 bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-  uint64_t shard_id, uint64_t settlement_epoch)
+  uint64_t shard_id, uint64_t settlement_epoch, uint64_t block_height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   if (m_nettype != FAKECHAIN)
@@ -5271,7 +5271,7 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
   }
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   db_wtxn_guard wtxn_guard(m_db);
-  m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch);
+  m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch, block_height);
   MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
     << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
     << " — bit is not block-owned; pops below this height strand it");
@@ -5311,7 +5311,28 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
-  if (m_db->has_archival_serve_credit_bit(sc_p_id, sc_shard_id, sc_settlement_epoch))
+  // PC-D4/PC-D7: PAIR-EPOCH-wide, deliberately, and this is the one place the
+  // widened key could have silently changed consensus.
+  //
+  // The exact-get `has_archival_serve_credit_bit(P, s, E, h)` would be
+  // VACUOUS here: `h` is the block under validation, which is not in the DB
+  // yet, so no row can match and every duplicate would be admitted. That is
+  // the correct END state -- up to CHALLENGES_PER_PAIR_PER_EPOCH rows across
+  // distinct blocks -- but only once the derived-assignment issuer bounds how
+  // many blocks may challenge a pair. That issuer is NOT wired:
+  // `assign_epoch` exists in Rust with no FFI export and no consensus caller,
+  // and the live mechanism is still the one-challenge-per-pair-epoch beacon.
+  // Relaxing to the exact-get now would leave the pass count bounded by
+  // nothing at all.
+  //
+  // So this stays the pair-epoch bound the beacon mechanism already implies,
+  // and consensus behaviour is byte-identical to before the key widened.
+  //
+  // REOPEN (rule 21): when the assignment cutover lands, this relaxes to
+  // "reject unless this block's assignment names this pair" -- which is the
+  // count bound and the anti-adaptive-selection check in one, and is what
+  // PC-D7's surviving half asks for.
+  if (m_db->archival_serve_credit_pass_count(sc_p_id, sc_shard_id, sc_settlement_epoch) > 0)
   {
     MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
     return false;
@@ -6091,10 +6112,19 @@ leave:
   // AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-C):
   // mirrored in Rust (serve_credit_decisions::serve_credit_block_unique) and
   // transcribed verbatim in archival_serve_credit_equivalence.cpp. The key is
-  // ArchivalServeCreditKey — the same big-endian encoding D-SC-A persists
-  // (SCE-1 unified post-equivalence; db_lmdb.cpp:1657–1659 forbids
-  // native-endian composite keys) — do not change it independently of the
-  // mirror, the transcription, and the fixture's key pins.
+  // ArchivalPairEpochKey — the same big-endian encoding, unchanged by PC-D4 —
+  // do not change it independently of the mirror, the transcription, and the
+  // fixture's key pins. (SCE-1 unified post-equivalence; the LMDB comparator
+  // setup forbids native-endian composite keys.)
+  //
+  // PC-D4 widened the LEDGER key and deliberately did NOT widen this one. The
+  // natural inference — "the key grew, so this should too" — is wrong: within
+  // ONE block every record shares the block, so the block component is
+  // common-mode here and adds no discrimination. Two records for the same pair
+  // in one block collide at the same (P, s, E, h) ledger key regardless, which
+  // leaves the (P, s, E) check the correct within-block enforcer rather than a
+  // leftover. The bytes must not move; the equivalence fixture's key pin is
+  // what says so.
   {
     std::unordered_set<std::string> block_serve_credits;
     block_serve_credits.reserve(txs.size());
@@ -6111,7 +6141,7 @@ leave:
           MERROR_VER("Archival serve-credit vin unparseable in block");
           return false;
         }
-        const shekyl::db::ArchivalServeCreditKey credit_key(
+        const shekyl::db::ArchivalPairEpochKey credit_key(
           reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard, sc_epoch);
         std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
           credit_key.bytes().size());

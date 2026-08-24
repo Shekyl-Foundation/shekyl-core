@@ -262,16 +262,68 @@ credit a pair once. No economic disposition opens — but note it is now preserv
 *by the fold* rather than by the key, so the fold is load-bearing and gets a test
 that fails if it is removed.
 
-### ~~`PC-D7`~~ — COLLAPSED by `PC-D2`
+### `PC-D7` — HALF collapsed, and the other half is the count bound
+
+**Corrected 2026-08-24, during implementation.** This entry read
+"COLLAPSED by `PC-D2`" and that was wrong by half.
 
 The opening draft had admission verify that a record's claimed block was a real
-assignment. **Under `PC-D2` there is no claimed block**, so there is nothing to
-verify and no disposition to hold: the record arrives in the block that produced
-it, and consensus reads that block directly.
+assignment. That check did **two** jobs, and the collapse discharged both when
+`PC-D2` only retires one:
 
-Recorded as collapsed rather than deleted, because it was carried as a rule-22
-blocker against `SO-D8`'s cutover and that dependency is now discharged — the
-round no longer waits on the urn for its soundness.
+1. **Verify a claimed block reference** — genuinely dead. Under `PC-D2` nothing
+   is claimed; the record arrives in the block that produced it and consensus
+   reads that block directly. Correctly collapsed.
+2. **Verify that this block's assignment names this pair** — **survives.** It
+   is the *count bound* (how many blocks may carry a record for one pair-epoch)
+   and the anti-adaptive-selection check, and `PC-D2` says nothing about
+   either.
+
+**What made this visible was the code, not a re-reading.** Widening the ledger
+key makes the admission dedup
+`has_archival_serve_credit_bit(P, s, E, h)` **vacuous**: `h` is the block under
+validation, which is not in the DB yet, so no row can ever match and every
+duplicate would be admitted. With job (2) discharged, nothing at all would bound
+the record count — a pair could file in every block of the epoch and inflate its
+own pass count. **That is the free-rider margin `TJ R1` closes**: an unbounded
+or self-selected record set prices the test below the job.
+
+**Disposition — the dedup stays pair-epoch-wide.**
+`archival_serve_credit_pass_count(P, s, E) > 0` rejects, which is exactly the
+one-credit-per-pair-epoch bound the live mechanism already implies, and leaves
+consensus behaviour **byte-identical** to before the key widened.
+
+**Named blocker (rule 22) for the surviving half:** `assign_epoch` exists in
+`challenge_assignment.rs` with **no FFI export and no consensus caller**, and
+the live issuer is still the one-challenge-per-pair-epoch beacon. So the
+three-row state is **unreachable by construction today** — nothing issues three
+challenges. Wiring the assignment is an issuance-mechanism cutover with its own
+round; enforcing `count < CHALLENGES_PER_PAIR_PER_EPOCH` *without* that issuer
+would change consensus now, still permit adaptive selection, and buy nothing.
+
+**Reopen criterion (rule 21):** when the assignment cutover lands, the dedup
+relaxes from "any row for this pair-epoch" to "this block's assignment names
+this pair" — count bound and selection check in one.
+
+The `SO-D8` dependency this entry claimed to discharge is discharged **for the
+schema only**. The three-record *semantics* still waits on the urn; the schema
+does not.
+
+### The interim property this creates, stated plainly
+
+Until the assignment cutover, the live beacon lets a response land anywhere in
+its `H_fire` window while `PC-D3` makes the leaf index vary **per block**. So a
+prover gets roughly `CHALLENGE_RESPONSE_BLOCKS` leaf draws and needs only one it
+holds: the sampled-leaf floor weakens from "the one assigned leaf" to "the best
+of a window of leaves".
+
+Recorded rather than treated as a redesign trigger, for two reasons: `RF-D8`
+already rules this floor **weak-but-nonzero** and justifies it on what survives
+total witness collusion, not on its strength; and the end state restores
+per-challenge binding, because pinning responses to their assignment blocks is
+what the assignment cutover *is*. It is an interim property of running the new
+derivation under the old issuer — and it is the second reason that cutover is
+worth doing, alongside the count bound.
 
 ## 4. What this costs — and the cost was already priced
 
@@ -317,7 +369,9 @@ pass.
 | 3 | `serve_credit.rs` (FFI) | derives the index with the block hash it is validating; verifies the opening against it |
 | 4 | `shekyl_ffi.h` + `check_archival_serve_credit_input` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
 | 5 | **`m_archival_serve_credit` key 48 → 56 B** | append `BE(block_height)`; every existing offset unchanged (§3.4.1) |
-| 6 | `has_archival_serve_credit_bit` old-vin dedup | becomes the uniqueness enforcer under the widened key |
+| 6 | old-vin dedup | **stays PAIR-EPOCH** (`archival_serve_credit_pass_count > 0`) until the assignment cutover — the exact-get would be vacuous; see the corrected `PC-D7` |
+| 6c | SCE-1 within-block pass | **stays pair-epoch too** — the block is common-mode inside one block, so widening adds no discrimination; bytes pinned by the equivalence fixture |
+| 6d | **slash-applied trio** (`has/set/remove_archival_slash_applied`) | **not on the original list** — shared `ArchivalServeCreditKey` by coincidence of shape; per-pair-epoch by design, so they move to the new `ArchivalPairEpochKey` rather than widening |
 | 6b | `remove_transaction` / `pop_block` | **must be threaded the block height** — the vin no longer carries it (§3.4.2) |
 | 7 | **Emission gather (`process_archival_epoch_close_at_height`)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site |
 | 8 | Slash-window walk (`archival_failure_window_slashable`) | reads "served" as a count over the widened key, not key-presence |
@@ -404,6 +458,12 @@ tables" rationale expires. That is a **retired justification, not a defect**: th
 tables now answer questions at different granularities — evidence per challenge,
 verdict per pair-epoch — which is exactly the split `PC-D6` draws. The settlement
 key keeps `(P, s, E)` and stops borrowing `ArchivalServeCreditKey`.
+
+**The type they adopt is `ArchivalPairEpochKey`** (48 B, byte-identical to
+what `ArchivalServeCreditKey` was), added by this round for exactly this reason.
+The slash-applied trio is its other consumer — see row 6d, which the original
+enumeration missed for the same reason `SO-D2` was caught: one key type was
+serving two granularities because their shapes happened to coincide.
 
 **Landed code affected:** `BlockchainLMDB::set_archival_settlement` /
 `get_archival_settlement` / `delete_archival_settlement_for_epoch` currently

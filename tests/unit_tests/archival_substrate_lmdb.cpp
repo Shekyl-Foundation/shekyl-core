@@ -30,6 +30,7 @@ namespace {
 
 // Shared archival-LMDB scaffolding (also driven by the claim-source RPC
 // tests — single-sourced so the fixtures cannot drift).
+using archival_test::kServeCreditTestBlockHeight;
 using archival_test::make_hash;
 using archival_test::EmissionSnapshotKat;
 using TempLMDB = archival_test::TempLMDB;
@@ -523,13 +524,13 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
   db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
 
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row without a bond record: gathered row is skipped, not fatal.
-  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row for a different epoch: filtered by the cursor pass.
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1, kServeCreditTestBlockHeight);
 
   // Non-boundary heights are no-ops.
   db.process_archival_epoch_close_at_height(close_height - 1);
@@ -817,7 +818,7 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
     2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
@@ -2025,7 +2026,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   db.put_archival_bond_value(p_served, seed);
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
-  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   // Connect blocks through epoch 1's slash deadline. The deadline block's
   // connect hook processes the epoch-1 slash pass.
@@ -2051,7 +2052,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   ASSERT_LE(h_fire, h_close);
   EXPECT_TRUE(db.archival_bond_holds_shard(p_miss, 7, h_fire));
   // ... and it really was missed: no affirmative pass for (P_miss, 7, E=1).
-  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch));
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch, kServeCreditTestBlockHeight));
 
   // P_miss: one observed miss is not a durable absence (m = 11 of the last
   // n = 13 observations is). The scheduler ran the epoch past its deadline and
@@ -2144,7 +2145,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
   for (uint64_t epoch = 1; epoch <= window.m; ++epoch)
-    db.set_archival_serve_credit_bit(p_served, 7, epoch);
+    db.set_archival_serve_credit_bit(p_served, 7, epoch, kServeCreditTestBlockHeight);
 
   // Walk to the deadline of epoch m-1: that is m-1 observed misses, one short
   // of the threshold.
@@ -2285,7 +2286,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_spans_a_full_window_past_the_serve
   // reached only by counting the full window.
   const uint64_t decision_epoch = window.n;
   for (uint32_t i = 1; i <= window.serve_budget; ++i)
-    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i);
+    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i, kServeCreditTestBlockHeight);
 
   // One epoch short of the decision epoch the record must still be intact: the
   // misses so far are m - 1.
@@ -2400,7 +2401,7 @@ TEST(archival_substrate_lmdb, failure_window_recomputes_from_reverted_state_on_p
 
   const uint64_t answered_epoch = slash_epoch / 2;
   ASSERT_GE(answered_epoch, 1u);
-  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch);
+  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2918,14 +2919,14 @@ TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
   // P served shards 3 and 9 across several epochs; the max per shard is what
   // the anchor fold needs. Shard 5 is bordered by another P's rows on both
   // sides to prove the scan neither leaks across nor stops early.
-  db.set_archival_serve_credit_bit(p, 3, 10);
-  db.set_archival_serve_credit_bit(p, 3, 40);   // shard 3 max
-  db.set_archival_serve_credit_bit(p, 3, 25);
-  db.set_archival_serve_credit_bit(p, 9, 7);
-  db.set_archival_serve_credit_bit(p, 9, 33);   // shard 9 max
+  db.set_archival_serve_credit_bit(p, 3, 10, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 3, 40, kServeCreditTestBlockHeight);   // shard 3 max
+  db.set_archival_serve_credit_bit(p, 3, 25, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 7, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 33, kServeCreditTestBlockHeight);   // shard 9 max
   // Another P interleaved in the shard key space: must not appear in P's scan.
-  db.set_archival_serve_credit_bit(other, 3, 99);
-  db.set_archival_serve_credit_bit(other, 9, 99);
+  db.set_archival_serve_credit_bit(other, 3, 99, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(other, 9, 99, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 

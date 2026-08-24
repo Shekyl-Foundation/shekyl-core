@@ -159,16 +159,31 @@ public:
     return h;
   }
 
+  // PC-D4: the double stores per-CHALLENGE rows, keyed by the block too, and
+  // answers the two questions separately -- exactly as the LMDB does. A double
+  // that collapsed them would let the pair-epoch dedup pass while the real DB
+  // failed it.
   bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override
+    uint64_t settlement_epoch, uint64_t block_height) const override
   {
-    return m_credit_bits.count({p_id, shard_id, settlement_epoch}) != 0;
+    return m_credit_bits.count({p_id, shard_id, settlement_epoch, block_height}) != 0;
   }
 
   void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override
+    uint64_t settlement_epoch, uint64_t block_height) override
   {
-    m_credit_bits.insert({p_id, shard_id, settlement_epoch});
+    m_credit_bits.insert({p_id, shard_id, settlement_epoch, block_height});
+  }
+
+  uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override
+  {
+    uint32_t n = 0;
+    for (const auto& row : m_credit_bits)
+      if (memcmp(row.p_id.data, p_id.data, 32) == 0 && row.shard_id == shard_id
+          && row.settlement_epoch == settlement_epoch)
+        ++n;
+    return n;
   }
 
   bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
@@ -285,17 +300,22 @@ private:
     }
   };
 
+  // PC-D4: block_height LAST, mirroring the LMDB key's append order, so the
+  // set's ordering matches the table's and a pair-epoch run is contiguous.
   struct CreditKey {
     crypto::hash p_id;
     uint64_t shard_id;
     uint64_t settlement_epoch;
+    uint64_t block_height;
     bool operator<(const CreditKey& other) const
     {
       if (memcmp(p_id.data, other.p_id.data, 32) != 0)
         return memcmp(p_id.data, other.p_id.data, 32) < 0;
       if (shard_id != other.shard_id)
         return shard_id < other.shard_id;
-      return settlement_epoch < other.settlement_epoch;
+      if (settlement_epoch != other.settlement_epoch)
+        return settlement_epoch < other.settlement_epoch;
+      return block_height < other.block_height;
     }
   };
 
@@ -674,7 +694,13 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
   seed_substrate(*db, kat);
-  db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch);
+  // PC-D4: seeded at a DIFFERENT block than the one being validated. That is
+  // what makes this test discriminate: the dedup is PAIR-EPOCH-wide, so a row
+  // from an earlier block still rejects. Seeded at the validating height it
+  // would pass under either rule and prove nothing.
+  ASSERT_GT(kat.current_height, 0u);
+  db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch,
+    kat.current_height - 1);
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;

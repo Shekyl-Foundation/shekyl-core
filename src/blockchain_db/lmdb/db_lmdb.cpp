@@ -5098,13 +5098,18 @@ int BlockchainLMDB::archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const
   return rc;
 }
 
+// PC-D4: the EXACT per-challenge question -- is there a record for this pair
+// at THIS block. Callers meaning "did the pair serve at all this epoch" want
+// archival_serve_credit_pass_count() > 0; under the old 48-byte key the two
+// were indistinguishable.
 bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch) const
+  uint64_t settlement_epoch, uint64_t block_height) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+    settlement_epoch, block_height);
   MDB_val k = key.as_mdb_val();
   MDB_val v;
   const int get_result = archival_db_get(m_archival_serve_credit, &k, &v);
@@ -5115,13 +5120,60 @@ bool BlockchainLMDB::has_archival_serve_credit_bit(const crypto::hash& p_id, uin
   return true;
 }
 
-void BlockchainLMDB::set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch)
+// The enumeration PC-D5 counts: rows sharing the key's 48-byte pair-epoch
+// prefix. There is no stored tally to read -- a count on a row would be a
+// value its writer chooses (PC-D1), so the count is always recomputed from the
+// rows themselves.
+uint32_t BlockchainLMDB::archival_serve_credit_pass_count(const crypto::hash& p_id,
+  uint64_t shard_id, uint64_t settlement_epoch) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(m_txn, m_archival_serve_credit, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for pass count: ",
+      rc).c_str()));
+
+  // Floor probe at height 0: the appended height is the LAST component, so
+  // every row for this pair-epoch is contiguous from here.
+  shekyl::db::ArchivalServeCreditKey probe(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+    settlement_epoch, 0);
+  MDB_val probe_val = probe.as_mdb_val();
+  MDB_val k = probe_val;
+  MDB_val v;
+  uint32_t count = 0;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+  while (rc == 0)
+  {
+    if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+    {
+      mdb_cursor_close(cur);
+      throw std::runtime_error("FATAL: archival_serve_credit key size mismatch at pass count");
+    }
+    // Compare the pair-epoch PREFIX only; the run ends at the first key that
+    // leaves it.
+    if (std::memcmp(k.mv_data, probe_val.mv_data, shekyl::db::kArchivalPairEpochKeySize) != 0)
+      break;
+    ++count;
+    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  mdb_cursor_close(cur);
+  if (rc && rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed archival_serve_credit pass-count scan: ", rc).c_str()));
+  return count;
+}
+
+void BlockchainLMDB::set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+  uint64_t settlement_epoch, uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+    settlement_epoch, block_height);
   MDB_val k = key.as_mdb_val();
   static const uint8_t flag = 1;
   MDB_val v = {sizeof(flag), const_cast<uint8_t*>(&flag)};
@@ -5131,12 +5183,13 @@ void BlockchainLMDB::set_archival_serve_credit_bit(const crypto::hash& p_id, uin
 }
 
 void BlockchainLMDB::remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch)
+  uint64_t settlement_epoch, uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+    settlement_epoch, block_height);
   MDB_val k = key.as_mdb_val();
   const int result = mdb_del(*m_write_txn, m_archival_serve_credit, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
@@ -5614,7 +5667,10 @@ bool BlockchainLMDB::has_archival_slash_applied(const crypto::hash& p_id, uint64
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  // PC-D4: pair-epoch, NOT per-challenge -- one slash per (P, shard, E). This
+  // table shared `ArchivalServeCreditKey` only because the two shapes
+  // coincided; the serve-credit ledger widened and this did not.
+  shekyl::db::ArchivalPairEpochKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
   MDB_val v;
   const int get_result = archival_db_get(m_archival_slash_applied, &k, &v);
@@ -5631,7 +5687,7 @@ void BlockchainLMDB::set_archival_slash_applied(const crypto::hash& p_id, uint64
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  shekyl::db::ArchivalPairEpochKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
   static const uint8_t flag = 1;
   MDB_val v = {sizeof(flag), const_cast<uint8_t*>(&flag)};
@@ -5646,7 +5702,7 @@ void BlockchainLMDB::remove_archival_slash_applied(const crypto::hash& p_id, uin
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
+  shekyl::db::ArchivalPairEpochKey key(reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
   const int result = mdb_del(*m_write_txn, m_archival_slash_applied, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
@@ -5800,7 +5856,11 @@ bool BlockchainLMDB::archival_failure_window_slashable(uint64_t block_height,
     --epoch;
     if (!archival_baseline_observed_at_epoch(block_height, p_id, bond, shard_id, epoch, seal_cache))
       break; // boundary of the pair's current continuous challengeable run
-    const bool passed = has_archival_serve_credit_bit(p_id, shard_id, epoch);
+    // PC-D4: "did this pair serve at all at `epoch`" — a pair-epoch question,
+    // so it counts rows rather than probing one key. `> 0` preserves exactly
+    // today's meaning; what a count of 2 vs 3 should mean is the failure
+    // window's question, not this loop's.
+    const bool passed = archival_serve_credit_pass_count(p_id, shard_id, epoch) > 0;
     epochs.push_back(epoch);
     served.push_back(passed ? 1 : 0);
     // Rust-computed stop budget (n - m): once more than this many observations
@@ -5830,7 +5890,9 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
   // earlier scan already slashed, is not a candidate at all. (All the
   // predicates here are pure reads, so their order is free; the beacon
   // reconstruction below is the expensive one and runs last.)
-  if (has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch))
+  // PC-D4: pair-epoch question — any pass at all disqualifies the epoch as a
+  // miss candidate, whichever block carried it.
+  if (archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch) > 0)
     return false;
   if (has_archival_slash_applied(p_id, shard_id, settlement_epoch))
     return false;
@@ -6951,8 +7013,13 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
 
   for (const uint64_t shard_id : shard_ids)
   {
+    // PC-D4: MAX in the appended height too. A ceiling probe that left the
+    // last component at 0 would sort BEFORE every (P, shard, MAX, h>0) row
+    // instead of after them, which is the one way appending a component can
+    // break a reverse seek.
     shekyl::db::ArchivalServeCreditKey probe(
       reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+      std::numeric_limits<uint64_t>::max(),
       std::numeric_limits<uint64_t>::max());
     MDB_val probe_val = probe.as_mdb_val();
     MDB_val k = probe_val;
@@ -6961,9 +7028,9 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
     if (rc == 0)
     {
       // SET_RANGE positions at the first key >= probe. An exact hit IS the
-      // shard's max (epoch == u64::MAX, unreachable in practice but handled
-      // exactly); otherwise the predecessor holds it, if it shares the
-      // (P, shard) prefix.
+      // shard's max (epoch AND height both u64::MAX, unreachable in practice
+      // but handled exactly); otherwise the predecessor holds it, if it
+      // shares the (P, shard) prefix.
       if (k.mv_size == probe_val.mv_size
           && std::memcmp(k.mv_data, probe_val.mv_data, k.mv_size) == 0)
       {
@@ -7028,8 +7095,12 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
   while (!shard_probe_wrapped)
   {
     // First row at or past (P, next_shard, 0): the next served shard, if any.
+    // PC-D4: the key gained BE(block_height) as its LAST component, so a
+    // floor probe takes height 0 and the (P, shard) prefix positioning is
+    // unchanged -- append-ordering is what makes that true rather than an
+    // audit of each scan.
     shekyl::db::ArchivalServeCreditKey lo_probe(
-      reinterpret_cast<const uint8_t*>(p_id.data), next_shard, 0);
+      reinterpret_cast<const uint8_t*>(p_id.data), next_shard, 0, 0);
     MDB_val lo = lo_probe.as_mdb_val();
     MDB_val k = lo;
     MDB_val v;
@@ -7055,7 +7126,8 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
     // reverse-seek the per-shard form uses; an exact hit IS the max.
     shekyl::db::ArchivalServeCreditKey hi_probe(
       reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
-      std::numeric_limits<uint64_t>::max());
+      std::numeric_limits<uint64_t>::max(),
+      std::numeric_limits<uint64_t>::max());  // MAX height: see the per-shard form
     MDB_val hi = hi_probe.as_mdb_val();
     k = hi;
     rc = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);

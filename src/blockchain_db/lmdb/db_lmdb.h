@@ -476,11 +476,13 @@ private:
   virtual uint64_t get_settlement_epoch_blocks_pin() const override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override;
+    uint64_t settlement_epoch, uint64_t block_height) const override;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
 
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const override;

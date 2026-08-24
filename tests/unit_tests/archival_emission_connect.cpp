@@ -168,7 +168,7 @@ void add_emission_tx(EmissionConnectDB& db, const transaction& tx)
   const crypto::hash tx_hash = crypto::null_hash;
   const crypto::hash tx_prunable_hash = crypto::null_hash;
   db.add_transaction(crypto::null_hash, std::make_pair(tx, blobdata_ref{}),
-    &tx_hash, &tx_prunable_hash);
+    /*block_height=*/0, &tx_hash, &tx_prunable_hash);
 }
 
 } // namespace
