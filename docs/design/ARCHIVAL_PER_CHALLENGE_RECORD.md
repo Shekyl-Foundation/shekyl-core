@@ -58,12 +58,14 @@ Grounded on `dev@863a9bf4f`, 2026-08-24.
 
 **The record has no block.** `ArchivalServeCreditResponse` is
 `{p_canonical_id, shard_id, settlement_epoch, ed25519_countersignature}`
-(`wire.rs:59`). It is structurally keyed per-`(P, s, E)`. There is no way to
+(`ArchivalServeCreditResponse`). It is structurally keyed per-`(P, s, E)`. There is no way to
 represent two distinct challenges for one pair-epoch, and the old-vin dedup
-(`blockchain.cpp:5307`) would reject the second as a duplicate of the first.
+(`has_archival_serve_credit_bit`, in `check_archival_serve_credit_input`)
+would reject the second as a duplicate of the first.
 
 **The leaf index cannot vary per challenge.** `challenge_leaf_index`'s preimage
-is `p_id ‖ shard_id_le ‖ settlement_epoch_le` (`challenge.rs:68`). For a given
+was `p_id ‖ shard_id_le ‖ settlement_epoch_le` (`challenge_leaf_index`, before
+this round). For a given
 `(P, s, E)` the index is a **constant**.
 
 ### 2.1 The asymmetry that makes this easy to miss
@@ -179,7 +181,8 @@ block is the including block, so the key means **one record per producer per
 pair-epoch**: a producer cannot submit two for the same pair in one block, and
 cannot submit for a block it did not produce.
 
-**The old-vin dedup at `blockchain.cpp:5307` becomes the uniqueness enforcer**
+**The old-vin dedup — `has_archival_serve_credit_bit`, called from
+`check_archival_serve_credit_input` — becomes the uniqueness enforcer**
 under the widened key. A duplicate is then not a double-count some check must
 catch — it is the same key, refused by the structure.
 
@@ -203,14 +206,15 @@ They answer different questions:
   `block_hash(h−1)`; a second, weaker reference could disagree with the first.
 - The **key** may use the height, because serve-credit rows are **block-owned**:
   `BlockchainDB::pop_block` → `remove_transaction` deletes a popped block's rows
-  vin-driven (`blockchain_db.cpp:850`). A popped block's rows go with it, so a
+  vin-driven (`BlockchainDB::remove_transaction_data`). A popped block's rows
+  go with it, so a
   height cannot be silently repointed at a different block while its rows
   survive. The property that makes the height safe here is the removal, not the
   height.
 
 #### 3.4.2 The pop path cannot rebuild the widened key — found by grounding it
 
-`remove_transaction(const crypto::hash& tx_hash)` (`blockchain_db.cpp:834`)
+`BlockchainDB::remove_transaction(const crypto::hash& tx_hash)`
 reconstructs the key **from the vin alone** via
 `get_archival_serve_credit_key(resp, …)`. Under `PC-D2` the block is *not on the
 vin*, so the widened key is not reconstructible there: the removal has the
@@ -238,7 +242,8 @@ key changes a table with four readers — the vin dedup, the slash-window walk, 
 fast-path miss check, and the emission gather.
 
 **The gather is the one that cannot be left to infer.** It cursor-walks the table
-and pushes one `credit_pairs` entry **per row** (`db_lmdb.cpp:7978`, no
+and pushes one `credit_pairs` entry **per row**
+(`process_archival_epoch_close_at_height`, no
 value-byte gate). Three keys where it expects one **triples `credit_pairs` and
 inflates `r_market` — silently, with no error and no test failing** unless a test
 asserts the fold.
@@ -288,6 +293,11 @@ re-derivation is owed, and the honest price is the one already carried.
 ## 5. Blast radius — everything this touches
 
 Enumerated at source before implementation, per rule 26's substrate pass.
+Sites are named by **function**, not by line number: this round's own edits moved
+every line cited in the opening draft, which is the same drift that made
+`ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6 unreachable (see `path.rs`'s header).
+A function name survives an insertion; a line number is stale as soon as
+somebody works above it.
 **`PC-D2` emptied the wire column and `PC-D6` filled the schema one** — the work
 moved from serialization to the four readers.
 
@@ -305,13 +315,13 @@ pass.
 | 1 | `challenge.rs::challenge_leaf_index` | preimage gains `block_hash(h−1)`; separator → `-v2` |
 | 2 | `wire.rs::signature_preimage` | binds the index derived from the including block |
 | 3 | `serve_credit.rs` (FFI) | derives the index with the block hash it is validating; verifies the opening against it |
-| 4 | `shekyl_ffi.h` + `blockchain.cpp:5412` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
+| 4 | `shekyl_ffi.h` + `check_archival_serve_credit_input` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
 | 5 | **`m_archival_serve_credit` key 48 → 56 B** | append `BE(block_height)`; every existing offset unchanged (§3.4.1) |
-| 6 | `blockchain.cpp:5307` old-vin dedup | becomes the uniqueness enforcer under the widened key |
+| 6 | `has_archival_serve_credit_bit` old-vin dedup | becomes the uniqueness enforcer under the widened key |
 | 6b | `remove_transaction` / `pop_block` | **must be threaded the block height** — the vin no longer carries it (§3.4.2) |
-| 7 | **Emission gather (`db_lmdb.cpp:7978`)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site |
-| 8 | Slash-window walk (`db_lmdb.cpp:5763`) | reads "served" as a count over the widened key, not key-presence |
-| 9 | Fast-path miss check (`db_lmdb.cpp:5793`) | same |
+| 7 | **Emission gather (`process_archival_epoch_close_at_height`)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site |
+| 8 | Slash-window walk (`archival_failure_window_slashable`) | reads "served" as a count over the widened key, not key-presence |
+| 9 | Fast-path miss check (same function, the early-out arm) | same |
 | 10 | `delete_archival_serve_credit_before_epoch` | **unchanged by construction** — the epoch stays at offset 40 (§3.4.1) |
 | 11 | Block-level SCE-1 uniqueness pass | widened key — per-challenge multiplies vins per tx |
 | 12 | `gate2_serve_credit_kat.rs` | fixtures gain the block hash in the index derivation |
@@ -319,13 +329,16 @@ pass.
 | 14 | `failure_window.rs`, `attestation_settlement_window.rs` | confirm they consume the settlement-table shape, not raw record presence |
 | 15 | `SO-D1`'s writer | its `passes` is this round's enumeration — the two rounds meet here |
 | 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B, and **`SO-D2`'s settlement key rides it** — see §5.2 |
+| 17 | `append_archival_block_unique_keys`' `'S'` reservation key | **not on the original list** — found by grounding the derivation site; see §5.3 |
+| 18 | `regtest_inject_archival_serve_credit` | **not on the original list** — a writer taking `(P, s, E)` as arguments, so `PC-D4` widens its signature too; it already warns its bit is not block-owned, which the widened key makes literal |
 
 ### 5.0 The ABI hazard the C++ half must clear FIRST
 
 `ShekylArchivalVerifyCtx` gained `prev_block_hash` **mid-struct**, between
-`segment_leaf_count` and `pqc_pubkey_ptr`. Until `shekyl_ffi.h` mirrors the
-field *at the same offset*, C++ constructs the smaller struct and Rust reads 32
-bytes past its end.
+`block_hash_at_seal` and `registry_segment_subroot_rk` (offset 48). Until
+`shekyl_ffi.h` mirrors the field *at the same offset*, C++ constructs the
+smaller struct and every field after it is misread — and if C++ is also the
+shorter struct, Rust reads 32 bytes past its end.
 
 **This does not fail the way the guard suggests it will.** The
 `SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED` refusal keys on an all-zero
@@ -336,11 +349,39 @@ prover-shaped failure for a wiring defect, which is the exact
 misattribution `PC-D3`'s guard exists to prevent, arriving through the one
 channel the guard cannot see.
 
-So the header edit is the **first** move of the FFI half, not a step within it,
-and the field order is checked side-by-side against `codes.rs` when it is
-written. (Appending the field instead would dodge this, but it would put the
-block after the two pointer/length pairs it is logically upstream of; the order
-is worth keeping and the hazard is worth one deliberate check.)
+So the header edit is the **first** move of the FFI half, not a step within it.
+
+**Resolved structurally, not by care.** Both sides now pin the offsets —
+`const _: () = assert!(core::mem::offset_of!(...))` in `codes.rs`,
+`static_assert(offsetof(...))` in `shekyl_ffi.h`, on the pattern
+`ShekylStemTallyRow` already uses. Offsets and not merely `sizeof`, because a
+field *moving* preserves the size: a size pin would have accepted the one
+mutation this hazard is actually about. The four pinned fields are
+platform-independent — everything at or before `segment_leaf_count` is
+fixed-width, so no pointer or `size_t` participates.
+
+A note in a design doc is read by whoever already suspects the problem. This
+one is now a compile error on both sides.
+
+### 5.0b The read nothing covered
+
+The FFI half added one line of production behaviour that no test observed:
+`check_tx_inputs`' read of `block_hash(h−1)`. Every archival test calls
+`check_archival_serve_credit_input` **directly** and supplies the hash itself,
+so replacing the production read with the null hash left **all 18 serve-credit
+tests green**.
+
+This was found by biting the read rather than by reading the tests — the tests
+looked like coverage because they exercise the derivation thoroughly; what they
+never touch is where its operand comes from. A parameter is not covered by
+tests that pass it.
+
+Closed by `gate2_check_tx_inputs_derives_the_block_hash_from_the_chain`, which
+drives the public entry point so the hash comes from the chain, and which is
+observed red on both the null-hash substitution and an
+`h` / `h−1` off-by-one. It doubles as the direct demonstration of `PC-D2`'s
+next-block-only property: the same record, byte-identical on the wire, is
+accepted against one parent and refused against another.
 
 ### 5.1 Interaction with `SO-D8`
 
@@ -369,3 +410,43 @@ key keeps `(P, s, E)` and stops borrowing `ArchivalServeCreditKey`.
 build `ArchivalServeCreditKey` (PR #554). They need their own 48-byte key type
 once that key widens. Flagged here because #554 is open and merges first;
 whoever lands this round owns the follow-through.
+
+### 5.3 How the record reaches its block: the pool is transport
+
+Grounding the derivation site surfaced a site the enumeration missed, and with
+it a question the ruling did not obviously answer: **serve-credit txs go through
+the mempool.** The pool reserves a `'S' ‖ P ‖ shard ‖ E` key for
+them (`append_archival_block_unique_keys`), and no C++ code constructs such a
+tx — they are produced elsewhere and
+relayed.
+
+**This is not a contradiction of `PC-D2`, and the distinction is worth stating
+because the first reading looks like one.** `PC-D2` says the miner that closes
+the block *issues the challenge*; **`P` produces the response**. The pool is how
+that response travels from `P` to the miner. `PC-D2` constrains the record's
+**validity binding** — it verifies only in a block whose `prev_id` matches its
+derivation — not its **transport**. "There is no path where a record names a
+block it did not come from" still holds exactly: nothing on the wire names a
+block at all.
+
+**The new consequence is that a pooled record is next-block-only.** Once another
+block connects, its derivation is bound to a hash that is no longer the tip's,
+and it can never be admitted. That is the mechanism working — a response is
+valid in exactly one block — but it had to be checked rather than assumed, since
+a stale record served from a cache into a block template would produce invalid
+blocks.
+
+**Checked, and no fix is owed.** `m_input_cache` is cleared in both
+`on_blockchain_inc` and `on_blockchain_dec`, so
+`is_transaction_ready_to_go` re-runs the real gate against the new tip and a
+stale record fails there — before it can enter a template. Recorded as a
+verified fact rather than left as a worry, because the next reader will have the
+same one.
+
+**The `(P, s, E)` pool key is left alone.** It is narrower than `PC-D4`'s
+widened ledger key, which invites widening it to match — but within a single
+block `(P, s, E)` is unique anyway (each of the three challenges rides its own
+block), so the narrow key is consensus-adequate. The only question it raises is
+stale *eviction*, which is liveness, not consensus, and which the existing
+`last_failed_id` path already handles. Widening it here would be a change made
+for symmetry with a different key serving a different purpose.

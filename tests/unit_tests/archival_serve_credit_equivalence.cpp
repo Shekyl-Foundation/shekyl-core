@@ -111,6 +111,7 @@ struct Gate2Substrate {
   std::string wire_hex;
   std::string p_id_hex;
   std::string seal_hash_hex;
+  std::string prev_block_hash_hex;  // PC-D3
   std::string bond_pubkey_hex;
   std::string leaf_scalars_hex;
   std::string pruned_hex;      // RF-D1: this vin's pruned record
@@ -135,6 +136,7 @@ Gate2Substrate load_gate2_substrate()
   s.wire_hex = i["wire_hex"].GetString();
   s.p_id_hex = i["p_canonical_id_hex"].GetString();
   s.seal_hash_hex = i["block_hash_at_seal_hex"].GetString();
+  s.prev_block_hash_hex = i["prev_block_hash_hex"].GetString();
   s.bond_pubkey_hex = i["bond_hybrid_pubkey_hex"].GetString();
   s.leaf_scalars_hex = i["leaf_layer_scalars_hex"].GetString();
   s.pruned_hex = i["pruned_hex"].GetString();
@@ -543,7 +545,12 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
     throw std::runtime_error("Blockchain::init failed");
 
-  return bc->check_archival_serve_credit_input(resp, pruned, current_height);
+  // PC-D3: the verifier's block. Taken from the gate-2 substrate, which is
+  // the same value the Rust leg reads from the equivalence fixture's base --
+  // the two legs must derive the index from the SAME block or they are not
+  // running the same gate.
+  return bc->check_archival_serve_credit_input(resp, pruned, current_height,
+    hash_from_hex(s.prev_block_hash_hex));
 }
 
 } // namespace
