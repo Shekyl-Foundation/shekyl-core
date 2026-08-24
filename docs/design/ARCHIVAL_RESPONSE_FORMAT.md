@@ -1,8 +1,21 @@
 # Serve-credit response format — design round (RF)
 
-**Status:** OPEN — `RF-D3`/`RF-D5` resolved and implemented 2026-08-19;
-`RF-D1`/`RF-D2`/`RF-D4` **drafted 2026-08-20** (§3.5), implementation pending.
-Round opened 2026-08-18.
+**Status:** **CLOSED 2026-08-21** — every disposition `RF-D1`…`RF-D10` is
+ruled *and* implemented on `dev`. Round opened 2026-08-18.
+
+*(This line read "implementation pending" until 2026-08-23. It was stale from
+2026-08-21, when PR #522 merged: the doc led the PR per this round's own
+practice, and nothing updated the header when the code landed behind it. The
+correction is dated rather than silently applied, because a status line is the
+first thing read and the second thing trusted — a reader grounding on it would
+have set out to build what was already in the tree. Its index row carried the
+same defect at the same time; both are fixed together, since fixing the prose
+and leaving the index is how the next reader still gets the wrong answer.)*
+
+**Landed:** `RF-D3`/`RF-D5` implemented 2026-08-19; artifacts A and B
+(on-chain record and served payload) 2026-08-20; `RF-D8`/`RF-D9`/`RF-D10`
+with the C++ vin, the pruned half, and the review round in PR #522, merged
+2026-08-21.
 **Unblocked by:** the carrier round
 ([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **RULED
 2026-08-18, merged to `dev` in PR #501.**
@@ -69,7 +82,7 @@ paths of `calculate_transaction_prunable_hash` see it by construction; after,
 they diverge silently and throw on blob-holding nodes only. That invariant is
 guarded by `tests/unit_tests/tx_prunable_region_sole_occupant.cpp`.
 
-### 1.2 `RF-D1` (OPEN) — the constraint whose failure mode is tidiness
+### 1.2 `RF-D1` (RULED + IMPLEMENTED 2026-08-20) — the constraint whose failure mode is tidiness
 
 **The leaf chunk is pruned-side by construction.** `leaf_bytes` is already
 kept-side and the leaf chunk is the same conceptual object in the same
@@ -82,7 +95,7 @@ rather than left to be re-derived: disagreement gets argued, tidiness just lands
 One field identifies the record, the other proves it, and only the first survives
 pruning.
 
-### 1.3 `RF-D2` (OPEN) — `CR-F2`: the tx id moves, and that is genesis-frozen
+### 1.3 `RF-D2` (RULED + IMPLEMENTED 2026-08-20) — `CR-F2`: the tx id moves, and that is genesis-frozen
 
 Today both signature legs sit in one 3,385 B `hybrid_signature` on the vin
 (`3385 = 12 framing + 64 Ed25519 + 3309 ML-DSA-65`). Slimming it to the Ed25519
