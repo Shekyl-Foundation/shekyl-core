@@ -1,23 +1,11 @@
 error[E0616]: field `enc_label` of struct `OutputData` is private
   --> tests/trybuild/enc_fields_cannot_be_overwritten.rs:18:8
    |
-18 |     od.enc_label = [0u8; 8];
-   |        ^^^^^^^^^ private field
-
-error[E0616]: field `label_tag` of struct `OutputData` is private
-  --> tests/trybuild/enc_fields_cannot_be_overwritten.rs:19:8
-   |
-19 |     od.label_tag = 0;
+18 |     od.enc_label = forged;
    |        ^^^^^^^^^ private field
 
 error[E0616]: field `enc_amount` of struct `OutputData` is private
-  --> tests/trybuild/enc_fields_cannot_be_overwritten.rs:20:8
+  --> tests/trybuild/enc_fields_cannot_be_overwritten.rs:19:8
    |
-20 |     od.enc_amount = [0u8; 8];
-   |        ^^^^^^^^^^ private field
-
-error[E0616]: field `amount_tag` of struct `OutputData` is private
-  --> tests/trybuild/enc_fields_cannot_be_overwritten.rs:21:8
-   |
-21 |     od.amount_tag = 0;
+19 |     od.enc_amount = forged;
    |        ^^^^^^^^^^ private field

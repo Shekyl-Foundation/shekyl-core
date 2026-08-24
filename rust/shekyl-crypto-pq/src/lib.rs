@@ -53,6 +53,7 @@ pub mod archival_p;
 pub mod archival_p_freeze;
 pub mod bip39;
 pub mod derivation;
+mod encrypted_output_field;
 pub mod error;
 pub mod handle;
 pub mod kem;

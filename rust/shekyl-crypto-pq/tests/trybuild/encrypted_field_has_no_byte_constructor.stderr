@@ -1,0 +1,19 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/trybuild/encrypted_field_has_no_byte_constructor.rs:14:13
+   |
+14 |     let _ = EncryptedOutputField([0u8; 9]);
+   |             ^^^^^^^^^^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/encrypted_output_field.rs
+   |
+   | pub struct EncryptedOutputField([u8; 9]);
+   |                                 ^^^^^^^ private field
+help: you might have meant to use an associated function to build this type
+   |
+14 -     let _ = EncryptedOutputField([0u8; 9]);
+14 +     let _ = EncryptedOutputField::assemble(_, _);
+   |
+14 -     let _ = EncryptedOutputField([0u8; 9]);
+14 +     let _ = EncryptedOutputField::from_ffi_json_unverified(_);
+   |

@@ -63,15 +63,18 @@ sustainability is unaffected by the recalibration.
   output carrying it.
 
   Fixed with a type rather than a check: `EncryptedOutputField`
-  (`shekyl-crypto-pq/src/output.rs`), whose only constructors are
-  `OutputData::enc_label_wire()` / `enc_amount_wire()`. "Reject zeros" was
-  considered and rejected — it treats one symptom, admits any other
-  unencrypted constant, and can fire on a legitimate ciphertext that happens to
-  be zero. `enc_amount` is typed alongside `enc_label` because the assembly was
-  one five-line template producing both; typing one would have left the
-  copy-paste source alive three lines above the field just protected.
-  (`enc_amount` fails loudly at the recipient rather than silently — a
-  difference in blast radius, not in shape.)
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`, re-exported from
+  `output`). In-process constructors are `OutputData::enc_label_wire()` /
+  `enc_amount_wire()`, which return the value `construct_output` assembled at
+  encryption — the field on `OutputData` *is* the type, not an 8+1 pair a
+  late accessor re-wraps. `Deserialize` is the other route (the FFI JSON
+  boundary). "Reject zeros" was considered and rejected — it treats one
+  symptom, admits any other unencrypted constant, and can fire on a legitimate
+  ciphertext that happens to be zero. `enc_amount` is typed alongside
+  `enc_label` because the assembly was one five-line template producing both;
+  typing one would have left the copy-paste source alive three lines above the
+  field just protected. (`enc_amount` fails loudly at the recipient rather
+  than silently — a difference in blast radius, not in shape.)
 
   **The guarantee, at its true width:** on the in-process Rust path an
   unencrypted field is not representable, and that is compiler-enforced —
@@ -80,19 +83,19 @@ sustainability is unaffected by the recalibration.
   then while a `feature = "test-utils"` constructor shipped in the production
   archive, then while `OutputData`'s ciphertext and tag fields were still
   `pub` — so a caller could overwrite a real output's bytes and call the
-  accessor, or build a literal. All three are closed; the last one is why
-  those fields are now `pub(crate)`. Widening them back no longer removes the
-  guarantee silently: `shekyl-crypto-pq/tests/trybuild/` holds the two forgery
-  attempts as compile-fail fixtures, and each names all four fields, so
-  loosening any one of them turns the suite red. The byte constructor is **private to the defining module**, so
-  the one remaining
-  way in is the type's `Deserialize` impl — the `shekyl_sign_fcmp_transaction`
-  JSON boundary, where the far side computed the encryption and this crate
-  cannot re-derive it. Deserializing is a visibly deliberate act at a boundary
-  rather than a function any crate can call. Its only non-test caller is the
-  C++ `construct_tx*` chain, which has had no production caller since `wallet2`
-  was deleted; it dies with the consensus-oracle harness, and the impl dies
-  with it.
+  accessor, or build a literal. All three are closed. The remaining
+  `pub(crate)` on the two stored fields stops a deserialized FFI-boundary
+  value being written onto a derived output. Widening them, or adding a
+  public byte constructor, is pinned by `shekyl-crypto-pq/tests/trybuild/`
+  (one fixture per route, because a field-privacy error otherwise masks the
+  rest). The byte constructor is **private to the defining module**, so the
+  one remaining way in is the type's `Deserialize` impl — the
+  `shekyl_sign_fcmp_transaction` JSON boundary, where the far side computed
+  the encryption and this crate cannot re-derive it. Deserializing is a
+  visibly deliberate act at a boundary rather than a function any crate can
+  call. Its only non-test caller is the C++ `construct_tx*` chain, which has
+  had no production caller since `wallet2` was deleted; it dies with the
+  consensus-oracle harness, and the impl dies with it.
 
 - **[Done 2026-08-21] `rct_signatures` / `rctSig` / `namespace rct` → CT
   names (rule 93 sweep, ~290 sites).** RF-D9 (PR #522) had renamed only the

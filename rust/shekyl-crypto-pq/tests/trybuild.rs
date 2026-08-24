@@ -8,24 +8,23 @@
 //! holding bytes that never met the encryption must be unrepresentable by
 //! downstream code, not merely discouraged.
 //!
-//! That guarantee rests entirely on four `pub(crate)` fields of
-//! `OutputData` — the ciphertext/tag pairs the wire accessors read. If a
-//! future edit widens any of them back to `pub`, every existing test still
-//! passes and the guarantee silently evaporates: the type's doc comment
-//! ("Do not widen these back to `pub`") is a comment, and a comment cannot
-//! fail. This test can.
+//! The type has no public byte constructor. `OutputData` stores it (not an
+//! 8+1 pair a late accessor could re-wrap), and those fields are `pub(crate)`
+//! so a deserialized FFI-boundary value cannot be written onto a derived
+//! output. If a future edit opens any of those, every existing runtime test
+//! still passes and the guarantee silently evaporates: a comment cannot fail.
+//! This test can.
 //!
-//! `trybuild` compiles the fixture as a *separate crate* linking this one,
+//! `trybuild` compiles each fixture as a *separate crate* linking this one,
 //! so it sees exactly what a downstream crate sees — which is the only
-//! vantage point from which the question means anything.
+//! vantage point from which the question means anything. One fixture per
+//! route: a field-privacy error aborts compilation before later bodies are
+//! type-checked, so sharing a file lets routes mask each other.
 
 #[test]
 fn an_unencrypted_output_field_cannot_be_constructed_downstream() {
     let t = trybuild::TestCases::new();
-    // Two fixtures, not one: a field-privacy error aborts the compilation
-    // before later bodies are type-checked, so the two routes mask each
-    // other if they share a file (observed — the literal error vanished
-    // from the snapshot entirely).
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_overwritten.rs");
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_literal_constructed.rs");
+    t.compile_fail("tests/trybuild/encrypted_field_has_no_byte_constructor.rs");
 }

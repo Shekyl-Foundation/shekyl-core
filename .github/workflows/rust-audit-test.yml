@@ -235,14 +235,29 @@ jobs:
         # is off. So the workspace `--all-targets` gate above neither compiles
         # the module nor reports that it declined to.
         #
-        # PR #544 paid for that: making four `OutputData` fields `pub(crate)`
-        # updated every consumer the gates could see, and this module — the one
-        # they could not — first reported the break in the 10-minute
-        # bench-capture job. This lane reproduces it in seconds.
+        # PR #544 paid for that: making `OutputData`'s encrypted fields
+        # `pub(crate)` updated every consumer the gates could see, and this
+        # module — the one they could not — first reported the break in the
+        # 10-minute bench-capture job. This lane reproduces it in seconds.
         #
         # Clippy, not test: the module declares no `#[test]`; it is fixture and
         # harness code whose only failure mode here is failing to compile.
-        run: cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings
+        #
+        # Subject assertion (47-gate-subject-assertion): clippy with this
+        # feature is green if the module or its cfg vanishes. Assert the file
+        # exists, the feature is declared, and the cfg sits on the module
+        # declaration — not a doc comment inside the file. Each command is
+        # unpiped (46-shell-gate-exits).
+        run: |
+          test -f shekyl-engine-core/src/engine/key_dispatch_bench.rs
+          grep -F -q 'bench-internals = []' shekyl-engine-core/Cargo.toml
+          awk '
+            /#\[cfg\(feature = "bench-internals"\)\]/ { cfg=1; next }
+            cfg && /mod key_dispatch_bench;/ { found=1; exit 0 }
+            { cfg=0 }
+            END { if (!found) { print "key_dispatch_bench missing or not cfg-gated" > "/dev/stderr"; exit 1 } }
+          ' shekyl-engine-core/src/engine/mod.rs
+          cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings
       # The probe sheet is a PRE-REGISTRATION: it records which probes exist
       # and which decision each failure revisits. That only means something if
       # the probes it names are implemented.

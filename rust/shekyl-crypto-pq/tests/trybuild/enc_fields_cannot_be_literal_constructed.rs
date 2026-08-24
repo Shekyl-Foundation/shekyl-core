@@ -5,21 +5,23 @@
 
 //! Route 2: skip construction entirely and write the struct literal.
 //!
-//! A separate fixture from route 1 on purpose. Field-privacy errors abort
-//! the compilation before later bodies are type-checked, so a single fixture
-//! holding both routes reports only the first — and would keep passing if
-//! the literal route alone were opened up.
+//! The wire fields are parameters, not tuple-struct constructions: that
+//! way this fixture tests `OutputData` field privacy (`E0451`) and the
+//! byte-constructor fixture tests the type. A field-privacy error aborts
+//! compilation before later bodies are type-checked, so a single fixture
+//! holding both routes reports only the first.
 
-use shekyl_crypto_pq::output::OutputData;
+use shekyl_crypto_pq::output::{EncryptedOutputField, OutputData};
 
-pub fn literal() -> OutputData {
+pub fn literal(
+    enc_amount: EncryptedOutputField,
+    enc_label: EncryptedOutputField,
+) -> OutputData {
     OutputData {
         output_key: [0u8; 32],
         commitment: [0u8; 32],
-        enc_amount: [0u8; 8],
-        amount_tag: 0,
-        enc_label: [0u8; 8],
-        label_tag: 0,
+        enc_amount,
+        enc_label,
         view_tag_prefilter: 0,
         kem_ciphertext_x25519: [0u8; 32],
         kem_ciphertext_ml_kem: Vec::new(),

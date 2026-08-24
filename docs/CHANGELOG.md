@@ -115,9 +115,12 @@
   including the genesis block builder. The live path was already correct
   (`sign_bridge.rs` took its values straight from `construct_output`), so this
   fixes no leak; it removes the possibility. `EncryptedOutputField`
-  (`shekyl-crypto-pq/src/output.rs`) has no public byte constructor: the only
-  ways to obtain one are `OutputData::enc_label_wire()` and
-  `enc_amount_wire()`, which can only be reached from a real derivation.
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`, re-exported from
+  `output`) has no public byte constructor. The in-process constructors are
+  `OutputData::enc_label_wire()` / `enc_amount_wire()`, which return the
+  value `construct_output` assembled at the moment of encryption — the field
+  on `OutputData` *is* the type, not an 8+1 pair a late accessor re-wraps.
+  `Deserialize` is the other route, and it exists for the FFI JSON boundary.
 
   The hazard was never a weak plaintext — an all-zero *plaintext* encrypts to
   `k_label[..8]` and is uniform, exactly as the sentinel does. It was bytes
@@ -127,27 +130,25 @@
   the remedy: it treats one symptom, admits any other unencrypted constant, and
   can fire on a legitimate ciphertext that happens to be zero.
 
-  The guarantee is compiler-enforced on two axes, both verified by attempting
-  the forgery from outside the crate: overwriting a real `OutputData`'s
-  ciphertext or tag is `E0616` (the fields are `pub(crate)`), and building an
-  `OutputData` literal is `E0451`.
+  The guarantee is compiler-enforced on three axes, all verified by attempting
+  the forgery from outside the crate: `EncryptedOutputField([0; 9])` is
+  `E0423` (the inner field is private), overwriting a real `OutputData`'s
+  stored field is `E0616` (`pub(crate)`), and building an `OutputData`
+  literal is `E0451`.
 
-  Those two attempts are now committed as compile-fail tests
+  Those attempts are committed as compile-fail tests
   (`shekyl-crypto-pq/tests/trybuild/`), which **retracts this entry's earlier
   judgement** that a `trybuild` harness was not worth adding for them. Two
   things made that judgement wrong. The cost was overstated — `trybuild` was
   already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock`,
   adding no package to the supply chain. And the alternative it chose was
-  documentation: the fields carry "`pub(crate)` is load-bearing, not
-  stylistic", but a comment cannot fail, and widening a field back to `pub`
+  documentation: a comment cannot fail, and widening a field back to `pub`
   would have left every existing test passing while the guarantee evaporated.
   A property this crate names in its own title deserves a check that goes red.
 
-  The two routes live in separate fixtures because a field-privacy error
+  The routes live in separate fixtures because a field-privacy error
   aborts the compilation before later bodies are type-checked — sharing a file,
-  the literal route's error vanished from the snapshot entirely and would have
-  been guarded by nothing. Each fixture touches all four fields, so widening
-  any one of them turns both red; observed, by widening `enc_amount` alone.
+  later routes vanish from the snapshot and would have been guarded by nothing.
 
   One exception survives, and it is a boundary rather than a constructor: the
   type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its

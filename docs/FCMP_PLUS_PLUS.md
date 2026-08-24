@@ -1777,11 +1777,11 @@ serialized immediately after `enc_amounts` and before `outPk`:
   The Rust signing path *used to* carry the same shape: `enc_label` was a plain
   `[u8; 9]` on `OutputInfo`, so an unencrypted value was representable there
   too. It is not any longer. `EncryptedOutputField`
-  (`shekyl-crypto-pq/src/output.rs`) has no public byte constructor — the only
-  ways to obtain one are `OutputData::enc_label_wire()` / `enc_amount_wire()`
-  and the `Deserialize` impl that serves the FFI JSON boundary — so on the
-  in-process path an unencrypted field is **unrepresentable**, not merely
-  rejected. Deliberately not implemented as "reject zeros": that treats one
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`) has no public byte
+  constructor — in-process construction is `OutputData::enc_label_wire()` /
+  `enc_amount_wire()` (the value `construct_output` assembled at encryption),
+  and `Deserialize` serves the FFI JSON boundary — so on the in-process path
+  an unencrypted field is **unrepresentable**, not merely rejected. Deliberately not implemented as "reject zeros": that treats one
   symptom, admits any other unencrypted constant, and can fire on a legitimate
   ciphertext that happens to be zero.
 

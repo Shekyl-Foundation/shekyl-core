@@ -4,21 +4,19 @@
 // BSD-3-Clause
 
 //! Route 1: take a legitimately constructed `OutputData` and overwrite the
-//! ciphertext/tag bytes with chosen constants, then spend them through
-//! `enc_label_wire()` / `enc_amount_wire()`.
+//! stored wire fields with a value this crate already holds.
 //!
-//! All four fields are written deliberately: the `.stderr` snapshot then
-//! names all four, so widening *any one* of them back to `pub` changes the
-//! output and turns this test red. Writing only the label pair would leave
-//! the amount pair unguarded.
+//! The forged value is a parameter, not a tuple-struct construction: that
+//! way this fixture tests *field privacy* and the byte-constructor fixture
+//! tests the type. Both fields are written so the `.stderr` snapshot names
+//! both; widening either back to `pub` changes the output and turns this
+//! red.
 
-use shekyl_crypto_pq::output::OutputData;
+use shekyl_crypto_pq::output::{EncryptedOutputField, OutputData};
 
-pub fn overwrite(od: &mut OutputData) {
-    od.enc_label = [0u8; 8];
-    od.label_tag = 0;
-    od.enc_amount = [0u8; 8];
-    od.amount_tag = 0;
+pub fn overwrite(od: &mut OutputData, forged: EncryptedOutputField) {
+    od.enc_label = forged;
+    od.enc_amount = forged;
 }
 
 fn main() {}
