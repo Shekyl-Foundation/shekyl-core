@@ -39,6 +39,28 @@
 
 ### Changed
 
+- **CI PR fan-out cut (`chore/ci-fanout-cut`).** A typical non-docs PR
+  was standing up ~15 workflows / ~30 jobs / ~500 billed minutes, and
+  four concurrent PRs plus a `dev` push queued the shared runner pool
+  for hours. The merge-blocking graph is now: Ubuntu 22.04 compile-only
+  + Ubuntu 24.04 build whose tests consume the artifact (no second
+  cmake/ctest rebuild) + macOS + Windows MSVC; ARM v8 qemu KATs only
+  when the three cross-arch crates change; `make depends` only when
+  `contrib/depends` (or Makefile) changes, with the six-target matrix
+  on a nightly; eight grep/source-scan gates in one job; CodeQL Rust
+  on PR, C++/Python weekly. Arch Linux and Windows MSYS2 moved to
+  `weekly-os.yml`. `source archive` still runs on PRs into `main`
+  (required check) and is skipped on PRs into `dev`. The MSRV cargo
+  check is the rust-audit-test job at `rust-toolchain.toml` 1.94, not
+  a second compile. Push-to-`dev` no longer double-runs the OS matrix
+  or the rust job (the PR event already tested the merge). Dispatch-only
+  leftovers: `bench-runner-bisect.yml` deleted; `rust-stable-canary.yml`
+  schedule removed until `cargo +stable fmt --check` has an owner.
+  Economics C2a′ paths glob by naming convention
+  (`src/shekyl/economics.*`, `tests/unit_tests/economics*.cpp`,
+  `tests/unit_tests/archival_*emission*.cpp`) rather than a frozen
+  file list or `src/shekyl/**`. The Ubuntu 24.04 CTest-artifact verify
+  step fail-closes if CMakeFiles/objects/archives leak into the tarball.
 - **`get_block` is served natively in Rust, and the two console commands
   that read it move with it (RK-3b,
   `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from

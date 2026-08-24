@@ -3,7 +3,7 @@ name: ci/gh-actions/rust
 # Split out of build.yml (workflow `ci/gh-actions/cli`) so the long-running,
 # most-commonly-flaking Rust gate is its own workflow *run*. In GitHub Actions
 # you cannot "Re-run failed jobs" until the whole run concludes; while this job
-# (the longest in the CLI workflow, ~35–48m per docs/CI_TIMING_BASELINE.md) was
+# (the longest in the CLI workflow, ~35–95m per docs/CI_TIMING_BASELINE.md) was
 # bundled with the C/C++ compile_by_OS matrix, an OS-runner flake could not be
 # re-run until this job finished. This job never depended on those OS builds —
 # no `needs:`, no artifact download, its own Swatinem cache — so the split is
@@ -18,10 +18,8 @@ name: ci/gh-actions/rust
 
 on:
   push:
-    # dev/main only. PR branches are covered by the pull_request event
-    # (which tests the PR merged into its base — the stronger signal);
-    # an unrestricted push trigger double-runs every job on each push
-    # to an open PR. Branches without a PR get CI by opening a draft PR.
+    # `main` only. PRs are covered by `pull_request`. A push-to-dev
+    # trigger double-ran this ~95-minute job on every merge.
     #
     # `paths` with negations instead of `paths-ignore` (the two cannot be
     # combined per event): docs are skipped EXCEPT the domain registry TSV,
@@ -29,7 +27,7 @@ on:
     # TSV-only PR that skipped this workflow could merge a duplicate domain
     # and turn dev's test suite red for the next unrelated rust/** PR.
     # Order matters: the last matching pattern wins.
-    branches: [dev, main]
+    branches: [main]
     paths: &rust_paths
       - '**'
       - '!docs/**'
@@ -70,7 +68,6 @@ jobs:
       - name: update apt
         run: apt update
       - name: install dependencies
-        # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
         # valgrind: headers required to compile `shekyl-engine-state`'s
         # `ledger_iai` bench (`gungraun` `client_requests` / `act`).
         # libclang-dev + clang: `valgrind-requests` bindgens those
@@ -79,7 +76,8 @@ jobs:
         # (`ci/benchmarks`) already ships clang, so the capture job
         # stayed green while this gate failed. Still gungraun — no
         # harness swap. clippy `--all-targets` builds benches.
-        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep valgrind libclang-dev clang
+        # ripgrep moved with lint_cpp_clamp_ban.sh to grep-gates.yml.
+        run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -410,102 +408,6 @@ jobs:
         # this gate catches.
         working-directory: rust
         run: cargo test --locked --release -p shekyl-pow-randomx
-      - name: Bech32m address encoding tests
-        working-directory: rust
-        run: cargo test --locked -p shekyl-crypto-pq -- address
-      - name: C++ clamp-ban lint (address-freeze)
-        run: bash scripts/lint_cpp_clamp_ban.sh
-      - name: "CI grep gate: no shekyl_y in C++ source"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: 'shekyl_y' salt still present in C++ source (grep rc=$rc)"; exit 1; }
-          echo "PASS: no shekyl_y in C++ source"
-      - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: derivation_to_y_scalar still present in C++ source (grep rc=$rc)"; exit 1; }
-          echo "PASS: no derivation_to_y_scalar in C++ source"
-      - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: legacy RCT types still referenced in C++ source (grep rc=$rc)"; exit 1; }
-          echo "PASS: no legacy RCT types"
-      - name: "CI grep gate: no v1/v2 tx version branches"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          # `\s`, `\b` and `\|` are GNU extensions to BRE, not PCRE-only escapes:
-          # GNU grep honours all three without -E or -P. Verified against GNU grep
-          # 3.11 — the pattern matches `tx.version == 1`, `tx.version==1` and
-          # `hf_version < 1`, and `\b` correctly rejects `== 11` / `< 10`. This job
-          # pins runs-on: ubuntu-latest, so the GNU implementation is guaranteed;
-          # a move to a BSD-grep runner would need `-E` plus a `\b` replacement.
-          # Stated because the escapes read as PCRE and have been misread once.
-          grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: legacy v1/v2 transaction version checks still present (grep rc=$rc)"; exit 1; }
-          echo "PASS: no v1/v2 tx version branches"
-      - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/ && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: legacy HASH_KEY_TXPROOF still referenced (grep rc=$rc)"; exit 1; }
-          echo "PASS: no HASH_KEY_TXPROOF"
-      - name: "CI grep gate: combined_shared_secret confined to wallet"
-        run: |
-          # grep exits 2 on *error* (a path that no longer exists, an unreadable
-          # file) and `if grep ...; then` cannot distinguish that from exit 1
-          # "no match" — so a deleted directory silently disables the gate, even
-          # when the forbidden pattern is present. Capture the status instead:
-          # 1 is the only passing value.
-          # NOTE: this gate is currently VACUOUS — `combined_shared_secret` has
-          # zero occurrences anywhere in src/ or tests/, and the "wallet
-          # boundary" it names was deleted at Phase 5. Its message is corrected
-          # here to describe what it actually checks; whether it is deleted or
-          # re-pointed at the Rust surface is a filed decision — see
-          # docs/FOLLOWUPS.md "combined_shared_secret gate is vacuous".
-          grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/ && rc=0 || rc=$?
-          [ "$rc" -eq 1 ] || { echo "FATAL: combined_shared_secret appeared in src/common, src/rpc or src/cryptonote_protocol (grep rc=$rc)"; exit 1; }
-          echo "PASS: no combined_shared_secret in the three checked dirs"
-      - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
-        run: |
-          # Two defects, both fail-open. (1) A pipeline's exit status is the
-          # LAST command's, so piping into `grep -v` discarded the producer's
-          # status entirely — this never read the grep it appears to read
-          # (.cursor/rules/46-shell-gate-exits). (2) grep exits 2 on error,
-          # which `if` cannot tell from exit 1 "no match". Both are fixed by
-          # capturing the producer's status before filtering.
-          matches=$(grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/) && rc=0 || rc=$?
-          [ "$rc" -le 1 ] || { echo "FATAL: ecdh grep errored (rc=$rc)"; exit 1; }
-          outside=$(printf '%s' "$matches" | grep -v device_ledger) && frc=0 || frc=$?
-          [ "$frc" -le 1 ] || { echo "FATAL: ecdh filter errored (rc=$frc)"; exit 1; }
-          if [ -n "$outside" ]; then
-            echo "$outside"
-            echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
-            exit 1
-          fi
-          echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
       - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
         working-directory: rust
         run: |

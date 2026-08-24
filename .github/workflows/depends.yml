@@ -2,9 +2,17 @@ name: ci/gh-actions/depends
 
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
+    # Full six-target `make depends` only when the depends tree, the
+    # Makefile target, or this workflow changes. Unrelated PRs used to
+    # pay ~124 billed minutes for six cross-compiles. ARM v8 qemu KATs
+    # live in depends-aarch64-kats.yml (path-filtered to the three
+    # cross-arch-deterministic crates).
+    paths:
+      - 'contrib/depends/**'
+      - 'Makefile'
+      - '.github/workflows/depends.yml'
+  schedule:
+    - cron: "0 4 * * *"   # daily 04:00 UTC — the rest of the matrix
   workflow_dispatch:
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
@@ -136,42 +144,6 @@ jobs:
       # the old block's `. "$HOME/.cargo/env"` worked around in-block.
       if: ${{ matrix.toolchain.rust_target }}
       run: rustup target add ${{ matrix.toolchain.rust_target }}
-    - name: archival KAT tests run under aarch64 (qemu-user)
-      if: matrix.toolchain.host == 'aarch64-linux-gnu'
-      run: |
-        . "$HOME/.cargo/env"
-        cd rust
-        # Execute the cross-compiled tests under qemu so the reward-arithmetic
-        # determinism golden vectors are verified bit-identical on aarch64, not
-        # just compiled (REWARD_EMISSION_VIN_PLAN.md §9, M-1 half (b)).
-        # qemu-user-static is installed via this lane's matrix `packages` list in
-        # the "install dependencies" step (the container runs as root; no sudo).
-        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64-static
-        export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu
-        cargo test --locked -p shekyl-archival-retention \
-          --target aarch64-unknown-linux-gnu
-        # `shekyl-standoff` default features only: the integer funding-seam
-        # standoff golden vector (`tests/golden_vector.rs`) is the cross-arch
-        # bit-identical guarantee (ARCHIVAL_FIREWALL_GATE6.md §10.12). The
-        # `conformance` float goodness-of-fit probes are deliberately NOT built
-        # here — float is not bit-identical across arches (the same reason
-        # reward-arithmetic is pure-integer), so they stay x86-only and the
-        # lane's guarantee is scoped to the integer (spread, bond_first)
-        # sequence.
-        cargo test --locked -p shekyl-standoff \
-          --target aarch64-unknown-linux-gnu
-        # `archival_p` is the third cross-arch-deterministic primitive (after
-        # reward-arithmetic and the standoff draw). A divergent bit on aarch64
-        # means an ARM-phone user cannot recover their own bond, so the
-        # ARCHIVAL_P_DERIVE_V1 KAT (+ corpus freeze self-check) must run under
-        # qemu, not just compile. Scoped to the KAT binary so the slow
-        # ML-KEM/ML-DSA keygen path runs only for the pinned vectors; the
-        # p_canonical_id cross-check is exercised via the
-        # shekyl-archival-retention run above (it depends on archival_p).
-        cargo test --locked -p shekyl-crypto-pq \
-          --target aarch64-unknown-linux-gnu \
-          --test kat_archival_p_derive_v1
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}

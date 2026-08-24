@@ -706,7 +706,9 @@ present in a frozen allowlist file.
 - `scripts/ci/check_zeroize.sh` — ripgrep invocation + allowlist
   diff. ~40 lines of shell + ripgrep. Exits non-zero on any hit
   that isn't wrapped and isn't allowlisted.
-- `.github/workflows/zeroize-check.yml` — wire the script into CI.
+- `.github/workflows/grep-gates.yml` — wire the script into CI
+  (bundled with the other source-scan gates; the dedicated
+  `zeroize-check.yml` was deleted in the 2026-08-24 fan-out cut).
 
 **Policy.**
 

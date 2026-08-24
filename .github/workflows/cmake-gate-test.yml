@@ -18,8 +18,18 @@ name: cmake-gate-test
 on:
   pull_request:
     branches: [dev]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "tests/cmake-gate-test/**"
+      - ".github/workflows/cmake-gate-test.yml"
   push:
     branches: [dev]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "tests/cmake-gate-test/**"
+      - ".github/workflows/cmake-gate-test.yml"
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
