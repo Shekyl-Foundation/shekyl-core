@@ -320,6 +320,28 @@ pass.
 | 15 | `SO-D1`'s writer | its `passes` is this round's enumeration — the two rounds meet here |
 | 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B, and **`SO-D2`'s settlement key rides it** — see §5.2 |
 
+### 5.0 The ABI hazard the C++ half must clear FIRST
+
+`ShekylArchivalVerifyCtx` gained `prev_block_hash` **mid-struct**, between
+`segment_leaf_count` and `pqc_pubkey_ptr`. Until `shekyl_ffi.h` mirrors the
+field *at the same offset*, C++ constructs the smaller struct and Rust reads 32
+bytes past its end.
+
+**This does not fail the way the guard suggests it will.** The
+`SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED` refusal keys on an all-zero
+hash; what Rust reads past the end of a short struct is stack residue, not
+zeros, so the refusal stays silent and the index derives from garbage. The
+symptom is a nondeterministically failing C++ test with a path mismatch — a
+prover-shaped failure for a wiring defect, which is the exact
+misattribution `PC-D3`'s guard exists to prevent, arriving through the one
+channel the guard cannot see.
+
+So the header edit is the **first** move of the FFI half, not a step within it,
+and the field order is checked side-by-side against `codes.rs` when it is
+written. (Appending the field instead would dodge this, but it would put the
+block after the two pointer/length pairs it is logically upstream of; the order
+is worth keeping and the hazard is worth one deliberate check.)
+
 ### 5.1 Interaction with `SO-D8`
 
 `SO-D8` (cross-epoch admission: a response naming `E` landing in `E+1`) becomes

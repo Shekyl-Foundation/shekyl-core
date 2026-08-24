@@ -156,10 +156,16 @@ fn gate_vectors_verdict_and_reason() {
             held_at_fire: v.bool("held_at_fire"),
             registry_present_at_fire: v.bool("registry_present_at_fire"),
             segment_leaf_count: v.u64("segment_leaf_count"),
-            // `PC-D3`. Read from the fixture rather than defaulted so both
-            // legs are fed the SAME bytes for this input -- see
-            // `prev_block_hash_is_fed_from_the_fixture_not_defaulted` for why
-            // that is not something these vectors can otherwise detect.
+            // `PC-D3`. Read from the fixture rather than defaulted, so both
+            // legs are fed the SAME bytes -- but note that THESE VECTORS
+            // CANNOT CATCH IT IF THEY ARE NOT. The gate verdict is insensitive
+            // to this input: it feeds `challenge_leaf_index`, and every index
+            // the derivation can produce is in range, so
+            // `challenge_leaf_chunk_bounds` accepts regardless of which block
+            // it came from. A legs-disagree here is caught by gate-2's pinned
+            // index (`gate2_serve_credit_kat_v1.json`, asserted in
+            // `gate2_serve_credit_kat_vectors`), which is the named catcher --
+            // not by anything in this file.
             prev_block_hash: hex32(v.get("prev_block_hash_hex")),
             leaf_chunk_ok: v.bool("leaf_chunk_ok"),
             verify_ok: v.bool("verify_ok"),
@@ -374,14 +380,14 @@ fn regenerate_equivalence_fixture_from_gate2() {
             "current_height",
             integ["current_height"].as_u64().expect("current_height"),
         ),
-        // RF-D6: the index is no longer on the wire; the gate-2 fixture records
-        // the verifier's derived value, which is what the base mirrors.
-        (
-            "leaf_index_in_segment",
-            integ["leaf_index_in_segment"]
-                .as_u64()
-                .expect("recorded index"),
-        ),
+        // (`leaf_index_in_segment` is NOT mirrored. RF-D8 (`dd4d0ff59`) removed
+        // it from this fixture's base -- the index is verifier-derived on both
+        // legs -- but left this mirror step behind, so every run of this
+        // regenerator has panicked with "no leaf_index_in_segment field" since.
+        // Nothing noticed because the regenerator is `#[ignore]`d: an
+        // ignore-gated tool is only exercised when someone needs it, which is
+        // the worst moment to discover it is broken. Removed rather than
+        // repaired -- there is no field to mirror.)
     ] {
         doc = replace_first_scalar(&doc, key, value);
     }
