@@ -123,11 +123,20 @@ enum class relay_category : uint8_t
       (`local`). `none` means "received via RPC with `do_not_relay` set" and
       Shekyl has no such RPC.
 
-      It survives because it is the ZERO of `relay_method`: a zeroed or
-      short-read pool record decodes to `none`, and this category is what
-      keeps such an entry out of `get_relayable_transactions`. That is a
-      decode guard, not a leftover of the removed RPC flag -- which is why
-      it stays while `legacy` goes. */
+      It is not a zero-decode guard, and it is worth saying so because that is
+      the plausible-sounding reason to keep it: a zeroed record decodes to
+      `fluff`, NOT `none` (`get_relay_method` falls through state 0 to the
+      `fluff` return). Reaching `none` needs `do_not_relay = 1`, which only a
+      build that had a `do_not_relay` writer could have persisted.
+
+      What it actually is: the DB-layer half of a two-layer filter. Its one production
+      reader is `get_relayable_transactions`, which passes it to
+      `for_all_txpool_txes` and *also* tests `!meta.do_not_relay` in the loop
+      body. So this category is not the sole guard against relaying a
+      do-not-relay entry, and no test should be credited for that. It stays
+      because it costs nothing and it is the only filter at the DB read;
+      removing it is a change to the relay loop's iteration, which is a
+      different surface from this classifier. */
   relayable,
   all             //!< Everything in the db
 };
@@ -137,10 +146,13 @@ enum class relay_category : uint8_t
    doc gave the reason as "rpc relay requests or historical reasons". The
    history was Monero's pre-Dandelion++ RPC; Shekyl is v3-from-genesis with
    no such client (rule 60), so the union had no member any caller wanted.
-   Every one of its ten call sites was asking "is this publicly known", which
-   is `broadcasted`, and at least one -- `fill_block_template` -- would have
+   Nine of its ten call sites were asking "is this publicly known", which is
+   `broadcasted`, and one of those -- `fill_block_template` -- would have
    admitted a do-not-relay transaction into a block template had `none` ever
-   been reachable. `matches_category`'s table is pinned exhaustively by
+   been reachable. The tenth, `core::pool_has_tx`, was asking a different
+   question and now says so: it asks `all`, because its caller wants "do I
+   already hold these bytes". See the note at its definition.
+   `matches_category`'s table is pinned exhaustively by
    `tests/unit_tests/relay_category.cpp`.
 
    Removing a middle member renumbered `all`, and that is deliberately NOT

@@ -119,10 +119,16 @@ TEST(relay_category, fluff_and_block_are_broadcast)
   EXPECT_TRUE(cryptonote::matches_category(relay_method::block, relay_category::broadcasted));
 }
 
-// `relayable` survives the `legacy` deletion because `none` is the ZERO of
-// `relay_method`: a zeroed or short-read pool record decodes to it, and this
-// category is what keeps such an entry out of `get_relayable_transactions`.
-// So it must differ from `all` at exactly one method, and no other.
+// `relayable` must differ from `all` at exactly one method and no other.
+//
+// What this pins and what it does NOT: it pins the classifier row, and that
+// is all it can pin. It is not evidence that a do-not-relay entry cannot be
+// relayed -- `get_relayable_transactions` tests `!meta.do_not_relay` in its
+// loop body as well as passing this category to `for_all_txpool_txes`, so the
+// production guarantee has a second layer this test does not touch. Nor is
+// `relayable` a zero-decode guard: a zeroed record decodes to `fluff`, not
+// `none`. Stated because "the category keeps it out of the relay loop" is the
+// credit this row would otherwise be given, and it would be over-credit.
 TEST(relay_category, only_none_separates_relayable_from_all)
 {
   for (const relay_method method : k_methods)
@@ -134,7 +140,10 @@ TEST(relay_category, only_none_separates_relayable_from_all)
 }
 
 // The negative control for the two above: the categories must not have
-// collapsed into one predicate. `local` and `stem` separate them.
+// collapsed into one predicate. `local` and `stem` separate them -- and both
+// sides matter, because `core::pool_has_tx` asks `all` precisely so that a
+// held `local`/`stem` entry answers true, while the disclosure sites ask
+// `broadcasted` so that it answers false.
 TEST(relay_category, relayable_is_wider_than_broadcasted)
 {
   for (const relay_method method : {relay_method::local, relay_method::stem})
