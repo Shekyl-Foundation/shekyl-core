@@ -7,6 +7,8 @@
 
 #include <cstring>
 #include <memory>
+#include <string>
+#include <variant>
 #include <mutex>
 #include <vector>
 
@@ -220,6 +222,156 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
   }
 }
 
+// Owns every variable-length payload of one `block_at` answer, so the caller
+// releases them with a single `shekyl_rpc_block_free`. Three separate owners
+// would be three chances to leak one. Named (not anonymous) so the C entry
+// point's `_free` twin below can name the type it deletes.
+struct block_payload_owner
+{
+  std::string blob;
+  std::string json;
+  std::vector<uint8_t> tx_hashes;  // n * 32, contiguous
+};
+
+// Body of `shekyl_rpc_block_at`. Carries what the deleted `on_get_block` did
+// together with `fill_block_header_response`.
+int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
+  uint64_t height, bool fill_pow_hash,
+  shekyl_rpc_block_header_facts* out_header,
+  shekyl_rpc_block_payload* out_payload, void** out_owner) noexcept
+{
+  if (!out_header || !out_payload || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  std::memset(out_header, 0, sizeof(*out_header));
+  std::memset(out_payload, 0, sizeof(*out_payload));
+  *out_owner = nullptr;
+  try
+  {
+    cryptonote::block blk;
+    crypto::hash seed = crypto::null_hash;
+    uint64_t block_height = 0;
+    std::unique_ptr<block_payload_owner> owned(new block_payload_owner());
+    {
+      // One acquisition for the whole projection, as `block_header_at` does.
+      // The long hash is computed after it; its seed is read inside.
+      const std::lock_guard<cryptonote::Blockchain> guard(bc);
+      const uint64_t chain_height = bc.get_current_blockchain_height();
+      out_header->chain_height = chain_height;
+
+      crypto::hash id;
+      if (block_hash)
+      {
+        id = *block_hash;
+      }
+      else
+      {
+        if (height >= chain_height)
+          return SHEKYL_RPC_FACTS_OK;  // past the tip: data, not a fault
+        id = bc.get_block_id_by_height(height);
+        if (id == crypto::null_hash)
+          return SHEKYL_RPC_FACTS_OK;  // in range but absent: still "no block"
+      }
+
+      bool orphan = false;
+      if (!bc.get_block_by_hash(id, blk, &orphan))
+        return SHEKYL_RPC_FACTS_OK;  // no such block; the caller knows how it asked
+
+      // The height comes from the coinbase, not from the lookup, and every
+      // height-keyed field below is then read at THAT height — so for an alt
+      // block they describe the main-chain block sharing its height. Inherited
+      // and preserved (RK-D8); see the §7 entry of 2026-08-23.
+      if (blk.miner_tx.vin.size() != 1
+        || !std::holds_alternative<cryptonote::txin_gen>(blk.miner_tx.vin.front()))
+      {
+        MERROR("block facts: coinbase of block " << id << " is not a single txin_gen");
+        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+      }
+      block_height = std::get<cryptonote::txin_gen>(blk.miner_tx.vin.front()).height;
+
+      std::memcpy(out_header->hash, id.data, sizeof(out_header->hash));
+      std::memcpy(out_header->prev_hash, blk.prev_id.data, sizeof(out_header->prev_hash));
+      const crypto::hash miner_tx_hash = cryptonote::get_transaction_hash(blk.miner_tx);
+      std::memcpy(out_header->miner_tx_hash, miner_tx_hash.data,
+        sizeof(out_header->miner_tx_hash));
+      std::memcpy(out_header->curve_tree_root, blk.curve_tree_root.data,
+        sizeof(out_header->curve_tree_root));
+      std::memcpy(out_header->attestation_root, blk.attestation_root.data,
+        sizeof(out_header->attestation_root));
+
+      out_header->height = block_height;
+      out_header->depth = chain_height - block_height - 1;
+      out_header->timestamp = blk.timestamp;
+
+      const cryptonote::difficulty_type difficulty = bc.block_difficulty(block_height);
+      out_header->difficulty_lo = (difficulty & 0xffffffffffffffff).convert_to<uint64_t>();
+      out_header->difficulty_hi = ((difficulty >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
+      const cryptonote::difficulty_type cumulative =
+        bc.get_db().get_block_cumulative_difficulty(block_height);
+      out_header->cumulative_difficulty_lo =
+        (cumulative & 0xffffffffffffffff).convert_to<uint64_t>();
+      out_header->cumulative_difficulty_hi =
+        ((cumulative >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
+
+      out_header->reward = cryptonote::get_outs_money_amount(blk.miner_tx);
+      out_header->block_weight = bc.get_db().get_block_weight(block_height);
+      out_header->long_term_weight = bc.get_db().get_block_long_term_weight(block_height);
+      out_header->num_txes = blk.tx_hashes.size();
+      out_header->nonce = blk.nonce;
+      out_header->major_version = blk.major_version;
+      out_header->minor_version = blk.minor_version;
+      out_header->orphan_status = orphan ? 1 : 0;
+      out_header->found = 1;
+
+      // The variable payloads are built here too: `json` renders the block
+      // that this snapshot describes, so it belongs to the same read.
+      owned->blob = cryptonote::t_serializable_object_to_blob(blk);
+      owned->json = cryptonote::obj_to_json_str(blk);
+      owned->tx_hashes.resize(blk.tx_hashes.size() * sizeof(crypto::hash));
+      for (size_t i = 0; i < blk.tx_hashes.size(); ++i)
+      {
+        std::memcpy(owned->tx_hashes.data() + i * sizeof(crypto::hash),
+          blk.tx_hashes[i].data, sizeof(crypto::hash));
+      }
+
+      if (fill_pow_hash)
+        seed = bc.get_pending_block_id_by_height(
+          shekyl_pow_randomx_v2_seedheight(block_height));
+    }
+
+    // Outside the lock, with the seed already taken from inside it: see
+    // `block_header_at` for why both halves of that sentence matter.
+    if (fill_pow_hash)
+    {
+      const crypto::hash pow = get_block_longhash(&bc, blk, block_height, &seed);
+      std::memcpy(out_header->pow_hash, pow.data, sizeof(out_header->pow_hash));
+      out_header->pow_hash_filled = 1;
+    }
+
+    out_payload->blob = reinterpret_cast<const uint8_t*>(owned->blob.data());
+    out_payload->blob_len = owned->blob.size();
+    out_payload->json = owned->json.c_str();
+    out_payload->json_len = owned->json.size();
+    out_payload->tx_hashes = owned->tx_hashes.empty() ? nullptr : owned->tx_hashes.data();
+    out_payload->tx_hashes_len = owned->tx_hashes.size() / sizeof(crypto::hash);
+    *out_owner = owned.release();
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("block facts: exception: " << e.what());
+    std::memset(out_header, 0, sizeof(*out_header));
+    std::memset(out_payload, 0, sizeof(*out_payload));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("block facts: unknown exception");
+    std::memset(out_header, 0, sizeof(*out_header));
+    std::memset(out_payload, 0, sizeof(*out_payload));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 } // namespace daemon_rpc_facts
 
 extern "C" {
@@ -318,6 +470,26 @@ int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
     return SHEKYL_RPC_FACTS_ERR_NULL;
   return daemon_rpc_facts::block_header_at(
     h->rpc->get_core().get_blockchain_storage(), height, fill_pow_hash != 0, out);
+}
+
+int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
+  uint64_t height, uint8_t fill_pow_hash,
+  shekyl_rpc_block_header_facts* out_header,
+  shekyl_rpc_block_payload* out_payload, void** out_owner)
+{
+  if (!h || !h->rpc || !out_header || !out_payload || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  crypto::hash id;
+  if (block_hash)
+    std::memcpy(id.data, block_hash, sizeof(id.data));
+  return daemon_rpc_facts::block_at(h->rpc->get_core().get_blockchain_storage(),
+    block_hash ? &id : nullptr, height, fill_pow_hash != 0, out_header, out_payload,
+    out_owner);
+}
+
+void shekyl_rpc_block_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::block_payload_owner*>(owner);
 }
 
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed)

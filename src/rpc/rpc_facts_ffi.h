@@ -108,6 +108,47 @@ typedef struct shekyl_rpc_block_header_facts {
 int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
     uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out);
 
+// The variable-length half of a block's facts (RK-3b): the three payloads
+// whose size the caller cannot know in advance. Allocated by C++, owned by
+// the opaque `owner` the export hands back, and released as one unit by
+// `shekyl_rpc_block_free` — the `shekyl_rpc_hardforks` shape, which §3.2
+// states as the rule for every variable-length payload.
+//
+// `json` is epee's rendering of the whole block (RK-D11). It crosses as an
+// opaque string and Rust passes it through untouched; matching that renderer
+// in Rust would mean reimplementing it over the entire transaction structure,
+// to match something already queued for deletion.
+typedef struct shekyl_rpc_block_payload {
+    const uint8_t* blob;      // consensus-encoded block bytes; hex is Rust's job
+    size_t         blob_len;
+    const char*    json;      // epee's `obj_to_json_str(blk)`, carried verbatim
+    size_t         json_len;
+    const uint8_t* tx_hashes; // tx_hashes_len * 32 contiguous bytes
+    size_t         tx_hashes_len;  // number of hashes, NOT bytes
+} shekyl_rpc_block_payload;
+
+// A whole block, by hash or by height (RK-3b).
+//
+// `block_hash` selects the lookup: 32 bytes to reach a block by hash — which
+// may be an alt block, so `out_header->orphan_status` is a real value here
+// and not the constant it is for `shekyl_rpc_block_header_at` — or NULL to
+// reach the block at `height`.
+//
+// `out_header->found == 0` means no such block, and `chain_height` is set
+// either way: past the tip and an unknown hash are both legitimate query
+// outcomes, and the caller knows which it asked for. A block whose coinbase
+// is not a single `txin_gen` is `ERR_INCONSISTENT` — that is a broken block,
+// not a missing one.
+//
+// On OK with `found == 1` the payload is set and `*out_owner` must be passed
+// to `shekyl_rpc_block_free`; on every other outcome the owner is NULL and
+// there is nothing to release.
+int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
+    uint64_t height, uint8_t fill_pow_hash,
+    shekyl_rpc_block_header_facts* out_header,
+    shekyl_rpc_block_payload* out_payload, void** out_owner);
+void shekyl_rpc_block_free(void* owner);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
@@ -135,6 +176,8 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 // than remove it. It is covered by the live daemon check until a p2p double
 // exists (RK-5 builds one for `get_info`, which needs the same object).
 
+#include "crypto/hash.h"
+
 namespace cryptonote { class Blockchain; }
 
 namespace daemon_rpc_facts {
@@ -144,6 +187,11 @@ int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
 
 int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
     bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
+
+int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
+    uint64_t height, bool fill_pow_hash,
+    shekyl_rpc_block_header_facts* out_header,
+    shekyl_rpc_block_payload* out_payload, void** out_owner) noexcept;
 
 } // namespace daemon_rpc_facts
 
