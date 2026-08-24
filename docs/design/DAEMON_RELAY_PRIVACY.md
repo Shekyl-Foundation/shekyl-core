@@ -13670,7 +13670,7 @@ zone to alias onto.
 > hop 251/501/751, with smaller +5 s and +3 s families between them from larger
 > `h`, and the whole structure **moves with `F`**. Measured rather than
 > modelled by `derive::next_embargo_step` and pinned in
-> `tests/carrier_window.rs`.
+> `shekyl-relay-privacy/tests/embargo_steps.rs`.
 >
 > **Because `hop` includes `f_ms(n_in, depth)`, different transaction shapes sit
 > at different distances from a step, and of different sizes.** At the §94
@@ -14128,7 +14128,7 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 > 2. The shipped interim anonymity hop (1750 ms) is **1 ms from an 11-second
 >    embargo step** — the embargo jumps where many stem lengths cross a tick
 >    boundary together. Measured by `derive::next_embargo_step` and pinned in
->    `tests/carrier_window.rs`.
+>    `shekyl-relay-privacy/tests/embargo_steps.rs`.
 >
 > **So arming is not merely a gate on one number — it is the commit that
 > converts an accumulating set of recorded latencies into live behaviour
