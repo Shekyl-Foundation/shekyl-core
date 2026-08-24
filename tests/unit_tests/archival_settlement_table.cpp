@@ -160,3 +160,59 @@ TEST(ArchivalSettlementTable, RowRoundTripsByteIdentically)
     }
   }
 }
+
+// SO-D6, through the production revert path rather than by argument.
+//
+// The direct-delete test above proves the epoch-scoped delete works. This one
+// proves it is WIRED: a real fold at a real height appends the epoch marker
+// that revert_archival_slashes_at_height keys on, and the settlement rows for
+// the epoch that fold covered must go with it.
+//
+// Note what is being asserted and what is not. Settlement rows are a memoised
+// derivation over final chain state, so the revert deletes them and lets the
+// re-connect recompute -- the close family's shape (r_market, sigma_work,
+// budget), not the attestation-witness table's journal, which exists because
+// *received* evidence cannot be reproduced on a losing branch.
+TEST(ArchivalSettlementTable, SlashRevertDropsTheFoldedEpochsRows)
+{
+  TempLMDB t;
+  cryptonote::BlockchainDB& db = t.db;
+
+  const crypto::hash p = make_hash(0xA1);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x0A, 0x0B, 0x0C};
+  bond.join_settlement_epoch = 2;
+  bond.bonded_total_atomic = 2 * floor;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {kShard};
+  // Parallel to held_shard_ids and checked at encode -- the v6 coupling.
+  bond.shard_add_epochs.assign(bond.held_shard_ids.size(), bond.join_settlement_epoch);
+  db.put_archival_bond_value(p, bond);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  // A height strictly past epoch kEpoch's slash deadline, so the fold covers
+  // epochs 0..kEpoch ascending and leaves kEpoch as the height's epoch marker.
+  const uint64_t fold_height = shekyl_archival_epoch_slash_deadline_height(kEpoch) + 1;
+  db.process_archival_slash_at_height(fold_height);
+  ASSERT_EQ(db.get_archival_last_slash_epoch(), kEpoch)
+    << "fixture assumption: the fold must have advanced to kEpoch, or the revert "
+       "below is not exercising the marker path at all";
+
+  // Rows for the folded epoch and for a later one that the revert must not touch.
+  t.db.set_archival_settlement(p, kShard, kEpoch, /*passes=*/0, /*issued=*/3);
+  t.db.set_archival_settlement(p, kShard, kEpoch + 1, /*passes=*/2, /*issued=*/3);
+
+  std::array<uint8_t, 3> row{};
+  ASSERT_TRUE(t.db.get_archival_settlement(p, kShard, kEpoch, row));
+
+  db.revert_archival_slashes_at_height(fold_height);
+
+  EXPECT_FALSE(t.db.get_archival_settlement(p, kShard, kEpoch, row))
+    << "the revert must drop the settlement rows for the epoch it rewound past; "
+       "a surviving row would be a derived value outliving the state it derives from";
+  EXPECT_TRUE(t.db.get_archival_settlement(p, kShard, kEpoch + 1, row))
+    << "and only that epoch -- the revert is scoped to the marker, not to everything";
+}

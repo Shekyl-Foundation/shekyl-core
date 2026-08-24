@@ -304,6 +304,31 @@ Stated here rather than discovered later, because "the writer is built" and
 "the writer is authoritative" are different claims, and the gap between them is
 exactly the §5 cutover (`SO-D8`).
 
+**Grounded 2026-08-24, and it went one step further than "unread": the writer
+is not *wired* either, and that is a ruling rather than an omission.**
+
+Both of its inputs are reachable today without touching the live slash
+predicate — `archival_challenge_failed_at_height` composes
+`has_archival_serve_credit_bit` (the interim `passes`) and
+`archival_baseline_observed_at_epoch` (the interim `issued`), both public const
+reads. So wiring it would be additive and safe. It is still wrong to do:
+
+1. **Every row would say `NonObservation`**, by the mechanism's own rule, not
+   by an implementation gap — beacon issuance is 1 per pair-epoch and
+   absolute-2 settles `issued = 1` as unobserved. The rows would carry no
+   information at all.
+2. **They would cost real storage** — one row per `(P, shard)` per epoch until
+   the prune horizon, to record a constant.
+3. **Both inputs change source at the cutover** (`passes` from a bit to a count
+   of admitted records, `issued` from the beacon to the urn derivation), so
+   what a beacon-era wiring would prove is not the thing that will run.
+
+**Named blocker, per rule 22:** the writer's call site lands with `SO-D8`'s
+cutover, which is what supplies both operands. **The revert is wired now**
+regardless, because it is pure cleanup with no such dependency, and it is the
+half `SO-D6` was actually open about — proven by a pop round-trip rather than
+by argument.
+
 ---
 
 ## 6. `SO-D7` — CORRECTED 2026-08-24: the constraint was already ruled and const-asserted; only the *writer's home* was open

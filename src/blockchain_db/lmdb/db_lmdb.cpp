@@ -6303,6 +6303,20 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     const uint64_t last = get_archival_last_slash_epoch();
     if (last == epoch_marker)
     {
+      // SO-D6: settlement rows are a memoised derivation over final chain
+      // state, not received evidence, so the revert DELETES them and lets the
+      // re-connect recompute — the same shape revert_archival_epoch_close_at_
+      // height uses for r_market/sigma_work/budget. The attestation-witness
+      // table journals instead because its evidence is *received* and cannot be
+      // reproduced on a losing branch; a settlement row can, by definition.
+      //
+      // Scoped to `epoch_marker` deliberately, inside this same guard, so the
+      // settlement revert undoes exactly the epoch the slash rewind below
+      // considers undone. Deriving a different span here — "every epoch since
+      // some other anchor" — would be a second opinion about what this height
+      // folded, and the two would disagree the first time they were both wrong.
+      delete_archival_settlement_for_epoch(epoch_marker);
+
       if (epoch_marker == 0)
         set_archival_last_slash_epoch(std::numeric_limits<uint64_t>::max());
       else
