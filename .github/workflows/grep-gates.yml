@@ -1,0 +1,146 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Bundled grep / source-scan gates. Each script is unchanged and still
+# fail-closed on its own subject. They used to be one workflow + one
+# runner + one `apt install ripgrep` each, which stacked eight cheap
+# jobs behind the OS matrix and the 95-minute rust job. One checkout,
+# one apt, every script.
+#
+# Carriers (scripts stay; these workflow files were deleted):
+#   domain-registry, consensus-invariants, pending-post-write-path,
+#   unbounded-device-read, multisig-doc-literals, zeroize-check,
+#   engine-decomposition, levin-constant-parity.
+#
+# Also the C++ residue greps that used to ride the rust-audit-test job
+# (they do not need a Rust toolchain). The vacuous `combined_shared_secret`
+# step is deleted, not moved — see docs/FOLLOWUPS.md.
+#
+# No path filter on purpose: an armed gate with no trigger is how a
+# second write path / unbounded /dev read / cap fossil merges. The job
+# is seconds of rg after one apt; skipping it to save a runner is the
+# wrong economy.
+
+name: ci/grep-gates
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: grep-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  grep-gates:
+    name: "Grep gates (bundled)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
+      # Collect every failure rather than stopping at the first, so a
+      # PR that trips two invariants shows both in one log.
+      - name: Run bundled gates
+        shell: bash
+        run: |
+          set -u
+          failed=0
+          run_one() {
+            local label="$1"
+            local rc
+            shift
+            echo "::group::${label}"
+            # `shell: bash` is `bash -eo pipefail`. `"$@"` as a bare
+            # statement would abort the step on the first red gate;
+            # `&& / ||` is the set -e exemption that lets us collect.
+            "$@" && rc=0 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "PASS: ${label}"
+            else
+              echo "FAIL: ${label} (rc=${rc})"
+              failed=1
+            fi
+            echo "::endgroup::"
+          }
+          # grep exit 1 = no match = the residue is gone. Any other
+          # status (0 = hit, 2 = error) fails the gate. Same capture
+          # shape the rust-audit-test.yml steps used (rule 46).
+          grep_absent() {
+            local label="$1"
+            local rc
+            shift
+            echo "::group::${label}"
+            "$@" && rc=0 || rc=$?
+            if [ "$rc" -eq 1 ]; then
+              echo "PASS: ${label}"
+            else
+              echo "FAIL: ${label} (grep rc=${rc})"
+              failed=1
+            fi
+            echo "::endgroup::"
+          }
+
+          run_one "SA-3b: domain-registry" \
+            scripts/ci/domain_registry_gate.sh
+          run_one "Consensus-invariants" \
+            scripts/ci/check_consensus_invariants.sh
+          run_one "Pending-post single-write-path" \
+            scripts/ci/check_pending_post_write_path.sh
+          run_one "Unbounded /dev read" \
+            scripts/ci/check_unbounded_device_read.sh
+          run_one "P0-n: multisig doc-literals" \
+            scripts/ci/check_multisig_doc_literals.sh
+          run_one "Zeroizing-field grep + allowlist" \
+            scripts/ci/check_zeroize.sh
+          run_one "Engine decomposition ratchet" \
+            scripts/ci/check_engine_decomposition.sh
+          run_one "LV-1: levin wire-constant parity" \
+            ./scripts/ci/check_levin_constant_parity.sh
+          run_one "C++ clamp-ban (address-freeze)" \
+            bash scripts/lint_cpp_clamp_ban.sh
+
+          grep_absent "C++ residue: no shekyl_y" \
+            grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
+          grep_absent "C++ residue: no derivation_to_y_scalar" \
+            grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h'
+          grep_absent "C++ residue: no RCTTypeFull/Simple/Bulletproof" \
+            grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'
+          grep_absent "C++ residue: no v1/v2 tx version branches" \
+            grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'
+          grep_absent "C++ residue: no HASH_KEY_TXPROOF" \
+            grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/
+
+          echo "::group::C++ residue: no ecdhEncode/ecdhDecode outside Ledger"
+          matches=$(grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/) && rc=0 || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "FAIL: ecdh grep errored (rc=$rc)"
+            failed=1
+          else
+            outside=$(printf '%s' "$matches" | grep -v device_ledger) && frc=0 || frc=$?
+            if [ "$frc" -gt 1 ]; then
+              echo "FAIL: ecdh filter errored (rc=$frc)"
+              failed=1
+            elif [ -n "$outside" ]; then
+              echo "$outside"
+              echo "FAIL: ecdhEncode/ecdhDecode used outside Ledger gate"
+              failed=1
+            else
+              echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
+            fi
+          fi
+          echo "::endgroup::"
+
+          exit "${failed}"
