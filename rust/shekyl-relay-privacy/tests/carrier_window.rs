@@ -23,6 +23,7 @@
 //! were wrong by 1.55x and 5.9x. Nothing could go red, because nothing
 //! connected them to a transaction. That is the gap this closes.
 
+use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_tx_weight::{
@@ -93,7 +94,7 @@ fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
 /// window, or raising `MAX_INPUTS` / `MAX_OUTPUTS` / `MAX_TREE_DEPTH`.
 #[test]
 fn the_fragment_cap_carries_the_largest_admissible_transaction() {
-    let structural_max = message_bytes(8, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
     let needs = structural_max.div_ceil(carrier::WINDOW_BYTES);
     assert!(
         u32::try_from(needs).expect("fragment count is small") <= carrier::MAX_FRAGMENTS,

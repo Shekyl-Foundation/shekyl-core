@@ -158,7 +158,12 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// machine's own cells, which is why §80.3's choice does not move with it.
 /// **Re-priced 2026-08-23** when the node-crypto term folded into `f_ms`.
 /// The 1-input column did not move at any transit point; the 8-input column
-/// moved by exactly one second at each. That asymmetry is the fold's own
+/// moved **0 s at 25 ms transit, +1 s at 50, and +12 s at 100** — not uniformly,
+/// and the 12-second jump is the embargo step structure, not the crypto term.
+/// A 4.26 ms input change producing a 12 s output change is `derive_embargo`
+/// being high-gain near a step (`derive::next_embargo_step`), which is why the
+/// re-derivation round must call it at the actual hop rather than interpolate.
+/// That the columns move differently at all is the fold's own
 /// premise showing up in the output: the crypto term scales with message size,
 /// so it is 0.94 ms at the modal shape's 13,122 B message and 4.26 ms at the
 /// 8-input shape's 59,348 B one. §80.2's "~56 s uncovered across the legal

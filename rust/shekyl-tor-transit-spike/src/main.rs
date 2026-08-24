@@ -73,8 +73,10 @@ use tokio::net::{TcpListener, TcpStream};
 // only as Tor cell counts (~17 and ~33). Against
 // `shekyl_tx_weight::predict_size_and_weight` — pinned to
 // `Transaction::write` — the smallest transaction the wire admits is
-// **13,042 B** and the structural maximum is **97,964 B**, so the labels were
-// off by 1.55× and 5.9×.
+// **13,042 B** and the structural maximum is **97,964 B** at a realistic fee
+// (97,969 B at `u64::MAX`, which is the basis `carrier::WINDOW_BYTES` is bounded
+// at — the fee is a varint, so its width moves with its value). Either way the
+// labels were off by 1.55× and 5.9×.
 //
 // **The values are deliberately NOT corrected.** §94.2(b) froze the payload
 // before the first sample and the round completed under these two; changing
