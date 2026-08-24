@@ -14118,12 +14118,22 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 >    boundary together. Measured by `derive::next_embargo_step` and pinned in
 >    `tests/carrier_window.rs`.
 >
-> **So arming is not merely a gate on one number — it is the event that
-> converts several recorded latencies into behaviour at once.** Whatever commit
-> closes the gap exercises everything currently filed as *inert, recorded*, in
-> the same change. That argues for auditing the full set of "inert" entries as
-> part of the arming work rather than discovering them one at a time
-> afterwards.
+> **So arming is not merely a gate on one number — it is the commit that
+> converts an accumulating set of recorded latencies into live behaviour
+> simultaneously.** Both entries above are the same shape: a latent defect held
+> harmless by a missing mechanism.
+>
+> ### The arming checklist — carry it, and re-check each entry against the code as it will THEN be
+>
+> | # | entry | held harmless by | re-check |
+> | --- | --- | --- | --- |
+> | 1 | §89.8.2's premise (a stem entering the anonymity zone completes there) | no anonymity embargo is armed | **the premise itself may already be stale** — Q12-U2 deleted the `forward` arm it cites, and relayed traffic inherits its arrival zone. Ground before scoping. |
+> | 2 | shipped interim anon hop 1 ms from an 11-second embargo step | as above | re-measure the distance with `derive::next_embargo_step` at whatever transit constant is live then; `F` moves the whole step structure |
+>
+> **Re-check rather than re-read**, because §89.8.4's own premises have gone
+> stale once in this arc already. An entry is discharged when the code that
+> would exercise it has been read *as it stands at arming time*, not when this
+> table was written.
 
 Stating the composite plainly, because each of the three findings above hides it
 and the review round is where it should be visible:

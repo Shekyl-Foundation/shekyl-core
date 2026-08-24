@@ -634,6 +634,34 @@ advances that boundary, not on whether the condemned C++ still "works."
 | **4** | **Production notify.** `send_txs` consumes `plan_dispatch` (phase + carrier + slot in one call). The inherited covert branch — carrier above phase, stem→`local`, all-channels broadcast — is deleted, not repaired. | FFI exists; no C++ caller. That is step 1's seam, not a finished notify path. | Wire the shim, *or* skip if step 5 lands first and notify is already Rust. Do not restructure `levin_notify.cpp` "for a month of life" — §2.6 already discarded that. |
 | **5** | **C++ relay path gone.** `levin_notify.cpp`, `net_node.inl`'s `send_txs` routing, the `zone_route` token in `enums.h`, every `levin.cpp` noise/route oracle, and any `shekyl_relay_zone_*` crossing that exists only for C++. | — | The cutover PR. In-process Rust calls `Zone` / `Driver` directly. A crossing with no remaining C++ consumer is deleted in this step, not kept as a souvenir. **See §2.9a: this step is NOT startable from this series.** |
 
+### 2.9b Step 5 owes the carrier ONE TRANSACTION PER NOTIFICATION (2026-08-23)
+
+**A requirement on the cutover caller, recorded here because the queue cannot
+enforce it and the reason is privacy rather than sizing.**
+
+`NOTIFY_NEW_TRANSACTIONS` carries a **vector** — `make_tx_message` takes
+`std::vector<blobdata>&& txs` — so a notification is not one transaction by
+construction. The carrier must normalise to one transaction per notification
+before enqueueing.
+
+**The sizing half is already enforced and is not the argument.**
+`NoiseQueues::enqueue` refuses anything over `carrier::MAX_FRAGMENTS` windows,
+so an oversized batch (two maximum transactions are ~196 KB, ten windows against
+a cap of five) is structurally rejected. That is the queue doing what it can with
+opaque bytes.
+
+**The argument is that batching correlates what the stem exists to separate.**
+Two transactions in one carrier message share **one window, one slot, and one
+successor** — they arrive at the same peer, together, from the same sender. That
+is precisely the pairwise linkage Dandelion++ denies: each stem transaction is
+supposed to carry its own routing decision and its own embargo. A batch makes
+the two indistinguishable from a single sender's paired emission, and no cap
+size fixes that.
+
+So the requirement is **normalisation at the caller**, which is the only place
+that still has transactions rather than bytes. The cap is the backstop, not the
+mechanism.
+
 ### 2.9a Step 5 is gated on a rewrite this series excludes (2026-08-20)
 
 **Step 5 as written contradicts §2.9's own scope, and this was found by trying

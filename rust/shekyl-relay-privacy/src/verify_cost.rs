@@ -93,6 +93,34 @@ pub enum TreeBasis {
 }
 
 /// One populated cell of the verification-cost surface.
+///
+/// # A cell asserts CO-OCCURRENCE, which constrains how its fields may be set
+///
+/// This record names a shape — `(n_in, depth)`, at `n_out = 2` — so every field
+/// must describe **that** transaction. Setting one field to a worst case while
+/// another holds a measurement of a different shape produces a figure for a
+/// configuration **that cannot occur**, and such a figure is not conservative;
+/// it is meaningless, and it reliably *looks* conservative, which is why
+/// inspection does not catch it.
+///
+/// Three instances of that one class have been found in this arc, all reading
+/// as safe:
+///
+/// 1. §94.9's negligibility test compared the largest **message** against the
+///    cheapest **verification** — shapes that cannot co-occur — and reported
+///    5.66 % where like-for-like gives 1.07 %.
+/// 2. An early `resonance_clearance_ms` reported the distance to a boundary the
+///    hop had **already passed**, so the smallest true clearance produced the
+///    largest reported one.
+/// 3. Pinning [`Self::msg_bytes`] at `MAX_OUTPUTS` while [`Self::millis`]
+///    measured `n_out = 2` — proposed as a conservative fix for (1)'s family and
+///    reversed for being (1) again, one field over.
+///
+/// **The discipline: worst-case-per-field is sound for a scalar standing alone
+/// and unsound inside a record that already names its shape.** Where a field
+/// cannot be set consistently, leave the axis **unpriced and named** — the
+/// answer this table already gives past [`MAX_TABLE_DEPTH`] — rather than
+/// approximated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VerifyCell {
     /// Verification cost in milliseconds: the FCMP++ membership-proof verify
