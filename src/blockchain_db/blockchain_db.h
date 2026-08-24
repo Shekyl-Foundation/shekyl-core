@@ -140,8 +140,8 @@ enum class relay_category : uint8_t
    Every one of its ten call sites was asking "is this publicly known", which
    is `broadcasted`, and at least one -- `fill_block_template` -- would have
    admitted a do-not-relay transaction into a block template had `none` ever
-   been reachable. `matches_category`'s table is pinned by
-   `relay_category.matches_category_table` (tests/unit_tests). */
+   been reachable. `matches_category`'s table is pinned exhaustively by
+   `tests/unit_tests/relay_category.cpp`. */
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 

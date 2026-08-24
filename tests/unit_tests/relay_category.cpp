@@ -22,8 +22,11 @@
 //     `only_none_separates_relayable_from_all` goes red.
 //   * let `local` or `stem` match `broadcasted` (the pre-Dandelion++ posture)
 //     and `pre_fluff_methods_are_not_broadcast` goes red.
-//   * re-add a category to the enum and `all_is_the_last_category` fails to
-//     compile, because the deleted member is what the value pins.
+//   * re-add a category to the enum and the namespace-scope `static_assert`s
+//     below fail the BUILD -- the value `legacy` vacated is what pins `all`.
+//     That one is deliberately not a `TEST`: a compile-time invariant dressed
+//     as a runtime case can never go red at run time, so presenting it as one
+//     would be a check that cannot fail.
 //
 // The categories are not tested as a black box against each other: a table
 // that only asserted `broadcasted` is a subset of `all` would pass with every
@@ -53,17 +56,16 @@ namespace
 
   static_assert(unsigned(relay_method::block) == k_methods.size() - 1,
     "relay_method gained a member; add its row to every table below");
-}
 
-// The enum's shape. `all` is last, and its value is what the deleted `legacy`
-// used to occupy -- re-adding a category between them breaks this, which is
-// the point.
-TEST(relay_category, all_is_the_last_category)
-{
-  static_assert(unsigned(relay_category::broadcasted) == 0, "");
-  static_assert(unsigned(relay_category::relayable) == 1, "");
-  static_assert(unsigned(relay_category::all) == 2, "");
-  SUCCEED();
+  /* The enum's shape. `all` is last, and it sits at the value the deleted
+     `legacy` used to occupy, so inserting a category anywhere before it is a
+     build failure rather than a silent renumbering. */
+  static_assert(unsigned(relay_category::broadcasted) == 0,
+    "relay_category::broadcasted must stay first; a category was inserted before it");
+  static_assert(unsigned(relay_category::relayable) == 1,
+    "relay_category::relayable moved; a category was inserted before it");
+  static_assert(unsigned(relay_category::all) == 2,
+    "relay_category::all moved; a category was added -- give it a row in every table below");
 }
 
 TEST(relay_category, all_admits_every_method)
