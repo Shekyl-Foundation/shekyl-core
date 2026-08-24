@@ -148,6 +148,12 @@ impl EncryptedOutputField {
     /// Assemble from a ciphertext and its tag. Private on purpose: the only
     /// callers are the two accessors on [`OutputData`], so the value cannot
     /// exist without a derivation behind it.
+    ///
+    /// The byte loop is not a style choice: `copy_from_slice` cannot be called
+    /// from a `const fn` on the pinned toolchain (E0658, "cannot call
+    /// conditionally-const operator in constant functions"), and dropping
+    /// `const` here would take it from `enc_label_wire` / `enc_amount_wire`
+    /// too. Revisit when const slice copies stabilise.
     const fn assemble(ciphertext: [u8; 8], tag: u8) -> Self {
         let mut buf = [0u8; 9];
         let mut i = 0;
@@ -185,8 +191,13 @@ impl serde::Serialize for EncryptedOutputField {
 }
 
 /// **This impl is the FFI JSON trust boundary**, and the only way to reach
-/// [`EncryptedOutputField::from_ffi_json_unverified`]. See the type docs for
-/// why it exists and when it goes away.
+/// `from_ffi_json_unverified`. See the type docs for why it exists and when it
+/// goes away.
+///
+/// Deliberately not an intra-doc link: that constructor became private in this
+/// PR, and rustdoc rejects a public doc linking a private item
+/// (`rustdoc::private_intra_doc_links`). A code span says the same thing
+/// without asserting a rendered link that public docs cannot follow.
 ///
 /// Decodes straight into the fixed-size buffer: the length is known, so
 /// neither the intermediate `Vec` nor a heap `String` is needed, and a wrong
@@ -296,10 +307,14 @@ impl OutputData {
 
     /// The `enc_label` wire field: ciphertext plus its tag, in serializer order.
     ///
-    /// This is the only way to obtain an [`EncryptedOutputField`] for a label,
-    /// which is what makes an unencrypted one unrepresentable on the in-process
-    /// path. It also replaces the hand-rolled `buf[..8] / buf[8]` assembly that
-    /// was copied at every call site.
+    /// This is the only way to *derive* an [`EncryptedOutputField`] for a
+    /// label, which is what makes an unencrypted one unrepresentable on the
+    /// in-process path. It is not the only way to obtain one — the type's
+    /// `Deserialize` impl rebuilds a field whose encryption the far side of
+    /// the FFI JSON boundary computed — and saying "only way to obtain" here
+    /// would repeat the incomplete enumeration this PR twice had to correct.
+    /// It also replaces the hand-rolled `buf[..8] / buf[8]` assembly that was
+    /// copied at every call site.
     #[must_use]
     pub const fn enc_label_wire(&self) -> EncryptedOutputField {
         EncryptedOutputField::assemble(self.enc_label, self.label_tag)
