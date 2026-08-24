@@ -50,4 +50,31 @@ jobs:
     uses: Shekyl-Foundation/shekyl-gui-wallet/.github/workflows/core-drift.yml@dev
     with:
       core_repository: ${{ github.repository }}
-      core_ref: ${{ github.head_ref || github.ref_name }}
+      # The MERGE ref on a pull request, not the branch head. The wallet
+      # builds against core's `dev`, so testing a branch tip asks "does the
+      # wallet build against this branch *as if dev did not exist*" — and any
+      # branch opened before a core API the wallet now uses fails on its
+      # absence. PR #544 hit exactly that: 24 commits behind dev, it failed on
+      # `network_posture`, which #542 had already added to dev and the wallet
+      # already consumes. That is a spurious red wearing a real drift's
+      # clothes, and a check that cries wolf gets ignored precisely when it is
+      # right.
+      #
+      # `refs/pull/N/merge` is head merged into base — what would actually
+      # land — and GitHub publishes it as a real ref, verified fetchable by
+      # name (`git fetch --depth 1 origin refs/pull/544/merge`). It is absent
+      # for a conflicting pull request, which cannot reach this workflow
+      # anyway: GitHub does not run checks on one.
+      #
+      # Two consequences worth knowing. The run summary now names the merge
+      # ref rather than a branch, and that SHA is ephemeral — GitHub recomputes
+      # it on every push and drops it when the pull request closes, so the
+      # durable pointer to what was tested is the pull request number, not the
+      # SHA. And the called workflow's concurrency group keys on this value, so
+      # per-pull-request refs stop two branches from cancelling each other's
+      # runs the way two same-named refs could.
+      #
+      # One line deliberately: in a folded scalar (`>-`) a more-indented
+      # continuation is kept literal rather than folded, so wrapping this
+      # expression embeds newlines inside `${{ }}`. Observed while writing it.
+      core_ref: "${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref_name }}"
