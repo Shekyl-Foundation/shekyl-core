@@ -225,7 +225,10 @@ pub struct OutputData {
     /// type exists to exclude — and a `pub` field would also make `OutputData`
     /// literal-constructible, giving a second route to the same place. Read
     /// access is unaffected and safe: see the `*_bytes()` / `*_tag()`
-    /// accessors. Do not widen these back to `pub`.
+    /// accessors. Do not widen these back to `pub` — and that instruction is
+    /// no longer only an instruction: `tests/trybuild/` attempts both forgeries
+    /// from outside the crate, and widening any one of these four fields turns
+    /// those fixtures red.
     #[zeroize(skip)]
     pub(crate) enc_amount: [u8; 8],
     /// 1-byte AAD tag for amount integrity.

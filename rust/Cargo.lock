@@ -3861,6 +3861,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-stats",
  "thiserror 2.0.18",
+ "trybuild",
  "x25519-dalek",
  "zeroize",
 ]

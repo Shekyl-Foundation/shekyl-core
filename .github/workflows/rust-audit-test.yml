@@ -224,6 +224,25 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
+      - name: "cargo clippy: bench-internals lane (shekyl-engine-core)"
+        working-directory: rust
+        # Same defect class as the lane above, by a different mechanism. The
+        # §5.3 B9 bench support (`engine/key_dispatch_bench.rs`, the
+        # `__bench_internals` re-exports) is `#[cfg(feature =
+        # "bench-internals")]` with no `test` alternative, and every bench
+        # target that consumes it carries `required-features =
+        # ["bench-internals"]` — which cargo SKIPS SILENTLY when the feature
+        # is off. So the workspace `--all-targets` gate above neither compiles
+        # the module nor reports that it declined to.
+        #
+        # PR #544 paid for that: making four `OutputData` fields `pub(crate)`
+        # updated every consumer the gates could see, and this module — the one
+        # they could not — first reported the break in the 10-minute
+        # bench-capture job. This lane reproduces it in seconds.
+        #
+        # Clippy, not test: the module declares no `#[test]`; it is fixture and
+        # harness code whose only failure mode here is failing to compile.
+        run: cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings
       # The probe sheet is a PRE-REGISTRATION: it records which probes exist
       # and which decision each failure revisits. That only means something if
       # the probes it names are implemented.

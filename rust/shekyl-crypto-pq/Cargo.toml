@@ -191,6 +191,12 @@ proptest = "1"
 # lint-clean statistics utility (not duplicated as literals, and not a dep on a
 # sim/domain crate); see `rust/shekyl-stats`.
 shekyl-stats = { path = "../shekyl-stats" }
+# Compile-fail harness for `tests/trybuild.rs`: the only way to assert that
+# downstream code *cannot* build an unencrypted `EncryptedOutputField`, since a
+# guarantee enforced by field visibility produces no runtime behaviour to test.
+# Already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock` —
+# this adds no package to the supply chain (`17-dependency-discipline`).
+trybuild = "1"
 
 [[bench]]
 name = "pqc_rederivation"

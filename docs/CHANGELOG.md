@@ -71,9 +71,24 @@
   The guarantee is compiler-enforced on two axes, both verified by attempting
   the forgery from outside the crate: overwriting a real `OutputData`'s
   ciphertext or tag is `E0616` (the fields are `pub(crate)`), and building an
-  `OutputData` literal is `E0451`. That coupling is documented at both ends,
-  because widening those fields would remove the guarantee without touching
-  the type that advertises it.
+  `OutputData` literal is `E0451`.
+
+  Those two attempts are now committed as compile-fail tests
+  (`shekyl-crypto-pq/tests/trybuild/`), which **retracts this entry's earlier
+  judgement** that a `trybuild` harness was not worth adding for them. Two
+  things made that judgement wrong. The cost was overstated — `trybuild` was
+  already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock`,
+  adding no package to the supply chain. And the alternative it chose was
+  documentation: the fields carry "`pub(crate)` is load-bearing, not
+  stylistic", but a comment cannot fail, and widening a field back to `pub`
+  would have left every existing test passing while the guarantee evaporated.
+  A property this crate names in its own title deserves a check that goes red.
+
+  The two routes live in separate fixtures because a field-privacy error
+  aborts the compilation before later bodies are type-checked — sharing a file,
+  the literal route's error vanished from the snapshot entirely and would have
+  been guarded by nothing. Each fixture touches all four fields, so widening
+  any one of them turns both red; observed, by widening `enc_amount` alone.
 
   One exception survives, and it is a boundary rather than a constructor: the
   type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its

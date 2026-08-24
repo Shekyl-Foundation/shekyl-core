@@ -81,8 +81,10 @@ sustainability is unaffected by the recalibration.
   archive, then while `OutputData`'s ciphertext and tag fields were still
   `pub` — so a caller could overwrite a real output's bytes and call the
   accessor, or build a literal. All three are closed; the last one is why
-  those fields are now `pub(crate)`, and widening them silently removes the
-  guarantee. The byte constructor is **private to the defining module**, so
+  those fields are now `pub(crate)`. Widening them back no longer removes the
+  guarantee silently: `shekyl-crypto-pq/tests/trybuild/` holds the two forgery
+  attempts as compile-fail fixtures, and each names all four fields, so
+  loosening any one of them turns the suite red. The byte constructor is **private to the defining module**, so
   the one remaining
   way in is the type's `Deserialize` impl — the `shekyl_sign_fcmp_transaction`
   JSON boundary, where the far side computed the encryption and this crate
