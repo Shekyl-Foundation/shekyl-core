@@ -82,7 +82,6 @@ pub(crate) struct AssembleBond {
 ///
 /// Dead_code allow: reply type of the wired orchestrator; same dual gate as
 /// [`AssembleBond`].
-#[allow(dead_code)]
 // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332). The placement carrier is the bare `bond_post_offset_blocks` (the entry-seam plan/order-coin was retired in the GF-7 coin retirement).
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {

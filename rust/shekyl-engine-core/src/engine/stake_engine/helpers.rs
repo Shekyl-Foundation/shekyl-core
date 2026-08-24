@@ -270,7 +270,6 @@ pub(crate) fn prepare_funding_inputs(
 /// [`LocalKeys::derive_primary_source_secrets_bundle`]: crate::engine::local_keys::LocalKeys
 /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
 /// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
-#[allow(dead_code)] // transient — consumed by the WI-2 `AssembleBond` handler as it lands.
 pub(crate) fn derive_p_source_secrets_bundle(
     keys: &ArchivalPKeys,
     source_ciphertext: &HybridCiphertext,
