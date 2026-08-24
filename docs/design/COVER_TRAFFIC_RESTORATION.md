@@ -60,7 +60,7 @@ what that change would wake up.
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
 | `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
-| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,BYTES,CHANNELS}` / `CRYPTONOTE_MAX_FRAGMENTS` | `cryptonote_config.h` | cadence + fragment window. The epoch pair was deleted with `noise_zone_params`. |
+| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,CHANNELS}` | `cryptonote_config.h` | cadence + channel count. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
 
@@ -69,6 +69,8 @@ what that change would wake up.
 | `CovertSchedule` | `shekyl-relay/src/zone/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
 | `Zone::covert_deadline` / `due_covert_channel` / `covert_deadline_at` / `covert_enabled` | same | complete |
 | `inherited::NOISE_CHANNELS` mirror | `shekyl-relay-privacy/src/params.rs` | pins the C++ constant |
+| `carrier::WINDOW_BYTES` / `MAX_FRAGMENTS` | `shekyl-relay-privacy/src/params/carrier.rs` | derived window and fragment cap; **not** inherited mirrors |
+| `NoiseQueues` | `shekyl-relay/src/noise_queue/mod.rs` | executor; `enqueue` refuses over `MAX_FRAGMENTS` windows |
 | covert linkage instruments | `shekyl-relay-privacy/src/conformance/linkage.rs` | Q-11 Unit 2's substrate |
 
 **The Rust half already models the target architecture** and the C++ half does
@@ -637,7 +639,11 @@ advances that boundary, not on whether the condemned C++ still "works."
 ### 2.9b Step 5 owes the carrier ONE TRANSACTION PER NOTIFICATION (2026-08-23)
 
 **A requirement on the cutover caller, recorded here because the queue cannot
-enforce it and the reason is privacy rather than sizing.**
+enforce it and the reason is privacy rather than sizing.** Privacy has to
+lead: it survives changes to the sizing. If the window grows, the size cap
+moves and the batching prohibition does not. A requirement recorded on the
+weaker of two grounds gets re-litigated when that ground moves; recorded on
+the stronger, it does not.
 
 `NOTIFY_NEW_TRANSACTIONS` carries a **vector** — `make_tx_message` takes
 `std::vector<blobdata>&& txs` — so a notification is not one transaction by

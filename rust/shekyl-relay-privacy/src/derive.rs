@@ -314,6 +314,16 @@ pub fn derive_embargo(
 /// near a step.** The re-derivation round must call it at the actual hop
 /// rather than scaling a nearby result, and when a re-measurement lands, this
 /// says whether the landing sits somewhere the value moves smoothly.
+///
+/// # Procedure, not advice — verify the input before the pins move
+///
+/// "Review the output" is the natural default. The 40,000× step (`4 ms` of
+/// hop → `12 s` of embargo) is a diff nobody should have to reason about in
+/// the same commit as its cause. Same shape as the design-doc-first PR
+/// ordering, applied to a numerical dependency: the re-derivation PR lands
+/// the input value and its provenance in a commit that moves **no** derived
+/// constant, then moves the pins in a second commit whose diff is entirely
+/// mechanical. `DAEMON_RELAY_PRIVACY.md` §94.10.
 #[must_use]
 pub fn next_embargo_step(
     params: &DandelionParams,

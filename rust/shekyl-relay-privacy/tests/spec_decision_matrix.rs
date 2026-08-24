@@ -162,7 +162,9 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// and the 12-second jump is the embargo step structure, not the crypto term.
 /// A 4.26 ms input change producing a 12 s output change is `derive_embargo`
 /// being high-gain near a step (`derive::next_embargo_step`), which is why the
-/// re-derivation round must call it at the actual hop rather than interpolate.
+/// re-derivation round must call it at the actual hop rather than interpolate —
+/// and why that round lands the input in a commit that moves no pin, then
+/// moves the pins mechanically (`DAEMON_RELAY_PRIVACY.md` §94.10).
 /// That the columns move differently at all is the fold's own
 /// premise showing up in the output: the crypto term scales with message size,
 /// so it is 0.94 ms at the modal shape's 13,122 B message and 4.26 ms at the

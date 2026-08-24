@@ -10195,22 +10195,15 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
-- **Relay: the packet-size fragment guard is still C++-bound (opened
-  2026-08-20).** `static_assert(CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES
-  <= LEVIN_DEFAULT_MAX_PACKET_SIZE)` sits at anonymous-namespace scope in
-  `levin_notify.cpp`, beside the constants it guards rather than beside the
-  fragmenting, which is now Rust's. **Step 5 deletes that file**, so it needs a
-  home before then. The obstacle is `LEVIN_DEFAULT_MAX_PACKET_SIZE`: it is an
-  epee *transport* constant, not a relay one, so mirroring it into
-  `shekyl-relay-privacy` would put a transport fact in a privacy crate. The
-  likely answer is that this assertion belongs wherever the levin codec lands
-  in the p2p cutover, which makes it that design's problem rather than a
-  standalone port.
-
-  *(The sibling epoch-budget guard — `MAX_FRAGMENTS <= epoch / (min_delay +
-  delay_range)` — is CLOSED: it crossed to `Zone::new` as
-  `ZoneNewError::NoiseCannotCrossOneEpoch`. It could cross because the epoch
-  already travels as `min_epoch_secs`; this one cannot, for the reason above.)*
+- **~~Relay: the packet-size fragment guard is still C++-bound~~ CLOSED
+  2026-08-23 (#546).** `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS`
+  are deleted. The window and cap live in `params::carrier`, derived rather
+  than inherited, and the packet bound is asserted in
+  `tests/carrier_window.rs` against `shekyl_levin::DEFAULT_MAX_PACKET_SIZE` —
+  levin's own constant, not a second copy of the limit. The obstacle that
+  kept the guard in C++ (mirroring a transport fact into the privacy crate)
+  is gone because the test is allowed the `shekyl-levin` dev-dependency the
+  default build is not.
 
 - **Relay: the `t_core` arrival harness — the witness this path has never
   had.** *(Rewritten 2026-08-12 by Q12-U2, which shipped the mechanism. The

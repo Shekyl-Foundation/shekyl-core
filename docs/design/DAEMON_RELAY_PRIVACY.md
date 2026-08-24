@@ -13607,12 +13607,14 @@ priced, because §63.2's margin was computed on the posture being retired.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
-> transport; §89.8.2 shows the shipped receive path re-relays an anonymity
-> arrival at `zone::public_`, so the premise is false today and the anonymity
-> embargo over-provisions a stem that leaves after one hop. (b) The mechanism
-> is landed but **inert on i2p/tor** until the receive path relays at arrival
-> (§89.8.4). Clearnet draws through it on every stem. The back-out of the
-> persisted zone field stands and is reconfirmed by §89.8.3.
+> transport; §89.8.2 shows the shipped receive path *as of that diagnosis*
+> re-relays an anonymity arrival at `zone::public_`, so the premise was false
+> then and the anonymity embargo over-provisions a stem that leaves after one
+> hop. Current liveness of that premise is the checklist at §89.8.4, not
+> restated here. (b) The mechanism is landed. Whether it draws on i2p/tor is
+> the same checklist. Clearnet draws through it on every stem. The back-out of
+> the persisted zone field stands and is reconfirmed by §89.8.3 — and by the
+> draw site itself, which already takes `zone` as a parameter.
 
 The tempting move is F-7's: provision one global at the worst zone, as
 `fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
@@ -13685,7 +13687,8 @@ zone to alias onto.
 > rather than re-derive them.
 >
 > **The shipped interim is the live instance**: hop 1750 ms, **1 ms** from an
-> 11-second step. Inert only because §89.8.4 arms no anonymity embargo.
+> 11-second step. Whether that instance is exercised is the checklist at
+> §89.8.4, not restated here.
 >
 > *(Method note: an earlier draft of this section computed distances from a
 > closed form for the `h = 1` family alone. That form missed the harmonics from
@@ -14033,6 +14036,15 @@ the wrong subject: the branch is not passing untested, it is **not running**.
 
 ### 89.8.2 The consequence for §89.2: the stem does not stay on one transport
 
+> **Re-grounded 2026-08-23 at the checklist in §89.8.4.** The body below is
+> the 2026-08-10 diagnosis. Q12-U2 deleted the `forward` arm it cites;
+> arrivals now relay at arrival as `stem` on the arrival zone; the embargo
+> draw site already had `zone` as a parameter. The cheapest remaining
+> question — is the input already at the draw, so that only the draw itself
+> is missing? — is answered there: the relayed path already draws.
+> Originated traffic still does not, by §89.8.3. Do not take "on the shipped
+> path it is false" below as current.
+
 §89.2 grounds a per-zone `hop` on §59's coherence: *"a transaction entering the
 anonymity zone's stem stays there until it fluffs, so every remaining hop in
 `S(h)` runs on one transport."* §89.7.3 already calls that premise
@@ -14103,12 +14115,12 @@ it. The `private_*` shell's outcome loop is also bounded now: the regression
 these six cases exist to catch pins the epoch role to one value, and the
 unbounded wait turned a red assertion into a CI job timeout with no test named.
 
-### 89.8.4 The embargo is landed and, on the anonymity zone, unreachable
+### 89.8.4 The embargo is landed — originated does not draw; relayed does
 
 > **NOTED 2026-08-23 — the arming gap is now load-bearing in a second way.**
-> This section records that no anonymity embargo is armed. That is a
-> prerequisite for landing a measured transit constant, and it is also the
-> **sole reason two separate latent defects are not live**:
+> This section recorded that no anonymity embargo is armed. That was a
+> prerequisite for landing a measured transit constant, and it was also the
+> **sole reason two separate latent defects were held not live**:
 >
 > 1. §89.8.2's premise — a transaction entering an anonymity stem completing it
 >    there — whose constant says it *"becomes live when the txpool gains an
@@ -14123,38 +14135,96 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 > simultaneously.** Both entries above are the same shape: a latent defect held
 > harmless by a missing mechanism.
 >
-> ### The arming checklist — carry it, and re-check each entry against the code as it will THEN be
+> ### The arming checklist — the only place these preconditions live
+>
+> Carry it, and re-check each entry against the code as it will THEN be.
+> Notes in other sections **point here**; they do not restate the entries.
+> Two locations for one fact is what produced most of the decay this arc has
+> been correcting.
 >
 > | # | entry | held harmless by | re-check |
 > | --- | --- | --- | --- |
-> | 1 | §89.8.2's premise (a stem entering the anonymity zone completes there) | no anonymity embargo is armed | **the premise itself may already be stale** — Q12-U2 deleted the `forward` arm it cites, and relayed traffic inherits its arrival zone. Ground before scoping. |
-> | 2 | shipped interim anon hop 1 ms from an 11-second embargo step | as above | re-measure the distance with `derive::next_embargo_step` at whatever transit constant is live then; `F` moves the whole step structure |
+> | 1 | §89.8.2's premise (a stem entering the anonymity zone completes there) | originated does not draw; **relayed does** | **verify me first, I may have already been discharged.** Re-grounded 2026-08-23: Q12-U2 deleted the `forward` arm; the draw site already had `zone`; relayed arrivals draw. See below. |
+> | 2 | shipped interim anon hop 1 ms from an 11-second embargo step | **not held harmless on the relayed path** — the draw is live | re-measure the distance with `derive::next_embargo_step` at whatever transit constant is live then; `F` moves the whole step structure |
 >
 > **Re-check rather than re-read**, because §89.8.4's own premises have gone
 > stale once in this arc already. An entry is discharged when the code that
 > would exercise it has been read *as it stands at arming time*, not when this
 > table was written.
+>
+> The self-warning on entry 1 is the right form, not a hedge. These rows are
+> claims about other sections' state, and gate rows decay at the rate of what
+> they gate: a description would have gone stale silently, a re-check
+> instruction goes stale loudly. A row that says "verify me first" is the
+> sharpest version of that.
+>
+> Collectively this is the eleventh item in this arc whose disposition is
+> *"may be stale, re-ground before use."* Individually each is handled
+> correctly. The thing not to grow is a twelfth copy of the same fact outside
+> this table.
+>
+> ### Re-grounded 2026-08-23 — entry 1, one level down
+>
+> The missing mechanism shrank, and then shrank again. Checked at source, not
+> inferred from Q12-U2's comments.
+>
+> 1. **"The txpool gains an origin zone" has landed** (Q12-U1). The field is
+>    stored. That is no longer the missing mechanism.
+> 2. **The draw site already has its input.** §89.2 backed out the persisted
+>    field on the finding that the txpool does not need to remember the zone,
+>    only to be told it. That holds at the embargo draw: `set_relayed` takes
+>    `zone` beside `tx_relay` and calls
+>    `shekyl_dandelionpp_embargo_draw_seconds(zone)`; every
+>    `on_transactions_relayed` site has `zone_->nzone` in scope. Q12-D2
+>    reconfirmed it. Missing-only-the-draw is the cheapest outcome that was
+>    worth checking, and it is the state of the *input*.
+> 3. **Q12-U2 already performs the draw for relayed arrivals.** They enter as
+>    `stem` (`cryptonote_protocol_handler.inl`), `once_at_origin_route` is
+>    `KeepArrival` for `(stem, tor|i2p)`, `dandelionpp_notify` records `stem`
+>    because `originated_stays_in_zone` excludes relayed traffic,
+>    `dandelionpp_stem = 1`, and the draw runs on `zone_->nzone`. Originated
+>    traffic still keeps `local` and takes `set_relayed`'s else arm — that is
+>    §89.8.3's design, not a remaining gap.
+>
+> So "arm the anon embargo" is too large a description of what is left. The
+> relayed path already draws. Entry 2's inertness claim is the one that moved:
+> the 1750 ms hop sitting 1 ms from an 11-second step is **exercised on
+> relayed anonymity stems**, not held harmless by a missing draw. Originated
+> traffic still does not draw, by design. The body below is the 2026-08-10
+> diagnosis; its "nothing arms" sentence does not describe the relayed path
+> after Q12-U2.
 
 Stating the composite plainly, because each of the three findings above hides it
 and the review round is where it should be visible:
 
 - Originated anonymity traffic keeps `local` (§89.8.3), and `local` sets
   `dandelionpp_stem = 0` (`blockchain_db.cpp:82-110`), so `set_relayed` takes
-  the `else` arm and **draws no embargo**.
-- Relayed anonymity traffic cannot reach an anonymity record site at all
-  (§89.8.1).
+  the `else` arm and **draws no embargo**. That is by design.
+- Relayed anonymity traffic **does** reach `set_relayed` as `stem` on the
+  arrival zone, after Q12-U2. The 2026-08-10 bullet this replaced — *cannot
+  reach an anonymity record site at all (§89.8.1)* — is the fifth-link
+  diagnosis; Q12-U2 removed that link.
 
-So in the shipped configuration **nothing arms an anonymity-zone embargo**. The
-per-zone mechanism is correct, tested at the boundary
+So in the shipped configuration **originated anonymity traffic arms no
+embargo** — it keeps `local`, by design. Relayed anonymity traffic, after
+Q12-U2, **does** reach `set_relayed` as `stem` on the arrival zone and draws.
+The 2026-08-10 sentence this replaced — *"nothing arms an anonymity-zone
+embargo"* — described the receive path before arrivals relayed at arrival; it
+does not describe the relayed path now. The checklist above is the current
+claim; this body is the diagnosis that produced it.
+
+The per-zone mechanism is correct, tested at the boundary
 (`the_zone_byte_selects_the_observation_window`, and the timers are one per
-parameter class rather than one per zone), and *inert on i2p/tor until the
-receive path relays at arrival*. It is not dead code — clearnet draws through
-the same path on every stem — but §89.2's headline should be read as "the
-mechanism is in place", not "the anonymity zone is now embargoed".
+parameter class rather than one per zone). It is not dead code — clearnet
+draws through the same path on every stem, and a relayed anonymity stem
+draws through it too. §89.2's headline should be read as "the mechanism is
+in place", which for relayed arrivals now includes "the anonymity zone is
+embargoed".
 
-**This is the honest state, and it is a smaller claim than §89 made.** The
-posture decision stands: the anonymity zone stems, on the wire, today. What has
-not happened is the receive-side half.
+**This is a smaller remaining claim than §89.8.4 made on 2026-08-10, and
+smaller again than "arm the anon embargo."** The posture decision stands.
+The receive-side half for relayed traffic has happened. What has not is a
+re-measure of entry 2 against a draw that is already live.
 
 ### 89.8.5 Coherence cannot be fixed by the receive path alone — the pool must remember
 
@@ -15400,6 +15470,24 @@ makes the derivation **smooth over the precision we do not have**. That is a
 separate round from the constant, and it must be argued on that ground —
 `DEFAULT_EMBARGO_TICK_MILLIS`'s existing 250 ms rationale is about
 instant-preemption, not about step density, and the two pull the same way here.
+
+**The re-derivation PR verifies the input before the pins move.** That is
+procedure, not advice: "review the output" is the natural default and it is
+what a reviewer will do unprompted. The 40,000× step (`4 ms` of hop → `12 s`
+of embargo) is a diff nobody should have to reason about in the same commit
+as its cause.
+
+Same shape as the design-doc-first PR ordering already in use, applied to a
+numerical dependency instead of a design one:
+
+1. **A commit that lands the input and its provenance, and moves no derived
+   constant.** The amplifier's input is reviewable on its own.
+2. **A second commit whose diff is entirely mechanical** — the pin table,
+   `DECIDED_SPEC_PRICE_LIST`, hop-to-step distances. Nothing to argue; the
+   first commit is the argument.
+
+A single commit that both changes the hop and restates the embargo is the
+shape that hid the 12-second jump inside a 4 ms fold.
 
 ### 94.9 The fourth hop term is FOLDED, not discharged — corrected 2026-08-23
 
