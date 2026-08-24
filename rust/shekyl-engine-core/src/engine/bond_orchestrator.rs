@@ -412,8 +412,9 @@ where
     /// go-live is gated only by the #332 staker-activation entry that wires
     /// this orchestrator (nothing else guards it; activation sequencing must
     /// be handled there, not assumed from a witness gap). Tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires with
-    /// the RPC stake entry (`docs/FOLLOWUPS.md`).
+    /// [`SpentRecordsDurablyPruned::for_test`]. This carries no suppression —
+    /// it is reached from wired code; go-live retires with the RPC stake entry
+    /// (`docs/FOLLOWUPS.md`).
     pub(crate) async fn assemble_bond_post(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,

@@ -103,7 +103,6 @@ const _: () = assert!(
 /// hint, not consensus truth (2d reconciles it against actual bond state).
 ///
 /// [`ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) enum HeldPersona {
     /// Carries at least one live bond (`consumer_held` or posted). Never wiped
     /// while bonded — its `bond_spend` key must stay reachable to unbond.
@@ -113,7 +112,6 @@ pub(crate) enum HeldPersona {
     Ephemeral(EphemeralPersona),
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl HeldPersona {
     /// Borrow the underlying derived bundle (read-only; the secret never
     /// escapes — callers project the public [`PersonaIdentity`] out of it).
@@ -128,11 +126,9 @@ impl HeldPersona {
 /// A held persona that carries a live bond. The wipe path cannot accept this
 /// type (typed contract #4), so a bonded persona is never zeroized while a bond
 /// depends on its `bond_spend` key.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys);
 
 /// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
 
 /// Wipe a retired ephemeral persona.
@@ -142,7 +138,6 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
 /// uncallable. The bundle's per-field `ZeroizeOnDrop` runs at the drop here; the
 /// explicit `drop` makes the wipe a named operation rather than an implicit
 /// scope-end.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
     drop(persona);
 }
@@ -155,7 +150,6 @@ pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
 /// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
 /// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
-#[allow(dead_code)] // transient — the SP-5 retire path is the consumer.
 pub(crate) fn wipe_bonded(persona: BondedPersona) {
     drop(persona);
 }
@@ -172,14 +166,12 @@ pub(crate) fn wipe_bonded(persona: BondedPersona) {
 /// `AbsentVerified`: a *wrong* retire wipes a still-live persona's `bond_spend`
 /// key → can't unbond → **stuck funds**, the exact mirror of a wrongful GC, which
 /// the conservative predicate guards against.
-#[allow(dead_code)] // transient — the SP-5 scan task builds it; the retire handler consumes it.
 pub(crate) struct RetirementWitness {
     /// The cleartext canonical id of the persona to retire (from its confirmed
     /// `Unbond` bond-post). The actor matches it against the bonded union.
     pub(crate) p_canonical_id: PCanonicalId,
 }
 
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
 impl RetirementWitness {
     /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
     /// `Unbond` whose **last creditable epoch has fallen out of the consensus
@@ -211,7 +203,6 @@ impl RetirementWitness {
 /// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
 /// valid (no error): the retire is **idempotent** — re-handing the same witness
 /// after the persona is gone is a no-op ([`Self::NotHeld`]).
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RetireOutcome {
     /// The bonded persona was found and wiped from the union.
@@ -291,13 +282,11 @@ impl std::fmt::Debug for FundedSlots {
 /// caller emerges that provably needs to drive two actor operations from one
 /// mint, with documented justification.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct PersonaHandle {
     pub(crate) p_slot: PSlot,
     pub(crate) generation: u64,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl PersonaHandle {
     /// The slot this handle authorizes.
     #[must_use]
@@ -333,7 +322,6 @@ const _: fn() = || {
         fn token_must_stay_single_use() {}
     }
     impl<T> AmbiguousIfImpl<()> for T {}
-    #[allow(dead_code)]
     struct Invalid;
     impl<T: Clone> AmbiguousIfImpl<Invalid> for T {}
 
@@ -352,7 +340,6 @@ const _: fn() = || {
 /// `HybridPublicKey` has no secret field. `Clone + Debug` is sound for the same
 /// reason.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct PersonaIdentity {
     /// The slot this persona was derived for.
     pub p_slot: PSlot,
@@ -360,7 +347,6 @@ pub(crate) struct PersonaIdentity {
     pub bond_id: HybridPublicKey,
 }
 
-#[allow(dead_code)] // inert until PR 2c wiring
 impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
     pub(crate) fn from_keys(keys: &ArchivalPKeys) -> Self {
@@ -377,7 +363,6 @@ impl PersonaIdentity {
 
 /// Errors surfaced by the StakeEngine handle.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) enum StakeEngineError {
     /// The StakeEngine actor has stopped (fail-stop after a handler panic, or a
     /// clean stop). Terminal and non-retryable — the persona secrets went with
@@ -543,7 +528,6 @@ pub(crate) enum ScanSetupError {
 /// Under Model D the actor receives **pre-derived** bundles (the orchestrator
 /// derived them at `assemble()` while the seed was transiently borrowed, then
 /// dropped the seed). The actor never sees the seed.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngineArgs {
     /// The derive-forward set — pre-derived `ArchivalPKeys` keyed by slot:
     /// `{personas with live bonds} ∪ {p_slot ..= p_slot+k}`. Each is `!Clone` +

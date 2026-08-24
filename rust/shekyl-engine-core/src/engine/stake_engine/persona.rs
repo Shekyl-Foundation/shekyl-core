@@ -25,7 +25,6 @@ use super::types::*;
 /// an unheld slot is [`StakeEngineError::LookaheadExhausted`] (reopen to extend
 /// the lookahead). The minted handle carries the current activation generation, so
 /// it is valid only until the next activation (operation-scoped).
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct MintPersonaHandle {
     pub p_slot: PSlot,
 }
@@ -58,7 +57,6 @@ impl Message<MintPersonaHandle> for StakeEngine {
 /// active slot, the retired slot is wiped iff ephemeral (typed contract #4), and
 /// the generation advances (invalidating every prior handle). There is never a
 /// window with two active personas and never a gap with none (§10.1 #2 / §10.9).
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct ActivatePersona {
     pub handle: PersonaHandle,
 }
@@ -108,7 +106,6 @@ impl Message<ActivatePersona> for StakeEngine {
 /// retired ephemeral persona as a side effect of an unrelated request.
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], exactly as
 /// at the mint boundary.
-#[allow(dead_code)] // inert until the RPC stake entry (same retirement as the claim seam)
 pub(crate) struct PersonaIdentityOf {
     pub p_slot: PSlot,
 }
@@ -158,7 +155,6 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 /// A read-only projection like [`PersonaIdentityOf`]: no activation, no
 /// retired-slot wipe, no generation advance. An unheld slot is
 /// [`StakeEngineError::LookaheadExhausted`], as at every other slot boundary.
-#[allow(dead_code)] // inert until SH-2b-2 starts a `PersonaServingHost`
 pub(crate) struct PersonaOnionIdentityOf {
     pub p_slot: PSlot,
 }
@@ -183,7 +179,6 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct ActivePersona;
 
 impl Message<ActivePersona> for StakeEngine {
@@ -263,7 +258,6 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// stake.mint_handle(slot)      → handle2
 /// stake.plan_bond_post(handle2, ticket, holdings) → BondPostPlacement
 /// ```
-#[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct PlanBondPost {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
@@ -284,8 +278,8 @@ pub(crate) struct PlanBondPost {
 /// private intent anchor `t0`), so the placement offset cannot be lost between
 /// construction and scheduling. The offset is relative; the anchor itself never
 /// leaves the caller. The vin carries no on-vin signature (SA-2b).
-#[allow(dead_code)] // inert until the 2c-2a assemble / 2d dispatch consumer lands
 #[derive(Debug)]
+#[allow(dead_code)] // 2c-2b: the field readers land with the request path — this is `PlanBondPost`'s reply, not `AssembleBond`'s (that is `AssembledBondPost`).
 pub(crate) struct BondPostPlacement {
     /// The constructed JoinMarket bond vin, ready for transaction assembly.
     /// Authorization is the later surface-A `pqc_auths` slot, not an on-vin blob.
