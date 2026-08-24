@@ -2,11 +2,13 @@ name: ci/gh-actions/cli
 
 on:
   push:
-    # dev/main only. PR branches are covered by the pull_request event
-    # (which tests the PR merged into its base — the stronger signal);
-    # an unrestricted push trigger double-runs every job on each push
-    # to an open PR. Branches without a PR get CI by opening a draft PR.
-    branches: [dev, main]
+    # `main` only. PRs are covered by `pull_request` (the merge commit into
+    # the base — the stronger signal). A push-to-dev trigger used to
+    # double-run this workflow on every merge (~the OS matrix plus the
+    # Ubuntu test rebuild). Branches without a PR get CI by opening a
+    # draft PR. The weekly Arch / MSYS2 matrix lives in
+    # `.github/workflows/weekly-os.yml`.
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - '**/README.md'
@@ -186,79 +188,11 @@ jobs:
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
 
-  build-windows:
-    name: 'Windows (MSYS2)'
-    runs-on: windows-latest
-    env:
-      CCACHE_TEMPDIR: C:\Users\runneradmin\.ccache-temp
-      CCACHE_DIR: C:\Users\runneradmin\.ccache
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: actions/cache@v5
-        with:
-          path: C:\Users\runneradmin\.ccache
-          key: ccache-${{ runner.os }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-build-
-      - uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-rust git
-      - uses: ./.github/actions/set-make-job-count
-      - name: build
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          make release-static-win64 -j${{env.MAKE_JOB_COUNT}}
-
-  build-arch:
-    name: 'Arch Linux'
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-    steps:
-      - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl libsodium readline gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
-      # WORKAROUND (2026-07-10, Arch gcc 16.1.1-3): the gcc-libs →
-      # libgcc/libstdc++ package split dropped the `libstdc++.so` symlink
-      # from GCC's internal search dir (which now carries only
-      # `libstdc++.a`, files dated 2026-07-09). ld stops at the first
-      # search dir containing the library in either form and the internal
-      # dir precedes /usr/lib, so every `-lstdc++` link silently goes
-      # STATIC — colliding with the dynamic-only `__cxa_throw` hook in
-      # `src/common/stack_trace.cpp` ("multiple definition of
-      # `__cxa_throw`", first seen linking shekyl-gen-ssl-cert).
-      # Reproduced distro-side with zero Shekyl code: on this image,
-      # `ldd` on a g++ hello-world shows no libstdc++ dependency at all.
-      # Restoring the symlink reinstates the historical layout; `ln -sf`
-      # is a no-op once Arch ships it again. REMOVE when a stock
-      # container passes `ldd`-shows-dynamic-libstdc++ (the sanity check
-      # below fails loudly if the workaround itself ever stops working).
-      - name: restore dynamic libstdc++ (Arch gcc 16.1.1-3 packaging regression)
-        run: |
-          for d in /usr/lib/gcc/x86_64-pc-linux-gnu/*/; do
-            if [ -f "$d/libstdc++.a" ] && [ ! -e "$d/libstdc++.so" ]; then
-              ln -sf /usr/lib/libstdc++.so "$d/libstdc++.so"
-              echo "restored $d/libstdc++.so -> /usr/lib/libstdc++.so"
-            fi
-          done
-          printf '#include <string>\nint main(){ return std::string("x").size() == 1 ? 0 : 1; }\n' > /tmp/dynlink_check.cpp
-          g++ /tmp/dynlink_check.cpp -o /tmp/dynlink_check
-          ldd /tmp/dynlink_check | grep -q 'libstdc++\.so' \
-            || { echo '::error::libstdc++ still links statically after the symlink workaround'; exit 1; }
-      - name: configure git
-        run: git config --global --add safe.directory '*'
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: ./.github/actions/set-make-job-count
-      - name: build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+  # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
+  # PR Windows coverage is the MSVC daemon job below (the only runner that
+  # can compile `shekyl-win-sec`); depends.yml still cross-compiles Win64
+  # when contrib/depends changes. Two Windows compiles on every PR was the
+  # third of three (MSVC + MSYS2 + depends Win64).
 
   build-ubuntu:
     name: ${{ matrix.name }}
@@ -267,12 +201,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Minimum supported Ubuntu LTS (Boost >= 1.74)
+          # Minimum supported Ubuntu LTS (Boost >= 1.74). Compile-only —
+          # the test job consumes the 24.04 artifact (same Release
+          # BUILD_TESTS=ON tree) rather than rebuilding twice.
           - name: Ubuntu 22.04
             container: ubuntu:22.04
+            pack_ctest: false
 
           - name: Ubuntu 24.04
             container: ubuntu:24.04
+            pack_ctest: true
     container:
       image: ${{ matrix.container }}
       env:
@@ -313,25 +251,49 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
+      # Pack the CTest tree for the 24.04 test job. Same shape as
+      # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
+      # (CMakeLists.txt), so test binaries are statically linked against
+      # in-tree libraries and the tar can drop *.o / *.a / CMakeFiles.
+      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
+      # that the test job installs. CMake bakes absolute paths into
+      # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
+      # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
+      # on both sides. tests/data/ is repo-tracked — the test job reads
+      # it from checkout, not this tarball.
+      - name: Pack CTest tree
+        if: matrix.pack_ctest
+        run: |
+          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
+            -czf ubuntu-24.04-ctest.tar.gz build/
+      - name: Verify CTest artifact
+        if: matrix.pack_ctest
+        shell: bash
+        run: |
+          set -euo pipefail
+          listing="$(tar tzf ubuntu-24.04-ctest.tar.gz)"
+          if ! grep -qx 'build/CTestTestfile.cmake' <<< "$listing"; then
+            echo "FATAL: ubuntu-24.04-ctest.tar.gz missing build/CTestTestfile.cmake" >&2
+            echo "tar tf (first 40 entries):" >&2
+            head -40 <<< "$listing" >&2
+            exit 1
+          fi
+          echo "OK: artifact contains CTestTestfile.cmake"
+      - uses: actions/upload-artifact@v4
+        if: matrix.pack_ctest
+        with:
+          name: ubuntu-24.04-ctest
+          path: ubuntu-24.04-ctest.tar.gz
+          retention-days: 1
 
   test-ubuntu:
-    name: "${{ matrix.name }} (tests)"
+    name: "Ubuntu 24.04 (tests)"
     needs: build-ubuntu
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu 22.04
-            container: ubuntu:22.04
-          - name: Ubuntu 24.04
-            container: ubuntu:24.04
     container:
-      image: ${{ matrix.container }}
+      image: ubuntu:24.04
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
       # Setting up a loop device (losetup) requires additional capabilities.
       # tests/create_test_disks.sh
       options: --privileged
@@ -340,35 +302,34 @@ jobs:
         run: ${{env.APT_SET_CONF}}
       - name: update apt
         run: apt update
-      - name: install build dependencies
-        run: ${{env.APT_INSTALL_LINUX}}
-      - name: install Python dependencies
-        run: apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
+      - name: install runtime + test dependencies
+        # No compiler, no cmake rebuild, no Rust. APT_INSTALL_LINUX is the
+        # same package set the 24.04 build job used, so the DT_NEEDED
+        # system libraries the statically-linked-against-in-tree binaries
+        # still require are present. Python packages are for functional
+        # tests that ctest launches.
+        run: |
+          ${{env.APT_INSTALL_LINUX}}
+          apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: install Rust
-        # Composite action (.github/actions/install-rust), after
-        # checkout — see the build job's step comment.
-        uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
+      - uses: actions/download-artifact@v4
         with:
-          path: ~/.ccache
-          key: ccache-${{ matrix.container }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ matrix.container }}-build-
+          name: ubuntu-24.04-ctest
+      - name: Unpack CTest tree
+        run: tar -xzf ubuntu-24.04-ctest.tar.gz
       - name: create dummy disk drives for testing
         run: tests/create_test_disks.sh >> $GITHUB_ENV
-      - uses: ./.github/actions/set-make-job-count
       - name: tests
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          ${{env.BUILD_DEFAULT_LINUX}}
-          cmake --build build --target test
+        # ctest, not `cmake --build --target test`: the latter would
+        # notice unpacked timestamps and try to rebuild. The build job
+        # already compiled everything.
+        run: ctest --test-dir build --output-on-failure
 
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
@@ -671,6 +632,14 @@ jobs:
 
   source-archive:
     name: "source archive"
+    # Required status check on `main` (ruleset 15215246). Keep it on the
+    # release PR (base = main) and on pushes to main. Drop it from every
+    # PR into `dev` — gitian on tags is the release archive; this job was
+    # ~1 min itself but occupied a runner in the same pool as the 15-workflow
+    # PR fan-out.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
@@ -708,23 +677,3 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
-
-  rust-msrv-gate:
-    name: "Rust: MSRV gate (1.94)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@1.94.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
-      - name: cargo check at declared MSRV
-        working-directory: rust
-        # Compiles every workspace crate except the differential harness,
-        # which needs a CMake-built C RandomX install and has its own
-        # workflow. Same exclusion shape as `rust-audit-and-test`'s test
-        # step — the MSRV gate asserts the declared floor builds, not
-        # that every integration test runs at MSRV.
-        run: cargo check --locked --workspace --exclude shekyl-randomx-differential
