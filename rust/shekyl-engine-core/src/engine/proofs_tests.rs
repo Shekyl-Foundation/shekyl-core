@@ -422,11 +422,11 @@ mod check_workflows {
                 base: CtBase {
                     enc_amounts: outputs
                         .iter()
-                        .map(|od| join9(od.enc_amount, od.amount_tag))
+                        .map(|od| join9(od.enc_amount_bytes(), od.amount_tag()))
                         .collect(),
                     enc_labels: outputs
                         .iter()
-                        .map(|od| join9(od.enc_label, od.label_tag))
+                        .map(|od| join9(od.enc_label_bytes(), od.label_tag()))
                         .collect(),
                     commitments: outputs.iter().map(|od| od.commitment).collect(),
                 },

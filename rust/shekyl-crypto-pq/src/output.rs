@@ -116,6 +116,15 @@ use crate::CryptoError;
 /// Tests build fixtures through `Deserialize`, so they can do nothing a C++
 /// caller could not.
 ///
+/// **The guarantee rests on one thing outside this type:** the [`OutputData`]
+/// fields the accessors read (`enc_label`, `label_tag`, `enc_amount`,
+/// `amount_tag`) are `pub(crate)`. While they were `pub`, this type did not
+/// establish provenance at all — a caller could take a real `OutputData`,
+/// overwrite the ciphertext with a constant, and call the accessor, or build a
+/// literal outright. Both routes are now compiler errors (`E0616` and `E0451`
+/// respectively), which is what makes "unrepresentable" a fact rather than a
+/// convention. Widening those fields silently removes it.
+///
 /// The bytes are public wire data — ciphertext, not key material — so this is
 /// deliberately not `Zeroize`; the secrets it is derived from are wiped by
 /// [`OutputData`]'s own `ZeroizeOnDrop`.
@@ -208,17 +217,26 @@ pub struct OutputData {
     #[zeroize(skip)]
     pub commitment: [u8; 32],
     /// XOR-encrypted amount (8 bytes).
+    ///
+    /// **`pub(crate)` is load-bearing, not stylistic.** This field and the
+    /// three below are the source bytes for [`EncryptedOutputField`], so if
+    /// they were `pub` a downstream crate could overwrite them with a constant
+    /// and then call the accessor, producing exactly the unencrypted value the
+    /// type exists to exclude — and a `pub` field would also make `OutputData`
+    /// literal-constructible, giving a second route to the same place. Read
+    /// access is unaffected and safe: see the `*_bytes()` / `*_tag()`
+    /// accessors. Do not widen these back to `pub`.
     #[zeroize(skip)]
-    pub enc_amount: [u8; 8],
+    pub(crate) enc_amount: [u8; 8],
     /// 1-byte AAD tag for amount integrity.
     #[zeroize(skip)]
-    pub amount_tag: u8,
+    pub(crate) amount_tag: u8,
     /// XOR-encrypted 8-byte label plaintext (sentinel at launch).
     #[zeroize(skip)]
-    pub enc_label: [u8; 8],
+    pub(crate) enc_label: [u8; 8],
     /// 1-byte AAD tag for label integrity.
     #[zeroize(skip)]
-    pub label_tag: u8,
+    pub(crate) label_tag: u8,
     /// ML-KEM-keyed view tag for scanner pre-filtering (wire: `view_tag`).
     #[zeroize(skip)]
     pub view_tag_prefilter: u8,
@@ -245,6 +263,34 @@ pub struct OutputData {
 }
 
 impl OutputData {
+    /// The raw `enc_label` ciphertext, without its tag.
+    ///
+    /// Read-only by construction: the field behind it is `pub(crate)` so that
+    /// no code outside this crate can *overwrite* it with a constant and then
+    /// call [`Self::enc_label_wire`]. Reading was never the hazard.
+    #[must_use]
+    pub const fn enc_label_bytes(&self) -> [u8; 8] {
+        self.enc_label
+    }
+
+    /// The HKDF-derived label tag.
+    #[must_use]
+    pub const fn label_tag(&self) -> u8 {
+        self.label_tag
+    }
+
+    /// The raw `enc_amount` ciphertext, without its tag.
+    #[must_use]
+    pub const fn enc_amount_bytes(&self) -> [u8; 8] {
+        self.enc_amount
+    }
+
+    /// The HKDF-derived amount tag.
+    #[must_use]
+    pub const fn amount_tag(&self) -> u8 {
+        self.amount_tag
+    }
+
     /// The `enc_label` wire field: ciphertext plus its tag, in serializer order.
     ///
     /// This is the only way to obtain an [`EncryptedOutputField`] for a label,

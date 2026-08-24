@@ -74,8 +74,16 @@ sustainability is unaffected by the recalibration.
   difference in blast radius, not in shape.)
 
   **The guarantee, at its true width:** on the in-process Rust path an
-  unencrypted field is not representable, and that is compiler-enforced. The
-  byte constructor is **private to the defining module**, so the one remaining
+  unencrypted field is not representable, and that is compiler-enforced —
+  which took three review rounds to become true rather than merely claimed.
+  The claim first shipped while a `#[doc(hidden)] pub` constructor existed,
+  then while a `feature = "test-utils"` constructor shipped in the production
+  archive, then while `OutputData`'s ciphertext and tag fields were still
+  `pub` — so a caller could overwrite a real output's bytes and call the
+  accessor, or build a literal. All three are closed; the last one is why
+  those fields are now `pub(crate)`, and widening them silently removes the
+  guarantee. The byte constructor is **private to the defining module**, so
+  the one remaining
   way in is the type's `Deserialize` impl — the `shekyl_sign_fcmp_transaction`
   JSON boundary, where the far side computed the encryption and this crate
   cannot re-derive it. Deserializing is a visibly deliberate act at a boundary

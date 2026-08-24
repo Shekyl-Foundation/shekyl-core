@@ -68,6 +68,13 @@
   the remedy: it treats one symptom, admits any other unencrypted constant, and
   can fire on a legitimate ciphertext that happens to be zero.
 
+  The guarantee is compiler-enforced on two axes, both verified by attempting
+  the forgery from outside the crate: overwriting a real `OutputData`'s
+  ciphertext or tag is `E0616` (the fields are `pub(crate)`), and building an
+  `OutputData` literal is `E0451`. That coupling is documented at both ends,
+  because widening those fields would remove the guarantee without touching
+  the type that advertises it.
+
   One exception survives, and it is a boundary rather than a constructor: the
   type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its
   outputs as JSON and the far side computed the encryption. The byte

@@ -125,17 +125,17 @@ fn scan_output_view_tag_kat() {
             "vector {i}: commitment"
         );
         assert_eq!(
-            hex::encode(out.enc_amount),
+            hex::encode(out.enc_amount_bytes()),
             v.enc_amount,
             "vector {i}: enc_amount"
         );
-        assert_eq!(out.amount_tag, v.amount_tag, "vector {i}: amount_tag");
+        assert_eq!(out.amount_tag(), v.amount_tag, "vector {i}: amount_tag");
         assert_eq!(
-            hex::encode(out.enc_label),
+            hex::encode(out.enc_label_bytes()),
             v.enc_label,
             "vector {i}: enc_label"
         );
-        assert_eq!(out.label_tag, v.label_tag, "vector {i}: label_tag");
+        assert_eq!(out.label_tag(), v.label_tag, "vector {i}: label_tag");
         // THE freeze pin: the ML-KEM-derived view tag must match the captured byte.
         assert_eq!(
             out.view_tag_prefilter, v.view_tag,
@@ -284,10 +284,10 @@ fn gen_scan_output_kat() {
                 output_index: s.output_index,
                 output_key: hex::encode(out.output_key),
                 commitment: hex::encode(out.commitment),
-                enc_amount: hex::encode(out.enc_amount),
-                amount_tag: out.amount_tag,
-                enc_label: hex::encode(out.enc_label),
-                label_tag: out.label_tag,
+                enc_amount: hex::encode(out.enc_amount_bytes()),
+                amount_tag: out.amount_tag(),
+                enc_label: hex::encode(out.enc_label_bytes()),
+                label_tag: out.label_tag(),
                 view_tag: out.view_tag_prefilter,
                 kem_ct_x25519: hex::encode(out.kem_ciphertext_x25519),
                 kem_ct_ml_kem: hex::encode(&out.kem_ciphertext_ml_kem),

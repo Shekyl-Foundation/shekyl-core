@@ -293,8 +293,8 @@ fn assemble_scannable_block(
             view_tag: out.view_tag_prefilter,
         });
         commitments.push(out.commitment);
-        enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
-        enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
+        enc_amounts.push(join_enc9(&out.enc_amount_bytes(), out.amount_tag()));
+        enc_labels.push(join_enc9(&out.enc_label_bytes(), out.label_tag()));
         // One `X25519_KEM_CT_LEN || ML_KEM_768_CT_LEN` ciphertext per
         // output; `Extra::for_hybrid_transfer` below concatenates them
         // into the single `0x06` field the scanner slices at
@@ -524,10 +524,10 @@ mod tests {
             &out.kem_ciphertext_ml_kem,
             &out.output_key,
             &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
+            &out.enc_amount_bytes(),
+            out.amount_tag(),
+            &out.enc_label_bytes(),
+            out.label_tag(),
             out.view_tag_prefilter,
             /* output_index */ 0,
         )
@@ -576,10 +576,10 @@ mod tests {
                 &out.kem_ciphertext_ml_kem,
                 &out.output_key,
                 &out.commitment,
-                &out.enc_amount,
-                out.amount_tag,
-                &out.enc_label,
-                out.label_tag,
+                &out.enc_amount_bytes(),
+                out.amount_tag(),
+                &out.enc_label_bytes(),
+                out.label_tag(),
                 out.view_tag_prefilter,
                 /* output_index */ 0,
             );
