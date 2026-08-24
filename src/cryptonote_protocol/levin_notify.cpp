@@ -215,21 +215,15 @@ namespace levin
       std::chrono::seconds epoch_range;
     };
 
-    /* The fragment-size guard, kept where its CONSTANTS live rather than where
-       the fragmenting happens. C++ no longer cuts anything to this window —
-       `NoiseQueues` in `shekyl-relay` owns the carrier — but `CRYPTONOTE_NOISE_BYTES`
-       and `CRYPTONOTE_MAX_FRAGMENTS` are still C++ `#define`s, and a guard over
-       constants belongs beside the constants. It has survived two homes now: the
-       deleted covert branch, then the deleted channel constructor.
-
-       FOLLOWUP: the constants should cross to Rust and `NoiseQueues`' window
-       should be derived from them, at which point this assertion moves with
-       them. Until then, deleting it here would leave the constraint unguarded
-       in both languages. */
-    static_assert(
-      CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE,
-      "most nodes will reject this fragment setting"
-    );
+    /* The fragment-size guard MOVED TO RUST, which is what this comment's own
+       FOLLOWUP asked for: "the constants should cross to Rust and `NoiseQueues`'
+       window should be derived from them, at which point this assertion moves
+       with them." Both `#define`s are gone from cryptonote_config.h; the window
+       and the cap are `shekyl_relay_privacy::params::carrier`, derived rather
+       than inherited, and the packet-size bound is asserted in that crate's
+       `tests/carrier_window.rs` against levin's own DEFAULT_MAX_PACKET_SIZE
+       instead of a second copy of the limit. The constraint is guarded in one
+       language now because it only has constants in one. */
 
     constexpr relay_zone_params public_zone_params()
     {

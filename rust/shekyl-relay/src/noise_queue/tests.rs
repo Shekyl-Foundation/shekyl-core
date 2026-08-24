@@ -376,3 +376,40 @@ fn cv4_the_comparison_can_distinguish_cadences() {
          not observing the schedule, so CV-4's assertion proves nothing"
     );
 }
+
+/// `enqueue` refuses a message over [`carrier::MAX_FRAGMENTS`] windows.
+///
+/// The cap is CV-1's, and before this it was checked only at `Zone::new` — a
+/// configuration was validated for `MAX_FRAGMENTS` worst-case sends while
+/// `enqueue` accepted any whole multiple of the window. A longer message
+/// entered a zone validated for a shorter one and lost its remainder at the
+/// next epoch roll, silently, because CV-1 discards rather than reports.
+///
+/// It is also the bound on a BATCH. `NOTIFY_NEW_TRANSACTIONS` carries a vector,
+/// so a notification is not one transaction by construction; two maximum
+/// transactions are ~196 KB, which is ten windows against a cap of five. The
+/// queue cannot parse what it is handed, so size is the enforcement point.
+///
+/// What edit reds this: deleting the cap check in `enqueue`, or raising
+/// `carrier::MAX_FRAGMENTS` without moving the boundary below.
+#[test]
+fn enqueue_refuses_a_message_over_the_fragment_cap() {
+    use shekyl_relay_privacy::params::carrier;
+
+    const W: usize = 64;
+    let mut q = NoiseQueues::new(1, vec![0u8; W]).expect("queues");
+    let cap = carrier::MAX_FRAGMENTS as usize;
+
+    assert!(
+        q.enqueue(0, vec![1u8; W * cap]),
+        "a message of exactly MAX_FRAGMENTS windows must be accepted — the cap \
+         is inclusive, and a message at the cap is what the epoch check sizes \
+         for"
+    );
+    assert!(
+        !q.enqueue(0, vec![1u8; W * (cap + 1)]),
+        "a message one window over MAX_FRAGMENTS must be refused: it would \
+         enter a zone validated for {cap} windows and lose its remainder at the \
+         epoch roll"
+    );
+}

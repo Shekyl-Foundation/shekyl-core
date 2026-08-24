@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use shekyl_relay_privacy::params::{inherited, DandelionParams};
+use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
@@ -121,7 +121,7 @@ pub enum ZoneNewError {
     /// arrive: CV-1 discards the in-flight remainder at every epoch roll.
     ///
     /// Budget is [`inherited::noise_windows_in_epoch`] against
-    /// [`inherited::MAX_FRAGMENTS`]. Runtime, not `const`, because the
+    /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
     /// epoch crosses as `min_epoch_secs`.
     NoiseCannotCrossOneEpoch {
         /// Windows a full-size message needs.
@@ -370,7 +370,7 @@ impl Zone {
     /// **A noise epoch must carry a full-size message** — otherwise CV-1
     /// discards the remainder at every roll. The budget is
     /// [`inherited::noise_windows_in_epoch`] against
-    /// [`inherited::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
+    /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
     /// this is a refusal rather than a `const` assertion.
     ///
     /// The three refusals are distinct [`ZoneNewError`] variants. The FFI
@@ -400,9 +400,9 @@ impl Zone {
                 return Err(ZoneNewError::NoiseChannelCount { got: stems });
             }
             let affords = inherited::noise_windows_in_epoch(params.min_epoch_secs);
-            if affords < inherited::MAX_FRAGMENTS {
+            if affords < carrier::MAX_FRAGMENTS {
                 return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
-                    needs: inherited::MAX_FRAGMENTS,
+                    needs: carrier::MAX_FRAGMENTS,
                     affords,
                 });
             }

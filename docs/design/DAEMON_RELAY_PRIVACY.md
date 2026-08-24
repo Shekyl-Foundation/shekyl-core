@@ -8387,7 +8387,7 @@ Traffic classes at Monero-like figures (20 k tx/day, 5 000 nodes, `q = 0.2`):
 
 | class | per epoch | against carrier (at ~8 KiB/tx) |
 | --- | --- | --- |
-| **fluff** — a node relays everything it sees | **69.4 tx** | **4.3× over capacity** |
+| **fluff** — a node relays everything it sees | **69.4 tx** | **4.3× over capacity** (at ~8 KiB/tx; **~6.7× on the real 13,042 B modal** — see §42.4a) |
 | **stem forwards** — `tx_rate × (1/q) / node_count` | 0.069 tx | — |
 | **own originations** — ~1/day | 0.0035 tx | — |
 | **stem + own together** | **0.073 tx** | **0.005× — 0.5 % utilisation** |
@@ -8484,6 +8484,20 @@ replaces** — 16.5 s against 12.5 s — because a 17 KiB window carries 5.7× m
 per tick. Today's design spends its bandwidth on **granularity** rather than
 capacity. And the adopted 12.5 s point delivers 2.72 KiB/s against a 2.06 KiB/s
 requirement: **32 % more than "cover everything" needs.**
+
+> **The basis moved, and the conclusion strengthens (2026-08-23).** §42.1's
+> 4.3× was priced at ~8 KiB per transaction. The real modal is **13,042 B**
+> (§94.5(b)'s correction), 1.55× larger, so fluff is **~6.7×** over the
+> inherited carrier rather than 4.3×. That figure is quoted in the retirement
+> argument for fluff-over-carrier; the argument gets stronger, but a quoted
+> number with a stale basis is the shape this arc has now corrected eleven
+> times, so it is corrected here rather than left to be re-derived.
+>
+> The window in the table above is **superseded**: it is sized at 17 KiB, and
+> the derived value is **20,480 B** (`carrier::WINDOW_BYTES`) — the modal
+> transaction at `MAX_TREE_DEPTH` plus its levin envelope plus margin.
+> Bandwidth moves 2.72 → 3.20 KiB/s and the Tor figure 0.27 → 0.32 %, both
+> still far under axis 2's ceiling.
 
 **So the wire-observer recall cell returns to zero for ALL traffic**, and
 §42.4's conceded activity signal closes. The narrowing is not repaired — its
@@ -13593,12 +13607,14 @@ priced, because §63.2's margin was computed on the posture being retired.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
-> transport; §89.8.2 shows the shipped receive path re-relays an anonymity
-> arrival at `zone::public_`, so the premise is false today and the anonymity
-> embargo over-provisions a stem that leaves after one hop. (b) The mechanism
-> is landed but **inert on i2p/tor** until the receive path relays at arrival
-> (§89.8.4). Clearnet draws through it on every stem. The back-out of the
-> persisted zone field stands and is reconfirmed by §89.8.3.
+> transport; §89.8.2 shows the shipped receive path *as of that diagnosis*
+> re-relays an anonymity arrival at `zone::public_`, so the premise was false
+> then and the anonymity embargo over-provisions a stem that leaves after one
+> hop. Current liveness of that premise is the checklist at §89.8.4, not
+> restated here. (b) The mechanism is landed. Whether it draws on i2p/tor is
+> the same checklist. Clearnet draws through it on every stem. The back-out of
+> the persisted zone field stands and is reconfirmed by §89.8.3 — and by the
+> draw site itself, which already takes `zone` as a parameter.
 
 The tempting move is F-7's: provision one global at the worst zone, as
 `fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
@@ -13645,6 +13661,40 @@ zone to alias onto.
 > *stored*.
 
 ### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
+
+> **NOTED 2026-08-23 — the same question one axis over: `hop`, not zone.**
+> `derive_embargo` steps discontinuously: it accumulates
+> `div_ceil(h * hop + F, tick)` over the stem-length sum, and where many `h`
+> cross a tick boundary together the answer jumps. At `tick = 250` ms and the
+> inherited `F` the largest jumps are **+11/+12 s for a 1 ms hop change** at
+> hop 251/501/751, with smaller +5 s and +3 s families between them from larger
+> `h`, and the whole structure **moves with `F`**. Measured rather than
+> modelled by `derive::next_embargo_step` and pinned in
+> `shekyl-relay-privacy/tests/embargo_steps.rs`.
+>
+> **Because `hop` includes `f_ms(n_in, depth)`, different transaction shapes sit
+> at different distances from a step, and of different sizes.** At the §94
+> candidate the modal genesis shape is 3 ms from a **1-second** step while the
+> 8-input one is 7 ms from a **12-second** one. A re-measurement could move
+> either across a large step independently, making the embargo
+> **discontinuous across shapes** rather than across zones.
+>
+> **Raised, not ruled.** Whether it discloses anything depends on whether
+> embargo firing times are observable at all — fires are ~10 % of transactions
+> and shape is public from the transaction anyway, so the likely answer is no.
+> Recorded here because this section already owns the zone-shaped version of the
+> question, and a future reader asking it about shapes should find the numbers
+> rather than re-derive them.
+>
+> **The shipped interim is the live instance**: hop 1750 ms, **1 ms** from an
+> 11-second step. Whether that instance is exercised is the checklist at
+> §89.8.4, not restated here.
+>
+> *(Method note: an earlier draft of this section computed distances from a
+> closed form for the `h = 1` family alone. That form missed the harmonics from
+> larger `h`, ignored `fluff_return_ms` — which shifts every boundary — and
+> truncated in a way that reported the LARGEST distance for the SMALLEST true
+> one. The numbers here are searched, not modelled.)*
 
 Per-zone means the two zones draw from different means, and a different mean is
 in principle an observable. This is the mirror of the `vin.size()` question D
@@ -13986,6 +14036,15 @@ the wrong subject: the branch is not passing untested, it is **not running**.
 
 ### 89.8.2 The consequence for §89.2: the stem does not stay on one transport
 
+> **Re-grounded 2026-08-23 at the checklist in §89.8.4.** The body below is
+> the 2026-08-10 diagnosis. Q12-U2 deleted the `forward` arm it cites;
+> arrivals now relay at arrival as `stem` on the arrival zone; the embargo
+> draw site already had `zone` as a parameter. The cheapest remaining
+> question — is the input already at the draw, so that only the draw itself
+> is missing? — is answered there: the relayed path already draws.
+> Originated traffic still does not, by §89.8.3. Do not take "on the shipped
+> path it is false" below as current.
+
 §89.2 grounds a per-zone `hop` on §59's coherence: *"a transaction entering the
 anonymity zone's stem stays there until it fluffs, so every remaining hop in
 `S(h)` runs on one transport."* §89.7.3 already calls that premise
@@ -14056,28 +14115,116 @@ it. The `private_*` shell's outcome loop is also bounded now: the regression
 these six cases exist to catch pins the epoch role to one value, and the
 unbounded wait turned a red assertion into a CI job timeout with no test named.
 
-### 89.8.4 The embargo is landed and, on the anonymity zone, unreachable
+### 89.8.4 The embargo is landed — originated does not draw; relayed does
+
+> **NOTED 2026-08-23 — the arming gap is now load-bearing in a second way.**
+> This section recorded that no anonymity embargo is armed. That was a
+> prerequisite for landing a measured transit constant, and it was also the
+> **sole reason two separate latent defects were held not live**:
+>
+> 1. §89.8.2's premise — a transaction entering an anonymity stem completing it
+>    there — whose constant says it *"becomes live when the txpool gains an
+>    origin zone."*
+> 2. The shipped interim anonymity hop (1750 ms) is **1 ms from an 11-second
+>    embargo step** — the embargo jumps where many stem lengths cross a tick
+>    boundary together. Measured by `derive::next_embargo_step` and pinned in
+>    `shekyl-relay-privacy/tests/embargo_steps.rs`.
+>
+> **So arming is not merely a gate on one number — it is the commit that
+> converts an accumulating set of recorded latencies into live behaviour
+> simultaneously.** Both entries above are the same shape: a latent defect held
+> harmless by a missing mechanism.
+>
+> ### The arming checklist — the only place these preconditions live
+>
+> Carry it, and re-check each entry against the code as it will THEN be.
+> Notes in other sections **point here**; they do not restate the entries.
+> Two locations for one fact is what produced most of the decay this arc has
+> been correcting.
+>
+> | # | entry | held harmless by | re-check |
+> | --- | --- | --- | --- |
+> | 1 | §89.8.2's premise (a stem entering the anonymity zone completes there) | originated does not draw; **relayed does** | **verify me first, I may have already been discharged.** Re-grounded 2026-08-23: Q12-U2 deleted the `forward` arm; the draw site already had `zone`; relayed arrivals draw. See below. |
+> | 2 | shipped interim anon hop 1 ms from an 11-second embargo step | **not held harmless on the relayed path** — the draw is live | re-measure the distance with `derive::next_embargo_step` at whatever transit constant is live then; `F` moves the whole step structure |
+>
+> **Re-check rather than re-read**, because §89.8.4's own premises have gone
+> stale once in this arc already. An entry is discharged when the code that
+> would exercise it has been read *as it stands at arming time*, not when this
+> table was written.
+>
+> The self-warning on entry 1 is the right form, not a hedge. These rows are
+> claims about other sections' state, and gate rows decay at the rate of what
+> they gate: a description would have gone stale silently, a re-check
+> instruction goes stale loudly. A row that says "verify me first" is the
+> sharpest version of that.
+>
+> Collectively this is the eleventh item in this arc whose disposition is
+> *"may be stale, re-ground before use."* Individually each is handled
+> correctly. The thing not to grow is a twelfth copy of the same fact outside
+> this table.
+>
+> ### Re-grounded 2026-08-23 — entry 1, one level down
+>
+> The missing mechanism shrank, and then shrank again. Checked at source, not
+> inferred from Q12-U2's comments.
+>
+> 1. **"The txpool gains an origin zone" has landed** (Q12-U1). The field is
+>    stored. That is no longer the missing mechanism.
+> 2. **The draw site already has its input.** §89.2 backed out the persisted
+>    field on the finding that the txpool does not need to remember the zone,
+>    only to be told it. That holds at the embargo draw: `set_relayed` takes
+>    `zone` beside `tx_relay` and calls
+>    `shekyl_dandelionpp_embargo_draw_seconds(zone)`; every
+>    `on_transactions_relayed` site has `zone_->nzone` in scope. Q12-D2
+>    reconfirmed it. Missing-only-the-draw is the cheapest outcome that was
+>    worth checking, and it is the state of the *input*.
+> 3. **Q12-U2 already performs the draw for relayed arrivals.** They enter as
+>    `stem` (`cryptonote_protocol_handler.inl`), `once_at_origin_route` is
+>    `KeepArrival` for `(stem, tor|i2p)`, `dandelionpp_notify` records `stem`
+>    because `originated_stays_in_zone` excludes relayed traffic,
+>    `dandelionpp_stem = 1`, and the draw runs on `zone_->nzone`. Originated
+>    traffic still keeps `local` and takes `set_relayed`'s else arm — that is
+>    §89.8.3's design, not a remaining gap.
+>
+> So "arm the anon embargo" is too large a description of what is left. The
+> relayed path already draws. Entry 2's inertness claim is the one that moved:
+> the 1750 ms hop sitting 1 ms from an 11-second step is **exercised on
+> relayed anonymity stems**, not held harmless by a missing draw. Originated
+> traffic still does not draw, by design. The body below is the 2026-08-10
+> diagnosis; its "nothing arms" sentence does not describe the relayed path
+> after Q12-U2.
 
 Stating the composite plainly, because each of the three findings above hides it
 and the review round is where it should be visible:
 
 - Originated anonymity traffic keeps `local` (§89.8.3), and `local` sets
   `dandelionpp_stem = 0` (`blockchain_db.cpp:82-110`), so `set_relayed` takes
-  the `else` arm and **draws no embargo**.
-- Relayed anonymity traffic cannot reach an anonymity record site at all
-  (§89.8.1).
+  the `else` arm and **draws no embargo**. That is by design.
+- Relayed anonymity traffic **does** reach `set_relayed` as `stem` on the
+  arrival zone, after Q12-U2. The 2026-08-10 bullet this replaced — *cannot
+  reach an anonymity record site at all (§89.8.1)* — is the fifth-link
+  diagnosis; Q12-U2 removed that link.
 
-So in the shipped configuration **nothing arms an anonymity-zone embargo**. The
-per-zone mechanism is correct, tested at the boundary
+So in the shipped configuration **originated anonymity traffic arms no
+embargo** — it keeps `local`, by design. Relayed anonymity traffic, after
+Q12-U2, **does** reach `set_relayed` as `stem` on the arrival zone and draws.
+The 2026-08-10 sentence this replaced — *"nothing arms an anonymity-zone
+embargo"* — described the receive path before arrivals relayed at arrival; it
+does not describe the relayed path now. The checklist above is the current
+claim; this body is the diagnosis that produced it.
+
+The per-zone mechanism is correct, tested at the boundary
 (`the_zone_byte_selects_the_observation_window`, and the timers are one per
-parameter class rather than one per zone), and *inert on i2p/tor until the
-receive path relays at arrival*. It is not dead code — clearnet draws through
-the same path on every stem — but §89.2's headline should be read as "the
-mechanism is in place", not "the anonymity zone is now embargoed".
+parameter class rather than one per zone). It is not dead code — clearnet
+draws through the same path on every stem, and a relayed anonymity stem
+draws through it too. §89.2's headline should be read as "the mechanism is
+in place", which for relayed arrivals now includes "the anonymity zone is
+embargoed".
 
-**This is the honest state, and it is a smaller claim than §89 made.** The
-posture decision stands: the anonymity zone stems, on the wire, today. What has
-not happened is the receive-side half.
+**This is a smaller remaining claim than §89.8.4 made on 2026-08-10, and
+smaller again than "arm the anon embargo."** The posture decision stands.
+The receive-side half for relayed traffic has happened. What has not is a
+re-measure of entry 2 against a draw that is already live.
 
 ### 89.8.5 Coherence cannot be fixed by the receive path alone — the pool must remember
 
@@ -15025,6 +15172,34 @@ along, and this round exists to stop repeating it. Measure the **modal**
 transaction (8395 B, ~17 cells) and the **max admissible** one (16651 B, ~33
 cells), in the same sessions.
 
+> **CORRECTION 2026-08-23 — the two sizes were never grounded.** 8395 B and
+> 16651 B were asserted flatly in the rig commit with no source, are coherent
+> only as Tor cell counts (~17 and ~33), and **no transaction the wire admits
+> produces either.** From `predict_size_and_weight` (pinned to
+> `Transaction::write`), the smallest possible transaction — 1-in/2-out at
+> genesis depth — is **13,042 B**, and the structural maximum (8-in/16-out at
+> `MAX_TREE_DEPTH`) is **97,964 B** at a realistic fee, 97,969 B at `u64::MAX`.
+> So the "modal" figure is 1.55× too small and the "max admissible" one 5.9×.
+>
+> §94.2(b) forbade exactly this in the same round — *"from an **actual**
+> transaction rather than a remembered constant"* — and named the prior
+> instance while doing it.
+>
+> **What survives.** The latency measurement stands: it timed two real payloads
+> over real Tor with a shared clock, and the gate is MET. What was wrong is the
+> *labels*. The true modal (13,042 B) sits **inside** the measured 8.4–16.6 KB
+> span, so the 590.6 ms candidate is interpolation and holds for the modal
+> shape.
+>
+> **What does not survive: the null slope cannot be carried to the tail.**
+> 97,964 B is 6× outside the measured span — 191 Tor cells against the modal's
+> 26, plausibly a different flow-control regime. **Ratified: the null covers the
+> modal range; the tail is unmeasured, not measured-flat.**
+>
+> The rig's constants keep their measured values — §94.2(b) froze the payload
+> and the round completed under it, so changing them now would move the
+> instrument after the fact. They are relabelled to say what they measured.
+
 Two points answer the question a point cannot: **is a scalar defensible at
 all?** If the size term is small against the six-hop rendezvous RTT, a scalar
 stands. If it is material, transit becomes a function of payload — and the
@@ -15249,7 +15424,110 @@ policy instead of re-deriving a contradiction of it, and fixes the axis
 (posture) and the superseded keeper (§89.2) so the re-derivation composes against
 one coherent rule.
 
-### 94.9 The fourth hop term is DISCHARGED — measured on the floor device (2026-08-21)
+### 94.10 The diurnal swing is a property of Tor, not measurement noise (2026-08-23)
+
+**Recorded so it is not rediscovered as an anomaly by whoever re-measures.**
+Per-session pooled p90 ran **403.8 ms (12:29 UTC) to 710.9 ms (01:15 UTC)** — a
+**1.76× swing** across time of day, reproducible, and a property of the network
+rather than of our sampling. §94.2(e)'s ≥8 h spread requirement exists because
+of it, and the jackknife moved the pooled figure −10.6 % on removing the single
+slowest session.
+
+**So there is no "the transit value."** A constant derived at the pooled p90 is
+over-provisioned through the middle of the day and under-provisioned at night,
+every day.
+
+**Three shapes, and only the third is open.**
+
+1. **Provision at the tail and accept it** — what ships. Static, no
+   observability surface, costs recovery latency two-thirds of the day.
+2. **Measure locally and adapt — RULED OUT, and firmly.** §18 refused a
+   degree-adaptive embargo because embargo length is measurable from fluff
+   timing; a transit-adaptive one writes the node's **observed circuit quality**
+   onto the wire, and circuit quality is more identifying than degree. The
+   argument transfers and is stronger here.
+3. **Make the MECHANISM tolerant rather than the CONSTANT accurate.** The
+   embargo's failure is asymmetric — too short is a privacy loss (premature
+   fluff at origin), too long is a liveness cost — and §44.3 measured that
+   over-provisioning *reduces* prefix-fire leak. So the answer is not a better
+   number: it is a system where an inaccurate constant **degrades gracefully**.
+   Provision long, and make the long case honest rather than silent.
+
+**That is a second, independent reason §89.6.3's ask-don't-time status query
+belongs on the critical path** rather than the wallet track. The carrier gives
+one (a ~20× zone spread makes a global `max()` unusable for the fast zone); the
+diurnal swing gives another (tail provisioning is only survivable as a product
+if the user is told what is happening instead of watching a deadline the daemon
+already knows the answer to).
+
+**And it reframes the embargo tick as its own item, argued on TOLERANCE rather
+than precision.** `derive_embargo` is high-gain near a step
+(`derive::next_embargo_step`): at `tick = 250` ms the steps are ~2.9 % apart, so
+an uncertainty band of ±10 % spans several of them — the derived embargo is not
+"590 ms ± something" but *one of four values depending which side of a boundary
+the pooled p90 lands on*. A finer tick does not buy precision we do not have; it
+makes the derivation **smooth over the precision we do not have**. That is a
+separate round from the constant, and it must be argued on that ground —
+`DEFAULT_EMBARGO_TICK_MILLIS`'s existing 250 ms rationale is about
+instant-preemption, not about step density, and the two pull the same way here.
+
+**The re-derivation PR verifies the input before the pins move.** That is
+procedure, not advice: "review the output" is the natural default and it is
+what a reviewer will do unprompted. The 40,000× step (`4 ms` of hop → `12 s`
+of embargo) is a diff nobody should have to reason about in the same commit
+as its cause.
+
+Same shape as the design-doc-first PR ordering already in use, applied to a
+numerical dependency instead of a design one:
+
+1. **A commit that lands the input and its provenance, and moves no derived
+   constant.** The amplifier's input is reviewable on its own.
+2. **A second commit whose diff is entirely mechanical** — the pin table,
+   `DECIDED_SPEC_PRICE_LIST`, hop-to-step distances. Nothing to argue; the
+   first commit is the argument.
+
+A single commit that both changes the hop and restates the embargo is the
+shape that hid the 12-second jump inside a 4 ms fold.
+
+### 94.9 The fourth hop term is FOLDED, not discharged — corrected 2026-08-23
+
+> **CORRECTION 2026-08-23 — read this before the section below, whose title and
+> conclusion are SUPERSEDED.** *"The fourth hop term is DISCHARGED"* is
+> **un-said**, and `node_crypto_hop_fraction_is_negligible` — named below as
+> *"armed, not prose"* — is **deleted**.
+>
+> It was **mispaired**: it compared the **largest message** against
+> `f_ms(1, GENESIS_TREE_DEPTH)`, the **cheapest verification**, and called that
+> conservative. A max-size message comes from an 8-input transaction, whose
+> verification is `f_ms(8, ·)`; the two describe a transaction that **cannot
+> exist**. It reported **5.66 %** where like-for-like gives **1.07 %** — and it
+> survived review *because* it was pessimistic, which is the direction nobody
+> double-checks.
+>
+> It also rested on an ungrounded payload size (16,651 B — see §94.5(b)'s
+> correction), which no transaction the wire admits produces.
+>
+> **Disposition: the term is FOLDED into `f_ms`, which removes the question
+> rather than answering it.** Node-crypto cost scales with message size,
+> message size is a function of `(n_in, depth)`, and `f_ms` is already a
+> function of exactly those — so it is not a fourth axis. There is no fraction
+> left to compare against a bar, and the self-invented 1 % bar goes with it.
+> Like-for-like, for the record: 0.75 %, 0.78 %, **1.07 %** (8-in at genesis
+> depth, the worst — the cheapest verification pairs with an already-large
+> message), 0.58 %.
+>
+> **What the fold does NOT do.** `f_ms` refuses past `MAX_TABLE_DEPTH` (7) while
+> transactions are admissible to `MAX_TREE_DEPTH` (24), so the term is priced
+> **where the table answers**, not across the admissible range. And the output
+> axis stays **unpriced**: the cells name `n_out = 2`, and setting `msg_bytes`
+> to a worst case beside a `millis` measured at 2 outputs would re-create this
+> section's own mispairing one field over.
+>
+> Downstream: the modal hop is unchanged at 175 ms; the 8-input genesis hop
+> moves 449 → 453 ms. The asymmetry is the fold's premise — the crypto term is
+> small exactly where the message is.
+
+#### 94.9 (original, 2026-08-21) — SUPERSEDED, kept for the record
 
 §94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
 *or* a negligibility ruling with a number. **It is measured on the floor device
