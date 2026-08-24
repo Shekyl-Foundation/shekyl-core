@@ -6,17 +6,53 @@
 //! Deterministic epoch challenge replay per
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.3–§3.4.
 //!
-//! **Mechanism status (2026-08-11):** the fire-beacon shape this module
-//! implements (`H_seal`/`H_fire`, one challenge per pair-epoch) is
-//! **superseded by derived assignment** — `ARCHIVAL_CHALLENGE_MECHANISM.md`
-//! §2, implemented in [`crate::challenge_assignment`]: `assignment(h)` seeds
-//! from `block_hash(h−1)`, issues `CHALLENGES_PER_PAIR_PER_EPOCH = 3` per
-//! pair-epoch, and needs no seal lag. This module is **not dead code**: it
-//! is the live interim serve-credit admission path (through `shekyl-ffi`
-//! into `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s
-//! slash-eligibility consumer) until the format round freezes the
-//! replacement response wire. It deletes wholesale with that round's
-//! deletion surface — extend the *new* mechanism, never this one.
+//! **Mechanism status (2026-08-11, corrected 2026-08-23):** the fire-beacon
+//! shape this module implements (`H_seal`/`H_fire`, one challenge per
+//! pair-epoch) is **superseded by derived assignment** for *deciding which
+//! pairs get challenged* — `ARCHIVAL_CHALLENGE_MECHANISM.md` §2, implemented
+//! in [`crate::challenge_assignment`]: `assignment(h)` seeds from
+//! `block_hash(h−1)`, issues `CHALLENGES_PER_PAIR_PER_EPOCH = 3` per
+//! pair-epoch, and needs no seal lag. This module is **not dead code**: it is
+//! the live serve-credit admission path (through `shekyl-ffi` into
+//! `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s slash-eligibility
+//! consumer).
+//!
+//! # It does NOT delete wholesale, and the trigger that said so has fired
+//!
+//! The 2026-08-11 wording said this module "deletes wholesale with that
+//! round's deletion surface", naming the **format round** as the trigger.
+//! That round landed 2026-08-21 (PR #522) and **ruled the opposite way** for
+//! the leaf-opening half: `RF-D8` ruling (i) kept the ~1,920 B opening as the
+//! one element consensus verifies independently of the witness, so
+//! [`challenge_leaf_index`] came **off** the deletion surface and is now
+//! permanent consensus admission code — derived verifier-side and fed
+//! straight into path verification and the signature preimage
+//! (`shekyl-ffi/src/archival_ffi/serve_credit.rs`, reached from
+//! `blockchain.cpp`). [`crate::path`] already records that correction; this
+//! banner did not, and the two modules disagreed for three days.
+//!
+//! Deleting on the strength of the old wording would remove **live consensus
+//! code**, which is why the correction is written here rather than left to a
+//! reader to reconcile against [`crate::path`].
+//!
+//! **What is settled:** the leaf-opening cluster is kept by `RF-D8`. It spans
+//! three modules — [`challenge_leaf_index`] here,
+//! [`crate::challenge_leaf_chunk_bounds`] and
+//! [`crate::challenged_leaf_offset_in_chunk`] in `segment_freeze`, and
+//! [`crate::challenged_leaf_bytes`] in `path` — which is worth stating,
+//! because "the sampled-leaf path" reads like one module and deleting it as
+//! one is how the fired trigger above would have been executed.
+//!
+//! **What is not settled here:** the beacon-timing cluster
+//! ([`challenge_seal_height`], [`challenge_seal_on_chain`],
+//! [`challenge_fire_height`]) is still beacon-shaped and still live as the
+//! admission window gate. Every public item in this module has production
+//! callers today, so nothing is delete-on-sight. Its disposition belongs to
+//! the settlement-writer round (`ARCHIVAL_SETTLEMENT_WRITER.md`), which
+//! replaces the settlement side — **it is deliberately not ruled by this
+//! comment.**
+//!
+//! Extend the *new* mechanism, never the beacon half.
 
 use crate::constants::CHALLENGE_BEACON_SEAL_BLOCKS;
 use crate::hash::cshake256_32;

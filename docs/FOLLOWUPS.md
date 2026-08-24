@@ -1532,6 +1532,25 @@ sustainability is unaffected by the recalibration.
   and both PR gates reduce to the one real measurement: the PoW-enabled
   rig run** (which must produce both the new `p` and the latency
   distribution the SP-T3 `W` allowance needs).
+  **MECHANISM CORRECTED 2026-08-23 — the conclusion survives, the
+  residence does not.** This paragraph says the records ride *the coinbase
+  transaction's* prunable region. `RF-D10` landed them in the
+  **serve-credit transaction's** prunable region instead: an opaque per-vin
+  record inside `serialize_ctsig_prunable` (`src/fcmp/ct_types.h`, guarded
+  by `SERVE_CREDIT_PRUNED_MAX_BYTES`), with the vin itself an opaque
+  `canonical_bytes` blob on the emission-vin pattern. Block-binding is
+  preserved by a different route than the one predicted here and the
+  `k_cap` consequence is unchanged, so the paragraph is corrected rather
+  than struck. **What did change is the magnitude, and the real numbers
+  belong next to the prediction:** the kept side is **≈ 99 B** against the
+  3.43 KB assumed above — 34.6× on the chain-growth axis — while the
+  *total* record rose to ≈ 5,204 B, because `RF-D8` ruling (i) kept the
+  ~1,920 B opening additively. **The record got bigger and the chain got
+  smaller.** So "prunability fixed `k_cap`" is true only on the axis that
+  stopped binding: block occupancy binds first now, and it is a penalty
+  threshold rather than a hard cap. Derived in full in
+  `docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §2, which is where the
+  settlement schema depends on it.
 
 - **TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)** (added 2026-07-29, §10.3–§10.4).
   **TJ-3:** `CHALLENGE_BEACON_SEAL_BLOCKS = 1` against `SEB = 10_000` publishes

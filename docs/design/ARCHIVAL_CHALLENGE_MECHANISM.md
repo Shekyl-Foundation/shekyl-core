@@ -1481,9 +1481,29 @@ than repealing it:
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
-**HOLD (correctly blocked on the format round):** pass-record
-serialization; the response format; `EndpointUpdate` on the bond wire;
-the settlement writer (item 9's schema is genuinely open).
+**HOLD — two of the four have since cleared (updated 2026-08-23).** The list
+as written was: pass-record serialization; the response format;
+`EndpointUpdate` on the bond wire; the settlement writer (item 9's schema is
+genuinely open).
+
+- **Pass-record serialization — DISCHARGED 2026-08-18.** The carrier round
+  ruled (`ARCHIVAL_PASS_RECORD_CARRIER.md`, `CR-D2`): a record partition, not
+  a signature split.
+- **The response format — DISCHARGED 2026-08-21.** `RF-D1`…`RF-D10` ruled and
+  implemented, PR #522. This entry is what made the other two "correctly
+  blocked", so its clearing is what re-opened the queue.
+- **`EndpointUpdate` on the bond wire — STILL HELD.** Ruled in shape, not in
+  the tree.
+- **The settlement writer — HELD ON A ROUND, NOT ON A BLOCKER, as of
+  2026-08-23.** Its schema is no longer "genuinely open" in the sense meant
+  here: the round is open at `ARCHIVAL_SETTLEMENT_WRITER.md` with `SO-D1`…
+  `SO-D5` and `SO-D7` ruled and `SO-D6` (reorg) the one item outstanding.
+
+**Recorded rather than edited down to the two survivors**, because the list's
+own framing is the useful part: it named a hold whose blocker was *the format
+round*, and the format round landing is precisely what discharged half of it.
+A HOLD list that is silently pruned as items clear loses the evidence that the
+sequencing was right.
 
 **No longer held — the `settle_epoch` rewrite LANDED** (PR #437, merged):
 this list previously carried it as "blocked on a ratification doable in a
@@ -1536,18 +1556,59 @@ against these.
    derived once wallet-side, never a seed. Made unrepresentable —
    `OnionServiceSpec::new` takes an `OnionIdentity`, not a seed.
 
-2. **The sampled-leaf verification path is fossil — do not build against
-   it.** `verify_segment_path` / `verify_leaf_index` (replaying a single
-   derived-index leaf opening) belong to the retired fire-beacon design
-   and sit on §2's deletion surface alongside `challenge_leaf_index`. The
-   ruled mechanism serves the **whole** shard and verifies by
-   recomputing `R_k` over the received bytes (`recompute_segment_r_k`) —
-   which is what PR-A's axis test calls; nothing in either PR touches the
-   sampled mode. *Remaining hygiene (a later archival-retention slice, not
-   PR-A/B):* `path.rs` is on the same beacon deletion surface that #441
-   annotated in `challenge.rs`/`constants.rs` but was not itself marked —
-   annotate it there, so a future reader does not resurrect sampled PoR
-   through the implementation door.
+2. ~~**The sampled-leaf verification path is fossil — do not build against
+   it.**~~ **SUPERSEDED 2026-08-20 by `RF-D8` ruling (i); the correction is
+   recorded here rather than the text deleted, because the original named a
+   deletion trigger that has since fired.**
+
+   *What it said:* `verify_segment_path` / `verify_leaf_index` (replaying a
+   single derived-index leaf opening) belong to the retired fire-beacon design
+   and sit on §2's deletion surface alongside `challenge_leaf_index`; and
+   `path.rs` should be annotated onto that same surface "so a future reader
+   does not resurrect sampled PoR through the implementation door."
+
+   **`verify_leaf_index` no longer exists — and how it went is the point.**
+   It was **deleted by `RF-D6`**, not kept and not left to rot: it compared a
+   *wire-transported* `leaf_index_in_segment` against `challenge_leaf_index`,
+   and once the index stopped being transported there was nothing left to
+   compare (`path.rs`: *"a check whose only possible input is the value it
+   would check against is not a check"*). So the struck instruction named two
+   symbols with **opposite fates in the very same round** — `RF-D6` deleted
+   one and `RF-D8` made the other permanent consensus code. That is what makes
+   the instruction more dangerous than a merely stale one: half of it came
+   true, which is exactly the shape that gets the other half executed on
+   trust.
+
+   *What is true.* The premise held — whole-shard fetch **remains the
+   mechanism**, and `recompute_segment_r_k` is still what verifies it. What
+   changed is that the opening is now carried **additively on top**, which
+   the standing sampled-leaf finding never argued against — it found
+   sampled-leaf insufficient as a ***standalone*** mechanism, which says
+   nothing against an opening carried additively on top. *(That finding was
+   cited as "§5.6" by `path.rs` and by the struck text above; **this document
+   no longer has a §5.6** and the anchor resolves nowhere in the tree. The
+   citation is dropped rather than repaired, since the substance is restated
+   here and a section number that has already drifted once is not worth
+   pinning a second time.)* `RF-D8` ruling (i)
+   kept the ~1,920 B opening as **the one element consensus verifies
+   independently of the witness** — every other element of a pass record
+   depends on witness honesty, so a witness colluding with `P` can manufacture
+   a pass with `P` holding zero bytes, and the opening raises the floor from
+   "`P` may hold nothing" to "`P` must hold at least the challenged leaf and
+   its path". Weak and cheaply outsourced, but non-zero.
+
+   **Consequence: `verify_segment_path` and `challenge_leaf_index` came OFF
+   the deletion surface and are permanent consensus admission code**
+   (`blockchain.cpp:5412` → `shekyl-ffi`'s `serve_credit.rs`), where the index
+   and `R_k` are **verifier-derived** and never read off the wire — which is
+   what makes them soundness-bearing rather than vestigial. The hygiene
+   instruction inverts with it: `path.rs` carries the `RF-D8` ruling instead
+   of a deletion annotation, and the `challenge.rs` banner was corrected
+   2026-08-23 (it had kept the fired trigger and disagreed with `path.rs`).
+
+   **Acting on the struck text would delete live consensus code.** That is why
+   it is struck in place — a reader who has already followed it needs to find
+   the correction where they read the instruction.
 
 3. **The shard universe grows without bound; `D` is a moving number, not
    a maturity plateau.** `SegmentId` is dense and `segment_freeze_eligible`
