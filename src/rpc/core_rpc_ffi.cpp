@@ -314,8 +314,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("getblockheaderbyhash",   on_get_block_header_by_hash,   COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH),
         DJRPC_WE("get_block_headers_range", on_get_block_headers_range,   COMMAND_RPC_GET_BLOCK_HEADERS_RANGE),
         DJRPC_WE("getblockheadersrange",   on_get_block_headers_range,    COMMAND_RPC_GET_BLOCK_HEADERS_RANGE),
-        DJRPC_WE("get_block",              on_get_block,                   COMMAND_RPC_GET_BLOCK),
-        DJRPC_WE("getblock",               on_get_block,                   COMMAND_RPC_GET_BLOCK),
         DJRPC_WE("get_connections",         on_get_connections,            COMMAND_RPC_GET_CONNECTIONS),
         DJRPC_WE("get_info",               on_get_info_json,              COMMAND_RPC_GET_INFO),
         DJRPC_WE("hard_fork_info",         on_hard_fork_info,             COMMAND_RPC_HARD_FORK_INFO),

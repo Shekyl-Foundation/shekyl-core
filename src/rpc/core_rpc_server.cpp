@@ -1892,66 +1892,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_block(const COMMAND_RPC_GET_BLOCK::request& req, COMMAND_RPC_GET_BLOCK::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_block);
-
-    crypto::hash block_hash;
-    if (!req.hash.empty())
-    {
-      bool hash_parsed = parse_hash256(req.hash, block_hash);
-      if(!hash_parsed)
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "Failed to parse hex representation of block hash. Hex = " + req.hash + '.';
-        return false;
-      }
-    }
-    else
-    {
-      if(m_core.get_current_blockchain_height() <= req.height)
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
-        error_resp.message = std::string("Requested block height: ") + std::to_string(req.height) + " greater than current top block height: " +  std::to_string(m_core.get_current_blockchain_height() - 1);
-        return false;
-      }
-      block_hash = m_core.get_block_id_by_height(req.height);
-    }
-    block blk;
-    bool orphan = false;
-    bool have_block = m_core.get_block_by_hash(block_hash, blk, &orphan);
-    if (!have_block)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Internal error: can't get block by hash. Hash = " + req.hash + '.';
-      return false;
-    }
-    if (blk.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(blk.miner_tx.vin.front()))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Internal error: coinbase transaction in the block has the wrong type";
-      return false;
-    }
-    uint64_t block_height = std::get<txin_gen>(blk.miner_tx.vin.front()).height;
-    const bool restricted = m_restricted && ctx;
-    bool response_filled = fill_block_header_response(blk, orphan, block_height, block_hash, res.block_header, req.fill_pow_hash && !restricted);
-    if (!response_filled)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Internal error: can't produce valid response.";
-      return false;
-    }
-    res.miner_tx_hash = res.block_header.miner_tx_hash;
-    for (size_t n = 0; n < blk.tx_hashes.size(); ++n)
-    {
-      res.tx_hashes.push_back(epee::string_tools::pod_to_hex(blk.tx_hashes[n]));
-    }
-    res.blob = string_tools::buff_to_hex_nodelimer(t_serializable_object_to_blob(blk));
-    res.json = obj_to_json_str(blk);
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   std::string core_rpc_server::stem_tallies_json() const
   {
     return m_p2p.stem_tallies_json();

@@ -1096,43 +1096,6 @@ namespace cryptonote
   };
 
 
-  struct COMMAND_RPC_GET_BLOCK
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::string hash;
-      uint64_t height;
-      bool fill_pow_hash;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(hash)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE_OPT(fill_pow_hash, false);
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      block_header_response block_header;
-      std::string miner_tx_hash;
-      std::vector<std::string> tx_hashes;
-      std::string blob;
-      std::string json;
-      
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(block_header)
-        KV_SERIALIZE(miner_tx_hash)
-        KV_SERIALIZE(tx_hashes)
-        KV_SERIALIZE(blob)
-        KV_SERIALIZE(json)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct peer {
     uint64_t id;
     std::string host;

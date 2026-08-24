@@ -888,71 +888,17 @@ bool t_rpc_command_executor::print_height() {
 }
 
 bool t_rpc_command_executor::print_block_by_hash(crypto::hash block_hash, bool include_hex) {
-  cryptonote::COMMAND_RPC_GET_BLOCK::request req;
-  cryptonote::COMMAND_RPC_GET_BLOCK::response res;
-  epee::json_rpc::error error_resp;
-
-  req.hash = epee::string_tools::pod_to_hex(block_hash);
-  req.fill_pow_hash = true;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "getblock", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_block(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
+  std::vector<std::string> argv{"print_block_by_hash", epee::string_tools::pod_to_hex(block_hash)};
   if (include_hex)
-    tools::success_msg_writer() << res.blob << std::endl;
-  print_block_header(res.block_header);
-  tools::success_msg_writer() << res.json << ENDL;
-
-  return true;
+    argv.emplace_back("+hex");
+  return run_rust_console(argv);
 }
 
 bool t_rpc_command_executor::print_block_by_height(uint64_t height, bool include_hex) {
-  cryptonote::COMMAND_RPC_GET_BLOCK::request req;
-  cryptonote::COMMAND_RPC_GET_BLOCK::response res;
-  epee::json_rpc::error error_resp;
-
-  req.height = height;
-  req.fill_pow_hash = true;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "getblock", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_block(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
+  std::vector<std::string> argv{"print_block_by_height", std::to_string(height)};
   if (include_hex)
-    tools::success_msg_writer() << res.blob << std::endl;
-  print_block_header(res.block_header);
-  tools::success_msg_writer() << res.json << ENDL;
-
-  return true;
+    argv.emplace_back("+hex");
+  return run_rust_console(argv);
 }
 
 bool t_rpc_command_executor::print_transaction(crypto::hash transaction_hash,
