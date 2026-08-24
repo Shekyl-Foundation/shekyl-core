@@ -1567,6 +1567,18 @@ against these.
    `path.rs` should be annotated onto that same surface "so a future reader
    does not resurrect sampled PoR through the implementation door."
 
+   **`verify_leaf_index` no longer exists — and how it went is the point.**
+   It was **deleted by `RF-D6`**, not kept and not left to rot: it compared a
+   *wire-transported* `leaf_index_in_segment` against `challenge_leaf_index`,
+   and once the index stopped being transported there was nothing left to
+   compare (`path.rs`: *"a check whose only possible input is the value it
+   would check against is not a check"*). So the struck instruction named two
+   symbols with **opposite fates in the very same round** — `RF-D6` deleted
+   one and `RF-D8` made the other permanent consensus code. That is what makes
+   the instruction more dangerous than a merely stale one: half of it came
+   true, which is exactly the shape that gets the other half executed on
+   trust.
+
    *What is true.* The premise held — whole-shard fetch **remains the
    mechanism**, and `recompute_segment_r_k` is still what verifies it. What
    changed is that the opening is now carried **additively on top**, which

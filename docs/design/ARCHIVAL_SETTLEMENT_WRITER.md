@@ -450,7 +450,8 @@ of them are how this round started.
    — the row contradicted itself, and the leading status is the half a reader
    trusts. Fixed with (1): correcting the prose and leaving the index is how
    the next reader still gets the wrong answer.
-3. **`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2** (2026-08-11) called
+3. **`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2** (2026-08-11; grep
+   `RF-D8` if that number has since moved) called
    `verify_segment_path` / `challenge_leaf_index` "fossil — do not build
    against it" and put them on §2's deletion surface; **`challenge.rs:9–19`**
    said the module "deletes wholesale with that round's deletion surface",
@@ -473,10 +474,15 @@ of them are how this round started.
    "`ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6". **That document has no §5.6**,
    and no other doc in the tree carries it. Dropped rather than repaired: the
    substance is restated at the one site that keeps it, and a section number
-   that has already drifted once is not worth pinning a second time. Worth
-   noting how it surfaced — it was invisible until the correction *quoted* it,
-   which is the argument for restating a cited claim rather than passing the
-   citation along.
+   that has already drifted once is not worth pinning a second time. **The
+   replacement is a `RF-D8` grep, not another section number** — a rule-94
+   disposition ID is stable because the rule forbids renaming it, whereas a
+   section number is stable only until someone inserts a section, which is
+   exactly how §5.6 became unreachable. (The first cut of this fix *did*
+   point at "§9.6 item 2", reproducing the defect at a later date; review
+   caught it.) Worth noting how the original surfaced — it was invisible
+   until the correction *quoted* it, which is the argument for restating a
+   cited claim rather than passing the citation along.
 
 **§9.5's HOLD list is discharged with them.** Pass-record serialization
 cleared 2026-08-18 (the carrier round) and the response format 2026-08-21;

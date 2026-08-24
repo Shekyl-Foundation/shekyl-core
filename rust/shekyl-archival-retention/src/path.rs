@@ -35,8 +35,14 @@
 //! insufficient as a *standalone* mechanism stands, and says nothing against
 //! an opening carried additively on top. (That finding was cited here as
 //! `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6 until 2026-08-23; **that document
-//! has no §5.6** and the anchor resolved nowhere, so it is dropped rather
-//! than repaired — the substance is restated in that doc's §9.6 item 2.) Accordingly
+//! has no §5.6** and the anchor resolved nowhere, so the citation is dropped
+//! rather than repaired and the substance restated above. The correction is
+//! recorded in `ARCHIVAL_CHALLENGE_MECHANISM.md` — **grep `RF-D8` to find
+//! it**, not a section number. A rule-94 disposition ID is stable by
+//! construction, since the rule forbids renaming them; a section number is
+//! stable only until someone inserts a section, which is precisely how §5.6
+//! became unreachable. Replacing one drifting anchor with another would have
+//! reproduced the defect at a later date.) Accordingly
 //! [`crate::challenge::challenge_leaf_index`] comes **off** §2's deletion
 //! surface: it is the verifier-side derivation the opening is checked against.
 //!

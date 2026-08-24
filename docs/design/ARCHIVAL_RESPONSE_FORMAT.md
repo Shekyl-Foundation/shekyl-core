@@ -12,10 +12,23 @@ have set out to build what was already in the tree. Its index row carried the
 same defect at the same time; both are fixed together, since fixing the prose
 and leaving the index is how the next reader still gets the wrong answer.)*
 
-**Landed:** `RF-D3`/`RF-D5` implemented 2026-08-19; artifacts A and B
-(on-chain record and served payload) 2026-08-20; `RF-D8`/`RF-D9`/`RF-D10`
-with the C++ vin, the pruned half, and the review round in PR #522, merged
-2026-08-21.
+**Landed — dates are `dev` merge dates throughout, which is the only sense in
+which a round has "landed":**
+
+| On `dev` | PR | Dispositions |
+|---|---|---|
+| 2026-08-19 | #504 | `RF-D3`, `RF-D5` |
+| 2026-08-21 | #522 | `RF-D1`, `RF-D2`, `RF-D4`, `RF-D6`…`RF-D10` — artifacts A and B, the C++ vin, the pruned half, and the review round |
+
+*(Stated as merge dates because an earlier cut of this block mixed them with
+**branch** dates — artifacts A and B were written 2026-08-20 and reached `dev`
+on the 21st with #522 — and a reader cannot tell which kind a bare date is. In
+a status block whose entire purpose is to be trusted without verification,
+"implemented" and "on `dev`" are different claims and only the second is what
+"landed" means. The branch date is kept in the prose below, where it carries
+the ordering argument; it is out of the table, where it would read as a third
+landing.)*
+
 **Unblocked by:** the carrier round
 ([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **RULED
 2026-08-18, merged to `dev` in PR #501.**
@@ -82,7 +95,7 @@ paths of `calculate_transaction_prunable_hash` see it by construction; after,
 they diverge silently and throw on blob-holding nodes only. That invariant is
 guarded by `tests/unit_tests/tx_prunable_region_sole_occupant.cpp`.
 
-### 1.2 `RF-D1` (RULED + IMPLEMENTED 2026-08-20) — the constraint whose failure mode is tidiness
+### 1.2 `RF-D1` (RULED 2026-08-20, on `dev` 2026-08-21 in #522) — the constraint whose failure mode is tidiness
 
 **The leaf chunk is pruned-side by construction.** `leaf_bytes` is already
 kept-side and the leaf chunk is the same conceptual object in the same
@@ -95,7 +108,7 @@ rather than left to be re-derived: disagreement gets argued, tidiness just lands
 One field identifies the record, the other proves it, and only the first survives
 pruning.
 
-### 1.3 `RF-D2` (RULED + IMPLEMENTED 2026-08-20) — `CR-F2`: the tx id moves, and that is genesis-frozen
+### 1.3 `RF-D2` (RULED 2026-08-20, on `dev` 2026-08-21 in #522) — `CR-F2`: the tx id moves, and that is genesis-frozen
 
 Today both signature legs sit in one 3,385 B `hybrid_signature` on the vin
 (`3385 = 12 framing + 64 Ed25519 + 3309 ML-DSA-65`). Slimming it to the Ed25519
