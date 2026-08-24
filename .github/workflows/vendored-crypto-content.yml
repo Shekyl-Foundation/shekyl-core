@@ -18,7 +18,13 @@ on:
     # tests the PR merged into its base); an unrestricted push trigger would
     # double-run the job on every push to an open PR. Mirrors build.yml.
     branches: [dev, main]
+    paths: &crypto_paths
+      - 'rust/shekyl-oxide/crypto/**'
+      - 'rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256'
+      - 'scripts/ci/check_vendored_crypto_manifest.sh'
+      - '.github/workflows/vendored-crypto-content.yml'
   pull_request:
+    paths: *crypto_paths
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new

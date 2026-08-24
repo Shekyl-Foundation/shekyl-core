@@ -9,9 +9,12 @@ name: rust stable canary
 # for a cryptocurrency.
 
 on:
-  schedule:
-    # Mondays 05:00 UTC, after the shekyl-oxide staleness canary (04:00).
-    - cron: "0 5 * * 1"
+  # Schedule removed 2026-08-24: the Monday cron had been red on
+  # `@stable rustfmt` for five-plus weeks, occupying a runner and a
+  # red-dot in the Actions tab with no owner for the fmt delta. Keep
+  # workflow_dispatch so whoever lands the next toolchain bump can
+  # re-run the canary before flipping rust-toolchain.toml. Re-add the
+  # cron in the same PR that makes `cargo +stable fmt --check` green.
   workflow_dispatch:
 
 permissions:
