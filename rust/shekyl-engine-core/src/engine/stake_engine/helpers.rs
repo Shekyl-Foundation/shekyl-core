@@ -41,7 +41,7 @@ pub(crate) struct PreparedInput {
 /// output-construction loop of [`AssembleBond`] (two confidential change
 /// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
 /// per output, `construct_output` → KEM blob layout → leaf-hash blob →
-/// `[u8; 9]` enc-amount/enc-label packing → tx-builder `OutputInfo`. Both
+/// `enc_amount_wire()` / `enc_label_wire()` → tx-builder `OutputInfo`. Both
 /// change vouts return to `P`'s base spend key (the pscan
 /// `GuaranteedScanner` claims against `spend_pk` directly), so change
 /// re-enters the funding set on the next sweep.

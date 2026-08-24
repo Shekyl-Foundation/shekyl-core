@@ -88,35 +88,6 @@ mod hex_vec32 {
     }
 }
 
-/// Serde helper: hex-encode/decode `Vec<[u8; 9]>`.
-mod hex_vec9 {
-    use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(items: &[[u8; 9]], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let hexes: Vec<String> = items.iter().map(hex::encode).collect();
-        hexes.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 9]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let hexes: Vec<String> = Vec::deserialize(deserializer)?;
-        hexes
-            .into_iter()
-            .map(|s| {
-                let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-                v.try_into().map_err(|v: Vec<u8>| {
-                    serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
-                })
-            })
-            .collect()
-    }
-}
-
 /// Serde helper: hex-encode/decode `Vec<Vec<[u8; 32]>>` (branch layers).
 #[allow(dead_code)]
 pub mod hex_layers {
@@ -349,11 +320,9 @@ pub struct SignedProofs {
     #[serde(with = "hex_vec32")]
     pub commitments: Vec<[u8; 32]>,
     /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
-    #[serde(with = "hex_vec9")]
-    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<EncryptedOutputField>,
     /// Per-output encrypted labels (9 bytes each).
-    #[serde(with = "hex_vec9")]
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     /// Per-input pseudo-output commitments (from FCMP prover).
     #[serde(with = "hex_vec32")]
     pub pseudo_outs: Vec<[u8; 32]>,

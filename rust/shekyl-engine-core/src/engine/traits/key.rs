@@ -71,6 +71,7 @@ use shekyl_address::Network;
 use shekyl_crypto_pq::handle::OutputHandle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_tx_builder::{LeafEntry, PqcAuth, TreeContext};
 use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -612,8 +613,11 @@ pub(crate) struct FcmpPlusPlusContext {
 pub(crate) struct TxSignatures {
     pub bulletproof_plus: Vec<u8>,
     pub out_commitments: Vec<[u8; 32]>,
-    pub enc_amounts: Vec<[u8; 9]>,
-    pub enc_labels: Vec<[u8; 9]>,
+    /// Typed end to end. These are pure pass-throughs from `SignedProofs` to
+    /// `WireEncodeInput`, and there is no route back up: the type has no public
+    /// byte constructor, so once the encoder's input is typed this must be too.
+    pub enc_amounts: Vec<EncryptedOutputField>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     pub per_input: Vec<TxInputSignature>,
     pub fcmp_proof: Vec<u8>,
     pub fee: u64,

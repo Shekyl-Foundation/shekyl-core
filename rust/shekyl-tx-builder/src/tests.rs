@@ -51,8 +51,28 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
 /// feature in its normal graph and cargo unifies features), so it would have
 /// shipped in the production archive. Going through serde keeps tests unable
 /// to do anything a C++ caller could not.
-fn enc_field_fixture(bytes: [u8; 9]) -> EncryptedOutputField {
+pub(crate) fn enc_field_fixture(bytes: [u8; 9]) -> EncryptedOutputField {
     serde_json::from_str(&format!("\"{}\"", hex::encode(bytes))).expect("fixture hex is valid")
+}
+
+#[test]
+fn signed_proofs_enc_arrays_keep_the_json_shape_the_ffi_already_read() {
+    // `SignedProofs::enc_amounts` / `enc_labels` carried `Vec<[u8; 9]>` through a
+    // bespoke `hex_vec9` serde helper until this PR typed them as
+    // `Vec<EncryptedOutputField>` and deleted the helper. That is a change to a
+    // struct C++ deserializes, so "the JSON is unchanged" is a claim about bytes
+    // and is pinned here rather than asserted. The old helper emitted
+    // `Vec<String>` with each entry `hex::encode(item)`: 18 lowercase characters,
+    // no separators, one entry per output.
+    let fields = vec![
+        enc_field_fixture([0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xfe, 0xff]),
+        enc_field_fixture([0u8; 9]),
+    ];
+    assert_eq!(
+        serde_json::to_string(&fields).expect("serializing the wire fields succeeds"),
+        r#"["00010f107f80abfeff","000000000000000000"]"#,
+        "the FFI reads this array; the encoding must not move with the Rust type"
+    );
 }
 
 fn dummy_output(amount: u64) -> OutputInfo {

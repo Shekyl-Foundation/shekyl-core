@@ -17,6 +17,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
@@ -134,11 +135,13 @@ pub fn sign_transaction_with_terms(
         .collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
-    let enc_amounts: Vec<[u8; 9]> = outputs
-        .iter()
-        .map(|out| out.enc_amount.to_bytes())
-        .collect();
-    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label.to_bytes()).collect();
+    // Carried as `EncryptedOutputField`, not unwrapped to `[u8; 9]`. This was
+    // where the guarantee used to end: everything downstream took raw arrays, so
+    // safe in-process Rust could hand the encoder nine chosen bytes without ever
+    // constructing the type. The bytes are now taken out only inside the private
+    // wire assembly, at the point they become wire.
+    let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_amount).collect();
+    let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is

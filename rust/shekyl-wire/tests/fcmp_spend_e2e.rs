@@ -567,8 +567,11 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             fee,
             reference_block: signed.reference_block,
             base: CtBase {
-                enc_amounts: signed.enc_amounts.clone(),
-                enc_labels: signed.enc_labels.clone(),
+                // Same unwrap the private `build_wire_tx` does, at the same
+                // boundary and for the same reason: this is where the send
+                // path stops being provenance-typed and becomes wire.
+                enc_amounts: signed.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: signed.enc_labels.iter().map(|f| f.to_bytes()).collect(),
                 commitments: signed.commitments.clone(),
             },
             pqc_auths: pqc_auths
