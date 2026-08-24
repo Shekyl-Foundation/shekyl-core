@@ -61,20 +61,27 @@ pub unsafe extern "C" fn shekyl_archival_serve_credit_extract(
     SHEKYL_ARCHIVAL_VERIFY_OK
 }
 
-/// The verifier-derived challenge leaf index (`RF-D6`: never transported).
+/// The verifier-derived challenge leaf index (`RF-D6`: never transported;
+/// `PC-D3`: bound to the block the record rides in).
+///
+/// `prev_block_hash` is `block_hash(h−1)` of that block, supplied by the
+/// verifier from the block it is validating — under `PC-D2` the block is
+/// implicit, so there is no transported value here for a prover to choose.
+/// All-zeros is refused as the unpopulated sentinel.
 ///
 /// # Safety
-/// `p_canonical_id` must point at 32 readable bytes; `out_leaf_index` must be
-/// valid.
+/// `p_canonical_id` and `prev_block_hash` must each point at 32 readable
+/// bytes; `out_leaf_index` must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_challenge_leaf_index(
     p_canonical_id: *const u8,
     shard_id: u64,
     settlement_epoch: u64,
+    prev_block_hash: *const u8,
     segment_leaf_count: u64,
     out_leaf_index: *mut u32,
 ) -> u8 {
-    if p_canonical_id.is_null() || out_leaf_index.is_null() {
+    if p_canonical_id.is_null() || prev_block_hash.is_null() || out_leaf_index.is_null() {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
     }
     if segment_leaf_count == 0 {
@@ -83,7 +90,13 @@ pub unsafe extern "C" fn shekyl_archival_challenge_leaf_index(
     let Some(p_id) = (unsafe { array_from_ptr::<32>(p_canonical_id) }) else {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
     };
-    let idx = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
+    let Some(prev) = (unsafe { array_from_ptr::<32>(prev_block_hash) }) else {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
+    };
+    if prev == [0u8; 32] {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED;
+    }
+    let idx = challenge_leaf_index(&p_id, shard_id, settlement_epoch, &prev, segment_leaf_count);
     unsafe { *out_leaf_index = idx };
     SHEKYL_ARCHIVAL_VERIFY_OK
 }
@@ -109,6 +122,21 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     let ctx = unsafe { &*ctx_ptr };
     if ctx.segment_leaf_count == 0 {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY;
+    }
+    // PC-D3: an all-zero `prev_block_hash` is the unpopulated sentinel -- the
+    // caller (C++) failed to supply the block it is validating.
+    //
+    // **This is a caller-wiring defect, not a prover one, so it is refused
+    // before any prover-controlled byte is parsed.** Checked at the derivation
+    // instead, a vin that fails to parse would return a wire error first and
+    // the broken ctx would never be reported: a prover could mask the node's
+    // own misconfiguration indefinitely by sending garbage, while the operator
+    // saw nothing but "bad vin". Deriving from a zero hash is separately
+    // unsafe -- it yields a well-formed index for the wrong block, surfacing
+    // downstream as a path mismatch and being misattributed to the prover
+    // (RF-D5's precedent and its reason).
+    if ctx.prev_block_hash == [0u8; 32] {
+        return SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED;
     }
     if ctx.pqc_pubkey_ptr.is_null() || ctx.pqc_pubkey_len == 0 {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR;
@@ -152,10 +180,15 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     // to compare: the derived values go straight into path verification and
     // the signature preimage, so a prover that disagrees with them cannot
     // produce a verifying signature.
+    // PC-D3: the index is derived against the block this record rides in, so
+    // each of a pair-epoch's challenges samples a different leaf. The
+    // unpopulated-sentinel refusal is up with the other ctx-population checks,
+    // above -- see there for why it cannot live here.
     let leaf_index = challenge_leaf_index(
         &response.p_canonical_id,
         response.shard_id,
         response.settlement_epoch,
+        &ctx.prev_block_hash,
         ctx.segment_leaf_count,
     );
 

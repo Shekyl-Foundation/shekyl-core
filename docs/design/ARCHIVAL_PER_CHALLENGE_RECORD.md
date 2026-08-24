@@ -147,6 +147,31 @@ under `PC-D2` nothing serializes at all, so size was never the axis.
 disagree silently on a value feeding the signature preimage. Pre-genesis there is
 no migration — the bump exists so one label never names two functions.
 
+#### The preimage, stated so a second implementation can be built against it
+
+```text
+preimage = P_id[32] ‖ LE64(shard_id) ‖ LE64(settlement_epoch) ‖ block_hash(h−1)[32]
+tau      = cSHAKE256(N = "", S = "shekyl/archival-serve-challenge-leaf-v2", preimage)[0..32]
+index    = LE_u64(tau[0..8]) mod segment_leaf_count        (0 when the count is 0)
+```
+
+This is written out because the implementation is not a specification: a reader
+who can only recover the layout by reading `challenge.rs` cannot check
+`challenge.rs`. **`LE64` here and `BE` in the ledger key of `PC-D4` is not an
+inconsistency** — the key is big-endian so its prefixes sort, and this preimage
+is little-endian because it always was; neither property is available to the
+other and unifying them would break one of the two.
+
+**How the shipped derivation was checked against it.** An independent cSHAKE256
+was written from FIPS 202 / SP 800-185 against the above — not by transcribing
+`challenge.rs` — its Keccak-f[1600] sponge validated against `hashlib.shake_256`
+and its customized path against NIST SP 800-185 cSHAKE256 Sample #3. It
+reproduces both fixture indices (13,125 and 14,593). The vector is pinned in
+`challenge.rs` as `the_v2_derivation_matches_an_independently_computed_vector`,
+and it is observed to go red on a byte-order swap, a reordered preimage, a
+big-endian `tau` read, and a reverted label — the four ways a second
+implementation is *differently wrong* while every self-comparison still passes.
+
 ### `PC-D4` — the ledger key widens to `(P, s, E, block)`
 
 This is where consensus stores the enumeration `PC-D5` counts. Under `PC-D2` the
@@ -157,6 +182,49 @@ cannot submit for a block it did not produce.
 **The old-vin dedup at `blockchain.cpp:5307` becomes the uniqueness enforcer**
 under the widened key. A duplicate is then not a double-count some check must
 catch — it is the same key, refused by the structure.
+
+#### 3.4.1 Field order is ruled, and it is the reason the prune survives
+
+**Append. `P_id[32] ‖ BE(shard)[8] ‖ BE(E)[8] ‖ BE(block_height)[8]` — 56 B,
+every existing offset unchanged.**
+
+`delete_archival_serve_credit_before_epoch` reads the epoch **by offset**
+(`+40`) and so do the gather and the slash walk. Appending keeps the epoch at
+40, so the prune, the dedup and every cursor scan keep working **by
+construction** rather than by being found and updated. Putting the block before
+the epoch would leave all of them compiling, scanning, and pruning the wrong
+rows with nothing failing.
+
+**Height in the key, hash in the derivation — and these are not inconsistent.**
+They answer different questions:
+
+- The **derivation** (`PC-D3`) must name the block *absolutely*, because it
+  enters a signature preimage, and because the nonce already binds
+  `block_hash(h−1)`; a second, weaker reference could disagree with the first.
+- The **key** may use the height, because serve-credit rows are **block-owned**:
+  `BlockchainDB::pop_block` → `remove_transaction` deletes a popped block's rows
+  vin-driven (`blockchain_db.cpp:850`). A popped block's rows go with it, so a
+  height cannot be silently repointed at a different block while its rows
+  survive. The property that makes the height safe here is the removal, not the
+  height.
+
+#### 3.4.2 The pop path cannot rebuild the widened key — found by grounding it
+
+`remove_transaction(const crypto::hash& tx_hash)` (`blockchain_db.cpp:834`)
+reconstructs the key **from the vin alone** via
+`get_archival_serve_credit_key(resp, …)`. Under `PC-D2` the block is *not on the
+vin*, so the widened key is not reconstructible there: the removal has the
+record but not the block it rode in on.
+
+**Ruled: thread the block height into the removal** rather than read it from
+ambient chain state. `height()` happens to hold the right value at that point in
+`pop_block`, and depending on that is the invariant-held-by-circumstance shape
+this codebase keeps paying for — it has no name, no test, and breaks silently
+when the call order changes.
+
+This is `PC-D2`'s one real cost: making the block implicit on the wire means
+every consumer that needs it must be *given* it, and the pop path is the one
+that had been getting it for free from a field.
 
 ### `PC-D5` — consensus counts by enumeration
 
@@ -238,12 +306,13 @@ pass.
 | 2 | `wire.rs::signature_preimage` | binds the index derived from the including block |
 | 3 | `serve_credit.rs` (FFI) | derives the index with the block hash it is validating; verifies the opening against it |
 | 4 | `shekyl_ffi.h` + `blockchain.cpp:5412` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
-| 5 | **`m_archival_serve_credit` key 48 → 56 B** | `(P, s, E)` → `(P, s, E, block)` — the schema change `PC-D6` is about |
+| 5 | **`m_archival_serve_credit` key 48 → 56 B** | append `BE(block_height)`; every existing offset unchanged (§3.4.1) |
 | 6 | `blockchain.cpp:5307` old-vin dedup | becomes the uniqueness enforcer under the widened key |
+| 6b | `remove_transaction` / `pop_block` | **must be threaded the block height** — the vin no longer carries it (§3.4.2) |
 | 7 | **Emission gather (`db_lmdb.cpp:7978`)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site |
 | 8 | Slash-window walk (`db_lmdb.cpp:5763`) | reads "served" as a count over the widened key, not key-presence |
 | 9 | Fast-path miss check (`db_lmdb.cpp:5793`) | same |
-| 10 | `delete_archival_serve_credit_before_epoch` | epoch field moves within the key; the prune's offset moves with it |
+| 10 | `delete_archival_serve_credit_before_epoch` | **unchanged by construction** — the epoch stays at offset 40 (§3.4.1) |
 | 11 | Block-level SCE-1 uniqueness pass | widened key — per-challenge multiplies vins per tx |
 | 12 | `gate2_serve_credit_kat.rs` | fixtures gain the block hash in the index derivation |
 | 13 | `serve_credit_tx_parity.rs` | **re-anchors only if the preimage changes its bytes** — verify; the vin itself does not move |

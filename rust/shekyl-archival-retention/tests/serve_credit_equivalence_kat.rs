@@ -156,6 +156,11 @@ fn gate_vectors_verdict_and_reason() {
             held_at_fire: v.bool("held_at_fire"),
             registry_present_at_fire: v.bool("registry_present_at_fire"),
             segment_leaf_count: v.u64("segment_leaf_count"),
+            // `PC-D3`. Read from the fixture rather than defaulted so both
+            // legs are fed the SAME bytes for this input -- see
+            // `prev_block_hash_is_fed_from_the_fixture_not_defaulted` for why
+            // that is not something these vectors can otherwise detect.
+            prev_block_hash: hex32(v.get("prev_block_hash_hex")),
             leaf_chunk_ok: v.bool("leaf_chunk_ok"),
             verify_ok: v.bool("verify_ok"),
         };
@@ -336,6 +341,20 @@ fn regenerate_equivalence_fixture_from_gate2() {
     // the dedup/block-unique key encodings, which are `p_id ‖ shard ‖ epoch`
     // words — a prefix swap re-derives them exactly.
     doc = doc.replace(&old_pid, &new_pid);
+
+    // `PC-D3`: the base must mirror gate-2's integration block, or the two
+    // legs derive the challenged index from different blocks.
+    let old_prev = fixture()["gate"]["base"]["prev_block_hash_hex"]
+        .as_str()
+        .expect("old prev block hash")
+        .to_owned();
+    let new_prev = integ["prev_block_hash_hex"]
+        .as_str()
+        .expect("gate-2 prev block hash")
+        .to_owned();
+    assert_eq!(old_prev.len(), 64);
+    assert_eq!(new_prev.len(), 64);
+    doc = doc.replace(&old_prev, &new_prev);
 
     // The integration wire is the parse-authoritative source for the leaf
     // index the base mirrors (and for the path shape asserted below).

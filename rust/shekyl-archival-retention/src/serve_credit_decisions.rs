@@ -162,6 +162,19 @@ pub struct ServeCreditGateInputs {
     /// off the vin; the C++ calls the same derivation through
     /// `shekyl_archival_challenge_leaf_index`, which refuses a zero geometry.
     pub segment_leaf_count: u64,
+
+    /// Step 11 (`PC-D3`): `block_hash(h−1)` of the block this record rides in.
+    ///
+    /// **Verifier-supplied, never transported.** `PC-D2` makes the block
+    /// implicit — the record arrives in its own producer's block — so consensus
+    /// reads this from the block it is already validating rather than from a
+    /// field the prover populated. A prover-supplied hash would be a `PC-D1`
+    /// violation of exactly the `RF-D8` shape this round refuses.
+    ///
+    /// The hash and not the height: `RF-D5`'s nonce already binds this same
+    /// term, so the record keeps **one** block reference instead of two that
+    /// could diverge.
+    pub prev_block_hash: [u8; 32],
     /// Step 12 (`:4353`): `get_curve_tree_leaf_chunk` succeeded.
     pub leaf_chunk_ok: bool,
     /// Step 14 (`:4387`): `shekyl_archival_verify_serve_credit_vin` returned
@@ -326,6 +339,7 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict
         &inputs.p_canonical_id,
         inputs.shard_id,
         inputs.settlement_epoch,
+        &inputs.prev_block_hash,
         inputs.segment_leaf_count,
     );
     if challenge_leaf_chunk_bounds(inputs.shard_id, u64::from(leaf_index)).is_none() {
@@ -437,6 +451,12 @@ mod tests {
             held_at_fire: true,
             registry_present_at_fire: true,
             segment_leaf_count: 25_992,
+            // A non-zero stand-in block. Zero is REFUSED at the FFI boundary
+            // (`SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED`), so an
+            // accepting fixture must not use it -- an all-zero default here
+            // would make every branch test start from an input the real gate
+            // rejects.
+            prev_block_hash: [0x6D; 32],
             leaf_chunk_ok: true,
             verify_ok: true,
         }
