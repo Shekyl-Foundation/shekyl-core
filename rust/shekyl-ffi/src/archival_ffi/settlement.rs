@@ -27,6 +27,15 @@ pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_RANGE: u8 = 3;
 /// `SO-D1`: `issued == 0` is not a row. A pair the urn never reached is
 /// recorded by its ABSENCE, so writing one would make absence ambiguous.
 pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO: u8 = 4;
+/// READ-ONLY: the stored outcome byte is not one of the three live tags — a
+/// zero-filled or garbage cell. Cannot arise from the writer.
+pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_UNKNOWN_OUTCOME: u8 = 5;
+/// READ-ONLY: the stored outcome is a live tag, but not the one its own counts
+/// fold to. Distinct from `UNKNOWN_OUTCOME` because the causes differ — a
+/// garbage cell versus counts or a tag that were altered after the fold — and
+/// this is a FATAL diagnostic, where "which corruption" is the whole value of
+/// the code. Cannot arise from the writer.
+pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_OUTCOME_DISAGREES: u8 = 6;
 
 /// Encode one settlement-outcome row from its counts.
 ///
@@ -79,9 +88,60 @@ pub unsafe extern "C" fn shekyl_archival_settlement_row(
 // shekyl_ffi.h fail the BUILD instead, which is what the rule asks for.
 const _: () = assert!(SETTLEMENT_ROW_LEN == 3);
 
+/// Validate a stored settlement row: re-fold its counts and confirm the stored
+/// outcome is the one they derive (`SettlementRow::decode`).
+///
+/// The READ half of the invariant. `SO-D1`/`SO-D2` say a settlement whose
+/// outcome contradicts its counts — or a zero-issued row — is not a
+/// settlement, and the write path already cannot emit one. Without this the
+/// read path had no way to ask: `decode` lives in Rust and C++ cannot reach
+/// it, so a corrupt cell was handed back as a valid row and the invariant held
+/// in one direction only.
+///
+/// C++ does not parse these bytes to check them (rule 40) — it asks.
+///
+/// **Three scalars, not a pointer**, and the row's fixed 3-byte width is why
+/// that is the smaller boundary rather than a stylistic choice: there is no
+/// null case, no length to agree on, and no raw slice reconstruction — the
+/// three things a `*const u8` entry would have added. The SA-R-7 boundary
+/// ratchet is what surfaced it; the first version took a pointer and grew the
+/// raw surface for a value that never needed one. If `SETTLEMENT_ROW_LEN` ever
+/// moves, this signature stops compiling, which is the correct failure.
+///
+/// Returns 0 when the row is canonical, otherwise the same code the writer
+/// would have refused it with.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_row_validate(
+    outcome: u8,
+    passes: u8,
+    issued: u8,
+) -> u8 {
+    // Every arm named, no wildcard. The wildcard here was inherited from the
+    // WRITER's mapping, and the writer cannot produce two of these failures at
+    // all -- so `UnknownOutcome` and `OutcomeDisagrees` were both reported as
+    // code 2, whose published contract is `passes > issued`. A `(Missed, 3, 3)`
+    // row is outcome corruption and was announced as a count desync: the code
+    // named a cause that was not the cause, on the one path whose entire job is
+    // to say what went wrong.
+    use shekyl_archival_retention::RowError;
+    match shekyl_archival_retention::SettlementRow::decode(&[outcome, passes, issued]) {
+        Ok(_) => 0,
+        Err(RowError::IssuedZero) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO,
+        Err(RowError::IssuedOutOfRange { .. }) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_RANGE,
+        Err(RowError::UnknownOutcome { .. }) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_UNKNOWN_OUTCOME,
+        Err(RowError::OutcomeDisagrees { .. }) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_OUTCOME_DISAGREES,
+        Err(RowError::Settle(_)) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_MORE_PASSES_THAN_ISSUED,
+        // Unreachable from three scalars, and named rather than swept into a
+        // wildcard so that adding a RowError variant fails to compile here
+        // instead of silently landing on someone else's code.
+        Err(RowError::BadLength { .. }) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_NULL,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED};
 
     #[test]
     fn encodes_the_forcing_case() {
@@ -124,5 +184,39 @@ mod tests {
     }
 
     #[test]
-    fn cpp_sizes_its_buffer_from_the_definition() {}
+    fn a_corrupt_row_is_refused_on_read() {
+        // The write path cannot emit these; the read path must still refuse
+        // them, or the invariant holds in one direction only.
+        assert_eq!(
+            shekyl_archival_settlement_row_validate(OUTCOME_NON_OBSERVATION, 0, 0),
+            SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO
+        );
+
+        // Outcome disagreeing with its counts: 3 of 3 passes is Served, not
+        // Missed. Asserted on the SPECIFIC code, not just non-zero: this used
+        // to report ERR_MORE_PASSES_THAN_ISSUED, which names a cause that is
+        // not the cause, and a non-zero assertion would have passed over it.
+        assert_eq!(
+            shekyl_archival_settlement_row_validate(OUTCOME_MISSED, 3, 3),
+            SHEKYL_ARCHIVAL_SETTLEMENT_ERR_OUTCOME_DISAGREES,
+            "a row whose outcome contradicts its counts must say so, not report a count desync"
+        );
+
+        // An unknown tag — the zero-filled cell — is its own cause.
+        assert_eq!(
+            shekyl_archival_settlement_row_validate(0x00, 0, 0),
+            SHEKYL_ARCHIVAL_SETTLEMENT_ERR_UNKNOWN_OUTCOME
+        );
+
+        // And the count desync the code-2 contract actually names.
+        assert_eq!(
+            shekyl_archival_settlement_row_validate(OUTCOME_SERVED, 3, 2),
+            SHEKYL_ARCHIVAL_SETTLEMENT_ERR_MORE_PASSES_THAN_ISSUED
+        );
+
+        assert_eq!(
+            shekyl_archival_settlement_row_validate(OUTCOME_SERVED, 2, 3),
+            0
+        );
+    }
 }

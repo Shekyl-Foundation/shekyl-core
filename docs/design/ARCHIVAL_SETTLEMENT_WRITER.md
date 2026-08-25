@@ -167,9 +167,16 @@ it is the exact inverse of the §4.1 bias the drawability relocation fixed.
 
 So the writer cannot be record-driven. It must enumerate.
 
-**Ruled:** at epoch close the writer runs the assignment derivation over the
-closing epoch and writes **one row per `(P, s)` with `issued ≥ 1`**, carrying
-its observed pass count. Pairs with `issued = 0` are not written.
+**Ruled:** when the closing epoch is settled — **inside the slash scheduler's
+per-epoch pass**, per `SO-D7` below, not at a separate epoch-close event — the
+writer runs the assignment derivation over that epoch and writes **one row per
+`(P, s)` with `issued ≥ 1`**, carrying its observed pass count. Pairs with
+`issued = 0` are not written.
+
+(This paragraph said "at epoch close" until 2026-08-25. `SO-D7` moved the
+timing and this earlier ruling was not moved with it, leaving two
+authoritative timings in one record — the reader who stopped here got the
+superseded one.)
 
 This is §4.2's second branch, adopted **unconditionally** rather than as the
 fallback for a §7.1 variant that did not win. Three reasons, in priority order:
@@ -413,10 +420,25 @@ fresh environment, and fails when a node opens its database.
 **Ruled: the bump is not a bump.** Hardcoding 49 re-arms the same trap for the
 50th table. `maxdbs` becomes **derived from the table list** — the
 `LMDB_*` name constants gathered so the count is computed, not maintained, and
-`mdb_env_set_maxdbs` takes that count plus a stated headroom margin. This is
+`mdb_env_set_maxdbs` takes **exactly that count**. This is
 `45`/`47` discipline applied to a runtime ceiling: a gate that cannot notice its
 own subject is not a gate, and a hand-maintained count of a list that lives
 three hundred lines away will drift.
+
+**No headroom margin — corrected 2026-08-25, and the correction is the
+ruling's own logic applied one step further.** The draft said "that count plus
+a stated headroom margin", and the implementation passes the exact count; a
+reviewer reasonably flagged the disagreement. The *code* is right and the
+clause was the stale half.
+
+Headroom exists to absorb drift between a ceiling and a list. Deriving the
+ceiling **from** the list removes the drift, so the margin buys nothing — and
+it is worse than nothing, because the only thing it can absorb is a table
+opened **outside** the list, which is exactly the case that must fail loudly.
+With the exact count, such a table hits `MDB_DBS_FULL` at open; with a margin,
+it opens silently and the derived count is quietly wrong until the margin runs
+out. That is the "gate that cannot notice its own subject" failure this ruling
+was written to remove, re-created by its own safety clause.
 
 **Not sequenced behind the credit-wire deletion.** Deleting the old credit wire
 frees `archival_attestation_witness` and `archival_alt_attestation_witness`

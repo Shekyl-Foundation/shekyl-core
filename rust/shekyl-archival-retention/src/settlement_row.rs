@@ -68,7 +68,9 @@ pub enum RowError {
     /// the fold is a pure statement about counts and has other callers; the
     /// ROW is the storage boundary, and it is storage that `SO-D1` rules on.
     #[error(
-        "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so          absence means never-issued; a zero-issued row would make absence          ambiguous and is refused at the boundary rather than stored"
+        "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so \
+         absence means never-issued; a zero-issued row would make absence \
+         ambiguous and is refused at the boundary rather than stored"
     )]
     IssuedZero,
 
@@ -174,9 +176,14 @@ impl SettlementRow {
     ///
     /// # Errors
     ///
-    /// [`RowError::BadLength`], [`RowError::UnknownOutcome`], or
-    /// [`RowError::OutcomeDisagrees`] — the last being the check that makes
-    /// the deliberate duplicate self-verifying at rest.
+    /// [`RowError::BadLength`] if `bytes` is not [`SETTLEMENT_ROW_LEN`],
+    /// [`RowError::UnknownOutcome`] for a tag outside the three live ones,
+    /// [`RowError::IssuedZero`] for a stored `issued == 0` (`SO-D1`: the
+    /// writer cannot emit it, so a stored one is corruption),
+    /// [`RowError::Settle`] if the stored counts do not fold at all
+    /// (`passes > issued`), and [`RowError::OutcomeDisagrees`] if they fold to
+    /// an outcome other than the stored tag — the last being the check that
+    /// makes the deliberate duplicate self-verifying at rest.
     pub fn decode(bytes: &[u8]) -> Result<Self, RowError> {
         let &[tag, passes, issued] = bytes else {
             return Err(RowError::BadLength { got: bytes.len() });
