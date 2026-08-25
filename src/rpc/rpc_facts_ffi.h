@@ -149,6 +149,18 @@ int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
     shekyl_rpc_block_payload* out_payload, void** out_owner);
 void shekyl_rpc_block_free(void* owner);
 
+// The global output indices of one transaction (RK-4a). Variable-length, so
+// it follows §3.2's rule: C++ allocates, the caller gets (pointer, length,
+// opaque owner), and `shekyl_rpc_tx_output_indices_free` releases it.
+//
+// `found` is 0 when the store has no such transaction — a legitimate query
+// outcome, not a fault, and the one the wire reports as a non-OK status. A
+// transaction that exists with no outputs recorded yet is `found = 1` with
+// `len == 0`, which is a different answer and must stay distinguishable.
+int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
+    const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner);
+void shekyl_rpc_tx_output_indices_free(void* owner);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
@@ -187,6 +199,9 @@ int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
 
 int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
     bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
+
+int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
+    const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept;
 
 int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
     uint64_t height, bool fill_pow_hash,

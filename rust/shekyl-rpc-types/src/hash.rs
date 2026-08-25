@@ -22,9 +22,10 @@
 //! knows which kind it is holding names it there — `BlockHash::from_bytes(h.to_bytes())`
 //! — and that knowledge stays where it is actually available.
 //!
-//! Keeping this crate's production dependency surface at serde alone is the
-//! other half of the same decision: no domain crate is needed to describe a
-//! wire field.
+//! Not needing a **domain** crate to describe a wire field is the other half
+//! of the same decision, and it still holds: this crate depends on the
+//! encodings it speaks — serde, and `shekyl-portable-storage` for the `.bin`
+//! methods (RK-4a) — and on no domain crate at all.
 
 use core::fmt;
 use std::borrow::Cow;

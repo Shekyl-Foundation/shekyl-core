@@ -400,6 +400,18 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_block_free(owner: *mut std::ffi::c_void);
+    /// Global output indices of one transaction. `out_found` is 0 when no
+    /// such transaction exists; on OK the view is valid until
+    /// `shekyl_rpc_tx_output_indices_free`.
+    pub fn shekyl_rpc_tx_output_indices(
+        h: *mut CoreRpcHandle,
+        txid: *const u8,
+        out: *mut *const u64,
+        out_len: *mut usize,
+        out_found: *mut u8,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_tx_output_indices_free(owner: *mut std::ffi::c_void);
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -546,6 +558,19 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_tx_output_indices(
+        _h: *mut CoreRpcHandle,
+        _txid: *const u8,
+        _out: *mut *const u64,
+        _out_len: *mut usize,
+        _out_found: *mut u8,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_tx_output_indices_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_hash_at(
         _h: *mut CoreRpcHandle,

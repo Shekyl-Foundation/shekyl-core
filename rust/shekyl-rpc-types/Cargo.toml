@@ -14,12 +14,21 @@ description = "Wallet-daemon RPC wire-contract types: the SubmitVerdict/RejectCa
 
 [dependencies]
 serde = { workspace = true }
+# The `.bin` half of this crate's job. RK-D1 always said one definition per
+# method, "serde for JSON; shekyl-portable-storage for `.bin`"; RK-4a is the
+# first method that speaks the second. The earlier claim that this crate's
+# production surface stays serde alone (RK-D10) predates it and is superseded.
+shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Only to render a byte diff when a `.bin` parity test fails.
+hex = "0.4"
 # The frozen-hex txid KAT (tests/txid_kat.rs) computes the engine-side txid
-# over a C++-captured oracle blob. Dev-only: the contract crate's production
-# dependency surface stays serde alone.
+# over a C++-captured oracle blob. Dev-only, and that is the load-bearing
+# part: a wire-contract crate that pulled in the tx builder to check a test
+# vector would invert its own dependency direction. The production surface is
+# serde and the `.bin` codec above — nothing else.
 shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]

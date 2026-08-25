@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`/get_o_indexes.bin` is served natively in Rust, and the `.bin` wire
+  now has a typed schema layer (RK-4a).** `shekyl-portable-storage` is the
+  codec; nothing mapped RPC commands onto it, and `shekyl-levin`'s schema
+  layer is for p2p by design. `shekyl-rpc-types::bin_commands` is that
+  layer, beside the JSON types, because one method has one definition
+  whichever encoding it speaks.
+  Two rules came from capturing epee's bytes rather than reading its
+  declarations, and neither is visible in the latter: a
+  `KV_SERIALIZE_VAL_POD_AS_BLOB` hash crosses as **32 raw bytes** where the
+  JSON side spells it as 64 hex characters, and an **empty sequence is
+  absent** rather than `[]`. Both are pinned against epee's own bytes,
+  compared as bytes — a byte-exactness claim checked through a text pipe
+  tests the pipe.
+  The wallet client's hand-rolled request build and reply walk are gone for
+  the shared map, and it no longer depends on the codec directly. The reply
+  shape is unchanged, including that an unknown transaction is a 200
+  carrying a non-OK `status` rather than a transport error.
+
 ### Removed
 
 - **`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
