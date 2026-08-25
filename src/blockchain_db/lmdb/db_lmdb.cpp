@@ -6336,14 +6336,38 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     // LAST. Pops are tip-first, so any higher block's folds are already
     // reverted and `archival_last_slash_epoch` is exactly this height's last.
     const uint64_t last = get_archival_last_slash_epoch();
-    if (last != std::numeric_limits<uint64_t>::max() && last < epoch_marker)
+    // A marker exists, so this height folded at least one epoch and the
+    // watermark MUST name it. Both ways that can fail are fatal:
+    //
+    //   * the sentinel ("nothing folded") contradicts the marker's existence;
+    //   * a watermark BELOW the marker says fewer epochs are folded than this
+    //     height's own journal says it folded.
+    //
+    // Loud in both cases, because the slash log entries above have ALREADY
+    // been undone by the time we get here: skipping the settlement deletion
+    // and the rewind would leave those epochs reverted, unrepeatable on
+    // reconnect, and the branch diverged -- which is precisely the failure the
+    // marker-span fix exists to remove, reintroduced through a quiet arm. The
+    // sentinel arm WAS that quiet arm until 2026-08-25: it fell through both
+    // conditions and returned normally.
+    //
+    // These are CORRUPTION tripwires, not reachable branches, and that is
+    // stated rather than left implicit: the marker and the watermark are
+    // written together by the scheduler, so no code path produces either state
+    // and neither has a red-side test. They are the same category as the
+    // `mv_size` FATAL checks throughout this file -- a check on an invariant
+    // the code maintains, whose job is to stop a corrupt DB from being
+    // silently reinterpreted.
+    if (last == std::numeric_limits<uint64_t>::max())
     {
-      // The chain state says fewer epochs are folded than this height's own
-      // journal says it folded. Loud, because silently skipping the rewind
-      // would leave the reverted slashes unrepeatable and diverge the branch.
-      throw std::runtime_error("FATAL: archival slash epoch marker precedes the last folded epoch");
+      throw std::runtime_error(
+        "FATAL: archival slash epoch marker present but the last-folded watermark is unset");
     }
-    if (last != std::numeric_limits<uint64_t>::max())
+    if (last < epoch_marker)
+    {
+      throw std::runtime_error(
+        "FATAL: archival last-folded epoch precedes this height's first folded epoch");
+    }
     {
       // SO-D6: settlement rows are a memoised derivation over final chain
       // state, not received evidence, so the revert DELETES them and lets the
@@ -7331,10 +7355,14 @@ void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t 
   // Rust owns the value: it folds (passes, issued) and emits the three bytes.
   // C++ never composes an outcome byte, so a settlement whose outcome
   // contradicts its counts is not a thing this side can express (SO-D2).
-  std::array<uint8_t, 3> row{};
-  static_assert(sizeof(row) == 3, "settlement row is outcome||passes||issued");
-  if (shekyl_archival_settlement_row_len() != row.size())
-    throw std::runtime_error("FATAL: settlement row length disagrees with the Rust definition");
+  // Rule 40: the length is agreed at COMPILE time on both sides. The buffer is
+  // declared from the shared constant, and the assertion below is the one that
+  // fails if Rust's SETTLEMENT_ROW_LEN ever moves -- a build error, where the
+  // old runtime length query could only have thrown after the mismatched
+  // buffer was already compiled in.
+  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES> row{};
+  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
+    "settlement row is outcome||passes||issued (SO-D2); Rust pins the same 3");
 
   const uint8_t rc = shekyl_archival_settlement_row(passes, issued, row.data());
   if (rc != 0)

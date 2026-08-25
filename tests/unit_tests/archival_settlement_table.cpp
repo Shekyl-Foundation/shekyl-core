@@ -146,7 +146,10 @@ TEST(ArchivalSettlementTable, RowRoundTripsByteIdentically)
   TempLMDB t;
   const crypto::hash p = make_hash(0x91);
 
-  for (uint32_t issued = 0; issued <= 3; ++issued)
+  // SO-D1: issued >= 1. A zero-issued pair is recorded by ABSENCE, and the
+  // row constructor refuses it -- this loop used to start at 0 and blessed the
+  // one state the table must not contain.
+  for (uint32_t issued = 1; issued <= 3; ++issued)
   {
     for (uint32_t passes = 0; passes <= issued; ++passes)
     {
@@ -160,6 +163,33 @@ TEST(ArchivalSettlementTable, RowRoundTripsByteIdentically)
       EXPECT_NE(row[0], 0x00) << "0x00 is reserved for 'not a settlement'";
     }
   }
+}
+
+/// `SO-D1`'s boundary: a zero-issued pair is **not a row**.
+///
+/// The fold answers `NonObservation` for `issued = 0` and that is correct as
+/// arithmetic -- nothing was observed. But storing it would assert "issued,
+/// and unreachable" about a pair that was never issued, and it would end the
+/// invariant the whole table rests on: *absent ⇒ never issued* is a theorem
+/// about the writer, true only while the writer cannot emit this row.
+///
+/// The refusal lives in Rust's row constructor, so C++ inherits it: the FFI
+/// writes NOTHING on a refusal, and this accessor turns any nonzero code into
+/// a throw. The edit that makes this green-when-it-should-be-red is deleting
+/// the `issued == 0` arm from `SettlementRow::settle`.
+TEST(ArchivalSettlementTable, AZeroIssuedPairIsRefusedRatherThanStored)
+{
+  TempLMDB t;
+  const crypto::hash p = make_hash(0x9E);
+
+  EXPECT_THROW(t.db.set_archival_settlement(p, kShard, kEpoch, /*passes=*/0, /*issued=*/0),
+               std::runtime_error)
+    << "a zero-issued settlement was accepted at the storage boundary; absence "
+       "and 'issued but unreachable' are now indistinguishable";
+
+  std::array<uint8_t, 3> row{};
+  EXPECT_FALSE(t.db.get_archival_settlement(p, kShard, kEpoch, row))
+    << "the refused write left a row behind";
 }
 
 // SO-D6, through the production revert path rather than by argument.

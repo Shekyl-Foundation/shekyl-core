@@ -54,6 +54,24 @@ pub enum RowError {
     #[error("settlement fold refused the counts: {0}")]
     Settle(#[from] SettleError),
 
+    /// `issued == 0` — a pair the urn never reached, which `SO-D1` rules is
+    /// **not written at all**.
+    ///
+    /// The fold answers `NonObservation` for zero issuance, and that answer is
+    /// correct *as arithmetic*: nothing was observed. But a stored row with
+    /// `issued = 0` would assert "issued, and unreachable" about a pair that
+    /// was never issued, and it would break the invariant `SO-D1` exists for —
+    /// **absent ⇒ never issued** is a theorem about the writer, and only stays
+    /// one while the writer cannot emit this row.
+    ///
+    /// Refused here, at the row constructor, rather than in `settle_epoch`:
+    /// the fold is a pure statement about counts and has other callers; the
+    /// ROW is the storage boundary, and it is storage that `SO-D1` rules on.
+    #[error(
+        "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so          absence means never-issued; a zero-issued row would make absence          ambiguous and is refused at the boundary rather than stored"
+    )]
+    IssuedZero,
+
     /// `issued` does not fit the one byte `SO-D2` allots it.
     ///
     /// Not a truncation: `CHALLENGES_PER_PAIR_PER_EPOCH = 3` and the band
@@ -123,8 +141,15 @@ impl SettlementRow {
     /// # Errors
     ///
     /// [`RowError::Settle`] if the fold refuses the counts (`passes > issued`),
+    /// [`RowError::IssuedZero`] if `issued == 0` (`SO-D1`: not written),
     /// [`RowError::IssuedOutOfRange`] if `issued` does not fit one byte.
     pub fn settle(passes: u32, issued: u32) -> Result<Self, RowError> {
+        // SO-D1: a pair with no issued challenge is not written. Checked before
+        // the fold, because the fold would answer NonObservation and hand back
+        // a well-formed row for the one state the table must not contain.
+        if issued == 0 {
+            return Err(RowError::IssuedZero);
+        }
         let settlement = settle_epoch(passes, issued)?;
         // `passes <= issued` is guaranteed by the fold above, so bounding
         // `issued` bounds both. Checking only the larger is not a shortcut
@@ -164,6 +189,13 @@ impl SettlementRow {
             OUTCOME_SERVED | OUTCOME_MISSED | OUTCOME_NON_OBSERVATION
         ) {
             return Err(RowError::UnknownOutcome { tag });
+        }
+        // `SO-D1`: the writer cannot emit `issued == 0`, so a stored row that
+        // carries it is corruption rather than a settlement. Refused on the
+        // read side too, because an invariant enforced only on the way in is
+        // one a corrupt cell walks straight past on the way out.
+        if issued == 0 {
+            return Err(RowError::IssuedZero);
         }
         let derived = outcome_tag(settle_epoch(u32::from(passes), u32::from(issued))?);
         if derived != tag {
@@ -250,7 +282,8 @@ mod tests {
     /// over the whole reachable input space rather than at one point.
     #[test]
     fn stored_outcome_always_equals_the_fold_over_stored_counts() {
-        for issued in 0..=8u32 {
+        // SO-D1: issued >= 1 is the writable space; 0 is refused, not stored.
+        for issued in 1..=8u32 {
             for passes in 0..=issued {
                 let row = SettlementRow::settle(passes, issued).expect("passes <= issued");
                 let refolded = settle_epoch(u32::from(row.passes()), u32::from(row.issued()))
@@ -270,22 +303,38 @@ mod tests {
     /// degrade, and silent degradation is unmeasured degradation.
     #[test]
     fn under_issuance_settles_non_observation_and_is_still_a_row() {
-        for issued in 0..2u32 {
-            for passes in 0..=issued {
-                let row = SettlementRow::settle(passes, issued).expect("passes <= issued");
-                assert_eq!(row.outcome(), EpochSettlement::NonObservation);
-                assert_eq!(
-                    u32::from(row.issued()),
-                    issued,
-                    "the issued count survives storage"
-                );
-            }
+        // `issued == 1` is the under-issuance case: a row, not an absence.
+        for passes in 0..=1u32 {
+            let row = SettlementRow::settle(passes, 1).expect("passes <= issued");
+            assert_eq!(row.outcome(), EpochSettlement::NonObservation);
+            assert_eq!(
+                u32::from(row.issued()),
+                1,
+                "the issued count survives storage"
+            );
         }
+
+        // And the boundary the case sits against: ZERO issuance is not a row
+        // at all. Asserted here, beside its neighbour, because the pair is the
+        // ruling — `SO-D1` distinguishes "issued but unreachable" (a written
+        // NonObservation) from "never issued" (an absence), and a test that
+        // covered only the first would leave the two synonymous again.
+        assert!(
+            matches!(SettlementRow::settle(0, 0), Err(RowError::IssuedZero)),
+            "a zero-issued pair must be refused, not stored as NonObservation"
+        );
+        assert!(
+            matches!(
+                SettlementRow::decode(&[OUTCOME_NON_OBSERVATION, 0, 0]),
+                Err(RowError::IssuedZero)
+            ),
+            "a stored zero-issued row must be refused on read as well as on write"
+        );
     }
 
     #[test]
     fn round_trips_through_bytes() {
-        for issued in 0..=5u32 {
+        for issued in 1..=5u32 {
             for passes in 0..=issued {
                 let row = SettlementRow::settle(passes, issued).expect("passes <= issued");
                 let back = SettlementRow::decode(row.as_bytes()).expect("own bytes decode");
