@@ -1523,18 +1523,22 @@ uint8_t shekyl_archival_serve_credit_extract(
 /// different granularities — evidence per challenge, verdict per pair-epoch.
 /// See ARCHIVAL_PER_CHALLENGE_RECORD.md §5.2.
 ///
-/// Writes shekyl_archival_settlement_row_len() bytes to out_row on OK (0) and
+/// Writes SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES bytes to out_row on OK (0) and
 /// writes NOTHING on any error, so a caller that ignores the code cannot store
 /// a fabricated settlement.
-///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte.
+///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte,
+///   4 = issued == 0 (SO-D1: a pair the urn never reached is recorded by its
+///       ABSENCE; writing a zero-issued row would make absence ambiguous).
 uint8_t shekyl_archival_settlement_row(
     uint32_t passes,
     uint32_t issued,
     uint8_t* out_row);
 
-/// Encoded length of a settlement row, so C++ sizes its buffer from the
-/// definition rather than a literal.
-size_t shekyl_archival_settlement_row_len(void);
+/// Encoded length of a settlement row — a FIXED-SIZE FFI contract, so both
+/// sides agree on it at COMPILE time (rule 40) rather than through a runtime
+/// query. Rust pins the same number with `const _: () = assert!(...)` beside
+/// its definition; a divergence fails the build on whichever side moved.
+#define SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES 3
 
 /// The verifier-derived challenge leaf index (RF-D6: never on the wire;
 /// PC-D3: bound to the block the record rides in).

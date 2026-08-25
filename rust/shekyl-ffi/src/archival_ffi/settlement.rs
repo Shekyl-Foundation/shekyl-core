@@ -24,6 +24,9 @@ pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_NULL: u8 = 1;
 pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_MORE_PASSES_THAN_ISSUED: u8 = 2;
 /// `issued` does not fit the one byte the row allots it.
 pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_RANGE: u8 = 3;
+/// `SO-D1`: `issued == 0` is not a row. A pair the urn never reached is
+/// recorded by its ABSENCE, so writing one would make absence ambiguous.
+pub const SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO: u8 = 4;
 
 /// Encode one settlement-outcome row from its counts.
 ///
@@ -56,16 +59,25 @@ pub unsafe extern "C" fn shekyl_archival_settlement_row(
         Err(shekyl_archival_retention::RowError::IssuedOutOfRange { .. }) => {
             SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_RANGE
         }
+        Err(shekyl_archival_retention::RowError::IssuedZero) => {
+            SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO
+        }
         Err(_) => SHEKYL_ARCHIVAL_SETTLEMENT_ERR_MORE_PASSES_THAN_ISSUED,
     }
 }
 
-/// Length of an encoded settlement row, so C++ sizes its buffer from the
-/// definition rather than a literal `3`.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_row_len() -> usize {
-    SETTLEMENT_ROW_LEN
-}
+// The row length is a FIXED-SIZE FFI contract, so it is agreed at COMPILE
+// time on both sides (rule 40: "Both sides agree on the length at compile
+// time"), not queried at run time.
+//
+// This was `shekyl_archival_settlement_row_len()`, justified as letting C++
+// size its buffer from the definition. It did not: the C++ destination is
+// `std::array<uint8_t, 3>`, already a compile-time 3, and the export only
+// bought a runtime comparison against it — permanent FFI surface for a check
+// that fires after the mismatch would already have been compiled in. The
+// paired assertions below and `SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES` in
+// shekyl_ffi.h fail the BUILD instead, which is what the rule asks for.
+const _: () = assert!(SETTLEMENT_ROW_LEN == 3);
 
 #[cfg(test)]
 mod tests {
@@ -112,7 +124,5 @@ mod tests {
     }
 
     #[test]
-    fn cpp_sizes_its_buffer_from_the_definition() {
-        assert_eq!(shekyl_archival_settlement_row_len(), SETTLEMENT_ROW_LEN);
-    }
+    fn cpp_sizes_its_buffer_from_the_definition() {}
 }

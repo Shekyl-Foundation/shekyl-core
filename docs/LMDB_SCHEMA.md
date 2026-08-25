@@ -420,6 +420,48 @@ that are per-pair-epoch by design (`archival_slash_applied`,
 `archival_settlement`) — see `ARCHIVAL_PER_CHALLENGE_RECORD.md` §5.2.
 | Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
 
+### `archival_settlement`
+
+Three-valued settlement verdict per `(P_id, shard_id, settlement_epoch)`
+(`SO-D1`/`SO-D2`). **One row per pair with `issued >= 1`** — a pair the urn
+never reached is recorded by its ABSENCE, which is what makes *absent ⇒ never
+issued* a theorem about the writer rather than an inference. `issued = 0` is
+refused at the boundary (`SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO`), on both
+the write and the read.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_settlement"` |
+| Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
+| Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
+| Writers | `set_archival_settlement` (epoch close) |
+| Readers | `get_archival_settlement` |
+| Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
+| Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
+| Encoder | key `shekyl::db::ArchivalPairEpochKey`; **value encoded in Rust only** |
+| Introduced | HF1 (Shekyl genesis) |
+
+**C++ never composes the value.** Rust folds `(passes, issued)` and emits the
+three bytes (`shekyl_archival_settlement_row`), so a row whose outcome
+contradicts its counts is not a state this side can express. The FFI writes
+nothing on any refusal, so a caller that ignored the return code still cannot
+store a fabricated settlement. The 3-byte length is a fixed-size FFI contract
+agreed at compile time on both sides (`SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES`,
+rule 40).
+
+**Keyed by `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`.** `SO-D2`
+ruled the two byte-identical so one key could probe both tables; `PC-D4` then
+widened the serve-credit key to 56 B while this table stayed per-pair-epoch, so
+the shared-key rationale is **retired rather than broken** — the tables answer
+at different granularities, evidence per challenge and verdict per pair-epoch
+(`ARCHIVAL_PER_CHALLENGE_RECORD.md` §5.2).
+
+**Not merged with `archival_serve_credit`.** This table records a NEGATIVE
+(Missed), while every consumer of the serve-credit ledger reads key-presence as
+"pay this pair" — so a Missed cell there would corrupt vin-dedup and emission at
+once (`SO-D4.3`).
+
 ### `archival_bond`
 
 Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
