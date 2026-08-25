@@ -103,7 +103,6 @@ pub(crate) use shekyl_standoff::conformance::CERTIFY_SAMPLE_N;
 /// transaction outputs) already speaks. `CoverAmount` itself stays a distinct
 /// newtype so "the cover" is never confused with any other amount.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)] // inert until 2d bond-transaction orchestration
 pub(crate) struct CoverAmount(pub AtomicUnits);
 
 impl CoverAmount {
@@ -118,12 +117,10 @@ impl CoverAmount {
 /// expects. Using a newtype at the call site prevents confusing a block-count
 /// argument with a plain `u64` fee, amount, or index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct BlockSpan(pub u64);
 
 impl BlockSpan {
     /// The raw block count, for the `u64`-typed `draw_entry_gap` boundary.
-    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
     pub(crate) const fn as_u64(self) -> u64 {
         self.0
     }
@@ -135,7 +132,6 @@ impl BlockSpan {
 /// One `SebSpan(1)` means "at least one full SEB must separate these events."
 /// The raw `u64` is the SEB count; no finer granularity is defined here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)] // inert until cold-start spacing check is wired
 pub(crate) struct SebSpan(pub u64);
 
 /// A timing constraint measured in blocks — gates the `draw_entry_gap` standoff
@@ -151,14 +147,12 @@ pub(crate) struct SebSpan(pub u64);
 /// **Not interchangeable with [`EconomicSpacing`]** — the inner type is
 /// `BlockSpan`, not `SebSpan`, so cross-application is a compile error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct NetworkGap(pub BlockSpan);
 
 impl NetworkGap {
     /// The window as a raw block count, for the `u64`-typed
     /// `draw_entry_gap` / `draw_entry_gap_guarded` boundary. Reads
     /// semantically at the call site instead of a `.0 .0` tuple-index chain.
-    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
     pub(crate) const fn as_blocks(self) -> u64 {
         self.0.as_u64()
     }
@@ -177,7 +171,6 @@ impl NetworkGap {
 /// **Not interchangeable with [`NetworkGap`]** — the inner type is `SebSpan`,
 /// not `BlockSpan`, so cross-application is a compile error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until cold-start spacing check is wired
 pub(crate) struct EconomicSpacing(pub SebSpan);
 
 /// The default archival-bond entry-gap window, **typed** as a [`NetworkGap`]

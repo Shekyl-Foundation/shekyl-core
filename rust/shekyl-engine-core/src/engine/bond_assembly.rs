@@ -69,7 +69,6 @@ use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 //
 // `allow(dead_code)`: transient — the production minter is the WI-2 assemble
 // handler; the production consumer is the WI-3 dispatch driver.
-#[allow(dead_code)]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PBoundBytes {
     persona: PCanonicalId,
@@ -86,7 +85,6 @@ impl std::fmt::Debug for PBoundBytes {
     }
 }
 
-#[allow(dead_code)]
 impl PBoundBytes {
     /// Bind fully-assembled, signed transaction bytes to the persona they
     /// were built for. **Private to this module** (pin P-1): the only mint
@@ -376,7 +374,6 @@ pub(crate) struct FundingSelection {
 /// persona until durable removal lands. [`SpentRecordsDurablyPruned`] makes
 /// that sequencing compile-enforced. See FOLLOWUPS "2d-1 WI-2 — durable
 /// removal of SPENT funding outputs".
-#[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
 pub(crate) fn sweep_funding_outputs<'a, I>(
     _pruning_landed: &SpentRecordsDurablyPruned,
     records: I,

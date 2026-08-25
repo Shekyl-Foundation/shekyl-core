@@ -53,7 +53,6 @@ const _: () = assert!(
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // inert until the principal-stake RPC surface consumes it (PR-P3+)
 pub(crate) enum StakeInError {
     /// This wallet is not an archival staker (no `StakeEngine`) — there is no
     /// persona to fund.

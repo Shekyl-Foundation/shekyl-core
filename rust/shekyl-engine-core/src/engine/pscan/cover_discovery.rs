@@ -93,7 +93,6 @@ use super::scan_step::BlockRange;
 /// [`BondPostMatch`](super::scan_step::BondPostMatch). The cover output itself stays in
 /// the actor's funding state; this only signals it arrived.
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the cold-start lifecycle is the lib consumer (unwired).
 pub(crate) struct CoverFound {
     height: BlockHeight,
 }
@@ -131,7 +130,6 @@ impl CoverFound {
 /// signature can require it, making "re-fund on exhaustive-but-stale evidence"
 /// unrepresentable at the boundary regardless of when ③'s producer arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // transient — ③ producer is 2d-2 §4; trusted producer wired at cold-start.
 pub(crate) struct TipCurrencyToken {
     basis: TipBasis,
 }
@@ -139,7 +137,6 @@ pub(crate) struct TipCurrencyToken {
 /// How a [`TipCurrencyToken`] was justified. Only `TrustedNode` is constructible in 2d-1;
 /// the multi-source basis (posture ③) is a 2d-2 §4 obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // transient — MultiSource (③) lands with 2d-2 §4.
 enum TipBasis {
     /// Postures ①/②: a local or own-remote **trusted** node's tip is taken as current.
     TrustedNode,
@@ -164,7 +161,6 @@ impl TipCurrencyToken {
 /// under the same no-clear-`Debug` discipline as [`CoverFound`] and
 /// [`BondPostMatch`](super::scan_step::BondPostMatch).
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the cold-start lifecycle is the lib consumer (unwired).
 pub(crate) enum CoverDiscovery {
     /// The cover arrived (found within the scanned range) — no re-fund.
     Found(CoverFound),
@@ -292,7 +288,6 @@ impl CoverDiscovery {
 /// cold-start timing (persona history), reachable only through the explicit accessors, never a
 /// `{:?}` path — same no-clear-`Debug` discipline as [`CoverFound`].
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the cold-start operator-surface is the lib consumer.
 pub(crate) struct RefundConsideration {
     /// The **absence window** — the cover-expected range that was scanned without finding
     /// the cover.

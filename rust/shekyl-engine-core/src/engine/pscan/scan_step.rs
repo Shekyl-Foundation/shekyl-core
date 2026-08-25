@@ -115,7 +115,6 @@ mod block_range {
     // Constructor + bounds accessors. Held under a transient allow until the PR-B driving
     // task fully wires them — kept separate from the live `impl` above so the dead-code lint
     // still covers `block_count`/`height_at`.
-    #[allow(dead_code)]
     impl BlockRange {
         /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
         /// inverted (`start >= end`). The **sole** constructor: with the fields private to

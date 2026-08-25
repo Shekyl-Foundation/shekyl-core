@@ -158,7 +158,6 @@ impl VerifiedBatch {
     /// The exhaustively-verified height range (the evidence 2d-2 consumes as
     /// `covered`).
     // transient — consumed by SP-6's `PReconcileSet`; lib-dead until it lands.
-    #[allow(dead_code)]
     pub(crate) fn range(&self) -> VerifiedRange {
         self.range
     }

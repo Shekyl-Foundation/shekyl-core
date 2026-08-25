@@ -102,7 +102,6 @@ pub(crate) const VIEW_TAG_BYTES: usize = 1;
 /// borrowed reference rather than an owned message, because address
 /// material is not bound to any per-call context.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct AccountPublicAddress {
     /// The wallet's PQC public material: `x25519_pk(32) ‖ ml_kem_ek(1184)`.
     /// Read the halves through the accessors below rather than slicing —
@@ -159,7 +158,6 @@ impl AccountPublicAddress {
 /// short publicly-comparable bytestrings, not opaque hashes that need
 /// verification machinery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 
 /// Input to [`KeyEngine::try_claim_output`].
@@ -173,7 +171,6 @@ pub(crate) struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 /// thereof); none impose a `Zeroize` discipline on the receiver.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputDetectionInput {
     // --- Cryptographic inputs to `scan_output_recover` ---------------------
     /// The hybrid ciphertext (X25519 ephemeral + ML-KEM ciphertext).
@@ -264,7 +261,6 @@ pub(crate) enum OutputClaimResult {
 /// [`KeyActor`]: super::super::key_actor::KeyActor
 #[derive(Clone, ZeroizeOnDrop)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputClaim {
     /// Opaque reference to the per-output spending capability.
     /// Stored by the orchestrator against the claimed output's
@@ -342,7 +338,6 @@ impl std::fmt::Debug for OutputClaim {
 /// any future secret-bearing field gets a `[REDACTED]` placeholder
 /// inline.
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxInputSigningContext {
     /// Opaque reference to the per-output spending capability.
     /// Resolved by `sign_transaction`'s impl against the implementor's
@@ -447,7 +442,6 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
 /// [`shekyl_tx_builder::sign_transaction`]: shekyl_tx_builder::sign_transaction
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct SourceSecretsBundle {
     /// Output-key secret `x` where `O = x*G + y*T`. 32-byte canonical
     /// little-endian Ed25519 scalar encoding.
@@ -505,7 +499,6 @@ impl std::fmt::Debug for SourceSecretsBundle {
 /// per `35-secure-memory.mdc` does not depend on inner-type
 /// discipline holding across maintenance.
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
     /// Network for recipient address decoding at sign time.
     pub network: Network,
@@ -544,7 +537,6 @@ impl std::fmt::Debug for TxToSign {
 #[non_exhaustive]
 pub(crate) struct OutputDestination {
     /// Canonical encoded recipient address from the build request.
-    #[allow(dead_code)] // 2a-3 recipient output construction reads this.
     pub address: String,
 }
 
@@ -564,7 +556,6 @@ pub(crate) enum TxOutputContext {
     /// User payment. `amount` is the only confidential field.
     Payment {
         #[zeroize(skip)]
-        #[allow(dead_code)] // 2a-3 recipient output construction reads `dest.address`.
         dest: OutputDestination,
         amount: u64,
     },
@@ -595,7 +586,6 @@ impl std::fmt::Debug for TxOutputContext {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub(crate) struct FcmpPlusPlusContext {
-    #[allow(dead_code)] // 2a-3 `sign_transaction` consumes `tree`.
     pub tree: TreeContext,
 }
 

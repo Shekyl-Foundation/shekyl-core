@@ -438,7 +438,6 @@ pub(crate) struct Reservation {
     /// Caller-supplied fee tier. Stored for diagnostics; the rate it
     /// resolved to is already charged in [`Self::fee_atomic_units`].
     /// Read only via `Debug` and tests.
-    #[allow(dead_code)]
     pub priority: FeePriority,
 }
 
@@ -546,7 +545,6 @@ pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 /// `Reservation`/`PendingTx` field augmentation per the §7.X
 /// commit decomposition's "type substrate before consumers"
 /// ordering.
-#[allow(dead_code)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReservationTTLConfig {

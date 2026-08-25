@@ -72,7 +72,6 @@ impl PersonaIsolatedTransport for PRpc {}
 // (DQ-T2.3) at the scan-loop wiring, a later slice. The proving test ships with
 // the enabler (it is not deferred).
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(crate) struct PRpc {
     client: PTorClient,
     /// The daemon base URL (scheme + host + port, no trailing slash), e.g.
@@ -87,7 +86,6 @@ pub(crate) struct PRpc {
     base_url: String,
 }
 
-#[allow(dead_code)]
 impl PRpc {
     /// Wrap `P`'s circuit-bound transport as an [`Rpc`] against `base_url`.
     pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
@@ -153,14 +151,12 @@ impl Rpc for PRpc {
 // `allow(dead_code)`: transient — consumed by the emission regtest e2e and,
 // when the DQ-T2.3 posture selector lands, by the scan-loop wiring.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct LocalNodeRpc {
     inner: HttpRpc,
 }
 
 impl PersonaIsolatedTransport for LocalNodeRpc {}
 
-#[allow(dead_code)]
 impl LocalNodeRpc {
     /// Open a loopback transport against `url`, refusing non-loopback hosts.
     ///
@@ -232,7 +228,6 @@ impl Rpc for LocalNodeRpc {
 // Owned `PTransportError` by design — this is a `.map_err(classify)` target, which
 // hands ownership of the error (the by-ref form would force `|e| classify(&e)`),
 // so `needless_pass_by_value` is a false positive here.
-#[allow(dead_code)]
 #[allow(clippy::needless_pass_by_value)]
 fn classify(e: PTransportError) -> RpcError {
     match e {

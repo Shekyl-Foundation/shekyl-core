@@ -211,7 +211,6 @@ pub(crate) struct DrainDestination {
 /// Dead_code allow: the assembly handler lands here; the Engine orchestrator
 /// entry (DS-PR-2) and the RPC drain entry are the remaining wiring (rule-21 —
 /// reopened when the orchestrator dispatch consumes this message).
-#[allow(dead_code)]
 pub(crate) struct AssembleDrain {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
@@ -235,7 +234,6 @@ pub(crate) struct AssembleDrain {
 ///
 /// Dead_code allow: reply type of the assembly handler; same gate as
 /// [`AssembleDrain`].
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AssembledDrain {
     /// The fully-signed, wire-encoded drain transaction, persona-bound.

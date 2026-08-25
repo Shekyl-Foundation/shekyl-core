@@ -603,7 +603,6 @@ pub struct Engine<
     // Read sites land when the orchestrator routes key operations through the
     // handle (Stage 4, per `STAGE_2_KEY_ENGINE_ACTOR.md` §8). The allow is
     // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
     key: KeyEngineHandle,
 
     /// Handle to the wallet's [`CurveTreeActor`](super::curve_tree_actor::CurveTreeActor),
@@ -863,7 +862,6 @@ pub struct Engine<
     // role here is ownership: spawning the actor at open for stakers and
     // wiping the bundles at close. The allow is reopened for deletion when
     // 2c-2b's read sites land, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives

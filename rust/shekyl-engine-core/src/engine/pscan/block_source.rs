@@ -219,7 +219,6 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
 // `allow(dead_code)`: transient — the non-test consumer is the posture selector
 // at the SP-5 scan-loop wiring (a later slice). The proving test ships with the
 // enabler; it is not deferred.
-#[allow(dead_code)]
 pub(crate) struct PBlockSource {
     rpc: PRpc,
 }

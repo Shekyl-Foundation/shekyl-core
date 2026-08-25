@@ -607,7 +607,6 @@ pub enum PendingTxDiagnostic {
 /// annotation lifts at C5α). The annotation is itself a discipline
 /// pin: a future maintainer who wants to remove the helper must
 /// confirm no C5+ consumer exists first.
-#[allow(dead_code)]
 pub(crate) fn emit_pending_tx_diagnostic(sink: &dyn DiagnosticSink, event: PendingTxDiagnostic) {
     sink.emit_pending_tx(event);
 }
