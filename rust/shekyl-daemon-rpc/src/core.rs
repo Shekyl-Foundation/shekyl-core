@@ -347,11 +347,13 @@ impl CoreRpc {
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
             }
-            if ok == 0 {
-                return Ok(Err(failed_height));
-            }
-            let mut out = Vec::with_capacity(len);
-            if !rows.is_null() {
+            // Past this point an owner may exist, so nothing returns until
+            // it is released. The `ok == 0` verdict waits below rather than
+            // short-circuiting here: the export sets a null owner on that
+            // path today, but a contract kept only by the other side's
+            // current behaviour is one bad edit from a leak.
+            let mut out = Vec::with_capacity(if ok == 0 { 0 } else { len });
+            if ok != 0 && !rows.is_null() {
                 for entry in std::slice::from_raw_parts(rows, len) {
                     let block = if entry.block.is_null() || entry.block_len == 0 {
                         Vec::new()
@@ -374,6 +376,9 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_blocks_by_height_free(owner);
+            if ok == 0 {
+                return Ok(Err(failed_height));
+            }
             Ok(Ok(out))
         }
     }

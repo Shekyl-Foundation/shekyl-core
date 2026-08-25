@@ -63,9 +63,6 @@ char* core_rpc_ffi_stem_tallies(core_rpc_handle* h);
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json);
 
-// Binary endpoints (/get_blocks.bin, /get_hashes.bin, etc.).
-// On success: sets *out_buf and *out_len, returns 0. Caller frees with core_rpc_ffi_free_buf.
-
 // JSON-RPC 2.0 method dispatch.
 // Returns a JSON string:
 //   {"ok":true,"result":{...}}                     on success
