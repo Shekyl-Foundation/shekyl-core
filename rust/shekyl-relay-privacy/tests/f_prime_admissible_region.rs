@@ -48,20 +48,36 @@
 //!
 //! Tail nodes are placed by stride (`n % k == 0`), matching
 //! `flood_convergence::uniform_at_the_floor_is_the_conservative_topology` so
-//! the readings here are directly comparable to the 3000 / 3500 / 4750 table
-//! §90.3 records. That convention always selects index 0 — the flood source.
+//! the readings here are directly comparable to the table §90.3 records.
+//!
+//! **Read that table's levels as transit-less.** It records 3000 / 3500 / 4750
+//! for rows this instrument now reads at 11375 / 12375 / 13875, because §91.6
+//! gave the flood a transit term the earlier readings did not have. The
+//! *ordering* the table is quoted for is unchanged; only the levels moved, and
+//! they move again when §94's measured constant lands.
+//!
+//! That convention always selects index 0 — the flood source.
 //!
 //! **That is a confound, and it is measured rather than assumed away**
 //! (`the_step_is_not_a_degraded_source_artifact`). Because index 0 is selected
 //! at every stride, every tail row carries a degraded source while `beta = 0`
 //! does not, so the sweep's shape is two effects superimposed:
 //!
-//! - a **source penalty**, roughly constant at +500 ms, present whenever the
-//!   originator is itself below the floor — which under
+//! - a **source penalty**, roughly constant at +750 to +875 ms, present
+//!   whenever the originator is itself below the floor — which under
 //!   `simulate_fluff_return_mixed`'s own split is "how a degraded source slows
 //!   *everyone else's* first passage", not the source's own return; and
-//! - a **tail effect**, a smooth ramp of +250 ms at `beta = 0.083` rising to
-//!   +1000 ms at `beta = 0.5`.
+//! - a **tail effect**, a smooth ramp of +125 ms at `beta = 0.083` rising to
+//!   +1125 ms at `beta = 0.5`.
+//!
+//! Both figures are instrument output at `ANON_ZONE_TRANSIT_ASSUMPTION_MS`
+//! (1625) and move with §94. The transit-less readings were +500 ms and
+//! +250 → +1000 ms; **the decomposition survived the change and the argument
+//! does not rest on the levels** — the source term still dominates the
+//! smallest-tail step (+1000 ms on-source against +125 ms off-source), which
+//! is the claim this paragraph exists to make. Checked rather than assumed:
+//! a source penalty that had vanished under transit would have made the
+//! on-source rows the typical case after all.
 //!
 //! Read naively the on-source sweep looks like a step at any tail followed by a
 //! plateau. It is not: the control shows the step is mostly the source term.
@@ -176,6 +192,56 @@ fn strided_tail_spread(nodes: usize, stride: usize, tail_degrees: &[usize]) -> V
         .collect()
 }
 
+/// The strides the sweep runs. `beta = 1/stride`.
+///
+/// 1/12 and 1/4 bracket the `A = 60` arm's observed tail range (best sample a
+/// 8.3 % tail, worst 23.3 %); 1/3 is §90.3's recorded row; 1/2 is the `A = 15`
+/// arm's condition (§14.2: 52.1 % of settled samples at or above the floor, so
+/// beta ~ 0.48).
+///
+/// **Retraction, recorded where it is consumed.** An earlier revision said the
+/// `A = 15` state "must not be silently outside the region", and the menu that
+/// followed recommended the most conservative row on that basis. That is
+/// exactly the *"set it to the worst"* policy §43.2 says must be defended
+/// rather than inherited, and it is wrong here on its own terms: `A = 15` is
+/// *below* §15's launch condition of ~30 anonymity-capable nodes, so it is a
+/// state the network is not supposed to launch in. The region declines to cover
+/// it deliberately — see `the_region_is_consistent_with_the_launch_condition`.
+const SWEEP_STRIDES: [usize; 7] = [12, 8, 6, 5, 4, 3, 2];
+
+/// `F'` at tail mass `beta = 1/stride`, tail at the measured minimum.
+fn f_prime_at_stride(flood: FloodParams, stride: usize) -> u64 {
+    let beta = 1.0 / stride as f64;
+    let degrees = strided_tail(flood.nodes, stride, MEASURED_D_MIN);
+    let label = format!("beta = 1/{stride:<3} ({beta:.3}) tail at {MEASURED_D_MIN}");
+    read(flood, &degrees, &label)
+}
+
+/// `(beta, F')` across the swept region, `beta = 0` first.
+///
+/// **The single definition of "the reading at this beta", and that is the
+/// point.** Until 2026-08-24 the alpha-degradation sweep carried its own
+/// hardcoded copy of these pairs, labelled *"from
+/// `f_prime_against_tail_mass_at_the_measured_minimum`"*. When §91.6 gave the
+/// flood a transit term the sibling's readings moved by ~3.5× and the copy did
+/// not, so a test named for the region's cost was reading a series the
+/// instrument had stopped producing — and nothing detected it, because the
+/// assertions are about shape and a copy that is uniformly wrong is still
+/// monotone. Callers ask for the reading; they must not restate it.
+///
+/// A shared *function*, not shared *state*: `uniform_baseline`'s note explains
+/// why nothing here is cached across tests, and that reasoning is unchanged.
+/// What is removed is the duplicate, not the independent re-establishment.
+fn sweep(flood: FloodParams) -> Vec<(f64, u64)> {
+    let mut rows = vec![(0.0_f64, uniform_baseline(flood))];
+    rows.extend(
+        SWEEP_STRIDES
+            .iter()
+            .map(|&stride| (1.0 / stride as f64, f_prime_at_stride(flood, stride))),
+    );
+    rows
+}
+
 /// **The sweep.** `F'` against tail mass, at the measured worst minimum.
 ///
 /// Strides are chosen so `beta = 1/stride` brackets the `A = 60` arm's observed
@@ -189,33 +255,14 @@ fn f_prime_against_tail_mass_at_the_measured_minimum() {
     );
     println!("  ------------------------------------------------------------------");
 
-    let uniform = uniform_baseline(flood);
+    let rows = sweep(flood);
+    let uniform = rows[0].1;
 
-    // 1/12 and 1/4 bracket the `A = 60` arm's observed tail range; 1/3 is
-    // §90.3's recorded row; 1/2 is the `A = 15` arm's condition (§14.2: 52.1 %
-    // of settled samples at or above the floor, so beta ~ 0.48).
-    //
-    // **Retraction, recorded where it is consumed.** An earlier revision of
-    // this comment said the `A = 15` state "must not be silently outside the
-    // region", and the menu that followed recommended the most conservative row
-    // on that basis. That is exactly the *"set it to the worst"* policy §43.2
-    // says must be defended rather than inherited, and it is wrong here on its
-    // own terms: `A = 15` is *below* §15's launch condition of ~30
-    // anonymity-capable nodes, so it is a state the network is not supposed to
-    // launch in. The region declines to cover it deliberately — see
-    // `the_region_is_consistent_with_the_launch_condition`.
-    let strides = [12_usize, 8, 6, 5, 4, 3, 2];
-    let mut rows: Vec<(usize, f64, u64)> = Vec::new();
-    for stride in strides {
-        let beta = 1.0 / stride as f64;
-        let degrees = strided_tail(flood.nodes, stride, MEASURED_D_MIN);
-        let label = format!("beta = 1/{stride:<3} ({beta:.3}) tail at {MEASURED_D_MIN}");
-        let p90 = read(flood, &degrees, &label);
-        rows.push((stride, beta, p90));
-    }
-
-    println!("\n  uniform-at-floor reading = {uniform} ms (the value §90.3 records as 3500)");
-    let worst = rows.last().expect("the sweep ran at least one stride").2;
+    println!(
+        "\n  uniform-at-floor reading = {uniform} ms; §90.3 records this row as 3500 ms, \n  \
+         which is the same instrument with transit switched off (§91.6)"
+    );
+    let worst = rows.last().expect("the sweep ran at least one stride").1;
     println!(
         "  spread across the swept region = {} ms ({:+.1} % over uniform)",
         worst.saturating_sub(uniform),
@@ -227,21 +274,16 @@ fn f_prime_against_tail_mass_at_the_measured_minimum() {
     // the placement convention or the builder changed under this file, not
     // that the network got quicker.
     for w in rows.windows(2) {
-        let (s_lo, b_lo, p_lo) = w[0];
-        let (s_hi, b_hi, p_hi) = w[1];
+        let (b_lo, p_lo) = w[0];
+        let (b_hi, p_hi) = w[1];
         assert!(
             p_hi >= p_lo,
-            "F' fell as tail mass ROSE: beta 1/{s_lo} ({b_lo:.3}) read {p_lo} ms, \
-             beta 1/{s_hi} ({b_hi:.3}) read {p_hi} ms. Below-floor nodes remove \
-             paths and first passage is a min over paths, so this is the sign \
-             inverted — the topology builder or the placement convention moved"
+            "F' fell as tail mass ROSE: beta {b_lo:.3} read {p_lo} ms, beta {b_hi:.3} \
+             read {p_hi} ms. Below-floor nodes remove paths and first passage is a \
+             min over paths, so this is the sign inverted — the topology builder or \
+             the placement convention moved"
         );
     }
-    assert!(
-        rows[0].2 >= uniform,
-        "any below-floor tail must not read below uniform-at-the-floor: got {} vs {uniform}",
-        rows[0].2
-    );
 }
 
 /// **Does the tail's SHAPE matter, or only its mass?**
@@ -822,23 +864,26 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
     use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
     use shekyl_relay_privacy::zone::RelayZone;
 
-    // (beta, F') from `f_prime_against_tail_mass_at_the_measured_minimum`.
-    const SWEEP: [(f64, u32); 7] = [
-        (0.000, 3_500),
-        (0.083, 4_250),
-        (0.125, 4_250),
-        (0.167, 4_500),
-        (0.250, 4_500),
-        (0.333, 4_750),
-        (0.500, 5_000),
-    ];
+    // Read from the instrument, never restated: `sweep`'s doc records what a
+    // copy of these pairs cost the last time one was kept here.
+    let rows = sweep(shipped_topology());
+    let worst_f = rows.last().expect("the sweep ran").1;
 
-    let params_at = |f_prime: u32| DandelionParams {
-        fluff_return_ms: f_prime,
+    let f_at = |beta_star: f64| -> u64 {
+        rows.iter()
+            .find(|(b, _)| (b - beta_star).abs() < 1e-9)
+            .map(|(_, f)| *f)
+            .expect("every candidate boundary is a swept row")
+    };
+
+    #[allow(clippy::cast_possible_truncation)]
+    let params_at = |f_prime: u64| DandelionParams {
+        fluff_return_ms: f_prime as u32,
         ..DandelionParams::adopted_for(RelayZone::Public)
     };
 
-    for (beta_star, f_star) in [(0.250_f64, 4_500_u32), (0.333, 4_750), (0.500, 5_000)] {
+    for beta_star in [0.250_f64, 1.0 / 3.0, 0.500] {
+        let f_star = f_at(beta_star);
         let fixed = derive_embargo(
             &params_at(f_star),
             DEFAULT_EMBARGO_TICK_MILLIS,
@@ -852,7 +897,8 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
         );
         println!("  beta     F' ms   alpha at the fixed embargo   miss vs 0.90");
         println!("  -----    -----   --------------------------   ------------");
-        for (beta, f_prime) in SWEEP {
+        let mut alphas: Vec<(f64, f64)> = Vec::new();
+        for &(beta, f_prime) in &rows {
             let a =
                 full_travel_probability(&params_at(f_prime), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
             let outside = if beta > beta_star { " <- OUTSIDE" } else { "" };
@@ -860,6 +906,7 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
                 "  {beta:.3}    {f_prime:5}   {a:26.6}   {:+.6}{outside}",
                 a - EMBARGO_FULL_TRAVEL_PROBABILITY
             );
+            alphas.push((beta, a));
         }
 
         // At the boundary itself the invariant must hold — that is what
@@ -876,37 +923,86 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
         // And outside it the invariant must actually be MISSED, or the region
         // bound is not doing any work and `beta` is not a design parameter at
         // all — the same vacuity trap the alpha gate's control exists to catch.
-        let worst = full_travel_probability(&params_at(5_000), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
-        if f_star < 5_000 {
+        let worst =
+            full_travel_probability(&params_at(worst_f), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
+        if f_star < worst_f {
             assert!(
                 worst < EMBARGO_FULL_TRAVEL_PROBABILITY,
                 "beta* = {beta_star:.3} must be MISSED at the worst swept tail, else the \
-                 bound constrains nothing: got {worst} at F' = 5000"
+                 bound constrains nothing: got {worst} at F' = {worst_f}"
             );
         }
 
-        // **The invariant, stated so it can be quoted and re-checked.** At the
-        // chosen region this reads: the bound holds for 90 % of the A = 60
-        // arm's observed samples, and where it does not, alpha degrades to no
-        // worse than DEGRADED_FLOOR at the worst tail any arm has recorded.
-        // "The miss is small" is not re-checkable and gets quoted without its
-        // number; this does not.
-        if (beta_star - 0.250).abs() < 1e-9 {
-            /// The floor the chosen region commits to outside its own bound.
-            const DEGRADED_FLOOR: f64 = 0.891;
-            println!(
-                "\n  INVARIANT at the chosen region: alpha >= {DEGRADED_FLOOR} at the worst \
-                 recorded tail\n  (beta = 0.500, F' = 5000); measured {worst:.6}, against the \
-                 pinned {EMBARGO_FULL_TRAVEL_PROBABILITY}."
-            );
+        // **The commitment outside the bound, as a relationship rather than a
+        // level.** This block used to pin `alpha >= 0.891` at the worst swept
+        // tail. That number was the instrument's output at
+        // `ANON_ZONE_TRANSIT_ASSUMPTION_MS`, so it goes stale the day §94's
+        // measured constant lands, and a stale level assert is re-pinned by
+        // whoever hits it — `flood_transit_reconciliation.rs`'s header rules
+        // that exact hazard, and this file had an instance of it.
+        //
+        // What "degrades gracefully" actually asserts, level-free:
+        //
+        //   * alpha is non-increasing in beta — more tail mass cannot help; and
+        //   * there is no CLIFF at the bound: the largest single step outside
+        //     the region is no larger than the largest step inside it. A region
+        //     whose cost jumps the moment it is left is not a bound, it is an
+        //     edge, and that is the property worth committing to.
+        //
+        // What edit reds these: make `full_travel_probability` ignore
+        // `fluff_return_ms` (alpha goes flat, the cliff check divides nothing
+        // and the monotone check still passes — so the vacuity control below
+        // is the one that fires), or invert the sweep's order.
+        for w in alphas.windows(2) {
             assert!(
-                worst >= DEGRADED_FLOOR,
-                "the chosen region commits to alpha >= {DEGRADED_FLOOR} outside its bound; \
-                 the worst recorded tail now reads {worst:.6}. Either a constant moved or \
-                 the commitment must be restated at its true strength — it must not be \
-                 quietly weakened to whatever the run produced"
+                w[1].1 <= w[0].1,
+                "alpha rose as tail mass rose: beta {:.3} read {:.6}, beta {:.3} read \
+                 {:.6}. More below-floor nodes cannot make full travel MORE likely",
+                w[0].0,
+                w[0].1,
+                w[1].0,
+                w[1].1
             );
         }
+
+        let step = |pair: &[(f64, f64)]| pair[0].1 - pair[1].1;
+        let inside: Vec<f64> = alphas
+            .windows(2)
+            .filter(|w| w[1].0 <= beta_star)
+            .map(step)
+            .collect();
+        let outside: Vec<f64> = alphas
+            .windows(2)
+            .filter(|w| w[1].0 > beta_star)
+            .map(step)
+            .collect();
+
+        if let (Some(worst_in), Some(worst_out)) = (
+            inside.iter().copied().reduce(f64::max),
+            outside.iter().copied().reduce(f64::max),
+        ) {
+            println!(
+                "  no-cliff at beta* = {beta_star:.3}: largest step inside {worst_in:.6}, \
+                 outside {worst_out:.6}"
+            );
+            assert!(
+                worst_out <= worst_in,
+                "leaving the region costs a CLIFF: the largest alpha step outside \
+                 beta* = {beta_star:.3} is {worst_out:.6} against {worst_in:.6} inside. \
+                 A bound whose cost jumps at its own edge is not a bound"
+            );
+        }
+
+        // The level itself is REPORTED, with its provenance, so the
+        // re-derivation round can find it by grep rather than by hunting:
+        // instrument output at ANON_ZONE_TRANSIT_ASSUMPTION_MS (1625); moves
+        // with §94.
+        println!(
+            "  alpha at the worst swept tail (beta {:.3}, F' = {worst_f} ms) = {worst:.6} \
+             against the pinned {EMBARGO_FULL_TRAVEL_PROBABILITY} \
+             [instrument output at ANON_ZONE_TRANSIT_ASSUMPTION_MS (1625); moves with §94]",
+            rows.last().expect("the sweep ran").0
+        );
     }
 }
 
@@ -952,9 +1048,29 @@ fn beta_star_is_a_quantile_of_the_measured_series_not_its_mean() {
 
     println!("\n  A = 60 below-floor tail, eleven settled samples (§13.2)");
     println!("  mean {mean:.4}   p50 {p50:.4}   p90 {p90:.4}   max {max:.4}");
+    // Read from the instrument rather than restated. The bracketing strides are
+    // named; their readings are not, because a reading written here is a copy
+    // of `sweep`'s output and `sweep`'s doc records what the last such copy
+    // cost.
+    let flood = shipped_topology();
+    let (lo_stride, hi_stride) = (5_usize, 4);
+    let (lo, hi) = (
+        f_prime_at_stride(flood, lo_stride),
+        f_prime_at_stride(flood, hi_stride),
+    );
     println!(
         "  the p90 is the read matching the pinned 0.90 invariant; on the sweep it \
-         lands\n  between beta = 0.200 and 0.250, both of which read F' = 4500 ms."
+         lands\n  between beta = {:.3} (F' = {lo} ms) and {:.3} (F' = {hi} ms).",
+        1.0 / lo_stride as f64,
+        1.0 / hi_stride as f64
+    );
+    assert!(
+        p90 > 1.0 / lo_stride as f64 && p90 <= 1.0 / hi_stride as f64,
+        "the p90 tail {p90:.4} must fall in the bracket this line names \
+         ({:.3}, {:.3}] — if it moves out, the sentence above is describing a \
+         different pair of rows than the ones it reads",
+        1.0 / lo_stride as f64,
+        1.0 / hi_stride as f64
     );
 
     // The point of the test: mean and p90 are DIFFERENT, so "which statistic"

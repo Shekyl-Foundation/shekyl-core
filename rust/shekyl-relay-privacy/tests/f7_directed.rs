@@ -13,6 +13,23 @@
 //! degree 12, §40.1); what this test guards is the *direction* of the gap —
 //! directed strictly slower — not the shipped value, whose pin lives with
 //! `DandelionParams` and the derivation tests.
+//!
+//! # Both arms run at ONE transit, and that is F-7's own lesson
+//!
+//! `transit_for(reach)` pairs the transit assumption to the link class, which
+//! is right for an instrument simulating production and wrong for this one.
+//! Using it here put `EveryPeer` at 50 ms against `OutboundOnly` at 1625 ms,
+//! so the reported gap charged the reach rule for a 32× difference in link
+//! latency — a rule change and a network change moving together, which is
+//! **F-7's defect reproduced inside the file named for it**. The gap read
+//! `+434 %` that way against `+46 %` at matched transit.
+//!
+//! Both arms therefore run at [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] via
+//! `transit_for(OutboundOnly)`: the question is *"same network, different
+//! fluff rule"*, and the anonymity zone is the network the rule applies to.
+//! The comparison stays non-vacuous — at matched transit the directed arm is
+//! still 1.3–1.5× slower at 1625 ms, and 2.3–3.0× at zero transit — so
+//! `dir > sym` is carried by the reach mechanism, not by the latency.
 
 #![allow(clippy::cast_precision_loss)]
 
@@ -37,7 +54,12 @@ fn f7_directed_first_passage_exceeds_the_undirected_measurement() {
                     peers,
                     nodes: 512,
                     reach,
-                    transit_ms: shekyl_relay_privacy::conformance::transit_for(reach),
+                    // NOT `transit_for(reach)` — see the module note: pairing
+                    // transit to reach makes this comparison measure two
+                    // things at once. One link class, both arms.
+                    transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                        FloodReach::OutboundOnly,
+                    ),
                 },
                 20,
                 dist,
@@ -62,7 +84,11 @@ fn f7_directed_first_passage_exceeds_the_undirected_measurement() {
     // shipped input is 3250 ms (OutboundOnly, degree 12).
     let sym = p90[&(8, "EveryPeer")];
     let dir = p90[&(8, "OutboundOnly")];
-    println!("\n  pre-F-7 fluff_return_ms = 2250 (EveryPeer, peers=8); shipped = 3250 (OutboundOnly, degree 12)");
+    println!(
+        "\n  both arms at ANON_ZONE_TRANSIT_ASSUMPTION_MS; the gap below is the REACH \
+         rule alone\n  pre-F-7 fluff_return_ms = 2250 (EveryPeer, peers=8); shipped = \
+         3250 (OutboundOnly, degree 12) — both transit-less readings (§91.6)"
+    );
     println!(
         "  directed p90 at peers=8  = {dir}  ({:+.1}%)",
         (dir as f64 / sym as f64 - 1.0) * 100.0

@@ -14440,6 +14440,19 @@ taken in.
 
 ### 90.3 3500 ms is a FLOOR on `F′`, not a placeholder
 
+> **Levels re-read 2026-08-24; the ruling is unchanged.** Every millisecond
+> figure below is a **transit-less** reading — §91.6 later found the flood
+> model had no transit term and made `FloodParams::transit_ms` mandatory. The
+> same instrument now reads **11375 / 12375 / 13875** for the three rows
+> recorded here as 3000 / 3500 / 4750, and the shipped `fluff_return_ms` of
+> 3250 is itself the transit-less reading, proved in
+> `flood_transit_reconciliation.rs`. **The ordering — uniform-at-the-floor is
+> the conservative topology — is what this section argues and it survives
+> unchanged**, which is why the section stands rather than being reopened.
+> The levels move again when §94's measured constant lands; do not quote them
+> as `F′` candidates.
+
+
 The re-derivation was queued as *"apply both corrections together"* — the
 converged trial count **and** a churn-realistic degree distribution — and filed
 as blocked because the second input does not exist. **That framing was wrong,
@@ -15205,6 +15218,46 @@ provenance is half-stale.
 
 Recording the split now matters because **the decision of what re-derives is
 exactly what a surprising measurement would distort.**
+
+> **CLOSED 2026-08-24 — and the five-file list was over-broad by three.** The
+> reconciliation ran, per file, by reproducing each recorded figure against the
+> instrument rather than by reading the list:
+>
+> | file | census |
+> | --- | --- |
+> | `flood_convergence` | **already reconciled** — asserts the criterion's behaviour and refuses to assert a level; its live output prints the reconciliation (`shipped 3250 ms; converged at the floor 12375 ms`) |
+> | `d9_alpha` | **already reconciled** — transit-bearing, records no level; its assertions are agreement (`|analytic − empirical| < 0.015`) and a pre-registered decision boundary |
+> | `d9_floor_locality` | **already reconciled** — "reports; it does not assert a threshold", by its own header |
+> | `f7_directed` | **a confound, not a stale number** — see below |
+> | `f_prime_admissible_region` | **one stale duplicate**, see below |
+>
+> **`f_prime_admissible_region`: the staleness was a COPY, not a reading.**
+> `alpha_degradation_when_the_network_leaves_the_region` carried a hardcoded
+> `SWEEP` of `(beta, F′)` pairs labelled *"from
+> `f_prime_against_tail_mass_at_the_measured_minimum`"* — and the sibling had
+> moved ~3.5× under §91.6 while the copy had not. Nothing detected it: the
+> assertions are about shape, and a copy that is uniformly wrong is still
+> monotone. Fixed by **deleting the copy**, not by re-synchronising it — both
+> tests now call one `sweep()` helper. The `DEGRADED_FLOOR = 0.891` level pin
+> went with it, replaced by relationships (alpha non-increasing in `beta`; no
+> cliff at the bound), because a level pinned at the assumption's output is the
+> artifact `flood_transit_reconciliation.rs` rules against.
+>
+> **`f7_directed`: the transit pairing reproduced F-7's own defect.**
+> `transit_for(reach)` put `EveryPeer` at 50 ms against `OutboundOnly` at
+> 1625 ms, so the reported gap charged the reach rule for a 32× latency
+> difference — a rule change and a network change moving together, in the file
+> named for that mistake. Both arms now run at one link class; the gap reads
+> **+46 %** where it read **+434 %**. (That figure is unrelated to §91.6's
+> "+42.9 % transit-less", which is the admissible region's *spread*. Two
+> different quantities that happen to land nearby — do not reconcile them.)
+>
+> **What did NOT change: any constant.** `fluff_return_ms` stays 3250 and
+> `ANON_ZONE_TRANSIT_ASSUMPTION_MS` stays 1625. Levels recorded in these files
+> now carry a grep-able marker — *instrument output at
+> `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1625); moves with §94* — so the
+> re-derivation round finds them by search rather than by hunt. §90.3's table
+> is bannered for the same reason.
 
 ### 94.4 What lands
 
