@@ -413,7 +413,7 @@ pass.
 | 14 | `failure_window.rs` | **VERIFIED SAFE, comments corrected** — it consumes a per-epoch `served` **boolean**, computed C++-side, so the row multiplicity never reaches it. Its prose named a `per-(P, s, E)` ledger that no longer exists. |
 | 14b | ~~`attestation_settlement_window.rs`~~ | **NO SUCH FILE, and never any such file.** The enumeration named it; nothing else in the tree does. Half of row 14 was unfalsifiable from the moment it was written — see §5.4. |
 | 15 | `SO-D1`'s writer | its `passes` is this round's enumeration — the two rounds meet here |
-| 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B, and **`SO-D2`'s settlement key rides it** — see §5.2 |
+| 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B. **`SO-D2`'s settlement key does NOT ride it** — the draft said it did; the settlement table is per-pair-epoch by design and stayed at 48 B on the new `ArchivalPairEpochKey`. See §5.2. |
 | 17 | `append_archival_block_unique_keys`' `'S'` reservation key | **not on the original list** — found by grounding the derivation site; see §5.3 |
 | 18 | `regtest_inject_archival_serve_credit` | **not on the original list** — a writer taking `(P, s, E)` as arguments, so `PC-D4` widens its signature too; it already warns its bit is not block-owned, which the widened key makes literal |
 
@@ -532,11 +532,21 @@ The slash-applied trio is its other consumer — see row 6d, which the original
 enumeration missed for the same reason `SO-D2` was caught: one key type was
 serving two granularities because their shapes happened to coincide.
 
-**Landed code affected:** `BlockchainLMDB::set_archival_settlement` /
-`get_archival_settlement` / `delete_archival_settlement_for_epoch` currently
-build `ArchivalServeCreditKey` (PR #554). They need their own 48-byte key type
-once that key widens. Flagged here because #554 is open and merges first;
-whoever lands this round owns the follow-through.
+**Landed code affected — MIGRATED, 2026-08-25.**
+`BlockchainLMDB::set_archival_settlement` / `get_archival_settlement` /
+`delete_archival_settlement_for_epoch`, plus
+`delete_archival_settlement_before_epoch` which #554 added afterwards, all key
+with **`ArchivalPairEpochKey`** now. This paragraph read "they need their own
+48-byte key type once that key widens", which was the state while #554 was
+unmerged and became a false outstanding action the moment the conversion
+landed.
+
+The follow-through recurred on **every** merge from #554 — four times, the last
+in a schema document rather than in code — because each settlement accessor is
+correct on its own branch and wrong on the stacked one. It ends when #554
+merges; until then, any new settlement accessor arriving from that branch needs
+the pair-epoch type on arrival, and the check is by enumeration over the four
+functions rather than by eye.
 
 ### 5.3 How the record reaches its block: the pool is transport
 

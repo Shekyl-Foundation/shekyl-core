@@ -1528,12 +1528,22 @@ namespace cryptonote
       return false;
     }
 
-    // PC-D4: attribute the injected row to the current tip. The injector is a
-    // fakechain Gate-6 stand-in with no block of its own; the tip is the
-    // honest choice and keeps the row inside the prune's epoch ordering.
+    // PC-D4: attribute the injected row to the current tip's INDEX.
+    //
+    // `get_current_blockchain_height()` is the block COUNT, so the tip's index
+    // is one below it -- the same count-versus-index distinction the pop path
+    // got wrong, and the third instance of it in this round. Passing the count
+    // would key the row to the slot the next block will occupy: a height no
+    // block owns yet, which no pop can ever reach.
+    const uint64_t chain_height = m_core.get_current_blockchain_height();
+    if (chain_height == 0)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Serve-credit injection needs a tip to attribute the row to";
+      return false;
+    }
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch,
-      m_core.get_current_blockchain_height()))
+      p_canonical_id, req.shard_id, req.settlement_epoch, chain_height - 1))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";

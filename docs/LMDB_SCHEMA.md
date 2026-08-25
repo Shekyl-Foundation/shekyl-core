@@ -410,6 +410,7 @@ tally (`PC-D1`/`PC-D5`).
 | Writers | `set_archival_serve_credit_bit` (on archival vin block connect, at the block's INDEX), `remove_archival_serve_credit_bit` (reorg `pop_block`, at the same index) |
 | Readers | `has_archival_serve_credit_bit` (the EXACT per-challenge question), `archival_serve_credit_pass_count` (the pair-epoch enumeration; the prefix scan every "did this pair serve at all" caller wants) |
 | Encoder | `shekyl::db::ArchivalServeCreditKey` in `blockchain_db/shekyl_types.h` |
+| Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
 
 **Field order is load-bearing.** `BE(block_height)` is **appended**, so offsets
 0..47 are exactly the pair-epoch layout: the epoch stays at offset 40, which is
@@ -418,7 +419,6 @@ working by construction rather than by re-audit. The 48-byte prefix is
 `shekyl::db::ArchivalPairEpochKey`, which is a **different type** for the tables
 that are per-pair-epoch by design (`archival_slash_applied`,
 `archival_settlement`) — see `ARCHIVAL_PER_CHALLENGE_RECORD.md` §5.2.
-| Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
 
 ### `archival_settlement`
 
