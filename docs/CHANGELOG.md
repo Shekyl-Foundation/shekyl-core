@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The submit-shim fixture paid a fee it never put in the transaction.**
+  `make_tx` derived a floor-clearing fee, asserted it cleared the floor,
+  and stored it beside the transaction — while the transaction itself kept
+  the shape builder's hardcoded `txnFee = 1000000`. Both readings then
+  existed at once: `commit_tx` is handed the derived fee as an argument, so
+  every shim test paid it, and `tx_memory_pool::add_tx` reads
+  `get_tx_fee(tx)`, so the one test exercising that path paid 0.001. The
+  divergence was invisible until the dynamic minimum rose past the
+  constant, at which point `legacy_add_tx_double_spend_pin` failed on a fee
+  rejection while claiming to pin double-spend classification. The fee now
+  settles **into** the transaction — writing it changes the blob length,
+  which changes the fee required, so it iterates to a fixed point — and the
+  assertion is on the value `add_tx` will actually read rather than on the
+  local the test computed for itself. The bond-post builder, which had the
+  same derive-and-discard, shares the settle.
+
 ### Changed
 
 - **`/get_o_indexes.bin` is served natively in Rust, and the `.bin` wire
