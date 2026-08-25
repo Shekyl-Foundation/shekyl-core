@@ -4061,7 +4061,6 @@ dependencies = [
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-transport",
- "shekyl-portable-storage",
  "shekyl-proofs",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

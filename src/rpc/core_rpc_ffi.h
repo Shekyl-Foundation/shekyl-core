@@ -65,11 +65,6 @@ char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
 
 // Binary endpoints (/get_blocks.bin, /get_hashes.bin, etc.).
 // On success: sets *out_buf and *out_len, returns 0. Caller frees with core_rpc_ffi_free_buf.
-// On failure: returns -1 (unknown URI or deserialization error).
-int core_rpc_ffi_bin_endpoint(core_rpc_handle* h,
-    const char* uri,
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len);
 
 // JSON-RPC 2.0 method dispatch.
 // Returns a JSON string:

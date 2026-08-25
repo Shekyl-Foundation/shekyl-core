@@ -270,6 +270,18 @@ pub struct BlockHashFactsFfi {
     pub reserved: [u8; 7],
 }
 
+/// Twin of `shekyl_rpc_block_entry`: one block of a by-height answer. Every
+/// pointer borrows memory owned by the opaque owner the export returns.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BlockEntryFfi {
+    pub block: *const u8,
+    pub block_len: usize,
+    pub txs: *const *const u8,
+    pub tx_lens: *const usize,
+    pub tx_count: usize,
+}
+
 /// Twin of `shekyl_rpc_block_payload`: the variable-length half of a
 /// block's facts. Every pointer borrows memory owned by the opaque owner the
 /// export returns, and is invalid the moment `shekyl_rpc_block_free` runs.
@@ -412,6 +424,19 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_tx_output_indices_free(owner: *mut std::ffi::c_void);
+    /// Blocks at the given heights, in order. `out_ok` is 0 when a height
+    /// could not be read, with `out_failed_height` naming it.
+    pub fn shekyl_rpc_blocks_by_height(
+        h: *mut CoreRpcHandle,
+        heights: *const u64,
+        heights_len: usize,
+        out: *mut *const BlockEntryFfi,
+        out_len: *mut usize,
+        out_failed_height: *mut u64,
+        out_ok: *mut u8,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_blocks_by_height_free(owner: *mut std::ffi::c_void);
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -438,15 +463,6 @@ extern "C" {
         uri: *const c_char,
         body_json: *const c_char,
     ) -> *mut c_char;
-
-    pub fn core_rpc_ffi_bin_endpoint(
-        h: *mut CoreRpcHandle,
-        uri: *const c_char,
-        body: *const u8,
-        body_len: usize,
-        out_buf: *mut *mut u8,
-        out_len: *mut usize,
-    ) -> i32;
 
     pub fn core_rpc_ffi_json_rpc(
         h: *mut CoreRpcHandle,
@@ -571,6 +587,22 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_tx_output_indices_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    #[allow(clippy::too_many_arguments)]
+    pub extern "C" fn shekyl_rpc_blocks_by_height(
+        _h: *mut CoreRpcHandle,
+        _heights: *const u64,
+        _heights_len: usize,
+        _out: *mut *const BlockEntryFfi,
+        _out_len: *mut usize,
+        _out_failed_height: *mut u64,
+        _out_ok: *mut u8,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_blocks_by_height_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_hash_at(
         _h: *mut CoreRpcHandle,

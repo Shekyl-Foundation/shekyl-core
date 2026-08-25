@@ -336,43 +336,6 @@ namespace cryptonote
       return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_blocks_by_height(const COMMAND_RPC_GET_BLOCKS_BY_HEIGHT::request& req, COMMAND_RPC_GET_BLOCKS_BY_HEIGHT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_blocks_by_height);
-
-    const bool restricted = m_restricted && ctx;
-    if (restricted && req.heights.size() > RESTRICTED_BLOCK_COUNT)
-    {
-      res.status = "Too many blocks requested in restricted mode";
-      return true;
-    }
-
-    res.status = "Failed";
-    res.blocks.clear();
-    res.blocks.reserve(req.heights.size());
-    for (uint64_t height : req.heights)
-    {
-      block blk;
-      try
-      {
-        blk = m_core.get_blockchain_storage().get_db().get_block_from_height(height);
-      }
-      catch (...)
-      {
-        res.status = "Error retrieving block at height " + std::to_string(height);
-        return true;
-      }
-      std::vector<transaction> txs;
-      std::vector<crypto::hash> missed_txs;
-      m_core.get_transactions(blk.tx_hashes, txs, missed_txs);
-      res.blocks.resize(res.blocks.size() + 1);
-      res.blocks.back().block = block_to_blob(blk);
-      for (auto& tx : txs)
-        res.blocks.back().txs.push_back({tx_to_blob(tx), crypto::null_hash});
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------

@@ -61,9 +61,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use shekyl_portable_storage::{
-    load_from_binary, store_to_binary, Array, Limits, Section, Value as StorageValue,
-};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_wire::Block;
@@ -72,25 +69,35 @@ use super::regtest_e2e::RegtestDaemon;
 
 // ---------------------------------------------------------------------------
 // portable_storage — `shekyl-portable-storage` (LV-2a). The two shapes
-// `get_blocks_by_height.bin` uses: request `{ heights: [u64] }` and a
-// response whose `block` STRING fields we collect.
+// `get_blocks_by_height.bin` is encoded and decoded through the shared
+// command map (`shekyl_rpc_types::bin_commands`, RK-4b). This rig used to
+// build the request `Section` and walk the reply for `block` strings itself
+// — a second definition of a wire the daemon also defines, and the kind
+// that drifts silently because both sides are ours.
 // ---------------------------------------------------------------------------
 
-/// Serialize the `get_blocks_by_height.bin` request `{ heights: [u64] }`.
+/// Serialize the `get_blocks_by_height.bin` request.
 fn build_get_blocks_by_height_req(heights: &[u64]) -> Vec<u8> {
-    let mut root = Section::new();
-    root.insert(
-        "heights",
-        StorageValue::Array(Array::UInt64(heights.to_vec())),
-    );
-    store_to_binary(&root).expect("encode get_blocks_by_height request")
+    shekyl_rpc_types::GetBlocksByHeightRequest {
+        heights: heights.to_vec(),
+    }
+    .to_bin()
+    .expect("encode get_blocks_by_height request")
 }
 
 /// Decode a `get_blocks_by_height.bin` response into its raw block blobs, in
 /// order.
+///
+/// A non-OK `status` is an error here rather than an empty result: this rig
+/// measures read latency, and silently treating a refusal as "no blocks"
+/// would fold a failed request into the sample as a fast one.
 fn decode_block_blobs(resp: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    let decoded = load_from_binary(resp, Limits::HTTP_BIN).map_err(|e| e.to_string())?;
-    Ok(decoded.collect_bytes_named("block"))
+    let reply =
+        shekyl_rpc_types::GetBlocksByHeightResponse::from_bin(resp).map_err(|e| e.to_string())?;
+    if !reply.status.is_ok() {
+        return Err(format!("daemon refused: {}", reply.status.0));
+    }
+    Ok(reply.blocks.into_iter().map(|entry| entry.block).collect())
 }
 
 // ---------------------------------------------------------------------------

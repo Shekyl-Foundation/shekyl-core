@@ -421,6 +421,105 @@ int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
   }
 }
 
+// Owns every allocation behind one `blocks_by_height` answer. The entry
+// views point into these vectors, so they must not reallocate after the
+// views are built — hence the two-pass fill: blobs first, pointers second.
+struct blocks_owner
+{
+  std::vector<std::string> blocks;               // one per height
+  std::vector<std::vector<std::string>> txs;     // per height, per tx
+  std::vector<std::vector<const uint8_t*>> tx_ptrs;
+  std::vector<std::vector<size_t>> tx_lens;
+  std::vector<shekyl_rpc_block_entry> entries;
+};
+
+// Body of `shekyl_rpc_blocks_by_height`. Carries what the deleted
+// `on_get_blocks_by_height` did, minus the restricted cap, which is handler
+// policy (RK-D6).
+int blocks_by_height(cryptonote::core& core, const uint64_t* heights, size_t heights_len,
+  const shekyl_rpc_block_entry** out, size_t* out_len, uint64_t* out_failed_height,
+  uint8_t* out_ok, void** out_owner) noexcept
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!out || !out_len || !out_failed_height || !out_ok || (!heights && heights_len))
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  *out_failed_height = 0;
+  *out_ok = 0;
+  try
+  {
+    std::unique_ptr<blocks_owner> owned(new blocks_owner());
+    owned->blocks.reserve(heights_len);
+    owned->txs.reserve(heights_len);
+    for (size_t i = 0; i < heights_len; ++i)
+    {
+      cryptonote::block blk;
+      try
+      {
+        blk = core.get_blockchain_storage().get_db().get_block_from_height(heights[i]);
+      }
+      catch (...)
+      {
+        // A height this chain cannot produce is the caller's answer, not a
+        // fault: the C++ replied with a status naming the height, and the
+        // handler rebuilds that message from `out_failed_height`.
+        *out_failed_height = heights[i];
+        return SHEKYL_RPC_FACTS_OK;
+      }
+      owned->blocks.push_back(cryptonote::block_to_blob(blk));
+      std::vector<cryptonote::transaction> txs;
+      std::vector<crypto::hash> missed;
+      core.get_transactions(blk.tx_hashes, txs, missed);
+      std::vector<std::string> blobs;
+      blobs.reserve(txs.size());
+      for (const cryptonote::transaction& tx : txs)
+        blobs.push_back(cryptonote::tx_to_blob(tx));
+      owned->txs.push_back(std::move(blobs));
+    }
+
+    // Second pass: the vectors above are final, so views into them are
+    // stable. Building them in the first pass would dangle on reallocation.
+    owned->tx_ptrs.resize(heights_len);
+    owned->tx_lens.resize(heights_len);
+    owned->entries.resize(heights_len);
+    for (size_t i = 0; i < heights_len; ++i)
+    {
+      const std::vector<std::string>& blobs = owned->txs[i];
+      owned->tx_ptrs[i].reserve(blobs.size());
+      owned->tx_lens[i].reserve(blobs.size());
+      for (const std::string& b : blobs)
+      {
+        owned->tx_ptrs[i].push_back(reinterpret_cast<const uint8_t*>(b.data()));
+        owned->tx_lens[i].push_back(b.size());
+      }
+      shekyl_rpc_block_entry& e = owned->entries[i];
+      e.block = reinterpret_cast<const uint8_t*>(owned->blocks[i].data());
+      e.block_len = owned->blocks[i].size();
+      e.txs = owned->tx_ptrs[i].empty() ? nullptr : owned->tx_ptrs[i].data();
+      e.tx_lens = owned->tx_lens[i].empty() ? nullptr : owned->tx_lens[i].data();
+      e.tx_count = blobs.size();
+    }
+
+    *out = owned->entries.empty() ? nullptr : owned->entries.data();
+    *out_len = owned->entries.size();
+    *out_ok = 1;
+    *out_owner = owned.release();
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("blocks by height facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("blocks by height facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 } // namespace daemon_rpc_facts
 
 extern "C" {
@@ -565,6 +664,23 @@ int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
 void shekyl_rpc_tx_output_indices_free(void* owner)
 {
   delete static_cast<std::vector<uint64_t>*>(owner);
+}
+
+int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
+  size_t heights_len, const shekyl_rpc_block_entry** out, size_t* out_len,
+  uint64_t* out_failed_height, uint8_t* out_ok, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc || !out || !out_len || !out_failed_height || !out_ok || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  return daemon_rpc_facts::blocks_by_height(h->rpc->get_core(), heights, heights_len,
+    out, out_len, out_failed_height, out_ok, out_owner);
+}
+
+void shekyl_rpc_blocks_by_height_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::blocks_owner*>(owner);
 }
 
 void shekyl_rpc_block_free(void* owner)

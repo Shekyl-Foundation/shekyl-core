@@ -68,34 +68,6 @@ char* dispatch_json(core_rpc_server& rpc,
     return strdup(out.c_str());
 }
 
-// Binary endpoint: deserialize request from binary, call handler, serialize response to binary.
-// Returns: 0 = success, -1 = bad request (parse failure), -2 = internal error.
-template<typename COMMAND>
-int dispatch_bin(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    // Always attempt deserialization. Empty or missing body will fail to
-    // parse -> 400 Bad Request.
-    epee::span<const uint8_t> blob(body, body_len);
-    if (!epee::serialization::load_t_from_binary(static_cast<typename COMMAND::request_t&>(req), blob))
-        return -1;
-
-    (rpc.*handler)(req, res, nullptr);
-
-    epee::byte_slice out = epee::serialization::store_t_to_binary(static_cast<typename COMMAND::response_t&>(res));
-
-    *out_len = out.size();
-    *out_buf = static_cast<uint8_t*>(malloc(out.size()));
-    if (!*out_buf) return -2;
-    memcpy(*out_buf, out.data(), out.size());
-    return 0;
-}
-
 // JSON-RPC: handler without error_resp.
 template<typename COMMAND>
 char* dispatch_jsonrpc(core_rpc_server& rpc,
@@ -163,17 +135,11 @@ char* dispatch_jsonrpc_we(core_rpc_server& rpc,
 
 // Dispatch table types
 using json_fn = std::function<char*(core_rpc_server&, const char*)>;
-using bin_fn = std::function<int(core_rpc_server&, const uint8_t*, size_t, uint8_t**, size_t*)>;
 using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 
 #define DJSON(uri, handler, cmd) \
     {uri, [](core_rpc_server& rpc, const char* body) -> char* { \
         return dispatch_json<cmd>(rpc, &core_rpc_server::handler, body); \
-    }}
-
-#define DBIN(uri, handler, cmd) \
-    {uri, [](core_rpc_server& rpc, const uint8_t* body, size_t len, uint8_t** out, size_t* olen) -> int { \
-        return dispatch_bin<cmd>(rpc, &core_rpc_server::handler, body, len, out, olen); \
     }}
 
 #define DJRPC(method, handler, cmd) \
@@ -215,14 +181,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/out_peers",                         on_out_peers,                    COMMAND_RPC_OUT_PEERS),
         DJSON("/in_peers",                          on_in_peers,                     COMMAND_RPC_IN_PEERS),
         DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
-    };
-    return t;
-}
-
-const std::unordered_map<std::string, bin_fn>& get_bin_table() {
-    static const std::unordered_map<std::string, bin_fn> t = {
-        DBIN("/get_blocks_by_height.bin",  on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
-        DBIN("/getblocks_by_height.bin",   on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
     };
     return t;
 }
@@ -391,23 +349,6 @@ char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     } catch (const std::exception& e) {
         MERROR("core_rpc_ffi_json_endpoint(" << uri << "): " << e.what());
         return nullptr;
-    }
-}
-
-int core_rpc_ffi_bin_endpoint(core_rpc_handle* h,
-    const char* uri,
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len)
-{
-    if (!h || !h->rpc || !uri || !out_buf || !out_len) return -1;
-    const auto& table = get_bin_table();
-    auto it = table.find(uri);
-    if (it == table.end()) return -1;
-    try {
-        return it->second(*h->rpc, body, body_len, out_buf, out_len);
-    } catch (const std::exception& e) {
-        MERROR("core_rpc_ffi_bin_endpoint(" << uri << "): " << e.what());
-        return -1;
     }
 }
 

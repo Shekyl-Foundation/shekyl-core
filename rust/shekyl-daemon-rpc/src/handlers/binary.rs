@@ -35,35 +35,73 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-async fn dispatch_bin(state: Arc<AppState>, uri: &'static str, body: Bytes) -> impl IntoResponse {
-    let core = state.core.clone();
-    let body_vec = body.to_vec();
-    let result = tokio::task::spawn_blocking(move || core.bin_endpoint(uri, &body_vec)).await;
+/// The restricted listener's block cap. Handler policy, single-sourced here
+/// (RK-D6) rather than in the facts export, which answers what it is asked.
+const RESTRICTED_BLOCK_COUNT: usize = 1000;
 
-    match result {
-        Ok(Ok(data)) => (
+/// `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) — served
+/// natively (RK-4b).
+///
+/// Every refusal keeps the shape the C++ gave, which on this endpoint means
+/// a **200 carrying a non-OK `status`** rather than a transport error: too
+/// many blocks on the restricted listener, and a height the chain cannot
+/// produce, both answered that way and both worded as before.
+pub async fn get_blocks_by_height(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Ok(request) = shekyl_rpc_types::GetBlocksByHeightRequest::from_bin(&body) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    if state.restricted && request.heights.len() > RESTRICTED_BLOCK_COUNT {
+        return bin_status("Too many blocks requested in restricted mode");
+    }
+    let core = state.core.clone();
+    let out = tokio::task::spawn_blocking(move || core.blocks_by_height(&request.heights)).await;
+    let reply = match out {
+        Ok(Ok(Ok(entries))) => shekyl_rpc_types::GetBlocksByHeightResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            blocks: entries
+                .into_iter()
+                .map(|(block, txs)| shekyl_rpc_types::BlockEntry { block, txs })
+                .collect(),
+        },
+        Ok(Ok(Err(height))) => {
+            return bin_status(&format!("Error retrieving block at height {height}"))
+        }
+        Ok(Err(_)) | Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
+        }
+    };
+    match reply.to_bin() {
+        Ok(bytes) => (
             StatusCode::OK,
             [("content-type", "application/octet-stream")],
-            data,
+            bytes,
         )
             .into_response(),
-        Ok(Err(-1)) => (StatusCode::BAD_REQUEST, "Bad request").into_response(),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "FFI dispatch failed").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "encode failed").into_response(),
     }
 }
 
-macro_rules! bin_handler {
-    ($fn_name:ident, $uri:expr) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            body: Bytes,
-        ) -> impl IntoResponse {
-            dispatch_bin(state, $uri, body).await
-        }
+/// A 200 carrying only a non-OK `status`, which is how this endpoint reports
+/// a refusal — the wallet and the engine branch on the status, so a
+/// transport error here would be a different reply, not a tidier one.
+fn bin_status(status: &str) -> axum::response::Response {
+    let reply = shekyl_rpc_types::GetBlocksByHeightResponse {
+        status: shekyl_rpc_types::RpcStatus(status.to_owned()),
+        blocks: Vec::new(),
     };
+    match reply.to_bin() {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "encode failed").into_response(),
+    }
 }
-
-bin_handler!(get_blocks_by_height, "/get_blocks_by_height.bin");
 /// `/get_o_indexes.bin` — served natively (RK-4a), not dispatched to C++.
 ///
 /// The first `.bin` method to answer from Rust. Every refusal keeps the
