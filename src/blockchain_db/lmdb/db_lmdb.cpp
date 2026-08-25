@@ -6219,9 +6219,10 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
 
   mdb_cursor_close(cur);
 
-  shekyl::db::ArchivalSlashRevertValue marker{};
-  marker.settlement_epoch = settlement_epoch;
-  append_archival_slash_log(block_height, shekyl::db::kArchivalSlashLogEpochMarkerSeq, marker);
+  // The epoch marker is NOT written here. It records the FIRST epoch folded at
+  // this height and is written once, by the scheduler
+  // (process_archival_slash_at_height) -- see the note there for why per-epoch
+  // writes could not express a multi-epoch fold.
 }
 
 void BlockchainLMDB::process_archival_slash_at_height(uint64_t block_height)
@@ -6232,12 +6233,43 @@ void BlockchainLMDB::process_archival_slash_at_height(uint64_t block_height)
   uint64_t last_epoch = get_archival_last_slash_epoch();
   uint64_t next_epoch = (last_epoch == std::numeric_limits<uint64_t>::max()) ? 0 : last_epoch + 1;
   uint32_t seq = 0;
+  bool marker_written = false;
 
   while (true)
   {
     const uint64_t h_slash_deadline = shekyl_archival_epoch_slash_deadline_height(next_epoch);
     if (block_height <= h_slash_deadline)
       break;
+
+    // The epoch marker records the FIRST epoch this height folded, written
+    // ONCE per height.
+    //
+    // It used to be written per epoch by process_archival_slash_for_epoch, at
+    // the fixed key (block_height, kArchivalSlashLogEpochMarkerSeq) -- so a
+    // height that folded several epochs overwrote it and kept only the LAST.
+    // The revert then read that value as "what this height folded" and was
+    // wrong twice: it rewound `last_slash_epoch` to `last - 1`, so the
+    // reconnect restarted at `last` and NEVER re-applied the epochs before it
+    // whose slashes the same pop had just undone; and (once the settlement
+    // writer is live) it deleted one epoch's settlement rows out of several.
+    //
+    // A single marker cannot express a span, and the span is what the revert
+    // needs. Recording the FIRST epoch makes it expressible: the last is
+    // recoverable at revert time from `archival_last_slash_epoch`, because
+    // pops are tip-first, so any higher block's folds are already undone and
+    // that value is exactly this height's last.
+    //
+    // One fold per height is the norm -- deadlines are SETTLEMENT_EPOCH_BLOCKS
+    // apart and this runs on every connect -- which is why the old shape
+    // survived. Nothing enforces it, so it was an invariant held by
+    // circumstance, and the settlement revert was about to lean on it.
+    if (!marker_written)
+    {
+      shekyl::db::ArchivalSlashRevertValue marker{};
+      marker.settlement_epoch = next_epoch;
+      append_archival_slash_log(block_height, shekyl::db::kArchivalSlashLogEpochMarkerSeq, marker);
+      marker_written = true;
+    }
 
     process_archival_slash_for_epoch(block_height, next_epoch, seq);
     set_archival_last_slash_epoch(next_epoch);
@@ -6363,8 +6395,18 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
 
   if (epoch_marker != std::numeric_limits<uint64_t>::max())
   {
+    // `epoch_marker` is the FIRST epoch this height folded; `last` is its
+    // LAST. Pops are tip-first, so any higher block's folds are already
+    // reverted and `archival_last_slash_epoch` is exactly this height's last.
     const uint64_t last = get_archival_last_slash_epoch();
-    if (last == epoch_marker)
+    if (last != std::numeric_limits<uint64_t>::max() && last < epoch_marker)
+    {
+      // The chain state says fewer epochs are folded than this height's own
+      // journal says it folded. Loud, because silently skipping the rewind
+      // would leave the reverted slashes unrepeatable and diverge the branch.
+      throw std::runtime_error("FATAL: archival slash epoch marker precedes the last folded epoch");
+    }
+    if (last != std::numeric_limits<uint64_t>::max())
     {
       // SO-D6: settlement rows are a memoised derivation over final chain
       // state, not received evidence, so the revert DELETES them and lets the
@@ -6373,12 +6415,18 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
       // table journals instead because its evidence is *received* and cannot be
       // reproduced on a losing branch; a settlement row can, by definition.
       //
-      // Scoped to `epoch_marker` deliberately, inside this same guard, so the
-      // settlement revert undoes exactly the epoch the slash rewind below
-      // considers undone. Deriving a different span here — "every epoch since
-      // some other anchor" — would be a second opinion about what this height
-      // folded, and the two would disagree the first time they were both wrong.
-      delete_archival_settlement_for_epoch(epoch_marker);
+      // Scoped to the SPAN this height folded, `[epoch_marker, last]`, and to
+      // the same span the slash rewind below undoes — so the two cannot hold a
+      // second opinion about what this height did. That was the intent when
+      // this was scoped to a single epoch; the marker simply could not express
+      // a multi-epoch fold, so "the epoch" and "what this height folded" were
+      // the same value only when the fold was one epoch wide.
+      for (uint64_t e = epoch_marker; e <= last; ++e)
+      {
+        delete_archival_settlement_for_epoch(e);
+        if (e == std::numeric_limits<uint64_t>::max())
+          break;  // saturating guard: `e <= last` cannot terminate at u64 max
+      }
 
       if (epoch_marker == 0)
         set_archival_last_slash_epoch(std::numeric_limits<uint64_t>::max());
@@ -7565,12 +7613,69 @@ void BlockchainLMDB::delete_archival_attestation_witness_before_height(uint64_t 
   mdb_cursor_close(cur);
 }
 
+// Retention prune for the settlement table, mirroring
+// delete_archival_serve_credit_before_epoch: same tail-epoch scan, same
+// reason (SO-D2's key puts the epoch LAST so a pair's epochs range-scan in
+// order, which costs a full-table walk here).
+//
+// Without this the table was the ONE epoch-scoped archival table the shared
+// prune did not visit, so its rows would have accumulated for the life of the
+// chain the moment the writer went live. It is latent today only because
+// set_archival_settlement has no production caller yet -- which is exactly
+// the kind of "not reachable, so not wrong" that stops being true silently.
+void BlockchainLMDB::delete_archival_settlement_before_epoch(uint64_t prune_below_epoch)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival settlement prune requires active write txn");
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_settlement, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_settlement cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalPairEpochKeySize)
+    {
+      mdb_cursor_close(cur);
+      throw std::runtime_error("FATAL: archival_settlement key size mismatch on prune");
+    }
+    // Epoch is the last 8 bytes: P_id[32] || BE(shard) || BE(E). PC-D4 widened
+    // the SERVE-CREDIT key to 56 B; this table keys with ArchivalPairEpochKey
+    // and did not widen with it (§5.2), so the epoch stays last here.
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 40);
+    if (epoch < prune_below_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+      {
+        mdb_cursor_close(cur);
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_settlement row on prune: ", rc).c_str()));
+      }
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+  {
+    mdb_cursor_close(cur);
+    throw0(DB_ERROR(lmdb_error("archival_settlement cursor error on prune: ", rc).c_str()));
+  }
+  mdb_cursor_close(cur);
+}
+
 void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
 {
   if (prune_below_epoch == 0)
     return;
 
   delete_archival_serve_credit_before_epoch(prune_below_epoch);
+  // SO-D1's verdict rows retire on the same horizon as the evidence they fold.
+  delete_archival_settlement_before_epoch(prune_below_epoch);
   delete_archival_r_market_before_epoch(prune_below_epoch);
   delete_archival_sigma_work_before_epoch(prune_below_epoch);
   delete_archival_budget_before_epoch(prune_below_epoch);

@@ -25,6 +25,7 @@
 // table, which is why the fix was to derive the ceiling rather than to raise
 // it and trust the next reader to interpret the error.
 
+#include <limits>
 #include "gtest/gtest.h"
 
 #include "archival_lmdb_test_helpers.h"
@@ -173,7 +174,7 @@ TEST(ArchivalSettlementTable, RowRoundTripsByteIdentically)
 // re-connect recompute -- the close family's shape (r_market, sigma_work,
 // budget), not the attestation-witness table's journal, which exists because
 // *received* evidence cannot be reproduced on a losing branch.
-TEST(ArchivalSettlementTable, SlashRevertDropsTheFoldedEpochsRows)
+TEST(ArchivalSettlementTable, SlashRevertDropsEveryEpochInTheFoldedSpanAndRewindsBelowIt)
 {
   TempLMDB t;
   cryptonote::BlockchainDB& db = t.db;
@@ -201,18 +202,36 @@ TEST(ArchivalSettlementTable, SlashRevertDropsTheFoldedEpochsRows)
     << "fixture assumption: the fold must have advanced to kEpoch, or the revert "
        "below is not exercising the marker path at all";
 
-  // Rows for the folded epoch and for a later one that the revert must not touch.
-  t.db.set_archival_settlement(p, kShard, kEpoch, /*passes=*/0, /*issued=*/3);
+  // A row for EVERY epoch the fold covered, not just the last one, plus a
+  // later epoch the revert must not touch.
+  //
+  // Seeding only the last epoch is what let this pass while the revert was
+  // scoped to a single epoch: the fold covers 0..kEpoch, and the marker used
+  // to record only kEpoch, so every earlier epoch's rows survived a pop that
+  // had just undone the slashes they were derived from.
+  for (uint64_t e = 0; e <= kEpoch; ++e)
+    t.db.set_archival_settlement(p, kShard, e, /*passes=*/0, /*issued=*/3);
   t.db.set_archival_settlement(p, kShard, kEpoch + 1, /*passes=*/2, /*issued=*/3);
 
   std::array<uint8_t, 3> row{};
-  ASSERT_TRUE(t.db.get_archival_settlement(p, kShard, kEpoch, row));
+  for (uint64_t e = 0; e <= kEpoch; ++e)
+    ASSERT_TRUE(t.db.get_archival_settlement(p, kShard, e, row))
+      << "fixture premise: epoch " << e << " must have a row before the revert";
 
   db.revert_archival_slashes_at_height(fold_height);
 
-  EXPECT_FALSE(t.db.get_archival_settlement(p, kShard, kEpoch, row))
-    << "the revert must drop the settlement rows for the epoch it rewound past; "
-       "a surviving row would be a derived value outliving the state it derives from";
+  for (uint64_t e = 0; e <= kEpoch; ++e)
+    EXPECT_FALSE(t.db.get_archival_settlement(p, kShard, e, row))
+      << "epoch " << e << "'s settlement row survived a revert of the height that "
+         "folded it; a derived value outliving the state it derives from";
   EXPECT_TRUE(t.db.get_archival_settlement(p, kShard, kEpoch + 1, row))
-    << "and only that epoch -- the revert is scoped to the marker, not to everything";
+    << "and only the folded span -- the revert is scoped to what this height did";
+
+  // The other half of the same defect, and the consequential one: the rewind
+  // must go below the FIRST epoch folded, not the last. Rewound to kEpoch - 1,
+  // the reconnect restarts at kEpoch and never re-applies the slashes for
+  // 0..kEpoch-1 that this same pop just undid.
+  EXPECT_EQ(db.get_archival_last_slash_epoch(), std::numeric_limits<uint64_t>::max())
+    << "the fold started at epoch 0, so the rewind must leave nothing folded; "
+       "any other value means epochs were reverted and will never be redone";
 }
