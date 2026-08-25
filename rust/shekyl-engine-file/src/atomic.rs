@@ -29,8 +29,10 @@
 //!    target name on reboot (subject to the usual caveats about
 //!    filesystem journaling modes).
 //! 4. **`rename(tmp, target)`**. Atomic on POSIX within a filesystem.
-//!    The tempfile handle is persisted (i.e. `NamedTempFile::persist`)
-//!    so the drop guard doesn't try to unlink the just-renamed file.
+//!    The staged file is first `TempPath::keep`-ed so the drop guard
+//!    doesn't try to unlink the just-renamed file — and, on Windows,
+//!    because `keep` is what clears `FILE_ATTRIBUTE_TEMPORARY` (see
+//!    *Why not `persist`* below).
 //! 5. **`fsync(parent_dir)`**. Without this, the rename is not
 //!    guaranteed durable across a crash on ext4/xfs/btrfs even though
 //!    the file data is; the dirent entry pointing `target` at the new
@@ -38,9 +40,48 @@
 //!    the rename has committed, so its failure does not un-apply the
 //!    write — it is reported as [`Durability::Unconfirmed`], not an error.
 //! 6. **Return** [`Durability`]. On any failure between steps 1 and 4 the
-//!    temp file is unlinked by `tempfile`'s drop guard and the target (if
-//!    any) is left untouched, returned as `Err`; a step-5 failure returns
+//!    staged file is removed and the target (if any) is left untouched,
+//!    returned as `Err`; a step-5 failure returns
 //!    `Ok(Durability::Unconfirmed)` — applied, durability unconfirmed.
+//!    Cleanup has two owners: up to and including the `keep`, it is
+//!    `tempfile`'s drop guard; after the `keep` disarms that guard, a
+//!    failed rename is unlinked explicitly (see *Why not `persist`*).
+//!
+//! # Why not `persist`
+//!
+//! Step 4 is `TempPath::keep` + [`std::fs::rename`], not
+//! `NamedTempFile::persist`. On Unix the two are equivalent. On Windows
+//! they differ twice, and both differences are load-bearing:
+//!
+//! 1. **`persist` cannot replace a file under a byte-range lock.** It
+//!    calls `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else.
+//!    `std::fs::rename` calls the same thing *and*, on
+//!    `ERROR_ACCESS_DENIED` specifically, retries via
+//!    `SetFileInformationByHandle(FileRenameInfoEx)` with
+//!    `FILE_RENAME_FLAG_POSIX_SEMANTICS`, which supersedes the open
+//!    target instead of deleting it. Password rotation replaces
+//!    `.wallet.keys` while the wallet handle still holds `LockFileEx` on
+//!    byte 0 of it, so `persist` returned `ERROR_ACCESS_DENIED` (os
+//!    error 5) and **every password rotation on Windows failed**. The
+//!    `FileRenameInfoEx` path needs NTFS: on exFAT or a share that does
+//!    not support POSIX-semantics rename, rotation with a live lock
+//!    still fails, and that is a known limitation rather than a
+//!    regression.
+//! 2. **`keep` is where `FILE_ATTRIBUTE_TEMPORARY` is cleared.**
+//!    `Builder::tempfile_in` stages with that attribute, which tells
+//!    NTFS to avoid writing the data back to mass storage while cache is
+//!    available — on a wallet keys file that silently undercuts step 3's
+//!    `sync_all`. `rename` does **not** clear it; the attribute survives
+//!    onto the target. `persist` cleared it as its own first step, and
+//!    `keep` performs exactly that call
+//!    (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`). Dropping the `keep`
+//!    and renaming a staged path directly would reintroduce the hazard
+//!    invisibly: the bytes are identical, only the durability guarantee
+//!    is gone. Observed end state is byte-identical to `persist`'s.
+//!
+//! Neither difference is observable on Unix, where `imp::keep` is a
+//! no-op and `rename(2)` never cared about locks — which is why this
+//! path survived to ship.
 //!
 //! # Platform notes
 //!
@@ -178,9 +219,37 @@ pub(crate) fn atomic_write_file_with<T>(
     // fails, `tempfile` unlinks the staged file and the target is untouched.
     let staged = before_persist(tmp.path())?;
 
-    // Persist into place; on any error, `tempfile` cleans up the temp.
-    tmp.persist(target)
+    // Persist into place. This is deliberately NOT `NamedTempFile::persist`,
+    // and the difference is load-bearing on Windows — see the module docs,
+    // *Why not `persist`*.
+    //
+    // `keep()` is the attribute clear (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`
+    // on Windows, a no-op on Unix). It is guarded: a failure to clear returns
+    // `Err`, and the `TempPath` rides inside that error, so the staged file is
+    // still removed when it drops.
+    let staged_path = tmp.into_temp_path();
+    let kept = staged_path
+        .keep()
         .map_err(|e| WalletFileError::rename(target.to_path_buf(), e.error))?;
+
+    // `keep()` disarmed `tempfile`'s cleanup, so from here the staged file is
+    // ours. `persist` used to carry the `NamedTempFile` inside its error and
+    // clean up on drop; nothing does that now, and without this arm every
+    // failed rotation would strand a `.<random>.shekyl-tmp` beside the wallet.
+    if let Err(e) = std::fs::rename(&kept, target) {
+        if let Err(cleanup) = std::fs::remove_file(&kept) {
+            // Best-effort: the rename failure is the one the caller must see,
+            // and a stranded staged file is clutter rather than corruption —
+            // it is a sibling with a random `.shekyl-tmp` name, never the
+            // wallet itself. Reported so it is not silent.
+            tracing::warn!(
+                staged = %kept.display(),
+                error = %cleanup,
+                "could not remove the staged file after a failed rename"
+            );
+        }
+        return Err(WalletFileError::rename(target.to_path_buf(), e));
+    }
 
     // The rename above has already committed the new file into place, and the
     // file data was fsynced before it. The parent-dir fsync only hardens the
@@ -221,7 +290,153 @@ fn fsync_parent_dir(_parent: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::KeysFileLock;
     use std::fs;
+
+    /// Replacing a **locked** target is where `NamedTempFile::persist` and
+    /// [`std::fs::rename`] diverge, and the module's *Why not `persist`*
+    /// section is written against this fact. On Windows `persist` issues
+    /// `MoveFileExW` alone and is refused with `ERROR_ACCESS_DENIED`; `rename`
+    /// issues the same call and then retries through
+    /// `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics,
+    /// which supersedes the open target. On POSIX neither ever cared about an
+    /// advisory `flock`.
+    ///
+    /// This is not decoration: password rotation replaces `.wallet.keys` while
+    /// the wallet handle holds the lock on it, so the divergence is the
+    /// difference between rotation working and **every rotation on Windows
+    /// failing** — which is what it did until this module stopped using
+    /// `persist`.
+    ///
+    /// The edit that turns the Windows `persist` arm red is `tempfile` gaining
+    /// the fallback std already has, at which point the module doc's premise —
+    /// not this crate's code — is what changed. The `rename` arm goes red if
+    /// std loses it, and rotation would be broken again. The POSIX arms go red
+    /// if a mandatory lock ever appears there.
+    #[test]
+    fn replacing_a_locked_target_is_platform_dependent() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.keys");
+        fs::write(&target, b"OLD").unwrap();
+        let _lock = KeysFileLock::acquire(&target).expect("acquire");
+
+        // `persist`: `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else.
+        let via_persist = {
+            let tmp = tempfile::Builder::new()
+                .prefix(".")
+                .suffix(".shekyl-tmp")
+                .rand_bytes(12)
+                .tempfile_in(dir.path())
+                .unwrap();
+            {
+                let mut w: &File = tmp.as_file();
+                w.write_all(b"NEW-persist").unwrap();
+            }
+            tmp.persist(&target).map(|_| ()).map_err(|e| e.error)
+        };
+
+        // `rename`: the same call, plus the `FileRenameInfoEx` retry.
+        let via_rename = {
+            let staged = dir.path().join(".rename.shekyl-tmp");
+            fs::write(&staged, b"NEW-rename").unwrap();
+            fs::rename(&staged, &target)
+        };
+
+        #[cfg(windows)]
+        {
+            /// `winerror.h`: the replace was refused outright — what a
+            /// byte-range lock on the target produces for `MoveFileExW`.
+            const ERROR_ACCESS_DENIED: i32 = 5;
+            let err = via_persist.expect_err(
+                "Windows: `persist` must be refused over a locked target — if it \
+                 now succeeds, *Why not `persist`* in the module docs is stale",
+            );
+            assert_eq!(
+                err.raw_os_error(),
+                Some(ERROR_ACCESS_DENIED),
+                "Windows: the refusal must be ACCESS_DENIED — a different code means \
+                 a different mechanism is at work: {err}"
+            );
+            via_rename.expect(
+                "Windows: `std::fs::rename` must supersede a locked target via \
+                 FileRenameInfoEx — without it, password rotation cannot work",
+            );
+        }
+        #[cfg(unix)]
+        {
+            via_persist.expect("POSIX: flock is advisory; persist replaces a locked target");
+            via_rename.expect("POSIX: rename replaces a locked target");
+        }
+
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"NEW-rename",
+            "the rename must land its bytes, not merely return Ok"
+        );
+    }
+
+    /// The staged file is created by `tempfile` with `FILE_ATTRIBUTE_TEMPORARY`,
+    /// which tells NTFS it may keep the data in cache rather than writing it
+    /// back to mass storage. On a wallet artifact that silently undoes the
+    /// `sync_all` this module performs before the rename, and `rename` does
+    /// **not** clear the attribute — `TempPath::keep` does. If the `keep` is
+    /// ever refactored away as a cleanup formality, the bytes stay identical
+    /// and only the durability guarantee disappears; this test is what notices.
+    #[cfg(windows)]
+    #[test]
+    fn the_target_is_never_left_marked_temporary() {
+        use std::os::windows::fs::MetadataExt;
+        /// `winnt.h`.
+        const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.keys");
+        atomic_write_file(&target, b"hello").unwrap();
+
+        let attrs = fs::metadata(&target).unwrap().file_attributes();
+        assert_eq!(
+            attrs & FILE_ATTRIBUTE_TEMPORARY,
+            0,
+            "`.wallet.keys` was left marked FILE_ATTRIBUTE_TEMPORARY (attrs=0x{attrs:08x}); \
+             the staged file's attribute survived the rename and the fsync guarantee is gone"
+        );
+    }
+
+    /// The password-rotation shape end to end: replace a target that a **live**
+    /// [`KeysFileLock`] holds, taking the lock on the staged file through the
+    /// pre-persist hook so the lock follows the inode the path is about to
+    /// name. This is the exact sequence `WalletFile::rotate_password` runs, and
+    /// it returned `AtomicWriteRename { code: 5 }` on Windows for every wallet
+    /// until the `persist` swap above.
+    #[test]
+    fn replaces_a_target_held_by_a_live_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.keys");
+        fs::write(&target, b"OLD").unwrap();
+
+        let old_lock = KeysFileLock::acquire(&target).expect("acquire the target's lock");
+        let (new_lock, _durability) = atomic_write_file_with(&target, b"NEW", |staged| {
+            KeysFileLock::acquire_staged(staged, &target)
+        })
+        .expect("a target under a live keys-file lock must still be replaceable");
+
+        // Both locks are released before the read: on Windows the lock is
+        // mandatory, so a path read while `new_lock` is live would fail for a
+        // reason that has nothing to do with what this test asserts.
+        drop(old_lock);
+        drop(new_lock);
+        assert_eq!(fs::read(&target).unwrap(), b"NEW");
+
+        // The staged file must not be left behind. `keep()` disarms
+        // `tempfile`'s cleanup, so nothing but this module's own error arm
+        // removes it — and on the success path the rename consumed it.
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".shekyl-tmp"))
+            .collect();
+        assert!(strays.is_empty(), "staged files left behind: {strays:?}");
+    }
 
     #[test]
     fn writes_to_fresh_target() {

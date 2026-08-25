@@ -441,15 +441,23 @@ jobs:
       # and the verified dial — which no Linux box can compile (their graphs
       # reach `ring`), plus the two end-to-end tests, which run in the same
       # step regardless of whether the check or each other passed (see
-      # REPORTING below). Coverage as of the keys-file fix: the wallet-rpc
-      # end-to-end test HAS executed on this runner — the self-hosted pipe
-      # under axum served its first request there, and the mandatory-lock
-      # bug was found there (WINDOWS_WALLET_PROBE_SHEET.md §4.3); the
-      # shekyl-cli end-to-end test has NOT yet executed here, because the
-      # earlier form of this step stopped at the first failure before
-      # reaching it, so its next run is its first. They are informational
+      # REPORTING below). Coverage as of the rotation fix: BOTH end-to-end
+      # tests have now executed here. The wallet-rpc half found the
+      # mandatory-lock bug (WINDOWS_WALLET_PROBE_SHEET.md §4.3), and the
+      # shekyl-cli half first ran green on 2026-08-24 once the run-everything
+      # change stopped the step aborting before it. They are informational
       # for the same reason as the check and end the same way — WP-W5 turns
       # the wallet test lane blocking.
+      #
+      # `shekyl-engine-file` joined the list with that rotation fix, and the
+      # reason is the point: it owns the atomic write, the keys-file lock and
+      # password rotation — every Windows-specific file primitive the wallet
+      # has — and it was covered by NOTHING here. The two crates above only
+      # reach it through the RPC surface, so `rotate_password` failing on
+      # Windows for every wallet arrived as an opaque `-32603` from a
+      # lifecycle test rather than as the four red tests in the crate that
+      # actually owns the defect. A crate whose whole job is platform file
+      # behaviour is the last one that should be tested only by proxy.
       #
       # REPORTING (2026-08-21). A `continue-on-error` step shows
       # `conclusion: success` on the run page whatever its command did; the
@@ -489,6 +497,7 @@ jobs:
           $first_failure = 0
           foreach ($argv in @(
             @('cargo', 'check', '--locked', '-p', 'shekyl-engine-core', '-p', 'shekyl-wallet-rpc', '-p', 'shekyl-cli'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-engine-file'),
             @('cargo', 'test', '--locked', '-p', 'shekyl-wallet-rpc', '--test', 'http_get_version'),
             @('cargo', 'test', '--locked', '-p', 'shekyl-cli', '--test', 'rpc_session_e2e')
           )) {

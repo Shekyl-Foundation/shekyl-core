@@ -2251,6 +2251,38 @@ sustainability is unaffected by the recalibration.
   still informational (WP-W5 owns the flip, once observed green), and Windows
   release archives still carry the daemon but no wallet.
 
+  **UPDATE 2026-08-25 — the scouting step was red on `dev`, and WP-W5's
+  precondition was not met.** The `shekyl-cli` end-to-end half (P-10) executed
+  here for the first time on 2026-08-24 and **passed**, which closes the last
+  transport-side unknown. But the `shekyl-wallet-rpc` half exited 101 on every
+  run: `lifecycle_create_open_close_change_password` failed with
+  `-32603 "password rotation failed"`. It is the same test that found the
+  mandatory-lock bug, now failing one step further along — the shape §2 has
+  always predicted, where clearing one error reveals the next.
+
+  The cause was **`NamedTempFile::persist` cannot replace a file under a
+  byte-range lock on Windows**, and `rotate_password` replaces `.wallet.keys`
+  while the wallet handle holds exactly such a lock. Fixed in the atomic
+  writer (see `CHANGELOG` and `atomic.rs`'s *Why not `persist`*).
+
+  **The reporting lesson is the one worth carrying.** `shekyl-engine-file`
+  owns the atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and **no Windows lane
+  tested it**. The scouting step covered only `shekyl-wallet-rpc` and
+  `shekyl-cli`, which reach that crate only through the RPC surface, so a
+  defect in four of its own unit tests arrived as one opaque `-32603` from a
+  lifecycle test in a different crate. It is now in the scouting list. A
+  crate whose entire job is platform file behaviour was the last one that
+  should have been covered only by proxy, and the gate asymmetry recorded
+  above described the `cfg(windows)` *arms* while missing that a whole
+  platform-critical crate sat outside every Windows lane.
+
+  **Still unmet, unchanged:** nothing links for Windows through CMake,
+  `BuildRust.cmake` still skips the Rust binaries, the scouting step is still
+  `continue-on-error`, and Windows release archives still carry the daemon but
+  no wallet. WP-W5's flip now needs one green scouting run including the
+  engine-file lane.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and
