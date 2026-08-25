@@ -756,7 +756,9 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
     txs.push_back(std::move(tx));
-    remove_transaction(h, block_height);
+    // PC-D4: the block's INDEX, not the chain count. See the note at the
+    // miner-tx call below.
+    remove_transaction(h, removed_block_height - 1);
   }
   {
     const crypto::hash miner_h = get_transaction_hash(blk.miner_tx);
@@ -766,7 +768,19 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       throw DB_ERROR("Attempted to pop a block with pruned transaction data");
     }
   }
-  remove_transaction(get_transaction_hash(blk.miner_tx), block_height);
+  // PC-D4: `remove_transaction` rebuilds the serve-credit ledger key, which
+  // `add_transaction` wrote with `prev_height` -- the block's INDEX N. The
+  // height convention documented at the top of this function applies here and
+  // cuts the other way from the slash/close hooks: those key on the chain
+  // height AFTER the block (`removed_block_height`), the ledger keys on N.
+  // `removed_block_height` is the count BEFORE the pop, so N is one below it.
+  //
+  // Passing the count instead built a key one above every row the add wrote,
+  // `mdb_del` answered MDB_NOTFOUND, and the tolerant delete swallowed it --
+  // so a popped pass SURVIVED its block. On a replacement branch that stale
+  // row then either rejects a legitimate record through the pair-epoch dedup
+  // or counts toward emission. Silent, and consensus-visible.
+  remove_transaction(get_transaction_hash(blk.miner_tx), removed_block_height - 1);
 
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block pop.

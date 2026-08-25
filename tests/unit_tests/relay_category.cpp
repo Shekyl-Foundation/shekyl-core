@@ -9,9 +9,16 @@
 // `relay_method::none`, a union of the most public class with the most
 // private one, justified by its own doc as "rpc relay requests or historical
 // reasons". The history was Monero's pre-Dandelion++ RPC, which Shekyl
-// (v3-from-genesis, rule 60) has no client for. All ten of its call sites
-// were asking "is this publicly known" -- `broadcasted` -- and one of them,
+// (v3-from-genesis, rule 60) has no client for. NINE of its ten call sites
+// were asking "is this publicly known" -- `broadcasted` -- and one of those,
 // `fill_block_template`, would have mined a do-not-relay transaction.
+//
+// The TENTH, `core::pool_has_tx`, went to `all` instead, and the difference is
+// the point rather than an exception to it: it asks a LOCAL holding question
+// ("do I already have these bytes"), which is a different axis from
+// disclosure. `legacy` was wrong for it too, just wrong in the other
+// direction. (This comment said "all ten" until 2026-08-25 -- written before
+// the tenth caller was corrected, and left behind by that fix.)
 //
 // This file is what stops the union coming back by accident, and every row
 // can fail:

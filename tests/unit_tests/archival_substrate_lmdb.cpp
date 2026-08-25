@@ -1973,6 +1973,97 @@ TEST(archival_substrate_lmdb, attestation_witness_threaded_through_add_block)
 // block hash that never becomes an alt block, and the height-keyed retention prune
 // structurally cannot see it. The loop below is that scenario: N plain pops must
 // leave the detached table completely empty, not N orphans.
+/// **`PC-D4`: the pop must delete the ledger row the connect wrote.**
+///
+/// The serve-credit key carries the block, so `remove_transaction` rebuilds it
+/// from a height the caller supplies. `add_transaction` is given `prev_height`
+/// -- the block's INDEX N -- while `pop_block`'s other archival hooks key on
+/// `removed_block_height`, the chain COUNT after the block. Those are the same
+/// function's two conventions and they differ by one.
+///
+/// Passing the count built a key one above every row the connect wrote,
+/// `mdb_del` answered MDB_NOTFOUND, and the tolerant delete swallowed it, so a
+/// popped pass SURVIVED its block. On a replacement branch that stale row
+/// either rejects a legitimate record through the pair-epoch dedup or counts
+/// toward emission.
+///
+/// Nothing caught it: every other serve-credit test calls the ledger accessors
+/// directly and supplies its own height, so none of them ever ran the two
+/// production call sites against each other. This one connects a real block
+/// and pops it.
+///
+/// The edit that makes it red is passing `removed_block_height` (or any other
+/// height) to `remove_transaction` in `pop_block`.
+TEST(archival_substrate_lmdb, pop_deletes_the_serve_credit_row_the_connect_wrote)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // The gate-2 integration vin: the only serve-credit blob whose kept half is
+  // authored by shekyl-wire, so this test cannot drift from the real encoding
+  // by hand-rolling one.
+  std::ifstream ifs(GATE2_KAT_FIXTURE_PATH);
+  ASSERT_TRUE(ifs.good()) << "missing gate-2 KAT fixture";
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  ASSERT_FALSE(doc.HasParseError());
+  ASSERT_TRUE(doc.HasMember("integration"));
+  const auto& integ = doc["integration"];
+
+  std::string kept_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["wire_hex"].GetString(), kept_bin));
+  std::string pruned_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["pruned_hex"].GetString(), pruned_bin));
+
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  txin_archival_serve_credit_response vin{};
+  vin.canonical_bytes.assign(kept_bin.begin(), kept_bin.end());
+  tx.vin.push_back(vin);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {
+    std::vector<uint8_t>(pruned_bin.begin(), pruned_bin.end())};
+
+  crypto::hash p_id{};
+  uint64_t shard_id = 0, settlement_epoch = 0;
+  ASSERT_TRUE(get_archival_serve_credit_key(vin, p_id, shard_id, settlement_epoch))
+    << "fixture premise: the kept blob must parse, or the connect stores nothing "
+       "and the pop assertion below passes vacuously";
+
+  const uint64_t connect_index = db.height();
+  connect_block_with_txs(db, {tx});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Premise AND the convention pin: the row is at the block's INDEX.
+  EXPECT_TRUE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index))
+    << "the connect did not write the row at the block index";
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index + 1))
+    << "negative control: the row must not sit at the chain COUNT -- that is the "
+       "off-by-one the pop path took";
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 1u);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 0u)
+    << "the popped block's serve-credit row survived its block: the pop rebuilt the "
+       "key at a different height than the connect wrote it, and the tolerant "
+       "delete swallowed the miss";
+}
+
 TEST(archival_substrate_lmdb, plain_pop_drops_the_witness_and_parks_no_detached_row)
 {
   TempLMDB fixture;

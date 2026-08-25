@@ -181,10 +181,21 @@ block is the including block, so the key means **one record per producer per
 pair-epoch**: a producer cannot submit two for the same pair in one block, and
 cannot submit for a block it did not produce.
 
-**The old-vin dedup — `has_archival_serve_credit_bit`, called from
-`check_archival_serve_credit_input` — becomes the uniqueness enforcer**
-under the widened key. A duplicate is then not a double-count some check must
-catch — it is the same key, refused by the structure.
+**What enforces uniqueness under the widened key — corrected at
+implementation.** The draft said the old-vin dedup becomes that enforcer. It
+does not, and `PC-D7` below carries the reason: the exact-get is **vacuous**
+during admission, because it would probe a block not yet in the DB. The dedup
+therefore stays **pair-epoch-wide** until the assignment cutover.
+
+What the widened key does enforce, structurally and today, is that a producer
+cannot write two rows for the same pair in one block — that is the same key,
+refused by the table. The *count bound across blocks* is the part that needs
+the issuer, and `PC-D7` holds it.
+
+This paragraph is corrected rather than deleted because the draft's version was
+the round's own reasoning up to the point the code contradicted it, and a
+normative record that quietly loses its wrong turn teaches nobody where the
+turn was.
 
 #### 3.4.1 Field order is ruled, and it is the reason the prune survives
 

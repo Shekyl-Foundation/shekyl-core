@@ -202,6 +202,8 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFIN
 # of each definition's value (CMake only treats quotes as delimiters at
 # argument start), so the compiler receives -DNAME="/abs/path" and the
 # macro expands to a valid C string literal — verified in build.ninja.
+SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
+  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
 SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
   SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
