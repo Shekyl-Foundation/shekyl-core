@@ -473,8 +473,24 @@ mod tests {
         // A directory cannot be replaced by a file rename on either platform.
         fs::create_dir(&target).unwrap();
 
-        let err = atomic_write_file(&target, b"NEW")
-            .expect_err("renaming a file over a directory must fail");
+        // The pre-persist hook is the only place the staged path is visible, and
+        // capturing it is what makes this test name a file rather than scan for
+        // a suffix. It also proves staging got as far as the hook: if the write
+        // had failed earlier the hook would never run, `staged` would be `None`,
+        // and a suffix scan would have reported "no strays" for the wrong
+        // reason — the very fail-open shape this suite keeps finding.
+        let mut staged: Option<std::path::PathBuf> = None;
+        let err = atomic_write_file_with(&target, b"NEW", |p| {
+            staged = Some(p.to_path_buf());
+            Ok(())
+        })
+        .map(|((), d)| d)
+        .expect_err("renaming a file over a directory must fail");
+
+        let staged = staged.expect(
+            "the pre-persist hook never ran, so the failure was before staging and \
+             this test is not exercising the cleanup arm at all",
+        );
         let WalletFileError::AtomicWriteRename { ref source, .. } = err else {
             panic!(
                 "the failure must be the rename step, not an earlier one — otherwise \
@@ -498,14 +514,10 @@ mod tests {
         #[cfg(windows)]
         let _ = source;
 
-        let strays: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .filter(|n| n.to_string_lossy().ends_with(".shekyl-tmp"))
-            .collect();
         assert!(
-            strays.is_empty(),
-            "a failed rename stranded its staged file: {strays:?}"
+            !staged.exists(),
+            "a failed rename stranded its staged file: {}",
+            staged.display()
         );
     }
 
