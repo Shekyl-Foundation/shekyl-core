@@ -216,9 +216,10 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
 /// conflation the firewall forbids (`P` routing its fetch over a shared circuit)
 /// is unrepresentable on the constructor, not merely discouraged.
 //
-// Lint-visible: constructed on a non-test path, so no suppression applies. The
-// posture selector at the SP-5 scan-loop wiring is still the outstanding
-// consumer.
+// The posture selector at the SP-5 scan-loop wiring is the outstanding
+// consumer. Note the split: the struct and its `BlockSource` impl need no
+// suppression, while the `new` constructor below does — the module test is its
+// only caller until that selector lands.
 pub(crate) struct PBlockSource {
     rpc: PRpc,
 }
