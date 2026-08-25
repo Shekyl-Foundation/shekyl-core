@@ -86,7 +86,7 @@ namespace cryptonote
 // whether they can talk to a given daemon without having to know in
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
-// CORE_RPC_VERSION (3.23) lives in rust/shekyl-rpc-types/src/chain.rs since
+// CORE_RPC_VERSION (3.24) lives in rust/shekyl-rpc-types/src/chain.rs since
 // RK-1: get_version, its only reader, is served natively.
 
   struct rpc_request_base
@@ -1139,27 +1139,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<crypto::hash> tx_hashes;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(tx_hashes)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_GET_TRANSACTION_POOL_HASHES
   {

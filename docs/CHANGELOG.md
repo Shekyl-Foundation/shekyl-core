@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
+  a route that is called; nothing called this one. The two handlers made
+  the same two core reads and differed only in raw-versus-hex output, so
+  the surviving JSON route keeps them and nothing else went callerless.
+  `CORE_RPC_VERSION` is **3.24**. Found by `ci/rpc-route-liveness` on its
+  first run and held as an allowlist entry pending disposition; that entry
+  is now gone rather than permanent — an allowlist entry is a claim someone
+  has to defend, and there was no defence to make. Reopen clause in
+  `docs/DAEMON_RPC_RUST.md`.
+
 ### Fixed
 
 - **The submit-shim fixture paid a fee it never put in the transaction.**

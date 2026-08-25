@@ -77,6 +77,25 @@ distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
 distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
 with a named caller, never “keep epee.”
 
+### Deleted `.bin` pool-hashes sibling (no Axum route)
+
+`/get_transaction_pool_hashes.bin` and
+`COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN` are deleted. It is the binary
+spelling of `/get_transaction_pool_hashes`, which **is** called (the python
+framework's `daemon.py`); the `.bin` one was called by nothing. Both handlers
+performed the same two core reads and differed only in whether the hashes went
+out raw or hex, so the surviving JSON route keeps those reads and nothing else
+went callerless.
+
+Found by `ci/rpc-route-liveness` on its first run, and disposed of on the
+predicate already ruled for the batch-sync retirement below rather than
+carried as an exemption: an allowlist entry is a claim someone has to defend,
+and there was no defence to make.
+
+**Rule-21 reopen:** iff a named live consumer needs pool hashes in binary.
+Re-evaluation shape: a typed Rust route with that caller, not a restoration of
+the epee struct.
+
 ### Deleted batch sync (no Axum route)
 
 `/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
