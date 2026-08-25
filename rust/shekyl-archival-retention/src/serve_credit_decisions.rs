@@ -71,10 +71,19 @@ pub fn serve_credit_key_be(
 }
 
 /// D-SC-A verdict: is this `(P, shard, E)` already credited in the pre-block
-/// state? Mirrors `blockchain.cpp:4247`
-/// (`m_db->has_archival_serve_credit_bit`) with the LMDB read modeled as a
-/// membership probe over the marshaled pre-block key set — the I/O stays
-/// C++; the key construction and the membership verdict are the decision.
+/// state? Mirrors the dedup in `check_archival_serve_credit_input`, with the
+/// LMDB read modeled as a membership probe over the marshaled pre-block key
+/// set — the I/O stays C++; the key construction and the membership verdict
+/// are the decision.
+///
+/// **`PC-D4`: the C++ read is now
+/// `archival_serve_credit_pass_count(P, s, E) > 0`, not
+/// `has_archival_serve_credit_bit`.** This mirror named the latter until
+/// 2026-08-24, after the gate had stopped calling it. The VERDICT is
+/// identical — which is precisely why the description drifted without a
+/// single vector going red: an equivalence fixture pins what the gate decides,
+/// never what it reads. The key stays 48-byte pair-epoch here because the
+/// dedup does.
 ///
 /// `true` = duplicate (the C++ rejects: "Duplicate archival serve-credit for
 /// (P, shard, E)").
@@ -117,8 +126,10 @@ pub struct ServeCreditGateInputs {
     /// `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (the one size check C++ keeps,
     /// as a transport ceiling).
     pub pruned_record_in_bounds: bool,
-    /// Step 2 (`:4247`, D-SC-A): result of the pre-block
-    /// `has_archival_serve_credit_bit` read.
+    /// Step 2 (D-SC-A): does the pre-block state already hold a pass for this
+    /// pair-epoch — `archival_serve_credit_pass_count(P, s, E) > 0` on the C++
+    /// side (`PC-D4`; it was `has_archival_serve_credit_bit` before the ledger
+    /// key widened, and the field name predates that).
     pub preblock_present: bool,
     /// Step 3 (`:4254`): `get_archival_bond_hybrid_pubkey` succeeded.
     pub bond_substrate_present: bool,

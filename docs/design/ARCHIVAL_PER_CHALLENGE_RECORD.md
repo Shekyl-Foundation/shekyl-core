@@ -384,7 +384,7 @@ pass.
 | # | Site | Change |
 |---|---|---|
 | 1 | `challenge.rs::challenge_leaf_index` | preimage gains `block_hash(h−1)`; separator → `-v2` |
-| 2 | `wire.rs::signature_preimage` | binds the index derived from the including block |
+| 2 | `wire.rs::signature_preimage` | **VERIFIED** — takes the derived index as an operand, so it binds the block through it; no signature over a transported value |
 | 3 | `serve_credit.rs` (FFI) | derives the index with the block hash it is validating; verifies the opening against it |
 | 4 | `shekyl_ffi.h` + `check_archival_serve_credit_input` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
 | 5 | **`m_archival_serve_credit` key 48 → 56 B** | append `BE(block_height)`; every existing offset unchanged (§3.4.1) |
@@ -396,14 +396,42 @@ pass.
 | 8 | Slash-window walk (`archival_failure_window_slashable`) | reads "served" as a count over the widened key, not key-presence |
 | 9 | Fast-path miss check (same function, the early-out arm) | same |
 | 10 | `delete_archival_serve_credit_before_epoch` | **unchanged by construction** — the epoch stays at offset 40 (§3.4.1) |
-| 11 | Block-level SCE-1 uniqueness pass | widened key — per-challenge multiplies vins per tx |
+| 11 | Block-level SCE-1 uniqueness pass | **RESOLVED THE OTHER WAY** — stays PAIR-EPOCH. The enumeration assumed the widened key propagates here; it does not, because within one block the block component is common-mode and adds no discrimination. See row 6c. |
 | 12 | `gate2_serve_credit_kat.rs` | fixtures gain the block hash in the index derivation |
-| 13 | `serve_credit_tx_parity.rs` | **re-anchors only if the preimage changes its bytes** — verify; the vin itself does not move |
-| 14 | `failure_window.rs`, `attestation_settlement_window.rs` | confirm they consume the settlement-table shape, not raw record presence |
+| 13 | `serve_credit_tx_parity.rs` | **RE-ANCHORED** — the conditional resolved to yes: the derived index moved, so the countersignature re-signed and the kept blob's bytes moved with it. Its own guard fired ("gate-2 blobs moved under the parity pin"). It lives in `shekyl-wire`, outside the two crates this round was testing — see §5.4. |
+| 14 | `failure_window.rs` | **VERIFIED SAFE, comments corrected** — it consumes a per-epoch `served` **boolean**, computed C++-side, so the row multiplicity never reaches it. Its prose named a `per-(P, s, E)` ledger that no longer exists. |
+| 14b | ~~`attestation_settlement_window.rs`~~ | **NO SUCH FILE, and never any such file.** The enumeration named it; nothing else in the tree does. Half of row 14 was unfalsifiable from the moment it was written — see §5.4. |
 | 15 | `SO-D1`'s writer | its `passes` is this round's enumeration — the two rounds meet here |
 | 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B, and **`SO-D2`'s settlement key rides it** — see §5.2 |
 | 17 | `append_archival_block_unique_keys`' `'S'` reservation key | **not on the original list** — found by grounding the derivation site; see §5.3 |
 | 18 | `regtest_inject_archival_serve_credit` | **not on the original list** — a writer taking `(P, s, E)` as arguments, so `PC-D4` widens its signature too; it already warns its bit is not block-owned, which the widened key makes literal |
+
+### 5.4 What auditing the table itself turned up
+
+The blast-radius table was this round's checklist, and at close-out it was
+audited **against the code** rather than read. Three rows were wrong in ways
+worth recording, because each is a different failure of an enumeration:
+
+- **Row 11 resolved the opposite way.** It assumed the widened key propagates to
+  the within-block uniqueness pass. It does not — the block is common-mode
+  inside one block. An enumeration written before the implementation can assert
+  a *direction*, not just a site, and the direction is the part that needs
+  checking.
+- **Row 13's conditional resolved to "yes", and its target sits outside the
+  crates this round was testing.** `serve_credit_tx_parity.rs` is in
+  `shekyl-wire`; running `-p shekyl-archival-retention -p shekyl-ffi` all round
+  reported green over a **red** test. The fixture's own guard caught it the
+  moment the right target ran — the tooling was the gap, not the test. (Rule
+  45's gate is workspace-wide for exactly this reason.)
+- **Row 14 named a file that has never existed.** `attestation_settlement_window.rs`
+  appears nowhere in the tree or in any commit; nothing else in the repository
+  mentions it. Half that row was **unfalsifiable from the moment it was
+  written** — a checklist item that could never be discharged and never fail,
+  which reads as coverage for as long as nobody looks. Rule 47's shape applied
+  to a design doc: an item must be able to be *wrong*.
+
+Recorded rather than silently corrected: a table used as a checklist earns the
+same standard as the code it lists.
 
 ### 5.0 The ABI hazard the C++ half must clear FIRST
 
