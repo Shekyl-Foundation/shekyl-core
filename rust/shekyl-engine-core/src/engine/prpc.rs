@@ -68,9 +68,9 @@ impl PersonaIsolatedTransport for PRpc {}
 /// (same connection pool, same circuit), so cloning a `PRpc` for the same
 /// persona keeps its traffic on one circuit — the correct isolation semantics.
 //
-// `allow(dead_code)`: transient — the non-test consumer is the posture selector
-// (DQ-T2.3) at the scan-loop wiring, a later slice. The proving test ships with
-// the enabler (it is not deferred).
+// Lint-visible: `PTransactionSubmitter` and `PBlockSource` construct these, so
+// no suppression applies. The DQ-T2.3 posture selector at the scan-loop wiring
+// is still the outstanding consumer.
 #[derive(Clone)]
 pub(crate) struct PRpc {
     client: PTorClient,
@@ -148,8 +148,8 @@ impl Rpc for PRpc {
 /// dial the same host. The pin binds the *type that made the posture
 /// argument*, not any transport that coincidentally resolves to loopback.
 //
-// `allow(dead_code)`: transient — consumed by the emission regtest e2e and,
-// when the DQ-T2.3 posture selector lands, by the scan-loop wiring.
+// Lint-visible: consumed by the emission regtest e2e, so no suppression
+// applies. The DQ-T2.3 posture selector will add the scan-loop consumer.
 #[derive(Clone, Debug)]
 pub(crate) struct LocalNodeRpc {
     inner: HttpRpc,
@@ -224,7 +224,7 @@ impl Rpc for LocalNodeRpc {
 /// loop surfaces a real bad-node/protocol problem instead of retrying it as an
 /// endless "connecting…". Never renders the SOCKS username — every
 /// [`RequestErrorKind`] `Display` is username-free (invariant (a)).
-// `dead_code` until the wiring slice consumes `PRpc` (whose `post` calls this).
+// Reached through `PRpc::post`, so this carries no dead-code suppression.
 // Owned `PTransportError` by design — this is a `.map_err(classify)` target, which
 // hands ownership of the error (the by-ref form would force `|e| classify(&e)`),
 // so `needless_pass_by_value` is a false positive here.

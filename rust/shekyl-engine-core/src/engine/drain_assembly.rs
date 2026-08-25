@@ -208,9 +208,9 @@ pub(crate) struct DrainDestination {
 /// re-derived from each record's `(ciphertext, index)` inside the handler
 /// (rule 36).
 ///
-/// Dead_code allow: the assembly handler lands here; the Engine orchestrator
-/// entry (DS-PR-2) and the RPC drain entry are the remaining wiring (rule-21 —
-/// reopened when the orchestrator dispatch consumes this message).
+/// Lint-visible: the stake-engine drain handler consumes this, so no
+/// suppression applies. The Engine orchestrator entry (DS-PR-2) and the RPC
+/// drain entry remain the outstanding wiring (rule-21).
 pub(crate) struct AssembleDrain {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
@@ -232,8 +232,8 @@ pub(crate) struct AssembleDrain {
 /// single P-1 site, [`finalize_bond_tx`]) and the spent funding gindexes for
 /// the caller's reservation record. Secrets never cross the boundary.
 ///
-/// Dead_code allow: reply type of the assembly handler; same gate as
-/// [`AssembleDrain`].
+/// Lint-visible: reply type of the assembly handler, so no suppression
+/// applies. Same outstanding wiring as [`AssembleDrain`].
 #[derive(Debug)]
 pub(crate) struct AssembledDrain {
     /// The fully-signed, wire-encoded drain transaction, persona-bound.

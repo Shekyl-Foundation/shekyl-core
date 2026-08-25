@@ -43,8 +43,9 @@
 //! `STAGE_2_KEY_ENGINE_ACTOR.md` §6), [`LocalSigner`](super::signer::LocalSigner)
 //! holds a handle clone, and the merge post-pass reads
 //! [`HandleDerivationViewSecret`] (the 6-i construction-time projection). The
-//! `#[allow(dead_code)]` on [`SignTransaction`] and related items marks surfaces
-//! that remain cold until PR 5 / signing-engine work — not "unwired."
+//! [`SignTransaction`] and related items are reached from non-test code and
+//! carry no dead-code suppression; some stay cold until PR 5 / signing-engine
+//! work, which is not the same as "unwired."
 //!
 //! [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`]: ../../../../../docs/design/STAGE_2_KEY_ENGINE_ACTOR.md
 //! [`AllKeysBlob`]: shekyl_crypto_pq::account::AllKeysBlob

@@ -540,11 +540,9 @@ pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 /// `ReservationTTLActor` reads the same `ReservationTTLConfig`
 /// and applies per-collection policy without trait revision.
 ///
-/// `dead_code` allow: no V3.0-time reader until C5α wires the
-/// constructor parameter; the type lands in C2γ alongside the
-/// `Reservation`/`PendingTx` field augmentation per the §7.X
-/// commit decomposition's "type substrate before consumers"
-/// ordering.
+/// Lint-visible: a reader is in scope, so the type carries no suppression. It
+/// landed in C2γ ahead of its consumers, per the §7.X commit decomposition's
+/// "type substrate before consumers" ordering.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReservationTTLConfig {
@@ -591,9 +589,9 @@ impl Default for ReservationTTLConfig {
 /// stores values; C2γ lands the type ahead of the storage so
 /// the type-substrate sub-commit is a coherent compile unit.
 ///
-/// `dead_code` allow: no V3.0-time reader until C5β wires the
-/// `in_flight` collection. Pattern matches the
-/// `ReservationTTLConfig` allow above.
+/// Lint-visible, like `ReservationTTLConfig` above: a reader is in scope, so
+/// the type carries no suppression. C5β still wires the `in_flight`
+/// collection.
 ///
 /// # Why the full [`ConsumerHeldEntry`] rides along
 ///

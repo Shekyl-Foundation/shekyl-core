@@ -41,7 +41,7 @@
 //! This module *produces* the type (PR 2c-2a); the 2c-2b request path *consumes*
 //! it. The contract between the two PRs is a Rust type the consumer cannot
 //! forge, not a convention it has to remember. Inert until 2c-2b wires the
-//! consumer, so the producer carries `#[allow(dead_code)]`.
+//! consumer; the producer itself carries no dead-code suppression.
 
 use shekyl_engine_state::StakingBlock;
 use shekyl_types::PCanonicalId;

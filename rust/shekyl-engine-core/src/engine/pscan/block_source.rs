@@ -216,9 +216,9 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
 /// conflation the firewall forbids (`P` routing its fetch over a shared circuit)
 /// is unrepresentable on the constructor, not merely discouraged.
 //
-// `allow(dead_code)`: transient — the non-test consumer is the posture selector
-// at the SP-5 scan-loop wiring (a later slice). The proving test ships with the
-// enabler; it is not deferred.
+// Lint-visible: constructed on a non-test path, so no suppression applies. The
+// posture selector at the SP-5 scan-loop wiring is still the outstanding
+// consumer.
 pub(crate) struct PBlockSource {
     rpc: PRpc,
 }

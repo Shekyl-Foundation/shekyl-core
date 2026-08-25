@@ -67,8 +67,8 @@ use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 ///
 /// [`BroadcastSubmitter::submit_bound`]: super::transaction_submitter::BroadcastSubmitter::submit_bound
 //
-// `allow(dead_code)`: transient — the production minter is the WI-2 assemble
-// handler; the production consumer is the WI-3 dispatch driver.
+// Lint-visible: the WI-2 assemble handler mints these and the WI-3 dispatch
+// driver consumes them, so no suppression applies.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PBoundBytes {
     persona: PCanonicalId,

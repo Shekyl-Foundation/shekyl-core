@@ -72,8 +72,7 @@ pub fn engine_balance_for_bench(
 /// task / mailbox overhead. Benchmarking through `&Engine` would
 /// conflate the two; the standalone `LocalKeys` fixture is the correct
 /// measurement substrate. `LocalKeys` is retained as the `KeyEngine`
-/// implementor for exactly this in-process bench/oracle use
-/// (`#[allow(dead_code)]` on the production path).
+/// implementor for exactly this in-process bench/oracle use.
 ///
 /// Given the substrate, the bench fixture is a standalone
 /// `Box<LocalKeys>` rather than the unified
