@@ -358,7 +358,7 @@ impl Zone {
     /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
     /// that transport is a parameter, not a topology, and handing the
     /// scheduler the overlay identity would recouple the axes this type exists
-    /// to keep apart. The FFI (and the cutover's in-process caller) derives
+    /// to keep apart. The FFI (and the carrier's Rust-side caller) derives
     /// params, reach, and secrecy from one discriminant at the adapter.
     ///
     /// **A noise carrier's channel count must equal
@@ -380,9 +380,11 @@ impl Zone {
     /// # Who can reach the refusals
     ///
     /// C++ never sets the noise flag, so no production construction hits
-    /// these. Tests do. The cutover's in-process caller will: it forms the
+    /// these. Tests do. The carrier's Rust-side caller will: it forms the
     /// pair in Rust and stops routing it through `make_relay_zone` — which
-    /// is why the checks are here and not at the FFI edge.
+    /// is why the checks are here and not at the FFI edge. That caller is
+    /// not the daemon cutover's to provide (`COVER_TRAFFIC_RESTORATION.md`
+    /// §3, step 2, corrected 2026-08-25); C++ keeps performing transport.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,

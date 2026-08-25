@@ -234,10 +234,15 @@ namespace levin
 
         **No noise flag.** C++ cannot enable the carrier any more: the machinery
         that executed it here is deleted and `NoiseQueues` is the port. The FFI
-        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and the cutover's
-        in-process caller will set it — this function simply never does, which
+        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and the carrier's
+        Rust-side caller will set it — this function simply never does, which
         is why `get_status().has_noise` reads false everywhere and
-        `select_anonymity`'s noise-priority arm stays dormant. */
+        `select_anonymity`'s noise-priority arm stays dormant.
+
+        That caller does not wait on the daemon cutover (corrected
+        2026-08-25). C++ stays the transport for the carrier as it is for stem
+        and fluff; what is missing is a Rust-internal join, not a language
+        boundary move. */
     RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone)
     {
       const relay_zone_params params = public_zone_params();
@@ -1032,11 +1037,14 @@ namespace levin
        Dandelion++ defends against an **internal** adversarial peer. Enabling
        one is not a reason to disable the other. The Rust executor
        (`NoiseQueues`) owns the carrier and attaches it *below* the phase
-       (`plan_dispatch`). Until step 5 gives that executor an in-process
-       caller, a noise-configured zone runs its channels and carries nothing:
-       it spends bandwidth and leaks no phase. The branch was unreachable in
-       production either way — both notifier constructions pass a null noise
-       payload.
+       (`plan_dispatch`). The executor has no caller yet, and — corrected
+       2026-08-25 — that is NOT step 5's to give: the missing join is
+       Rust-internal on both sides (`Driver::poll`'s `Effect::NoiseSend` to
+       `NoiseQueues::take_for_send`), and C++ performs the transport for the
+       carrier exactly as it does for stem and fluff today. Until that join
+       exists no zone here enables noise at all, so the branch was unreachable
+       in production either way — both notifier constructions pass a null
+       noise payload. See `COVER_TRAFFIC_RESTORATION.md` §3, step 2.
 
        Recording parity was checked before the deletion. `fluff` makes the
        identical `on_transactions_relayed` call below. `stem`/`local` are

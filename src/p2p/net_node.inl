@@ -2408,12 +2408,19 @@ namespace nodetool
            live connection's zone. Coherence holds a still-stemming arrival on
            that zone.
 
-           The pool re-relay does NOT read `origin_zone` and does not come here
-           as a stem. Expired stems leave as `fluff` at `zone::public_` — the
-           Dandelion++ exit. Re-reading that literal as a leak, and re-stemming
-           those entries on their recorded origin, is the retracted U2-b path:
-           a liveness defect that strands the tx in the anonymity subgraph
-           (§59.1).
+           The pool re-relay does not come here as a stem, and does not read
+           `origin_zone` FOR ROUTING — it passes `invalid`, above. Since
+           §92.5c item 3 it does read the field for TIMING (`local_relay_base`
+           picks the retry's parameter class from it), which selects a wait
+           rather than a route and reaches no arm of this switch. The two
+           readings must stay apart, because turning the recorded origin into
+           a routing input is exactly the retracted path named next.
+
+           Expired stems leave as `fluff` at `zone::public_` — the
+           Dandelion++ exit. Re-reading that literal as a leak, and
+           re-stemming those entries on their recorded origin, is the
+           retracted U2-b path: a liveness defect that strands the tx in the
+           anonymity subgraph (§59.1).
 
            Witness: the token type. Still NOT witnessed: the arrival leg
            end-to-end (`t_core` harness, FOLLOWUPS). */
