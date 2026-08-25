@@ -7424,13 +7424,35 @@ void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_ep
   if (rc)
     throw0(DB_ERROR(lmdb_error("Failed to open archival_settlement cursor for revert: ", rc).c_str()));
 
+  // Every exit closes the cursor first, including the throwing ones.
+  //
+  // **This is the file's MINORITY shape, and saying so is the point.** The
+  // twin directly above -- `delete_archival_serve_credit_before_epoch` -- is
+  // byte-for-byte this function with a different table and does NOT close on
+  // its throw paths, and it is one of roughly eighteen such functions here.
+  // This one was written by copying that idiom, so a reader who assumes the
+  // difference is meaningful should know it is a correction, not a
+  // distinction between the two tables.
+  //
+  // Why correct it rather than match the neighbours: `mdb_cursor_close`
+  // requires a write cursor's transaction to still be LIVE (lmdb.h), so the
+  // close must happen HERE, while the throw is still unwinding this frame and
+  // before any caller aborts the txn -- there is no correct place to do it
+  // later. Severity is bounded either way, and that is worth stating too so
+  // nobody reads this as a leak fix: the txn frees its cursors when it ends
+  // ("It and its cursors must not be used again", lmdb.h on commit/abort), and
+  // every throw here is already on a fatal path. What is fixed is a handle
+  // held open across an unwind, for three lines.
   MDB_val k, v;
   MDB_cursor_op op = MDB_FIRST;
   while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
     op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalPairEpochKeySize)
+    {
+      mdb_cursor_close(cur);
       throw std::runtime_error("FATAL: archival_settlement key size mismatch on revert");
+    }
     // Epoch is the last 8 bytes: P_id[32] || BE(shard) || BE(E). PC-D4 widened
     // the SERVE-CREDIT key to 56 B; this table did not widen with it (SO-D1:
     // per-pair-epoch by design), so it keys with ArchivalPairEpochKey and the
@@ -7440,11 +7462,17 @@ void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_ep
     {
       rc = mdb_cursor_del(cur, 0);
       if (rc)
+      {
+        mdb_cursor_close(cur);
         throw0(DB_ERROR(lmdb_error("Failed to delete archival_settlement row on revert: ", rc).c_str()));
+      }
     }
   }
   if (rc != MDB_NOTFOUND)
+  {
+    mdb_cursor_close(cur);
     throw0(DB_ERROR(lmdb_error("archival_settlement cursor error on revert: ", rc).c_str()));
+  }
   mdb_cursor_close(cur);
 }
 
