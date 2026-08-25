@@ -52,6 +52,16 @@
   worse than leaving them broken: it would make a test whose entire purpose
   is detecting an on-disk rewrite blind to one.
 
+- **`BuildRust.cmake`'s Windows skip was justified by a blocker that no
+  longer exists.** Its comment said the Rust wallet stack was Unix-only, that
+  the Windows port was still an open design question (named-pipe ACLs vs.
+  UDS), and that building there would fail on the first of many sites. WP-Q1
+  ruled the pipe, WP-W2 shipped it, and both binaries were observed building
+  and linking for `x86_64-pc-windows-msvc` with `rpc_session_e2e` passing.
+  The rationale is corrected; **the gate is deliberately not flipped**, because
+  compiling is not installing and the CMake path, staging, `install()` and the
+  archive layout are all still unverified. WP-W5 owns that removal.
+
 - **`shekyl-engine-file` joined the Windows scouting step.** It owns the
   atomic write, the keys-file lock and password rotation — every
   Windows-specific file primitive the wallet has — and no Windows lane

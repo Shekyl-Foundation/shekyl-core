@@ -2277,11 +2277,31 @@ sustainability is unaffected by the recalibration.
   above described the `cfg(windows)` *arms* while missing that a whole
   platform-critical crate sat outside every Windows lane.
 
-  **Still unmet, unchanged:** nothing links for Windows through CMake,
-  `BuildRust.cmake` still skips the Rust binaries, the scouting step is still
-  `continue-on-error`, and Windows release archives still carry the daemon but
-  no wallet. WP-W5's flip now needs one green scouting run including the
-  engine-file lane.
+  **The headline claim of this entry is now FALSE, and it is corrected here
+  rather than quietly left standing.** This entry has said since 2026-08-18
+  that `shekyl-cli` and `shekyl-wallet-rpc` "do not compile" for Windows, and
+  `BuildRust.cmake`'s skip said the same in stronger terms — that a Windows
+  port was still an unanswered design question and that building would fail on
+  the first of many sites. Measured on 2026-08-25:
+  `cargo build --locked -p shekyl-cli -p shekyl-wallet-rpc --bins` on a Windows
+  box **exits 0 and produces both `.exe`s**, and `shekyl-cli`'s
+  `rpc_session_e2e` passes there — so the cli's session path *runs*, not merely
+  type-checks. The design question was answered by WP-Q1 and shipped by WP-W2;
+  the prose outlived it. `BuildRust.cmake`'s comment is corrected in the same
+  commit.
+
+  **What that does NOT license is flipping the build gate.** Compiling is not
+  installing. Unverified: the CMake path itself (it cross-compiles with its own
+  target/linker wiring, not the host cargo build that was observed), staging
+  into `bin/`, `install()`, and the archive layout — which is what
+  `contrib/gitian/*.yml` tars. WP-W5 removes the gate deliberately, with the CI
+  job that builds and smoke-tests both binaries; nobody should remove it on the
+  strength of a `cargo build`.
+
+  **Still unmet:** the Rust binaries are not built for Windows *through CMake*,
+  the scouting step is still `continue-on-error`, and Windows release archives
+  still carry the daemon but no wallet. WP-W5's flip now needs one green
+  scouting run including the engine-file lane.
 
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
