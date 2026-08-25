@@ -92,7 +92,6 @@ where
 
 /// Test / unit-build source returning a fixed, already-validated snapshot.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // constructed from `local_pending_tx` tests only.
 pub(crate) struct FixedFeeSnapshotSource {
     snapshot: ValidatedFeeEstimates,
 }

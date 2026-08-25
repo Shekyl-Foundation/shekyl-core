@@ -398,7 +398,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     // a feature-on **non-test** build still sees no caller — the
     // `dead_code` allow covers exactly that build shape.
     #[cfg(feature = "gf7-hooks")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // gf7-hooks lane only: the sim-facing observer injector; no default-feature caller.
     pub(crate) fn set_observer(&mut self, observer: Box<dyn BroadcastTimelineObserver>) {
         self.observer = observer;
     }

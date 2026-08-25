@@ -349,17 +349,15 @@ where
 /// closed by the [`BroadcastSubmitter`] constructor choke point (②→here, never
 /// the principal) plus the [`PBoundBytes`] pairing check at its façade.
 //
-// `allow(dead_code)`: transient — the non-test consumer is the gated **2c-2b**
-// bond-assembly + request-path wiring (see `stake_engine.rs` `TODO(2d)`), NOT the
-// posture selector (which resolves a posture, never a submitter). The dead-proxy
-// proving test ships with the enabler; not deferred.
-#[allow(dead_code)]
+// Lint-visible: the claim, drain and pscan dispatch paths exercise this, so no
+// suppression applies. The gated **2c-2b** bond-assembly + request-path wiring
+// (`stake_engine.rs` `TODO(2d)`) is the remaining consumer — NOT the posture
+// selector, which resolves a posture and never a submitter.
 pub(crate) struct PTransactionSubmitter {
     persona: PCanonicalId,
     rpc: PRpc,
 }
 
-#[allow(dead_code)]
 impl PTransactionSubmitter {
     /// Build a remote-posture submitter broadcasting over `persona`'s **own**
     /// circuit (through `socks`) to `base_url`. The transport is constructed
@@ -435,7 +433,6 @@ impl TransactionSubmitter for PTransactionSubmitter {
 /// pre-flight pairing check refused the dispatch (nothing reached a wire), or
 /// the delegated submit itself failed.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // transient — the non-test consumer is the 2c-2b request path.
 pub(crate) enum BroadcastSubmitError {
     /// The bytes' bound persona does not match the submitter's
     /// constructor-bound persona. A build-path defect (the single-mint-site
@@ -475,9 +472,9 @@ const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
 /// that owns the ②→[`Self::PerP`] routing guard (invariant A's open
 /// obligation, closed here).
 //
-// `allow(dead_code)`: transient — the non-test consumer is the 2c-2b
-// bond-assembly + request-path wiring (`stake_engine.rs` `TODO(2d)`).
-#[allow(dead_code)]
+// Lint-visible: exercised by the dispatch paths, so no suppression applies.
+// The 2c-2b bond-assembly + request-path wiring (`stake_engine.rs` `TODO(2d)`)
+// is the remaining consumer.
 pub(crate) enum BroadcastSubmitter<D> {
     /// ① The principal's loopback submitter. The wallet's own local daemon
     /// observing `P`'s tx is conceded (§3.1 part 3): it is the operator's
@@ -491,7 +488,6 @@ pub(crate) enum BroadcastSubmitter<D> {
     PerP(PTransactionSubmitter),
 }
 
-#[allow(dead_code)]
 impl<D: DaemonEngine> BroadcastSubmitter<D> {
     /// The single construction choke point: posture in, submitter out
     /// (§3.1 part 2). [`super::posture::select_broadcast`] stays

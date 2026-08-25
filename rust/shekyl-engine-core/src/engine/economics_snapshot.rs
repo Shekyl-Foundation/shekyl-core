@@ -108,7 +108,6 @@ pub(crate) fn snapshot_calibration_digest(
 /// V3.x adaptive-burn FOLLOWUPS item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // R6: only constructed via `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
-#[allow(dead_code)]
 pub(crate) struct CalibrationStamp {
     /// Monotonic calibration generation. Increments on each pre-genesis
     /// recalibration and (at V3.x) each adaptive-burn epoch. Consumers
@@ -140,7 +139,6 @@ pub(crate) struct CalibrationStamp {
 /// methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // R6: only constructed via `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
-#[allow(dead_code)]
 pub(crate) struct EconomicsParametersSnapshot {
     /// Emission speed factor per minute (locked at 22).
     pub emission_speed_factor: u8,

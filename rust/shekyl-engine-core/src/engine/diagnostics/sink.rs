@@ -403,7 +403,6 @@ pub(crate) const fn candidates_bucket(c: usize) -> &'static str {
 /// adequate for V3.0 producer coverage.
 #[cfg(any(test, feature = "test-helpers"))]
 #[derive(Debug, Default)]
-#[allow(dead_code)] // Constructed by C7 property tests (cfg(test)) and by downstream test-helpers consumers.
 pub struct AssertionSink {
     /// Recording buffer; `Mutex` guards the append on `emit` and the
     /// drain on inspection. `RwLock` would not help — every access
@@ -546,7 +545,6 @@ impl DiagnosticSink for AssertionSink {
 /// F-Mock-1 symmetry pin.
 #[cfg(any(test, feature = "test-helpers"))]
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Constructed by C7 panic-safety property tests (cfg(test)) and by downstream test-helpers consumers.
 pub struct PanickingSink {
     /// Which class of event triggers the panic. [`Trigger::Any`]
     /// panics on the first emission of any class.

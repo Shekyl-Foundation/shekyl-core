@@ -668,8 +668,7 @@ mod tests {
 
     /// The zero-pre-bond-output test (GF-4b §3.4 definition, §4 item 3) —
     /// state-level, against the sweep + the funding-record set (the
-    /// bond-post path's data plane; `AssembleBond` stays dead code, so no
-    /// end-to-end tx is built).
+    /// bond-post path's data plane; this test builds no end-to-end tx).
     ///
     /// One persona slot, mixed lineage: raw funding (rung 3) plus a
     /// `BondPostChange` record from a prior post. Asserts, in order:
