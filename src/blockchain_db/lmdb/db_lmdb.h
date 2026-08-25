@@ -741,6 +741,12 @@ public:
   /// reason. Both callers are rare — a prune, and a reorg crossing a fold.
   void delete_archival_settlement_for_epoch(uint64_t settlement_epoch);
 
+  /// Retention prune for the settlement table — every row strictly below
+  /// `prune_below_epoch`. Called from `prune_archival_epochs_before`, which
+  /// is contracted to visit every epoch-scoped archival table and was
+  /// missing this one.
+  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch);
+
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the
   /// caller contract. Delegates to the windowed form with a width-1 window.

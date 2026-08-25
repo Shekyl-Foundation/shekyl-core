@@ -1177,6 +1177,48 @@ TEST(archival_substrate_lmdb, epoch_prune_retires_witness_and_accrual_on_the_sam
     << "the prune reached into the retained epoch";
 }
 
+// The retention prune must visit the settlement table too.
+//
+// `prune_archival_epochs_before` is contracted to retire every epoch-scoped
+// archival table, and the settlement table was the one it did not visit — so
+// its rows would have accumulated for the life of the chain from the moment
+// the writer went live. That it is unreachable today (no production caller for
+// set_archival_settlement) is why the gap was invisible, not why it was safe:
+// a table this prune forgets stays forgotten after the writer is wired.
+//
+// The assertion is taken at the boundary epoch on BOTH sides, so a prune that
+// deletes too much fails as loudly as one that deletes nothing.
+TEST(archival_substrate_lmdb, epoch_prune_retires_settlement_rows_on_the_boundary)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t prune_below_epoch = 3;
+  const crypto::hash p = make_hash(0x8C);
+  const uint64_t shard = 7;
+
+  lmdb.set_archival_settlement(p, shard, prune_below_epoch - 1, /*passes=*/1, /*issued=*/3);
+  lmdb.set_archival_settlement(p, shard, prune_below_epoch, /*passes=*/2, /*issued=*/3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  std::array<uint8_t, 3> row{};
+  ASSERT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch - 1, row))
+    << "fixture premise: the retired epoch's row must exist before the prune";
+  ASSERT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch, row));
+
+  lmdb.prune_archival_epochs_before(prune_below_epoch);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_FALSE(lmdb.get_archival_settlement(p, shard, prune_below_epoch - 1, row))
+    << "the retired epoch's settlement row survived the retention prune -- the "
+       "shared prune does not visit this table";
+  EXPECT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch, row))
+    << "the prune reached into the retained epoch";
+}
+
 // reset() is enumeration-based: it empties every named table in the
 // environment except the keep-list (table_survives_chain_reset), so a
 // table added tomorrow cannot silently survive a chain wipe (FOLLOWUPS
