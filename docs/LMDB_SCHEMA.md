@@ -423,7 +423,7 @@ the write and the read.
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
 | Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
 | Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
-| Writers | `set_archival_settlement` (epoch close) |
+| Writers | `set_archival_settlement` — **not wired to production yet** (`SO-D8`); when it lands it runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event |
 | Readers | `get_archival_settlement` |
 | Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
 | Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |

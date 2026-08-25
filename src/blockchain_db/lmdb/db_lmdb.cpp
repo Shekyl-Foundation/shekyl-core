@@ -7400,6 +7400,31 @@ bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t 
     throw std::runtime_error("FATAL: archival_settlement value size mismatch");
 
   std::memcpy(out_row.data(), v.mv_data, out_row.size());
+
+  // SO-D2: the stored outcome must be the one its counts derive, and a
+  // zero-issued row is not a settlement (SO-D1). The write path cannot emit
+  // either, so reaching one here is corruption -- but "cannot be written" is
+  // only half an invariant while the reader has no way to ASK. C++ does not
+  // re-fold the counts itself (rule 36: Rust owns the value); it hands the
+  // bytes back to the same decoder that refuses them on the write side.
+  //
+  // Coverage boundary, stated because it is not what it looks like: the
+  // VALIDATOR is directly tested (`a_corrupt_row_is_refused_on_read` drives
+  // every refusal through the FFI), but this CALL SITE is a corruption
+  // tripwire with no red-side test -- `set_archival_settlement` cannot write a
+  // row that fails it, so the state is not constructible through any
+  // accessible interface, and deleting this call fails nothing. A test-only
+  // raw writer would add a way to STORE invalid rows in order to prove invalid
+  // rows are rejected; the honest note is the better trade. Same category as
+  // the `mv_size` FATAL checks throughout this file.
+  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
+    "the validate call names all three bytes; a width change must break this");
+  const uint8_t row_rc =
+    shekyl_archival_settlement_row_validate(out_row[0], out_row[1], out_row[2]);
+  if (row_rc != 0)
+    throw std::runtime_error(
+      "FATAL: stored archival_settlement row is not a canonical settlement; code "
+      + std::to_string(static_cast<unsigned>(row_rc)));
   return true;
 }
 

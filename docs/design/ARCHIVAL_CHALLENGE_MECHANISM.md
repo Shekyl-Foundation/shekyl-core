@@ -1494,10 +1494,15 @@ genuinely open).
   blocked", so its clearing is what re-opened the queue.
 - **`EndpointUpdate` on the bond wire — STILL HELD.** Ruled in shape, not in
   the tree.
-- **The settlement writer — HELD ON A ROUND, NOT ON A BLOCKER, as of
-  2026-08-23.** Its schema is no longer "genuinely open" in the sense meant
-  here: the round is open at `ARCHIVAL_SETTLEMENT_WRITER.md` with `SO-D1`…
-  `SO-D5` and `SO-D7` ruled and `SO-D6` (reorg) the one item outstanding.
+- **The settlement writer — SCHEMA LANDED; the production wiring is now the
+  hold, as of 2026-08-25.** This entry said the round had `SO-D6` (reorg)
+  outstanding, which was true on 2026-08-23 and is not now: `SO-D1`…`SO-D5`
+  are ruled, **`SO-D6` closed** (the revert deletes the rows and lets the
+  reconnect recompute), and **`SO-D7` was CORRECTED** — the `h_close + W₂`
+  timing is superseded, the writer runs inside the slash scheduler's per-epoch
+  pass. What remains is **`SO-D8`**: `set_archival_settlement` has the table,
+  the value encoding and the revert, and **no production caller**. The hold is
+  a wiring cutover, not an open schema question.
 
 **Recorded rather than edited down to the two survivors**, because the list's
 own framing is the useful part: it named a hold whose blocker was *the format

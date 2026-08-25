@@ -18,8 +18,8 @@
 // fixture below opens a fresh environment, so a ceiling that stopped covering
 // the table list fails here loudly rather than on someone's node.
 //
-// Verified by biting it: pinning maxdbs back to a literal 48 fails all six of
-// these with MDB_DBS_FULL. Worth knowing what that failure looks like, because
+// Verified by biting it: pinning maxdbs back to a literal 48 fails every test
+// in this file with MDB_DBS_FULL. Worth knowing what that failure looks like, because
 // it does NOT name the table you added — it names `m_output_metadata`, the one
 // that happens to be opened last. An overflow always accuses an innocent
 // table, which is why the fix was to derive the ceiling rather than to raise
