@@ -173,18 +173,32 @@ emission read.
 
 ### 3.3 Leaf index (deterministic)
 
+> **SUPERSEDED 2026-08-24 by `PC-D3`** (`ARCHIVAL_PER_CHALLENGE_RECORD.md`).
+> The block below is the ORIGINAL derivation and is **not what ships** — it is
+> kept because this file is the record of what gate-2 built, not a live spec.
+>
+> The shipped preimage appends `block_hash(h−1)` and the label is
+> **`-v2`**. Under this `-v1` form the index is a function of `(P, s, E)`
+> alone, so a pair-epoch's three challenges sample the SAME leaf — three
+> countersignatures over three identical openings, which looks like three
+> tests and contains one. **Implementing the block below would reproduce that
+> defect**, which is why the supersession is stated here rather than left to a
+> reader to discover from the registry.
+
 ```text
 τ = cSHAKE256(
-  customization = "shekyl/archival-serve-challenge-leaf-v1",
+  customization = "shekyl/archival-serve-challenge-leaf-v1",   # SUPERSEDED: now -v2
   input         = P_id[32]
                   || shard_id_le64
-                  || E_le64
+                  || E_le64                                     # SUPERSEDED: || block_hash(h−1)[32]
 )
 
 ℓ = uint64(τ) mod segment_leaf_count(shard, E)
 ```
 
 `ℓ` is knowable at epoch open; `P` must still be **reachable at `H_fire`**.
+(Under `PC-D3` it is knowable only once the challenging block is known — the
+point of binding it to that block.)
 
 ### 3.4 Fire time (beacon — reachability)
 

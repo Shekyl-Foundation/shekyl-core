@@ -421,8 +421,17 @@ worth recording, because each is a different failure of an enumeration:
   crates this round was testing.** `serve_credit_tx_parity.rs` is in
   `shekyl-wire`; running `-p shekyl-archival-retention -p shekyl-ffi` all round
   reported green over a **red** test. The fixture's own guard caught it the
-  moment the right target ran — the tooling was the gap, not the test. (Rule
-  45's gate is workspace-wide for exactly this reason.)
+  moment the right target ran — the tooling was the gap, not the test.
+
+  **And it recurred once more before the round closed**, which is what settles
+  it as a tooling defect rather than an oversight: registering the `-v2`
+  separator edited `CRYPTO_DOMAIN_REGISTRY.tsv`, which is pinned by a test in
+  `shekyl-crypto-pq` — a crate this round never touched. Green locally, red in
+  CI, the same shape and the same cause. **The affected-crate set is not
+  derivable from the diff's directory names**: a shared file has consumers
+  anywhere. CI runs
+  `cargo test --locked --workspace --exclude shekyl-randomx-differential`,
+  and that — not a `-p` list assembled from what looks related — is the gate.
 - **Row 14 named a file that has never existed.** `attestation_settlement_window.rs`
   appears nowhere in the tree or in any commit; nothing else in the repository
   mentions it. Half that row was **unfalsifiable from the moment it was
