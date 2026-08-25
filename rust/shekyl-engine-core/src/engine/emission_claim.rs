@@ -879,7 +879,7 @@ pub fn self_check_claims(
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use crate::engine::emission_source::{
-        BondContext, BondRow, EmissionClaimSource, EpochSnapshot,
+        BondContext, BondRow, EmissionClaimSource, EpochSnapshot, ServeAnchor, SlashWatermark,
     };
     use shekyl_archival_retention::{
         as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
@@ -1002,6 +1002,9 @@ pub(crate) mod test_fixtures {
                     shard_ids: ShardSet::new(vec![SHARD_A]).unwrap(),
                 },
                 claimed_settlement_epochs: claimed,
+                bonded_total_atomic: 0,
+                last_served: ServeAnchor::NeverServed,
+                last_settled_slash: SlashWatermark::NothingSettled,
             }),
             epochs,
         }
@@ -1139,6 +1142,24 @@ pub(crate) mod test_fixtures {
                 "claimed_settlement_epochs",
                 &bond.claimed_settlement_epochs,
             );
+            obj.insert(
+                "bonded_total_atomic".into(),
+                bond.bonded_total_atomic.into(),
+            );
+            // Emitted as the daemon emits them — flag plus value — so a fixture
+            // cannot accidentally exercise a shape the wire never produces.
+            let (served_flag, served_epoch) = match bond.last_served {
+                ServeAnchor::NeverServed => (false, 0u64),
+                ServeAnchor::ServedAt(e) => (true, e),
+            };
+            obj.insert("has_last_served_epoch".into(), served_flag.into());
+            obj.insert("last_served_epoch".into(), served_epoch.into());
+            let (slash_flag, slash_epoch) = match bond.last_settled_slash {
+                SlashWatermark::NothingSettled => (false, 0u64),
+                SlashWatermark::SettledThrough(e) => (true, e),
+            };
+            obj.insert("has_last_settled_slash_epoch".into(), slash_flag.into());
+            obj.insert("last_settled_slash_epoch".into(), slash_epoch.into());
         }
         let epochs: Vec<serde_json::Value> = source.epochs.iter().map(epoch_json).collect();
         put_array(&mut obj, "epochs", &epochs);

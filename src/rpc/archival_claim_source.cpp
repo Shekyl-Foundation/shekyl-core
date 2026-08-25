@@ -43,6 +43,56 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     res.holdings_kind = bond.holdings_kind;
     res.held_shard_ids = bond.held_shard_ids;
     res.claimed_settlement_epochs = bond.claimed_settlement_epochs;
+    res.bonded_total_atomic = bond.bonded_total_atomic;
+
+    // The `Unbond` cooldown anchor, gathered EXACTLY as the Unbond verify arm
+    // gathers it -- `blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post`
+    // call site, which carries the twin of this comment. THE TWO GATHERS MUST
+    // MOVE TOGETHER: this one only tells the wallet whether an exit can verify,
+    // so if they diverge the wallet reports readiness the chain then refuses --
+    // or, worse, reports "never served" for a record kind the verify arm knows
+    // has served, which is the permissive branch of both cooldown predicates.
+    // Nothing but these two comments couples them; a new record kind added to
+    // one is a silent divergence in the other (gate-4 §3.5): the record's held shards for
+    // a compact set, the all-shards P-prefix scan for a complete-tree record
+    // (which stores no shard list, so folding its empty list would report
+    // "never served" for a record that has). Never-served shards are omitted
+    // by both accessors, so an empty result is the legitimate
+    // "record exists, nothing served yet" case.
+    //
+    // The fold to the whole-record anchor stays Rust-side, through the same
+    // function consensus uses. A C++ max() here would be a second derivation of
+    // a consensus operand and could drift from the verifier that decides the
+    // tx — the failure `close_block_height` is already shaped to prevent.
+    const std::vector<uint64_t> last_served = bond.is_complete_tree()
+      ? db.archival_bond_all_last_served_epochs(p_id)
+      : db.archival_bond_last_served_epochs(p_id, bond.held_shard_ids);
+    uint8_t anchor_present = 0;
+    uint64_t anchor_epoch = 0;
+    // A non-OK return is a marshaling bug on this side (null pointer with a
+    // positive length, or a length past the slice-soundness bound), not a
+    // property of the record. Leave part A's exit operands absent rather than
+    // reporting an anchor this function did not compute: absence is the
+    // fail-closed reading for a consumer that cannot verify, and the wallet
+    // refuses to answer readiness on it.
+    if (shekyl_archival_whole_record_last_served(
+          last_served.empty() ? nullptr : last_served.data(),
+          last_served.size(),
+          &anchor_present,
+          &anchor_epoch) == SHEKYL_ARCHIVAL_BOND_POST_OK)
+    {
+      res.has_last_served_epoch = anchor_present != 0;
+      res.last_served_epoch = anchor_epoch;
+    }
+
+    // The scheduler's watermark, with the storage sentinel resolved here so no
+    // consumer has to carry it. Unlike the anchor above, absence on THIS
+    // operand is fail-closed at consensus (`slashes_settled_through`), so the
+    // two flags are not interchangeable.
+    const uint64_t slash_watermark = db.get_archival_last_slash_epoch();
+    res.has_last_settled_slash_epoch = slash_watermark != UINT64_MAX;
+    if (res.has_last_settled_slash_epoch)
+      res.last_settled_slash_epoch = slash_watermark;
   }
 
   // Full window, unconditionally (§7.2): the low end resolves through the

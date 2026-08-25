@@ -1833,6 +1833,31 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
     uint64_t last_settled_slash_epoch,
     uint64_t current_settlement_epoch);
 
+// Fold the served shards' last-served epochs into the whole-record
+// release-cooldown anchor -- the SAME fold
+// `shekyl_archival_verify_unbond_bond_post` applies internally, exported so a
+// marshaling caller reports the anchor instead of deriving a second one in C++.
+//
+// `out_present` is written 1 with the anchor in `out_epoch`, or 0 with
+// `out_epoch = 0` when no shard has served. Both outputs are written on every
+// OK return. The flag is load-bearing rather than cosmetic: the two consensus
+// predicates that consume the anchor treat an ABSENT anchor as permissive
+// (nothing served => nothing to cool down from), so a consumer that inferred
+// absence from a missing or zero field would route "we do not know" into the
+// permissive branch. Epoch 0 is a real settlement epoch; only the flag
+// separates it from "never served".
+//
+// Callers gather the slice exactly as the Unbond verify arm does: the record's
+// held shards for a compact set, the all-shards P-prefix scan for a
+// complete-tree record (which stores no shard list); never-served shards are
+// omitted by the DB accessors, so an empty slice is the legitimate
+// "record exists, nothing served" case.
+uint8_t shekyl_archival_whole_record_last_served(
+    const uint64_t* per_shard_last_served_ptr,
+    size_t per_shard_last_served_len,
+    uint8_t* out_present,
+    uint64_t* out_epoch);
+
 // Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no

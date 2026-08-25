@@ -4868,6 +4868,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // scheduler's settled watermark (the SLASH_SETTLEMENT_PENDING gate; u64
     // max = no epoch settled yet). The fold to the whole-record anchor and
     // every verdict stay Rust-side.
+    // TWIN GATHER: `rpc/archival_claim_source.cpp` performs this same
+    // shard-kind branch to tell a wallet whether an `Unbond` can verify. A
+    // record kind added here without being added there makes the wallet fold a
+    // vacuously-empty list into "never served" -- the permissive branch of
+    // `release_cooldown_elapsed` and `slashes_settled_through` -- and report an
+    // irreversible exit as ready. Change both.
     std::vector<uint64_t> last_served;
     if (have_record)
     {

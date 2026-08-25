@@ -102,6 +102,82 @@ pub struct EpochSnapshot {
     pub claimant_bond_idx: Option<usize>,
 }
 
+/// The whole-record release-cooldown anchor, as the **daemon folded it**.
+///
+/// Deliberately not an `Option<u64>` at rest, and the reason is a safety
+/// boundary rather than a style preference. Both consensus predicates that
+/// consume this operand treat an absent anchor as *permissive*:
+/// `release_cooldown_elapsed` returns `true` on `None`, and
+/// `slashes_settled_through` returns `true` on `None`. That is correct at the
+/// daemon, where absence can only mean "no shard has ever served" — nothing
+/// served, nothing whose settlement an exit could outrun.
+///
+/// On this side of the wire a bare `None` could also mean "the field never
+/// arrived", and that fact must be *fail-closed*: it would otherwise flow into
+/// the same permissive branch and report an irreversible exit as ready on a
+/// value the wallet never received. The daemon therefore reports the
+/// distinction (`has_last_served_epoch`) instead of leaving it inferred, the
+/// decoder requires the field (an absent one is
+/// [`EmissionSourceError::Malformed`], never a default), and this type has no
+/// variant for "unknown" — so the unsafe state cannot be constructed here at
+/// all, rather than being constructible and merely discouraged.
+///
+/// Epoch 0 is a real settlement epoch, so a zero-means-absent encoding would
+/// have collapsed the same two facts one layer lower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServeAnchor {
+    /// The daemon reported that no shard on this record has served.
+    NeverServed,
+    /// The daemon's folded whole-record anchor.
+    ServedAt(u64),
+}
+
+impl ServeAnchor {
+    /// The consensus predicates' operand form.
+    ///
+    /// The single place this becomes an `Option`, so every `None` reaching
+    /// `release_cooldown_elapsed` / `slashes_settled_through` provably came
+    /// from a daemon that said "never served" — not from a missing field.
+    #[must_use]
+    #[allow(dead_code)] // PR-P4 slice 2: `AssembleUnbond` is the caller; it is the only conversion to the verifier's operand form.
+    pub const fn as_verify_operand(self) -> Option<u64> {
+        match self {
+            Self::NeverServed => None,
+            Self::ServedAt(epoch) => Some(epoch),
+        }
+    }
+}
+
+/// The slash scheduler's monotone watermark, as the daemon reported it.
+///
+/// The storage sentinel (`u64::MAX` = nothing settled yet) is resolved
+/// daemon-side, so it never reaches this type.
+///
+/// Note the deliberate asymmetry with [`ServeAnchor`]: absence on *this*
+/// operand is already fail-closed at consensus — `slashes_settled_through`
+/// returns `false` when the watermark is absent but an anchor exists. The two
+/// therefore cannot share one "absent" encoding without being wrong for one of
+/// them, which is why they are separate types rather than two `Option<u64>`s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashWatermark {
+    /// No settlement epoch has been slash-processed yet.
+    NothingSettled,
+    /// Every epoch up to and including this one has been processed.
+    SettledThrough(u64),
+}
+
+impl SlashWatermark {
+    /// The consensus predicate's operand form.
+    #[must_use]
+    #[allow(dead_code)] // PR-P4 slice 2: `AssembleUnbond` is the caller; it is the only conversion to the verifier's operand form.
+    pub const fn as_verify_operand(self) -> Option<u64> {
+        match self {
+            Self::NothingSettled => None,
+            Self::SettledThrough(epoch) => Some(epoch),
+        }
+    }
+}
+
 /// Part-A claim context: the claimant's bond record as the daemon read it.
 #[derive(Debug, Clone)]
 pub struct BondContext {
@@ -116,6 +192,19 @@ pub struct BondContext {
     /// (`claimed_epochs_contains` binary-searches it; the ordering is
     /// enforced at decode, not assumed).
     pub claimed_settlement_epochs: Vec<u64>,
+    /// The record's current bonded balance — `verify_unbond_bond_post`'s first
+    /// operand (`NothingToUnbond` at zero) and the exact value a full exit's
+    /// `bond_debit` must equal.
+    #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` as the exit's `bond_debit`.
+    pub bonded_total_atomic: u64,
+    /// The release-cooldown anchor. See [`ServeAnchor`] for why this is not an
+    /// `Option<u64>`.
+    #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` / `unbond_readiness`.
+    pub last_served: ServeAnchor,
+    /// The slash scheduler's watermark. See [`SlashWatermark`].
+    #[allow(dead_code)]
+    // PR-P4 slice 2: read by `AssembleUnbond`'s slash-settlement precondition.
+    pub last_settled_slash: SlashWatermark,
 }
 
 impl BondContext {
@@ -359,6 +448,34 @@ impl EmissionClaimSource {
                     })?,
                 },
                 claimed_settlement_epochs,
+                bonded_total_atomic: req_u64(v, "bonded_total_atomic")?,
+                // `req_*`, not an `unwrap_or`: an absent field must be a decode
+                // error, because the only other option — defaulting — produces
+                // exactly the permissive `None` that would report an
+                // irreversible exit as ready on a value that never arrived.
+                // This is the line that makes "unknown" unrepresentable rather
+                // than merely discouraged (see `ServeAnchor`).
+                //
+                // There are two presence encodings here and they answer
+                // different questions, so it is worth saying which wins. The
+                // **required read is authoritative about the wire**: an absent
+                // `has_last_served_epoch`, or a `true` flag with the value
+                // missing, is `Malformed` — the flag cannot vouch for a field
+                // that did not arrive. The **flag is the daemon's assertion
+                // about semantics**: "this record has never served", which is a
+                // fact only the daemon holds. So `false` legitimately means the
+                // value is absent and it is never read; every other
+                // disagreement is a decode error, not a reconciliation.
+                last_served: if req_bool(v, "has_last_served_epoch")? {
+                    ServeAnchor::ServedAt(req_u64(v, "last_served_epoch")?)
+                } else {
+                    ServeAnchor::NeverServed
+                },
+                last_settled_slash: if req_bool(v, "has_last_settled_slash_epoch")? {
+                    SlashWatermark::SettledThrough(req_u64(v, "last_settled_slash_epoch")?)
+                } else {
+                    SlashWatermark::NothingSettled
+                },
             })
         } else {
             None
@@ -445,6 +562,114 @@ mod tests {
     /// (`emission_claim::test_fixtures::source_json`); the shape's
     /// independent pin is the C++ wire-contract test on the serializer
     /// side (`archival_claim_source_rpc.cpp`).
+    /// The exit operands must arrive or the decode must fail — they must never
+    /// default.
+    ///
+    /// This is the slice's safety boundary in one test. `release_cooldown_elapsed`
+    /// and `slashes_settled_through` both treat an ABSENT serve anchor as
+    /// permissive, which is right at the daemon (nothing served ⇒ nothing to cool
+    /// down from) and wrong here, where absence can also mean "the field never
+    /// arrived". If the decoder defaulted instead of erroring, an older daemon or
+    /// a dropped field would make the wallet compute readiness from a value it
+    /// never received and tell a user an irreversible exit was safe to take.
+    ///
+    /// So: every exit operand is a required field, and its absence is
+    /// `Malformed`. There is no `ServeAnchor` variant for "unknown" — a decode
+    /// that cannot answer refuses instead of guessing.
+    ///
+    /// **What this test covers, stated precisely.** It exercises the *decoder's*
+    /// contract, not a shape today's wire produces: the C++ marshaler writes all
+    /// three operands whenever `has_bond_record` is set, so a current daemon
+    /// never omits them and this negative control cannot fire against one. Its
+    /// value is forward-looking and is the reason it is worth keeping — a daemon
+    /// that predates these fields, a field dropped in a future response edit, or
+    /// a transport that elides scalars would all arrive here, and the decoder
+    /// refuses rather than defaulting into the permissive branch. The
+    /// wire-shape pin lives on the C++ side (`archival_claim_source_rpc.cpp`),
+    /// where it belongs; this is the decoder's half.
+    #[test]
+    fn a_missing_exit_operand_is_a_decode_error_never_a_permissive_default() {
+        for field in [
+            "bonded_total_atomic",
+            "has_last_served_epoch",
+            "has_last_settled_slash_epoch",
+        ] {
+            let mut v = fixture();
+            v.as_object_mut()
+                .expect("fixture is an object")
+                .remove(field);
+            let err = EmissionClaimSource::from_json(&v)
+                .expect_err("a missing exit operand must not decode");
+            assert!(
+                matches!(err, EmissionSourceError::Malformed(_)),
+                "{field} absent must be Malformed, got {err:?}"
+            );
+        }
+    }
+
+    /// A flag that vouches for a field which did not arrive is a decode error,
+    /// not a reconciliation.
+    ///
+    /// The two presence encodings answer different questions — the required read
+    /// is authoritative about the wire, the flag is the daemon's assertion about
+    /// semantics — so `has_last_served_epoch: true` with `last_served_epoch`
+    /// missing has no consistent reading and must not be resolved into one. The
+    /// dangerous resolution would be "trust the flag, default the value": that
+    /// yields `ServedAt(0)`, the earliest possible anchor, which makes the
+    /// cooldown look maximally elapsed.
+    #[test]
+    fn a_flag_without_its_value_is_malformed_not_reconciled() {
+        let mut v = fixture();
+        let obj = v.as_object_mut().expect("fixture is an object");
+        obj.insert("has_last_served_epoch".into(), true.into());
+        obj.remove("last_served_epoch");
+        let err = EmissionClaimSource::from_json(&v)
+            .expect_err("a flag vouching for a missing value must not decode");
+        assert!(matches!(err, EmissionSourceError::Malformed(_)), "got {err:?}");
+
+        // Same for the watermark, whose absence is fail-closed at consensus.
+        let mut v = fixture();
+        let obj = v.as_object_mut().expect("fixture is an object");
+        obj.insert("has_last_settled_slash_epoch".into(), true.into());
+        obj.remove("last_settled_slash_epoch");
+        let err = EmissionClaimSource::from_json(&v)
+            .expect_err("a flag vouching for a missing value must not decode");
+        assert!(matches!(err, EmissionSourceError::Malformed(_)), "got {err:?}");
+    }
+
+    /// The flag carries the fact; the value never encodes it. A served-at-epoch-0
+    /// record decodes as *served*, not as "never served" — the collapse a
+    /// zero-means-absent encoding would produce, and the one that would flip the
+    /// cooldown check from "not elapsed" to permissive.
+    #[test]
+    fn served_at_epoch_zero_decodes_as_served_not_as_never_served() {
+        let mut v = fixture();
+        let obj = v.as_object_mut().expect("fixture is an object");
+        obj.insert("has_last_served_epoch".into(), true.into());
+        obj.insert("last_served_epoch".into(), 0u64.into());
+        let src = EmissionClaimSource::from_json(&v).expect("decodes");
+        let bond = src.bond.expect("fixture has a bond record");
+        assert_eq!(bond.last_served, ServeAnchor::ServedAt(0));
+        assert_eq!(
+            bond.last_served.as_verify_operand(),
+            Some(0),
+            "the verifier must see an anchor, not the permissive None"
+        );
+    }
+
+    /// `NeverServed` is a real daemon answer and must still reach the verifier as
+    /// `None` — the permissive branch is correct when the daemon *said* so. This
+    /// is the other half of the pair: the mapping is not "always fail closed", it
+    /// is "closed on unknown, faithful on known".
+    #[test]
+    fn never_served_reaches_the_verifier_as_the_permissive_none() {
+        let src = EmissionClaimSource::from_json(&fixture()).expect("decodes");
+        let bond = src.bond.expect("fixture has a bond record");
+        assert_eq!(bond.last_served, ServeAnchor::NeverServed);
+        assert_eq!(bond.last_served.as_verify_operand(), None);
+        assert_eq!(bond.last_settled_slash.as_verify_operand(), None);
+    }
+
     fn fixture() -> Value {
         source_json(&EmissionClaimSource {
             chain_height: ChainCount::from_raw(30001),
@@ -456,6 +681,9 @@ mod tests {
                     shard_ids: ShardSet::new(vec![4, 9]).unwrap(),
                 },
                 claimed_settlement_epochs: vec![1],
+                bonded_total_atomic: 0,
+                last_served: ServeAnchor::NeverServed,
+                last_settled_slash: SlashWatermark::NothingSettled,
             }),
             epochs: vec![
                 EpochSnapshot {

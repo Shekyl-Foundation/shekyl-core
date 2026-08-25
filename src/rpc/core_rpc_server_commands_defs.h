@@ -2170,6 +2170,41 @@ namespace cryptonote
       /// Strictly increasing; mirrors
       /// `ClaimantBondRecord::claimed_settlement_epochs`.
       std::vector<uint64_t> claimed_settlement_epochs;
+      // ── Part A, exit operands (the `Unbond` preconditions) ───────────
+      /// The record's current bonded balance. `verify_unbond_bond_post`
+      /// checks it first (`RecordMissing` / `NothingToUnbond`) and requires
+      /// the vin's `bond_debit` to equal it exactly, so a producer cannot
+      /// even name a full exit without this value.
+      uint64_t bonded_total_atomic;
+      /// The whole-record release-cooldown anchor, folded daemon-side by
+      /// `shekyl_archival_whole_record_last_served` — the same fold consensus
+      /// applies. Never re-derived by the wallet, for the same reason
+      /// `close_block_height` is not.
+      ///
+      /// **The flag is a safety boundary, not a convenience.** Both consumers
+      /// of the anchor (`release_cooldown_elapsed`, `slashes_settled_through`)
+      /// treat an ABSENT anchor as permissive — correct at the daemon, where
+      /// absence can only mean "nothing has ever served". A reader that
+      /// inferred absence from a missing or zeroed field would put "the value
+      /// did not arrive" into that same permissive branch and report an
+      /// irreversible exit as ready on a fact it never received. Reported, so
+      /// the two are different values rather than the same silence. Epoch 0
+      /// is a real settlement epoch; only this flag separates the cases.
+      bool has_last_served_epoch;
+      /// Meaningful only when `has_last_served_epoch`.
+      uint64_t last_served_epoch;
+      /// The slash scheduler's monotone watermark. The storage sentinel
+      /// (`u64::MAX` = nothing settled yet) is resolved daemon-side into this
+      /// flag rather than shipped raw, so no consumer has to know it.
+      ///
+      /// Note the deliberate asymmetry with the anchor above: on THIS operand
+      /// absence is already fail-closed at consensus
+      /// (`slashes_settled_through` returns false when the watermark is absent
+      /// but an anchor exists), which is why a single shared "absent" encoding
+      /// for both operands would be wrong for one of them by construction.
+      bool has_last_settled_slash_epoch;
+      /// Meaningful only when `has_last_settled_slash_epoch`.
+      uint64_t last_settled_slash_epoch;
       // ── Part B: per-epoch snapshots, full window unconditionally ─────
       std::vector<epoch_snapshot_t> epochs;
 
@@ -2182,6 +2217,11 @@ namespace cryptonote
         KV_SERIALIZE(holdings_kind)
         KV_SERIALIZE(held_shard_ids)
         KV_SERIALIZE(claimed_settlement_epochs)
+        KV_SERIALIZE(bonded_total_atomic)
+        KV_SERIALIZE(has_last_served_epoch)
+        KV_SERIALIZE(last_served_epoch)
+        KV_SERIALIZE(has_last_settled_slash_epoch)
+        KV_SERIALIZE(last_settled_slash_epoch)
         KV_SERIALIZE(epochs)
       END_KV_SERIALIZE_MAP()
     };

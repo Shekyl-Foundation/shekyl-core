@@ -223,6 +223,69 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
 /// the len is 0 (an `Unbond` vin never carries the §9.11 field, so a conforming
 /// caller passes null/0; the shared marshaler rejects anything else as
 /// `ERR_BOND_SPEND_PK_COUPLING`).
+/// Fold the served shards' last-served epochs into the whole-record
+/// release-cooldown anchor — **the same fold** consensus applies inside
+/// [`shekyl_archival_verify_unbond_bond_post`], exported so a marshaling caller
+/// reports the anchor instead of deriving a second one.
+///
+/// The claim-source RPC is that caller: the wallet needs the anchor to answer
+/// `unbond_readiness(P)` and to know whether an `Unbond` can verify at all, and
+/// a C++-side or wallet-side re-fold would be a second derivation of a
+/// consensus operand — the failure mode `close_block_height` already forbids
+/// ("as the daemon sourced it; the wallet never re-derives").
+///
+/// Never-served shards are omitted by the caller's gather, so an empty slice is
+/// the legitimate "record exists, nothing has served yet" case and folds to
+/// *absent* rather than to an epoch. That distinction is load-bearing
+/// downstream: `release_cooldown_elapsed` and `slashes_settled_through` both
+/// treat an absent anchor as *permissive* (nothing served ⇒ nothing to cool
+/// down from), so a consumer must never be able to confuse it with "the value
+/// did not arrive". `out_present` is what keeps those two facts distinct on the
+/// wire — the value is reported, not inferred from a missing field.
+///
+/// Writes `*out_present = 1` and `*out_epoch = anchor` when at least one shard
+/// has served; `*out_present = 0` and `*out_epoch = 0` otherwise. Both outputs
+/// are written on every `OK` return, so a caller cannot read a stale slot.
+///
+/// # Safety
+/// When `per_shard_last_served_len > 0`, `per_shard_last_served_ptr` must be
+/// valid for that many `u64`s for the duration of the call. `out_present` and
+/// `out_epoch` must each be valid for one write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_whole_record_last_served(
+    per_shard_last_served_ptr: *const u64,
+    per_shard_last_served_len: usize,
+    out_present: *mut u8,
+    out_epoch: *mut u64,
+) -> u8 {
+    if out_present.is_null() || out_epoch.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let anchor = match unsafe {
+        with_bond_post_u64_slice(
+            per_shard_last_served_ptr,
+            per_shard_last_served_len,
+            whole_record_last_served,
+        )
+    } {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    unsafe {
+        match anchor {
+            Some(epoch) => {
+                *out_present = 1;
+                *out_epoch = epoch;
+            }
+            None => {
+                *out_present = 0;
+                *out_epoch = 0;
+            }
+        }
+    }
+    SHEKYL_ARCHIVAL_BOND_POST_OK
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     post_kind: u8,

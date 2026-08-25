@@ -419,6 +419,9 @@ mod tests {
                     shard_ids: ShardSet::new(ids).expect("fixture shard set"),
                 },
                 claimed_settlement_epochs: Vec::new(),
+                bonded_total_atomic: 0,
+                last_served: crate::engine::emission_source::ServeAnchor::NeverServed,
+                last_settled_slash: crate::engine::emission_source::SlashWatermark::NothingSettled,
             }),
             epochs: Vec::new(),
         })))
