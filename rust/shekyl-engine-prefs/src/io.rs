@@ -470,8 +470,19 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), PrefsError> {
         file.sync_all().map_err(PrefsError::Io)?;
     }
 
-    tmp.persist(target)
-        .map_err(|e| PrefsError::Io(io::Error::other(e.to_string())))?;
+    // `persist` rather than the `keep` + `rename` that `shekyl-engine-file`'s
+    // atomic writer needs: nothing holds a byte-range lock on the prefs file,
+    // so `MoveFileExW` alone is not refused here, and `persist` clears
+    // `FILE_ATTRIBUTE_TEMPORARY` itself. The distinction is the lock, not the
+    // platform.
+    //
+    // The error is carried through unchanged. It used to be re-wrapped as
+    // `io::Error::other(e.to_string())`, which discards `raw_os_error()` — and
+    // an OS code is exactly what made the Windows rotation failure diagnosable
+    // (`ERROR_ACCESS_DENIED` reads as "Access is denied", which names no
+    // mechanism). Dropping `e` still unlinks the staged file: `PersistError`
+    // owns the `NamedTempFile` and its guard runs here.
+    tmp.persist(target).map_err(|e| PrefsError::Io(e.error))?;
 
     fsync_parent_dir(parent)?;
     Ok(())

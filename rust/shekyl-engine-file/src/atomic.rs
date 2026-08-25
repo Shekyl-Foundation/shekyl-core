@@ -406,8 +406,8 @@ mod tests {
     /// [`KeysFileLock`] holds, taking the lock on the staged file through the
     /// pre-persist hook so the lock follows the inode the path is about to
     /// name. This is the exact sequence `WalletFile::rotate_password` runs, and
-    /// it returned `AtomicWriteRename { code: 5 }` on Windows for every wallet
-    /// until the `persist` swap above.
+    /// it returned `AtomicWriteRename { source: <os error 5> }` on Windows for
+    /// every wallet until the `persist` swap above.
     #[test]
     fn replaces_a_target_held_by_a_live_lock() {
         let dir = tempfile::tempdir().unwrap();
@@ -451,7 +451,21 @@ mod tests {
     /// A directory at the target is the portable way to make `rename` fail
     /// after everything before it has succeeded — the staging, the write and the
     /// fsync all complete, and only the swap is refused. The edit that turns
-    /// this red is deleting the `remove_file` call.
+    /// this red is deleting the `remove_file` call; observed red before being
+    /// trusted, with the stray file named in the failure message.
+    ///
+    /// **What each arm proves is not the same, and the difference is stated
+    /// rather than papered over.** `keep()` failing would also surface as
+    /// `AtomicWriteRename`, and in that case `tempfile`'s guard is still armed
+    /// and does the cleanup — so a test that only checked the variant could pass
+    /// without the `remove_file` arm ever running. On Unix that cannot happen:
+    /// `tempfile`'s `imp::keep` is a literal `Ok(())`, so the error is
+    /// necessarily the rename, and `EISDIR`/`ENOTDIR` pins it further. On
+    /// Windows `keep()` is a real `SetFileAttributesW` call that could in
+    /// principle fail with the same `ERROR_ACCESS_DENIED` the rename produces,
+    /// so the Windows arm asserts the weaker property. It is still worth
+    /// running there — it is the only arm that exercises the real
+    /// `FileRenameInfoEx` path — but the strict claim lives on Unix.
     #[test]
     fn a_failed_rename_still_removes_the_staged_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -461,11 +475,28 @@ mod tests {
 
         let err = atomic_write_file(&target, b"NEW")
             .expect_err("renaming a file over a directory must fail");
-        assert!(
-            matches!(err, WalletFileError::AtomicWriteRename { .. }),
-            "the failure must be the rename step, not an earlier one — otherwise \
-             this test is not exercising the cleanup arm it exists for: {err:?}"
-        );
+        let WalletFileError::AtomicWriteRename { ref source, .. } = err else {
+            panic!(
+                "the failure must be the rename step, not an earlier one — otherwise \
+                 this test is not exercising the cleanup arm it exists for: {err:?}"
+            );
+        };
+        #[cfg(unix)]
+        {
+            /// `errno.h`: the new path is a directory and the old one is not.
+            const EISDIR: i32 = 21;
+            /// The same conflict, reported the other way round by some kernels.
+            const ENOTDIR: i32 = 20;
+            assert!(
+                matches!(source.raw_os_error(), Some(EISDIR | ENOTDIR)),
+                "expected a directory-conflict errno from `rename`, got {source} — \
+                 a different code means the write failed somewhere other than the \
+                 swap, and `tempfile`'s guard would be doing the cleanup instead \
+                 of the arm under test"
+            );
+        }
+        #[cfg(windows)]
+        let _ = source;
 
         let strays: Vec<_> = fs::read_dir(dir.path())
             .unwrap()

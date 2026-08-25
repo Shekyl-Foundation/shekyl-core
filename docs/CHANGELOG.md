@@ -22,7 +22,7 @@
   still holds `LockFileEx` on byte 0 of it. `NamedTempFile::persist` issues
   `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else, and a
   byte-range lock on the target makes that `ERROR_ACCESS_DENIED` — surfaced
-  as `AtomicWriteRename { code: 5 }`, flattened by the RPC's classifier into
+  as `AtomicWriteRename` carrying os error 5, flattened by the RPC's classifier into
   `-32603 "password rotation failed"`. `std::fs::rename` issues the same
   call *and* retries on `ERROR_ACCESS_DENIED` through
   `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics, which
@@ -37,7 +37,7 @@
   wallet. This is the same class as the mandatory-lock bug in the keys-file
   read: POSIX-shaped reasoning about file replacement, invisible on Linux
   because `imp::keep` is a no-op there and `rename(2)` never cared about an
-  advisory `flock`. Three tripwires pin it — `persist` must stay refused
+  advisory `flock`. Four tests pin it — `persist` must stay refused
   over a locked target on Windows and `rename` must stay able to supersede
   it, the target must never be left marked temporary, and the whole
   rotation shape must work under a live `KeysFileLock`. Known limitation,
