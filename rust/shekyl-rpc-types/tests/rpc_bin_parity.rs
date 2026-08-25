@@ -13,7 +13,10 @@
 //! was deleted (`tests/unit_tests/rpc_oracle_vectors.cpp` at the capture
 //! commit).
 
-use shekyl_rpc_types::{GetOIndexesRequest, GetOIndexesResponse, RpcStatus};
+use shekyl_rpc_types::{
+    BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
+    GetOIndexesResponse, RpcStatus,
+};
 
 /// The emitter's `tagged_hash(31)`: byte i = (i*7 + 31) & 0xff.
 fn tagged_txid() -> [u8; 32] {
@@ -120,5 +123,91 @@ fn malformed_documents_are_refused() {
     assert!(
         GetOIndexesRequest::from_bin(&empty).is_err(),
         "a response is not a request"
+    );
+}
+
+// ── /get_blocks_by_height.bin ───────────────────────────────────────────────
+
+fn tagged_blob(tag: u8, len: usize) -> Vec<u8> {
+    (0..len)
+        .map(|i| {
+            u8::try_from(i & 0xff)
+                .expect("masked")
+                .wrapping_mul(7)
+                .wrapping_add(tag)
+        })
+        .collect()
+}
+
+#[test]
+fn get_blocks_by_height_request_matches_the_oracle_bytes() {
+    let built = GetBlocksByHeightRequest {
+        heights: vec![0, 1, 4_294_967_296, u64::MAX],
+    }
+    .to_bin()
+    .expect("encode");
+    let oracle = include_bytes!("vectors/rpc/get_blocks_by_height_request_v1.bin");
+    assert_bytes(oracle, &built, "get_blocks_by_height request");
+
+    let back = GetBlocksByHeightRequest::from_bin(oracle).expect("decode epee's own bytes");
+    assert_eq!(back.heights, vec![0, 1, 4_294_967_296, u64::MAX]);
+}
+
+/// Two blocks, one with transactions and one without. This pins the shape
+/// the capture proved: `txs` is an **array of strings**, not of objects, and
+/// none of `pruned`, `block_weight`, `attestation_witness` or
+/// `prunable_hash` appears — modelling any of them would emit a document
+/// epee never does.
+#[test]
+fn get_blocks_by_height_response_matches_the_oracle_bytes() {
+    let built = GetBlocksByHeightResponse {
+        status: RpcStatus::ok(),
+        blocks: vec![
+            BlockEntry {
+                block: tagged_blob(11, 24),
+                txs: vec![tagged_blob(31, 16), tagged_blob(41, 8)],
+            },
+            BlockEntry {
+                block: tagged_blob(53, 12),
+                txs: Vec::new(),
+            },
+        ],
+    }
+    .to_bin()
+    .expect("encode");
+    let oracle = include_bytes!("vectors/rpc/get_blocks_by_height_response_v1.bin");
+    assert_bytes(oracle, &built, "get_blocks_by_height response");
+
+    for absent in ["pruned", "block_weight", "attestation_witness"] {
+        assert!(
+            !built.windows(absent.len()).any(|w| w == absent.as_bytes()),
+            "{absent} must not reach this wire"
+        );
+    }
+
+    let back = GetBlocksByHeightResponse::from_bin(oracle).expect("decode epee's own bytes");
+    assert_eq!(back.blocks.len(), 2);
+    assert_eq!(back.blocks[0].txs.len(), 2);
+    assert!(
+        back.blocks[1].txs.is_empty(),
+        "a block with no transactions decodes as empty, not as an error"
+    );
+}
+
+/// No blocks at all: `blocks` is dropped from the document, like every other
+/// empty sequence. Removing the `is_empty` guard turns this red.
+#[test]
+fn an_empty_block_list_is_absent_not_an_empty_array() {
+    let built = GetBlocksByHeightResponse {
+        status: RpcStatus::ok(),
+        blocks: Vec::new(),
+    }
+    .to_bin()
+    .expect("encode");
+    let oracle = include_bytes!("vectors/rpc/get_blocks_by_height_response_empty_v1.bin");
+    assert_bytes(oracle, &built, "get_blocks_by_height empty response");
+    assert!(
+        !built.windows(6).any(|w| w == b"blocks"),
+        "an empty block list must not put the key in the document"
     );
 }
