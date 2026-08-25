@@ -590,6 +590,60 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
+/// **`PC-D6`: the emission fold, and the test that fails when it is removed.**
+///
+/// `PC-D4` made the serve-credit ledger per-CHALLENGE — one pair-epoch can hold
+/// up to `CHALLENGES_PER_PAIR_PER_EPOCH` rows. Emission stays per-PAIR-epoch:
+/// three passes credit a pair ONCE.
+///
+/// The gather pushes one `credit_pair` per row, so without an explicit fold the
+/// pair is paid per challenge. Nothing about that failure looks wrong: every
+/// row is legitimate, every index is correct, the arrays are well formed, and
+/// the only symptom is a number three times too large in a place no assertion
+/// was watching. That is why this test exists at all, and why it asserts on the
+/// pair COUNT rather than on a downstream reward figure — the fold's absence is
+/// only visible on the axis the fold acts on.
+///
+/// The edit that makes this red is deleting the `pair_seen` guard in
+/// `gather_archival_emission_epoch_snapshot`'s scan.
+TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_credit_pair)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t settlement_epoch = 3;
+  const uint64_t join_epoch = settlement_epoch - 1;
+  const crypto::hash p1 = make_hash(0x71);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+
+  // CHALLENGES_PER_PAIR_PER_EPOCH rows for ONE pair-epoch, each from a
+  // different block — the state PC-D4's key makes representable and PC-D2
+  // makes legitimate. Distinct heights are the whole point: at one height
+  // these would collapse in the table and the fold would never be exercised.
+  const uint64_t kBlocks[] = {4100, 4250, 4390};
+  for (const uint64_t h : kBlocks)
+    db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, h);
+
+  // The rows really are distinct — otherwise this test passes for the wrong
+  // reason, having never built the state it is about.
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p1, 7, settlement_epoch), 3u);
+
+  ArchivalEmissionEpochSnapshot snap;
+  lmdb.gather_archival_emission_epoch_snapshot(p1, settlement_epoch, snap);
+
+  EXPECT_EQ(snap.bonds.size(), 1u);
+  EXPECT_EQ(snap.shards.size(), 1u);
+  EXPECT_EQ(snap.credit_pairs.size(), 1u)
+      << "three challenge rows produced " << snap.credit_pairs.size()
+      << " credit pairs: the pair is paid once per challenge instead of once "
+         "per epoch, and every row involved is individually valid";
+}
+
 TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity)
 {
   TempLMDB fixture;

@@ -36,6 +36,7 @@
 #include <boost/circular_buffer.hpp>
 #include <memory>  // std::unique_ptr
 #include <cstring>  // memcpy
+#include <set>
 #include <map>
 #include <unordered_map>
 #include <array>
@@ -7810,6 +7811,14 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
     // bond table.
     std::vector<std::unordered_map<crypto::hash, size_t>> bond_index(window);
     std::vector<std::map<uint64_t, size_t>> shard_index(window);
+    // PC-D4/PC-D6: the ledger is per-CHALLENGE, so one pair-epoch can hold up
+    // to CHALLENGES_PER_PAIR_PER_EPOCH rows. Emission is per-PAIR-epoch: three
+    // passes credit a pair ONCE. Without this set the loop below pushes one
+    // credit_pair per ROW and the pair is paid per challenge -- silently,
+    // because every row is legitimate and every index is correct. This is the
+    // site where the widened key could inflate emission, and the fold is what
+    // preserves the payment granularity the key no longer carries.
+    std::vector<std::set<std::pair<size_t, size_t>>> pair_seen(window);
     // Bond and shard-segment records are keyed by P / shard alone (not by
     // epoch), so within one read view a single decode serves every epoch in
     // the window.
@@ -7910,7 +7919,13 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
             shard_it = shard_index[w].emplace(shard_id, out.shards.size()).first;
             out.shards.push_back(scached->second);
           }
-          out.credit_pairs.push_back({ bond_it->second, shard_it->second });
+          // Fold: first row for this (bond, shard) in this epoch wins. Note
+          // this does NOT rely on the rows being adjacent -- they are, since
+          // the height is the key's last component, but a fold that depended
+          // on that would be correct by circumstance rather than by
+          // construction.
+          if (pair_seen[w].emplace(bond_it->second, shard_it->second).second)
+            out.credit_pairs.push_back({ bond_it->second, shard_it->second });
         }
       }
       rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_NEXT);

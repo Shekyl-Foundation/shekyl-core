@@ -262,6 +262,19 @@ credit a pair once. No economic disposition opens — but note it is now preserv
 *by the fold* rather than by the key, so the fold is load-bearing and gets a test
 that fails if it is removed.
 
+**Landed, and the removal test confirmed the site was silent.** With the fold
+deleted, **exactly one** test in the whole suite goes red — the one written for
+it. Every other assertion stays green: each row is legitimate, each index is
+correct, the arrays are well formed, and the only symptom is a count three times
+too large where nothing was looking. That is the empirical form of "silent
+failure site", and it is worth recording that the pre-existing emission tests —
+which do assert on `credit_pairs.size()` — could not catch it, because they seed
+one row per pair-epoch and so never build the state the fold acts on.
+
+The test asserts on the **pair count**, not on a downstream reward figure: the
+fold's absence is only visible on the axis the fold acts on, and a reward
+assertion would have coupled it to the economics.
+
 ### `PC-D7` — HALF collapsed, and the other half is the count bound
 
 **Corrected 2026-08-24, during implementation.** This entry read
@@ -379,7 +392,7 @@ pass.
 | 6c | SCE-1 within-block pass | **stays pair-epoch too** — the block is common-mode inside one block, so widening adds no discrimination; bytes pinned by the equivalence fixture |
 | 6d | **slash-applied trio** (`has/set/remove_archival_slash_applied`) | **not on the original list** — shared `ArchivalServeCreditKey` by coincidence of shape; per-pair-epoch by design, so they move to the new `ArchivalPairEpochKey` rather than widening |
 | 6b | `remove_transaction` / `pop_block` | **must be threaded the block height** — the vin no longer carries it (§3.4.2) |
-| 7 | **Emission gather (`process_archival_epoch_close_at_height`)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site |
+| 7 | **Emission gather (`gather_archival_emission_epoch_snapshot`'s scan)** | **folds rows → one `credit_pairs` per pair-epoch, explicitly** — the silent-inflation site; **LANDED**, with `emission_gather_folds_three_challenges_into_one_credit_pair` as its removal test |
 | 8 | Slash-window walk (`archival_failure_window_slashable`) | reads "served" as a count over the widened key, not key-presence |
 | 9 | Fast-path miss check (same function, the early-out arm) | same |
 | 10 | `delete_archival_serve_credit_before_epoch` | **unchanged by construction** — the epoch stays at offset 40 (§3.4.1) |
