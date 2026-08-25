@@ -25,8 +25,10 @@ serde_json = { workspace = true }
 # Only to render a byte diff when a `.bin` parity test fails.
 hex = "0.4"
 # The frozen-hex txid KAT (tests/txid_kat.rs) computes the engine-side txid
-# over a C++-captured oracle blob. Dev-only: the contract crate's production
-# dependency surface stays serde alone.
+# over a C++-captured oracle blob. Dev-only, and that is the load-bearing
+# part: a wire-contract crate that pulled in the tx builder to check a test
+# vector would invert its own dependency direction. The production surface is
+# serde and the `.bin` codec above — nothing else.
 shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]
