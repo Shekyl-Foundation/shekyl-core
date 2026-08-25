@@ -1508,6 +1508,34 @@ uint8_t shekyl_archival_serve_credit_extract(
     uint64_t* out_shard_id,
     uint64_t* out_settlement_epoch);
 
+/// Settlement-outcome row encoding (SO-D2).
+///
+/// C++ owns the table and its 48-byte key; Rust owns the 3-byte value, because
+/// the value carries the invariant that its outcome byte equals the fold over
+/// its counts. There is deliberately NO outcome parameter: supplying one would
+/// reopen at the boundary the disagreement the Rust type closes.
+///
+/// **The key is `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`** — this
+/// comment said the latter until PC-D4 widened that key to 56 B. The settlement
+/// table is per-pair-epoch by design (SO-D1: one row per pair with issued >= 1),
+/// so it did not widen with the ledger, and SO-D2's "one key probes both
+/// tables" rationale is retired rather than broken: the two tables answer at
+/// different granularities — evidence per challenge, verdict per pair-epoch.
+/// See ARCHIVAL_PER_CHALLENGE_RECORD.md §5.2.
+///
+/// Writes shekyl_archival_settlement_row_len() bytes to out_row on OK (0) and
+/// writes NOTHING on any error, so a caller that ignores the code cannot store
+/// a fabricated settlement.
+///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte.
+uint8_t shekyl_archival_settlement_row(
+    uint32_t passes,
+    uint32_t issued,
+    uint8_t* out_row);
+
+/// Encoded length of a settlement row, so C++ sizes its buffer from the
+/// definition rather than a literal.
+size_t shekyl_archival_settlement_row_len(void);
+
 /// The verifier-derived challenge leaf index (RF-D6: never on the wire;
 /// PC-D3: bound to the block the record rides in).
 ///
