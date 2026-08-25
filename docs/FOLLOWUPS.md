@@ -7353,7 +7353,10 @@ sustainability is unaffected by the recalibration.
   naming the fixture. Finding **SCE-1** (BE/native-endian `(P,s,E)`
   key split) was proven behavior-irrelevant and then **resolved** by
   the post-equivalence unify commit (D-SC-C now keys with
-  `ArchivalServeCreditKey`). No divergence between the C++ and the
+  `ArchivalPairEpochKey` — it was `ArchivalServeCreditKey` until `PC-D4`
+  widened that type to 56 B; the block-uniqueness pass stayed at the
+  48-byte pair-epoch width, because within ONE block the block component
+  is common-mode and adds no discrimination). No divergence between the C++ and the
   mirrors was found. The V3.1 flip entry is unchanged.
 
   The **decision-site flip** (Rust becomes the primary decision site,

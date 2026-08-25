@@ -84,6 +84,10 @@ fuzz_target!(|data: &[u8]| {
         held_at_fire: c.bool(),
         registry_present_at_fire: c.bool(),
         segment_leaf_count: c.u64(),
+        // PC-D3: drawn from the corpus like every other input, so the fuzzer
+        // reaches the all-zero sentinel the gate refuses as well as the
+        // populated hashes it derives from.
+        prev_block_hash: c.arr32(),
         leaf_chunk_ok: c.bool(),
         verify_ok: c.bool(),
     };

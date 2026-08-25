@@ -346,6 +346,15 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict
     if inputs.segment_leaf_count == 0 {
         return Reject(R::LeafIndexDerivationRefused);
     }
+    // `PC-D3`: the same refusal the C++ path takes. `check_archival_serve_credit_input`
+    // calls `shekyl_archival_challenge_leaf_index`, which answers
+    // `ERR_PREVHASH_UNPOPULATED` for an all-zero hash and rejects the vin — so a
+    // mirror that derived an index from it would disagree with production on an
+    // input production refuses. Both arms land on the same verdict here because
+    // the C++ reports both through one "leaf index derivation refused" branch.
+    if inputs.prev_block_hash == [0u8; 32] {
+        return Reject(R::LeafIndexDerivationRefused);
+    }
     let leaf_index = crate::challenge::challenge_leaf_index(
         &inputs.p_canonical_id,
         inputs.shard_id,
@@ -553,6 +562,17 @@ mod tests {
             ),
             (
                 |i| i.segment_leaf_count = 0,
+                GateReject::LeafIndexDerivationRefused,
+            ),
+            (
+                // PC-D3: the all-zero unpopulated sentinel. Same verdict as a
+                // zero geometry because the C++ reports both through one
+                // "leaf index derivation refused" branch -- and the mirror
+                // must agree with the gate on an input the gate REFUSES, not
+                // only on the ones it derives from. Without this the mirror
+                // derived an index here while
+                // `shekyl_archival_challenge_leaf_index` rejected the vin.
+                |i| i.prev_block_hash = [0u8; 32],
                 GateReject::LeafIndexDerivationRefused,
             ),
             (

@@ -395,17 +395,29 @@ Per-staked-output watermark tracking the last claimed height.
 
 ### `archival_serve_credit`
 
-Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch)` (gate-2 §3.1).
+Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch, block)`
+— **per CHALLENGE, not per pair-epoch** (`PC-D4`). A pair-epoch holds up to
+`CHALLENGES_PER_PAIR_PER_EPOCH` rows, one per block that challenged it, and
+consensus counts passes by **enumerating** them: no field anywhere carries a
+tally (`PC-D1`/`PC-D5`).
 
 | Property | Value |
 |---|---|
 | LMDB name | `"archival_serve_credit"` |
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
-| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch) \|\| BE(block_height)` (**56 bytes**) |
 | Value | `uint8_t` `0x01` (presence flag; key existence is the authoritative bit) |
-| Writers | `set_archival_serve_credit_bit` (on archival vin block connect), `remove_archival_serve_credit_bit` (reorg `pop_block`) |
-| Readers | `has_archival_serve_credit_bit` (idempotency check; derived `R_market` at epoch close) |
+| Writers | `set_archival_serve_credit_bit` (on archival vin block connect, at the block's INDEX), `remove_archival_serve_credit_bit` (reorg `pop_block`, at the same index) |
+| Readers | `has_archival_serve_credit_bit` (the EXACT per-challenge question), `archival_serve_credit_pass_count` (the pair-epoch enumeration; the prefix scan every "did this pair serve at all" caller wants) |
 | Encoder | `shekyl::db::ArchivalServeCreditKey` in `blockchain_db/shekyl_types.h` |
+
+**Field order is load-bearing.** `BE(block_height)` is **appended**, so offsets
+0..47 are exactly the pair-epoch layout: the epoch stays at offset 40, which is
+what lets `delete_archival_serve_credit_before_epoch` and the cursor scans keep
+working by construction rather than by re-audit. The 48-byte prefix is
+`shekyl::db::ArchivalPairEpochKey`, which is a **different type** for the tables
+that are per-pair-epoch by design (`archival_slash_applied`,
+`archival_settlement`) — see `ARCHIVAL_PER_CHALLENGE_RECORD.md` §5.2.
 | Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
 
 ### `archival_bond`

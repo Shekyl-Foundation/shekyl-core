@@ -918,16 +918,21 @@ private:
   MDB_dbi m_properties;
 
   MDB_dbi m_block_burn;
-  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
-  // Settlement outcomes (SO-D2). SAME 48-byte key as m_archival_serve_credit --
-  // deliberately, so one ArchivalServeCreditKey probes both tables -- but a
-  // 3-byte value (outcome||passes||issued) rather than a presence flag. The two
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E)||BE(height) [56B] -> uint8_t 0x01 flag
+  // Settlement outcomes (SO-D2). Keyed by ArchivalPairEpochKey [48B]: SO-D2
+  // ruled this key byte-identical to m_archival_serve_credit's so one key
+  // probed both tables, and PC-D4 then widened THAT key to 56 B while this
+  // table stayed per-pair-epoch (SO-D1: one row per pair with issued >= 1).
+  // The shared-key rationale is therefore RETIRED, not broken -- the two
+  // tables answer at different granularities, evidence per challenge and
+  // verdict per pair-epoch. Value is 3 bytes (outcome||passes||issued) rather
+  // than a presence flag. The two
   // tables cannot be merged: this one records a NEGATIVE (Missed), and every
   // consumer of m_archival_serve_credit reads key-presence as "pay this pair"
   // (old-vin dedup, slash-window walk, fast-path miss, emission gather -- a
   // pure presence cursor-walk with no value-byte gate), so a Missed cell there
   // would corrupt vin-dedup and emission at once (SO-D4.3).
-  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B] -> outcome||passes||issued [3B]
+  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B, ArchivalPairEpochKey] -> outcome||passes||issued [3B]
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit

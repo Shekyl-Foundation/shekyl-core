@@ -106,8 +106,10 @@ TEST(relay_category, all_admits_every_method)
 // `broadcasted` means the network already has it: block or fluff, nothing
 // earlier. This is the disclosure boundary -- the foreign `in_pool_broadcast`
 // fact, the pool-inspection RPC's non-sensitive view, and the block template
-// all read it. (`core::pool_has_tx` reads it too and should not; see the note
-// at its definition.)
+// all read it. (`core::pool_has_tx` does NOT: it asks a local holding
+// question and reads `all` -- see the note at its definition. This comment
+// said it "reads it too and should not" until 2026-08-25, describing the
+// state before that caller was corrected.)
 TEST(relay_category, none_is_not_broadcast)
 {
   EXPECT_FALSE(cryptonote::matches_category(relay_method::none, relay_category::broadcasted))
