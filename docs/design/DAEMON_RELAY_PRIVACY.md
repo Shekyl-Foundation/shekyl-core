@@ -14015,9 +14015,17 @@ argument and by link 1, not by execution.
 > **HISTORICAL as of Q12-U2 (2026-08-12).** This section is the #427
 > diagnosis. Link 5 is closed: an arrival is stemmed whatever transport
 > carried it, `relay_method::forward` is deleted, and coherence executes
-> on the live connection's zone. The pool re-relay does **not** read
-> `origin_zone`; expired stems leave as fluff at `zone::public_`, which
-> is the exit, not a leak. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+> on the live connection's zone. Expired stems leave as fluff at
+> `zone::public_`, which is the exit, not a leak. See
+> `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+>
+> **Amended 2026-08-25:** "the pool re-relay does not read `origin_zone`"
+> stood here and is now false. §92.5c item 3 made it a live timing input —
+> `local_relay_base` reads it to pick the retry's parameter class. That does
+> not reopen link 5 (the field selects a *wait*, not a route, and every entry
+> reaching it carries `invalid`), but the sentence was load-bearing for a
+> rule-15 deletion clause in `blockchain_db.h`, so it is corrected in both
+> places rather than left as a trap.
 
 **2026-08-10, review round on #427.** Three findings, all in §89's own
 territory, and the first two are the same mistake §63.9 named: reasoning from
@@ -14957,6 +14965,20 @@ the entry's age rounded to it, capped at `MAX_RELAY_TIME`. And the emission
 **count** barely moves (13 → 11 over the 36 h window), because `MAX_RELAY_TIME`
 and `max_age / 2` dominate the tail. So §92.5's pricing of branches (a)–(d)
 **stands**; this does not require the disarm round to re-do its arithmetic.
+
+**Only a transaction that was actually SENT asks this question.** `local` is
+worn by two entries. One has been dispatched and stayed `local` because
+`originated_stays_in_zone` pinned it there — that is the origin above, and its
+retry is the stem-completion question. The other has never been sent at all:
+`insert_attested_tx` stamps `relayed = false` and names this same loop the
+fallback if the engine's fire-and-forget submit nudge missed
+(`DAEMON_SUBMIT_VERDICT.md` §4.3 / §5.2 item 1). For that entry **no stem was
+launched and no embargo exists anywhere**, so the derived interval would be
+provisioning against an event that cannot have happened — 848 s of added
+latency on a *first* send, buying nothing. It keeps `MIN_RELAY_TIME`, which is
+the answer to the question it is actually asking ("did the nudge miss?").
+`local_relay_base` carries the split, and the two 400 s test cases differ in
+`relayed` alone so the discriminant cannot drift.
 
 **It provisions against an unobservable, and that is the honest framing.** The
 case this retry rescues is a swallow at hop 1: the first stem peer drops the

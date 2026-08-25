@@ -90,18 +90,17 @@ namespace cryptonote
 
 
     /* A kind of increasing backoff within min/max bounds.
-       `base` is the FIRST wait and the rounding grid; every later gap is the
+       `base` is the first wait and the rounding grid; every later gap is the
        entry's age rounded to it, capped at `MAX_RELAY_TIME`.
 
        The base is a parameter rather than `MIN_RELAY_TIME` because the classes
        on this branch no longer share one question. `fluff` and `block` are
        already broadcast, so re-relaying them is a liveness nicety on an
-       inherited grid. `local` is not: `originated_stays_in_zone` pins an
-       anonymity-zone ORIGIN at `local` permanently, so that entry lives here
-       for its whole life and its first wait is the origin asking "has my stem
-       probably completed?". That is a derived quantity
+       inherited grid. A RE-BROADCAST by an origin is not: it asks "has my stem
+       probably completed?", which is a derived quantity
        (`shekyl_dandelionpp_origin_retry_interval_seconds`), and at
-       `MIN_RELAY_TIME` it sat below the anonymity embargo's own median.
+       `MIN_RELAY_TIME` it sat below the anonymity embargo's own median. See
+       `local_relay_base` for which entries actually ask that question.
 
        The escalation SHAPE is unchanged for both. Repeated failure is a reason
        to back off, and inventing a second schedule shape is not what the
@@ -114,18 +113,37 @@ namespace cryptonote
       return d;
     }
 
-    /*! The origin's first re-broadcast wait, in seconds, for a pool entry.
+    /*! The backoff base for a `relay_method::local` pool entry, in seconds.
 
-        Reads the entry's recorded origin zone. Originated traffic carries
-        `invalid` -- it did not arrive over anything -- which the Rust boundary
-        resolves to the anonymity parameter class: correct, because a surviving
-        `local` record IS an anonymity origin, and fail-safe, because it is the
-        longer wait.
+        Two entries wear `local` and they are asking different questions, so
+        one base cannot serve both.
+
+        NOT YET SENT (`relayed == false`): `insert_attested_tx` stamps this
+        state and names this loop its fallback if the engine's fire-and-forget
+        submit nudge misses (DAEMON_SUBMIT_VERDICT.md §4.3 / §5.2 item 1). No
+        stem was ever launched, so no embargo exists anywhere to complete, and
+        the derived interval would be provisioning against an event that cannot
+        have happened -- pure added latency on the first send. The inherited
+        `MIN_RELAY_TIME` is the answer to the question actually being asked,
+        which is "did the nudge miss?".
+
+        SENT AND STILL HERE (`relayed == true`): `originated_stays_in_zone`
+        pins an anonymity-zone ORIGIN at `local` permanently, so this entry
+        lives on this branch for its whole life, and its retry IS the origin
+        asking whether its stem completed. That is the derived quantity.
+
+        The zone read is the entry's recorded origin zone. Originated traffic
+        carries `invalid` -- it did not arrive over anything -- which the Rust
+        boundary resolves to the anonymity parameter class: correct, because a
+        surviving `local` record IS an anonymity origin, and fail-safe, because
+        it is the longer wait.
 
         The Rust side caches per parameter class, so this is a lookup rather
         than a survival-quantile solve per entry per pass. */
-    time_t origin_retry_base(const txpool_tx_meta_t &meta)
+    time_t local_relay_base(const txpool_tx_meta_t &meta)
     {
+      if (!meta.relayed)
+        return MIN_RELAY_TIME;
       const auto zone = static_cast<std::uint8_t>(meta.get_origin_zone());
       return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(zone));
     }
@@ -1060,10 +1078,12 @@ namespace cryptonote
           case relay_method::none:
             return true;
           case relay_method::local:
-            // The origin's own retry: derived from the network's own
-            // full-travel confidence, not the inherited 300 s grid.
+            // An origin's re-broadcast is derived from the network's own
+            // full-travel confidence, not the inherited 300 s grid; an entry
+            // that has never been sent keeps the grid. `local_relay_base`
+            // carries the distinction.
             if (now - meta.last_relayed_time
-                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, origin_retry_base(meta)))
+                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, local_relay_base(meta)))
               return true; // continue to next tx
             break;
           case relay_method::fluff:

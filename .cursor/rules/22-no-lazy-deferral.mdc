@@ -86,7 +86,10 @@ blocked on a daemon/p2p cutover that has no design doc. Nobody re-read the
 skip, so a deferral taken on a condition that never fired became a permanent
 block on the mechanism — and "the carrier is blocked" was read off a line
 whose actual subject was *deleting the C++ relay path*, which is a different
-thing that really is blocked.
+thing that really is blocked. (Corrected in that file's §3 status table,
+2026-08-25: the skip survives on an independent ground, and what the expiry
+left owed is named. Naming the instance without repairing it would have left
+the exact stale conclusion this section warns about.)
 
 **So:**
 

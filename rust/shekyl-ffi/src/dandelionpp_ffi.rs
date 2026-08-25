@@ -192,17 +192,25 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 /// How long an **origin** waits before re-broadcasting its own still-unseen
 /// transaction — **seconds**, per zone.
 ///
-/// The pool's inherited re-broadcast loop escalates: the first wait is this
-/// value, and each subsequent gap is the entry's age rounded to it, capped at
+/// The pool's inherited re-broadcast loop escalates: this value is the base
+/// wait, and each subsequent gap is the entry's age rounded to it, capped at
 /// `MAX_RELAY_TIME`. This replaces `MIN_RELAY_TIME` as the **base** of that
-/// escalation for `relay_method::local` only; the shape of the escalation is
-/// unchanged, because repeated failure is a reason to back off and inventing a
-/// second schedule shape is not what the defect asks for.
+/// escalation for a `relay_method::local` entry that has already been **sent**;
+/// the shape of the escalation is unchanged, because repeated failure is a
+/// reason to back off and inventing a second schedule shape is not what the
+/// defect asks for.
+///
+/// An unsent `local` entry is not a caller. It exists because the engine's
+/// fire-and-forget submit nudge may have missed, and this loop is its named
+/// fallback — no stem was launched, so there is no completion to wait on and
+/// the derived interval would be latency bought with nothing. The pool keeps
+/// `MIN_RELAY_TIME` there; see `local_relay_base` in `tx_pool.cpp`.
 ///
 /// # The quantile is derived, not chosen
 ///
-/// [`origin_retry_one_in`] is `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`: the
-/// origin asks *"has this stem probably completed?"* at the confidence the
+/// [`shekyl_relay_privacy::params::origin_retry_one_in`] is
+/// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`: the
+/// origin asks *"has my stem probably completed?"* at the confidence the
 /// network already uses to answer it. On the adopted anonymity timer that is
 /// the 1-in-10 survival quantile, **1148 s**, against a 346 s median — so the
 /// retry no longer fires while most embargoes along its own stem are running,
@@ -292,6 +300,40 @@ mod tests {
             anon > 300,
             "MIN_RELAY_TIME (300 s) is the value this replaces and is below the median"
         );
+    }
+
+    /// The exported interval is the divisor of the pool's rounding grid, so
+    /// zero would be a SIGFPE in the relay loop, under the pool lock.
+    ///
+    /// A C++ runtime guard could not be the instrument here: the value has no
+    /// runtime inputs — it is a pure function of shipped constants, solved
+    /// once and cached — so a `base == 0` branch could never fire and would be
+    /// decorative by rule 50's test. The regression it would be guarding
+    /// against is a *source* change, which this catches at build time and
+    /// loudly, instead of silently substituting a different retry policy in a
+    /// running daemon.
+    ///
+    /// The bound is the pool's own `MIN_RELAY_TIME` rather than zero, because
+    /// that is the real invariant: this constant exists because 300 s was too
+    /// EAGER for an origin, so a parameter change that pushed any class below
+    /// 300 s would re-create the defect in the direction the PR fixed. Zero-
+    /// safety falls out of it.
+    ///
+    /// What edit reds it: lower `EMBARGO_FULL_TRAVEL_PROBABILITY` far enough
+    /// that the quantile drops under the floor, or shrink an embargo timer.
+    #[test]
+    fn every_parameter_class_clears_the_pool_floor() {
+        // `MIN_RELAY_TIME`, `src/cryptonote_core/tx_pool.cpp` — quoted here
+        // rather than shared, because a cross-language tripwire is the only
+        // job this literal has.
+        const POOL_MIN_RELAY_TIME_SECS: u64 = 300;
+        for zone in DandelionParams::CLASS_REPRESENTATIVES {
+            let secs = shekyl_dandelionpp_origin_retry_interval_seconds(zone.as_u8());
+            assert!(
+                secs > POOL_MIN_RELAY_TIME_SECS,
+                "{zone:?}: {secs} s is at or below the pool floor                  ({POOL_MIN_RELAY_TIME_SECS} s) this constant exists to raise;                  at 0 it would divide by zero in get_relay_delay"
+            );
+        }
     }
 
     /// `invalid` — what an originated entry actually carries — must resolve to
