@@ -436,13 +436,21 @@ struct blocks_owner
 // Body of `shekyl_rpc_blocks_by_height`. Carries what the deleted
 // `on_get_blocks_by_height` did, minus the restricted cap, which is handler
 // policy (RK-D6).
-int blocks_by_height(cryptonote::core& core, const uint64_t* heights, size_t heights_len,
+//
+// Takes the `Blockchain`, not the `core`, deliberately: everything it needs
+// is there, and a body that required a `core` would be reachable only
+// through a live daemon — the shim fixture builds a Blockchain and a pool.
+// The transaction read stays parse-then-`tx_to_blob`, matching what the C++
+// handler did, rather than the stored blob: the two should agree, and
+// "should" is not a basis for a byte-preserving migration.
+int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t heights_len,
   const shekyl_rpc_block_entry** out, size_t* out_len, uint64_t* out_failed_height,
   uint8_t* out_ok, void** out_owner) noexcept
 {
   if (out_owner)
     *out_owner = nullptr;
-  if (!out || !out_len || !out_failed_height || !out_ok || (!heights && heights_len))
+  if (!out || !out_len || !out_failed_height || !out_ok || !out_owner
+    || (!heights && heights_len))
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
@@ -458,7 +466,7 @@ int blocks_by_height(cryptonote::core& core, const uint64_t* heights, size_t hei
       cryptonote::block blk;
       try
       {
-        blk = core.get_blockchain_storage().get_db().get_block_from_height(heights[i]);
+        blk = bc.get_db().get_block_from_height(heights[i]);
       }
       catch (...)
       {
@@ -471,7 +479,7 @@ int blocks_by_height(cryptonote::core& core, const uint64_t* heights, size_t hei
       owned->blocks.push_back(cryptonote::block_to_blob(blk));
       std::vector<cryptonote::transaction> txs;
       std::vector<crypto::hash> missed;
-      core.get_transactions(blk.tx_hashes, txs, missed);
+      bc.get_transactions(blk.tx_hashes, txs, missed);
       std::vector<std::string> blobs;
       blobs.reserve(txs.size());
       for (const cryptonote::transaction& tx : txs)
@@ -674,7 +682,8 @@ int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
     *out_owner = nullptr;
   if (!h || !h->rpc || !out || !out_len || !out_failed_height || !out_ok || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::blocks_by_height(h->rpc->get_core(), heights, heights_len,
+  return daemon_rpc_facts::blocks_by_height(h->rpc->get_core().get_blockchain_storage(),
+    heights, heights_len,
     out, out_len, out_failed_height, out_ok, out_owner);
 }
 

@@ -282,6 +282,13 @@ pub struct BlockEntryFfi {
     pub tx_count: usize,
 }
 
+const _: () = assert!(std::mem::size_of::<BlockEntryFfi>() == 40);
+const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, block) == 0);
+const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, block_len) == 8);
+const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, txs) == 16);
+const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_lens) == 24);
+const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_count) == 32);
+
 /// Twin of `shekyl_rpc_block_payload`: the variable-length half of a
 /// block's facts. Every pointer borrows memory owned by the opaque owner the
 /// export returns, and is invalid the moment `shekyl_rpc_block_free` runs.
@@ -297,6 +304,18 @@ pub struct BlockPayloadFfi {
     /// Number of hashes, not bytes.
     pub tx_hashes_len: usize,
 }
+
+// The C++ half of this twin is in tests/unit_tests/rpc_facts_ffi_roundtrip.cpp.
+// Pointers have no seed value to fill and compare, so the layout itself is
+// what gets pinned: a field reordered or widened on one side and not the
+// other is what turns the unsafe reads below into reads of foreign memory.
+const _: () = assert!(std::mem::size_of::<BlockPayloadFfi>() == 48);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, blob) == 0);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, blob_len) == 8);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, json) == 16);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, json_len) == 24);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, tx_hashes) == 32);
+const _: () = assert!(std::mem::offset_of!(BlockPayloadFfi, tx_hashes_len) == 40);
 
 impl Default for BlockPayloadFfi {
     fn default() -> Self {

@@ -235,7 +235,7 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
 int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
     const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept;
 
-int blocks_by_height(cryptonote::core& core, const uint64_t* heights, size_t heights_len,
+int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t heights_len,
     const shekyl_rpc_block_entry** out, size_t* out_len, uint64_t* out_failed_height,
     uint8_t* out_ok, void** out_owner) noexcept;
 

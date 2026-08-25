@@ -657,6 +657,40 @@ TEST(rpc_facts_shims, block_with_a_malformed_coinbase_is_inconsistent)
 // handle returns before any core object is touched, which is the one path
 // where the owner slot could keep a value from a previous call — and a caller
 // that frees what it sees there frees it twice.
+// The by-height body, driven directly. `blocks_by_height` writes through
+// every out-parameter it was given, so each one has to be refused rather
+// than dereferenced — and this body is reachable from a test without a
+// `core_rpc_server`, which is the whole reason the exports are thin adapters
+// over free functions. The owner slot in particular was checked for the
+// clear but not for the write, so a null there was undefined behaviour.
+TEST(rpc_facts_shims, blocks_by_height_refuses_every_null_out_parameter)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+  const uint64_t heights[] = {0};
+
+  const shekyl_rpc_block_entry* out = nullptr;
+  size_t len = 0;
+  uint64_t failed = 0;
+  uint8_t ok = 0;
+  void* owner = nullptr;
+
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, nullptr, &len, &failed, &ok, &owner));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, nullptr, &failed, &ok, &owner));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, &len, nullptr, &ok, &owner));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, &len, &failed, nullptr, &owner));
+  // The one the review found: refused, not written through.
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, &len, &failed, &ok, nullptr));
+  // A null height array with a non-zero count is the same class.
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::blocks_by_height(
+    bap.bc, nullptr, 1, &out, &len, &failed, &ok, &owner));
+}
+
 TEST(rpc_facts_shims, a_refused_export_never_leaves_a_stale_owner)
 {
   void* const stale = reinterpret_cast<void*>(0xdeadbeef);
