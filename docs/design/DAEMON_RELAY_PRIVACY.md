@@ -15268,6 +15268,18 @@ without leaving the code. The assumption constant is **deleted in the same
 commit**, not left beside its successor: two constants for one quantity is the
 duplicate-to-synchronise shape this arc has already paid for.
 
+**And the sweep of derived levels is gated, not remembered.** Recorded readings
+that were derived from the assumption carry a marker naming it (*"instrument
+output at `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1625); moves with §94"*), and
+`scripts/ci/check_transit_marker.sh` fails the build if the constant is deleted
+while any marker survives — naming every file. Deleting the constant breaks
+*code* references (`transit_for`, the reconciliation test) but not markers in
+doc comments and printed strings, so without the gate the sweep would depend on
+somebody thinking to grep. That is an armed marker with no trigger, a shape this
+arc has already paid for. **The gate is deleted by the commit that completes the
+sweep**, which is the point at which it has no subject left; it says so when it
+passes on that arm.
+
 ### 94.5 AMENDMENT, before the first sample (2026-08-20)
 
 **Amending a pre-registration is legitimate only before data exists, and only
