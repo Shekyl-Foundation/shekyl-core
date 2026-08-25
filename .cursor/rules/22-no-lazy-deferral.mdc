@@ -71,6 +71,41 @@ and quietly became "later"). Staging allows with named consumers are
 the marker of the first; allow comments whose named consumer shifted
 between commits without a plan change are the marker of the second.
 
+## A deferral's CONDITION can expire, and expiry looks exactly like pending
+
+A disclosed deferral is usually written as *"skip this if X lands first"*.
+That is the right shape. What it does not carry is a way to notice that
+**X never landed** — because a condition that has expired and a condition
+that is still pending read identically. The deferral just sits there, and
+the next reader takes "blocked" from a line that only ever said "blocked
+on X".
+
+Observed: `COVER_TRAFFIC_RESTORATION.md` §2.9 step 4 deferred wiring the
+carrier shim with *"or skip if step 5 lands first"*. Step 5 was then ruled
+blocked on a daemon/p2p cutover that has no design doc. Nobody re-read the
+skip, so a deferral taken on a condition that never fired became a permanent
+block on the mechanism — and "the carrier is blocked" was read off a line
+whose actual subject was *deleting the C++ relay path*, which is a different
+thing that really is blocked.
+
+**So:**
+
+- **State the condition as something that can be observed to have failed**,
+  not only to have succeeded. *"Skip if X lands first"* has no failure
+  reading; *"skip if X lands first; if X is still open when this file is
+  next touched, the skip is void"* does.
+- **A deferral is not discharged by the passage of time.** When you touch a
+  file carrying one, re-check its condition before you inherit its
+  conclusion — the condition, not the conclusion.
+- **Do not read a block off a neighbouring statement.** "Deleting A is
+  blocked" is not "A cannot run". Check what the blocked item's subject
+  actually is before scoping around it.
+
+Every `21-reversion-clause-discipline.mdc` reopening criterion has this
+shape, which is why the check belongs in the rule rather than in one
+document: a reopen criterion that nobody re-evaluates is a permanent
+rejection wearing a conditional's clothes.
+
 ## Interaction with existing rules
 
 - **`15-deletion-and-debt.mdc`** — "while we're here" governs scope

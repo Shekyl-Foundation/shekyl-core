@@ -89,13 +89,45 @@ namespace cryptonote
     constexpr const std::chrono::minutes max_relayable_check{2};
 
 
-    // a kind of increasing backoff within min/max bounds
-    uint64_t get_relay_delay(time_t last_relay, time_t received)
+    /* A kind of increasing backoff within min/max bounds.
+       `base` is the FIRST wait and the rounding grid; every later gap is the
+       entry's age rounded to it, capped at `MAX_RELAY_TIME`.
+
+       The base is a parameter rather than `MIN_RELAY_TIME` because the classes
+       on this branch no longer share one question. `fluff` and `block` are
+       already broadcast, so re-relaying them is a liveness nicety on an
+       inherited grid. `local` is not: `originated_stays_in_zone` pins an
+       anonymity-zone ORIGIN at `local` permanently, so that entry lives here
+       for its whole life and its first wait is the origin asking "has my stem
+       probably completed?". That is a derived quantity
+       (`shekyl_dandelionpp_origin_retry_interval_seconds`), and at
+       `MIN_RELAY_TIME` it sat below the anonymity embargo's own median.
+
+       The escalation SHAPE is unchanged for both. Repeated failure is a reason
+       to back off, and inventing a second schedule shape is not what the
+       defect asks for -- see DAEMON_RELAY_PRIVACY.md §92.5c item 3. */
+    uint64_t get_relay_delay(time_t last_relay, time_t received, time_t base)
     {
-      time_t d = (last_relay - received + MIN_RELAY_TIME) / MIN_RELAY_TIME * MIN_RELAY_TIME;
+      time_t d = (last_relay - received + base) / base * base;
       if (d > MAX_RELAY_TIME)
         d = MAX_RELAY_TIME;
       return d;
+    }
+
+    /*! The origin's first re-broadcast wait, in seconds, for a pool entry.
+
+        Reads the entry's recorded origin zone. Originated traffic carries
+        `invalid` -- it did not arrive over anything -- which the Rust boundary
+        resolves to the anonymity parameter class: correct, because a surviving
+        `local` record IS an anonymity origin, and fail-safe, because it is the
+        longer wait.
+
+        The Rust side caches per parameter class, so this is a lookup rather
+        than a survival-quantile solve per entry per pass. */
+    time_t origin_retry_base(const txpool_tx_meta_t &meta)
+    {
+      const auto zone = static_cast<std::uint8_t>(meta.get_origin_zone());
+      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(zone));
     }
 
     uint64_t template_accept_threshold(uint64_t amount)
@@ -449,7 +481,7 @@ namespace cryptonote
     // is fire-and-forget (DAEMON_SUBMIT_VERDICT.md §4.3), and the periodic
     // relay loop is its stated fallback if the nudge misses (§5.2 item 1) —
     // but get_relayable_transactions skips a max()-stamped local tx forever:
-    // `now - max()` underflows to now+1 and get_relay_delay(max(), _) casts to
+    // `now - max()` underflows to now+1 and get_relay_delay(max(), ...) casts to
     // a negative time_t returned as a huge unsigned delay, so the entry never
     // becomes eligible. receive_time lets the loop relay it after
     // MIN_RELAY_TIME if the nudge missed, while a successful nudge's
@@ -1028,9 +1060,16 @@ namespace cryptonote
           case relay_method::none:
             return true;
           case relay_method::local:
+            // The origin's own retry: derived from the network's own
+            // full-travel confidence, not the inherited 300 s grid.
+            if (now - meta.last_relayed_time
+                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, origin_retry_base(meta)))
+              return true; // continue to next tx
+            break;
           case relay_method::fluff:
           case relay_method::block:
-            if (now - meta.last_relayed_time <= get_relay_delay(meta.last_relayed_time, meta.receive_time))
+            if (now - meta.last_relayed_time
+                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, MIN_RELAY_TIME))
               return true; // continue to next tx
             break;
         }
@@ -1063,7 +1102,8 @@ namespace cryptonote
          function is only called every ~2 minutes, so this resetting should be
          unnecessary, but is primarily a precaution against potential changes
 	 to the callback routines. */
-      elem.second.last_relayed_time = now + get_relay_delay(elem.second.last_relayed_time, elem.second.receive_time);
+      elem.second.last_relayed_time =
+        now + get_relay_delay(elem.second.last_relayed_time, elem.second.receive_time, MIN_RELAY_TIME);
       m_blockchain.update_txpool_tx(elem.first, elem.second);
     }
 
