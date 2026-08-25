@@ -7344,6 +7344,17 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
   mdb_cursor_close(cur);
 }
 
+// PC-D4/§5.2: this table keys with `ArchivalPairEpochKey`, not
+// `ArchivalServeCreditKey`. SO-D2 ruled the two byte-identical so one key could
+// probe both tables; PC-D4 widened the serve-credit key to 56 B and the
+// settlement table stayed per-pair-epoch, so that rationale is RETIRED rather
+// than broken -- the tables answer at different granularities, evidence per
+// challenge and verdict per pair-epoch.
+//
+// Left borrowing the widened key, these rows would be written at 56 B and the
+// revert's size guard would then throw FATAL on every 48-byte row already in
+// the table: a silent-until-catastrophic coupling between two tables that only
+// ever shared a shape.
 void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
   uint64_t settlement_epoch, uint32_t passes, uint32_t issued)
 {
@@ -7366,7 +7377,7 @@ void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t 
     throw std::runtime_error("FATAL: settlement fold refused (P, shard, E) counts; code "
       + std::to_string(static_cast<unsigned>(rc)));
 
-  shekyl::db::ArchivalServeCreditKey key(
+  shekyl::db::ArchivalPairEpochKey key(
     reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
   MDB_val v{ row.size(), row.data() };
@@ -7381,7 +7392,7 @@ bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t 
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  shekyl::db::ArchivalServeCreditKey key(
+  shekyl::db::ArchivalPairEpochKey key(
     reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
   MDB_val k = key.as_mdb_val();
   MDB_val v;
@@ -7418,9 +7429,12 @@ void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_ep
   while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
   {
     op = MDB_NEXT;
-    if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+    if (k.mv_size != shekyl::db::kArchivalPairEpochKeySize)
       throw std::runtime_error("FATAL: archival_settlement key size mismatch on revert");
-    // Epoch is the last 8 bytes: P_id[32] || BE(shard) || BE(E).
+    // Epoch is the last 8 bytes: P_id[32] || BE(shard) || BE(E). PC-D4 widened
+    // the SERVE-CREDIT key to 56 B; this table did not widen with it (SO-D1:
+    // per-pair-epoch by design), so it keys with ArchivalPairEpochKey and the
+    // epoch stays last here.
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 40);
     if (epoch == settlement_epoch)
     {

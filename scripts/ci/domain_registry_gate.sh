@@ -140,6 +140,41 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
     elif ! rg -q -- "const ${leaf}[[:space:]]*:" <<<"$code"; then
       echo "CONST MISSING: 'const $leaf:' not found in the code of $file (row b\"$literal\" [mech $mech])" >&2
       fail=1
+    else
+      # The literal and the const must be the SAME declaration, not merely both
+      # present in the file.
+      #
+      # Checked separately, the two tests above are independently satisfiable:
+      # a rotated separator leaves the OLD literal in the file (as the retired
+      # label a negative control needs) while the registered const now holds
+      # the NEW one, and both greps pass over a row that is now false. That is
+      # not hypothetical — `shekyl/archival-serve-challenge-leaf` hit it
+      # exactly, and the gate stayed green on a stale row. The failure mode
+      # arrives precisely when a domain separator is ROTATED, which is when
+      # this registry matters most.
+      # Terminate on a line whose LAST character is `;`, not on any `;`: a
+      # declaration like `const X: [u8; 64] =` carries a semicolon inside its
+      # array type, and stopping there would truncate the declaration one line
+      # above its literal — reporting a mismatch for a row that is correct.
+      decl=$(awk -v name="$leaf" '
+        $0 ~ ("const[[:space:]]+" name "[[:space:]]*:") { cap = 1 }
+        cap {
+          buf = buf $0 "\n"
+          line = $0
+          sub(/[[:space:]]+$/, "", line)
+          if (line ~ /;$/) { printf "%s", buf; exit }
+        }
+      ' <<<"$code")
+      if [[ -z "$decl" ]]; then
+        echo "CONST UNTERMINATED: could not read the declaration of 'const $leaf' in $file (row b\"$literal\" [mech $mech])" >&2
+        fail=1
+      elif ! rg -F -q -- "\"$literal\"" <<<"$decl"; then
+        echo "CONST/LITERAL MISMATCH: 'const $leaf' in $file does not hold b\"$literal\" [mech $mech]" >&2
+        echo "  The literal exists in the file and the const exists in the file, but they are not the same declaration —" >&2
+        echo "  the registry row is stale. This is what a rotated separator looks like: update the row to the const's" >&2
+        echo "  current bytes, and give the retired literal its own row." >&2
+        fail=1
+      fi
     fi
   fi
 
@@ -175,7 +210,10 @@ count_pattern() {
 # SA-3c: 37 -> 40. snapshot-id retargeted cn_fast_hash -> cSHAKE, adding one
 # production call site plus two in its rewritten domain-separation test (inline
 # #[cfg(test)] sites are counted by design; see the header).
-MECH1_EXPECTED=41
+# PC-D3: 41 -> 43. The -v2 leaf-index separator's negative control hashes ONE
+# preimage under both the live and the retired label to assert they differ, so
+# it adds exactly two inline #[cfg(test)] sites and no production site.
+MECH1_EXPECTED=43
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
