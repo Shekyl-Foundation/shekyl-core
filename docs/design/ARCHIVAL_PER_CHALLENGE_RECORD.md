@@ -305,6 +305,12 @@ would change consensus now, still permit adaptive selection, and buy nothing.
 relaxes from "any row for this pair-epoch" to "this block's assignment names
 this pair" — count bound and selection check in one.
 
+**Written into the cutover's own inputs**, not only here:
+`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5.1 carries both this bound and the interim
+floor-weakening below, because a reader planning that work reads §9.5's
+build/hold split and would never reach this round's record. An argument *for* a
+piece of work belongs where that work is planned.
+
 The `SO-D8` dependency this entry claimed to discharge is discharged **for the
 schema only**. The three-record *semantics* still waits on the urn; the schema
 does not.

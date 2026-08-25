@@ -2190,6 +2190,26 @@ public:
   // source, and never read from ambient chain state: a pop that recomputed the
   // height from `height()` would delete a key it never wrote
   // (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
+  /// The exact per-challenge read: is there a row for this pair at THIS block.
+  ///
+  /// **No production caller today, deliberately, and that is not an oversight
+  /// to clean up.** The pop path uses `remove_...`, and the admission dedup is
+  /// pair-epoch-wide (`archival_serve_credit_pass_count() > 0`) until the
+  /// derived-assignment issuer is wired — see the corrected `PC-D7` in
+  /// ARCHIVAL_PER_CHALLENGE_RECORD.md and the cutover's inputs in
+  /// ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1. At that cutover the dedup becomes
+  /// this exact question, and this is the read it will use.
+  ///
+  /// Two warnings for whoever finds it:
+  ///
+  /// - **Do not delete it under rule 15.** Its caller is named and its blocker
+  ///   is named; it is the read half of a pair whose two writers
+  ///   (`set_`/`remove_`) are both production-called.
+  /// - **Do not read its tests as coverage of anything in production.** Only
+  ///   tests call it, and a primitive exercised solely by tests that supply
+  ///   its own arguments tells you nothing about a caller that does not exist
+  ///   yet. It is the same shape as a parameter "covered" by tests that pass
+  ///   it — thoroughly exercised, and evidence for nothing.
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
