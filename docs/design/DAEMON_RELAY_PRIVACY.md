@@ -3118,6 +3118,24 @@ pre-Dandelion alternative of "censored entirely."
 
 ### 15.4 FTL and MIN_RELAY are *not* in this seam (a correction)
 
+> **VACATED for one class, 2026-08-25 — the statement is still true and has
+> stopped being informative.** This section cleared `MIN_RELAY_TIME` on the
+> ground that it *"governs an already-fluffed transaction, a different state
+> from the embargo"*, and §77.3 quoted that to refuse a re-run. Both were right
+> when written. `originated_stays_in_zone` (§89.8.3) then pinned an
+> anonymity-zone **origin** at `relay_method::local` permanently, creating a
+> class that is **never fluffed** and lives on the `get_relay_delay` branch for
+> its whole life.
+>
+> The disjointness below still holds — it holds *trivially* for that class,
+> which is exactly why it stopped carrying information. A guard that cannot
+> fail is not a guard, and re-reading the sentence does not reveal that,
+> because nothing in it became false.
+>
+> The consequence: an anonymity origin re-emitted at 300 s, **below its own
+> zone's embargo median of 346 s**. Repaired at §92.5c item 3 — the base of
+> that escalation is now derived from `EMBARGO_FULL_TRAVEL_PROBABILITY`.
+
 FTL (540 s) bounds how far ahead a block's **timestamp** may be relative to the
 node's median time — block-timestamp validation, not a tx-propagation or recovery
 deadline. Nothing about a black-holed tx's recovery latency "races the FTL
@@ -12717,6 +12735,15 @@ liveness and capacity question, not a precondition for D's correctness.
 
 ### 77.3 Correcting §73.6 — the cascade check is not owed
 
+> **The correction below is sound and its ground has narrowed, 2026-08-25.**
+> It refuses the re-run by quoting §15.4's *"`MIN_RELAY_TIME` governs an
+> already-fluffed transaction"*. That covers `fluff` and `block`; it does
+> **not** cover an anonymity origin, which `originated_stays_in_zone` keeps at
+> `local` for life. §73.6's cascade check was still not owed for the reason
+> given — during the embargo a *stem* is stem-governed — but the class this
+> quotation was read as covering turned out to have a member it never covered.
+> See §15.4's banner and §92.5c item 3.
+
 §73.6 said the `MIN_RELAY_TIME` cascade check *"must be re-run by the constants
 round"* because recovery p90 grows into the 300 s window. **That was wrong, and
 §15.4 had already dispositioned it:** `MIN_RELAY_TIME` governs an
@@ -13988,9 +14015,17 @@ argument and by link 1, not by execution.
 > **HISTORICAL as of Q12-U2 (2026-08-12).** This section is the #427
 > diagnosis. Link 5 is closed: an arrival is stemmed whatever transport
 > carried it, `relay_method::forward` is deleted, and coherence executes
-> on the live connection's zone. The pool re-relay does **not** read
-> `origin_zone`; expired stems leave as fluff at `zone::public_`, which
-> is the exit, not a leak. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+> on the live connection's zone. Expired stems leave as fluff at
+> `zone::public_`, which is the exit, not a leak. See
+> `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+>
+> **Amended 2026-08-25:** "the pool re-relay does not read `origin_zone`"
+> stood here and is now false. §92.5c item 3 made it a live timing input —
+> `local_relay_base` reads it to pick the retry's parameter class. That does
+> not reopen link 5 (the field selects a *wait*, not a route, and every entry
+> reaching it carries `invalid`), but the sentence was load-bearing for a
+> rule-15 deletion clause in `blockchain_db.h`, so it is corrected in both
+> places rather than left as a trap.
 
 **2026-08-10, review round on #427.** Three findings, all in §89's own
 territory, and the first two are the same mistake §63.9 named: reasoning from
@@ -14894,6 +14929,63 @@ prices them against each other rather than adopting `p` by default.
    already has the join key for.
 2. **`p` for branch (d)**, against measured `N` — and per §91.6 that measurement
    waits on the complete mechanism, not a simulation.
+3. **The interval — SETTLED 2026-08-25, and it was a defect rather than a
+   parameter.** Items 1 and 2 settle *whether* re-broadcast continues and *how
+   many* nodes do it. Neither settles *when the origin's first retry fires*,
+   and that was the inherited `MIN_RELAY_TIME` at 300 s — **below the anonymity
+   embargo's own median of 346 s**, so the origin re-emitted while more than
+   half the embargoes along its own stem were still running. Under-provisioned,
+   on the origination path, which is where the priority order says to spend
+   first.
+
+**The ruling: derive it from `alpha`, not from the emission count.**
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90` already pins the confidence at which a
+*relaying* node decides a stem has probably completed. The origin's retry is the
+same question asked by a different actor, so it is asked at the same confidence:
+`one_in = 1 / (1 - alpha) = 10`, and the 1-in-10 survival quantile of the
+adopted anonymity timer is **1148 s**
+(`shekyl_dandelionpp_origin_retry_interval_seconds`).
+
+That is a constant with a live provenance rather than a point inside a bracket:
+if `alpha` moves the interval follows, instead of decoupling silently. Same
+shape as §94.8's argument for deriving rather than choosing, and it removes the
+self-invented bar this arc has been bitten by twice.
+
+The **emission-count coincidence is a check, not the basis.** 1148 s is also the
+lowest quantile that leaves exactly one retry before the wallet's 2297 s failure
+verdict — which is the right relationship for it to have, and the more robust
+one, because that ceiling has **no live consumer**:
+`shekyl_dandelionpp_propagation_timeout_seconds()` is declared in
+`shekyl_ffi.h` and called by nobody since wallet2's consumer died with
+`src/wallet/`.
+
+**Scope of the change, stated because two things did NOT move.** The escalation
+*shape* is unchanged — the base is a parameter now, and every later gap is still
+the entry's age rounded to it, capped at `MAX_RELAY_TIME`. And the emission
+**count** barely moves (13 → 11 over the 36 h window), because `MAX_RELAY_TIME`
+and `max_age / 2` dominate the tail. So §92.5's pricing of branches (a)–(d)
+**stands**; this does not require the disarm round to re-do its arithmetic.
+
+**Only a transaction that was actually SENT asks this question.** `local` is
+worn by two entries. One has been dispatched and stayed `local` because
+`originated_stays_in_zone` pinned it there — that is the origin above, and its
+retry is the stem-completion question. The other has never been sent at all:
+`insert_attested_tx` stamps `relayed = false` and names this same loop the
+fallback if the engine's fire-and-forget submit nudge missed
+(`DAEMON_SUBMIT_VERDICT.md` §4.3 / §5.2 item 1). For that entry **no stem was
+launched and no embargo exists anywhere**, so the derived interval would be
+provisioning against an event that cannot have happened — 848 s of added
+latency on a *first* send, buying nothing. It keeps `MIN_RELAY_TIME`, which is
+the answer to the question it is actually asking ("did the nudge miss?").
+`local_relay_base` carries the split, and the two 400 s test cases differ in
+`relayed` alone so the discriminant cannot drift.
+
+**It provisions against an unobservable, and that is the honest framing.** The
+case this retry rescues is a swallow at hop 1: the first stem peer drops the
+transaction, no other node holds it, and **no embargo exists anywhere to fire**.
+There is no signal to wait for, so the number is a bet on a distribution rather
+than a response to an event. That is precisely what item 1's disarm predicate
+would fix — until it exists, the interval is doing both jobs.
 
 ### 92.6 The residual is a second independent argument for Tor-only
 
