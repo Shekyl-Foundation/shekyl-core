@@ -35,6 +35,11 @@
 //! - [`WalletFileError::AtomicWriteRename`] carries the `io::Error` from the
 //!   `rename(2)` step specifically, so callers can distinguish "wrote the
 //!   tmp OK but could not atomically swap it in" from generic I/O.
+//! - [`WalletFileError::AtomicWriteFinalizeStaged`] is its sibling for the
+//!   step *before* the swap (clearing the staged file's temporary marking).
+//!   Two variants rather than one so `AtomicWriteRename` keeps meaning the
+//!   rename: a single variant covering both would name a step the failure
+//!   may never have reached.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
@@ -107,10 +112,38 @@ pub enum WalletFileError {
     AlreadyLocked { path: PathBuf },
 
     /// The atomic-write sequence wrote a fresh temp file successfully but
-    /// could not `rename(2)` it into place. The original target (if any)
-    /// is untouched and the temp file has been removed.
+    /// could not `rename(2)` it into place.
+    ///
+    /// The original target (if any) is **untouched** — that is the
+    /// guarantee. Removal of the staged file is attempted and logged on
+    /// failure, but not guaranteed: a leftover `.<random>.shekyl-tmp`
+    /// sibling is possible and is clutter, never a wallet artifact.
     #[error("atomic rename into {target} failed: {source}")]
     AtomicWriteRename {
+        target: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// The atomic-write sequence wrote and fsynced the staged file but
+    /// could not **finalize** it for the swap, so no `rename(2)` was ever
+    /// attempted and the target is untouched.
+    ///
+    /// Distinct from [`Self::AtomicWriteRename`] on purpose. On Windows
+    /// finalizing is `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`, clearing
+    /// the `FILE_ATTRIBUTE_TEMPORARY` that the staged file is created with;
+    /// it must succeed *before* the rename, because otherwise the attribute
+    /// rides onto the target and tells NTFS it may keep the data in cache
+    /// rather than writing it back — silently undoing the `fsync`. That is a
+    /// different failure from a refused swap, with a different remedy, so it
+    /// gets a different variant: collapsing the two would leave
+    /// `AtomicWriteRename` unable to mean what its own name says.
+    ///
+    /// Structurally Unix-unreachable — `tempfile`'s `imp::keep` is `Ok(())`
+    /// there — but the variant is not `cfg`-gated, because an error type
+    /// that changes shape by platform makes every caller platform-aware.
+    #[error("atomic write into {target}: the staged file could not be finalized: {source}")]
+    AtomicWriteFinalizeStaged {
         target: PathBuf,
         #[source]
         source: io::Error,
@@ -198,5 +231,10 @@ impl WalletFileError {
     /// construction at every call site.
     pub(crate) fn rename(target: PathBuf, source: io::Error) -> Self {
         Self::AtomicWriteRename { target, source }
+    }
+
+    /// Companion to [`Self::rename`] for the finalize step that precedes it.
+    pub(crate) fn finalize_staged(target: PathBuf, source: io::Error) -> Self {
+        Self::AtomicWriteFinalizeStaged { target, source }
     }
 }

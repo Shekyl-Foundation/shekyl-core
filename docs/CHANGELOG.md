@@ -52,6 +52,23 @@
   worse than leaving them broken: it would make a test whose entire purpose
   is detecting an on-disk rewrite blind to one.
 
+- **`AtomicWriteRename` was reported for a step that may never have run.**
+  A `TempPath::keep` failure — the staged file's `FILE_ATTRIBUTE_TEMPORARY`
+  clear on Windows — was wrapped in the variant whose own documentation says
+  it carries the error from `rename(2)` specifically, so an error naming the
+  swap could be raised before any swap was attempted. Split into
+  `AtomicWriteFinalizeStaged`, because the two have different causes and
+  different remedies and one name cannot carry both. This is not only
+  tidiness: `keep()` leaves `tempfile`'s cleanup guard *armed* while a failed
+  rename does not, so the conflation had made the cleanup-arm test unable to
+  tell, on Windows, whether the arm it guards had run at all. Fixing the
+  error model removed that gap instead of documenting it. Also corrected:
+  the module and variant docs claimed the staged file "is removed" on
+  failure — cleanup is best-effort from both owners (`tempfile`'s guard
+  ignores unlink errors; ours logs and continues). The guarantee is that the
+  **target is byte-unchanged**; a stray `.shekyl-tmp` sibling is possible,
+  and is clutter rather than a wallet artifact.
+
 - **`BuildRust.cmake`'s Windows skip was justified by a blocker that no
   longer exists.** Its comment said the Rust wallet stack was Unix-only, that
   the Windows port was still an open design question (named-pipe ACLs vs.

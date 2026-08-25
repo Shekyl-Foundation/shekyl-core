@@ -39,13 +39,20 @@
 //!    inode may still be buffered in the dcache. This step runs *after*
 //!    the rename has committed, so its failure does not un-apply the
 //!    write — it is reported as [`Durability::Unconfirmed`], not an error.
-//! 6. **Return** [`Durability`]. On any failure between steps 1 and 4 the
-//!    staged file is removed and the target (if any) is left untouched,
-//!    returned as `Err`; a step-5 failure returns
+//! 6. **Return** [`Durability`]. A step-5 failure returns
 //!    `Ok(Durability::Unconfirmed)` — applied, durability unconfirmed.
-//!    Cleanup has two owners: up to and including the `keep`, it is
-//!    `tempfile`'s drop guard; after the `keep` disarms that guard, a
-//!    failed rename is unlinked explicitly (see *Why not `persist`*).
+//!
+//!    On any failure between steps 1 and 4, **the guarantee is that the
+//!    target is byte-unchanged**, returned as `Err`. Removing the staged
+//!    file is *best-effort* and deliberately not part of that guarantee:
+//!    before the `keep` it is `tempfile`'s drop guard, which ignores unlink
+//!    errors, and after the `keep` disarms that guard it is this module's
+//!    own `remove_file`, which logs and continues. Either can leave a
+//!    `.<random>.shekyl-tmp` sibling behind. That is clutter, never a
+//!    wallet artifact — no caller reads a staged path — and it is
+//!    reported rather than silent, but a caller must not depend on its
+//!    absence. Saying "the staged file is removed" would promise something
+//!    neither owner delivers.
 //!
 //! # Why not `persist`
 //!
@@ -230,7 +237,7 @@ pub(crate) fn atomic_write_file_with<T>(
     let staged_path = tmp.into_temp_path();
     let kept = staged_path
         .keep()
-        .map_err(|e| WalletFileError::rename(target.to_path_buf(), e.error))?;
+        .map_err(|e| WalletFileError::finalize_staged(target.to_path_buf(), e.error))?;
 
     // `keep()` disarmed `tempfile`'s cleanup, so from here the staged file is
     // ours. `persist` used to carry the `NamedTempFile` inside its error and
@@ -454,18 +461,22 @@ mod tests {
     /// this red is deleting the `remove_file` call; observed red before being
     /// trusted, with the stray file named in the failure message.
     ///
-    /// **What each arm proves is not the same, and the difference is stated
-    /// rather than papered over.** `keep()` failing would also surface as
-    /// `AtomicWriteRename`, and in that case `tempfile`'s guard is still armed
-    /// and does the cleanup — so a test that only checked the variant could pass
-    /// without the `remove_file` arm ever running. On Unix that cannot happen:
-    /// `tempfile`'s `imp::keep` is a literal `Ok(())`, so the error is
-    /// necessarily the rename, and `EISDIR`/`ENOTDIR` pins it further. On
-    /// Windows `keep()` is a real `SetFileAttributesW` call that could in
-    /// principle fail with the same `ERROR_ACCESS_DENIED` the rename produces,
-    /// so the Windows arm asserts the weaker property. It is still worth
-    /// running there — it is the only arm that exercises the real
-    /// `FileRenameInfoEx` path — but the strict claim lives on Unix.
+    /// **`AtomicWriteRename` means the rename on both platforms**, which is
+    /// what makes this test sound rather than merely suggestive. An earlier
+    /// form of this code mapped a `keep()` failure onto the same variant, and
+    /// then this doc had to admit that the Windows arm proved less than the
+    /// Unix one: a `keep()` failure leaves `tempfile`'s guard armed, so it does
+    /// the cleanup and the test would pass with the `remove_file` arm never
+    /// running. The fix was to the error model, not to the test — `keep()`
+    /// failures are now [`WalletFileError::AtomicWriteFinalizeStaged`], so
+    /// matching `AtomicWriteRename` pins the failing step everywhere and the
+    /// asymmetry is gone rather than documented.
+    ///
+    /// The Unix arm additionally pins the errno (`EISDIR`/`ENOTDIR`). That is
+    /// a refinement, not the load-bearing claim, and it stays Unix-only
+    /// because the equivalent Windows code for this case has not been
+    /// measured — an unmeasured constant in an assertion is how a check
+    /// becomes decorative.
     #[test]
     fn a_failed_rename_still_removes_the_staged_file() {
         let dir = tempfile::tempdir().unwrap();
