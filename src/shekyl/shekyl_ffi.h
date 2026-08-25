@@ -1489,6 +1489,9 @@ uint8_t shekyl_archival_serve_credit_extract(
 ///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte,
 ///   4 = issued == 0 (SO-D1: a pair the urn never reached is recorded by its
 ///       ABSENCE; writing a zero-issued row would make absence ambiguous).
+///
+/// Codes 5 and 6 are READ-ONLY -- the writer cannot produce them; see
+/// shekyl_archival_settlement_row_validate below.
 uint8_t shekyl_archival_settlement_row(
     uint32_t passes,
     uint32_t issued,
@@ -1514,6 +1517,17 @@ uint8_t shekyl_archival_settlement_row(
 /// 3 bytes, so there is no null case, no length to agree on, and nothing for
 /// either side to reconstruct. A `const uint8_t*` here would have been a
 /// larger boundary for no gain.
+///
+/// Codes: 0 = canonical, 2 = passes > issued, 3 = issued exceeds one byte,
+/// 4 = issued == 0, and two the WRITER cannot produce because they describe a
+/// stored row that no fold could have emitted:
+///   5 = the outcome byte is not one of the three live tags (a zero-filled or
+///       garbage cell);
+///   6 = the outcome is a live tag but not the one its own counts fold to.
+/// Kept distinct because this is a FATAL diagnostic and "which corruption" is
+/// the whole value of the code -- 5 points at the cell, 6 at the row's
+/// contents. Reporting either as 2 would name a count desync that did not
+/// happen.
 uint8_t shekyl_archival_settlement_row_validate(uint8_t outcome, uint8_t passes, uint8_t issued);
 
 /// The verifier-derived challenge leaf index (RF-D6: never on the wire).

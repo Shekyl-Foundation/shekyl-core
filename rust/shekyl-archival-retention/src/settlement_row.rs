@@ -68,7 +68,9 @@ pub enum RowError {
     /// the fold is a pure statement about counts and has other callers; the
     /// ROW is the storage boundary, and it is storage that `SO-D1` rules on.
     #[error(
-        "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so          absence means never-issued; a zero-issued row would make absence          ambiguous and is refused at the boundary rather than stored"
+        "issued is 0: SO-D1 writes a row only for a pair with issued >= 1, so \
+         absence means never-issued; a zero-issued row would make absence \
+         ambiguous and is refused at the boundary rather than stored"
     )]
     IssuedZero,
 
