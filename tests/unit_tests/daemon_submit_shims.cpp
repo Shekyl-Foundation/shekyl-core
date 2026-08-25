@@ -359,19 +359,54 @@ struct ShimFixture
 
   // fee_scale ≥ 1 clears the floor (with check_fee's 2% buffer); the F34
   // test passes an absolute fee instead.
-  SubmitTx make_tx(uint8_t variant, uint8_t ki_variant, uint64_t fee_scale = 2)
+  // Put the fee **in** the transaction, then re-derive everything from it.
+  //
+  // There are two ways the fee is read here and they must not disagree.
+  // `commit_tx` is handed `s.fee` as an argument, but
+  // `tx_memory_pool::add_tx` calls `get_tx_fee(tx)`, which reads
+  // `ct_signatures.txnFee` off the transaction itself. While those two
+  // diverged, every shim test paid a correctly derived fee and every
+  // add_tx test paid the shape builder's hardcoded 0.001 — and nothing
+  // noticed until the dynamic minimum rose past that constant, which turned
+  // one test red for a reason that had nothing to do with its subject.
+  //
+  // Writing the fee changes the blob length, which changes the fee the
+  // blob requires, so this settles rather than assuming: at most a couple
+  // of rounds, and the final assertion is on the value `add_tx` will
+  // actually read, not on a local the test computed for itself.
+  void settle_fee(SubmitTx& s, uint64_t fee_scale)
   {
-    SubmitTx s;
-    s.tx = make_fcmp_shape_tx(variant, ki_variant);
+    const uint64_t fee_per_byte = bap.bc.get_current_fee_per_byte();
+    const uint64_t mask = Blockchain::get_fee_quantization_mask();
+    for (int round = 0; round < 4; ++round)
+    {
+      const size_t weight = cryptonote::tx_to_blob(s.tx).size();
+      const uint64_t needed = (weight * fee_per_byte + mask - 1) / mask * mask;
+      const uint64_t want = needed * fee_scale;
+      if (s.tx.ct_signatures.txnFee == want)
+        break;
+      s.tx.ct_signatures.txnFee = want;
+      s.tx.invalidate_hashes();
+    }
     s.blob = cryptonote::tx_to_blob(s.tx);
     EXPECT_FALSE(s.blob.empty());
     s.txid = cryptonote::get_transaction_hash(s.tx);
     s.weight = s.blob.size();
-    const uint64_t fee_per_byte = bap.bc.get_current_fee_per_byte();
-    const uint64_t mask = Blockchain::get_fee_quantization_mask();
-    const uint64_t needed = (s.weight * fee_per_byte + mask - 1) / mask * mask;
-    s.fee = needed * fee_scale;
-    EXPECT_TRUE(bap.bc.check_fee(s.weight, s.fee));
+    s.fee = s.tx.ct_signatures.txnFee;
+
+    uint64_t as_the_pool_reads_it = 0;
+    EXPECT_TRUE(cryptonote::get_tx_fee(s.tx, as_the_pool_reads_it));
+    EXPECT_EQ(as_the_pool_reads_it, s.fee)
+      << "the fee the pool reads must be the fee the test believes it paid";
+    EXPECT_TRUE(bap.bc.check_fee(s.weight, as_the_pool_reads_it))
+      << "the settled fee must clear the dynamic floor at the settled weight";
+  }
+
+  SubmitTx make_tx(uint8_t variant, uint8_t ki_variant, uint64_t fee_scale = 2)
+  {
+    SubmitTx s;
+    s.tx = make_fcmp_shape_tx(variant, ki_variant);
+    settle_fee(s, fee_scale);
     return s;
   }
 
@@ -398,19 +433,11 @@ struct ShimFixture
     auth.flags = 0;
     s.tx.pqc_auths.push_back(auth);
     // make_tx hashed the pre-bond tx and `transaction` caches its hash;
-    // drop the stale cache before re-serializing and re-hashing.
+    // drop the stale cache before re-deriving from the grown blob.
     s.tx.invalidate_hashes();
-    s.blob = cryptonote::tx_to_blob(s.tx);
-    EXPECT_FALSE(s.blob.empty());
-    s.txid = cryptonote::get_transaction_hash(s.tx);
-    s.weight = s.blob.size();
-    // Re-derive the floor-clearing fee for the grown blob (make_tx derived
-    // it for the pre-bond size).
-    const uint64_t fee_per_byte = bap.bc.get_current_fee_per_byte();
-    const uint64_t mask = Blockchain::get_fee_quantization_mask();
-    const uint64_t needed = (s.weight * fee_per_byte + mask - 1) / mask * mask;
-    s.fee = needed * 2;
-    EXPECT_TRUE(bap.bc.check_fee(s.weight, s.fee));
+    // The bond vin grew the transaction, so the fee it requires grew too.
+    // Same settle as make_tx, and the same reason it belongs in one place.
+    settle_fee(s, 2);
     return s;
   }
 
@@ -988,7 +1015,15 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
   tx_verification_context tvc{};
   // version == nic_verified_hf_version skips ver_non_input_consensus (the
   // shape tx carries no real proofs); the double-spend gate sits before
-  // check_tx_inputs, so the reject under test fires first.
+  // check_tx_inputs, so it fires ahead of input verification.
+  //
+  // It does NOT fire ahead of everything: `add_tx` checks the fee first,
+  // reading it off the transaction. This test spent a while red because the
+  // fixture paid a hardcoded 0.001 there while telling itself it had paid a
+  // derived fee, and the dynamic floor eventually rose past the constant —
+  // a fee rejection wearing the costume of a double-spend regression. The
+  // fee now lives in the transaction (`settle_fee`), so reaching this gate
+  // is a property of the fixture rather than of the current fee schedule.
   EXPECT_FALSE(fx.bap.txpool.add_tx(mine.tx, tvc, relay_method::local,
     /*relayed=*/false, /*version=*/1, /*origin=*/epee::net_utils::zone::invalid,
     /*nic_verified_hf_version=*/1));
