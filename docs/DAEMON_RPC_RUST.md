@@ -61,7 +61,7 @@ port — it is not part of this Phase 1 transport deletion.
 - **1 native Rust** endpoint: `POST /submit_transaction` — served
   directly by the Rust admission engine (`src/submit/`), never crossing
   the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
-- **Binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+- **Binary** endpoints (`/get_o_indexes.bin`, `/get_blocks_by_height.bin`)
   - POST-only; return **400 Bad Request** on parse failure
 - **JSON-RPC 2.0** methods via `POST /json_rpc` (includes curve-tree and
   `get_archival_emission_claim_source`)

@@ -84,8 +84,9 @@
   audit that had the rule written down. The gate now requires every path in
   the Axum route table to have a reference outside route registration, the
   FFI dispatch table, and comments — or an allowlist entry stating why it
-  is served without one. It found a third dead route on its first run
-  (`/get_transaction_pool_hashes.bin`, recorded pending disposition).
+  is served without one. It found a third dead route on its first run,
+  `/get_transaction_pool_hashes.bin`, which is retired above — the
+  allowlist it was held in is now empty of exemptions.
 
 ### Changed
 
