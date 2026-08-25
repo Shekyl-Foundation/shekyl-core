@@ -109,6 +109,14 @@ using cmd = COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE;
 // Watch item 1 (§7.1): every response field is a field-for-field copy of
 // the single landed gather on the same DB state — the marshal helper owns
 // no second gather path and reconstructs no operand.
+//
+// COVERS: what the marshaler *computes* — whether each field equals the value
+// its landed source produces on this DB state. This is the SEMANTICS test, and
+// it is the one that catches a mis-derived or unresolved operand (the storage
+// sentinel shipped raw fails here).
+// DOES NOT COVER: whether those values survive serialization. That is
+// `wire_roundtrip_sentinel_and_omit_empty`, below, and the two are not
+// substitutes — see its header for why.
 TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
 {
   ClaimSourceFixture fx;
@@ -322,6 +330,19 @@ TEST(archival_claim_source_rpc, window_is_unconditional_and_cause_blind)
 // Wire contract: epee KV JSON round-trip, the u64::MAX sentinel on the
 // wire, and epee's omit-empty-container behavior (the Rust decode's
 // absent-equals-empty rule pins against this).
+//
+// COVERS: TRANSPORT FIDELITY — that what the marshaler produced arrives
+// unchanged, fields and presence flags alike. The flags matter here
+// specifically: they are the only thing separating "the daemon says nothing has
+// served" from "the field did not arrive", so a transport that dropped one
+// would merge a permissive fact with a fail-closed one.
+// DOES NOT COVER: whether the value was right to begin with. This test compares
+// the decoded response to the SAME response it encoded, so a wrong value —
+// including a storage sentinel shipped raw instead of resolved — round-trips
+// perfectly and passes. That is correct for a transport test and a blind spot
+// for a semantics one; `fill_matches_single_gather_field_for_field` is the
+// other half. Observed, not assumed: biting the sentinel resolution failed that
+// test and left this one green.
 TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
 {
   ClaimSourceFixture fx;

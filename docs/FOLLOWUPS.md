@@ -47,6 +47,35 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **The claim-source gather and the `Unbond` verify gather are coupled by
+  comments only** (surfaced 2026-08-25 in PR-P4 slice 1, while biting the
+  complete-tree branch).
+
+  **Trigger for this entry: a new `ArchivalBondValue::holdings_kind` variant.**
+  Two sites branch on record kind to build the release-cooldown anchor's input
+  — `blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post` call site
+  (which decides whether an `Unbond` verifies) and
+  `rpc/archival_claim_source.cpp` (which tells a wallet whether one *would*).
+  They must agree, and nothing enforces it: each carries a comment naming the
+  other, which is the whole mechanism.
+
+  **Why divergence is not a cosmetic bug.** A kind whose records store no shard
+  list makes the compact accessor return empty; the fold then reports "never
+  served"; and an absent anchor is the *permissive* branch of both
+  `release_cooldown_elapsed` and `slashes_settled_through`. The wallet would
+  report an irreversible persona-key wipe as ready for a record that has served
+  and is still cooling down. That is not hypothetical — it is exactly what
+  deleting the `is_complete_tree()` branch does today, and before slice 1 every
+  test in `archival_claim_source_rpc.cpp` stayed green while it did.
+
+  `complete_tree_anchor_comes_from_the_all_shards_scan` closes the two kinds
+  that exist. It does **not** generalise: a third kind arrives untested on both
+  sides at once, and this row decays at that other item's rate rather than its
+  own. Options when the trigger fires, cheapest first: give the branch one home
+  both sites call (an FFI or a shared C++ helper taking the record), so there is
+  one place to update; or a gate asserting the two branch sets match. Prefer the
+  first — a shared callee cannot diverge, while a gate only reports that it did.
+
 - **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
   production signing path** (surfaced 2026-08-22 while deleting the legacy
   prove seam; the only stated enforcement had been an unreachable check inside
