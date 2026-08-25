@@ -625,7 +625,10 @@ mod tests {
         obj.remove("last_served_epoch");
         let err = EmissionClaimSource::from_json(&v)
             .expect_err("a flag vouching for a missing value must not decode");
-        assert!(matches!(err, EmissionSourceError::Malformed(_)), "got {err:?}");
+        assert!(
+            matches!(err, EmissionSourceError::Malformed(_)),
+            "got {err:?}"
+        );
 
         // Same for the watermark, whose absence is fail-closed at consensus.
         let mut v = fixture();
@@ -634,7 +637,10 @@ mod tests {
         obj.remove("last_settled_slash_epoch");
         let err = EmissionClaimSource::from_json(&v)
             .expect_err("a flag vouching for a missing value must not decode");
-        assert!(matches!(err, EmissionSourceError::Malformed(_)), "got {err:?}");
+        assert!(
+            matches!(err, EmissionSourceError::Malformed(_)),
+            "got {err:?}"
+        );
     }
 
     /// The flag carries the fact; the value never encodes it. A served-at-epoch-0
