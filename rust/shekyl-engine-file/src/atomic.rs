@@ -438,6 +438,46 @@ mod tests {
         assert!(strays.is_empty(), "staged files left behind: {strays:?}");
     }
 
+    /// A **failed** rename must still unlink the staged file.
+    ///
+    /// This is the arm `keep()` created: it disarms `tempfile`'s drop guard, so
+    /// on the failure path nothing but this module's explicit `remove_file`
+    /// removes the staged file, and without it every failed write strands a
+    /// `.<random>.shekyl-tmp` beside the wallet. The success-path assertion in
+    /// [`replaces_a_target_held_by_a_live_lock`] cannot see this: there the
+    /// rename consumed the staged file, so deleting the cleanup arm would leave
+    /// that test green.
+    ///
+    /// A directory at the target is the portable way to make `rename` fail
+    /// after everything before it has succeeded — the staging, the write and the
+    /// fsync all complete, and only the swap is refused. The edit that turns
+    /// this red is deleting the `remove_file` call.
+    #[test]
+    fn a_failed_rename_still_removes_the_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.keys");
+        // A directory cannot be replaced by a file rename on either platform.
+        fs::create_dir(&target).unwrap();
+
+        let err = atomic_write_file(&target, b"NEW")
+            .expect_err("renaming a file over a directory must fail");
+        assert!(
+            matches!(err, WalletFileError::AtomicWriteRename { .. }),
+            "the failure must be the rename step, not an earlier one — otherwise \
+             this test is not exercising the cleanup arm it exists for: {err:?}"
+        );
+
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".shekyl-tmp"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "a failed rename stranded its staged file: {strays:?}"
+        );
+    }
+
     #[test]
     fn writes_to_fresh_target() {
         let dir = tempfile::tempdir().unwrap();
