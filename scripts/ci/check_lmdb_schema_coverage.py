@@ -94,12 +94,27 @@ def main() -> None:
         errors.append(f"the doc claims {m.group(1)} sub-databases; "
                       f"SHEKYL_LMDB_TABLES has {len(tables)}")
 
+    # Header version pin — the claim that drifted twice (header said v8
+    # against VERSION 10; the properties row carried a third copy). The doc
+    # header must name the same number the code defines.
+    code_v = re.search(r"^#define VERSION (\d+)$",
+                       SOURCE.read_text(encoding="utf-8"), re.MULTILINE)
+    doc_v = re.search(r"^\*\*DB version:\*\* (\d+)", doc, re.MULTILINE)
+    if not code_v:
+        errors.append("#define VERSION not found in db_lmdb.cpp — the gate's "
+                      "version subject is missing")
+    elif not doc_v:
+        errors.append("the doc's '**DB version:** N' header line is missing")
+    elif doc_v.group(1) != code_v.group(1):
+        errors.append(f"the doc header says DB version {doc_v.group(1)}; "
+                      f"db_lmdb.cpp defines VERSION {code_v.group(1)}")
+
     if errors:
         sys.exit("FAIL: docs/LMDB_SCHEMA.md is out of step with the live "
                  "table list:\n" + "\n".join(errors))
 
-    print(f"OK: all {len(tables)} LMDB tables documented; stated total "
-          "matches the list")
+    print(f"OK: all {len(tables)} LMDB tables documented; stated total and "
+          "DB-version header match the code")
 
 
 if __name__ == "__main__":
