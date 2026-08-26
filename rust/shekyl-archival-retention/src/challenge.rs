@@ -242,15 +242,17 @@ mod tests {
 
     // ── `PC-D3`: the block-bound leaf index ──────────────────────────────────
 
-    /// The property the whole round exists for: two challenges on the same
-    /// pair-epoch, differing only in their block, must sample DIFFERENT leaves.
+    /// The property the whole round exists for: the block hash materially
+    /// affects the draw, so two challenges on the same pair-epoch draw their
+    /// leaves independently. NOT distinctness — the tolerance below admits
+    /// modulo collisions, and a collision is a valid outcome.
     ///
-    /// Under `-v1` this was impossible — the index was a function of
+    /// Under `-v1` even independence was absent — the index was a function of
     /// `(P, s, E)` alone, so three records carried three distinct
     /// countersignatures over three identical openings. The edit that makes
     /// this red is dropping `prev_block_hash` from the preimage.
     #[test]
-    fn different_blocks_sample_different_leaves() {
+    fn the_block_hash_materially_affects_the_draw() {
         let p = [0x11u8; 32];
         let mut differing = 0;
         // Over a realistic segment, distinct blocks must land on distinct

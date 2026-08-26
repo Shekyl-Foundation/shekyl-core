@@ -33,6 +33,13 @@ on:
       - "docs/**"
       - "scripts/ci/check_doc_links.py"
       - "scripts/ci/check_doc_headings.py"
+      - "scripts/ci/check_lmdb_schema_coverage.py"
+      # The schema-coverage gate reads the table list and VERSION out of
+      # db_lmdb.cpp, so a source-only table/version change must start this
+      # workflow — that drift arriving with no docs edit is exactly the
+      # case the gate exists to catch (rule 47: a gate that cannot see its
+      # subject change is not a gate).
+      - "src/blockchain_db/lmdb/db_lmdb.cpp"
       - ".github/workflows/doc-links.yml"
 
 concurrency:
