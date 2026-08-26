@@ -20,6 +20,7 @@ use crate::queries;
 use crate::receiving;
 use crate::send;
 use crate::staking;
+use crate::staking_actions;
 use crate::sync;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
@@ -67,10 +68,15 @@ pub async fn dispatch(
         "estimate_tx_size_and_weight" => fees::estimate_tx_size_and_weight(tenants, params).await,
         "get_default_fee_priority" => fees::get_default_fee_priority(tenants, params).await,
         // WI-RPC-1 staking reads (authoritative pscan/pending aggregation —
-        // never the `bonded_slots` hint). Staking actions stay `-32601`.
+        // never the `bonded_slots` hint).
         "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
         "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
         "staking_info" => staking::staking_info(tenants, params).await,
+        // WI-RPC-5 archival principal staking actions. `unstake` stays
+        // `-32601` (RESERVED on the Unbond producer).
+        "stake_in" => staking_actions::stake_in(tenants, params).await,
+        "get_drain_balance" => staking_actions::get_drain_balance(tenants, params).await,
+        "drain" => staking_actions::drain(tenants, params).await,
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
@@ -325,6 +331,49 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    /// The three WI-RPC-5 staking actions are routed, not RESERVED: with no
+    /// wallet open the answer is the wallet gate, never the `-32601`
+    /// fallthrough. Params must be valid — parsing runs ahead of the gate.
+    #[tokio::test]
+    async fn staking_actions_without_open_wallet_are_wallet_not_open() {
+        let tenants = test_tenants();
+        for (method, params) in [
+            ("stake_in", json!({ "amount": "5" })),
+            ("get_drain_balance", json!({})),
+            ("drain", json!({ "amount": "5" })),
+        ] {
+            let err = dispatch(&tenants, method, &params, KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen, "{method}");
+        }
+    }
+
+    /// F-1 at the dispatch surface: a client steering `drain` with `fee` /
+    /// `destination` / `p_slot` (or `stake_in` with `fee`, or any key at all
+    /// on `get_drain_balance`) is refused `-32602` — the extra key is never
+    /// silently dropped, and the refusal fires ahead of the wallet gate.
+    #[tokio::test]
+    async fn staking_action_extra_fields_are_invalid_params() {
+        let tenants = test_tenants();
+        for (method, params) in [
+            ("stake_in", json!({ "amount": "5", "fee": "1" })),
+            ("drain", json!({ "amount": "5", "fee": "1" })),
+            ("drain", json!({ "amount": "5", "destination": "shekyl1x" })),
+            ("drain", json!({ "amount": "5", "p_slot": 0 })),
+            ("get_drain_balance", json!({ "p_slot": 0 })),
+        ] {
+            let err = dispatch(&tenants, method, &params, KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                WalletRpcErrorCode::InvalidParams,
+                "{method} {params}"
+            );
+        }
     }
 
     #[tokio::test]
