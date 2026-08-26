@@ -37,7 +37,9 @@
 //! is a decode error, so no anchor can be manufactured from silence.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
-use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding, BondBuildError};
+use shekyl_archival_bond_builder::{
+    build_unbond_vin, verify_debit_funding, BondBuildError, UnbondVin,
+};
 use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_unbond_bond_post, ArchivalBondPostVin,
     BondPostError, BondPostKind, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
@@ -50,7 +52,8 @@ use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 /// The record's current bonded balance — the exit's `bond_debit` by contract.
 const BONDED: u64 = 3 * 750_000_000;
 
-fn vin() -> ArchivalBondPostVin {
+/// The witness, as `build_unbond_vin` returns it.
+fn built() -> UnbondVin {
     let keys = derive_archival_p_keys(
         &[0x5B; MASTER_SEED_BYTES],
         DerivationNetwork::Fakechain,
@@ -59,6 +62,12 @@ fn vin() -> ArchivalBondPostVin {
     )
     .expect("derive archival P keys");
     build_unbond_vin(keys.bond_post_keys(), BONDED).expect("build Unbond vin")
+}
+
+/// The same post as a bare vin, for the mutation tests: they deliberately
+/// break invariants the witness asserts, so they work on the unwrapped value.
+fn vin() -> ArchivalBondPostVin {
+    built().vin().clone()
 }
 
 /// Verify with record state that is ready in every respect the producer does
@@ -135,15 +144,29 @@ fn holdings_must_be_empty_not_merely_floor_zero() {
 
 #[test]
 fn a_non_zero_post_connect_total_is_not_a_full_exit() {
+    // Reaching `NotFullUnbond` needs a vin that SURVIVES floor equality with a
+    // non-zero total, which an empty descriptor cannot provide: floor(∅) == 0,
+    // so any non-zero total is `UnbondFloorMismatch` and the guard this test is
+    // named for never runs. Give the post a real descriptor and set the total
+    // to that descriptor's own floor — equality then holds, and the only thing
+    // left to object to is that the exit is partial.
     let mut v = vin();
-    v.bonded_total_atomic = 1;
-    // Floor equality fires first (floor(∅) == 0 != 1), which is the verifier's
-    // ordering; `NotFullUnbond` is its belt for a descriptor whose floor also
-    // happens to be non-zero.
-    assert!(matches!(
-        verify(&v),
-        Err(BondPostError::UnbondFloorMismatch)
-    ));
+    v.holdings = HoldingsDescriptor {
+        kind: HoldingsKind::ShardSetCompact,
+        shard_ids: ShardSet::new(vec![4]).expect("one shard"),
+    };
+    let floor = bond_floor(&v.holdings);
+    assert_ne!(
+        floor, 0,
+        "premise: a non-empty descriptor has a non-zero floor"
+    );
+    v.bonded_total_atomic = floor;
+
+    assert!(
+        matches!(verify(&v), Err(BondPostError::NotFullUnbond)),
+        "got {:?}",
+        verify(&v)
+    );
 }
 
 #[test]
@@ -212,7 +235,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
     const FUNDING: u64 = 0;
     let out_total = BONDED + FUNDING - FEE;
 
-    let v = vin();
+    let v = built();
     verify_debit_funding(
         AtomicUnits::from_raw(FUNDING),
         AtomicUnits::from_raw(out_total),
@@ -227,7 +250,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
         &commit(out_total, &mask),
         FEE,
         BondTerm::Debit(
-            NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.bond_debit))
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit))
                 .expect("a full exit debits a non-zero balance"),
         ),
     )
@@ -240,7 +263,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
 #[test]
 fn the_debit_rule_rejects_amounts_the_commitment_rule_would_reject() {
     const FEE: u64 = 1_000;
-    let v = vin();
+    let v = built();
     // Outputs sized as if the released collateral contributed nothing — the
     // shape a reading that put the debit on the output side would produce, and
     // the one that leaves the whole balance unaccounted for.
@@ -265,7 +288,8 @@ fn the_debit_rule_rejects_amounts_the_commitment_rule_would_reject() {
             &commit(wrong_total, &mask),
             FEE,
             BondTerm::Debit(
-                NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.bond_debit)).expect("non-zero"),
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit))
+                    .expect("non-zero"),
             ),
         )
         .is_err(),

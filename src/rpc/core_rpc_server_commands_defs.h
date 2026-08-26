@@ -2176,6 +2176,20 @@ namespace cryptonote
       /// the vin's `bond_debit` to equal it exactly, so a producer cannot
       /// even name a full exit without this value.
       uint64_t bonded_total_atomic;
+      /// The record's interval-log length — `verify_unbond_bond_post`'s
+      /// `record_bad_interval_count` operand, the sixth and last of its
+      /// record facts.
+      ///
+      /// A plain count, with no presence flag, because unlike the two anchors
+      /// below it has no absent state: a record with no bad intervals has a
+      /// log of length 0, which is a value rather than a silence. The hazard
+      /// is the same one the flags exist for, though, and lands on the
+      /// decoder instead: 0 is the *permissive* reading (`0 <
+      /// MAX_BOND_BAD_INTERVALS` passes), so an absent field must be a decode
+      /// error wallet-side rather than a default.
+      ///
+      /// Bounded by the codec's `kMaxBadIntervals`, so it always fits.
+      uint64_t bad_interval_count;
       /// The whole-record release-cooldown anchor, folded daemon-side by
       /// `shekyl_archival_whole_record_last_served` — the same fold consensus
       /// applies. Never re-derived by the wallet, for the same reason
@@ -2218,6 +2232,7 @@ namespace cryptonote
         KV_SERIALIZE(held_shard_ids)
         KV_SERIALIZE(claimed_settlement_epochs)
         KV_SERIALIZE(bonded_total_atomic)
+        KV_SERIALIZE(bad_interval_count)
         KV_SERIALIZE(has_last_served_epoch)
         KV_SERIALIZE(last_served_epoch)
         KV_SERIALIZE(has_last_settled_slash_epoch)

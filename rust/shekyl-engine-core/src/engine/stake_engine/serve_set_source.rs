@@ -420,6 +420,7 @@ mod tests {
                 },
                 claimed_settlement_epochs: Vec::new(),
                 bonded_total_atomic: 0,
+                bad_interval_count: 0,
                 last_served: crate::engine::emission_source::ServeAnchor::NeverServed,
                 last_settled_slash: crate::engine::emission_source::SlashWatermark::NothingSettled,
             }),

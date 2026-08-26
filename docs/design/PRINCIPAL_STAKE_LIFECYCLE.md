@@ -534,7 +534,7 @@ A1 freezes the §2 signatures; PRs fill bodies in place. Bundled by **validation
 | **PR-P1** | `shekyl-staking` **Tier-A** deletion (`registry.rs` / `rewards.rs` / `entitlement.rs`) | removal (rule 15) | **buildable now** — 0 production deps |
 | **PR-P2** | `stake_in(amount)` — ordinary principal→`P` transfer; **end-test = `P` dual-scan recognizes the funded output** (GF-2, real end-test not a unit stub) | ordinary-transfer + dual-scan boundary | frozen contract only; **first unblocked code cut**. Its worth is the GF-2 boundary test, not standalone user value |
 | **PR-P3** | `fund_bond`/`join_market` — drive built `AssembleBond`→`PBoundBytes` + submit | JoinMarket bond-post | **lightly gated** — JoinMarket **verify is built** ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)); remaining = C++ transport/FFI wiring + activating the inert driving path. The lightest of the bond legs |
-| **PR-P4** | `partial_unbond` + `unbond` — NEW `StakeEngine` bond-debit ops | bond-debit wire + release cooldown | **Re-graded 2026-08-25 (Round 2): the `Unbond` POST is unblocked; the composed `unbond()` method is not.** All three Round-1 blockers were re-checked at source. (1) *non-JoinMarket connect-path code* — **discharged**: `verify_unbond_bond_post` ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)) and `unbond_connect` ([`bond_connect.rs`](../../rust/shekyl-archival-retention/src/bond_connect.rs)) both exist with a full error set; `PostKindNotJoinMarket` now guards only the JoinMarket verifier, and gate-6 §12 records the landing (PR #303 `HoldingsUpdate`/`Unbond`, PR #307 `Rebond`). (2) *`bond_spend_pk` debit-auth verify* — **dissolved by design**, not built: the verifier takes no signature operand and `bond_wire.rs` **forbids** `bond_spend_pk` on non-JoinMarket kinds; authorization is the surface-A `pqc_auths` slot (SA-2b). The row's parenthetical "sign `bond_spend_sk`" is retired with it. (3) *gate-6 R4 GF-4/GF-7* — **constrains a different leg**: GF-7's verdict was withdrawn in full (2026-07-23) and R4's remaining item is F-D2's unbuilt `P`-value-out **drain-send subsystem**. §1's leg table already says bond collateral returns via the gate-4 `Unbond`, **not** the drain. **So the boundary is: post producer buildable now; `unbond()` — which composes post + drain — stays gated on R4 with PR-P5.** Producer prerequisite, and the reason this is not a one-PR item: the wallet held **none** of three verify operands — `record_bonded_total`, `last_served_epoch`, `last_settled_slash_epoch` — so a producer could only have assembled blind. The bond-record read path lands them first (this PR). |
+| **PR-P4** | `partial_unbond` + `unbond` — NEW `StakeEngine` bond-debit ops | bond-debit wire + release cooldown | **Re-graded 2026-08-25 (Round 2): the `Unbond` POST is unblocked; the composed `unbond()` method is not.** All three Round-1 blockers were re-checked at source. (1) *non-JoinMarket connect-path code* — **discharged**: `verify_unbond_bond_post` ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)) and `unbond_connect` ([`bond_connect.rs`](../../rust/shekyl-archival-retention/src/bond_connect.rs)) both exist with a full error set; `PostKindNotJoinMarket` now guards only the JoinMarket verifier, and gate-6 §12 records the landing (PR #303 `HoldingsUpdate`/`Unbond`, PR #307 `Rebond`). (2) *`bond_spend_pk` debit-auth verify* — **dissolved by design**, not built: the verifier takes no signature operand and `bond_wire.rs` **forbids** `bond_spend_pk` on non-JoinMarket kinds; authorization is the surface-A `pqc_auths` slot (SA-2b). The row's parenthetical "sign `bond_spend_sk`" is retired with it. (3) *gate-6 R4 GF-4/GF-7* — **constrains a different leg**: GF-7's verdict was withdrawn in full (2026-07-23) and R4's remaining item is F-D2's unbuilt `P`-value-out **drain-send subsystem**. §1's leg table already says bond collateral returns via the gate-4 `Unbond`, **not** the drain. **So the boundary is: post producer buildable now; `unbond()` — which composes post + drain — stays gated on R4 with PR-P5.** Producer prerequisite, and the reason this is not a one-PR item: the wallet held **none** of four verify operands — `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`, `last_settled_slash_epoch` — so a producer could only have assembled blind. The bond-record read path lands them first (this PR). **Corrected 2026-08-26: this row first said *three*, omitting `record_bad_interval_count`; the count guards the `IntervalLogFull` arm and its absent reading (`0`) is the permissive one, so the omission was the kind that does not announce itself.** |
 | **PR-P5** | `drain` — NEW `StakeEngine` `P`-spend op → `PendingTxEngine`, multi-tx | reward-output spend | **blocked** — **reward-emission leg** (outputs to drain don't exist until PR-E3 ML-DSA hard gate) **+ gate-6 R4 GF-4** |
 | **PR-P6** | query surface (View structs); `bonded_holdings`/`unbond_readiness` read public cache; `drainable_balance` = `StakeEngine` scalar | owner-grade projection | rides its data sources (public-cache queries buildable with PR-P3; `drainable_balance` with PR-P5) |
 | **PR-P7** | `shekyl-staking` **Tier-B** deletion (`StakingMeta`/`LockTier`/`TierTable`) after consumer migration | removal (rule 15) | **blocked** — scanner/economics consumer migration (emission/admission cutover) |
@@ -589,15 +589,32 @@ gates, ordered:
    rule, see §DQ3's update) and the exit seam re-homed to the principal↔user crossing;
    this item no longer gates the drain. GF-7's conditionals and the gate-6 R4 close items
    (F-D1/F-D2/deletion PR/F-D5) live at gate-6 §12.9.
-2. **V3.0 connect-path CODE (not design).** Today only **JoinMarket** is implemented — the
-   `BondPostKind` enum + wire codec round-trip all four, but
-   [`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs) **rejects** any
-   non-JoinMarket kind (`PostKindNotJoinMarket`). Rebond / Unbond / HoldingsUpdate each
-   need a `verify_*` + FFI error cluster + builder; plus the `bond_spend_pk`
-   debit-authorizer wire+commit+verify and the `archival_p` HKDF-label/KAT (GF-1), and the
-   C++ `has_archival_bond_shard` `at_height` read fix (Pin 4). **This code IS most of the
-   principal lifecycle's `fund_bond` / `partial_unbond` / `unbond` — same work, two
-   labels.** Authority: [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §8.
+2. **V3.0 connect-path CODE (not design).** **Re-graded 2026-08-26 (PR-P4 slice 2): this
+   item's premise was retired by PR #303/#307 and never swept.** It read "today only
+   **JoinMarket** is implemented — `bond_post.rs` **rejects** any non-JoinMarket kind
+   (`PostKindNotJoinMarket`)", which contradicted this document's own PR-P4 row above and
+   the landed code. Verified at source:
+
+   - **All five verify arms exist** in
+     [`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs):
+     `verify_join_market_bond_post`, `verify_rebond_bond_post`, `verify_unbond_bond_post`,
+     `verify_holdings_update_add`, `verify_holdings_update_drop`. `PostKindNotJoinMarket`
+     guards the JoinMarket arm only; it is not a whole-module gate.
+   - **`bond_spend_pk` debit-authorizer — dissolved, not owed.** SA-2b made authorization
+     the surface-A `pqc_auths` slot, and `bond_wire.rs` now *forbids* the field on
+     non-JoinMarket kinds. See the PR-P4 row for the full re-grade.
+   - **GF-1 HKDF labels — landed** (`archival_p.rs` carries the `bond_spend` Ed25519 and
+     ML-DSA-65 info-labels).
+   - **Pin 4 — a ghost.** `has_archival_bond_shard` has **no occurrence anywhere in the
+     tree**. Whatever the read fix was attached to no longer exists under that name; the
+     clause is retired rather than carried, and re-derived from the substrate if the
+     underlying concern resurfaces.
+
+   **What is genuinely still owed:** the two remaining **builders**. `shekyl-archival-bond-builder`
+   has `build_join_market_vin` and `build_unbond_vin`; **`Rebond` and `HoldingsUpdate` have
+   verify arms but no producer.** That is the whole of this item now, and it maps to
+   `fund_bond`'s top-up path rather than to `unbond`.
+   Authority: [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §8.
 3. **Reward-emission leg — paying-side cross-dependency only.** The drain consumes reward
    outputs that do not exist until emission is built, and the C-1 ML-DSA check gates
    *verifying* the `Bonded→emit` path — but **not** the bond-lifecycle connect paths

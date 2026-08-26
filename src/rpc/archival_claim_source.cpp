@@ -46,6 +46,11 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     res.held_shard_ids = bond.held_shard_ids;
     res.claimed_settlement_epochs = bond.claimed_settlement_epochs;
     res.bonded_total_atomic = bond.bonded_total_atomic;
+    // The interval-log length, as the verify arm marshals it
+    // (`record.bad_intervals.size()` at the
+    // `shekyl_archival_verify_unbond_bond_post` call site) — the count only,
+    // never the intervals themselves, which no exit precondition reads.
+    res.bad_interval_count = bond.bad_intervals.size();
 
     // The `Unbond` cooldown anchor, gathered EXACTLY as the Unbond verify arm
     // gathers it -- `blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post`

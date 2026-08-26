@@ -36,6 +36,14 @@
 //! The full prover round-trip against a synthetic tree, and against the real
 //! `CurveTreeClient` (CT-5), are PR 2 / separate-series work (§3, §8).
 
+// Every public item must carry its own docs. This is the gate for a defect this
+// crate actually had: inserting `build_unbond_vin` between `verify_credit_funding`'s
+// doc block and its item silently re-attached those docs to the new function and
+// left the old one undocumented. Rustdoc does not warn — two adjacent doc blocks
+// just concatenate — but `missing_docs` fires on the item that LOST its docs, which
+// is the observable half. Zero violations at the time of landing; CI's `-D warnings`
+// makes it binding.
+#![warn(missing_docs)]
 #![deny(unsafe_code)]
 
 mod error;
@@ -47,7 +55,7 @@ use shekyl_archival_retention::{
     HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::archival_p::BondPostKeys;
-use shekyl_ct_balance::OutputTerm;
+use shekyl_ct_balance::{InputTerm, OutputTerm};
 use shekyl_units::AtomicUnits;
 
 /// A constructed JoinMarket bond-post `vin`.
@@ -82,6 +90,46 @@ impl JoinMarketVin {
     #[must_use]
     pub fn credit_term(&self) -> OutputTerm {
         OutputTerm::new(AtomicUnits::from_raw(self.vin.bond_credit))
+    }
+}
+
+/// A structurally-valid `Unbond` bond-post input — the debit-side twin of
+/// [`JoinMarketVin`].
+///
+/// Fields are private: an `UnbondVin` can be produced **only** by
+/// [`build_unbond_vin`], which establishes the genesis-frozen Unbond invariants
+/// (`post_kind == Unbond`, `bond_credit == 0`, `bonded_total_atomic == 0`,
+/// empty holdings, `bond_debit == the record's whole balance`). A consumer
+/// holding one therefore has a structural witness that those hold.
+///
+/// **The witness is what makes the debit rule safe to state as a function.**
+/// The side a bond term sits on is genesis-frozen — a credit is a sink, a debit
+/// is a source — so [`verify_debit_funding`] carries "debit" in its name. A name
+/// is not a check: over a bare `ArchivalBondPostVin` that function would happily
+/// return `Ok` for a JoinMarket post, whose `bond_debit` is 0, making the debit
+/// rule collapse into `funding == outputs + fee` and pass for a transaction it
+/// was never meant to describe. The type is what stops the wrong post reaching
+/// the right-sounding rule.
+#[derive(Clone, Debug)]
+pub struct UnbondVin {
+    vin: ArchivalBondPostVin,
+}
+
+impl UnbondVin {
+    /// The bond-post input, ready for wire encoding / verify.
+    #[must_use]
+    pub fn vin(&self) -> &ArchivalBondPostVin {
+        &self.vin
+    }
+
+    /// The cleartext balance term for this post's `bond_debit`, on the **input**
+    /// side — the released collateral returning to circulation. Feed as the
+    /// `extra_inputs` entry to `shekyl-tx-builder::sign_transaction_with_terms`,
+    /// mirroring [`JoinMarketVin::credit_term`]'s `extra_outputs` placement.
+    /// `verify_bond_post_ct_balance` is what fixes the side.
+    #[must_use]
+    pub fn debit_term(&self) -> InputTerm {
+        InputTerm::new(AtomicUnits::from_raw(self.vin.bond_debit))
     }
 }
 
@@ -184,6 +232,28 @@ pub fn build_join_market_vin(
 ///
 /// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end
 /// (rule 20); the raw `u64` is derived only at the error boundary.
+pub fn verify_credit_funding(
+    funding_total: AtomicUnits,
+    output_total: AtomicUnits,
+    fee: AtomicUnits,
+    post: &JoinMarketVin,
+) -> Result<(), BondBuildError> {
+    let bond_credit = AtomicUnits::from_raw(post.vin.bond_credit);
+    let required = output_total
+        .checked_add(fee)
+        .and_then(|s| s.checked_add(bond_credit))
+        .ok_or(BondBuildError::AmountOverflow)?;
+    if funding_total != required {
+        return Err(BondBuildError::CreditImbalance {
+            funding: funding_total.to_raw(),
+            outputs: output_total.to_raw(),
+            fee: fee.to_raw(),
+            floor: post.vin.bond_credit,
+        });
+    }
+    Ok(())
+}
+
 /// Build the `Unbond` bond-post vin — the terminal full exit (gate-4 §3.5
 /// debit path, `post_kind = 2`).
 ///
@@ -225,7 +295,7 @@ pub fn build_join_market_vin(
 pub fn build_unbond_vin(
     keys: BondPostKeys<'_>,
     record_bonded_total: u64,
-) -> Result<ArchivalBondPostVin, BondBuildError> {
+) -> Result<UnbondVin, BondBuildError> {
     if record_bonded_total == 0 {
         return Err(BondBuildError::NothingToUnbond);
     }
@@ -236,7 +306,7 @@ pub fn build_unbond_vin(
         .map_err(BondBuildError::IdentityEncode)?;
     let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
 
-    Ok(ArchivalBondPostVin {
+    let vin = ArchivalBondPostVin {
         hybrid_public_key,
         p_canonical_id,
         post_kind: BondPostKind::Unbond,
@@ -256,29 +326,8 @@ pub fn build_unbond_vin(
         bonded_total_atomic: 0,
         bond_credit: 0,
         bond_debit: record_bonded_total,
-    })
-}
-
-pub fn verify_credit_funding(
-    funding_total: AtomicUnits,
-    output_total: AtomicUnits,
-    fee: AtomicUnits,
-    post: &JoinMarketVin,
-) -> Result<(), BondBuildError> {
-    let bond_credit = AtomicUnits::from_raw(post.vin.bond_credit);
-    let required = output_total
-        .checked_add(fee)
-        .and_then(|s| s.checked_add(bond_credit))
-        .ok_or(BondBuildError::AmountOverflow)?;
-    if funding_total != required {
-        return Err(BondBuildError::CreditImbalance {
-            funding: funding_total.to_raw(),
-            outputs: output_total.to_raw(),
-            fee: fee.to_raw(),
-            floor: post.vin.bond_credit,
-        });
-    }
-    Ok(())
+    };
+    Ok(UnbondVin { vin })
 }
 
 /// Amount-level balance rule for the `Unbond` debit path (gate-4 §3.5).
@@ -306,9 +355,9 @@ pub fn verify_debit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,
     fee: AtomicUnits,
-    vin: &ArchivalBondPostVin,
+    post: &UnbondVin,
 ) -> Result<(), BondBuildError> {
-    let bond_debit = AtomicUnits::from_raw(vin.bond_debit);
+    let bond_debit = AtomicUnits::from_raw(post.vin.bond_debit);
     let sources = funding_total
         .checked_add(bond_debit)
         .ok_or(BondBuildError::AmountOverflow)?;
@@ -318,7 +367,7 @@ pub fn verify_debit_funding(
     if sources != sinks {
         return Err(BondBuildError::DebitImbalance {
             funding: funding_total.to_raw(),
-            debit: vin.bond_debit,
+            debit: post.vin.bond_debit,
             outputs: output_total.to_raw(),
             fee: fee.to_raw(),
         });

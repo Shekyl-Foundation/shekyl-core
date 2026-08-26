@@ -94,6 +94,28 @@ sustainability is unaffected by the recalibration.
   tidied away: an oracle that calls the subject's helper agrees with it by
   construction and detects nothing.
 
+- **`shekyl-ffi` has 105 items with no docs, so `missing_docs` cannot gate it**
+  (measured 2026-08-26 during PR-P4 slice 2).
+
+  **Trigger for this entry: anyone widening the rustdoc gate's `-p` list, or the
+  separate whole-workspace rustdoc hygiene task already noted in
+  `rust-audit-test.yml`.**
+
+  Context, because the number alone understates the point. Two doc blocks landed
+  detached from their items in this PR — a new function inserted between an
+  existing block and the item it documented, which silently re-attaches the docs
+  to the newcomer and leaves the original undocumented. **Rustdoc does not warn**:
+  adjacent doc blocks simply concatenate, so `RUSTDOCFLAGS=-D warnings` is blind
+  to the whole class. `missing_docs` *is* the detector, because it fires on the
+  item that lost its docs. It was landed on `shekyl-archival-bond-builder`
+  (0 violations) in the same commit.
+
+  `shekyl-ffi` measured **105** violations, which is a sweep rather than a gate,
+  so the lint is not landed there and the crate stays undetected for this defect
+  class. Two of its exported `unsafe extern "C"` functions had already drifted
+  this way — one inherited a `# Safety` section naming a parameter it does not
+  have. That is the cost of the gap, not the doc-coverage percentage.
+
 - **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
   production signing path** (surfaced 2026-08-22 while deleting the legacy
   prove seam; the only stated enforcement had been an unreachable check inside

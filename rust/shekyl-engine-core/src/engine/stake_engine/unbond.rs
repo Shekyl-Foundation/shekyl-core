@@ -28,24 +28,34 @@
 
 use kameo::message::{Context, Message};
 
-use shekyl_archival_bond_builder::build_unbond_vin;
+use shekyl_archival_bond_builder::{build_unbond_vin, UnbondVin};
 use shekyl_archival_retention::bond_connect::MAX_BOND_BAD_INTERVALS;
 use shekyl_archival_retention::release_cooldown::{
     release_cooldown_elapsed, slashes_settled_through,
 };
-use shekyl_archival_retention::ArchivalBondPostVin;
 
-use crate::engine::emission_source::{ServeAnchor, SlashWatermark};
+use shekyl_types::PCanonicalId;
 
-use super::actor::StakeEngine;
+use crate::engine::emission_source::{EmissionClaimSource, ServeAnchor, SlashWatermark};
+
+use super::actor::{persona_canonical_id, StakeEngine};
 use super::types::*;
 
-/// The record facts an exit's preconditions read, as the daemon reported them.
+/// The record facts an exit's preconditions read, as the daemon reported them,
+/// **bound to the persona they were read for**.
 ///
-/// Every field arrives from one claim-source response and therefore one LMDB
-/// read view: `bonded_total_atomic` and the cooldown anchor cannot straddle a
-/// block here, which would otherwise let readiness be computed on one view and
-/// the vin built against another.
+/// Fields are private and [`Self::from_claim_source`] is the only production
+/// constructor, which takes one decoded [`EmissionClaimSource`] and the `P` it
+/// was requested for. Two properties follow structurally rather than by
+/// convention, and both matter on a path whose confirmation is irreversible:
+///
+/// - **One read view.** Every field comes from a single response, so
+///   `bonded_total_atomic` and the cooldown anchor cannot straddle a block —
+///   which would otherwise let readiness be computed on one view and the vin be
+///   built against another.
+/// - **One persona.** The id travels with the facts, so a caller cannot pair
+///   persona A's balance and anchors with persona B's handle. Field-by-field
+///   assembly is what would allow that, and it is not available.
 ///
 /// [`ServeAnchor`] and [`SlashWatermark`] rather than `Option<u64>` on purpose.
 /// Both consensus predicates treat an absent anchor as *permissive*, so a bare
@@ -55,21 +65,61 @@ use super::types::*;
 /// absent field is a decode error — and these types carry that guarantee the
 /// rest of the way.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // PR-P4 slice 2b: the tx-assembly caller populates this from `BondContext`.
+#[allow(dead_code)] // PR-P4 slice 2b: the tx-assembly caller builds this from a claim-source read.
 pub(crate) struct UnbondRecordState {
+    /// The persona these facts describe — checked against the handle's own
+    /// derived id before anything is built for it.
+    p_id: PCanonicalId,
     /// The record's current bonded balance; the exit's `bond_debit` by contract.
-    pub bonded_total_atomic: u64,
+    bonded_total_atomic: u64,
     /// The record's interval-log length.
-    pub bad_interval_count: usize,
+    bad_interval_count: usize,
     /// The whole-record release-cooldown anchor, folded by the daemon.
-    pub last_served: ServeAnchor,
+    last_served: ServeAnchor,
     /// The slash scheduler's monotone watermark.
-    pub last_settled_slash: SlashWatermark,
+    last_settled_slash: SlashWatermark,
     /// The settled epoch the daemon derived from its own tip.
-    pub current_settlement_epoch: u64,
+    current_settlement_epoch: u64,
 }
 
 impl UnbondRecordState {
+    /// Build from one decoded claim-source response and the `P` it was
+    /// requested for — the only production constructor.
+    ///
+    /// `None` when the daemon holds no bond record for that `P`: there is no
+    /// exit to assess, which the caller reports rather than treating as an
+    /// error. Both the record facts and `current_settlement_epoch` come from
+    /// this one response, so the settled epoch a refusal quotes is the epoch
+    /// the anchors were read against.
+    #[allow(dead_code)] // PR-P4 slice 2b: called by the tx-assembly path.
+    pub(crate) fn from_claim_source(
+        p_id: PCanonicalId,
+        source: &EmissionClaimSource,
+    ) -> Option<Self> {
+        let bond = source.bond.as_ref()?;
+        Some(Self {
+            p_id,
+            bonded_total_atomic: bond.bonded_total_atomic,
+            bad_interval_count: bond.bad_interval_count,
+            last_served: bond.last_served,
+            last_settled_slash: bond.last_settled_slash,
+            current_settlement_epoch: source.current_settled_epoch,
+        })
+    }
+
+    /// The persona these facts describe.
+    #[allow(dead_code)] // PR-P4 slice 2b: read by the `AssembleUnbond` binding check.
+    pub(crate) fn p_id(&self) -> PCanonicalId {
+        self.p_id
+    }
+
+    /// The exit's `bond_debit` by contract — `verify_unbond_bond_post` requires
+    /// the vin's debit to equal this exactly.
+    #[allow(dead_code)] // PR-P4 slice 2b: read by the `AssembleUnbond` builder call.
+    pub(crate) fn bonded_total_atomic(&self) -> u64 {
+        self.bonded_total_atomic
+    }
+
     /// Refuse, with a named cause, if this record cannot support a full exit.
     ///
     /// Mirrors the verify arm's record-state checks in the same order, using the
@@ -77,8 +127,22 @@ impl UnbondRecordState {
     /// about *why*.
     #[allow(dead_code)] // PR-P4 slice 2b: called by the tx-assembly path.
     pub(crate) fn ensure_exit_ready(&self) -> Result<(), UnbondNotReady> {
-        // A zero balance is `NothingToUnbond` at the builder, which owns that
-        // operand; it is not repeated here.
+        // FIRST, because it is first at the verifier: `NothingToUnbond` is
+        // checked before the interval log, the cooldown, or the watermark
+        // (`verify_unbond_bond_post` step 3). An earlier revision left this to
+        // `build_unbond_vin` on the grounds that the builder consumes the
+        // operand — true, and it does still check it as its own constructor
+        // invariant. But deferring it here reordered the *reasons*: a
+        // zero-balance record with a full interval log was refused as
+        // `IntervalLogFull` while the chain would have said `NothingToUnbond`.
+        // The whole point of running consensus's own predicates in consensus's
+        // own order is that a wallet refusal and a chain rejection cannot
+        // disagree about why, so the operand this struct already holds is
+        // tested here too. The two checks cannot diverge: same field, same
+        // comparison, no derivation between them.
+        if self.bonded_total_atomic == 0 {
+            return Err(UnbondNotReady::NothingToUnbond);
+        }
 
         // The connect must append a clean interval-close; a full log makes the
         // tx unconnectable, so verify rejects it too. Same bound, one constant.
@@ -119,7 +183,7 @@ impl UnbondRecordState {
 
 /// Assemble the `Unbond` post's vin for a held persona (gate-4 §3.5).
 ///
-/// Returns the vin only. The persona-bound transaction around it — funding,
+/// Returns the witness only. The persona-bound transaction around it — funding,
 /// outputs, the surface-A `pqc_auths` slot — is slice 2b, and is deliberately
 /// not reachable from any RPC method or CLI verb until slice 3's regtest walk
 /// has exercised the retire path end to end.
@@ -132,7 +196,11 @@ pub(crate) struct AssembleUnbond {
 }
 
 impl Message<AssembleUnbond> for StakeEngine {
-    type Reply = Result<ArchivalBondPostVin, StakeEngineError>;
+    /// The witness, not the bare vin: the invariants `build_unbond_vin`
+    /// established travel to slice 2b's assembly rather than being asserted
+    /// once and then forgotten at the actor boundary. `verify_debit_funding`
+    /// is the consumer that requires them.
+    type Reply = Result<UnbondVin, StakeEngineError>;
 
     async fn handle(
         &mut self,
@@ -141,25 +209,49 @@ impl Message<AssembleUnbond> for StakeEngine {
     ) -> Self::Reply {
         self.validate_handle(&msg.handle)?;
 
-        // Preconditions BEFORE construction: nothing is built for a record that
-        // cannot exit, so a refusal never produces a post that could be
-        // broadcast by a caller ignoring the error.
-        msg.record.ensure_exit_ready()?;
-
         let keys = self
             .held
             .get(&msg.handle.p_slot)
             .expect("validate_handle confirmed the slot is held")
             .keys();
 
-        build_unbond_vin(keys.bond_post_keys(), msg.record.bonded_total_atomic)
+        // The handle and the record facts arrive as two independent values, so
+        // BEFORE either is used, prove they describe the same persona. The
+        // handle proves the slot is held; it says nothing about whose record
+        // was read. Without this, a caller holding two claim-source responses
+        // could pair persona A's balance and anchors with persona B's handle,
+        // and the wallet would answer readiness from A's cooldown while
+        // building B's post. The daemon would reject the result — but the
+        // readiness answer would already have been wrong, and this path's
+        // confirmation is an irreversible persona-key wipe.
+        //
+        // Derived from the resident keys rather than carried on the handle:
+        // `persona_canonical_id` hashes the same canonical bytes an on-chain
+        // bond-post carries, so this compares the id the chain will see.
+        let handle_p_id = persona_canonical_id(keys)
+            .map_err(|e| StakeEngineError::ScanSetup(ScanSetupError::CanonicalId(e)))?;
+        if handle_p_id != msg.record.p_id() {
+            return Err(StakeEngineError::RecordPersonaMismatch);
+        }
+
+        // Preconditions BEFORE construction: nothing is built for a record that
+        // cannot exit, so a refusal never produces a post that could be
+        // broadcast by a caller ignoring the error.
+        msg.record.ensure_exit_ready()?;
+
+        build_unbond_vin(keys.bond_post_keys(), msg.record.bonded_total_atomic())
             .map_err(StakeEngineError::BondBuild)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use shekyl_archival_retention::RELEASE_COOLDOWN_EPOCHS;
+    use shekyl_archival_retention::{
+        HoldingsDescriptor, HoldingsKind, ShardSet, RELEASE_COOLDOWN_EPOCHS,
+    };
+    use shekyl_types::ChainCount;
+
+    use crate::engine::emission_source::BondContext;
 
     use super::*;
 
@@ -170,6 +262,7 @@ mod tests {
     /// failure reaches the user at the wallet instead of at the chain.
     fn ready() -> UnbondRecordState {
         UnbondRecordState {
+            p_id: PCanonicalId::from_bytes([7u8; 32]),
             bonded_total_atomic: 3 * 750_000_000,
             bad_interval_count: 0,
             last_served: ServeAnchor::ServedAt(4),
@@ -198,6 +291,104 @@ mod tests {
                 count: MAX_BOND_BAD_INTERVALS,
                 max: MAX_BOND_BAD_INTERVALS,
             })
+        );
+    }
+
+    /// The refusal ORDER is consensus's, not a convenient one — on the exact
+    /// state where the two orders disagree.
+    ///
+    /// `verify_unbond_bond_post` checks `NothingToUnbond` (step 3) before
+    /// `IntervalLogFull` (step 9). A record that is both zero-balance and
+    /// interval-log-full satisfies both conditions, so it is the only input
+    /// that can tell which order this function actually runs. Leaving the
+    /// zero-balance check to the builder made this state report
+    /// `IntervalLogFull` while the chain would say `NothingToUnbond` — a wallet
+    /// and a chain disagreeing about why an irreversible operation was refused.
+    ///
+    /// The single-condition cases are asserted alongside, so a fix that
+    /// reordered into a *different* wrong order would not pass.
+    #[test]
+    fn the_refusal_order_is_the_verifiers_where_two_conditions_both_hold() {
+        let mut r = ready();
+        r.bonded_total_atomic = 0;
+        r.bad_interval_count = MAX_BOND_BAD_INTERVALS;
+        assert_eq!(
+            r.ensure_exit_ready(),
+            Err(UnbondNotReady::NothingToUnbond),
+            "both conditions hold; the verifier names the balance first"
+        );
+
+        // Each alone still names itself, so the ordering fix did not collapse
+        // one arm into the other.
+        let mut only_zero = ready();
+        only_zero.bonded_total_atomic = 0;
+        assert_eq!(
+            only_zero.ensure_exit_ready(),
+            Err(UnbondNotReady::NothingToUnbond)
+        );
+        let mut only_full = ready();
+        only_full.bad_interval_count = MAX_BOND_BAD_INTERVALS;
+        assert_eq!(
+            only_full.ensure_exit_ready(),
+            Err(UnbondNotReady::IntervalLogFull {
+                count: MAX_BOND_BAD_INTERVALS,
+                max: MAX_BOND_BAD_INTERVALS,
+            })
+        );
+    }
+
+    /// A record read for one persona cannot be spent through another's handle.
+    ///
+    /// The constructor is what makes this hard to get wrong — record facts and
+    /// the settled epoch come from one response together — but the binding
+    /// itself is the handler's equality check, because the handle is a separate
+    /// value that arrives on the same message. This asserts the id survives
+    /// construction so that check has something true to compare; the handler's
+    /// refusal is exercised where the actor is driven.
+    #[test]
+    fn the_record_carries_the_persona_it_was_read_for() {
+        let want = PCanonicalId::from_bytes([0xA5; 32]);
+        let source = EmissionClaimSource {
+            chain_height: ChainCount::from_raw(30001),
+            current_settled_epoch: 3,
+            bond: Some(BondContext {
+                join_settlement_epoch: 1,
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: ShardSet::new(vec![4]).expect("one shard"),
+                },
+                claimed_settlement_epochs: vec![1],
+                bonded_total_atomic: 2_250_000_000,
+                bad_interval_count: 1,
+                last_served: ServeAnchor::ServedAt(4),
+                last_settled_slash: SlashWatermark::SettledThrough(4),
+            }),
+            epochs: vec![],
+        };
+        let state = UnbondRecordState::from_claim_source(want, &source)
+            .expect("the response carries a bond record");
+        assert_eq!(state.p_id(), want);
+        assert_ne!(state.p_id(), PCanonicalId::from_bytes([0x5A; 32]));
+        // Every fact came from this one response, including the settled epoch
+        // the anchors are judged against.
+        assert_eq!(state.bonded_total_atomic(), 2_250_000_000);
+        assert_eq!(state.bad_interval_count, 1);
+        assert_eq!(state.current_settlement_epoch, 3);
+    }
+
+    /// No bond record is "nothing to assess", not an error: the caller reports
+    /// it rather than refusing with a cause that would imply a record exists.
+    #[test]
+    fn a_response_without_a_bond_record_yields_no_state() {
+        let source = EmissionClaimSource {
+            chain_height: ChainCount::from_raw(30001),
+            current_settled_epoch: 3,
+            bond: None,
+            epochs: vec![],
+        };
+        assert!(
+            UnbondRecordState::from_claim_source(PCanonicalId::from_bytes([1; 32]), &source)
+                .is_none()
         );
     }
 

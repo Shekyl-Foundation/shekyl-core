@@ -371,6 +371,16 @@ impl PersonaIdentity {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[allow(dead_code)] // PR-P4 slice 2b: constructed by `UnbondRecordState::ensure_exit_ready`.
 pub(crate) enum UnbondNotReady {
+    /// The record has no bonded balance, so there is nothing to exit.
+    ///
+    /// First, because it is first at the verifier (`verify_unbond_bond_post`
+    /// checks it before the interval log). `build_unbond_vin` refuses the same
+    /// state as its own constructor invariant; this arm exists so the *reason*
+    /// a caller is given matches the reason the chain would give, which a
+    /// later-firing check would not.
+    #[error("the record has no bonded balance; there is nothing to unbond")]
+    NothingToUnbond,
+
     /// The record's interval log is at `MAX_BOND_BAD_INTERVALS`, so the
     /// connect's clean interval-close could not append. Verify rejects this for
     /// the same reason: a tx that verifies but cannot connect is a
@@ -521,6 +531,20 @@ pub(crate) enum StakeEngineError {
     /// is named so the wallet can say which condition, and when it lifts.
     #[error("record is not ready to exit: {0}")]
     UnbondNotReady(#[from] UnbondNotReady),
+
+    /// The record facts describe a different persona than the handle does.
+    ///
+    /// A handle proves its slot is held; it says nothing about *whose* record
+    /// was read. The two arrive as independent values, so an `Unbond` that
+    /// paired one persona's balance and cooldown anchors with another's keys
+    /// would answer readiness from the wrong record and then build a post for
+    /// the right one. Not a user-facing condition — it is a caller bug, and the
+    /// message says so rather than suggesting a remedy the user does not have.
+    #[error(
+        "internal error: the bond record and the persona handle name different personas; \
+         the exit was not assembled"
+    )]
+    RecordPersonaMismatch,
 
     /// Bond construction failed after the actor validated the handle and ticket
     /// (`PlanBondPost`, S2). The persona bundle was available but

@@ -92,6 +92,10 @@ struct ClaimSourceFixture
     shekyl::db::ArchivalBondValue bond{};
     EXPECT_TRUE(bdb().get_archival_bond_value(p1, bond));
     bond.claimed_settlement_epochs = {1};
+    // A NON-EMPTY interval log, so `bad_interval_count`'s assertion has an
+    // axis: against an empty log the marshaled count is 0, which is also what
+    // an unwritten field reads as, and the check could not tell them apart.
+    bond.bad_intervals = {{2, 3}, {5, 6}};
     bdb().put_archival_bond_value(p1, bond);
 
     db.fake_height = kTipHeight;
@@ -140,6 +144,9 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
 
   // The `Unbond` exit operands: same source, same fold, no second derivation.
   EXPECT_EQ(res.bonded_total_atomic, bond.bonded_total_atomic);
+  // The interval-log length, from the record — the count only. The verify arm
+  // marshals `record.bad_intervals.size()`; this must be the same number.
+  EXPECT_EQ(res.bad_interval_count, bond.bad_intervals.size());
   // The cooldown anchor is whatever the verify arm's gather + the exported
   // Rust fold produce on this state — recomputed here through the SAME two
   // calls rather than restated, so the assertion cannot drift from the
@@ -394,6 +401,12 @@ TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
   // fail-closed — so a transport that dropped them would silently merge the
   // two. Pinned on the wire, not just in the struct.
   EXPECT_EQ(back.bonded_total_atomic, res.bonded_total_atomic);
+  // The interval count carries no flag — an empty log is a length, not a
+  // silence — so the wire is the only thing separating "the log is empty" from
+  // "the field was dropped". Both would decode as 0, and 0 is the PERMISSIVE
+  // reading of the `IntervalLogFull` gate, so the round-trip has to pin it.
+  EXPECT_NE(res.bad_interval_count, 0u) << "the fixture must carry a non-empty log";
+  EXPECT_EQ(back.bad_interval_count, res.bad_interval_count);
   EXPECT_EQ(back.has_last_served_epoch, res.has_last_served_epoch);
   EXPECT_EQ(back.last_served_epoch, res.last_served_epoch);
   EXPECT_EQ(back.has_last_settled_slash_epoch, res.has_last_settled_slash_epoch);

@@ -221,6 +221,18 @@ pub struct BondContext {
     /// `bond_debit` must equal.
     #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` as the exit's `bond_debit`.
     pub bonded_total_atomic: u64,
+    /// The record's interval-log length — `verify_unbond_bond_post`'s sixth
+    /// and last record operand (`record_bad_interval_count`).
+    ///
+    /// No presence flag, because the field has no absent state: an empty log
+    /// is length 0. The permissive-default hazard is the same as the anchors'
+    /// and lands here instead — `0 < MAX_BOND_BAD_INTERVALS` **passes**, so a
+    /// field that never arrived would read as "the log has room" and let an
+    /// unconnectable exit be assembled. Hence a required read, like every other
+    /// exit operand.
+    #[allow(dead_code)]
+    // PR-P4 slice 2: read by `AssembleUnbond` as the `IntervalLogFull` operand.
+    pub bad_interval_count: usize,
     /// The release-cooldown anchor. See [`ServeAnchor`] for why this is not an
     /// `Option<u64>`.
     #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` / `unbond_readiness`.
@@ -473,6 +485,10 @@ impl EmissionClaimSource {
                 },
                 claimed_settlement_epochs,
                 bonded_total_atomic: req_u64(v, "bonded_total_atomic")?,
+                bad_interval_count: to_usize(
+                    req_u64(v, "bad_interval_count")?,
+                    "bad_interval_count",
+                )?,
                 // `req_*`, not an `unwrap_or`: an absent field must be a decode
                 // error, because the only other option — defaulting — produces
                 // exactly the permissive `None` that would report an
@@ -615,6 +631,7 @@ mod tests {
     fn a_missing_exit_operand_is_a_decode_error_never_a_permissive_default() {
         for field in [
             "bonded_total_atomic",
+            "bad_interval_count",
             "has_last_served_epoch",
             "has_last_settled_slash_epoch",
         ] {
@@ -629,6 +646,23 @@ mod tests {
                 "{field} absent must be Malformed, got {err:?}"
             );
         }
+    }
+
+    /// The interval-log length is read from the wire, not assumed.
+    ///
+    /// It is the sixth and last of `verify_unbond_bond_post`'s record operands
+    /// and the only one with no presence flag, because an empty log is a length
+    /// rather than a silence. That makes the decode the whole safety boundary:
+    /// `0 < MAX_BOND_BAD_INTERVALS` **passes**, so a defaulted read reports "the
+    /// log has room" for a record whose log may be full — and a full log makes
+    /// the exit unconnectable, which verify rejects. The fixture carries a
+    /// non-zero count precisely so this assertion can tell a real read from a
+    /// default.
+    #[test]
+    fn the_interval_log_length_is_decoded_not_defaulted() {
+        let src = EmissionClaimSource::from_json(&fixture()).expect("fixture decodes");
+        let bond = src.bond.as_ref().expect("fixture has a bond record");
+        assert_eq!(bond.bad_interval_count, 2);
     }
 
     /// The two anchor types render their absent arm as a word, not a number.
@@ -743,6 +777,10 @@ mod tests {
                 },
                 claimed_settlement_epochs: vec![1],
                 bonded_total_atomic: 0,
+                // Non-zero on purpose: 0 is what a dropped field would also
+                // decode to if the read were ever defaulted, so a fixture
+                // carrying 0 could not tell the two apart.
+                bad_interval_count: 2,
                 last_served: ServeAnchor::NeverServed,
                 last_settled_slash: SlashWatermark::NothingSettled,
             }),

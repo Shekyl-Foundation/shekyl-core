@@ -127,6 +127,7 @@ pub(crate) fn source_with(
             },
             claimed_settlement_epochs: claimed,
             bonded_total_atomic: 0,
+            bad_interval_count: 0,
             last_served: ServeAnchor::NeverServed,
             last_settled_slash: SlashWatermark::NothingSettled,
         }),
@@ -269,6 +270,10 @@ pub(crate) fn source_json(source: &EmissionClaimSource) -> serde_json::Value {
         obj.insert(
             "bonded_total_atomic".into(),
             bond.bonded_total_atomic.into(),
+        );
+        obj.insert(
+            "bad_interval_count".into(),
+            (bond.bad_interval_count as u64).into(),
         );
         // Emitted as the daemon emits them — flag plus value — so a fixture
         // cannot accidentally exercise a shape the wire never produces.
