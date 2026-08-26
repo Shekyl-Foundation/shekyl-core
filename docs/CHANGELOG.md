@@ -4,8 +4,8 @@
 
 ### Added
 
-- **The wallet can read the four `Unbond` verify operands and build the
-  `Unbond` post's vin (PR-P4).** Before this it held *none* of
+- **The wallet can read the four `Unbond` verify operands and assemble the
+  full `Unbond` exit transaction (PR-P4).** Before this it held *none* of
   `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`
   or `last_settled_slash_epoch`, so an exit producer could only have
   assembled blind. `/archival_claim_source` now marshals all four — the
@@ -25,6 +25,23 @@
   `UnbondRecordState::ensure_exit_ready` mirrors
   `verify_unbond_bond_post`'s refusals **in the verifier's own order**, so
   a wallet refusal and a consensus rejection cannot disagree about why.
+  Around that vin, `AssembleUnbond` assembles the whole persona-bound
+  transaction: funding from the typed `P`-space pool (cover + earnings —
+  a principal output is unrepresentable in the selector's input type),
+  the released collateral entering as a **source** (`sum(funding) +
+  bond_debit == sum(outputs) + fee`, and the side is genesis-frozen in
+  the type — `debit_term()` returns an `InputTerm`, so it cannot be
+  placed on the output side), payout split across two outputs to `P`'s
+  **own base address** — never the principal, because the composed
+  `unbond()` is the post **plus a decorrelated drain** and paying the
+  exit straight out would put the P↔principal edge in one transaction.
+  The surface-A `pqc_auths` slot is signed under **`bond_spend_pk`**, not
+  the identity key: that is the whole of GF-1 debit authorization, which
+  consensus pins in `archival_debit_auth_pin` and which is the only thing
+  stopping a compromised serving host — it holds `hybrid_sign_sk` — from
+  authorizing a collateral-draining exit. `wire_bond_post_input` gained
+  its `Unbond` arm here; the refusal it replaced said the kind "has no
+  wallet-side producer yet", which was true when written and is not now.
   **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
   no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
   RESERVED. The gate on this lane is reachability, not existence: nothing

@@ -27,10 +27,8 @@ use super::persona::{
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
 };
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
-use shekyl_archival_bond_builder::UnbondVin;
-
 use super::types::*;
-use super::unbond::AssembleUnbond;
+use super::unbond::{AssembleUnbond, AssembledUnbondPost};
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::drain_assembly::{AssembleDrain, AssembledDrain};
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch, ScanStep, ScanStepResult};
@@ -304,7 +302,7 @@ impl StakeEngineHandle {
     pub(crate) async fn assemble_unbond(
         &self,
         msg: AssembleUnbond,
-    ) -> Result<UnbondVin, StakeEngineError> {
+    ) -> Result<AssembledUnbondPost, StakeEngineError> {
         self.actor.ask(msg).await.map_err(collapse_send_error)
     }
 

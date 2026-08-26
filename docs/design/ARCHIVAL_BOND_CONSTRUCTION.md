@@ -458,10 +458,13 @@ flowchart LR
 
 The four-kind architecture is designed here so JoinMarket-first does not paint
 into a corner. **UPDATE 2026-08-26 (PR-P4): `Unbond` is no longer provisional.**
-Its verify arm landed in #303 and its constructor (`build_unbond_vin`) now has
-its own round-trip KAT against `verify_unbond_bond_post`
-(`unbond_round_trip.rs`), so the section title overstates for that kind: two of
-the four are exercised, not one. **`Rebond` and `HoldingsUpdate` remain
+Its verify arm landed in #303, its constructor (`build_unbond_vin`) has its own
+round-trip KAT against `verify_unbond_bond_post` (`unbond_round_trip.rs`), and
+the persona-bound transaction around that vin is built too — `AssembleUnbond`
+assembles the whole exit, with the surface-A auth slot under `bond_spend_pk`.
+So the section title overstates for that kind: two of the four are exercised,
+not one. What `Unbond` still lacks is not construction but **reachability** —
+no RPC method, no CLI verb, until the regtest walk lands. **`Rebond` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture
@@ -479,7 +482,7 @@ exists to track.
 | HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
 | HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
 | Rebond | `P_pubkey` | `verify_rebond_bond_post` | provisional — no producer |
-| Unbond | `bond_spend_pk` | `verify_unbond_bond_post` | PR-P4 `build_unbond_vin` (KAT-validated) |
+| Unbond | `bond_spend_pk` | `verify_unbond_bond_post` | PR-P4 — `build_unbond_vin` (KAT-validated) + `AssembleUnbond` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb until the regtest walk lands |
 
 The `Auth key` column is unchanged and remains correct: `Unbond` and
 `HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,

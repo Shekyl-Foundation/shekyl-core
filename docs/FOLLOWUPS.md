@@ -352,6 +352,25 @@ sustainability is unaffected by the recalibration.
   because the blocker is an explicit refusal in the assembler, not an
   absent design.
 
+  **UPDATE 2026-08-26 (PR-P4): the `Unbond` half is DISCHARGED; the other
+  two kinds are not.** `wire_bond_post_input` now maps `Unbond` as well,
+  and the wallet assembles the full exit — `build_unbond_vin` for the
+  witness, `AssembleUnbond` for the persona-bound transaction around it
+  (funding from the typed `P`-space pool, payout to `P`'s own base
+  address, and the surface-A `pqc_auths` slot under `bond_spend_pk`).
+  `Rebond` and `HoldingsUpdate` still refuse, and the refusal now names
+  them rather than being everything-else. **The consumer/producer
+  inversion below is therefore half-resolved and worth restating
+  precisely:** the producer exists, but it is not *reachable* — no RPC
+  method, no CLI verb — so a staker still cannot bond out today. What
+  changed is the nature of the gap: it was a missing producer, and it is
+  now an unlanded regtest walk (its own PR) that must exercise the
+  irreversible wipe before anything opens the path. `CLI_PARITY_MATRIX.md`
+  row 9 was corrected in the same pass — it no longer reads "unbonding
+  entry design pending", which was the understatement this entry called
+  out and is now wrong in a second way as well. Keep this entry open
+  until `HoldingsUpdate` and `Rebond` have producers.
+
   **Consequences as the code stands:** a staker can bond in and cannot
   bond out or adjust holdings. `stake_engine/retire.rs` performs an
   irreversible persona-key wipe on a confirmed `Unbond` witness, so a
@@ -390,9 +409,10 @@ sustainability is unaffected by the recalibration.
 
   **UPDATE 2026-08-26 (PR-P4): the `Unbond` producer is now partly built,
   and the entry's core still stands — for a different reason.** The vin
-  producer (`build_unbond_vin`) and the engine-side preconditions
-  (`UnbondRecordState`, `AssembleUnbond`) landed; the tx assembly around
-  the vin (slice 2b) has not. Bond-out therefore remains impossible, but
+  producer (`build_unbond_vin`), the engine-side preconditions
+  (`UnbondRecordState`), and the persona-bound transaction around the vin
+  (`AssembleUnbond`, slice 2b) all landed. Bond-out therefore remains
+  impossible, but
   from **unreachability** rather than absence: `assemble_unbond` is
   `pub(crate)` with no RPC method and no CLI verb behind it. Read that as
   a narrower guarantee than the original — absence needed no upkeep,
