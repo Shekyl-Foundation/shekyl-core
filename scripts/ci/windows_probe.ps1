@@ -36,14 +36,22 @@ $ErrorActionPreference = 'Stop'
 # exits non-zero when a probe FAILS, and the P-12 example exits 1 for FAIL and 2
 # for UNRUN. Every one of those is a verdict this script exists to record.
 #
-# On PowerShell 7.3+ `$PSNativeCommandUseErrorActionPreference` promotes a
-# native command's non-zero exit into a terminating error under
-# `$ErrorActionPreference = 'Stop'` — before `$LASTEXITCODE` can be read. The
-# script would then abort mid-run and print no summary table at all, so a FAIL
-# or UNRUN would be LESS visible than a pass: the reporting works exactly when
-# there is nothing to report and breaks when there is. That is the fail-open
-# shape this round kept meeting, and `build.yml`'s scouting step already
-# disables the preference for the same reason.
+# `$PSNativeCommandUseErrorActionPreference` promotes a native command's
+# non-zero exit into a terminating error under `$ErrorActionPreference = 'Stop'`
+# — before `$LASTEXITCODE` can be read. A host with it enabled would abort this
+# script mid-run and print no summary table at all, so a FAIL or UNRUN would be
+# LESS visible than a pass: the reporting would work exactly when there is
+# nothing to report and break when there is.
+#
+# **Measured, because the conditional above is doing real work.** On the pwsh we
+# actually run (7.6.5) the preference defaults to `False`, and
+# `$ErrorActionPreference = 'Stop'` alone does **not** turn it on — a native
+# `exit 3` is reached with `$LASTEXITCODE = 3`. So this line is not fixing a
+# live abort here; it makes the script immune to a host that has the preference
+# on, which is a profile, a policy, an older 7.3/7.4 default, or a future
+# change to it. The failure path itself is now observed rather than assumed: a
+# deliberately failed §1 probe prints the table, carries the exit code in the
+# FAIL row, lets §3 still report, and exits 1.
 #
 # Script-scoped rather than wrapped around each call, because it is true of
 # every native invocation here — there is no command in this file whose
