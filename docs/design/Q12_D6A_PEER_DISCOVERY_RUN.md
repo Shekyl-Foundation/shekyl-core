@@ -480,6 +480,26 @@ is fixed by the arm's construction rather than observed, and nothing in the arm
 reads the field. As written, the arm runs, produces its result, reads
 `origin_zone` nowhere, and the reopen fires at teardown **by default**.
 
+> **THE JUSTIFICATION ABOVE IS DEFEATED, 2026-08-25 — and this section is the
+> reason to say so rather than to quietly keep the requirement.** The whole of
+> *"why it is needed"* is the reopen-fires-by-default argument. It cannot fire:
+> `local_relay_base` (`tx_pool.cpp`) now reads the field on every relay pass
+> (`DAEMON_RELAY_PRIVACY.md` §92.5c item 3), so a reader besides the
+> preservation path exists whatever this run ships. The arm no longer has to
+> carry a readout to keep the field alive.
+>
+> **What that does NOT settle: whether the readout is worth having on its own
+> merit.** The section conceded its own provenance was weak — *"a scope change
+> argued from text"* — and the argument it was resting on has now gone. So the
+> requirement is **suspended, not deleted**, and the question goes back open in
+> its honest form: does distinguishing originated-on-anon from relayed-on-anon
+> tell the isolation arm something it needs? Answer that before the run is
+> provisioned. Deleting the section would destroy the only record that the
+> question was ever asked; leaving it armed would keep a requirement whose
+> stated reason no longer exists — which is the failure
+> `.cursor/rules/22-no-lazy-deferral.mdc` describes, arriving from the other
+> direction.
+
 **And it cannot be recovered afterwards.** The arm originates on one node and
 measures at another, and both origin classes produce the same pool-membership
 event. Arrival fraction is not disaggregable by origin class after the fact, so

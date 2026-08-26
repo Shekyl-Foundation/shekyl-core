@@ -358,8 +358,9 @@ impl Zone {
     /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
     /// that transport is a parameter, not a topology, and handing the
     /// scheduler the overlay identity would recouple the axes this type exists
-    /// to keep apart. The FFI (and the cutover's in-process caller) derives
-    /// params, reach, and secrecy from one discriminant at the adapter.
+    /// to keep apart. The FFI derives params, reach, and secrecy from one
+    /// discriminant at the adapter; a carrier caller, once one is built, would
+    /// do the same. None exists today — see `Self::new`'s refusal notes.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
@@ -380,9 +381,21 @@ impl Zone {
     /// # Who can reach the refusals
     ///
     /// C++ never sets the noise flag, so no production construction hits
-    /// these. Tests do. The cutover's in-process caller will: it forms the
-    /// pair in Rust and stops routing it through `make_relay_zone` — which
-    /// is why the checks are here and not at the FFI edge.
+    /// these. Tests do. **No carrier caller exists yet**, and it is more than
+    /// one call: nothing owns or enqueues [`crate::NoiseQueues`] outside its
+    /// own tests, neither of `Driver::poll`'s noise effects reaches the queue
+    /// (`Effect::NoiseSend` to `take_for_send`, `Effect::NoiseUnbind` to
+    /// [`crate::NoiseQueues::unbind`], which is what invalidates outstanding
+    /// tokens), and `NoiseSendCb` carries no bytes out
+    /// and no status back — so the deliberately non-destructive token cannot
+    /// be resolved. An earlier draft called the join the sole missing piece;
+    /// it is one of four. When the caller is built it will hit these refusals,
+    /// because it forms the pair in Rust and stops routing it through
+    /// `make_relay_zone` — which is why the checks are here and not at the
+    /// FFI edge. Building it is not the daemon cutover's to provide
+    /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
+    /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps
+    /// performing transport.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,

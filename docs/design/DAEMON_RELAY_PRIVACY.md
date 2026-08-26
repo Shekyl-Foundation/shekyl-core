@@ -15225,7 +15225,7 @@ when §2.9 step 4 was expected to **wire** the carrier. It did not:
 | regime | what a hop costs | status |
 | --- | --- | --- |
 | **1 — ordinary encrypted transport** | one onion-to-onion traversal of a levin message on an established connection | **complete today.** D++ is live on every zone (§89), Tor is the transport, and no carrier is in the path. **Measurable now.** |
-| **2 — noise carrier** | regime 1 **plus** `fragments × cadence draw` | **does not exist end-to-end.** `NoiseQueues` has no caller until step 5. |
+| **2 — noise carrier** | regime 1 **plus** `fragments × cadence draw` | **does not exist end-to-end.** `NoiseQueues` has no caller. *(Corrected 2026-08-25: "until step 5" was wrong — the work does not wait on the cutover. Corrected again 2026-08-26: it is also not one call. FOUR pieces are missing — an owner for `NoiseQueues`, an enqueue path, the join for both of `Driver::poll`'s noise effects (`NoiseSend` → `take_for_send`, `NoiseUnbind` → `unbind`), and a widened `NoiseSendCb`, which today carries neither bytes out nor a send status back and so cannot resolve the non-destructive token. Three are Rust-internal; the fourth is a boundary change. `COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed "§2.9 step 2 — covert executor".)* |
 
 So regime 1 is measured and regime 2 is **arithmetic over the cadence
 constants**, not a second measurement. §91.6's rule — do not derive against a

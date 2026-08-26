@@ -1279,11 +1279,21 @@ Three scoped, zero delivered: U1 pool-loop routing (deleted with
 zone-labelled tallies (collection zone, not this field). The named
 consumer is the Q12-D6a isolation arm
 (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6): distinguish originated-on-anon
-from relayed-on-anon. One production read remains: HF re-validation
-preservation (`e.meta.get_origin_zone()`). First-writer-wins holds.
-Reopen for rule-15 deletion if that run ships without a reader besides
-the preservation path. Do not delete it in the meantime — two bits
-are cheap; re-deriving this history is not.
+from relayed-on-anon. First-writer-wins holds. Reopen for rule-15
+deletion if that run ships without a reader besides the preservation
+path. Do not delete it in the meantime — two bits are cheap;
+re-deriving this history is not.
+
+**DISCHARGED 2026-08-25 — the reopen criterion above can no longer fire,
+and the read count was wrong from that date.** There are now TWO production
+reads: HF re-validation preservation (`e.meta.get_origin_zone()`), and
+`local_relay_base` in `tx_pool.cpp`, which picks the parameter class for an
+origin's re-broadcast interval on every relay pass
+(`DAEMON_RELAY_PRIVACY.md` §92.5c item 3). The second arrived from outside
+this round and does not depend on the Q12-D6a run, so the field is kept on
+its own ground rather than on that run's. The heading above still holds
+exactly as written: the new reader selects a WAIT, so `origin_zone` is
+still not a routing field.
 
 **Witness.** `once_at_origin_route.table` pins the decision function.
 `send_txs` requires a `zone_route` token only that helper can

@@ -10325,15 +10325,28 @@ its wake.
   stems by recorded origin, on the reading that its `zone::public_` literal was
   a clearnet leak; that was retracted before push. The literal is the fluff
   exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+  **DISCHARGED 2026-08-25 — the reopen criterion below can no longer fire.**
+  `local_relay_base` (`tx_pool.cpp`) reads `get_origin_zone()` on every relay
+  pass to pick the parameter class for an origin's re-broadcast interval
+  (`DAEMON_RELAY_PRIVACY.md` §92.5c item 3). That is a production reader
+  besides the preservation path, arriving from outside this item's subject and
+  independent of whether the Q12-D6a run ever ships. The field is kept on that
+  ground now; the isolation arm is no longer what is holding it. Note the
+  reader is a TIMING one — `origin_zone` still has no ROUTING consumer, which
+  is the claim the rest of this item makes and it is unchanged.
+
   **Consequence — `txpool_tx_meta_t::origin_zone` has no routing consumer.
   Fourth consumer named 2026-08-13: the Q12-D6a isolation arm.**
   Three scoped, zero delivered: U1 pool-loop routing (deleted with
   `forward`), U2 re-relay origin bucketing (retracted, `2cd0fb72`), U3
   zone-labelled `/get_stem_tallies` (collection zone, not this field).
   It is written at first arrival (`add_tx` does not revise it on a
-  stem→fluff upgrade) and preserved across hard-fork re-validation. The one
-  production read is that preservation path (`e.meta.get_origin_zone()` in
-  the HF re-validation loop). **Decision, not a residual comment:** keep
+  stem→fluff upgrade) and preserved across hard-fork re-validation. When this
+  was written the one production read was that preservation path
+  (`e.meta.get_origin_zone()` in the HF re-validation loop); `local_relay_base`
+  has been a second since 2026-08-25 — see the banner above, which is why the
+  reopen criterion three sentences down cannot fire.
+  **Decision, not a residual comment:** keep
   the field for the isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) —
   distinguish originated-on-anon from relayed-on-anon. Reopen for
   rule-15 deletion if that run ships without a reader besides the
@@ -10341,6 +10354,9 @@ its wake.
   origin-classified telemetry as a precondition for `p`. **Target: the
   Q12-D6a isolation-arm run** (pre-genesis; `Q12_D6A_PEER_DISCOVERY_RUN.md`
   §6 step 11). Reopening for deletion is that run's closing PR.
+  *(That closing PR has nothing left to do here — see the banner above.
+  The paragraph is kept as written because the reasoning is still the
+  record of why the field exists.)*
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
   pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
   `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /

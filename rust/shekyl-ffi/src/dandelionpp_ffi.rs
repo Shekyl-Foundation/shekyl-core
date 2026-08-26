@@ -281,8 +281,26 @@ mod tests {
 
     /// The defect this constant exists to fix, asserted rather than described.
     ///
-    /// What edit reds it: revert the C++ caller to `MIN_RELAY_TIME`, or move
-    /// the quantile below the median.
+    /// What edit reds it: move the exported quantile to or below the anonymity
+    /// median. Concretely, DECREASE
+    /// [`shekyl_relay_privacy::params::origin_retry_one_in`] — at `one_in == 2`
+    /// the export IS the median and `anon > median` fails — or shrink the
+    /// adopted timer.
+    ///
+    /// Stated as the integer rather than as a "rate", because the first
+    /// wording here said "lower its rate" and that is BACKWARDS: the
+    /// false-retry rate is `1 / one_in`, so lowering the rate raises `one_in`,
+    /// raises the quantile, and moves further ABOVE the median — leaving this
+    /// test green. Second inverted can-fail claim in this doc comment; the
+    /// lesson is to name the value and the direction, never a derived ratio.
+    ///
+    /// What does NOT red it, stated because the claim was made and was wrong:
+    /// reverting the C++ caller to `MIN_RELAY_TIME`. This test calls the
+    /// export and nothing else, so an unwired export still satisfies it. The
+    /// caller is pinned on the other side of the boundary, by
+    /// `txpool_relay_timers.local_holds_past_min_relay_time`, and the two
+    /// tests are not substitutes: this one says the VALUE is right, that one
+    /// says the value is USED.
     #[test]
     fn the_origin_retry_clears_the_anonymity_embargo_median() {
         let anon = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Tor.as_u8());
