@@ -31,6 +31,34 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# A non-zero exit from the commands below is DATA, not an error: `cargo test`
+# exits non-zero when a probe FAILS, and the P-12 example exits 1 for FAIL and 2
+# for UNRUN. Every one of those is a verdict this script exists to record.
+#
+# `$PSNativeCommandUseErrorActionPreference` promotes a native command's
+# non-zero exit into a terminating error under `$ErrorActionPreference = 'Stop'`
+# — before `$LASTEXITCODE` can be read. A host with it enabled would abort this
+# script mid-run and print no summary table at all, so a FAIL or UNRUN would be
+# LESS visible than a pass: the reporting would work exactly when there is
+# nothing to report and break when there is.
+#
+# **Measured, because the conditional above is doing real work.** On the pwsh we
+# actually run (7.6.5) the preference defaults to `False`, and
+# `$ErrorActionPreference = 'Stop'` alone does **not** turn it on — a native
+# `exit 3` is reached with `$LASTEXITCODE = 3`. So this line is not fixing a
+# live abort here; it makes the script immune to a host that has the preference
+# on, which is a profile, a policy, an older 7.3/7.4 default, or a future
+# change to it. The failure path itself is now observed rather than assumed: a
+# deliberately failed §1 probe prints the table, carries the exit code in the
+# FAIL row, lets §3 still report, and exits 1.
+#
+# Script-scoped rather than wrapped around each call, because it is true of
+# every native invocation here — there is no command in this file whose
+# non-zero exit should abort the run. Assigning it on a PowerShell that has no
+# such preference is harmless.
+$PSNativeCommandUseErrorActionPreference = $false
+
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $results = [System.Collections.ArrayList]::new()
 $failed = 0
@@ -101,13 +129,34 @@ if ($CiOnly) {
 } else {
     # P-12: does the Medium mandatory label block a Low-IL opener?
     #
-    # NOT YET IMPLEMENTED, and reported as such rather than quietly passing.
-    # It needs a Low-integrity child (a restricted token derived from the
-    # interactive one), which is real work and belongs with WP-W2's transport
-    # rather than being faked here. A blank in the sheet is a finding; so is
-    # this line.
-    Add-Result 'P-12' 'TODO' 'needs a Low-IL child process — lands with WP-W2; result goes in the sheet §4'
-    Add-Result 'P-13' 'TODO' 'needs two interactive logons — manual, result goes in the sheet §4'
+    # An EXAMPLE rather than a `#[test]`, for two reasons the example's own
+    # module docs give in full: it needs a genuine second process at Low
+    # integrity, and check_probe_registry.py asserts that §3 probes have no
+    # test function in tests/probes.rs — a `p12_*` test would be a claim that
+    # this runs in CI, which §3 pre-declares it does not.
+    #
+    # The example carries its own controls (a Medium opener must reach the
+    # pipe; the child must confirm its own integrity level before it opens
+    # anything), so a refusal for an unrelated reason reports UNRUN rather
+    # than passing quietly.
+    Write-Host ''
+    Write-Host '-- P-12: does the Medium label block a Low-IL opener? --'
+    Push-Location (Join-Path $repo 'rust')
+    try {
+        cargo run --locked -q -p shekyl-win-sec --features test-utils --example p12_low_il_probe
+        $p12Exit = $LASTEXITCODE
+    } finally { Pop-Location }
+
+    switch ($p12Exit) {
+        0 { Add-Result 'P-12' 'PASS' 'Low-IL open refused with ERROR_ACCESS_DENIED, as predicted' }
+        1 { Add-Result 'P-12' 'FAIL' 'see output above; per the sheet this revisits WP-D4, not the probe' }
+        default { Add-Result 'P-12' 'UNRUN' "the probe could not measure the label (exit $p12Exit) — not a pass" }
+    }
+
+    # P-13 needs two CONCURRENT interactive logons, which one console session
+    # cannot provide. Left unrun rather than approximated: a single-session
+    # stand-in would be asserting something P-13 does not ask.
+    Add-Result 'P-13' 'TODO' 'needs two concurrent interactive logons — manual, result goes in the sheet §4'
 }
 
 # ---------------------------------------------------------------------------
