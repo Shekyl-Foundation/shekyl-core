@@ -3740,6 +3740,41 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           tvc.m_verifivation_failed = true;
           return false;
         }
+        // PC-D3: `block_hash(h-1)` for the slot this tx is being validated FOR.
+        //
+        // `chain_height` already means "the height the next block will occupy"
+        // on both paths, so the parent is at `chain_height - 1`. Derived from
+        // that variable rather than from a second `height()` read: the two
+        // would then be independent reads that a connect could separate,
+        // leaving a height and a hash describing different slots. This way
+        // they are one slot by construction.
+        //
+        // On the block path this IS the validated block's `prev_id`, and as a
+        // CHECKED invariant rather than an ambient one --
+        // `handle_block_to_main_chain` refuses `bl.prev_id != top_hash`
+        // before any tx here runs. It is read from the chain rather
+        // than taken from `bl` because this function has no block, and
+        // reading it here keeps the pool path -- which has no block at all --
+        // on an identical derivation.
+        //
+        // On the pool path it is the current tip, which makes a pooled
+        // serve-credit record NEXT-BLOCK-ONLY: once another block connects,
+        // the record's derivation is bound to a hash that is no longer the
+        // tip's and it can never be admitted. That is PC-D2 working -- a
+        // response is valid in exactly one block -- not a defect. The pool is
+        // transport, not a claim about which block the record belongs to
+        // (ARCHIVAL_PER_CHALLENGE_RECORD.md §5.3).
+        //
+        // Read inside this branch, not beside `chain_height` above: only
+        // serve-credit txs need it, and the outer scope is every FCMP++ tx.
+        // The zero-height arm cannot be reached by a serve-credit tx, but
+        // yields the all-zero hash the FFI refuses rather than a wrapped
+        // height -- `top_block_hash(&h)` would have underflowed its out-param
+        // to UINT64_MAX here.
+        const crypto::hash slot_prev_block_hash = chain_height
+          ? m_db->get_block_hash_from_height(chain_height - 1)
+          : crypto::null_hash;
+
         // RF-D1: one pruned pass record per serve-credit vin, in vin order.
         // Every vin is a serve-credit in this shape, so index i pairs them.
         const auto& pruned_records = tx.ct_signatures.p.serve_credit_pruned;
@@ -3754,7 +3789,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           const txin_archival_serve_credit_response& resp =
             std::get<txin_archival_serve_credit_response>(tx.vin[i]);
-          if (!check_archival_serve_credit_input(resp, pruned_records[i], chain_height))
+          if (!check_archival_serve_credit_input(resp, pruned_records[i], chain_height,
+                slot_prev_block_hash))
           {
             MERROR_VER("Archival serve-credit validation failed for input " << i);
             tvc.m_verifivation_failed = true;
@@ -5234,10 +5270,26 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
     return false;
   }
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  // PC-D4: attribute the injected row to the tip's INDEX, read here under the
+  // same lock as the write. A tip snapshot taken by the caller (the RPC
+  // handler ran get_current_blockchain_height() before this lock) can go
+  // stale against a concurrent mine/pop; deriving it inside the critical
+  // section makes the attribution race-free by construction, and removing
+  // the parameter means no caller can reintroduce the stale copy.
+  // m_db->height() is the block COUNT, so the tip's index is one below it —
+  // the same count-versus-index distinction the pop path got wrong.
+  const uint64_t chain_height = m_db->height();
+  if (chain_height == 0)
+  {
+    MERROR("regtest_inject_archival_serve_credit refusing: chain has no tip to attribute the row to");
+    return false;
+  }
+  const uint64_t block_height = chain_height - 1;
   db_wtxn_guard wtxn_guard(m_db);
-  m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch);
+  m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch, block_height);
   MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
     << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
+    << " height=" << block_height
     << " — bit is not block-owned; pops below this height strand it");
   return true;
 }
@@ -5251,7 +5303,8 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
 // re-authoring the fixture's expected-reason column and updating the mirror
 // in the same change.
 bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
-  const std::vector<uint8_t>& pruned_record, uint64_t current_height) const
+  const std::vector<uint8_t>& pruned_record, uint64_t current_height,
+  const crypto::hash& prev_block_hash) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -5274,7 +5327,28 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
-  if (m_db->has_archival_serve_credit_bit(sc_p_id, sc_shard_id, sc_settlement_epoch))
+  // PC-D4/PC-D7: PAIR-EPOCH-wide, deliberately, and this is the one place the
+  // widened key could have silently changed consensus.
+  //
+  // The exact-get `has_archival_serve_credit_bit(P, s, E, h)` would be
+  // VACUOUS here: `h` is the block under validation, which is not in the DB
+  // yet, so no row can match and every duplicate would be admitted. That is
+  // the correct END state -- up to CHALLENGES_PER_PAIR_PER_EPOCH rows across
+  // distinct blocks -- but only once the derived-assignment issuer bounds how
+  // many blocks may challenge a pair. That issuer is NOT wired:
+  // `assign_epoch` exists in Rust with no FFI export and no consensus caller,
+  // and the live mechanism is still the one-challenge-per-pair-epoch beacon.
+  // Relaxing to the exact-get now would leave the pass count bounded by
+  // nothing at all.
+  //
+  // So this stays the pair-epoch bound the beacon mechanism already implies,
+  // and consensus behaviour is byte-identical to before the key widened.
+  //
+  // REOPEN (rule 21): when the assignment cutover lands, this relaxes to
+  // "reject unless this block's assignment names this pair" -- which is the
+  // count bound and the anti-adaptive-selection check in one, and is what
+  // PC-D7's surviving half asks for.
+  if (m_db->archival_serve_credit_pass_count(sc_p_id, sc_shard_id, sc_settlement_epoch) > 0)
   {
     MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
     return false;
@@ -5377,12 +5451,19 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   // ARE the as-of-H_fire chunk; no snapshot table exists. Chunk-bounds
   // arithmetic lives in Rust only (same one-site family as the freeze rule).
   // RF-D6: the challenged index is DERIVED, never read off the vin.
+  // PC-D3: bound to the block this record rides in, so each of a pair-epoch's
+  // challenges samples an independently drawn leaf (independent, not
+  // guaranteed-distinct: draws can collide mod the leaf count). An all-zero
+  // `prev_block_hash` is refused by the FFI rather than derived against.
   uint32_t leaf_index = 0;
-  if (shekyl_archival_challenge_leaf_index(
-        reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard_id, sc_settlement_epoch,
-        segment_leaf_count, &leaf_index) != SHEKYL_ARCHIVAL_VERIFY_OK)
+  const uint8_t leaf_index_rc = shekyl_archival_challenge_leaf_index(
+    reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard_id, sc_settlement_epoch,
+    reinterpret_cast<const uint8_t*>(prev_block_hash.data),
+    segment_leaf_count, &leaf_index);
+  if (leaf_index_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
   {
-    MERROR_VER("Archival serve-credit: leaf index derivation refused");
+    MERROR_VER("Archival serve-credit: leaf index derivation refused (code "
+      << (int)leaf_index_rc << ")");
     return false;
   }
   uint64_t chunk_first_leaf = 0;
@@ -5417,6 +5498,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.current_height = current_height;
   ctx.settlement_epoch = sc_settlement_epoch;
   memcpy(ctx.block_hash_at_seal, seal_hash.data, 32);
+  // NOT seal_hash: different block, different derivation (PC-D3).
+  memcpy(ctx.prev_block_hash, prev_block_hash.data, 32);
   memcpy(ctx.registry_segment_subroot_rk, registry_rk.data, 32);
   ctx.segment_leaf_count = segment_leaf_count;
   ctx.pqc_pubkey_ptr = bond_pubkey.data();
@@ -6046,10 +6129,19 @@ leave:
   // AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-C):
   // mirrored in Rust (serve_credit_decisions::serve_credit_block_unique) and
   // transcribed verbatim in archival_serve_credit_equivalence.cpp. The key is
-  // ArchivalServeCreditKey — the same big-endian encoding D-SC-A persists
-  // (SCE-1 unified post-equivalence; db_lmdb.cpp:1657–1659 forbids
-  // native-endian composite keys) — do not change it independently of the
-  // mirror, the transcription, and the fixture's key pins.
+  // ArchivalPairEpochKey — the same big-endian encoding, unchanged by PC-D4 —
+  // do not change it independently of the mirror, the transcription, and the
+  // fixture's key pins. (SCE-1 unified post-equivalence; the LMDB comparator
+  // setup forbids native-endian composite keys.)
+  //
+  // PC-D4 widened the LEDGER key and deliberately did NOT widen this one. The
+  // natural inference — "the key grew, so this should too" — is wrong: within
+  // ONE block every record shares the block, so the block component is
+  // common-mode here and adds no discrimination. Two records for the same pair
+  // in one block collide at the same (P, s, E, h) ledger key regardless, which
+  // leaves the (P, s, E) check the correct within-block enforcer rather than a
+  // leftover. The bytes must not move; the equivalence fixture's key pin is
+  // what says so.
   {
     std::unordered_set<std::string> block_serve_credits;
     block_serve_credits.reserve(txs.size());
@@ -6066,7 +6158,7 @@ leave:
           MERROR_VER("Archival serve-credit vin unparseable in block");
           return false;
         }
-        const shekyl::db::ArchivalServeCreditKey credit_key(
+        const shekyl::db::ArchivalPairEpochKey credit_key(
           reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard, sc_epoch);
         std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
           credit_key.bytes().size());

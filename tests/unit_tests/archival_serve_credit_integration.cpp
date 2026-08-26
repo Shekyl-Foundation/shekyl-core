@@ -50,6 +50,7 @@ struct IntegrationKat {
   std::string wire_hex;
   std::string p_id_hex;
   std::string seal_hash_hex;
+  std::string prev_block_hash_hex;  // PC-D3: the block the index derives from
   std::string bond_pubkey_hex;
   std::string leaf_scalars_hex;
   std::string pruned_hex;      // RF-D1: this vin's pruned record
@@ -82,6 +83,7 @@ IntegrationKat load_integration_kat()
   kat.wire_hex = i["wire_hex"].GetString();
   kat.p_id_hex = i["p_canonical_id_hex"].GetString();
   kat.seal_hash_hex = i["block_hash_at_seal_hex"].GetString();
+  kat.prev_block_hash_hex = i["prev_block_hash_hex"].GetString();
   kat.bond_pubkey_hex = i["bond_hybrid_pubkey_hex"].GetString();
   kat.leaf_scalars_hex = i["leaf_layer_scalars_hex"].GetString();
   kat.pruned_hex = i["pruned_hex"].GetString();
@@ -130,10 +132,21 @@ public:
     m_block_hashes[height] = hash;
   }
 
+  // PC-D3: `check_tx_inputs` reads `height()` and derives the parent hash from
+  // it. `BaseTestDB::height()` is a fixed 1, which would put the parent at
+  // height 0 -- so a test exercising that read must be able to place the tip.
+  void set_chain_height(uint64_t chain_height) { m_chain_height = chain_height; }
+  uint64_t height() const override { return m_chain_height; }
+
   // Every queried height is captured so the seal-committed-guard KAT can assert
   // that an uncommitted-seal credit is rejected BEFORE this read is attempted
   // (the guard short-circuits), not by catching a throw from it.
   mutable std::vector<uint64_t> block_hash_queried_heights;
+
+private:
+  uint64_t m_chain_height = 1;
+
+public:
 
   crypto::hash get_block_hash_from_height(const uint64_t& height) const override
   {
@@ -146,16 +159,31 @@ public:
     return h;
   }
 
+  // PC-D4: the double stores per-CHALLENGE rows, keyed by the block too, and
+  // answers the two questions separately -- exactly as the LMDB does. A double
+  // that collapsed them would let the pair-epoch dedup pass while the real DB
+  // failed it.
   bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override
+    uint64_t settlement_epoch, uint64_t block_height) const override
   {
-    return m_credit_bits.count({p_id, shard_id, settlement_epoch}) != 0;
+    return m_credit_bits.count({p_id, shard_id, settlement_epoch, block_height}) != 0;
   }
 
   void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override
+    uint64_t settlement_epoch, uint64_t block_height) override
   {
-    m_credit_bits.insert({p_id, shard_id, settlement_epoch});
+    m_credit_bits.insert({p_id, shard_id, settlement_epoch, block_height});
+  }
+
+  uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override
+  {
+    uint32_t n = 0;
+    for (const auto& row : m_credit_bits)
+      if (memcmp(row.p_id.data, p_id.data, 32) == 0 && row.shard_id == shard_id
+          && row.settlement_epoch == settlement_epoch)
+        ++n;
+    return n;
   }
 
   bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
@@ -272,17 +300,22 @@ private:
     }
   };
 
+  // PC-D4: block_height LAST, mirroring the LMDB key's append order, so the
+  // set's ordering matches the table's and a pair-epoch run is contiguous.
   struct CreditKey {
     crypto::hash p_id;
     uint64_t shard_id;
     uint64_t settlement_epoch;
+    uint64_t block_height;
     bool operator<(const CreditKey& other) const
     {
       if (memcmp(p_id.data, other.p_id.data, 32) != 0)
         return memcmp(p_id.data, other.p_id.data, 32) < 0;
       if (shard_id != other.shard_id)
         return shard_id < other.shard_id;
-      return settlement_epoch < other.settlement_epoch;
+      if (settlement_epoch != other.settlement_epoch)
+        return settlement_epoch < other.settlement_epoch;
+      return block_height < other.block_height;
     }
   };
 
@@ -331,6 +364,23 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   // Seed the curve-tree leaf table at the chunk positions the consensus read
   // derives via the FFI — and pin that derivation against the fixture's
   // Rust-side values (cross-language tripwire on the chunk arithmetic).
+  // PC-D3 cross-language pin, ahead of the chunk arithmetic: the C++ FFI call
+  // must reproduce the fixture's index FROM THE SAME BLOCK. Without this the
+  // only symptom of C++ passing the wrong hash (seal_hash is right there, and
+  // is a different block) is that the opening fails to verify several hundred
+  // lines later -- a prover-shaped failure for a marshaling defect. Asserted
+  // on the index itself, which is the axis the defect lives on.
+  uint32_t derived_leaf_index = 0;
+  const crypto::hash prev_block_hash = hash_from_hex(kat.prev_block_hash_hex);
+  const uint8_t leaf_index_rc = shekyl_archival_challenge_leaf_index(
+    reinterpret_cast<const uint8_t*>(p_id.data), kat.shard_id, kat.settlement_epoch,
+    reinterpret_cast<const uint8_t*>(prev_block_hash.data),
+    kat.segment_leaf_count, &derived_leaf_index);
+  if (leaf_index_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
+    throw std::runtime_error("FFI refused the leaf-index derivation");
+  if (derived_leaf_index != kat.leaf_index)
+    throw std::runtime_error("FFI leaf index disagrees with fixture pin");
+
   uint64_t chunk_first = 0;
   uint64_t chunk_leaves = 0;
   if (!shekyl_archival_challenge_leaf_chunk_bounds(kat.shard_id, kat.leaf_index,
@@ -387,7 +437,77 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   // init() takes ownership; ~Blockchain deletes the DB in deinit().
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
+    hash_from_hex(kat.prev_block_hash_hex)));
+}
+
+/// **`PC-D3`'s production read — the only test that observes it.**
+///
+/// Every other test in this file calls `check_archival_serve_credit_input`
+/// directly and hands it a `prev_block_hash` of its own. None of them touches
+/// the read in `check_tx_inputs` that supplies that argument in production, so
+/// replacing that read with the null hash leaves all of them green: the read
+/// was the one thing the new code does that nothing verified. This test drives
+/// the public entry point instead, so the hash comes from the chain.
+///
+/// It also demonstrates `PC-D2`'s next-block-only property directly: the same
+/// record accepted against one tip is refused against another, with nothing on
+/// the wire changed. That is the mechanism, not a failure mode.
+///
+/// The edit that makes this red is any change to which block the derivation
+/// reads -- the null hash, the seal hash, `height()` instead of
+/// `height() - 1`.
+TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_the_chain)
+{
+  const IntegrationKat kat = load_integration_kat();
+  const crypto::hash prev_block_hash = hash_from_hex(kat.prev_block_hash_hex);
+
+  // Build the serve-credit tx the way the wire carries it: the opaque kept
+  // half on the vin, this vin's pruned record in the prunable region.
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  tx.vin.push_back(load_serve_credit_vin(kat.wire_hex));
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {bytes_from_hex(kat.pruned_hex)};
+
+  auto run_against_tip = [&](const crypto::hash& tip_hash) {
+    auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+    seed_substrate(*db, kat);
+    // The slot under validation is `kat.current_height`, so its parent -- the
+    // block the derivation reads -- sits at `current_height - 1`.
+    db->set_chain_height(kat.current_height);
+    db->set_seal_hash(kat.current_height - 1, tip_hash);
+
+    BlockchainAndPool bap;
+    cryptonote::Blockchain* bc = &bap.bc;
+    const std::pair<uint8_t, uint64_t> hard_forks[] = {
+      std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+      std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+    };
+    const cryptonote::test_options test_options = {hard_forks, 5000};
+    if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
+      throw std::runtime_error("Blockchain::init failed");
+
+    cryptonote::transaction tx_copy = tx;
+    uint64_t max_used_block_height = 0;
+    crypto::hash max_used_block_id{};
+    cryptonote::tx_verification_context tvc{};
+    return bc->check_tx_inputs(tx_copy, max_used_block_height, max_used_block_id, tvc);
+  };
+
+  EXPECT_TRUE(run_against_tip(prev_block_hash))
+      << "the record does not verify against the block it was derived for; "
+         "check_tx_inputs is not reading block_hash(h-1)";
+
+  // A different parent is a different challenge. Nothing on the wire moved.
+  crypto::hash other_tip = prev_block_hash;
+  other_tip.data[0] ^= 0x01;
+  EXPECT_FALSE(run_against_tip(other_tip))
+      << "the record verified against a DIFFERENT parent block, so the index "
+         "is not block-bound and one response would answer every challenge";
 }
 
 TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
@@ -409,7 +529,8 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
+    hash_from_hex(kat.prev_block_hash_hex)));
 }
 
 // The seal-committed guard: a credit whose challenge-seal block is not yet on
@@ -441,7 +562,8 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
     db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
-    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal));
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal,
+      hash_from_hex(kat.prev_block_hash_hex)));
     EXPECT_TRUE(db_raw->block_hash_queried_heights.empty());
   }
 
@@ -461,7 +583,8 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     // reaches the seal read exactly once, for h_seal. The credit is still
     // rejected — downstream on H_fire timing (current_height <= H_fire), not by
     // this guard.
-    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal + 1));
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal + 1,
+      hash_from_hex(kat.prev_block_hash_hex)));
     ASSERT_EQ(db_raw->block_hash_queried_heights.size(), 1u);
     EXPECT_EQ(db_raw->block_hash_queried_heights[0], kat.h_seal);
   }
@@ -524,7 +647,8 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
+    hash_from_hex(kat.prev_block_hash_hex)));
   // The gate asked the as-of-height question at exactly the derived h_fire.
   ASSERT_FALSE(db_raw->holds_shard_queried_heights.empty());
   for (const uint64_t queried : db_raw->holds_shard_queried_heights)
@@ -558,7 +682,8 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
+    hash_from_hex(kat.prev_block_hash_hex)));
 }
 
 TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
@@ -569,7 +694,13 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
   seed_substrate(*db, kat);
-  db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch);
+  // PC-D4: seeded at a DIFFERENT block than the one being validated. That is
+  // what makes this test discriminate: the dedup is PAIR-EPOCH-wide, so a row
+  // from an earlier block still rejects. Seeded at the validating height it
+  // would pass under either rule and prove nothing.
+  ASSERT_GT(kat.current_height, 0u);
+  db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch,
+    kat.current_height - 1);
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
@@ -580,7 +711,8 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
+    hash_from_hex(kat.prev_block_hash_hex)));
 }
 
 // ── Cross-language byte parity of the serve-credit TRANSACTION (RF-D1/RF-D9) ──

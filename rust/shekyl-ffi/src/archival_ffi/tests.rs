@@ -848,6 +848,11 @@ fn ffi_rejects_leaf_layer_scalar_count_not_multiple_of_four() {
         block_hash_at_seal: [0u8; 32],
         registry_segment_subroot_rk: [0u8; 32],
         segment_leaf_count: 1,
+        // Non-zero on purpose: an all-zero hash is the PC-D3 unpopulated
+        // sentinel, refused ahead of the scalar-shape check. Leaving it zero
+        // would make this test pass on the WRONG code and stop testing the
+        // scalar shape at all.
+        prev_block_hash: [0x6D; 32],
         pqc_pubkey_ptr: pubkey.as_ptr(),
         pqc_pubkey_len: pubkey.len(),
         leaf_layer_scalars_ptr: scalars.as_ptr(),
@@ -866,6 +871,50 @@ fn ffi_rejects_leaf_layer_scalar_count_not_multiple_of_four() {
         )
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE);
+}
+
+/// `PC-D3`'s red side: an unpopulated `prev_block_hash` is refused, and refused
+/// **before** anything the prover controls is parsed.
+///
+/// The vin and pruned slices here are deliberate garbage. If the refusal ever
+/// moves below the parses, this returns a wire error instead and goes red --
+/// which is the point: a caller-wiring defect that only surfaces when the
+/// prover happens to send a well-formed vin is a defect that a hostile prover
+/// decides whether the operator ever sees.
+///
+/// The edit that makes this red is deleting the zero-hash guard, or moving it
+/// after `ArchivalServeCreditResponse::read_exact`.
+#[test]
+fn ffi_refuses_an_unpopulated_prev_block_hash_before_parsing_the_vin() {
+    let pubkey = [0u8; 32];
+    let scalars = [0u8; 128];
+    let ctx = ShekylArchivalVerifyCtx {
+        current_height: 1,
+        settlement_epoch: 0,
+        block_hash_at_seal: [0xAB; 32],
+        registry_segment_subroot_rk: [0u8; 32],
+        segment_leaf_count: 25_992,
+        prev_block_hash: [0u8; 32],
+        pqc_pubkey_ptr: pubkey.as_ptr(),
+        pqc_pubkey_len: pubkey.len(),
+        leaf_layer_scalars_ptr: scalars.as_ptr(),
+        leaf_layer_scalars_len: scalars.len(),
+    };
+    let garbage = [0xFFu8; 4];
+    let code = unsafe {
+        shekyl_archival_verify_serve_credit_vin(
+            garbage.as_ptr(),
+            garbage.len(),
+            garbage.as_ptr(),
+            garbage.len(),
+            std::ptr::from_ref(&ctx),
+        )
+    };
+    assert_eq!(
+        code, SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED,
+        "an unpopulated ctx block was not refused ahead of the vin parse; a \
+         prover can now mask the node's own misconfiguration with garbage"
+    );
 }
 
 #[test]

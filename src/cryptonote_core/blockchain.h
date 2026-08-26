@@ -1144,8 +1144,14 @@ namespace cryptonote
 
     // RF-D1: a pass record is checked as a pair -- the vin's opaque kept half
     // and this vin's pruned record from CtSig.p.serve_credit_pruned.
+    // `prev_block_hash` is `block_hash(h-1)` for the slot being validated
+    // (PC-D3) -- on the block path the validated block's `prev_id`, on the
+    // pool path the current tip. It is a VERIFIER-supplied operand: under
+    // PC-D2 the block is implicit, so nothing on the wire names it and there
+    // is no prover-chosen value here to check.
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
-      const std::vector<uint8_t>& pruned_record, uint64_t current_height) const;
+      const std::vector<uint8_t>& pruned_record, uint64_t current_height,
+      const crypto::hash& prev_block_hash) const;
 
     // `auth_pubkey` is the bond input's pqc auth key
     // (`tx.pqc_auths[bond_index].hybrid_public_key`); the §3.5 step-5
@@ -1176,6 +1182,14 @@ namespace cryptonote
      *
      * @return false unless nettype is FAKECHAIN.
      */
+    /// The injected row is attributed to the tip's block index (PC-D4), read
+    /// inside the method under `m_blockchain_lock` — the same critical
+    /// section as the write, so a concurrent mine/pop cannot move the tip
+    /// between attribution and write. There is deliberately no height
+    /// parameter: a caller-supplied snapshot is pre-lock by construction,
+    /// and the "not block-owned" warning stays literal — nothing pops the
+    /// bit, so a later pop below the attributed height strands a row that
+    /// claims a block it did not come from.
     bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
       uint64_t shard_id, uint64_t settlement_epoch);
 

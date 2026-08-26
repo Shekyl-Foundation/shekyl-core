@@ -25,9 +25,9 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::challenge::challenge_fire_height;
 use shekyl_archival_retention::serve_credit_decisions::{
-    serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
-    serve_credit_key_be, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
-    GateVerdict, ServeCreditGateInputs, SERVE_CREDIT_KEY_LEN,
+    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
+    serve_credit_gate_decision, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
+    GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
 };
 
 const KAT: &str = include_str!("fixtures/serve_credit_equivalence_kat_v1.json");
@@ -156,6 +156,17 @@ fn gate_vectors_verdict_and_reason() {
             held_at_fire: v.bool("held_at_fire"),
             registry_present_at_fire: v.bool("registry_present_at_fire"),
             segment_leaf_count: v.u64("segment_leaf_count"),
+            // `PC-D3`. Read from the fixture rather than defaulted, so both
+            // legs are fed the SAME bytes -- but note that THESE VECTORS
+            // CANNOT CATCH IT IF THEY ARE NOT. The gate verdict is insensitive
+            // to this input: it feeds `challenge_leaf_index`, and every index
+            // the derivation can produce is in range, so
+            // `challenge_leaf_chunk_bounds` accepts regardless of which block
+            // it came from. A legs-disagree here is caught by gate-2's pinned
+            // index (`gate2_serve_credit_kat_v1.json`, asserted in
+            // `gate2_serve_credit_kat_vectors`), which is the named catcher --
+            // not by anything in this file.
+            prev_block_hash: hex32(v.get("prev_block_hash_hex")),
             leaf_chunk_ok: v.bool("leaf_chunk_ok"),
             verify_ok: v.bool("verify_ok"),
         };
@@ -184,14 +195,14 @@ fn dedup_vectors_verdict_and_key_pin() {
         let shard_id = vector["shard_id"].as_u64().unwrap();
         let epoch = vector["settlement_epoch"].as_u64().unwrap();
 
-        let key = serve_credit_key_be(&p, shard_id, epoch);
+        let key = pair_epoch_key_be(&p, shard_id, epoch);
         assert_eq!(
             key.to_vec(),
             hex_bytes(&vector["expected_key_be_hex"]),
             "vector {id}: BE key bytes"
         );
 
-        let preblock: BTreeSet<[u8; SERVE_CREDIT_KEY_LEN]> = vector["preblock_keys_hex"]
+        let preblock: BTreeSet<[u8; PAIR_EPOCH_KEY_LEN]> = vector["preblock_keys_hex"]
             .as_array()
             .expect("preblock keys")
             .iter()
@@ -251,9 +262,10 @@ fn block_unique_vectors_verdict_and_key_pin() {
 
 /// SCE-1 executable record, post-unify: the two decision paths (D-SC-A
 /// persistent, D-SC-C block-level) key the same logical `(P, shard, E)`
-/// triple with the *same* bytes — the unify commit re-pointed D-SC-C onto
-/// `ArchivalServeCreditKey` (audit doc §6). `expect_equal` is now `true` and
-/// load-bearing: a reintroduced encoding split fails here.
+/// triple with the *same* bytes — `ArchivalPairEpochKey` (audit doc §6;
+/// `PC-D4` left this width in place because the block is common-mode).
+/// `expect_equal` is now `true` and load-bearing: a reintroduced encoding
+/// split fails here.
 #[test]
 fn sce1_key_encoding_crosscheck() {
     let doc = fixture();
@@ -262,7 +274,7 @@ fn sce1_key_encoding_crosscheck() {
     let shard_id = x["shard_id"].as_u64().unwrap();
     let epoch = x["settlement_epoch"].as_u64().unwrap();
 
-    let key_be = serve_credit_key_be(&p, shard_id, epoch);
+    let key_be = pair_epoch_key_be(&p, shard_id, epoch);
     let key_block = serve_credit_block_key(&p, shard_id, epoch);
     assert_eq!(key_be.to_vec(), hex_bytes(&x["key_be_hex"]));
     assert_eq!(key_block.to_vec(), hex_bytes(&x["key_block_hex"]));
@@ -337,6 +349,20 @@ fn regenerate_equivalence_fixture_from_gate2() {
     // words — a prefix swap re-derives them exactly.
     doc = doc.replace(&old_pid, &new_pid);
 
+    // `PC-D3`: the base must mirror gate-2's integration block, or the two
+    // legs derive the challenged index from different blocks.
+    let old_prev = fixture()["gate"]["base"]["prev_block_hash_hex"]
+        .as_str()
+        .expect("old prev block hash")
+        .to_owned();
+    let new_prev = integ["prev_block_hash_hex"]
+        .as_str()
+        .expect("gate-2 prev block hash")
+        .to_owned();
+    assert_eq!(old_prev.len(), 64);
+    assert_eq!(new_prev.len(), 64);
+    doc = doc.replace(&old_prev, &new_prev);
+
     // The integration wire is the parse-authoritative source for the leaf
     // index the base mirrors (and for the path shape asserted below).
     let wire = hex_bytes(&integ["wire_hex"]);
@@ -355,14 +381,14 @@ fn regenerate_equivalence_fixture_from_gate2() {
             "current_height",
             integ["current_height"].as_u64().expect("current_height"),
         ),
-        // RF-D6: the index is no longer on the wire; the gate-2 fixture records
-        // the verifier's derived value, which is what the base mirrors.
-        (
-            "leaf_index_in_segment",
-            integ["leaf_index_in_segment"]
-                .as_u64()
-                .expect("recorded index"),
-        ),
+        // (`leaf_index_in_segment` is NOT mirrored. RF-D8 (`dd4d0ff59`) removed
+        // it from this fixture's base -- the index is verifier-derived on both
+        // legs -- but left this mirror step behind, so every run of this
+        // regenerator has panicked with "no leaf_index_in_segment field" since.
+        // Nothing noticed because the regenerator is `#[ignore]`d: an
+        // ignore-gated tool is only exercised when someone needs it, which is
+        // the worst moment to discover it is broken. Removed rather than
+        // repaired -- there is no field to mirror.)
     ] {
         doc = replace_first_scalar(&doc, key, value);
     }

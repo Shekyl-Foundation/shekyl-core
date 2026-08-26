@@ -1460,6 +1460,10 @@ namespace cryptonote
       return false;
     }
 
+    // PC-D4: the tip index the row is attributed to is derived INSIDE the
+    // injector, under the blockchain lock — a snapshot taken here would be
+    // pre-lock and can go stale against a concurrent mine/pop. On refusal
+    // (wrong nettype, empty chain) the daemon log names the reason.
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
       p_canonical_id, req.shard_id, req.settlement_epoch))
     {

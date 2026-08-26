@@ -19,19 +19,35 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_archival_retention::{challenge_leaf_index, SEGMENT_LEAF_COUNT};
+use shekyl_archival_retention::{
+    challenge_leaf_index, CHALLENGES_PER_PAIR_PER_EPOCH, SEGMENT_LEAF_COUNT,
+};
 
-/// The set of segment-leaf indices the current challenge derivation names for
-/// one `(P, s, E)`. Today that is exactly one index; TJ-A's spec must make the
-/// challenge's scope the whole segment.
+/// The set of segment-leaf indices the challenge derivation names for one
+/// `(P, s, E)`, across all `CHALLENGES_PER_PAIR_PER_EPOCH` of its challenges.
+///
+/// **`PC-D3` moved this from one index to at most three** — the derivation now
+/// takes the challenge's block, so a pair-epoch's three challenges sample three
+/// leaves instead of one. That is a real step toward TJ-G and nowhere near it:
+/// three of `SEGMENT_LEAF_COUNT` is still sampling, so this test stays red for
+/// exactly the reason it was written. Recorded here rather than left implicit,
+/// because "the number went up" is the kind of change that quietly reads as
+/// progress toward a threshold it does not approach.
 fn named_leaf_indices(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> BTreeSet<u32> {
     let mut named = BTreeSet::new();
-    named.insert(challenge_leaf_index(
-        p_id,
-        shard_id,
-        settlement_epoch,
-        SEGMENT_LEAF_COUNT,
-    ));
+    for challenge in 0..CHALLENGES_PER_PAIR_PER_EPOCH {
+        // Distinct blocks stand in for the epoch's distinct challenge blocks;
+        // under PC-D2 each is the block its record rode in on.
+        let mut prev_block_hash = [0u8; 32];
+        prev_block_hash[0] = u8::try_from(challenge).expect("lambda fits a byte");
+        named.insert(challenge_leaf_index(
+            p_id,
+            shard_id,
+            settlement_epoch,
+            &prev_block_hash,
+            SEGMENT_LEAF_COUNT,
+        ));
+    }
     named
 }
 

@@ -21,6 +21,17 @@
 
 namespace archival_test {
 
+// PC-D4: serve-credit rows are keyed by the block they rode in. These
+// substrate tests are about the pair-epoch dimensions -- prefix scans, epoch
+// ordering, the prune -- and not about which block issued a challenge, so they
+// seed every row at one representative height. Each row stays unique per
+// (P, shard, E) exactly as it was before the key widened, which is what keeps
+// their assertions unchanged.
+//
+// A test that IS about the block dimension must use distinct heights and say
+// so; sharing this constant there would silently collapse the rows it needs.
+inline constexpr uint64_t kServeCreditTestBlockHeight = 1000;
+
 /// Temp-dir LMDB with the batch write lifecycle open, templated so tests can
 /// substitute a BlockchainLMDB subclass (e.g. a fake-tip height override).
 template <typename DBT>
@@ -93,9 +104,9 @@ struct EmissionSnapshotKat
     db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
     db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
 
-    db.set_archival_serve_credit_bit(p1, 7, kSettlementEpoch);
-    db.set_archival_serve_credit_bit(p2, 7, kSettlementEpoch);
-    db.set_archival_serve_credit_bit(p2, 9, kSettlementEpoch);
+    db.set_archival_serve_credit_bit(p1, 7, kSettlementEpoch, kServeCreditTestBlockHeight);
+    db.set_archival_serve_credit_bit(p2, 7, kSettlementEpoch, kServeCreditTestBlockHeight);
+    db.set_archival_serve_credit_bit(p2, 9, kSettlementEpoch, kServeCreditTestBlockHeight);
 
     db.process_archival_epoch_close_at_height(kCloseHeight);
     db.batch_stop();

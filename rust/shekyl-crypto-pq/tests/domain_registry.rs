@@ -70,7 +70,9 @@ const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
 ];
 /// Pinned counts for the non-production sections.
 const EXCLUDED_EXPECTED: usize = 8;
-const TEST_ONLY_EXPECTED: usize = 7;
+const TEST_ONLY_EXPECTED: usize = 8;
+// PC-D3: +1 — the retired `-v1` leaf label, kept only so the negative control
+// can assert the `-v2` derivation does not reproduce it.
 
 /// Well-formed mechanism ids: `1`..`6` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {

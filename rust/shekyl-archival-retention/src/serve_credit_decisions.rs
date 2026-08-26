@@ -19,16 +19,21 @@
 //! The three decision sites, at the pinned substrate commit `ca8edce6b`:
 //!
 //! - **D-SC-A** — per-tx `(P, shard, E)` dedup against pre-block LMDB state
-//!   (`blockchain.cpp:4247`; key type `ArchivalServeCreditKey`,
-//!   `shekyl_types.h:405–412`, **big-endian** `u64` fields).
+//!   (`check_archival_serve_credit_input`; key type `ArchivalPairEpochKey`,
+//!   **big-endian** `u64` fields). The C++ read is
+//!   `archival_serve_credit_pass_count > 0` over that 48-byte prefix
+//!   (`PC-D4`: the 56-byte ledger key is per-challenge and is a different
+//!   type).
 //! - **D-SC-B** — the full per-tx acceptance gate
-//!   (`check_archival_serve_credit_input`, `blockchain.cpp:4224–4396`),
-//!   mirrored **wide**: the ordered predicate sequence returns the first
-//!   failing branch. A reorder is a behavior change; the ordering is audited.
+//!   (`check_archival_serve_credit_input`), mirrored **wide**: the ordered
+//!   predicate sequence returns the first failing branch. A reorder is a
+//!   behavior change; the ordering is audited.
 //! - **D-SC-C** — block-level cross-tx `(P, shard, E)` uniqueness
-//!   (`blockchain.cpp:4889–4910`; keyed with `ArchivalServeCreditKey` — the
+//!   (`handle_block_to_main_chain`; keyed with `ArchivalPairEpochKey` — the
 //!   same **big-endian** encoding D-SC-A persists, since the SCE-1 unify
 //!   commit replaced the original native-endian `memcpy` key, audit doc §6).
+//!   The block is common-mode inside one block, so this pass did not widen
+//!   with the ledger.
 //!
 //! Single-source rule (audit doc §2.2): predicates that already exist in Rust
 //! are *called*, never re-implemented — [`serve_credit_epoch_ok`] (step 4),
@@ -43,49 +48,81 @@ use crate::challenge::challenge_seal_on_chain;
 use crate::segment_freeze::challenge_leaf_chunk_bounds;
 use crate::serve_eligibility::serve_credit_epoch_ok;
 
-/// Byte length of the `(P, shard, E)` composite key — both the persistent
-/// LMDB key (D-SC-A) and the in-block key (D-SC-C) are
-/// `P_id[32] ‖ u64 ‖ u64`.
-pub const SERVE_CREDIT_KEY_LEN: usize = 48;
+/// Byte length of C++ `ArchivalPairEpochKey`: `P ‖ BE64(shard) ‖ BE64(E)`.
+/// D-SC-A (prefix membership) and D-SC-C (in-block uniqueness) use this
+/// encoding because those decisions are pair-epoch-wide while the beacon
+/// still issues one challenge. Settlement and slash-applied share it.
+pub const PAIR_EPOCH_KEY_LEN: usize = 48;
+
+/// Byte length of C++ `ArchivalServeCreditKey`: the pair-epoch prefix plus
+/// `BE64(block_height)`. This is the ledger row. It is not the D-SC-A/C key.
+pub const SERVE_CREDIT_KEY_LEN: usize = 56;
 
 // ─── D-SC-A — per-tx (P, shard, E) dedup vs pre-block LMDB ────────────────
 
-/// The persistent LMDB serve-credit key, byte-for-byte as C++
-/// `ArchivalServeCreditKey` builds it (`shekyl_types.h:405–412`):
+/// The pair-epoch key, byte-for-byte as C++ `ArchivalPairEpochKey` builds it:
 /// `P_id[32] ‖ BE64(shard_id) ‖ BE64(settlement_epoch)`.
 ///
-/// Big-endian is load-bearing for the LMDB table's sort order
-/// (`db_lmdb.cpp:1657–1659`: composite keys are multi-field big-endian byte
-/// arrays, never native-endian integers).
+/// Big-endian is load-bearing for the LMDB table's sort order (composite keys
+/// are multi-field big-endian byte arrays, never native-endian integers).
 #[must_use]
-pub fn serve_credit_key_be(
+pub fn pair_epoch_key_be(
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
-) -> [u8; SERVE_CREDIT_KEY_LEN] {
-    let mut key = [0u8; SERVE_CREDIT_KEY_LEN];
+) -> [u8; PAIR_EPOCH_KEY_LEN] {
+    let mut key = [0u8; PAIR_EPOCH_KEY_LEN];
     key[..32].copy_from_slice(p_canonical_id);
     key[32..40].copy_from_slice(&shard_id.to_be_bytes());
     key[40..48].copy_from_slice(&settlement_epoch.to_be_bytes());
     key
 }
 
+/// The serve-credit ledger key, byte-for-byte as C++ `ArchivalServeCreditKey`
+/// builds it: [`pair_epoch_key_be`] plus `BE64(block_height)`. Composed, not
+/// re-encoded, matching `shekyl_types.h`.
+#[must_use]
+pub fn serve_credit_key_be(
+    p_canonical_id: &[u8; 32],
+    shard_id: u64,
+    settlement_epoch: u64,
+    block_height: u64,
+) -> [u8; SERVE_CREDIT_KEY_LEN] {
+    let mut key = [0u8; SERVE_CREDIT_KEY_LEN];
+    key[..PAIR_EPOCH_KEY_LEN].copy_from_slice(&pair_epoch_key_be(
+        p_canonical_id,
+        shard_id,
+        settlement_epoch,
+    ));
+    key[PAIR_EPOCH_KEY_LEN..].copy_from_slice(&block_height.to_be_bytes());
+    key
+}
+
 /// D-SC-A verdict: is this `(P, shard, E)` already credited in the pre-block
-/// state? Mirrors `blockchain.cpp:4247`
-/// (`m_db->has_archival_serve_credit_bit`) with the LMDB read modeled as a
-/// membership probe over the marshaled pre-block key set — the I/O stays
-/// C++; the key construction and the membership verdict are the decision.
+/// state? Mirrors the dedup in `check_archival_serve_credit_input`, with the
+/// LMDB read modeled as a membership probe over the marshaled pre-block key
+/// set — the I/O stays C++; the key construction and the membership verdict
+/// are the decision.
+///
+/// **`PC-D4`: the C++ read is now
+/// `archival_serve_credit_pass_count(P, s, E) > 0`, not
+/// `has_archival_serve_credit_bit`.** This mirror named the latter until
+/// 2026-08-24, after the gate had stopped calling it. The VERDICT is
+/// identical — which is precisely why the description drifted without a
+/// single vector going red: an equivalence fixture pins what the gate decides,
+/// never what it reads. The key stays 48-byte pair-epoch here because the
+/// dedup does.
 ///
 /// `true` = duplicate (the C++ rejects: "Duplicate archival serve-credit for
 /// (P, shard, E)").
 #[must_use]
 pub fn serve_credit_preblock_duplicate(
-    preblock_keys: &BTreeSet<[u8; SERVE_CREDIT_KEY_LEN]>,
+    preblock_keys: &BTreeSet<[u8; PAIR_EPOCH_KEY_LEN]>,
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
 ) -> bool {
-    preblock_keys.contains(&serve_credit_key_be(
+    preblock_keys.contains(&pair_epoch_key_be(
         p_canonical_id,
         shard_id,
         settlement_epoch,
@@ -117,8 +154,10 @@ pub struct ServeCreditGateInputs {
     /// `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (the one size check C++ keeps,
     /// as a transport ceiling).
     pub pruned_record_in_bounds: bool,
-    /// Step 2 (`:4247`, D-SC-A): result of the pre-block
-    /// `has_archival_serve_credit_bit` read.
+    /// Step 2 (D-SC-A): does the pre-block state already hold a pass for this
+    /// pair-epoch — `archival_serve_credit_pass_count(P, s, E) > 0` on the C++
+    /// side (`PC-D4`; it was `has_archival_serve_credit_bit` before the ledger
+    /// key widened, and the field name predates that).
     pub preblock_present: bool,
     /// Step 3 (`:4254`): `get_archival_bond_hybrid_pubkey` succeeded.
     pub bond_substrate_present: bool,
@@ -162,6 +201,19 @@ pub struct ServeCreditGateInputs {
     /// off the vin; the C++ calls the same derivation through
     /// `shekyl_archival_challenge_leaf_index`, which refuses a zero geometry.
     pub segment_leaf_count: u64,
+
+    /// Step 11 (`PC-D3`): `block_hash(h−1)` of the block this record rides in.
+    ///
+    /// **Verifier-supplied, never transported.** `PC-D2` makes the block
+    /// implicit — the record arrives in its own producer's block — so consensus
+    /// reads this from the block it is already validating rather than from a
+    /// field the prover populated. A prover-supplied hash would be a `PC-D1`
+    /// violation of exactly the `RF-D8` shape this round refuses.
+    ///
+    /// The hash and not the height: `RF-D5`'s nonce already binds this same
+    /// term, so the record keeps **one** block reference instead of two that
+    /// could diverge.
+    pub prev_block_hash: [u8; 32],
     /// Step 12 (`:4353`): `get_curve_tree_leaf_chunk` succeeded.
     pub leaf_chunk_ok: bool,
     /// Step 14 (`:4387`): `shekyl_archival_verify_serve_credit_vin` returned
@@ -207,8 +259,11 @@ pub enum GateReject {
     /// "leaf index derivation refused" -- a zero registry geometry (RF-D6).
     LeafIndexDerivationRefused,
     /// "challenged leaf index out of segment range". With the index DERIVED
-    /// (`< segment_leaf_count`), reachable only when the registry's count
-    /// exceeds `SEGMENT_LEAF_COUNT` -- kept because the C++ keeps the check.
+    /// (`< segment_leaf_count`), reachable when the registry's count exceeds
+    /// `SEGMENT_LEAF_COUNT` -- or when the global position
+    /// `shard_id * SEGMENT_LEAF_COUNT + index` overflows `u64` (a far-end
+    /// `shard_id`; the bounds arithmetic is checked, not silently wrapping).
+    /// Kept because the C++ keeps the check.
     LeafIndexOutOfSegmentRange,
     /// `:4355` — "leaf chunk read failed" (registry/tree disagreement).
     LeafChunkReadFailed,
@@ -322,10 +377,20 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict
     if inputs.segment_leaf_count == 0 {
         return Reject(R::LeafIndexDerivationRefused);
     }
+    // `PC-D3`: the same refusal the C++ path takes. `check_archival_serve_credit_input`
+    // calls `shekyl_archival_challenge_leaf_index`, which answers
+    // `ERR_PREVHASH_UNPOPULATED` for an all-zero hash and rejects the vin — so a
+    // mirror that derived an index from it would disagree with production on an
+    // input production refuses. Both arms land on the same verdict here because
+    // the C++ reports both through one "leaf index derivation refused" branch.
+    if inputs.prev_block_hash == [0u8; 32] {
+        return Reject(R::LeafIndexDerivationRefused);
+    }
     let leaf_index = crate::challenge::challenge_leaf_index(
         &inputs.p_canonical_id,
         inputs.shard_id,
         inputs.settlement_epoch,
+        &inputs.prev_block_hash,
         inputs.segment_leaf_count,
     );
     if challenge_leaf_chunk_bounds(inputs.shard_id, u64::from(leaf_index)).is_none() {
@@ -352,10 +417,8 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict
 
 // ─── D-SC-C — block-level (P, shard, E) uniqueness ─────────────────────────
 
-/// The in-block serve-credit key, byte-for-byte as the C++ block pass builds
-/// it: since the SCE-1 unify commit (audit doc §6) the block pass keys with
-/// `ArchivalServeCreditKey` — the same **big-endian** encoding as the
-/// persistent D-SC-A key — so this delegates to [`serve_credit_key_be`].
+/// The in-block uniqueness key, byte-for-byte as the C++ block pass builds
+/// it: `ArchivalPairEpochKey`. Delegates to [`pair_epoch_key_be`].
 ///
 /// **Finding SCE-1** (audit doc §6), for the record: pre-unify the C++ built
 /// a native-endian `memcpy` key here, the *other* encoding of the same
@@ -368,8 +431,8 @@ pub fn serve_credit_block_key(
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
-) -> [u8; SERVE_CREDIT_KEY_LEN] {
-    serve_credit_key_be(p_canonical_id, shard_id, settlement_epoch)
+) -> [u8; PAIR_EPOCH_KEY_LEN] {
+    pair_epoch_key_be(p_canonical_id, shard_id, settlement_epoch)
 }
 
 /// Verdict of the block-level uniqueness pass.
@@ -437,15 +500,21 @@ mod tests {
             held_at_fire: true,
             registry_present_at_fire: true,
             segment_leaf_count: 25_992,
+            // A non-zero stand-in block. Zero is REFUSED at the FFI boundary
+            // (`SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED`), so an
+            // accepting fixture must not use it -- an all-zero default here
+            // would make every branch test start from an input the real gate
+            // rejects.
+            prev_block_hash: [0x6D; 32],
             leaf_chunk_ok: true,
             verify_ok: true,
         }
     }
 
     #[test]
-    fn key_be_matches_archival_serve_credit_key_layout() {
-        // shekyl_types.h:405–412 — P ‖ BE64(shard) ‖ BE64(E).
-        let key = serve_credit_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+    fn key_be_matches_archival_pair_epoch_key_layout() {
+        // ArchivalPairEpochKey — P ‖ BE64(shard) ‖ BE64(E).
+        let key = pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
         assert_eq!(&key[..32], &P);
         assert_eq!(&key[32..40], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(
@@ -455,14 +524,30 @@ mod tests {
     }
 
     #[test]
+    fn serve_credit_key_is_pair_epoch_plus_height() {
+        let pair = pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+        let key = serve_credit_key_be(
+            &P,
+            0x0102_0304_0506_0708,
+            0x1112_1314_1516_1718,
+            0x2122_2324_2526_2728,
+        );
+        assert_eq!(key.len(), SERVE_CREDIT_KEY_LEN);
+        assert_eq!(&key[..PAIR_EPOCH_KEY_LEN], &pair);
+        assert_eq!(
+            &key[48..56],
+            &[0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28]
+        );
+    }
+
+    #[test]
     fn block_key_is_unified_onto_the_be_key() {
-        // Post-SCE-1-unify (audit doc §6): the block pass keys with
-        // ArchivalServeCreditKey, so D-SC-C's key IS D-SC-A's key —
-        // P ‖ BE64(shard) ‖ BE64(E), one encoding for the logical triple.
+        // Post-SCE-1-unify (audit doc §6): D-SC-C's key IS D-SC-A's key —
+        // ArchivalPairEpochKey, one encoding for the logical triple.
         let key = serve_credit_block_key(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
         assert_eq!(
             key,
-            serve_credit_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718)
+            pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718)
         );
         assert_eq!(&key[32..40], &[1, 2, 3, 4, 5, 6, 7, 8]);
     }
@@ -471,7 +556,7 @@ mod tests {
     fn preblock_duplicate_is_membership_over_be_keys() {
         let mut preblock = BTreeSet::new();
         assert!(!serve_credit_preblock_duplicate(&preblock, &P, 3, 100));
-        preblock.insert(serve_credit_key_be(&P, 3, 100));
+        preblock.insert(pair_epoch_key_be(&P, 3, 100));
         assert!(serve_credit_preblock_duplicate(&preblock, &P, 3, 100));
         // Field-swapped triples do not collide.
         assert!(!serve_credit_preblock_duplicate(&preblock, &P, 100, 3));
@@ -522,6 +607,17 @@ mod tests {
             ),
             (
                 |i| i.segment_leaf_count = 0,
+                GateReject::LeafIndexDerivationRefused,
+            ),
+            (
+                // PC-D3: the all-zero unpopulated sentinel. Same verdict as a
+                // zero geometry because the C++ reports both through one
+                // "leaf index derivation refused" branch -- and the mirror
+                // must agree with the gate on an input the gate REFUSES, not
+                // only on the ones it derives from. Without this the mirror
+                // derived an index here while
+                // `shekyl_archival_challenge_leaf_index` rejected the vin.
+                |i| i.prev_block_hash = [0u8; 32],
                 GateReject::LeafIndexDerivationRefused,
             ),
             (

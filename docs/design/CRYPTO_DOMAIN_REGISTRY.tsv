@@ -15,6 +15,34 @@
 # "Monero ", bulletproof), which is exactly the SA §3.1 defect class; the
 # mechanism entry point is the only complete anchor.
 #
+# THE STRUCTURAL ANSWER, NOT YET BUILT (recorded 2026-08-24 by PC-D3's -v2
+# rotation). This file is a HAND-MAINTAINED MIRROR of Rust consts, and a grep
+# gate can only ever check that a mirror AGREES with its source — it cannot
+# make the two one thing. That limit is not theoretical: rotating
+# `shekyl/archival-serve-challenge-leaf` to -v2 produced a row naming the wrong
+# bytes for its const, and the gate stayed GREEN, because "the literal is in
+# the file" and "the const is in the file" were two independent greps and a
+# rotation satisfies both (the retired label is still present, by design, as
+# the negative control). The binding check was tightened to require one
+# declaration — but every check of that kind is reconstructing a relationship
+# the code could simply HAVE.
+#
+# The durable fix is a Rust type. Declare the separators in Rust with their
+# metadata — a macro emitting both the consts and a const registry array — and:
+#   - literal and const become ONE declaration; this drift class is unrepresentable
+#   - mechanism / status ride the declaration instead of a parallel TSV column
+#   - distinctness is a const assert, not a script over a text file
+#   - this TSV becomes GENERATED output (or is deleted, and the gate has nothing
+#     left to check because there is nothing left that can disagree)
+#   - a `DomainSeparator` newtype at the cSHAKE entry points refuses an
+#     unregistered byte string, which is what the count-pins currently
+#     approximate by counting call sites
+#
+# Scope, stated so it is not mistaken for a small edit: ~43 cSHAKE call sites,
+# 6 mechanisms, 114 rows across the workspace, and FROST's associated consts do
+# not fit the same shape and need their own treatment. That is a design round
+# (rules 19 + 26), not a review fix.
+#
 # THROUGH-LINE INVARIANT (SA, ratified): a live domain string's BYTES are
 # consensus / derivation state, not a naming convention. Style inconsistency
 # across these rows is intended and permanent. "Aligning" a live string's
@@ -67,7 +95,8 @@
 1	shekyl/genesis-txkey-v2	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live		pre-genesis remint: preimage is payment identity (spend/view/ek), not Bech32m spelling; v1 retired unused
 1	shekyl/multisig-address-v1	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION	shekyl-live
 1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live
-1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-serve-challenge-leaf-v2	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live		PC-D3: preimage gained block_hash(h-1) so a pair-epoch's challenges draw their leaves independently (collisions mod leaf count allowed - independence, not distinctness, is the guarantee); -v1 label retired below
+1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED	test-only		RETIRED by PC-D3. Kept ONLY as the negative control asserting -v2 does not reproduce it; must never acquire a production caller
 1	shekyl/archival-serve-challenge-fire-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_FIRE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)

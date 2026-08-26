@@ -33,6 +33,13 @@ on:
       - "docs/**"
       - "scripts/ci/check_doc_links.py"
       - "scripts/ci/check_doc_headings.py"
+      - "scripts/ci/check_lmdb_schema_coverage.py"
+      # The schema-coverage gate reads the table list and VERSION out of
+      # db_lmdb.cpp, so a source-only table/version change must start this
+      # workflow — that drift arriving with no docs edit is exactly the
+      # case the gate exists to catch (rule 47: a gate that cannot see its
+      # subject change is not a gate).
+      - "src/blockchain_db/lmdb/db_lmdb.cpp"
       - ".github/workflows/doc-links.yml"
 
 concurrency:
@@ -71,3 +78,14 @@ jobs:
         # mask the other.
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_headings.py
+
+      - name: Run LMDB schema coverage check
+        # Every table in db_lmdb.cpp's SHEKYL_LMDB_TABLES list must have a
+        # section in docs/LMDB_SCHEMA.md, and the doc's stated total must
+        # match the list. Nine live tables had zero mentions when this gate
+        # was written — absence of a section reads as absence of a table.
+        #
+        # Runs even if earlier checks failed, for the same non-masking
+        # reason as above.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_lmdb_schema_coverage.py

@@ -111,6 +111,7 @@ struct Gate2Substrate {
   std::string wire_hex;
   std::string p_id_hex;
   std::string seal_hash_hex;
+  std::string prev_block_hash_hex;  // PC-D3
   std::string bond_pubkey_hex;
   std::string leaf_scalars_hex;
   std::string pruned_hex;      // RF-D1: this vin's pruned record
@@ -135,6 +136,7 @@ Gate2Substrate load_gate2_substrate()
   s.wire_hex = i["wire_hex"].GetString();
   s.p_id_hex = i["p_canonical_id_hex"].GetString();
   s.seal_hash_hex = i["block_hash_at_seal_hex"].GetString();
+  s.prev_block_hash_hex = i["prev_block_hash_hex"].GetString();
   s.bond_pubkey_hex = i["bond_hybrid_pubkey_hex"].GetString();
   s.leaf_scalars_hex = i["leaf_layer_scalars_hex"].GetString();
   s.pruned_hex = i["pruned_hex"].GetString();
@@ -185,16 +187,31 @@ public:
     return h;
   }
 
+  // PC-D4: the double stores per-CHALLENGE rows, keyed by the block too, and
+  // answers the two questions separately -- exactly as the LMDB does. A double
+  // that collapsed them would let the pair-epoch dedup pass while the real DB
+  // failed it.
   bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override
+    uint64_t settlement_epoch, uint64_t block_height) const override
   {
-    return m_credit_bits.count({p_id, shard_id, settlement_epoch}) != 0;
+    return m_credit_bits.count({p_id, shard_id, settlement_epoch, block_height}) != 0;
   }
 
   void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override
+    uint64_t settlement_epoch, uint64_t block_height) override
   {
-    m_credit_bits.insert({p_id, shard_id, settlement_epoch});
+    m_credit_bits.insert({p_id, shard_id, settlement_epoch, block_height});
+  }
+
+  uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override
+  {
+    uint32_t n = 0;
+    for (const auto& row : m_credit_bits)
+      if (memcmp(row.p_id.data, p_id.data, 32) == 0 && row.shard_id == shard_id
+          && row.settlement_epoch == settlement_epoch)
+        ++n;
+    return n;
   }
 
   bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
@@ -297,17 +314,22 @@ private:
     }
   };
 
+  // PC-D4: block_height LAST, mirroring the LMDB key's append order, so the
+  // set's ordering matches the table's and a pair-epoch run is contiguous.
   struct CreditKey {
     crypto::hash p_id;
     uint64_t shard_id;
     uint64_t settlement_epoch;
+    uint64_t block_height;
     bool operator<(const CreditKey& other) const
     {
       if (memcmp(p_id.data, other.p_id.data, 32) != 0)
         return memcmp(p_id.data, other.p_id.data, 32) < 0;
       if (shard_id != other.shard_id)
         return shard_id < other.shard_id;
-      return settlement_epoch < other.settlement_epoch;
+      if (settlement_epoch != other.settlement_epoch)
+        return settlement_epoch < other.settlement_epoch;
+      return block_height < other.block_height;
     }
   };
 
@@ -431,7 +453,11 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   }
   else if (cpp_setup == "seed_credit_bit")
   {
-    db->set_archival_serve_credit_bit(p_id, s.shard_id, s.settlement_epoch);
+    // PC-D4: an earlier block's row. The dedup is pair-epoch-wide, so this
+    // rejects; seeding it at the validating height would not distinguish that
+    // rule from the exact-get.
+    db->set_archival_serve_credit_bit(p_id, s.shard_id, s.settlement_epoch,
+      s.current_height ? s.current_height - 1 : 0);
   }
   else if (cpp_setup == "omit_bond")
   {
@@ -543,7 +569,12 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
   if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
     throw std::runtime_error("Blockchain::init failed");
 
-  return bc->check_archival_serve_credit_input(resp, pruned, current_height);
+  // PC-D3: the verifier's block. Taken from the gate-2 substrate, which is
+  // the same value the Rust leg reads from the equivalence fixture's base --
+  // the two legs must derive the index from the SAME block or they are not
+  // running the same gate.
+  return bc->check_archival_serve_credit_input(resp, pruned, current_height,
+    hash_from_hex(s.prev_block_hash_hex));
 }
 
 } // namespace
@@ -601,7 +632,7 @@ TEST(serve_credit_equivalence, gate_vectors_live_cpp_verdict)
     fixture["gate"]["vectors"].GetArray().Size());
 }
 
-// ── D-SC-A: (P,s,E) key bytes pinned at the live ArchivalServeCreditKey ───
+// ── D-SC-A: (P,s,E) key bytes pinned at the live ArchivalPairEpochKey ───
 
 TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
 {
@@ -614,11 +645,13 @@ TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
     const uint64_t shard_id = vec["shard_id"].GetUint64();
     const uint64_t epoch = vec["settlement_epoch"].GetUint64();
 
-    // The exact type D-SC-A's LMDB accessors key with (shekyl_types.h).
-    const shekyl::db::ArchivalServeCreditKey key(
+    // PC-D4: the PAIR-EPOCH encoding. The dedup and the SCE-1 block pass both
+    // stayed at this width when the ledger key widened, so these pins must not
+    // move -- if this fixture's key hex changes, the split is wrong.
+    const shekyl::db::ArchivalPairEpochKey key(
       reinterpret_cast<const uint8_t*>(p_id.data), shard_id, epoch);
     const MDB_val v = key.as_mdb_val();
-    ASSERT_EQ(v.mv_size, shekyl::db::kArchivalServeCreditKeySize) << id;
+    ASSERT_EQ(v.mv_size, shekyl::db::kArchivalPairEpochKeySize) << id;
     const std::string key_hex =
       hex_from_bytes(static_cast<const uint8_t*>(v.mv_data), v.mv_size);
     EXPECT_EQ(key_hex, std::string(vec["expected_key_be_hex"].GetString())) << id;
@@ -638,10 +671,10 @@ TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
 // connecting full blocks. Per §5 ("D-SC-C is trivially isolatable — pure, no
 // DB") this leg runs a VERBATIM transcription of that loop: the same
 // std::unordered_set<std::string> over the same 48-byte
-// ArchivalServeCreditKey bytes (the unified big-endian encoding, post-SCE-1
-// unify), first-collision-wins. The guard comment at the blockchain.cpp site
-// names this test; an edit to the live loop must update both in the same
-// commit.
+// ArchivalPairEpochKey bytes (the unified big-endian encoding, post-SCE-1
+// unify; PC-D4 left this width in place), first-collision-wins. The guard
+// comment at the blockchain.cpp site names this test; an edit to the live
+// loop must update both in the same commit.
 
 namespace {
 
@@ -660,9 +693,11 @@ BlockUniqueOutcome run_block_unique_transcription(
   size_t index = 0;
   for (const auto& t : triples)
   {
-    // Transcribed from blockchain.cpp:4898–4903 (D-SC-C key construction,
-    // post-SCE-1-unify: ArchivalServeCreditKey, the D-SC-A encoding).
-    const shekyl::db::ArchivalServeCreditKey credit_key(
+    // Transcribed from the D-SC-C key construction in blockchain.cpp
+    // (post-SCE-1-unify). PC-D4: the within-block pass stays PAIR-EPOCH — the
+    // block is common-mode inside one block, so widening it would add no
+    // discrimination and move bytes this fixture pins.
+    const shekyl::db::ArchivalPairEpochKey credit_key(
       reinterpret_cast<const uint8_t*>(std::get<0>(t).data),
       std::get<1>(t), std::get<2>(t));
     std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
@@ -710,7 +745,7 @@ TEST(serve_credit_equivalence, block_unique_vectors_verdict_and_key_pin)
     }
     if (vec.HasMember("expected_first_key_be_hex"))
     {
-      // Post-SCE-1-unify: the block key is the same BE ArchivalServeCreditKey
+      // Post-SCE-1-unify: the block key is the same BE ArchivalPairEpochKey
       // encoding D-SC-A persists (audit doc §6).
       EXPECT_EQ(out.first_key_hex,
         std::string(vec["expected_first_key_be_hex"].GetString())) << id;
@@ -729,7 +764,7 @@ TEST(serve_credit_equivalence, sce1_key_encoding_crosscheck)
   const uint64_t shard_id = x["shard_id"].GetUint64();
   const uint64_t epoch = x["settlement_epoch"].GetUint64();
 
-  const shekyl::db::ArchivalServeCreditKey be_key(
+  const shekyl::db::ArchivalPairEpochKey be_key(
     reinterpret_cast<const uint8_t*>(p_id.data), shard_id, epoch);
   const MDB_val v = be_key.as_mdb_val();
   const std::string be_hex =
@@ -742,7 +777,7 @@ TEST(serve_credit_equivalence, sce1_key_encoding_crosscheck)
   EXPECT_EQ(be_hex, std::string(x["key_be_hex"].GetString()));
   EXPECT_EQ(block_hex, std::string(x["key_block_hex"].GetString()));
   // Post-unify, expect_equal is true and load-bearing: the two decision
-  // paths must key with the one ArchivalServeCreditKey encoding — a
+  // paths must key with the one ArchivalPairEpochKey encoding — a
   // reintroduced split (SCE-1, audit doc §6) fails here.
   EXPECT_EQ(be_hex == block_hex, x["expect_equal"].GetBool());
 }

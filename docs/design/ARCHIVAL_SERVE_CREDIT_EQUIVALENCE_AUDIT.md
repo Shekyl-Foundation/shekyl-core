@@ -207,6 +207,11 @@ name `serve_credit_decisions.rs`. No new crate; no new workspace dependency
 
 **Shape (illustrative signatures, subject to review — not yet written):**
 
+**PC-D4 (2026-08-26):** the 48-byte encoding below is `ArchivalPairEpochKey`
+/`pair_epoch_key_be`. `ArchivalServeCreditKey` is the 56-byte per-challenge
+ledger key and is not this function. The signatures record the substrate at
+the audit pin.
+
 ```rust
 /// D-SC-A sub-unit: the (P,s,E) LMDB dedup key (BE) + membership verdict.
 pub fn serve_credit_key_be(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> [u8; 48];
@@ -367,7 +372,12 @@ against the pre-unify split: D-SC-C's inline native-endian `memcpy` key is
 replaced by `ArchivalServeCreditKey` (via a new `bytes()` accessor on the key
 type), the mirror's `serve_credit_block_key` re-points to the BE encoding,
 and the fixture re-pins with `expect_equal: true` — a reintroduced split now
-fails both legs' cross-checks. The decision-invariance property that licensed
+fails both legs' cross-checks. **PC-D4 (2026-08-26):** the key type this
+resolution names was the 48-byte `(P,s,E)` encoding, renamed
+`ArchivalPairEpochKey` when `ArchivalServeCreditKey` widened to 56 B
+per-challenge; the block pass builds `ArchivalPairEpochKey` today
+(`blockchain.cpp:6161`) and the mirror's `serve_credit_block_key` delegates
+to `pair_epoch_key_be`. The decision-invariance property that licensed
 the unify as behavior-preserving is held standing by the
 `fuzz_serve_credit_block_unique` target.
 

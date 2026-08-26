@@ -30,6 +30,7 @@ namespace {
 
 // Shared archival-LMDB scaffolding (also driven by the claim-source RPC
 // tests — single-sourced so the fixtures cannot drift).
+using archival_test::kServeCreditTestBlockHeight;
 using archival_test::make_hash;
 using archival_test::EmissionSnapshotKat;
 using TempLMDB = archival_test::TempLMDB;
@@ -523,13 +524,13 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
   db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
 
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row without a bond record: gathered row is skipped, not fatal.
-  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row for a different epoch: filtered by the cursor pass.
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1, kServeCreditTestBlockHeight);
 
   // Non-boundary heights are no-ops.
   db.process_archival_epoch_close_at_height(close_height - 1);
@@ -569,6 +570,21 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
 }
 
+TEST(archival_substrate_lmdb, serve_credit_key_is_pair_epoch_plus_height)
+{
+  const crypto::hash p = make_hash(0x11);
+  const shekyl::db::ArchivalPairEpochKey pair(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 3);
+  const shekyl::db::ArchivalServeCreditKey sc(pair, 4100);
+  const MDB_val k = sc.as_mdb_val();
+  ASSERT_EQ(k.mv_size, shekyl::db::kArchivalServeCreditKeySize);
+  EXPECT_TRUE(pair.is_prefix_of(k.mv_data, k.mv_size));
+  EXPECT_EQ(shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 48), 4100u);
+  const shekyl::db::ArchivalPairEpochKey other(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 4);
+  EXPECT_FALSE(other.is_prefix_of(k.mv_data, k.mv_size));
+}
+
 // ── M-2/Q7 emission snapshot identity KATs ──────────────────────────────────
 // (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2)
 //
@@ -589,6 +605,60 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
+
+/// **`PC-D6`: the emission fold, and the test that fails when it is removed.**
+///
+/// `PC-D4` made the serve-credit ledger per-CHALLENGE — one pair-epoch can hold
+/// up to `CHALLENGES_PER_PAIR_PER_EPOCH` rows. Emission stays per-PAIR-epoch:
+/// three passes credit a pair ONCE.
+///
+/// The gather would push one `credit_pair` per row without the prefix skip, so
+/// the pair is paid per challenge. Nothing about that failure looks wrong:
+/// every row is legitimate, every index is correct, the arrays are well
+/// formed, and the only symptom is a number three times too large in a place
+/// no assertion was watching. That is why this test exists at all, and why it
+/// asserts on the pair COUNT rather than on a downstream reward figure.
+///
+/// The edit that makes this red is deleting the pair-epoch prefix skip in
+/// `gather_archival_epoch_rows_window`.
+TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_credit_pair)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t settlement_epoch = 3;
+  const uint64_t join_epoch = settlement_epoch - 1;
+  const crypto::hash p1 = make_hash(0x71);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+
+  // CHALLENGES_PER_PAIR_PER_EPOCH rows for ONE pair-epoch, each from a
+  // different block — the state PC-D4's key makes representable and PC-D2
+  // makes legitimate. Distinct heights are the whole point: at one height
+  // these would collapse in the table and the fold would never be exercised.
+  const uint64_t kBlocks[] = {4100, 4250, 4390};
+  for (const uint64_t h : kBlocks)
+    db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, h);
+
+  // The rows really are distinct — otherwise this test passes for the wrong
+  // reason, having never built the state it is about.
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p1, 7, settlement_epoch), 3u);
+
+  ArchivalEmissionEpochSnapshot snap;
+  lmdb.gather_archival_emission_epoch_snapshot(p1, settlement_epoch, snap);
+
+  EXPECT_EQ(snap.bonds.size(), 1u);
+  EXPECT_EQ(snap.shards.size(), 1u);
+  EXPECT_EQ(snap.credit_pairs.size(), 1u)
+      << "three challenge rows produced " << snap.credit_pairs.size()
+      << " credit pairs: the pair is paid once per challenge instead of once "
+         "per epoch, and every row involved is individually valid";
+}
+
 TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity)
 {
   TempLMDB fixture;
@@ -817,7 +887,7 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
     2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
@@ -1918,6 +1988,97 @@ TEST(archival_substrate_lmdb, attestation_witness_threaded_through_add_block)
 // block hash that never becomes an alt block, and the height-keyed retention prune
 // structurally cannot see it. The loop below is that scenario: N plain pops must
 // leave the detached table completely empty, not N orphans.
+/// **`PC-D4`: the pop must delete the ledger row the connect wrote.**
+///
+/// The serve-credit key carries the block, so `remove_transaction` rebuilds it
+/// from a height the caller supplies. `add_transaction` is given `prev_height`
+/// -- the block's INDEX N -- while `pop_block`'s other archival hooks key on
+/// `removed_block_height`, the chain COUNT after the block. Those are the same
+/// function's two conventions and they differ by one.
+///
+/// Passing the count built a key one above every row the connect wrote,
+/// `mdb_del` answered MDB_NOTFOUND, and the tolerant delete swallowed it, so a
+/// popped pass SURVIVED its block. On a replacement branch that stale row
+/// either rejects a legitimate record through the pair-epoch dedup or counts
+/// toward emission.
+///
+/// Nothing caught it: every other serve-credit test calls the ledger accessors
+/// directly and supplies its own height, so none of them ever ran the two
+/// production call sites against each other. This one connects a real block
+/// and pops it.
+///
+/// The edit that makes it red is passing `removed_block_height` (or any other
+/// height) to `remove_transaction` in `pop_block`.
+TEST(archival_substrate_lmdb, pop_deletes_the_serve_credit_row_the_connect_wrote)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // The gate-2 integration vin: the only serve-credit blob whose kept half is
+  // authored by shekyl-wire, so this test cannot drift from the real encoding
+  // by hand-rolling one.
+  std::ifstream ifs(GATE2_KAT_FIXTURE_PATH);
+  ASSERT_TRUE(ifs.good()) << "missing gate-2 KAT fixture";
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  ASSERT_FALSE(doc.HasParseError());
+  ASSERT_TRUE(doc.HasMember("integration"));
+  const auto& integ = doc["integration"];
+
+  std::string kept_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["wire_hex"].GetString(), kept_bin));
+  std::string pruned_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["pruned_hex"].GetString(), pruned_bin));
+
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  txin_archival_serve_credit_response vin{};
+  vin.canonical_bytes.assign(kept_bin.begin(), kept_bin.end());
+  tx.vin.push_back(vin);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {
+    std::vector<uint8_t>(pruned_bin.begin(), pruned_bin.end())};
+
+  crypto::hash p_id{};
+  uint64_t shard_id = 0, settlement_epoch = 0;
+  ASSERT_TRUE(get_archival_serve_credit_key(vin, p_id, shard_id, settlement_epoch))
+    << "fixture premise: the kept blob must parse, or the connect stores nothing "
+       "and the pop assertion below passes vacuously";
+
+  const uint64_t connect_index = db.height();
+  connect_block_with_txs(db, {tx});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Premise AND the convention pin: the row is at the block's INDEX.
+  EXPECT_TRUE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index))
+    << "the connect did not write the row at the block index";
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index + 1))
+    << "negative control: the row must not sit at the chain COUNT -- that is the "
+       "off-by-one the pop path took";
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 1u);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 0u)
+    << "the popped block's serve-credit row survived its block: the pop rebuilt the "
+       "key at a different height than the connect wrote it, and the tolerant "
+       "delete swallowed the miss";
+}
+
 TEST(archival_substrate_lmdb, plain_pop_drops_the_witness_and_parks_no_detached_row)
 {
   TempLMDB fixture;
@@ -2067,7 +2228,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   db.put_archival_bond_value(p_served, seed);
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
-  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   // Connect blocks through epoch 1's slash deadline. The deadline block's
   // connect hook processes the epoch-1 slash pass.
@@ -2093,7 +2254,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   ASSERT_LE(h_fire, h_close);
   EXPECT_TRUE(db.archival_bond_holds_shard(p_miss, 7, h_fire));
   // ... and it really was missed: no affirmative pass for (P_miss, 7, E=1).
-  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch));
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch, kServeCreditTestBlockHeight));
 
   // P_miss: one observed miss is not a durable absence (m = 11 of the last
   // n = 13 observations is). The scheduler ran the epoch past its deadline and
@@ -2186,7 +2347,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
   for (uint64_t epoch = 1; epoch <= window.m; ++epoch)
-    db.set_archival_serve_credit_bit(p_served, 7, epoch);
+    db.set_archival_serve_credit_bit(p_served, 7, epoch, kServeCreditTestBlockHeight);
 
   // Walk to the deadline of epoch m-1: that is m-1 observed misses, one short
   // of the threshold.
@@ -2327,7 +2488,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_spans_a_full_window_past_the_serve
   // reached only by counting the full window.
   const uint64_t decision_epoch = window.n;
   for (uint32_t i = 1; i <= window.serve_budget; ++i)
-    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i);
+    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i, kServeCreditTestBlockHeight);
 
   // One epoch short of the decision epoch the record must still be intact: the
   // misses so far are m - 1.
@@ -2442,7 +2603,7 @@ TEST(archival_substrate_lmdb, failure_window_recomputes_from_reverted_state_on_p
 
   const uint64_t answered_epoch = slash_epoch / 2;
   ASSERT_GE(answered_epoch, 1u);
-  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch);
+  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2960,14 +3121,14 @@ TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
   // P served shards 3 and 9 across several epochs; the max per shard is what
   // the anchor fold needs. Shard 5 is bordered by another P's rows on both
   // sides to prove the scan neither leaks across nor stops early.
-  db.set_archival_serve_credit_bit(p, 3, 10);
-  db.set_archival_serve_credit_bit(p, 3, 40);   // shard 3 max
-  db.set_archival_serve_credit_bit(p, 3, 25);
-  db.set_archival_serve_credit_bit(p, 9, 7);
-  db.set_archival_serve_credit_bit(p, 9, 33);   // shard 9 max
+  db.set_archival_serve_credit_bit(p, 3, 10, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 3, 40, kServeCreditTestBlockHeight);   // shard 3 max
+  db.set_archival_serve_credit_bit(p, 3, 25, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 7, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 33, kServeCreditTestBlockHeight);   // shard 9 max
   // Another P interleaved in the shard key space: must not appear in P's scan.
-  db.set_archival_serve_credit_bit(other, 3, 99);
-  db.set_archival_serve_credit_bit(other, 9, 99);
+  db.set_archival_serve_credit_bit(other, 3, 99, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(other, 9, 99, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 

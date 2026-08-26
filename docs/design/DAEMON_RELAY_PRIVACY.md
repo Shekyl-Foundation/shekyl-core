@@ -15165,7 +15165,12 @@ scar.
 question unioned with a *policy* flag. It is a Monero-lineage name **whose
 referent does not exist here** — its stated reason was the pre-Dandelion++ RPC,
 and Shekyl is v3-from-genesis with no such client (rule 60). Deleted this round;
-its ten call sites all wanted `broadcasted`.
+nine of its ten call sites wanted `broadcasted`; the tenth,
+`core::pool_has_tx`, wanted `all`, because it asks a local *holding* question
+rather than a disclosure one — `legacy` was wrong for it in the other
+direction. (This sentence read "its ten call sites all wanted `broadcasted`"
+until 2026-08-25; the tenth caller was corrected in #550's own review round and
+this line was not moved with it.)
 
 #### Scope: no rename sweep, and the reason is timing not size
 

@@ -281,6 +281,11 @@ fn gate4_lifecycle_kat_vectors() {
         &parsed.p_canonical_id,
         parsed.shard_id,
         parsed.settlement_epoch,
+        &decode_hex32(
+            serve["prev_block_hash_hex"]
+                .as_str()
+                .expect("prev block hash"),
+        ),
         segment_leaf_count,
     );
     assert_eq!(

@@ -1517,6 +1517,43 @@ as `settle_epoch(passes, issued)` in `attestation.rs`. Recorded rather than
 silently deleted, because the entry's own framing — a hold whose blocker was
 a *decision*, not a design round — is what let it clear in one sitting.
 
+### 9.5.1 Two inputs the assignment cutover acquired elsewhere (2026-08-24)
+
+`assignment(h)` is BUILT (item 1 above) and **not wired**: `assign_epoch` has no
+FFI export and no consensus caller, so the live issuer is still the
+one-challenge-per-pair-epoch beacon. The per-challenge record round
+(`ARCHIVAL_PER_CHALLENGE_RECORD.md`) landed against that live issuer and
+produced two arguments *for* wiring it. They are recorded **here**, in the
+cutover's own inputs, because a reader planning this work would not otherwise
+see them — they arose in a different round and would stay in its record.
+
+**1. The count bound has no other home (`PC-D7`, corrected).** Widening the
+ledger key to `(P, s, E, block)` makes the admission dedup's exact-get vacuous —
+it probes a block not yet in the DB. `PC-D7` was collapsed on "under `PC-D2`
+there is no claimed block", which retires *verifying a claimed reference* and
+does **not** reach *verifying this block's assignment names this pair*. That
+second job is the count bound. Without it nothing limits how many blocks may
+carry a record for one pair-epoch, and a pair inflates its own pass count by
+filing in every block of the epoch — the free-rider margin `TJ R1` closes.
+
+The per-challenge round holds the line by keeping its dedup **pair-epoch-wide**
+(`pass_count > 0`), which is byte-identical to pre-widening consensus and makes
+the three-row state unreachable by construction. **That is a holding position,
+and this cutover is what replaces it.** Enforcing
+`count < CHALLENGES_PER_PAIR_PER_EPOCH` before the issuer exists would change
+consensus now, still permit adaptive selection, and buy nothing.
+
+**2. The sampled-leaf floor is weaker until responses are pinned to their
+assignment blocks.** `PC-D3` made the challenged leaf index vary per block. Under
+the beacon a response may land anywhere in its `H_fire` window, so a prover gets
+roughly `CHALLENGE_RESPONSE_BLOCKS` leaf draws and needs only one leaf it holds:
+the floor degrades from "the one assigned leaf" to "best of a window". `RF-D8`
+rules that floor weak-but-nonzero on what survives total witness collusion, so
+this is not a redesign trigger — but pinning each response to its assignment
+block is exactly what this cutover does, and it restores the per-challenge
+binding. **The interim weakening is an argument for this work, not against
+`PC-D3`.**
+
 **The strategic point:** building the serving path is what unblocks W₂ —
 the measurement program needs a working transfer, not a frozen format
 (3.33 MB over two Tor legs takes what it takes regardless of header

@@ -56,6 +56,15 @@ pub const SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH: u8 = 13;
 /// Leaf-layer scalar count is not a multiple of four.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE: u8 = 14;
 
+/// `PC-D3`: `ctx.prev_block_hash` was all-zeros — the unpopulated-field
+/// sentinel, on `RF-D5`'s precedent.
+///
+/// Deriving the leaf index against a zero hash would succeed and produce a
+/// well-formed index for the wrong block, so the failure has to be here rather
+/// than downstream where it would surface as a path mismatch and be
+/// misattributed to the prover.
+pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 15;
+
 /// Bond-post CT balance sum matches (ARCHIVAL_BOND_GATE4.md §3.2).
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK: u8 = 0;
 /// Required pointer was null while count > 0.
@@ -333,6 +342,18 @@ pub struct ShekylArchivalVerifyCtx {
     pub current_height: u64,
     pub settlement_epoch: u64,
     pub block_hash_at_seal: [u8; 32],
+    /// `block_hash(h−1)` of the block this record rides in (`PC-D3`).
+    ///
+    /// **Verifier-supplied, never transported.** `PC-D2` makes the block
+    /// implicit — the record arrives in its own producer's block — so consensus
+    /// fills this from the block it is validating. A prover-supplied hash would
+    /// be the `PC-D1`/`RF-D8` violation this round exists to refuse.
+    ///
+    /// All-zeros is refused with its own code, on `RF-D5`'s precedent and for
+    /// its reason: a caller that forgets the field must fail loudly rather than
+    /// derive a leaf index against a zero hash, and a readability flag would
+    /// itself be caller-populated and forgotten alongside it.
+    pub prev_block_hash: [u8; 32],
     pub registry_segment_subroot_rk: [u8; 32],
     pub segment_leaf_count: u64,
     pub pqc_pubkey_ptr: *const u8,
@@ -341,6 +362,26 @@ pub struct ShekylArchivalVerifyCtx {
     /// Byte length of the flattened scalar blob (`N × 32`); not a scalar count.
     pub leaf_layer_scalars_len: usize,
 }
+
+// ── ABI pins, mirrored by `static_assert`s in `src/shekyl/shekyl_ffi.h` ──────
+//
+// `PC-D3` added `prev_block_hash` MID-STRUCT, and a mid-struct addition is the
+// one ABI change that fails silently in both directions: if the C++ header
+// lags, C++ builds the shorter struct and Rust reads stack residue past its
+// end. Residue is not all-zeros, so the `ERR_PREVHASH_UNPOPULATED` guard --
+// written for exactly this hazard -- stays quiet, and the leaf index derives
+// from garbage. The symptom is a path mismatch attributed to the prover: a
+// consensus-visible verdict produced by a local wiring defect.
+//
+// Offsets rather than only size, because a field MOVING preserves size. These
+// four are platform-independent: every field at or before `segment_leaf_count`
+// is fixed-width, so no pointer or `usize` participates. Size is deliberately
+// not pinned here -- it varies with pointer width, and the offsets already
+// cover the failure.
+const _: () = assert!(core::mem::offset_of!(ShekylArchivalVerifyCtx, current_height) == 0);
+const _: () = assert!(core::mem::offset_of!(ShekylArchivalVerifyCtx, block_hash_at_seal) == 16);
+const _: () = assert!(core::mem::offset_of!(ShekylArchivalVerifyCtx, prev_block_hash) == 48);
+const _: () = assert!(core::mem::offset_of!(ShekylArchivalVerifyCtx, segment_leaf_count) == 112);
 
 #[must_use]
 pub(super) fn map_verify_error(err: &shekyl_archival_retention::VerifyError) -> u8 {

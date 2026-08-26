@@ -82,13 +82,13 @@
 //!
 //! There is no miss-tally in persisted consensus state, and therefore no
 //! `42-serialization-policy` version bump. The window is a pure function of the
-//! per-`(P, s, E)` `serve_credit_bit` ledger and the bond record — both already
+//! serve-credit ledger and the bond record — both already
 //! persisted, and both already reverted by `pop_block` (gate-2 §8, gate-4 §5).
 //! Recomputing is what makes the mechanism reorg-safe for free: a rewound bit is
 //! a rewound observation, with no second copy of the history to keep in sync.
 //!
 //! **The price of recomputing: `n` is now a retention constraint.** Before the
-//! window, the slash decision read a *single* epoch's `serve_credit_bit`; it now
+//! window, the slash decision read a *single* epoch's served state; it now
 //! reads up to `n − 1` epochs further back. Those rows are not permanent —
 //! `prune_archival_epochs_before` deletes `archival_serve_credit` below
 //! `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
@@ -216,13 +216,23 @@ const _: () = assert!(
 /// One baseline observation for a `(P_id, shard)` pair: an epoch at which a
 /// challenge was posed and could have been answered.
 ///
-/// `served` is the epoch's `serve_credit_bit` — an **affirmative pass**, never
+/// `served` is the epoch's served state — an **affirmative pass**, never
 /// absence-of-failure (gate-2 §0.1). `!served` is the miss the window counts.
+///
+/// **`PC-D4`: this is a per-EPOCH boolean, and deliberately not a count.** The
+/// ledger is per-challenge now — a pair-epoch may hold several rows — and the
+/// caller collapses them (`archival_serve_credit_pass_count(...) > 0`) before
+/// marshaling. The row multiplicity therefore never reaches this module, which
+/// is why widening the key needed no change here. Anything that wants to
+/// distinguish two passes from three must take the count as a new input rather
+/// than reinterpret this flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaselineObservation {
     /// The settlement epoch the baseline was observed in.
     pub settlement_epoch: u64,
-    /// `serve_credit_bit(P_id, shard, settlement_epoch)`.
+    /// Whether `(P_id, shard, settlement_epoch)` has any affirmative pass —
+    /// `archival_serve_credit_pass_count(...) > 0` on the C++ side. Under
+    /// `PC-D4` that is a fold over rows, not a single stored bit.
     pub served: bool,
 }
 

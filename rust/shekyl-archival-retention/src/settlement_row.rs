@@ -5,12 +5,14 @@
 //! The settlement-outcome row — `SO-D2`'s value half.
 //!
 //! [`ARCHIVAL_SETTLEMENT_WRITER.md`](../../docs/design/ARCHIVAL_SETTLEMENT_WRITER.md)
-//! `SO-D2` pins a 48-byte key and a 3-byte value. **The key is not declared
-//! here and has no type of its own**: it is byte-identical to
-//! `ArchivalServeCreditKey` (`src/blockchain_db/shekyl_types.h`,
-//! `P_id[32] ‖ BE(shard_id) ‖ BE(settlement_epoch)`), and the whole point of
-//! that choice is that one key probes both tables. A second 48-byte key class
-//! would be a twin to keep in sync, not a boundary.
+//! `SO-D2` pins a 48-byte key and a 3-byte value. **The key is
+//! `ArchivalPairEpochKey`** (`src/blockchain_db/shekyl_types.h`,
+//! `P_id[32] ‖ BE(shard_id) ‖ BE(settlement_epoch)`). `SO-D2` originally
+//! shared `ArchivalServeCreditKey` because the two shapes coincided; `PC-D4`
+//! widened the serve-credit ledger to 56 B (per challenge) and this table
+//! stayed per-pair-epoch, so the types split. A settlement key that borrowed
+//! the ledger type would silently become 56 B. C++ owns the key; this module
+//! owns the value.
 //!
 //! This module owns the value, because the value carries an invariant.
 //!

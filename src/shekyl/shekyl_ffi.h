@@ -1397,6 +1397,24 @@ struct shekyl_archival_verify_ctx {
     uint64_t current_height;
     uint64_t settlement_epoch;
     uint8_t block_hash_at_seal[32];
+    /// `block_hash(h-1)` of the block being validated (PC-D3). NOT
+    /// `block_hash_at_seal` above: the two are different blocks feeding
+    /// different derivations (the challenged leaf index vs. the fire height),
+    /// and populating this from the seal hash yields a well-formed index for
+    /// the wrong block.
+    ///
+    /// **Field order is load-bearing.** This sits between
+    /// `block_hash_at_seal` and `registry_segment_subroot_rk` to match
+    /// `ShekylArchivalVerifyCtx` in rust/shekyl-ffi/src/archival_ffi/codes.rs.
+    /// A mismatch here does not fail cleanly: Rust reads stack residue, which
+    /// is not all-zeros, so the ERR_PREVHASH_UNPOPULATED guard stays silent
+    /// and the index derives from garbage -- surfacing as a path mismatch
+    /// attributed to the prover.
+    ///
+    /// All-zeros is refused with ERR_PREVHASH_UNPOPULATED, ahead of any parse
+    /// of prover-controlled bytes: an unpopulated ctx is the CALLER's defect,
+    /// and checked later a malformed vin would mask it indefinitely.
+    uint8_t prev_block_hash[32];
     uint8_t registry_segment_subroot_rk[32];
     uint64_t segment_leaf_count;
     const uint8_t* pqc_pubkey_ptr;
@@ -1405,6 +1423,19 @@ struct shekyl_archival_verify_ctx {
     const uint8_t* leaf_layer_scalars_ptr;
     size_t leaf_layer_scalars_len;
 };
+
+// ABI pins, mirrored by `const _: () = assert!(...)` in
+// rust/shekyl-ffi/src/archival_ffi/codes.rs. See the note on
+// `prev_block_hash` above for why a mid-struct addition does NOT fail cleanly
+// and why offsets are pinned rather than only the size.
+static_assert(offsetof(struct shekyl_archival_verify_ctx, current_height) == 0,
+              "shekyl_archival_verify_ctx ABI drift");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, block_hash_at_seal) == 16,
+              "shekyl_archival_verify_ctx ABI drift");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, prev_block_hash) == 48,
+              "shekyl_archival_verify_ctx ABI drift: PC-D3's block hash is not where Rust reads it");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) == 112,
+              "shekyl_archival_verify_ctx ABI drift");
 
 #define SHEKYL_ARCHIVAL_VERIFY_OK                    0
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR        1
@@ -1421,6 +1452,8 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY      12
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
+/// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
 
 /// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
 /// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
@@ -1477,11 +1510,18 @@ uint8_t shekyl_archival_serve_credit_extract(
 
 /// Settlement-outcome row encoding (SO-D2).
 ///
-/// C++ owns the table and the 48-byte key (the same ArchivalServeCreditKey
-/// encoding); Rust owns the 3-byte value, because the value carries the
-/// invariant that its outcome byte equals the fold over its counts. There is
-/// deliberately NO outcome parameter: supplying one would reopen at the
-/// boundary the disagreement the Rust type closes.
+/// C++ owns the table and its 48-byte key; Rust owns the 3-byte value, because
+/// the value carries the invariant that its outcome byte equals the fold over
+/// its counts. There is deliberately NO outcome parameter: supplying one would
+/// reopen at the boundary the disagreement the Rust type closes.
+///
+/// **The key is `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`** — this
+/// comment said the latter until PC-D4 widened that key to 56 B. The settlement
+/// table is per-pair-epoch by design (SO-D1: one row per pair with issued >= 1),
+/// so it did not widen with the ledger, and SO-D2's "one key probes both
+/// tables" rationale is retired rather than broken: the two tables answer at
+/// different granularities — evidence per challenge, verdict per pair-epoch.
+/// See ARCHIVAL_PER_CHALLENGE_RECORD.md §5.2.
 ///
 /// Writes SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES bytes to out_row on OK (0) and
 /// writes NOTHING on any error, so a caller that ignores the code cannot store
@@ -1530,11 +1570,16 @@ uint8_t shekyl_archival_settlement_row(
 /// happen.
 uint8_t shekyl_archival_settlement_row_validate(uint8_t outcome, uint8_t passes, uint8_t issued);
 
-/// The verifier-derived challenge leaf index (RF-D6: never on the wire).
+/// The verifier-derived challenge leaf index (RF-D6: never on the wire;
+/// PC-D3: bound to the block the record rides in).
+///
+/// `prev_block_hash` is `block_hash(h-1)` of the block being validated, 32
+/// bytes. All-zeros returns ERR_PREVHASH_UNPOPULATED rather than deriving.
 uint8_t shekyl_archival_challenge_leaf_index(
     const uint8_t* p_canonical_id,
     uint64_t shard_id,
     uint64_t settlement_epoch,
+    const uint8_t* prev_block_hash,
     uint64_t segment_leaf_count,
     uint32_t* out_leaf_index);
 

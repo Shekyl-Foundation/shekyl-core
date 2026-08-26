@@ -131,6 +131,27 @@ fn flat_layer_scalars_hex(scalars: &[[u8; 32]]) -> String {
     )
 }
 
+/// `block_hash(h−1)` for the integration case (`PC-D3`).
+///
+/// **Non-uniform on purpose.** A repeated-byte hash (like the `0xAB..`
+/// `block_hash_at_seal` beside it) is its own reverse and its own rotation, so
+/// a byte-order or offset bug in a second implementation reproduces the right
+/// index anyway. A counting pattern makes the preimage order-sensitive, which
+/// is the property a cross-language KAT is for. Distinct from
+/// [`CHALLENGE_PREV_BLOCK_HASH`] so a test that swaps the two cases' hashes
+/// fails instead of passing.
+const INTEGRATION_PREV_BLOCK_HASH: [u8; 32] = [
+    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F,
+    0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
+];
+
+/// `block_hash(h−1)` for the synthetic challenge case. See
+/// [`INTEGRATION_PREV_BLOCK_HASH`] for why it is non-uniform.
+const CHALLENGE_PREV_BLOCK_HASH: [u8; 32] = [
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+];
+
 fn build_integration_substrate(
     pinned_pk_hex: Option<&str>,
     pinned_sk_hex: Option<&str>,
@@ -160,7 +181,13 @@ fn build_integration_substrate(
     // Consensus requires settlement_epoch >= join_settlement_epoch + 1; join at 0 ⇒ first credit at 1.
     let settlement_epoch = 1u64;
     let segment_leaf_count = SEGMENT_LEAF_COUNT;
-    let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
+    let leaf_index = challenge_leaf_index(
+        &p_id,
+        shard_id,
+        settlement_epoch,
+        &INTEGRATION_PREV_BLOCK_HASH,
+        segment_leaf_count,
+    );
     // Cross-language pin: the fixture carries the chunk bounds the Rust
     // derivation produces so the C++ integration test can assert the FFI
     // returns the same values before seeding the leaf table.
@@ -246,6 +273,11 @@ fn build_integration_substrate(
         // them the way the verifier does -- from outside the wire. Neither is
         // transported (RF-D6/RF-D8); both are in the signed preimage.
         "leaf_index_in_segment": leaf_index,
+        // `PC-D3`: the block whose hash the index is derived from. Recorded
+        // for the same reason as the two below -- it is a verifier-supplied
+        // input to the signed preimage that never travels on the wire, so a
+        // consumer cannot recover it from `wire_hex`.
+        "prev_block_hash_hex": encode_hex(&INTEGRATION_PREV_BLOCK_HASH),
         "segment_subroot_rk_hex": encode_hex(&rk),
         "leaf_bytes_hex": encode_hex(&leaf_bytes),
         "freeze_height": h_fire,
@@ -496,7 +528,13 @@ fn build_kat_document(
     let shard_id = 7u64;
     let settlement_epoch = 100u64;
     let segment_leaf_count = SEGMENT_LEAF_COUNT;
-    let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
+    let leaf_index = challenge_leaf_index(
+        &p_id,
+        shard_id,
+        settlement_epoch,
+        &CHALLENGE_PREV_BLOCK_HASH,
+        segment_leaf_count,
+    );
 
     let h_open = 1_000_000u64;
     let h_close = h_open + 9_999;
@@ -553,6 +591,11 @@ fn build_kat_document(
             "shard_id": shard_id,
             "settlement_epoch": settlement_epoch,
             "segment_leaf_count": segment_leaf_count,
+            // `PC-D3`: the challenge's own block. NOT `block_hash_at_seal`
+            // below -- the two are different blocks feeding different
+            // derivations (leaf index vs. fire height), and a consumer that
+            // confuses them gets a valid-looking index for the wrong block.
+            "prev_block_hash_hex": encode_hex(&CHALLENGE_PREV_BLOCK_HASH),
             "leaf_index": leaf_index,
             "h_open": h_open,
             "h_close": h_close,
@@ -683,11 +726,16 @@ fn gate2_serve_credit_kat_vectors() {
         let h_open = case["h_open"].as_u64().expect("h_open");
         let h_close = case["h_close"].as_u64().expect("h_close");
         let seal_hash = decode_hex32(case["block_hash_at_seal_hex"].as_str().expect("seal hash"));
+        let prev_block_hash = decode_hex32(
+            case["prev_block_hash_hex"]
+                .as_str()
+                .expect("prev block hash"),
+        );
 
         let leaf_index = u32::try_from(case["leaf_index"].as_u64().expect("leaf_index"))
             .expect("leaf_index fits u32");
         assert_eq!(
-            challenge_leaf_index(&p_id, shard_id, epoch, count),
+            challenge_leaf_index(&p_id, shard_id, epoch, &prev_block_hash, count),
             leaf_index
         );
         // (verify_leaf_index was deleted by RF-D6; the derivation above IS the
@@ -819,6 +867,11 @@ fn gate2_serve_credit_kat_vectors() {
         &parsed.p_canonical_id,
         parsed.shard_id,
         parsed.settlement_epoch,
+        &decode_hex32(
+            integration["prev_block_hash_hex"]
+                .as_str()
+                .expect("integration prev block hash"),
+        ),
         integration["segment_leaf_count"]
             .as_u64()
             .expect("segment count"),

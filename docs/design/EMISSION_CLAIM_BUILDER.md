@@ -574,7 +574,8 @@ row-selection routine (`gather_archival_epoch_rows_window`,
 `gather_archival_emission_epoch_snapshot` is its width-1 delegate, and
 the epoch close funnels through the same routine, so the single-gather
 pin holds by construction. The motivation is a per-request work bound:
-the serve-credit key is `p_id | shard | epoch` (epoch is the *suffix*),
+the serve-credit key is `p_id | shard | epoch | block_height` (`PC-D4`
+appended the height; the epoch is an interior component at offset 40),
 so a per-epoch range seek is impossible and a full-table cursor pass is
 inherent — paying that pass once per window epoch (26×) on an
 unauthenticated public endpoint was attacker-drivable CPU amplification;

@@ -147,7 +147,27 @@ static constexpr size_t kDrainKeySize        = 16;  // BE(block_height) || BE(ou
 static constexpr size_t kDrainValueSize      = 136; // maturity[8] || leaf[128]
 static constexpr size_t kBlockPendingKeySize = 16;  // BE(block_height) || BE(output_index)
 static constexpr size_t kBlockPendingValSize = 8;   // maturity[8]
-static constexpr size_t kArchivalServeCreditKeySize = 48; // P_id[32] || BE(shard) || BE(epoch)
+// PC-D4: the serve-credit ledger is per-CHALLENGE, so its key carries the
+// block. The block is the HEIGHT and not the hash: serve-credit rows are
+// block-owned (pop removes them vin-driven), so a height here cannot be
+// silently repointed by a reorg -- the row dies with its block. The
+// DERIVATION takes the hash instead, because that value enters a signature
+// preimage (PC-D3, and see ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.1).
+//
+// Appended LAST so every existing offset is unchanged: the epoch stays at 40,
+// which is what lets `delete_archival_serve_credit_before_epoch` and the
+// cursor scans keep working by construction rather than by being re-audited.
+static constexpr size_t kArchivalServeCreditKeySize = 56; // P_id[32] || BE(shard) || BE(epoch) || BE(block_height)
+
+// The pair-epoch key: today's 48-byte layout, kept for the tables that are
+// per-(P, shard, E) BY DESIGN and must NOT widen with the serve-credit ledger.
+//
+// These were sharing `ArchivalServeCreditKey` because the two shapes happened
+// to coincide. PC-D4 separates them, and the coincidence was the whole reason
+// one name covered two granularities -- evidence per challenge, verdict per
+// pair-epoch. Splitting the type is what stops a later widening of one from
+// silently widening the other.
+static constexpr size_t kArchivalPairEpochKeySize = 48; // P_id[32] || BE(shard) || BE(epoch)
 static constexpr size_t kArchivalSlashLogKeySize = 12;    // BE(block_height) || BE(seq)
 static constexpr uint32_t kArchivalSlashLogEpochMarkerSeq = 0xFFFFFFFFu;
 static constexpr size_t kArchivalBondKeySize = 32;        // P_id[32]
@@ -397,14 +417,20 @@ private:
     std::array<uint8_t, kBlockPendingValSize> bytes_{};
 };
 
-// ─── ArchivalServeCreditKey ────────────────────────────────────────────────
+// ─── ArchivalPairEpochKey ──────────────────────────────────────────────────
 //
-// Serve-credit ledger row: affirmative pass for (P_id, shard_id, E).
-// Key existence is the authoritative bit; value is a 1-byte presence flag (gate-2 §3.1).
+// (P_id, shard_id, E) — for the tables whose row is per-pair-epoch by design:
+// the slash-applied bit (one slash per pair-epoch) and, once it merges, the
+// settlement verdict (SO-D1: one row per pair with `issued >= 1`).
+//
+// Byte-identical to what `ArchivalServeCreditKey` was before PC-D4, and that
+// is deliberate: these tables did not change, only the type they name. A
+// consumer that switched to this type and saw its bytes move would be
+// reporting a mistake in the split.
 
-class ArchivalServeCreditKey {
+class ArchivalPairEpochKey {
 public:
-    ArchivalServeCreditKey(const uint8_t p_id[32], uint64_t shard_id, uint64_t settlement_epoch) noexcept
+    ArchivalPairEpochKey(const uint8_t p_id[32], uint64_t shard_id, uint64_t settlement_epoch) noexcept
     {
         std::memcpy(bytes_.data(), p_id, 32);
         store_be64(bytes_.data() + 32, shard_id);
@@ -416,9 +442,56 @@ public:
         return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
     }
 
-    // Raw key bytes for non-LMDB consumers (the block-level uniqueness pass in
-    // blockchain.cpp shares this encoding per SCE-1,
-    // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §6).
+    // Raw key bytes for non-LMDB consumers — the block-level SCE-1 uniqueness
+    // pass in blockchain.cpp shares this encoding (the block is common-mode
+    // inside one block, so the 56-byte ledger key would add no discrimination).
+    const std::array<uint8_t, kArchivalPairEpochKeySize>& bytes() const noexcept
+    {
+        return bytes_;
+    }
+
+    // Serve-credit rows are this encoding plus BE(height). Prefix scans,
+    // pass-count, and the emission fold ask this rather than a raw 48-byte
+    // memcmp, so the layout is a type invariant rather than a comment.
+    bool is_prefix_of(const void* key, size_t key_size) const noexcept
+    {
+        return key != nullptr
+            && key_size >= kArchivalPairEpochKeySize
+            && std::memcmp(key, bytes_.data(), kArchivalPairEpochKeySize) == 0;
+    }
+
+private:
+    std::array<uint8_t, kArchivalPairEpochKeySize> bytes_{};
+};
+
+// ─── ArchivalServeCreditKey ────────────────────────────────────────────────
+//
+// Serve-credit ledger row: affirmative pass for (P_id, shard_id, E) issued in
+// ONE block (PC-D4). Key existence is the authoritative bit; value is a
+// 1-byte presence flag (gate-2 §3.1). Consensus counts passes by enumerating
+// these rows — no field anywhere carries a tally (PC-D1/PC-D5).
+
+class ArchivalServeCreditKey {
+public:
+    // The ledger key IS a pair-epoch key plus the issuing block's index —
+    // composed, not re-encoded, so a later widening of one cannot silently
+    // rewrite the other's first 48 bytes.
+    ArchivalServeCreditKey(const ArchivalPairEpochKey& pair_epoch, uint64_t block_height) noexcept
+    {
+        std::memcpy(bytes_.data(), pair_epoch.bytes().data(), kArchivalPairEpochKeySize);
+        store_be64(bytes_.data() + kArchivalPairEpochKeySize, block_height);
+    }
+
+    ArchivalServeCreditKey(const uint8_t p_id[32], uint64_t shard_id, uint64_t settlement_epoch,
+                           uint64_t block_height) noexcept
+        : ArchivalServeCreditKey(ArchivalPairEpochKey(p_id, shard_id, settlement_epoch), block_height)
+    {}
+
+    MDB_val as_mdb_val() const noexcept
+    {
+        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
+    }
+
     const std::array<uint8_t, kArchivalServeCreditKeySize>& bytes() const noexcept
     {
         return bytes_;

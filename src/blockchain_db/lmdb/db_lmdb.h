@@ -476,11 +476,13 @@ private:
   virtual uint64_t get_settlement_epoch_blocks_pin() const override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override;
+    uint64_t settlement_epoch, uint64_t block_height) const override;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
 
 
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
@@ -755,8 +757,9 @@ public:
 
   /// Windowed snapshot gather: one snapshot per epoch in
   /// `[epoch_lo, epoch_hi)`, all rows collected in a SINGLE serve-credit
-  /// table pass (the epoch is the key suffix, so a per-epoch range seek is
-  /// impossible — the windowed pass is what bounds the unauthenticated
+  /// table pass (the epoch is an interior key component at offset 40 —
+  /// `p_id | shard | epoch | height` since PC-D4 — so a per-epoch range seek
+  /// is impossible; the windowed pass is what bounds the unauthenticated
   /// claim-source RPC to one scan per request instead of one per window
   /// epoch).
   virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
@@ -916,16 +919,21 @@ private:
   MDB_dbi m_properties;
 
   MDB_dbi m_block_burn;
-  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
-  // Settlement outcomes (SO-D2). SAME 48-byte key as m_archival_serve_credit --
-  // deliberately, so one ArchivalServeCreditKey probes both tables -- but a
-  // 3-byte value (outcome||passes||issued) rather than a presence flag. The two
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E)||BE(height) [56B] -> uint8_t 0x01 flag
+  // Settlement outcomes (SO-D2). Keyed by ArchivalPairEpochKey [48B]: SO-D2
+  // ruled this key byte-identical to m_archival_serve_credit's so one key
+  // probed both tables, and PC-D4 then widened THAT key to 56 B while this
+  // table stayed per-pair-epoch (SO-D1: one row per pair with issued >= 1).
+  // The shared-key rationale is therefore RETIRED, not broken -- the two
+  // tables answer at different granularities, evidence per challenge and
+  // verdict per pair-epoch. Value is 3 bytes (outcome||passes||issued) rather
+  // than a presence flag. The two
   // tables cannot be merged: this one records a NEGATIVE (Missed), and every
   // consumer of m_archival_serve_credit reads key-presence as "pay this pair"
   // (old-vin dedup, slash-window walk, fast-path miss, emission gather -- a
   // pure presence cursor-walk with no value-byte gate), so a Missed cell there
   // would corrupt vin-dedup and emission at once (SO-D4.3).
-  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B] -> outcome||passes||issued [3B]
+  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B, ArchivalPairEpochKey] -> outcome||passes||issued [3B]
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
