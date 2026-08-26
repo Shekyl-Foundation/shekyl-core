@@ -317,11 +317,10 @@ impl CoreRpc {
     /// returned from the failure without clearing again, so `[0, past_tip]`
     /// carried block 0 with the error. The owner is released here, after the
     /// copies and before any verdict, so no path out can lose the free.
-    #[allow(clippy::type_complexity)]
     pub fn blocks_by_height(
         &self,
         heights: &[u64],
-    ) -> Result<(Vec<(Vec<u8>, Vec<Vec<u8>>)>, Option<u64>), i32> {
+    ) -> Result<(Vec<shekyl_rpc_types::BlockEntry>, Option<u64>), i32> {
         if self.handle.is_null() {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
@@ -374,7 +373,7 @@ impl CoreRpc {
                             });
                         }
                     }
-                    out.push((block, txs));
+                    out.push(shekyl_rpc_types::BlockEntry { block, txs });
                 }
             }
             ffi::shekyl_rpc_blocks_by_height_free(owner);
