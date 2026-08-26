@@ -31,6 +31,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# A non-zero exit from the commands below is DATA, not an error: `cargo test`
+# exits non-zero when a probe FAILS, and the P-12 example exits 1 for FAIL and 2
+# for UNRUN. Every one of those is a verdict this script exists to record.
+#
+# On PowerShell 7.3+ `$PSNativeCommandUseErrorActionPreference` promotes a
+# native command's non-zero exit into a terminating error under
+# `$ErrorActionPreference = 'Stop'` — before `$LASTEXITCODE` can be read. The
+# script would then abort mid-run and print no summary table at all, so a FAIL
+# or UNRUN would be LESS visible than a pass: the reporting works exactly when
+# there is nothing to report and breaks when there is. That is the fail-open
+# shape this round kept meeting, and `build.yml`'s scouting step already
+# disables the preference for the same reason.
+#
+# Script-scoped rather than wrapped around each call, because it is true of
+# every native invocation here — there is no command in this file whose
+# non-zero exit should abort the run. Assigning it on a PowerShell that has no
+# such preference is harmless.
+$PSNativeCommandUseErrorActionPreference = $false
+
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $results = [System.Collections.ArrayList]::new()
 $failed = 0

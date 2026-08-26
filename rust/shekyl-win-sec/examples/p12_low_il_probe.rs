@@ -24,15 +24,26 @@
 //!
 //! An earlier form of this paragraph justified that differently, by asserting
 //! that "a Low-IL thread inside the test binary is not a Low-IL opener". That
-//! is a claim about how NT scopes a mandatory-label check against an
-//! impersonating thread, and it is **untested** — reasoned from labels being
-//! evaluated against the token on the opening handle, never observed. It is
-//! probably true and it is not relied on: the sentence above rests on the
-//! threat model, not on NT's thread semantics, and the reason below is the
-//! binding one regardless. Recorded rather than deleted because "probably
-//! true, stated as fact, untested" is the defect class this round kept
-//! finding, and an unmarked instance of it in this file's own rationale would
-//! be the least excusable place for one.
+//! claim was never tested when it was written, was marked as untested, and has
+//! since been **measured and found false**: on Windows 11 23H2
+//! `10.0.22631.7517`, a thread impersonating a Low-integrity token was refused
+//! by a Medium mandatory label with `ERROR_ACCESS_DENIED`, against a
+//! deliberately permissive DACL so the label was the only thing that could
+//! refuse. Controls: the same pipe opened as self before and after, and the
+//! thread's effective integrity was confirmed to be `S-1-16-4096` at the
+//! moment of the attempt. **NT evaluates the label against the impersonation
+//! token, so an impersonating Low-IL thread IS a Low-IL opener.**
+//!
+//! Two consequences, and neither is "change this probe". A future *in-process*
+//! integrity check can be probed by impersonation without spawning anything —
+//! useful, and not obvious before it was asked. And P-12 still uses a second
+//! process for the reason above, which is a threat-model reason and was never
+//! resting on the false claim; that is why the measurement moves nothing here.
+//!
+//! Kept rather than deleted because the correction is the useful artifact. A
+//! reader who wonders "why not a thread?" now gets the answer instead of
+//! re-deriving the wrong one, which is exactly how the claim survived long
+//! enough to be written down in the first place.
 //!
 //! The binding reason: §3 pre-declares this probe CI-fragile because a CI
 //! service account's token may not be a faithful thing to derestrict from;
@@ -197,12 +208,21 @@ mod probe {
     const SPAWN_UNLABELLED: u64 = 1_203;
 
     pub fn main() -> i32 {
-        let args: Vec<String> = std::env::args().collect();
-        match args.get(1).map(String::as_str) {
-            Some("--open") => match args.get(2) {
+        // `args_os`, not `args`: the latter panics on any argument that is not
+        // valid Unicode — including `argv[0]`, the executable path. That would
+        // abort before either parent or child ran, which would defeat the
+        // `encode_wide` respawn path entirely: preserving the exact path across
+        // `CreateProcessAsUserW` buys nothing if reading it back panics.
+        //
+        // Only the pipe name is converted, and it is UTF-8 by construction (a
+        // SID and two integers), so a `None` there is a real fault rather than
+        // an encoding accident.
+        let args: Vec<OsString> = std::env::args_os().collect();
+        match args.get(1).and_then(|a| a.to_str()) {
+            Some("--open") => match args.get(2).and_then(|a| a.to_str()) {
                 Some(name) => run_child(name),
                 None => {
-                    eprintln!("--open needs a pipe name");
+                    eprintln!("--open needs a pipe name, and it must be UTF-8");
                     1
                 }
             },
@@ -595,6 +615,13 @@ mod probe {
         let mut code: u32 = 0;
         // SAFETY: same handle; the process has exited, so the code is final.
         let read = unsafe { GetExitCodeProcess(info.hProcess, &raw mut code) };
+        // Captured here, before the handles close, for the same reason as the
+        // wait arm above: `CloseHandle` sets the thread's last-error, so
+        // reading it after cleanup reports the cleanup rather than the failure
+        // being reported. Read unconditionally — it is only used when `read`
+        // is zero, and branching first would put a comparison between the API
+        // and its error.
+        let read_err = last_error();
         // SAFETY: both handles came from `CreateProcessAsUserW` and are closed
         // exactly once.
         unsafe {
@@ -602,7 +629,7 @@ mod probe {
             CloseHandle(info.hProcess);
         }
         if read == 0 {
-            return Err(SpawnFailure::ExitCode(last_error()));
+            return Err(SpawnFailure::ExitCode(read_err));
         }
         Ok(code)
     }
