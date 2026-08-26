@@ -37,6 +37,8 @@
 //! the daemon derives both from one `db.height()` read, and the builder's
 //! window boundaries and the step-7 self-check split the pair downstream).
 
+use std::fmt;
+
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
@@ -148,6 +150,17 @@ impl ServeAnchor {
     }
 }
 
+/// Renders the distinction this type exists to keep, so a refusal that quotes
+/// the anchor cannot flatten it back to a bare integer on the way to the user.
+impl fmt::Display for ServeAnchor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NeverServed => f.write_str("never"),
+            Self::ServedAt(epoch) => write!(f, "epoch {epoch}"),
+        }
+    }
+}
+
 /// The slash scheduler's monotone watermark, as the daemon reported it.
 ///
 /// The storage sentinel (`u64::MAX` = nothing settled yet) is resolved
@@ -174,6 +187,17 @@ impl SlashWatermark {
         match self {
             Self::NothingSettled => None,
             Self::SettledThrough(epoch) => Some(epoch),
+        }
+    }
+}
+
+/// As [`ServeAnchor`]'s: the absent arm names itself rather than rendering as a
+/// missing or defaulted number.
+impl fmt::Display for SlashWatermark {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingSettled => f.write_str("nothing settled"),
+            Self::SettledThrough(epoch) => write!(f, "settled through epoch {epoch}"),
         }
     }
 }
@@ -603,6 +627,37 @@ mod tests {
             assert!(
                 matches!(err, EmissionSourceError::Malformed(_)),
                 "{field} absent must be Malformed, got {err:?}"
+            );
+        }
+    }
+
+    /// The two anchor types render their absent arm as a word, not a number.
+    ///
+    /// [`ServeAnchor`]'s doc turns on epoch 0 being a real settlement epoch, so
+    /// the type keeps `NeverServed` and `ServedAt(0)` apart. Anything that
+    /// prints them has to keep them apart too — a refusal that reports the
+    /// anchor is read by a user deciding whether an irreversible exit is
+    /// blocked, and `0` is the one rendering that could mean either. The same
+    /// holds for the watermark, where the absent arm is the *restrictive* one.
+    #[test]
+    fn the_absent_arm_of_each_anchor_renders_distinctly_from_epoch_zero() {
+        assert_ne!(
+            ServeAnchor::NeverServed.to_string(),
+            ServeAnchor::ServedAt(0).to_string()
+        );
+        assert_ne!(
+            SlashWatermark::NothingSettled.to_string(),
+            SlashWatermark::SettledThrough(0).to_string()
+        );
+        // Neither absent arm may render as a bare number of any kind: a caller
+        // interpolating it into "epoch {}" must not produce a readable lie.
+        for absent in [
+            ServeAnchor::NeverServed.to_string(),
+            SlashWatermark::NothingSettled.to_string(),
+        ] {
+            assert!(
+                !absent.chars().any(|c| c.is_ascii_digit()),
+                "absent arm rendered with a digit in it: {absent}"
             );
         }
     }

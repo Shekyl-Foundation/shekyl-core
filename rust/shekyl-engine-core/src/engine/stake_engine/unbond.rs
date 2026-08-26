@@ -89,21 +89,27 @@ impl UnbondRecordState {
             });
         }
 
+        // Both predicates are called unconditionally, on the operand form
+        // `as_verify_operand` produces and nothing else. A tempting shortening
+        // is to note that neither can refuse a never-served record
+        // (`release_cooldown_elapsed(None, _)` and `slashes_settled_through(_,
+        // None)` are both `true`) and wrap the pair in a `ServedAt` match. That
+        // trades a wrong message for a missing check: if either absent arm ever
+        // moved, the match would *skip* the predicate instead of running it.
+        // The refusals carry the anchor as read, so no branch here has to
+        // restate what consensus does with `None`.
         let anchor = self.last_served.as_verify_operand();
         if !release_cooldown_elapsed(anchor, self.current_settlement_epoch) {
             return Err(UnbondNotReady::CooldownNotElapsed {
-                // `anchor` is `Some` on this branch: the `None` arm of
-                // `release_cooldown_elapsed` returns true, so reaching here
-                // means a served record.
-                last_served_epoch: anchor.unwrap_or_default(),
+                last_served: self.last_served,
                 current_settlement_epoch: self.current_settlement_epoch,
             });
         }
 
         if !slashes_settled_through(self.last_settled_slash.as_verify_operand(), anchor) {
             return Err(UnbondNotReady::SlashSettlementPending {
-                last_served_epoch: anchor.unwrap_or_default(),
-                watermark: self.last_settled_slash.as_verify_operand(),
+                last_served: self.last_served,
+                watermark: self.last_settled_slash,
             });
         }
 
@@ -153,6 +159,8 @@ impl Message<AssembleUnbond> for StakeEngine {
 
 #[cfg(test)]
 mod tests {
+    use shekyl_archival_retention::RELEASE_COOLDOWN_EPOCHS;
+
     use super::*;
 
     /// The record-state arms are tested here as PRECONDITIONS, not as verifier
@@ -166,8 +174,10 @@ mod tests {
             bad_interval_count: 0,
             last_served: ServeAnchor::ServedAt(4),
             last_settled_slash: SlashWatermark::SettledThrough(4),
-            // Cooldown is 2 epochs at genesis, so 4 + 2 = 6 is the boundary.
-            current_settlement_epoch: 6,
+            // The boundary, read from the config-generated constant rather than
+            // written out: a fixture that hardcodes the genesis value states the
+            // cooldown a second time, and the copy is what goes stale.
+            current_settlement_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
         }
     }
 
@@ -191,21 +201,66 @@ mod tests {
         );
     }
 
+    /// Epoch 0 is a real settlement epoch, and this is the refusal that proves
+    /// the error reports the anchor it was given rather than a stand-in for it.
+    ///
+    /// The arm is only reachable for a served record, which invites deriving
+    /// the epoch from that reasoning instead of carrying it — an `Option`
+    /// unwrapped to its default. That renders a record served at epoch 0 and a
+    /// record with no anchor at all as the same `0`, and the second is the
+    /// *permissive* state: the message would name the absence of the condition
+    /// that is in fact blocking the exit. So this asserts the rendering too,
+    /// not just the variant — the collapse lives in the string, not the shape.
+    #[test]
+    fn a_record_served_at_epoch_zero_is_refused_by_its_own_anchor() {
+        // Premise, from consensus's own predicate rather than restated here: an
+        // exit at the very epoch a record served is inside the cooldown.
+        assert!(
+            !release_cooldown_elapsed(Some(0), 0),
+            "premise: the serving epoch itself is not past the cooldown"
+        );
+        let mut r = ready();
+        r.last_served = ServeAnchor::ServedAt(0);
+        r.last_settled_slash = SlashWatermark::SettledThrough(0);
+        r.current_settlement_epoch = 0;
+
+        let err = r
+            .ensure_exit_ready()
+            .expect_err("a record inside its cooldown must be refused");
+        assert_eq!(
+            err,
+            UnbondNotReady::CooldownNotElapsed {
+                last_served: ServeAnchor::ServedAt(0),
+                current_settlement_epoch: 0,
+            }
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("last served epoch 0"), "{rendered}");
+        assert!(
+            !rendered.contains("never"),
+            "a record served at epoch 0 must not read as never served: {rendered}"
+        );
+    }
+
     /// One epoch short of the boundary is refused; the boundary itself is not.
     /// Asserting both sides is what makes this a boundary test rather than a
     /// test that any old value fails.
     #[test]
     fn the_cooldown_boundary_is_refused_below_and_allowed_at() {
         let mut r = ready();
-        r.current_settlement_epoch = 5;
+        // Both sides derived from the constant for the reason `ready()` gives:
+        // the boundary is `anchor + RELEASE_COOLDOWN_EPOCHS`, and writing 5 and
+        // 6 restates the genesis cooldown in a third place.
+        let boundary = 4 + RELEASE_COOLDOWN_EPOCHS;
+        r.current_settlement_epoch = boundary - 1;
         assert_eq!(
             r.ensure_exit_ready(),
             Err(UnbondNotReady::CooldownNotElapsed {
-                last_served_epoch: 4,
-                current_settlement_epoch: 5,
+                last_served: ServeAnchor::ServedAt(4),
+                current_settlement_epoch: boundary - 1,
             })
         );
-        r.current_settlement_epoch = 6;
+        r.current_settlement_epoch = boundary;
         r.ensure_exit_ready()
             .expect("the boundary epoch itself is elapsed");
     }
@@ -225,8 +280,8 @@ mod tests {
         assert_eq!(
             r.ensure_exit_ready(),
             Err(UnbondNotReady::SlashSettlementPending {
-                last_served_epoch: 4,
-                watermark: Some(3),
+                last_served: ServeAnchor::ServedAt(4),
+                watermark: SlashWatermark::SettledThrough(3),
             })
         );
     }
@@ -242,8 +297,8 @@ mod tests {
         assert_eq!(
             r.ensure_exit_ready(),
             Err(UnbondNotReady::SlashSettlementPending {
-                last_served_epoch: 4,
-                watermark: None,
+                last_served: ServeAnchor::ServedAt(4),
+                watermark: SlashWatermark::NothingSettled,
             })
         );
     }

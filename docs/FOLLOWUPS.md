@@ -76,6 +76,24 @@ sustainability is unaffected by the recalibration.
   one place to update; or a gate asserting the two branch sets match. Prefer the
   first — a shared callee cannot diverge, while a gate only reports that it did.
 
+  **Shape the shared callee should take** (recorded 2026-08-26, when a review
+  pass re-proposed centralising the branch): one C++ callee holding the branch is
+  only half the answer, because it dedups the two call sites without making a
+  third record kind announce itself — a new `kHoldings*` constant obliges
+  nothing. Put the kind→scan decision in Rust as an exhaustive `match` on
+  `HoldingsKind` behind FFI (the `holdings_kind: u8` + `from_u8` + rejection-code
+  shape `archival_admission_ffi.rs` already uses), and let the C++ callee ask it.
+  Then a third variant fails to *compile* until its arm is written, which is the
+  gate this row is asking for, sited where it cannot be skipped. Both sites
+  currently read the branch from `ArchivalBondValue::is_complete_tree()`, so the
+  C++ change is one predicate swap per site.
+
+  **The test oracle stays hand-written.** `archival_claim_source_rpc.cpp`'s
+  fidelity test restates the branch to check the marshaler's output against an
+  independent gather. That restatement is the oracle, not a third copy to be
+  tidied away: an oracle that calls the subject's helper agrees with it by
+  construction and detects nothing.
+
 - **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
   production signing path** (surfaced 2026-08-22 while deleting the legacy
   prove seam; the only stated enforcement had been an unreachable check inside

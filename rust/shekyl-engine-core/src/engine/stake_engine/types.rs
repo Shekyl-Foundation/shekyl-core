@@ -19,6 +19,7 @@ use shekyl_types::{PCanonicalId, SettlementEpoch};
 use crate::engine::bond_assembly::BondAssemblyError;
 use crate::engine::drain_assembly::DrainAssemblyError;
 use crate::engine::emission_claim::EmissionClaimError;
+use crate::engine::emission_source::{ServeAnchor, SlashWatermark};
 use crate::engine::pscan::persona_scanner::PersonaScanError;
 use crate::engine::pscan::scan_step::DualExtractError;
 
@@ -386,12 +387,23 @@ pub(crate) enum UnbondNotReady {
     /// epoch. The grace window is sized so every epoch up to the anchor reaches
     /// its slash deadline before a release can verify.
     #[error(
-        "release cooldown has not elapsed: last served epoch {last_served_epoch}, \
+        "release cooldown has not elapsed: last served {last_served}, \
          current settlement epoch {current_settlement_epoch}"
     )]
     CooldownNotElapsed {
-        /// The whole-record anchor the cooldown runs from.
-        last_served_epoch: u64,
+        /// The whole-record anchor the cooldown runs from, carried in the form
+        /// it was read in.
+        ///
+        /// Typed rather than a `u64` because this arm is only reachable for a
+        /// served record — `release_cooldown_elapsed(None, _)` is `true` — and
+        /// the obvious way to spend that reasoning is to unwrap the operand
+        /// here. That would put `0` in the message for both a record served at
+        /// epoch 0 and a record with no anchor at all, which is the exact
+        /// collapse [`ServeAnchor`] exists to prevent, one layer further out.
+        /// Carrying the anchor costs nothing and reports whatever was actually
+        /// read — so if the predicate's absent arm ever moves, the refusal says
+        /// `never` instead of quietly saying `0`.
+        last_served: ServeAnchor,
         /// The daemon's settled epoch at the read view.
         current_settlement_epoch: u64,
     },
@@ -401,18 +413,22 @@ pub(crate) enum UnbondNotReady {
     /// Distinct from the cooldown, and not implied by it: the cooldown alone
     /// leaves a one-block connect-ordering race open, because an `Unbond` in the
     /// first block past the anchor's slash deadline connects *before* that
-    /// block's slash fold. `watermark` is `None` when nothing has settled at
-    /// all — the fail-closed reading, and the one case where an absent operand
-    /// is restrictive rather than permissive.
+    /// block's slash fold. `watermark` is [`SlashWatermark::NothingSettled`]
+    /// when nothing has settled at all — the fail-closed reading, and the one
+    /// case where an absent operand is restrictive rather than permissive.
     #[error(
-        "slash settlement is pending through epoch {last_served_epoch} \
-         (watermark: {watermark:?})"
+        "slash settlement is pending through {last_served} \
+         (watermark: {watermark})"
     )]
     SlashSettlementPending {
-        /// The anchor that must be covered.
-        last_served_epoch: u64,
-        /// The scheduler's watermark, absent when nothing has settled.
-        watermark: Option<u64>,
+        /// The anchor that must be covered. Typed for the reason given on
+        /// [`Self::CooldownNotElapsed`].
+        last_served: ServeAnchor,
+        /// The scheduler's watermark. Typed as well, so `NothingSettled` names
+        /// itself instead of arriving as a `Debug`-rendered `None` — this is
+        /// the operand whose absence is *restrictive*, and a refusal that turns
+        /// on it should say so in words.
+        watermark: SlashWatermark,
     },
 }
 
