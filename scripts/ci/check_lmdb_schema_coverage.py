@@ -52,7 +52,8 @@ def parse_table_list(text: str) -> list[str]:
 
 
 def main() -> None:
-    tables = parse_table_list(SOURCE.read_text(encoding="utf-8"))
+    source_text = SOURCE.read_text(encoding="utf-8")
+    tables = parse_table_list(source_text)
     if len(tables) < MIN_TABLES:
         sys.exit(f"FAIL: parsed only {len(tables)} table names from "
                  f"SHEKYL_LMDB_TABLES (floor {MIN_TABLES}) — broken parse or "
@@ -103,8 +104,7 @@ def main() -> None:
     # Header version pin — the claim that drifted twice (header said v8
     # against VERSION 10; the properties row carried a third copy). The doc
     # header must name the same number the code defines.
-    code_v = re.search(r"^#define VERSION (\d+)$",
-                       SOURCE.read_text(encoding="utf-8"), re.MULTILINE)
+    code_v = re.search(r"^#define VERSION (\d+)$", source_text, re.MULTILINE)
     doc_v = re.search(r"^\*\*DB version:\*\* (\d+)", doc, re.MULTILINE)
     if not code_v:
         errors.append("#define VERSION not found in db_lmdb.cpp — the gate's "
