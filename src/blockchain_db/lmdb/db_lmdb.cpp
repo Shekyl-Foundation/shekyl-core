@@ -7258,8 +7258,10 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
       break; // past P's prefix: no more served shards
     const uint64_t shard_id = shekyl::db::load_be64(kb + 32);
 
-    // This shard's max epoch: predecessor of (P, shard, u64::MAX) — the same
-    // reverse-seek the per-shard form uses; an exact hit IS the max.
+    // This shard's max epoch: predecessor of (P, shard, MAX epoch, MAX
+    // height) — MAX in the appended height too, or the probe sorts before
+    // the rows it must sort after (see the per-shard form); an exact hit IS
+    // the max.
     shekyl::db::ArchivalServeCreditKey hi_probe(
       reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
       std::numeric_limits<uint64_t>::max(),

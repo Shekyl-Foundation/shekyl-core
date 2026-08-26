@@ -5261,7 +5261,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 // consensus-state write, and the core boundary must not trust the RPC
 // layer to have checked the nettype.
 bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-  uint64_t shard_id, uint64_t settlement_epoch, uint64_t block_height)
+  uint64_t shard_id, uint64_t settlement_epoch)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   if (m_nettype != FAKECHAIN)
@@ -5270,10 +5270,26 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
     return false;
   }
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  // PC-D4: attribute the injected row to the tip's INDEX, read here under the
+  // same lock as the write. A tip snapshot taken by the caller (the RPC
+  // handler ran get_current_blockchain_height() before this lock) can go
+  // stale against a concurrent mine/pop; deriving it inside the critical
+  // section makes the attribution race-free by construction, and removing
+  // the parameter means no caller can reintroduce the stale copy.
+  // m_db->height() is the block COUNT, so the tip's index is one below it —
+  // the same count-versus-index distinction the pop path got wrong.
+  const uint64_t chain_height = m_db->height();
+  if (chain_height == 0)
+  {
+    MERROR("regtest_inject_archival_serve_credit refusing: chain has no tip to attribute the row to");
+    return false;
+  }
+  const uint64_t block_height = chain_height - 1;
   db_wtxn_guard wtxn_guard(m_db);
   m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch, block_height);
   MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
     << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
+    << " height=" << block_height
     << " — bit is not block-owned; pops below this height strand it");
   return true;
 }

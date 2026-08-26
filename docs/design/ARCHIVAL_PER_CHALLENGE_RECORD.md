@@ -427,7 +427,7 @@ version bumps" without naming which version was the error a reviewer caught.
 | 15 | `SO-D1`'s writer | its `passes` is this round's enumeration — the two rounds meet here |
 | 16 | `ArchivalServeCreditKey` (`shekyl_types.h`) | 48 → 56 B. **`SO-D2`'s settlement key does NOT ride it** — the draft said it did; the settlement table is per-pair-epoch by design and stayed at 48 B on the new `ArchivalPairEpochKey`. See §5.2. |
 | 17 | `append_archival_block_unique_keys`' `'S'` reservation key | **not on the original list** — found by grounding the derivation site; see §5.3 |
-| 18 | `regtest_inject_archival_serve_credit` | **not on the original list** — a writer taking `(P, s, E)` as arguments, so `PC-D4` widens its signature too; it already warns its bit is not block-owned, which the widened key makes literal |
+| 18 | `regtest_inject_archival_serve_credit` | **not on the original list** — a writer taking `(P, s, E)` as arguments. `PC-D4` first widened its signature with a caller-supplied height; review then retracted the widening: the caller's tip snapshot was read *outside* `m_blockchain_lock` (stale against a concurrent mine/pop), so the injector derives the tip index itself, inside the lock, and the parameter is gone — no caller can reintroduce the pre-lock copy. Wire request unchanged. It already warns its bit is not block-owned, which the widened key makes literal |
 
 ### 5.4 What auditing the table itself turned up
 

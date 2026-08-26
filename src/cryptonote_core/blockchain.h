@@ -1182,13 +1182,16 @@ namespace cryptonote
      *
      * @return false unless nettype is FAKECHAIN.
      */
-    /// `block_height` is the block the injected row is attributed to (PC-D4).
-    /// The injector has no block, so the caller names one — and the existing
-    /// warning that this bit is "not block-owned" becomes literal: nothing
-    /// pops it, so a pop below `block_height` strands a row that now claims a
-    /// block it did not come from.
+    /// The injected row is attributed to the tip's block index (PC-D4), read
+    /// inside the method under `m_blockchain_lock` — the same critical
+    /// section as the write, so a concurrent mine/pop cannot move the tip
+    /// between attribution and write. There is deliberately no height
+    /// parameter: a caller-supplied snapshot is pre-lock by construction,
+    /// and the "not block-owned" warning stays literal — nothing pops the
+    /// bit, so a later pop below the attributed height strands a row that
+    /// claims a block it did not come from.
     bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-      uint64_t shard_id, uint64_t settlement_epoch, uint64_t block_height);
+      uint64_t shard_id, uint64_t settlement_epoch);
 
 #ifndef IN_UNIT_TESTS
   private:

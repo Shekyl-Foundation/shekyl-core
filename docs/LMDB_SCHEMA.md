@@ -596,10 +596,11 @@ Slash idempotency per `(P_id, shard_id, settlement_epoch)` (gate-4 §4.2).
 |---|---|
 | LMDB name | `"archival_slash_applied"` |
 | Flags | `MDB_CREATE` |
-| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes; same shape as serve-credit key) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes; the serve-credit key's pair-epoch PREFIX, not its shape — serve-credit is 56 B with `BE(block_height)` appended) |
 | Value | `uint8_t` `0x01` presence flag |
 | Writers | `set_archival_slash_applied` (slash scheduler), `remove_archival_slash_applied` (reorg) |
 | Readers | `has_archival_slash_applied` |
+| Encoder | `shekyl::db::ArchivalPairEpochKey` (per-pair-epoch by design, like `archival_settlement`) |
 | Introduced | HF1 (gate-2 §10 step 4) |
 
 ### `archival_slash_log`

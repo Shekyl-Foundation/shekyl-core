@@ -1497,22 +1497,12 @@ namespace cryptonote
       return false;
     }
 
-    // PC-D4: attribute the injected row to the current tip's INDEX.
-    //
-    // `get_current_blockchain_height()` is the block COUNT, so the tip's index
-    // is one below it -- the same count-versus-index distinction the pop path
-    // got wrong, and the third instance of it in this round. Passing the count
-    // would key the row to the slot the next block will occupy: a height no
-    // block owns yet, which no pop can ever reach.
-    const uint64_t chain_height = m_core.get_current_blockchain_height();
-    if (chain_height == 0)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Serve-credit injection needs a tip to attribute the row to";
-      return false;
-    }
+    // PC-D4: the tip index the row is attributed to is derived INSIDE the
+    // injector, under the blockchain lock — a snapshot taken here would be
+    // pre-lock and can go stale against a concurrent mine/pop. On refusal
+    // (wrong nettype, empty chain) the daemon log names the reason.
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch, chain_height - 1))
+      p_canonical_id, req.shard_id, req.settlement_epoch))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";
