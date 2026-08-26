@@ -381,12 +381,18 @@ impl Zone {
     /// # Who can reach the refusals
     ///
     /// C++ never sets the noise flag, so no production construction hits
-    /// these. Tests do. **No carrier caller exists yet** — the missing piece
-    /// is the Rust-internal join from `Driver::poll`'s `Effect::NoiseSend` to
-    /// `NoiseQueues::take_for_send`. When it is built it will hit these
-    /// refusals, because it forms the pair in Rust and stops routing it
-    /// through `make_relay_zone` — which is why the checks are here and not at
-    /// the FFI edge. Building it is not the daemon cutover's to provide
+    /// these. Tests do. **No carrier caller exists yet**, and it is more than
+    /// one call: nothing owns or enqueues [`crate::NoiseQueues`] outside its
+    /// own tests, neither of `Driver::poll`'s noise effects reaches the queue
+    /// (`Effect::NoiseSend` to `take_for_send`, `Effect::NoiseUnbind` to
+    /// [`crate::NoiseQueues::unbind`], which is what invalidates outstanding
+    /// tokens), and `NoiseSendCb` carries no bytes out
+    /// and no status back — so the deliberately non-destructive token cannot
+    /// be resolved. An earlier draft called the join the sole missing piece;
+    /// it is one of four. When the caller is built it will hit these refusals,
+    /// because it forms the pair in Rust and stops routing it through
+    /// `make_relay_zone` — which is why the checks are here and not at the
+    /// FFI edge. Building it is not the daemon cutover's to provide
     /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
     /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps
     /// performing transport.
