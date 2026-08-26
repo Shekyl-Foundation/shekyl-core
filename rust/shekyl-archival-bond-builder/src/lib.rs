@@ -44,7 +44,7 @@ pub use error::BondBuildError;
 
 use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
-    HoldingsDescriptor,
+    HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::OutputTerm;
@@ -184,6 +184,81 @@ pub fn build_join_market_vin(
 ///
 /// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end
 /// (rule 20); the raw `u64` is derived only at the error boundary.
+/// Build the `Unbond` bond-post vin — the terminal full exit (gate-4 §3.5
+/// debit path, `post_kind = 2`).
+///
+/// **The verifier is the contract, and it is the only one.** Staking is
+/// greenfield: there is no prior implementation to agree with, so every
+/// invariant below is here because `verify_unbond_bond_post` checks it, and the
+/// tests assert by calling that function rather than by restating its clauses.
+/// The wallet conforms to consensus and never the reverse — that side is
+/// genesis-frozen and this one is not.
+///
+/// Five fields are producer-controlled and this function fixes all five:
+///
+/// - `post_kind = Unbond`
+/// - `bond_credit = 0` — a debit path credits nothing (`UnbondCreditNonzero`)
+/// - `holdings` = the canonical empty descriptor — a full exit ends holding
+///   nothing (`UnbondHoldingsNotEmpty`)
+/// - `bonded_total_atomic = 0` — the **post-connect** state, which for empty
+///   holdings is also `bond_floor(∅)`, satisfying the floor equality and the
+///   full-exit check together (`UnbondFloorMismatch` / `NotFullUnbond`)
+/// - `bond_debit = record_bonded_total` — exactly the whole current balance
+///   (`DebitNotFullBalance`)
+///
+/// `bond_spend_pk` is deliberately **empty**: it is JoinMarket-coupled on the
+/// wire and `bond_wire.rs` rejects it on any other kind. Authorization is the
+/// surface-A `pqc_auths` slot over the whole-tx payload (SA-2b), the same as
+/// every other bond post — so this constructor, like its JoinMarket sibling,
+/// does not sign.
+///
+/// The remaining verify arms — `IntervalLogFull`, `CooldownNotElapsed`,
+/// `SlashSettlementPending`, `RecordMissing` — are **record state this function
+/// does not set and cannot fix**. They belong to the caller's precondition
+/// check; see `AssembleUnbond`. The one exception is a zero bonded total, which
+/// is refused here because it is the operand this function consumes.
+///
+/// # Errors
+///
+/// - [`BondBuildError::NothingToUnbond`] if `record_bonded_total` is zero.
+/// - [`BondBuildError::IdentityEncode`] if the identity key fails to serialize.
+pub fn build_unbond_vin(
+    keys: BondPostKeys<'_>,
+    record_bonded_total: u64,
+) -> Result<ArchivalBondPostVin, BondBuildError> {
+    if record_bonded_total == 0 {
+        return Err(BondBuildError::NothingToUnbond);
+    }
+
+    let hybrid_public_key = keys
+        .identity_pk()
+        .to_canonical_bytes()
+        .map_err(BondBuildError::IdentityEncode)?;
+    let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
+
+    Ok(ArchivalBondPostVin {
+        hybrid_public_key,
+        p_canonical_id,
+        post_kind: BondPostKind::Unbond,
+        // Empty, not omitted: `bond_wire.rs` rejects a `bond_spend_pk` on any
+        // non-JoinMarket kind ("JoinMarket-coupled; other post kinds must not
+        // carry one"), and the Unbond verify arm is passed null/0 by the
+        // consensus caller for the same reason.
+        bond_spend_pk: Vec::new(),
+        // The canonical empty descriptor. `bond_floor` returns 0 both for this
+        // and for a structurally-invalid oversize set, which is why the verifier
+        // guards the non-empty case explicitly — this constructor can only
+        // produce the legitimate one.
+        holdings: HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::empty(),
+        },
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: record_bonded_total,
+    })
+}
+
 pub fn verify_credit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,

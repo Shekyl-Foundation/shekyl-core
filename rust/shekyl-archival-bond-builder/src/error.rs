@@ -15,6 +15,16 @@ pub enum BondBuildError {
     #[error("bond_floor(holdings) is zero; holdings are structurally invalid")]
     BondFloorZero,
 
+    /// A full `Unbond` was requested against a record with nothing bonded.
+    ///
+    /// Refused **here**, at assembly, rather than assembled and rejected by the
+    /// daemon (`BondPostError::NothingToUnbond`). On this path the difference
+    /// matters: an exit that fails at the wallet fails loudly to the person who
+    /// asked for it, while one that fails at the chain fails opaquely after a
+    /// broadcast.
+    #[error("nothing to unbond: the record's bonded total is zero")]
+    NothingToUnbond,
+
     /// The P identity hybrid public key could not be serialized to its
     /// canonical wire bytes.
     #[error("failed to encode P identity hybrid public key: {0}")]
