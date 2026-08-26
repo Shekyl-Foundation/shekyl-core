@@ -10213,9 +10213,12 @@ its wake.
   `forward`), U2 re-relay origin bucketing (retracted, `2cd0fb72`), U3
   zone-labelled `/get_stem_tallies` (collection zone, not this field).
   It is written at first arrival (`add_tx` does not revise it on a
-  stem→fluff upgrade) and preserved across hard-fork re-validation. The one
-  production read is that preservation path (`e.meta.get_origin_zone()` in
-  the HF re-validation loop). **Decision, not a residual comment:** keep
+  stem→fluff upgrade) and preserved across hard-fork re-validation. When this
+  was written the one production read was that preservation path
+  (`e.meta.get_origin_zone()` in the HF re-validation loop); `local_relay_base`
+  has been a second since 2026-08-25 — see the banner above, which is why the
+  reopen criterion three sentences down cannot fire.
+  **Decision, not a residual comment:** keep
   the field for the isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) —
   distinguish originated-on-anon from relayed-on-anon. Reopen for
   rule-15 deletion if that run ships without a reader besides the

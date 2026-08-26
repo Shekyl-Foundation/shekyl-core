@@ -1044,7 +1044,8 @@ namespace levin
        carrier exactly as it does for stem and fluff today. Until that join
        exists no zone here enables noise at all, so the branch was unreachable
        in production either way — both notifier constructions pass a null
-       noise payload. See `COVER_TRAFFIC_RESTORATION.md` §3, step 2.
+       noise payload. See `COVER_TRAFFIC_RESTORATION.md` §3's status table,
+       the row headed "§2.9 step 2 — covert executor".
 
        Recording parity was checked before the deletion. `fluff` makes the
        identical `on_transactions_relayed` call below. `stem`/`local` are

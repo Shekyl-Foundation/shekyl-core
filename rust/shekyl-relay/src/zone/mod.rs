@@ -384,7 +384,8 @@ impl Zone {
     /// pair in Rust and stops routing it through `make_relay_zone` — which
     /// is why the checks are here and not at the FFI edge. That caller is
     /// not the daemon cutover's to provide (`COVER_TRAFFIC_RESTORATION.md`
-    /// §3, step 2, corrected 2026-08-25); C++ keeps performing transport.
+    /// §3's status table, the row headed "§2.9 step 2 — covert executor",
+    /// corrected 2026-08-25); C++ keeps performing transport.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
