@@ -36,13 +36,16 @@
 //! and `a_flag_without_its_value_is_malformed_not_reconciled`): an absent field
 //! is a decode error, so no anchor can be manufactured from silence.
 
-use shekyl_archival_bond_builder::{build_unbond_vin, BondBuildError};
+use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
+use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding, BondBuildError};
 use shekyl_archival_retention::{
-    bond_floor, verify_unbond_bond_post, ArchivalBondPostVin, BondPostError, BondPostKind,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    bond_floor, verify_bond_post_ct_balance, verify_unbond_bond_post, ArchivalBondPostVin,
+    BondPostError, BondPostKind, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+use shekyl_ct_balance::amount_commitment;
+use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
 /// The record's current bonded balance — the exit's `bond_debit` by contract.
 const BONDED: u64 = 3 * 750_000_000;
@@ -178,4 +181,94 @@ fn nothing_to_unbond_is_refused_at_assembly_not_at_the_chain() {
 #[test]
 fn an_unbond_carries_no_bond_spend_pk() {
     assert!(vin().bond_spend_pk.is_empty());
+}
+
+// ── The debit-side balance rule, tied to the commitment rule it precedes ─────
+
+/// `mask * G + amount * H` — the synthetic witness. In the real path the prover
+/// emits these; here they only need to sum correctly.
+fn commit(amount: u64, mask: &Scalar) -> [u8; 32] {
+    (mask * G + amount_commitment(AtomicUnits::from_raw(amount)))
+        .compress()
+        .to_bytes()
+}
+
+/// The scalar rule and the consensus commitment rule must agree about which
+/// side the released collateral is on.
+///
+/// This is the whole point of `verify_debit_funding` being a separate function
+/// from `verify_credit_funding` rather than one rule with a signed term: a
+/// credit is a **sink** and a debit is a **source**, and consensus freezes that
+/// —`BondTerm::Debit` goes to `extra_inputs`. A caller who could choose the
+/// side would balance a different transaction than the one being built. So the
+/// scalar check is asserted here against `verify_bond_post_ct_balance` itself,
+/// not against a restatement of it.
+#[test]
+fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
+    const FEE: u64 = 1_000;
+    // No funding inputs: the released collateral covers the fee and the rest
+    // lands in outputs. This is the ordinary exit shape — a debit path needs no
+    // credit funded, only its fee paid.
+    const FUNDING: u64 = 0;
+    let out_total = BONDED + FUNDING - FEE;
+
+    let v = vin();
+    verify_debit_funding(
+        AtomicUnits::from_raw(FUNDING),
+        AtomicUnits::from_raw(out_total),
+        AtomicUnits::from_raw(FEE),
+        &v,
+    )
+    .expect("the amounts admit a balanced transaction");
+
+    let mask = Scalar::from_bytes_mod_order([0x5Au8; 32]);
+    verify_bond_post_ct_balance(
+        &commit(FUNDING, &mask),
+        &commit(out_total, &mask),
+        FEE,
+        BondTerm::Debit(
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.bond_debit))
+                .expect("a full exit debits a non-zero balance"),
+        ),
+    )
+    .expect("the commitment sum closes with the debit on the input side");
+}
+
+/// The scalar rule must REJECT what the commitment rule rejects. Spending the
+/// debit as though it were a credit — collateral on the output side — is the
+/// specific confusion the two-function split exists to prevent.
+#[test]
+fn the_debit_rule_rejects_amounts_the_commitment_rule_would_reject() {
+    const FEE: u64 = 1_000;
+    let v = vin();
+    // Outputs sized as if the released collateral contributed nothing — the
+    // shape a reading that put the debit on the output side would produce, and
+    // the one that leaves the whole balance unaccounted for.
+    let wrong_total: u64 = 0;
+
+    let err = verify_debit_funding(
+        AtomicUnits::from_raw(0),
+        AtomicUnits::from_raw(wrong_total),
+        AtomicUnits::from_raw(FEE),
+        &v,
+    )
+    .expect_err("collateral on the wrong side must not balance");
+    assert!(
+        matches!(err, BondBuildError::DebitImbalance { .. }),
+        "got {err:?}"
+    );
+
+    let mask = Scalar::from_bytes_mod_order([0x5Au8; 32]);
+    assert!(
+        verify_bond_post_ct_balance(
+            &commit(0, &mask),
+            &commit(wrong_total, &mask),
+            FEE,
+            BondTerm::Debit(
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.bond_debit)).expect("non-zero"),
+            ),
+        )
+        .is_err(),
+        "consensus must reject the same amounts, or the scalar rule is not its precondition"
+    );
 }

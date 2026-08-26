@@ -280,3 +280,48 @@ pub fn verify_credit_funding(
     }
     Ok(())
 }
+
+/// Amount-level balance rule for the `Unbond` debit path (gate-4 §3.5).
+///
+/// `sum(funding) + bond_debit == sum(outputs) + fee`
+///
+/// The mirror of [`verify_credit_funding`], and deliberately a **separate
+/// function rather than one rule with a signed term**. The released collateral
+/// is a *source*: consensus places it on the input side
+/// (`BondTerm::Debit -> extra_inputs` in `verify_bond_post_ct_balance`), where
+/// a credit is a *sink* on the output side. One rule taking a signed amount
+/// would let a caller put the term on either side and still balance — for a
+/// different transaction than the one being built. The side is genesis-frozen,
+/// so it belongs in the function's identity, not in an argument.
+///
+/// This is the scalar precondition for the commitment-level check the daemon
+/// runs; it is not a substitute for it. Passing here means the *amounts* admit
+/// a balanced transaction, and the commitment sum still has to agree.
+///
+/// # Errors
+///
+/// - [`BondBuildError::DebitImbalance`] if the equation does not hold.
+/// - [`BondBuildError::AmountOverflow`] if either side overflows `u64`.
+pub fn verify_debit_funding(
+    funding_total: AtomicUnits,
+    output_total: AtomicUnits,
+    fee: AtomicUnits,
+    vin: &ArchivalBondPostVin,
+) -> Result<(), BondBuildError> {
+    let bond_debit = AtomicUnits::from_raw(vin.bond_debit);
+    let sources = funding_total
+        .checked_add(bond_debit)
+        .ok_or(BondBuildError::AmountOverflow)?;
+    let sinks = output_total
+        .checked_add(fee)
+        .ok_or(BondBuildError::AmountOverflow)?;
+    if sources != sinks {
+        return Err(BondBuildError::DebitImbalance {
+            funding: funding_total.to_raw(),
+            debit: vin.bond_debit,
+            outputs: output_total.to_raw(),
+            fee: fee.to_raw(),
+        });
+    }
+    Ok(())
+}

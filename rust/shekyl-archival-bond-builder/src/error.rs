@@ -15,6 +15,31 @@ pub enum BondBuildError {
     #[error("bond_floor(holdings) is zero; holdings are structurally invalid")]
     BondFloorZero,
 
+    /// The debit-path amounts did not satisfy
+    /// `sum(funding) + bond_debit == sum(outputs) + fee`.
+    ///
+    /// The mirror of [`Self::CreditImbalance`], and the sides are not
+    /// interchangeable: a credit is a **sink** (`BondTerm::Credit` places it on
+    /// the output side) while a debit is a **source** (`BondTerm::Debit` places
+    /// it on the input side). Putting the released collateral on the wrong side
+    /// balances arithmetically for a *different* transaction than the one being
+    /// built, which is why the two rules are separate functions rather than one
+    /// signed term.
+    #[error(
+        "debit witness amounts do not balance: \
+         sum(funding)={funding} + debit={debit} != sum(outputs)={outputs} + fee={fee}"
+    )]
+    DebitImbalance {
+        /// Total committed value across funding inputs.
+        funding: u64,
+        /// The released collateral entering the transaction.
+        debit: u64,
+        /// Total value across constructed outputs.
+        outputs: u64,
+        /// Transaction fee.
+        fee: u64,
+    },
+
     /// A full `Unbond` was requested against a record with nothing bonded.
     ///
     /// Refused **here**, at assembly, rather than assembled and rejected by the
