@@ -52,6 +52,20 @@ pub enum ResolvedCommand {
     ShowTransfer {
         txid: String,
     },
+    GetTxNote {
+        txid: String,
+    },
+    SetTxNote {
+        txid: String,
+        /// Taken verbatim from the input line (like `sign`): the note is
+        /// user-authored text, and a token re-join would collapse the
+        /// whitespace the user typed into it.
+        note: String,
+    },
+    /// Give up on a dispatched send (`abandon_tx`, PR-SJ-3).
+    Abandon {
+        txid: String,
+    },
 
     // -- Receiving (payment requests / URIs, WI-RPC-1) --
     RequestNew {
@@ -90,6 +104,24 @@ pub enum ResolvedCommand {
     StakedBalance,
     StakedOutputs,
     StakingInfo,
+
+    // -- Archival principal staking actions (WI-RPC-5) --
+    /// `stake_in <amount>` — fund the staking balance with an ordinary
+    /// principal transfer. Amount only, by contract: cover is
+    /// system-drawn and the `P` destination never appears on the wire.
+    StakeIn {
+        amount: u64,
+    },
+    /// `drain_balance` — the aggregate drainable staking amount, or an
+    /// honest "syncing" (never a zero that would lie, rule 82 / F-D2).
+    DrainBalance,
+    /// `drain <amount>` — move staking funds back to this wallet. No fee,
+    /// destination, or slot parameter exists, by contract (the
+    /// anti-fingerprint pin): the fee is the canonical P-lane floor and
+    /// the destination is this wallet's primary address, both engine-side.
+    Drain {
+        amount: u64,
+    },
 
     // -- Fees (WI-RPC-1) --
     Fee {
@@ -271,6 +303,32 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("show_transfer: need <txid>")
             }
         }
+        "get_tx_note" => match args {
+            [txid] => ResolvedCommand::GetTxNote {
+                txid: (*txid).to_string(),
+            },
+            _ => diag("get_tx_note: need <txid>"),
+        },
+        "set_tx_note" => {
+            // The note is the VERBATIM remainder after the txid (the `sign`
+            // grammar): user-authored text keeps its internal whitespace.
+            // A missing note is a usage error, never a silent clear — the
+            // RPC clears on an empty note, and a forgotten argument must
+            // not erase an annotation (rule 82).
+            match raw_remainder(input, 2) {
+                Some(note) => ResolvedCommand::SetTxNote {
+                    txid: args[0].to_string(),
+                    note: note.to_string(),
+                },
+                None => diag("set_tx_note: need <txid> <note>"),
+            }
+        }
+        "abandon" => match args {
+            [txid] => ResolvedCommand::Abandon {
+                txid: (*txid).to_string(),
+            },
+            _ => diag("abandon: need <txid>"),
+        },
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
             let expiry = match parse_flag::<u64>(&rest, "--expiry") {
@@ -372,6 +430,35 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
+        // `stake_in` / `drain` take exactly one amount and NO flags, by
+        // contract: a fee, destination, or slot token would be a steering
+        // attempt the server rejects with -32602 (F-1) — say so here rather
+        // than let muscle-memory flags travel and fail with less context.
+        "stake_in" => match args {
+            [one] if !one.starts_with('-') => match crate::commands::parse_amount(one) {
+                Some(amount) => ResolvedCommand::StakeIn { amount },
+                None => diag(format!("stake_in: invalid amount {one:?}")),
+            },
+            _ => diag(
+                "stake_in: need exactly <amount>; the command takes no flags \
+                 (usage: stake_in <amount>)",
+            ),
+        },
+        "drain_balance" => match args {
+            [] => ResolvedCommand::DrainBalance,
+            _ => diag("drain_balance: takes no arguments"),
+        },
+        "drain" => match args {
+            [one] if !one.starts_with('-') => match crate::commands::parse_amount(one) {
+                Some(amount) => ResolvedCommand::Drain { amount },
+                None => diag(format!("drain: invalid amount {one:?}")),
+            },
+            _ => diag(
+                "drain: need exactly <amount>; the command takes no flags — \
+                 the network fee and the destination (this wallet) are set \
+                 automatically (usage: drain <amount>)",
+            ),
+        },
         "fee" => {
             // Parsed as u64, so a negative or non-numeric value is a hard
             // client-side diagnostic, never a silent fall-back to the default
@@ -1159,6 +1246,84 @@ mod tests {
             parse("staking_info"),
             ResolvedCommand::StakingInfo
         ));
+    }
+
+    /// WI-RPC-5 notes/abandon grammar: one txid each; `set_tx_note` takes
+    /// the note VERBATIM (whitespace preserved), and a missing note is a
+    /// usage error rather than a silent clear.
+    #[test]
+    fn notes_and_abandon_parse() {
+        match parse("get_tx_note deadbeef") {
+            ResolvedCommand::GetTxNote { txid } => assert_eq!(txid, "deadbeef"),
+            other => panic!("expected GetTxNote, got {other:?}"),
+        }
+        match parse("set_tx_note deadbeef rent  march") {
+            ResolvedCommand::SetTxNote { txid, note } => {
+                assert_eq!(txid, "deadbeef");
+                assert_eq!(note, "rent  march", "note whitespace must survive");
+            }
+            other => panic!("expected SetTxNote, got {other:?}"),
+        }
+        match parse("abandon deadbeef") {
+            ResolvedCommand::Abandon { txid } => assert_eq!(txid, "deadbeef"),
+            other => panic!("expected Abandon, got {other:?}"),
+        }
+        for line in [
+            "get_tx_note",
+            "get_tx_note a b",
+            "set_tx_note deadbeef", // forgotten note must not clear silently
+            "abandon",
+            "abandon a b",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line:?} should be a Diagnostic"
+            );
+        }
+    }
+
+    /// WI-RPC-5 staking actions: exactly one amount, no flags. A
+    /// flag-shaped token is a hard diagnostic naming the no-steering
+    /// grammar — the CLI-side half of the F-1 `-32602` pin.
+    #[test]
+    fn stake_in_and_drain_parse_amount_only() {
+        match parse("stake_in 2.5") {
+            ResolvedCommand::StakeIn { amount } => assert_eq!(amount, 2_500_000_000),
+            other => panic!("expected StakeIn, got {other:?}"),
+        }
+        match parse("drain 1.0") {
+            ResolvedCommand::Drain { amount } => assert_eq!(amount, 1_000_000_000),
+            other => panic!("expected Drain, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("drain_balance"),
+            ResolvedCommand::DrainBalance
+        ));
+        for line in [
+            "stake_in",
+            "stake_in 1.0 extra",
+            "stake_in --fee 1", // steering flags refused at parse
+            "stake_in abc",
+            "drain",
+            "drain 1.0 skl1dest", // no destination arg exists
+            "drain --fee 1",
+            "drain --priority 3",
+            "drain abc",
+            "drain_balance extra",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line:?} should be a Diagnostic"
+            );
+        }
+        // The no-flags diagnostics name the grammar.
+        match parse("drain --fee 1") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("drain <amount>"), "{message}");
+                assert!(message.contains("no flags"), "{message}");
+            }
+            other => panic!("expected Diagnostic, got {other:?}"),
+        }
     }
 
     #[test]

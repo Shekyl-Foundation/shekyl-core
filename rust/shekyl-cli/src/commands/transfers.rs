@@ -27,107 +27,74 @@ pub(crate) fn priority_tier(priority: Option<u32>) -> &'static str {
     }
 }
 
-pub fn cmd_transfer(
-    rpc: &RpcSession,
-    amount: u64,
-    dest: &str,
-    priority: Option<u32>,
-    no_confirm: bool,
-) {
-    if !require_open(rpc) {
-        return;
-    }
+/// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
+/// `stake_in` share this contract shape) that the confirm/submit flow needs.
+pub(crate) struct BuiltPendingTx {
+    pub id: String,
+    pub seen_gen: i64,
+    /// The actual fee, already rendered as SKL for the confirmation print.
+    pub fee_skl: String,
+}
 
-    let built = match rpc.call(
-        "build_pending_tx",
-        json!({
-            "recipients": [{ "address": dest, "amount": amount.to_string() }],
-            "priority": priority_tier(priority),
-        }),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            rpc.report("Failed to build transaction", &e);
-            return;
-        }
-    };
-
-    // build_pending_tx succeeded, so the server now holds a funds reservation
-    // keyed by pending_tx_id. Every abort path from here MUST release it, or
-    // the reserved outputs stay unspendable (drain_balance nets out reserved
-    // gindexes) until the wallet is closed and reopened.
-    let Some(pending_tx_id) = built
+/// Extract the [`BuiltPendingTx`] fields from a build-phase response.
+///
+/// The build succeeded, so the server now holds a funds reservation keyed by
+/// `pending_tx_id`. Every abort path from here MUST release it, or the
+/// reserved outputs stay unspendable until the wallet is closed and reopened
+/// — so a malformed response discards the reservation before returning
+/// `None` (except when `pending_tx_id` itself is missing, in which case
+/// there is no handle to discard with; the contract guarantees the field, so
+/// its absence is a genuine protocol error).
+///
+/// `content_gen` and `fee` are contractually required. Do NOT default them:
+/// a wrong `seen_gen` guarantees a CONTENT_GEN_MISMATCH on submit (leaving
+/// the reservation live), and a missing fee would ask the user to confirm a
+/// send without its real cost.
+pub(crate) fn take_built_pending_tx(rpc: &RpcSession, built: &Value) -> Option<BuiltPendingTx> {
+    let Some(id) = built
         .get("pending_tx_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned)
     else {
-        // Without the handle there is nothing to discard with; the contract
-        // guarantees this field, so its absence is a genuine protocol error.
-        eprintln!("Malformed build_pending_tx response (missing pending_tx_id).");
-        return;
+        eprintln!("Malformed build response (missing pending_tx_id).");
+        return None;
     };
-
-    // content_gen and fee are contractually required. Do NOT default them: a
-    // wrong seen_gen guarantees a CONTENT_GEN_MISMATCH on submit (leaving the
-    // reservation live), and a missing fee would ask the user to confirm a
-    // send without its real cost. Treat either as malformed → discard + abort.
     let Some(seen_gen) = built.get("content_gen").and_then(serde_json::Value::as_i64) else {
-        eprintln!("Malformed build_pending_tx response (missing content_gen).");
-        discard_reservation(rpc, &pending_tx_id);
-        return;
+        eprintln!("Malformed build response (missing content_gen).");
+        discard_reservation(rpc, &id);
+        return None;
     };
-    let Some(fee) = built
+    let Some(fee_skl) = built
         .get("fee")
         .and_then(|v| v.as_str())
         .map(format_amount_str)
     else {
-        eprintln!("Malformed build_pending_tx response (missing fee).");
-        discard_reservation(rpc, &pending_tx_id);
-        return;
+        eprintln!("Malformed build response (missing fee).");
+        discard_reservation(rpc, &id);
+        return None;
     };
+    Some(BuiltPendingTx {
+        id,
+        seen_gen,
+        fee_skl,
+    })
+}
 
-    println!("Transaction summary:");
-    println!("  To:     {dest}");
-    println!("  Amount: {} SKL", format_amount(amount));
-    println!("  Fee:    {fee} SKL");
-
-    let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
-    let accepted = if no_confirm {
-        if stdin_is_tty {
-            eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
-            confirm("Send this transaction?")
-        } else {
-            true
-        }
-    } else if !stdin_is_tty {
-        // Non-interactive input without --no-confirm: reading confirm() here
-        // would silently consume the next piped line (or hit EOF) as the
-        // answer and discard the send with no clear reason — automation would
-        // see funds "sent" that never moved. Refuse loudly and point at the
-        // explicit flag instead.
-        eprintln!(
-            "Refusing to send without confirmation on non-interactive input. \
-             Re-run with --no-confirm to send unattended, or run interactively."
-        );
-        false
-    } else {
-        confirm("Send this transaction?")
-    };
-
-    if !accepted {
-        match rpc.call(
-            "discard_pending_tx",
-            json!({ "pending_tx_id": pending_tx_id }),
-        ) {
-            Ok(_) => println!("Transaction discarded."),
-            Err(e) => rpc.report("Failed to discard pending transaction", &e),
-        }
-        return;
+/// Release a reservation the user declined, with a "nothing was sent" line.
+pub(crate) fn discard_declined(rpc: &RpcSession, built: &BuiltPendingTx) {
+    match rpc.call("discard_pending_tx", json!({ "pending_tx_id": built.id })) {
+        Ok(_) => println!("Transaction discarded."),
+        Err(e) => rpc.report("Failed to discard pending transaction", &e),
     }
+}
 
+/// Submit a confirmed pending transaction and render the verdict. On a
+/// failed submit the reservation is released so the user's spendable
+/// balance is not silently tied up.
+pub(crate) fn submit_pending(rpc: &RpcSession, built: &BuiltPendingTx) {
     match rpc.call(
         "submit_pending_tx",
-        json!({ "pending_tx_id": pending_tx_id, "seen_gen": seen_gen }),
+        json!({ "pending_tx_id": built.id, "seen_gen": built.seen_gen }),
     ) {
         // Decoded through the server's own result type, not a second copy of
         // the verdict vocabulary: `SubmitVerdictView` owns the wire strings,
@@ -169,9 +136,73 @@ pub fn cmd_transfer(
             rpc.report("Failed to submit transaction", &e);
             // The failed submit left the reservation live; release it so the
             // user's spendable balance is not silently tied up.
-            discard_reservation(rpc, &pending_tx_id);
+            discard_reservation(rpc, &built.id);
         }
     }
+}
+
+pub fn cmd_transfer(
+    rpc: &RpcSession,
+    amount: u64,
+    dest: &str,
+    priority: Option<u32>,
+    no_confirm: bool,
+) {
+    if !require_open(rpc) {
+        return;
+    }
+
+    let response = match rpc.call(
+        "build_pending_tx",
+        json!({
+            "recipients": [{ "address": dest, "amount": amount.to_string() }],
+            "priority": priority_tier(priority),
+        }),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            rpc.report("Failed to build transaction", &e);
+            return;
+        }
+    };
+    let Some(built) = take_built_pending_tx(rpc, &response) else {
+        return;
+    };
+
+    println!("Transaction summary:");
+    println!("  To:     {dest}");
+    println!("  Amount: {} SKL", format_amount(amount));
+    println!("  Fee:    {} SKL", built.fee_skl);
+
+    let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let accepted = if no_confirm {
+        if stdin_is_tty {
+            eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
+            confirm("Send this transaction?")
+        } else {
+            true
+        }
+    } else if !stdin_is_tty {
+        // Non-interactive input without --no-confirm: reading confirm() here
+        // would silently consume the next piped line (or hit EOF) as the
+        // answer and discard the send with no clear reason — automation would
+        // see funds "sent" that never moved. Refuse loudly and point at the
+        // explicit flag instead.
+        eprintln!(
+            "Refusing to send without confirmation on non-interactive input. \
+             Re-run with --no-confirm to send unattended, or run interactively."
+        );
+        false
+    } else {
+        confirm("Send this transaction?")
+    };
+
+    if !accepted {
+        discard_declined(rpc, &built);
+        return;
+    }
+
+    submit_pending(rpc, &built);
 }
 
 /// Best-effort release of a `build_pending_tx` reservation on an abort path
@@ -271,6 +302,68 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             }
         }
         Err(e) => rpc.report("Failed to get transfer", &e),
+    }
+}
+
+/// `get_tx_note <txid>` — read the local note stored for a transaction
+/// (SJ-DQ-7). An absent note is also the answer for a txid the wallet has
+/// never seen: the note store carries no existence claim (contract pin), so
+/// the copy must not imply "unknown transaction".
+pub fn cmd_get_tx_note(rpc: &RpcSession, txid: &str) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_tx_note", json!({ "tx_hash": txid })) {
+        Ok(val) => match val.get("note").and_then(|v| v.as_str()) {
+            Some(note) => println!("{note}"),
+            None => println!("No note stored for this transaction."),
+        },
+        Err(e) => rpc.report("Failed to get the note", &e),
+    }
+}
+
+/// `set_tx_note <txid> <note>` — attach a local note to a transaction
+/// (SJ-DQ-7). The result echoes the note as stored, so what is printed is
+/// the server's truth, not an assumption that the write took the input
+/// verbatim.
+pub fn cmd_set_tx_note(rpc: &RpcSession, txid: &str, note: &str) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("set_tx_note", json!({ "tx_hash": txid, "note": note })) {
+        Ok(val) => match val.get("note").and_then(|v| v.as_str()) {
+            Some(stored) => println!("Note stored: {stored}"),
+            // Unreachable through this CLI (the parser requires a non-empty
+            // note), but the wire allows a clearing write — echo it honestly.
+            None => println!("Note cleared."),
+        },
+        Err(e) => rpc.report("Failed to set the note", &e),
+    }
+}
+
+/// `abandon <txid>` — give up on a dispatched send (`abandon_tx`, PR-SJ-3 /
+/// SJ-DQ-8).
+///
+/// The copy is careful about what abandoning does NOT do: input locks are
+/// not released by intent — an abandoned-but-still-landable send keeps its
+/// spent-input locks until confirmed-absent evidence releases them (the
+/// self-link defence), and a late confirmation flips the row back to
+/// CONFIRMED. Claiming "your funds are free again" here would be a lie the
+/// user acts on.
+pub fn cmd_abandon(rpc: &RpcSession, txid: &str) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("abandon_tx", json!({ "tx_hash": txid })) {
+        Ok(_) => {
+            println!("Send abandoned: the wallet has given up on it.");
+            println!(
+                "Its funds stay locked until the network is confirmed to have \
+                 dropped it — and if the network confirms it after all, the \
+                 send shows as confirmed again."
+            );
+        }
+        Err(e) => rpc.report("Failed to abandon the send", &e),
     }
 }
 
