@@ -234,9 +234,10 @@ namespace levin
 
         **No noise flag.** C++ cannot enable the carrier any more: the machinery
         that executed it here is deleted and `NoiseQueues` is the port. The FFI
-        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and the carrier's
-        Rust-side caller will set it — this function simply never does, which
-        is why `get_status().has_noise` reads false everywhere and
+        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and whatever
+        eventually enables the carrier will set it. NOTHING DOES TODAY: no such
+        caller has been built, and this function never sets the flag either,
+        which is why `get_status().has_noise` reads false everywhere and
         `select_anonymity`'s noise-priority arm stays dormant.
 
         That caller does not wait on the daemon cutover (corrected

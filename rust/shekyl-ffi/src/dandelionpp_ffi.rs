@@ -282,8 +282,17 @@ mod tests {
     /// The defect this constant exists to fix, asserted rather than described.
     ///
     /// What edit reds it: move the exported quantile to or below the anonymity
-    /// median — lower [`shekyl_relay_privacy::params::origin_retry_one_in`]'s
-    /// rate, or shrink the adopted timer.
+    /// median. Concretely, DECREASE
+    /// [`shekyl_relay_privacy::params::origin_retry_one_in`] — at `one_in == 2`
+    /// the export IS the median and `anon > median` fails — or shrink the
+    /// adopted timer.
+    ///
+    /// Stated as the integer rather than as a "rate", because the first
+    /// wording here said "lower its rate" and that is BACKWARDS: the
+    /// false-retry rate is `1 / one_in`, so lowering the rate raises `one_in`,
+    /// raises the quantile, and moves further ABOVE the median — leaving this
+    /// test green. Second inverted can-fail claim in this doc comment; the
+    /// lesson is to name the value and the direction, never a derived ratio.
     ///
     /// What does NOT red it, stated because the claim was made and was wrong:
     /// reverting the C++ caller to `MIN_RELAY_TIME`. This test calls the
