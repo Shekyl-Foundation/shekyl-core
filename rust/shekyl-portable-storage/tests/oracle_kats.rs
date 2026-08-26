@@ -108,15 +108,28 @@ fn uint64_array_roundtrip() {
     );
 }
 
+/// An array of sections, each holding a blob — the shape
+/// `/get_blocks_by_height.bin` puts on the wire. Read by walking into the
+/// section, which is what the typed command map does; the tree-scanning
+/// `collect_bytes_named` that used to be asserted here went with its only
+/// caller (RK-4b), since "any field named X, anywhere" is the untyped
+/// access the schema layer exists to replace.
 #[test]
-fn object_array_and_collect_bytes() {
+fn object_array_round_trips() {
     let mut block = Section::new();
     block.insert("block", Value::Bytes(b"blob".to_vec()));
     let mut root = Section::new();
     root.insert("blocks", Value::Array(Array::Object(vec![block])));
     let bytes = store_to_binary(&root).expect("encode");
     let decoded = load_from_binary(&bytes, Limits::HTTP_BIN).expect("decode");
-    assert_eq!(decoded.collect_bytes_named("block"), vec![b"blob".to_vec()]);
+    let Some(Value::Array(Array::Object(sections))) = decoded.get("blocks") else {
+        panic!("blocks must decode as an array of sections");
+    };
+    assert_eq!(sections.len(), 1);
+    assert_eq!(
+        sections[0].get("block"),
+        Some(&Value::Bytes(b"blob".to_vec()))
+    );
 }
 
 #[test]

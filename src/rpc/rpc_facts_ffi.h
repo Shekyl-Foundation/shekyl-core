@@ -161,6 +161,41 @@ int shekyl_rpc_tx_output_indices(core_rpc_handle* h, const uint8_t* txid,
     const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner);
 void shekyl_rpc_tx_output_indices_free(void* owner);
 
+// One block of a `/get_blocks_by_height.bin` answer (RK-4b). Every pointer
+// borrows memory owned by the opaque owner the export returns.
+//
+// `txs` is an array of `tx_count` pointers with matching lengths in
+// `tx_lens` — the transactions of this block, in block order, as consensus
+// blobs. The wire drops each transaction's prunable hash on this endpoint
+// (the C++ map serializes a plain blob vector when `pruned` is false), so
+// there is nothing else per transaction to carry.
+typedef struct shekyl_rpc_block_entry {
+    const uint8_t*        block;
+    size_t                block_len;
+    const uint8_t* const* txs;
+    const size_t*         tx_lens;
+    size_t                tx_count;
+} shekyl_rpc_block_entry;
+
+// Blocks at the given heights, in the order asked (RK-4b).
+//
+// On OK with `*out_ok == 1` the view holds `heights_len` entries and
+// `*out_owner` must be released with `shekyl_rpc_blocks_by_height_free`.
+// When a height cannot be read the answer is `*out_ok == 0` with
+// `*out_failed_height` naming it — and the blocks gathered *before* it are
+// still returned, with an owner to release. The C++ cleared its block list
+// once before its loop and returned from the failure without clearing
+// again, so `[0, past_tip]` carried block 0 alongside the error; the prefix
+// is part of that reply, not debris.
+//
+// The restricted-listener block cap is NOT applied here: it is handler
+// policy, single-sourced in Rust (RK-D6), and this export answers what it
+// is asked.
+int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
+    size_t heights_len, const shekyl_rpc_block_entry** out, size_t* out_len,
+    uint64_t* out_failed_height, uint8_t* out_ok, void** out_owner);
+void shekyl_rpc_blocks_by_height_free(void* owner);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
@@ -190,7 +225,7 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 
 #include "crypto/hash.h"
 
-namespace cryptonote { class Blockchain; }
+namespace cryptonote { class Blockchain; class core; }
 
 namespace daemon_rpc_facts {
 
@@ -202,6 +237,10 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
 
 int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
     const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept;
+
+int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t heights_len,
+    const shekyl_rpc_block_entry** out, size_t* out_len, uint64_t* out_failed_height,
+    uint8_t* out_ok, void** out_owner) noexcept;
 
 int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
     uint64_t height, bool fill_pow_hash,

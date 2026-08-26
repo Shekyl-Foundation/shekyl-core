@@ -103,32 +103,4 @@ impl Section {
     pub(crate) fn from_entries(entries: BTreeMap<String, Value>) -> Self {
         Self { entries }
     }
-
-    /// Every `SERIALIZE_TYPE_STRING` (scalar or array element) whose field
-    /// name is `name`, anywhere in the tree. Used by
-    /// `get_blocks_by_height.bin` to collect `block` blobs.
-    #[must_use]
-    pub fn collect_bytes_named(&self, name: &str) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        collect_bytes(self, name, &mut out);
-        out
-    }
-}
-
-fn collect_bytes(section: &Section, name: &str, out: &mut Vec<Vec<u8>>) {
-    for (key, value) in section.iter() {
-        match value {
-            Value::Bytes(b) if key == name => out.push(b.clone()),
-            Value::Array(Array::Bytes(blobs)) if key == name => {
-                out.extend(blobs.iter().cloned());
-            }
-            Value::Object(inner) => collect_bytes(inner, name, out),
-            Value::Array(Array::Object(secs)) => {
-                for inner in secs {
-                    collect_bytes(inner, name, out);
-                }
-            }
-            _ => {}
-        }
-    }
 }

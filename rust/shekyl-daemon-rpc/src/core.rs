@@ -85,36 +85,6 @@ impl CoreRpc {
         unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
     }
 
-    /// Dispatch a binary endpoint (e.g. "/get_o_indexes.bin").
-    /// Returns `Ok(data)` on success, `Err(rc)` with the FFI error code on failure.
-    /// rc -1 = bad request (parse failure), rc -2 = internal error.
-    pub fn bin_endpoint(&self, uri: &str, body: &[u8]) -> Result<Vec<u8>, i32> {
-        if self.handle.is_null() {
-            // A null handle is an internal invariant violation, not a malformed
-            // request, so report the internal-error code (-2), not -1.
-            return Err(-2);
-        }
-        let c_uri = CString::new(uri).map_err(|_| -2i32)?;
-        let mut out_buf: *mut u8 = std::ptr::null_mut();
-        let mut out_len: usize = 0;
-        unsafe {
-            let rc = ffi::core_rpc_ffi_bin_endpoint(
-                self.handle,
-                c_uri.as_ptr(),
-                body.as_ptr(),
-                body.len(),
-                &raw mut out_buf,
-                &raw mut out_len,
-            );
-            if rc != 0 || out_buf.is_null() {
-                return Err(rc);
-            }
-            let data = std::slice::from_raw_parts(out_buf, out_len).to_vec();
-            ffi::core_rpc_ffi_free_buf(out_buf);
-            Ok(data)
-        }
-    }
-
     /// Raw handle for the submit shims (`crate::submit::ffi_shim`), which
     /// call the `shekyl_submit_*` FFI directly rather than through the
     /// string-dispatch surface above.
@@ -334,6 +304,80 @@ impl CoreRpc {
             };
             ffi::shekyl_rpc_tx_output_indices_free(owner);
             Ok((copied, found != 0))
+        }
+    }
+
+    /// Blocks at `heights`, in order.
+    ///
+    /// Returns the entries gathered and, when the chain could not produce a
+    /// height, that height alongside them.
+    ///
+    /// The two are not exclusive: a failure keeps the blocks read **before**
+    /// it, because the C++ did — it cleared its list once before the loop and
+    /// returned from the failure without clearing again, so `[0, past_tip]`
+    /// carried block 0 with the error. The owner is released here, after the
+    /// copies and before any verdict, so no path out can lose the free.
+    pub fn blocks_by_height(
+        &self,
+        heights: &[u64],
+    ) -> Result<(Vec<shekyl_rpc_types::BlockEntry>, Option<u64>), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const ffi::BlockEntryFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut failed_height: u64 = 0;
+        let mut ok: u8 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; every out pointer is valid for the call. On OK
+        // the views borrow memory owned by `owner`, released below before
+        // this function returns, with every copy taken first.
+        unsafe {
+            let rc = ffi::shekyl_rpc_blocks_by_height(
+                self.handle,
+                if heights.is_empty() {
+                    std::ptr::null()
+                } else {
+                    heights.as_ptr()
+                },
+                heights.len(),
+                &raw mut rows,
+                &raw mut len,
+                &raw mut failed_height,
+                &raw mut ok,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            // Past this point an owner may exist, so nothing returns until
+            // it is released. The entries are copied whether or not `ok` is
+            // set: on a failure they are the prefix the C++ also returned.
+            let mut out = Vec::with_capacity(len);
+            if !rows.is_null() {
+                for entry in std::slice::from_raw_parts(rows, len) {
+                    let block = if entry.block.is_null() || entry.block_len == 0 {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(entry.block, entry.block_len).to_vec()
+                    };
+                    let mut txs = Vec::with_capacity(entry.tx_count);
+                    if !entry.txs.is_null() && !entry.tx_lens.is_null() {
+                        let ptrs = std::slice::from_raw_parts(entry.txs, entry.tx_count);
+                        let lens = std::slice::from_raw_parts(entry.tx_lens, entry.tx_count);
+                        for (p, l) in ptrs.iter().zip(lens.iter()) {
+                            txs.push(if p.is_null() || *l == 0 {
+                                Vec::new()
+                            } else {
+                                std::slice::from_raw_parts(*p, *l).to_vec()
+                            });
+                        }
+                    }
+                    out.push(shekyl_rpc_types::BlockEntry { block, txs });
+                }
+            }
+            ffi::shekyl_rpc_blocks_by_height_free(owner);
+            Ok((out, (ok == 0).then_some(failed_height)))
         }
     }
 

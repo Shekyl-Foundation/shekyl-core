@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
+  FFI dispatch bridge is deleted (RK-4b).** With RK-4a's `/get_o_indexes.bin`
+  this was the last `.bin` route reaching C++, so `dispatch_bin`,
+  `bin_handler!`, `CoreRpc::bin_endpoint`, `core_rpc_ffi_bin_endpoint`,
+  `core_rpc_ffi_free_buf`, the `DBIN` macro, `bin_fn` and `get_bin_table`
+  all go: the binary half of the epee dispatch bridge is gone ahead of RK-X.
+  `free_buf` had no caller once the endpoint that allocated through it was
+  deleted, and the header still advertised binary endpoints returning
+  buffers through it.
+  The oracle capture settled a question the C++ declaration would have
+  answered wrongly. `block_complete_entry` has five KV members and this
+  handler sets two, so `pruned`, `block_weight` and `attestation_witness`
+  never reach this wire — and with `pruned` false the map serializes `txs`
+  as an **array of strings**, dropping each transaction's prunable hash.
+  The array-of-objects form exists only on the p2p path, so modelling it
+  here would have carried a variant the daemon cannot emit.
+  Two behaviours are recorded rather than silently carried. A height the
+  chain cannot produce still returns the blocks read **before** it, as the
+  C++ did — it cleared its list once before the loop and returned from the
+  failure without clearing again. And the restricted listener's 1000-block
+  cap now **fires**: the C++ gated it on `m_restricted && ctx` while the
+  bridge always passed a null `ctx`, so the check was dead and a restricted
+  listener accepted any number of heights. That is a deliberate fix, not
+  parity.
+  The engine's timing rig stops hand-rolling the request and reply walk;
+  `Section::collect_bytes_named`, a tree-scanning helper that existed for
+  that walk, goes with its only caller, and `shekyl-engine-core` drops its
+  direct dependency on the codec.
+
 ### Removed
 
 - **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
