@@ -36,7 +36,6 @@
 #include <boost/circular_buffer.hpp>
 #include <memory>  // std::unique_ptr
 #include <cstring>  // memcpy
-#include <set>
 #include <map>
 #include <unordered_map>
 #include <array>
@@ -8172,7 +8171,14 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
     // PC-D6: emission is per pair-epoch. The ledger is per-challenge, so fold
     // on the 48-byte prefix (the pair-epoch type) at the top of the scan —
     // not after resolving bonds, and not on derived (bond, shard) indices.
-    std::vector<std::set<std::array<uint8_t, shekyl::db::kArchivalPairEpochKeySize>>> pair_epoch_seen(window);
+    // Rows sharing a prefix are CONTIGUOUS (cursor order is BE key order and
+    // only the appended height varies within a pair-epoch), so the fold is a
+    // compare against the previous row's prefix — constant memory, one
+    // comparison per row, where a seen-set would grow to pairs × window
+    // nodes on the claim-source path. The prefix also determines the epoch
+    // (offset 40 is inside it), so one carry-over spans the whole scan.
+    std::array<uint8_t, shekyl::db::kArchivalPairEpochKeySize> prev_prefix{};
+    bool have_prev_prefix = false;
     // Bond and shard-segment records are keyed by P / shard alone (not by
     // epoch), so within one read view a single decode serves every epoch in
     // the window.
@@ -8200,11 +8206,13 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
         const size_t w = static_cast<size_t>(epoch - epoch_lo);
         std::array<uint8_t, shekyl::db::kArchivalPairEpochKeySize> prefix{};
         std::memcpy(prefix.data(), ck.mv_data, prefix.size());
-        if (!pair_epoch_seen[w].insert(prefix).second)
+        if (have_prev_prefix && prefix == prev_prefix)
         {
           rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_NEXT);
           continue;
         }
+        prev_prefix = prefix;
+        have_prev_prefix = true;
         ArchivalEmissionEpochSnapshot& out = outs[w];
         crypto::hash row_p_id{};
         std::memcpy(row_p_id.data, ck.mv_data, 32);

@@ -1107,7 +1107,7 @@ General key-value store for database-level metadata.
 
 | Key | Value type | Description |
 |---|---|---|
-| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 8) |
+| `"version"` (NUL-terminated) | `uint32_t` | Database schema version — tracks `#define VERSION` in `db_lmdb.cpp` (the header of this document names the current value; a third copy here just drifts) |
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
