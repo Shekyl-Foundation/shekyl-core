@@ -886,9 +886,10 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 Self::InvalidParams("the drain amount must be greater than zero".into())
             }
             DrainToPrincipalError::Refused { detail } => {
-                // Scalar-free planner reason (zero / exceeds spendable /
-                // uncoverable); logged server-side, category code on the
-                // wire.
+                // Scalar-free planner reason (exceeds spendable, uncoverable,
+                // or needs more inputs than one drain can spend — zero has
+                // its own EmptyRequest arm above); logged server-side,
+                // category code on the wire.
                 tracing::info!(detail = %detail, "drain payment refused by the planner");
                 Self::InsufficientFunds
             }
