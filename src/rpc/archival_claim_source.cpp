@@ -6,6 +6,8 @@
 #include "rpc/archival_claim_source.h"
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "blockchain_db/blockchain_db.h"
@@ -69,21 +71,34 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
       : db.archival_bond_last_served_epochs(p_id, bond.held_shard_ids);
     uint8_t anchor_present = 0;
     uint64_t anchor_epoch = 0;
-    // A non-OK return is a marshaling bug on this side (null pointer with a
-    // positive length, or a length past the slice-soundness bound), not a
-    // property of the record. Leave part A's exit operands absent rather than
-    // reporting an anchor this function did not compute: absence is the
-    // fail-closed reading for a consumer that cannot verify, and the wallet
-    // refuses to answer readiness on it.
-    if (shekyl_archival_whole_record_last_served(
-          last_served.empty() ? nullptr : last_served.data(),
-          last_served.size(),
-          &anchor_present,
-          &anchor_epoch) == SHEKYL_ARCHIVAL_BOND_POST_OK)
-    {
-      res.has_last_served_epoch = anchor_present != 0;
-      res.last_served_epoch = anchor_epoch;
-    }
+    // A non-OK return is a marshaling bug on THIS side (null pointer with a
+    // positive length, or a length past the slice-soundness bound), never a
+    // property of the record — so there is no anchor to report and no honest
+    // way to describe this record's exit state.
+    //
+    // Throwing is the fail-closed choice, and the alternative is worse than it
+    // looks: leaving the fields at their value-initialized defaults reports
+    // `has_last_served_epoch = false`, which the wallet decodes as
+    // `NeverServed` — the PERMISSIVE branch of both cooldown predicates. A
+    // record that has served would then read as ready to exit, on an operand
+    // this function failed to compute. (An earlier revision of this comment
+    // called that default "the fail-closed reading". It is the opposite, and
+    // the mistake is worth leaving recorded: on this operand, absence means
+    // permissive.)
+    //
+    // The handler wraps this call in try/catch and answers a non-OK status,
+    // which the wallet's decoder rejects before reading any payload field — so
+    // an internal error cannot decode as a claim about the record.
+    const uint8_t fold_rc = shekyl_archival_whole_record_last_served(
+      last_served.empty() ? nullptr : last_served.data(),
+      last_served.size(),
+      &anchor_present,
+      &anchor_epoch);
+    if (fold_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+      throw std::runtime_error(
+        "whole-record last-served fold failed (rc=" + std::to_string(fold_rc) + ")");
+    res.has_last_served_epoch = anchor_present != 0;
+    res.last_served_epoch = anchor_epoch;
 
     // The scheduler's watermark, with the storage sentinel resolved here so no
     // consumer has to carry it. Unlike the anchor above, absence on THIS
