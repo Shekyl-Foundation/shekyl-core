@@ -22,12 +22,13 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use shekyl_archival_retention::challenge;
+use shekyl_archival_retention::challenge_leaf_chunk_bounds;
 use shekyl_archival_retention::challenge_seal_on_chain;
 use shekyl_archival_retention::serve_credit_decisions::{
     serve_credit_gate_decision, GateReject, GateVerdict, ServeCreditGateInputs,
 };
 use shekyl_archival_retention::serve_credit_epoch_ok;
-use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
 
 struct Cursor<'a> {
     data: &'a [u8],
@@ -127,13 +128,29 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs, reason: GateReject) {
         GateReject::SealHashUnavailable => assert!(i.seal_hash.is_none()),
         GateReject::ShardNotHeldAtFire => assert!(!i.held_at_fire),
         GateReject::ShardRegistryUnavailableAtFire => assert!(!i.registry_present_at_fire),
-        GateReject::LeafIndexDerivationRefused => assert_eq!(i.segment_leaf_count, 0),
+        GateReject::LeafIndexDerivationRefused => {
+            // One reason, two red predicates: the gate reports zero geometry
+            // AND the all-zero prev-hash sentinel (PC-D3) through the single
+            // C++ "leaf index derivation refused" branch, so soundness here
+            // is the disjunction — at least one arm must be red.
+            assert!(i.segment_leaf_count == 0 || i.prev_block_hash == [0u8; 32]);
+        }
         GateReject::LeafIndexOutOfSegmentRange => {
-            // Derivation-shaped: the index is `challenge_leaf_index` over a
-            // registry count that can exceed `SEGMENT_LEAF_COUNT`. The
-            // standing KAT owns this branch; the field-shaped half is the
-            // zero-geometry reject above.
-            assert!(i.segment_leaf_count > SEGMENT_LEAF_COUNT);
+            // Derivation-shaped: assert through the production predicates,
+            // like the epoch-ok and seal-on-chain arms — a hand-derived
+            // necessary condition drifted here once already (it claimed
+            // `segment_leaf_count > SEGMENT_LEAF_COUNT`, missing the
+            // global-position u64 overflow arm a far-end `shard_id` trips).
+            // This still catches misattribution: any other red predicate
+            // reported under this reason fails the is_none below.
+            let leaf_index = challenge::challenge_leaf_index(
+                &i.p_canonical_id,
+                i.shard_id,
+                i.settlement_epoch,
+                &i.prev_block_hash,
+                i.segment_leaf_count,
+            );
+            assert!(challenge_leaf_chunk_bounds(i.shard_id, u64::from(leaf_index)).is_none());
         }
         GateReject::LeafChunkReadFailed => assert!(!i.leaf_chunk_ok),
         GateReject::FfiVerifyFailed => assert!(!i.verify_ok),
@@ -175,6 +192,14 @@ fn single_flip_first_failure(green: &ServeCreditGateInputs) {
         ),
         (
             |i| i.segment_leaf_count = 0,
+            GateReject::LeafIndexDerivationRefused,
+        ),
+        (
+            // PC-D3: the all-zero prev-hash sentinel is the refusal's second
+            // arm, checked by the gate right after the zero-geometry arm. An
+            // accepting input's hash is necessarily nonzero, so this is a
+            // genuine single red flip.
+            |i| i.prev_block_hash = [0u8; 32],
             GateReject::LeafIndexDerivationRefused,
         ),
         (|i| i.leaf_chunk_ok = false, GateReject::LeafChunkReadFailed),

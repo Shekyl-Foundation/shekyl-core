@@ -259,8 +259,11 @@ pub enum GateReject {
     /// "leaf index derivation refused" -- a zero registry geometry (RF-D6).
     LeafIndexDerivationRefused,
     /// "challenged leaf index out of segment range". With the index DERIVED
-    /// (`< segment_leaf_count`), reachable only when the registry's count
-    /// exceeds `SEGMENT_LEAF_COUNT` -- kept because the C++ keeps the check.
+    /// (`< segment_leaf_count`), reachable when the registry's count exceeds
+    /// `SEGMENT_LEAF_COUNT` -- or when the global position
+    /// `shard_id * SEGMENT_LEAF_COUNT + index` overflows `u64` (a far-end
+    /// `shard_id`; the bounds arithmetic is checked, not silently wrapping).
+    /// Kept because the C++ keeps the check.
     LeafIndexOutOfSegmentRange,
     /// `:4355` — "leaf chunk read failed" (registry/tree disagreement).
     LeafChunkReadFailed,
