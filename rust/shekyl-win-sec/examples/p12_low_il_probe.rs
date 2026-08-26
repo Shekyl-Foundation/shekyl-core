@@ -131,6 +131,51 @@ mod probe {
     /// the whole probe sweep with nothing to read.
     const CHILD_TIMEOUT_MS: u32 = 30_000;
 
+    /// Why a spawned child produced no usable exit code.
+    ///
+    /// These have different remedies and previously shared one bare `u32`
+    /// channel, which is exactly how a child that started and then hung came to
+    /// be reported as a failure to *spawn* — sending the reader to
+    /// `CreateProcessAsUserW` for a problem that is not there. Naming the step
+    /// is the whole point of the type.
+    enum SpawnFailure {
+        /// The token work or `CreateProcessAsUserW` itself failed.
+        Spawn(u32),
+        /// The child started and did not exit within [`CHILD_TIMEOUT_MS`]. It
+        /// has been terminated.
+        Timeout,
+        /// The wait failed for a reason that is *not* a timeout; carries the
+        /// `GetLastError` captured before any cleanup could overwrite it.
+        WaitFailed(u32),
+        /// The child exited but its code could not be read.
+        ExitCode(u32),
+    }
+
+    impl std::fmt::Display for SpawnFailure {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Spawn(e) => write!(f, "could not spawn a Low-integrity child: os error {e}"),
+                Self::Timeout => write!(
+                    f,
+                    "the Low-integrity child started but did not exit within {}s and was \
+                     terminated (os error {WAIT_TIMEOUT}). It hung after spawn — opening the \
+                     pipe is the only thing it does",
+                    CHILD_TIMEOUT_MS / 1_000
+                ),
+                Self::WaitFailed(e) => write!(
+                    f,
+                    "waiting for the Low-integrity child failed (os error {e}) — this is not a \
+                     timeout; the wait itself did not work"
+                ),
+                Self::ExitCode(e) => write!(
+                    f,
+                    "the Low-integrity child exited but its exit code could not be read \
+                     (os error {e}), so nothing can be concluded from the run"
+                ),
+            }
+        }
+    }
+
     /// Spawn counters, so the listeners never share a name.
     const SPAWN_CONTROL: u64 = 1_201;
     const SPAWN_PROBE: u64 = 1_202;
@@ -291,26 +336,12 @@ mod probe {
 
         let code = match spawned {
             Ok(code) => code,
-            // A timeout gets its own arm because the remedies differ and the
-            // reader is about to go looking. "Could not spawn" sends someone to
-            // `CreateProcessAsUserW` when the child in fact started fine and
-            // then never exited — a diagnosis pointing at the wrong step costs
-            // more than no diagnosis (rule 82).
-            Err(WAIT_TIMEOUT) => {
-                println!(
-                    "P-12 UNRUN: the Low-integrity child started but did not exit within \
-                     {}s and was terminated (os error {WAIT_TIMEOUT}). It hung somewhere \
-                     after spawn — the pipe open is the only thing it does. The probe did \
-                     not execute; this is not a pass.",
-                    CHILD_TIMEOUT_MS / 1_000
-                );
-                return 2;
-            }
-            Err(e) => {
-                println!(
-                    "P-12 UNRUN: could not spawn a Low-integrity child: os error {e}. \
-                     The probe did not execute; this is not a pass."
-                );
+            // Each failure names its own step. A diagnosis pointing at the
+            // wrong call costs more than no diagnosis (rule 82), and the bare
+            // `u32` this used to return could not tell a hung child from a
+            // failed spawn.
+            Err(failure) => {
+                println!("P-12 UNRUN: {failure}. The probe did not execute; this is not a pass.");
                 return 2;
             }
         };
@@ -381,9 +412,9 @@ mod probe {
                 "P-12 note: the unlabelled-pipe attribution was inconclusive \
                  (child exited {other})."
             ),
-            Err(e) => println!(
-                "P-12 note: the unlabelled-pipe attribution could not spawn \
-                 (os error {e})."
+            Err(failure) => println!(
+                "P-12 note: the unlabelled-pipe attribution did not produce a result: \
+                 {failure}."
             ),
         }
     }
@@ -441,11 +472,11 @@ mod probe {
     /// privilege when the duplicate is *weaker* than the original, which
     /// lowering the integrity label makes it. That is the documented path for
     /// launching a Low-IL child and the reason this probe needs no elevation.
-    fn spawn_opener(exe: &std::path::Path, pipe: &str, low_il: bool) -> Result<u32, u32> {
+    fn spawn_opener(exe: &std::path::Path, pipe: &str, low_il: bool) -> Result<u32, SpawnFailure> {
         let token = open_own_token(
             TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_ASSIGN_PRIMARY,
         )
-        .ok_or_else(last_error)?;
+        .ok_or_else(|| SpawnFailure::Spawn(last_error()))?;
 
         let mut dup: HANDLE = std::ptr::null_mut();
         // SAFETY: `token` is a live token handle; `dup` is written only on
@@ -461,12 +492,15 @@ mod probe {
             )
         };
         if ok == 0 {
-            return Err(last_error());
+            return Err(SpawnFailure::Spawn(last_error()));
         }
         let dup = TokenGuard(dup);
 
         if low_il {
-            lower_to_low_integrity(dup.0)?;
+            // Explicitly mapped, not via a blanket `From<u32>`: a blanket
+            // conversion would silently label any future post-spawn error as a
+            // spawn failure, which is the defect this type exists to prevent.
+            lower_to_low_integrity(dup.0).map_err(SpawnFailure::Spawn)?;
         }
 
         let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
@@ -508,7 +542,7 @@ mod probe {
             )
         };
         if created == 0 {
-            return Err(last_error());
+            return Err(SpawnFailure::Spawn(last_error()));
         }
 
         // Bounded, not `INFINITE`. This runs from `scripts/ci/windows_probe.ps1`,
@@ -521,8 +555,19 @@ mod probe {
         // SAFETY: `info.hProcess` is a live process handle from the call above.
         let waited = unsafe { WaitForSingleObject(info.hProcess, CHILD_TIMEOUT_MS) };
         if waited != WAIT_OBJECT_0 {
+            // Capture the reason BEFORE any cleanup. `TerminateProcess` and
+            // `CloseHandle` both set the thread's last-error, so reading it
+            // afterwards would report the success of the cleanup instead of the
+            // failure of the wait.
+            let failure = if waited == WAIT_TIMEOUT {
+                SpawnFailure::Timeout
+            } else {
+                SpawnFailure::WaitFailed(last_error())
+            };
             // SAFETY: same live handle; the child is killed so its handles are
-            // released and the probe cannot leave a process behind.
+            // released and the probe cannot leave a process behind. Harmless if
+            // the wait failed for some other reason and the child is already
+            // gone.
             unsafe { TerminateProcess(info.hProcess, 1) };
             // SAFETY: both handles came from `CreateProcessAsUserW` and are
             // closed exactly once on this path.
@@ -530,7 +575,7 @@ mod probe {
                 CloseHandle(info.hThread);
                 CloseHandle(info.hProcess);
             }
-            return Err(WAIT_TIMEOUT);
+            return Err(failure);
         }
         let mut code: u32 = 0;
         // SAFETY: same handle; the process has exited, so the code is final.
@@ -542,7 +587,7 @@ mod probe {
             CloseHandle(info.hProcess);
         }
         if read == 0 {
-            return Err(last_error());
+            return Err(SpawnFailure::ExitCode(last_error()));
         }
         Ok(code)
     }
