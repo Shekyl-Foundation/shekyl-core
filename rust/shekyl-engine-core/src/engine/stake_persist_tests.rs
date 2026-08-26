@@ -462,29 +462,15 @@ fn phantom_sweep_derivation_failure_leaves_state_untouched() {
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_rpc_transport::HttpRpc;
 use tempfile::tempdir;
 
-use crate::engine::{Credentials, DaemonClient, EngineCreateParams, OpenedEngine, SoloSigner};
+use crate::engine::{Credentials, EngineCreateParams, OpenedEngine, SoloSigner};
 
-/// A `DaemonClient` against a never-resolved URL. The persist path issues no
-/// RPC; the daemon is held only to build the `Engine`. Mirrors the bridge in
-/// `lifecycle.rs`'s `dummy_daemon` (sync body → async ctor via the ambient
-/// multi-thread runtime), which is why every test here is `multi_thread`.
-fn dummy_daemon() -> DaemonClient {
-    let rpc = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-    })
-    .expect("construct HttpRpc (no actual connection attempted)");
-    DaemonClient::new(rpc)
-}
+use crate::engine::test_support::dummy_daemon;
 
+/// This suite's deterministic seed (multiplier 7).
 fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
-    for (i, b) in s.iter_mut().enumerate() {
-        *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-    }
-    s
+    crate::engine::test_support::fixed_seed(7)
 }
 
 /// The ticket witnesses a durable commit, not an in-memory mutation: a record

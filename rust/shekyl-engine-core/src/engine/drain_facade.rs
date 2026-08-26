@@ -47,9 +47,10 @@ use tokio::sync::RwLock;
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
-use super::drain_orchestrator::DrainOrchestrationError;
+use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
+use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::transaction_submitter::SubmitSuccess;
@@ -120,9 +121,20 @@ pub enum DrainToPrincipalError {
     /// (`-29511`, retry remedy).
     #[error("a concurrent post reserved one of this drain's inputs; retry")]
     InputRaced,
-    /// The F-D1 planner refused the payment itself (zero, exceeds spendable,
-    /// uncoverable by the spendable outputs). User-actionable: lower the
-    /// payment or wait for `P` accrual.
+    /// The requested payment is zero — nothing to move. Its own arm, never
+    /// folded into [`Self::Refused`] (rule 82: `-29101`'s "lower the payment
+    /// or wait for accrual" remedy is unsatisfiable at zero — the remedy here
+    /// is "send a nonzero amount", a malformed *request*). The wallet-RPC
+    /// layer also rejects zero at its params boundary (`-32602`) before any
+    /// engine work; this arm keeps the refusal honest for direct embedder
+    /// callers and is checked up front, before persona resolution or any
+    /// daemon round trip.
+    #[error("the requested drain amount is zero — nothing to move")]
+    EmptyRequest,
+    /// The F-D1 planner refused the payment itself (exceeds spendable,
+    /// uncoverable by the spendable outputs, or needs more inputs than one
+    /// drain can spend). User-actionable: lower the payment or wait for `P`
+    /// accrual.
     #[error("drain refused: {detail}")]
     Refused {
         /// The planner's own (scalar-free) reason.
@@ -178,10 +190,6 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                 context: "stake engine",
                 detail: e.to_string(),
             },
-            DrainRequestError::Identity(e) => Self::State {
-                context: "persona identity",
-                detail: e.to_string(),
-            },
             DrainRequestError::Destination { detail } => Self::State {
                 context: "principal destination",
                 detail: detail.to_string(),
@@ -194,6 +202,11 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                     Self::Unanchorable { detail }
                 }
                 DrainOrchestrationError::ReserveBreached => Self::ReserveBreached,
+                // The planner's zero arm keeps its own façade arm (the façade
+                // pre-check makes it unreachable from `drain_to_principal`,
+                // but the mapping stays total and honest for any other
+                // pipeline entry).
+                DrainOrchestrationError::Plan(DrainError::EmptyRequest) => Self::EmptyRequest,
                 DrainOrchestrationError::Plan(e) => Self::Refused {
                     detail: e.to_string(),
                 },
@@ -242,12 +255,21 @@ where
         self_arc: Arc<RwLock<Self>>,
         payment: AtomicUnits,
     ) -> Result<DrainOutcome, DrainToPrincipalError> {
-        // Brief read: the stake handle (refuse a non-staker before any I/O)
-        // and a daemon clone for the fee quote.
-        let (daemon, stake) = {
+        // A zero payment is a malformed request, refused before any actor,
+        // file, or network work — the planner's own zero arm stays the
+        // authoritative check inside the pipeline; this copy only spares a
+        // request that cannot succeed its daemon round trip.
+        if payment.is_zero() {
+            return Err(DrainToPrincipalError::EmptyRequest);
+        }
+
+        // Brief read: the stake handle (refuse a non-staker before any I/O),
+        // a daemon clone for the fee quote, and the pending-post write lock
+        // for the advisory in-flight read below.
+        let (daemon, stake, pending_write_lock) = {
             let g = self_arc.read().await;
             let stake = g.stake_handle().ok_or(DrainToPrincipalError::NotStaker)?;
-            (g.daemon().clone(), stake)
+            (g.daemon().clone(), stake, g.pending_write_lock.clone())
         };
 
         // Resolve the LIVE active persona from the actor's own state — the
@@ -261,6 +283,34 @@ where
                 detail: e.to_string(),
             })?
             .ok_or(DrainToPrincipalError::NoActivePersona)?;
+
+        // Advisory copy of the one-live-drain read, BEFORE the daemon fee
+        // round trip. The AUTHORITATIVE serialization stays `push_drain`
+        // under the write lock at the dispatch seam's seal; this read is
+        // sound by that seam's own argument for its pre-assembly copy ("this
+        // read only saves the wasted proof work") — here it saves the
+        // network RTT, and keeps the refusal truthful: a wallet whose drain
+        // lane is sealed AND whose daemon is unreachable answers the
+        // in-flight `-29511`, not a `-29102` sending the user to debug a
+        // daemon that is not the problem.
+        let p_canonical_id = stake
+            .persona_canonical_id(identity.p_slot)
+            .await
+            .map_err(|e| DrainToPrincipalError::State {
+                context: "persona identity",
+                detail: e.to_string(),
+            })?;
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let already = store
+            .read(|block| block.has_live_drain_for(&p_canonical_id))
+            .await
+            .map_err(|e| DrainToPrincipalError::State {
+                context: "pending-drain read",
+                detail: e.to_string(),
+            })?;
+        if already {
+            return Err(DrainToPrincipalError::InFlight);
+        }
 
         // Canonical P-lane floor fee — the same function the bond post
         // quotes, preserving the -29109 vs -29102 remedy split.
@@ -301,20 +351,13 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_rpc_transport::HttpRpc;
-    use shekyl_types::PSlot;
     use shekyl_units::AtomicUnits;
-    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
     use super::super::drain_dispatch::DrainRequestError;
-    use super::super::drain_orchestrator::DrainOrchestrationError;
+    use super::super::drain_orchestrator::{DrainError, DrainOrchestrationError};
     use super::DrainToPrincipalError;
-    use crate::engine::{
-        Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
-    };
+    use crate::engine::Engine;
 
     /// The façade's structural pins, `drain_dispatch`-tripwire style (comment
     /// lines stripped so module docs cannot satisfy a negative guard):
@@ -329,10 +372,16 @@ mod tests {
     /// 4. The one submit route is the crate-internal `submit_drain` seam.
     #[test]
     fn facade_cannot_steer_slot_fee_or_retirement() {
-        let production = include_str!("drain_facade.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("drain_facade.rs has a production section");
+        // Split on the `#[cfg(test)]` boundary only — not the full
+        // `mod tests {` line — so a reformat of the test-module declaration
+        // can't silently fold the test section into the scanned text
+        // (`drain_amount.rs` pattern). `split_once` + `expect` fails loudly
+        // if the boundary is ever absent, rather than the old
+        // `.split(..).next()` — whose `expect` could never fire (`split`
+        // always yields a first element) — defaulting to the whole file.
+        let (production, _tests) = include_str!("drain_facade.rs")
+            .split_once("\n#[cfg(test)]")
+            .expect("drain_facade.rs has a #[cfg(test)] section to exclude from the scan");
         let code: String = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
@@ -368,8 +417,11 @@ mod tests {
 
     /// The reserve-gate refusal survives the flattening: the orchestrator's
     /// `ReserveBreached` (the DS-4 gate, pinned by the orchestrator's own
-    /// tests) maps onto the façade arm the RPC renders as `-29509` — and the
-    /// in-flight/raced pair both land on the `-29511` remedy arms.
+    /// tests) maps onto the façade arm the RPC renders as `-29509` — the
+    /// in-flight/raced pair both land on the `-29511` remedy arms — and the
+    /// planner's zero arm keeps its own `EmptyRequest` identity while every
+    /// other planner refusal stays `Refused` (rule 82: the "lower the
+    /// payment" remedy is unsatisfiable at zero).
     #[test]
     fn error_flattening_preserves_the_rpc_discriminants() {
         let breached: DrainToPrincipalError =
@@ -391,42 +443,48 @@ mod tests {
             unanchored,
             DrainToPrincipalError::Unanchorable { .. }
         ));
+
+        let zero: DrainToPrincipalError =
+            DrainRequestError::Drain(DrainOrchestrationError::Plan(DrainError::EmptyRequest))
+                .into();
+        assert!(matches!(zero, DrainToPrincipalError::EmptyRequest));
+
+        let unaffordable: DrainToPrincipalError =
+            DrainRequestError::Drain(DrainOrchestrationError::Plan(DrainError::Unaffordable))
+                .into();
+        assert!(
+            matches!(unaffordable, DrainToPrincipalError::Refused { .. }),
+            "non-zero planner refusals stay on the Refused arm"
+        );
     }
 
-    /// A `DaemonClient` that never connects: both refusal paths under test
-    /// short-circuit before any network I/O. (Replicated from the
-    /// `principal_stake` suite — those helpers are test-private.)
-    fn dummy_daemon() -> DaemonClient {
-        let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-        })
-        .expect("construct HttpRpc (no actual connection attempted)");
-        DaemonClient::new(rpc)
-    }
+    use crate::engine::test_support::{activate_persona, non_staker_engine, staker_engine};
 
-    fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in s.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-        }
-        s
-    }
+    /// This suite's deterministic-seed multiplier (`test_support::fixed_seed`).
+    const SEED_MULT: u8 = 7;
 
-    fn creds() -> Credentials<'static> {
-        Credentials::password_only(b"correct horse battery staple")
+    /// A zero payment is refused as its own malformed-request arm, before
+    /// persona resolution or any I/O — even a non-staker gets `EmptyRequest`,
+    /// not `NotStaker` (the request is invalid regardless of who sent it).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drain_of_zero_is_an_empty_request_before_any_work() {
+        let (_tmp, engine) = non_staker_engine(SEED_MULT);
+        let engine = Arc::new(RwLock::new(engine));
+
+        let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(0))
+            .await
+            .expect_err("a zero drain must refuse");
+        assert!(
+            matches!(err, DrainToPrincipalError::EmptyRequest),
+            "got {err:?}"
+        );
     }
 
     /// A non-staker cannot drain — refused up front, before persona
     /// resolution, fee quote, or any network I/O.
     #[tokio::test(flavor = "multi_thread")]
     async fn drain_on_a_non_staker_is_not_staker() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let engine =
-            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create non-staker");
+        let (_tmp, engine) = non_staker_engine(SEED_MULT);
         let engine = Arc::new(RwLock::new(engine));
 
         let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(50_000))
@@ -442,7 +500,7 @@ mod tests {
     /// the fee quote (no daemon round trip; the dummy daemon would fail one).
     #[tokio::test(flavor = "multi_thread")]
     async fn drain_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
         let engine = Arc::new(RwLock::new(engine));
 
         let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(50_000))
@@ -454,36 +512,61 @@ mod tests {
         );
     }
 
-    /// A **staker** engine (persists a bond record for `slot` →
-    /// `staking_enabled`, then reopens so the StakeEngine spawns). Idle — no
-    /// persona is activated.
-    fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let network = params.network;
-        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
-        engine
-            .persist_bond_record(PSlot::from_raw(slot))
-            .expect("persist bond record → staking_enabled");
-        engine.close(&creds).expect("close created wallet");
-        let opened = Engine::<SoloSigner>::open_full(
-            &base,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-        )
-        .expect("reopen staker wallet");
-        let engine = match opened {
-            OpenedEngine::Loaded(w) => w,
-            OpenedEngine::Restored { wallet, .. } => wallet,
+    /// A sealed live drain refuses `InFlight` (`-29511`) **before the daemon
+    /// fee round trip**: this test runs against the never-connecting dummy
+    /// daemon, so reaching the fee quote would fail as `FeeEstimate`
+    /// (`-29102`, "check the daemon") — getting `InFlight` therefore proves
+    /// the advisory in-flight read precedes the quote. That ordering is the
+    /// fix for the sealed-wallet-with-flaky-daemon misdiagnosis (the truthful
+    /// refusal is the seal, not the daemon), and this is the dispatch-layer
+    /// `-29511` path's first behavioral coverage — the seal is produced
+    /// through the same `push_drain` store mutation production seals with,
+    /// not a hand-built error value.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sealed_live_drain_refuses_in_flight_before_the_fee_quote() {
+        use crate::engine::pscan::start::pending_post_store_for_engine;
+        use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState};
+        use shekyl_types::PSlot;
+
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        activate_persona(&engine, 3).await;
+        let engine = Arc::new(RwLock::new(engine));
+
+        // Seal a live drain for the active persona, exactly as the dispatch
+        // seam would (persona-keyed record; the reservation is the record).
+        let (stake, write_lock) = {
+            let g = engine.read().await;
+            (
+                g.stake_handle().expect("staker"),
+                g.pending_write_lock.clone(),
+            )
         };
+        let persona = stake
+            .persona_canonical_id(PSlot::from_raw(3))
+            .await
+            .expect("canonical id");
+        let store = pending_post_store_for_engine(engine.clone(), write_lock);
+        let sealed = store
+            .mutate(move |block| {
+                let ok = block.push_drain(PendingDrain {
+                    persona,
+                    tx_bytes: vec![0xd7; 32],
+                    funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
+                    state: PendingPostState::Pending,
+                });
+                (ok, ok)
+            })
+            .await
+            .expect("seal a live drain");
+        assert!(sealed, "fixture drain must seal");
+
+        let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(50_000))
+            .await
+            .expect_err("a sealed live drain refuses a second drain");
         assert!(
-            engine.stake_handle().is_some(),
-            "a staker reopen spawns the StakeEngine"
+            matches!(err, DrainToPrincipalError::InFlight),
+            "expected InFlight before the fee quote (a FeeEstimate arm here \
+             means the advisory read ran after the quote), got {err:?}"
         );
-        (tmp, engine)
     }
 }

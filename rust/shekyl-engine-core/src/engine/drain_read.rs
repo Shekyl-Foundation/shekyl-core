@@ -10,9 +10,11 @@
 //! (`DrainBalance`, from `drain_orchestrator`) — never a per-epoch / per-reward
 //! decomposition (the F-D1 trust boundary; `drain_orchestrator` §"F-D2"). This
 //! module is the engine-side accessor a UI (the eventual DS-PR-3 GUI slice)
-//! polls to render the drainable balance: it lifts the sealed `P` funding set,
-//! anchors the same send-path reference a real drain uses, and returns the
-//! aggregate spendable scalar.
+//! polls to render the drainable balance: it lifts the sealed `P` funding set
+//! **scoped to the live active persona** (the same slot scope a real drain's
+//! planning applies, so the advertised figure is spendable by the `drain` it
+//! sizes), anchors the same send-path reference a real drain uses, and returns
+//! the aggregate spendable scalar.
 //!
 //! ## Anchor parity
 //!
@@ -142,6 +144,18 @@ where
     /// wallet may drain, measured at the same send-path reference a real drain
     /// anchors to.
     ///
+    /// **Scoped to the live active persona** — the contract's own wording
+    /// ("the aggregate drainable scalar across the active persona's pool"):
+    /// [`drain_to_principal`](super::drain_facade) spends only the active
+    /// persona's slot-scoped records (`drain_orchestrator`'s scoped
+    /// projection), so this read measures the same set. A wallet-wide sum
+    /// would advertise dormant held personas' funds that an immediate `drain`
+    /// cannot move, so an amount at or under the displayed figure could still
+    /// refuse as unaffordable. No stake engine, or no active persona, is an
+    /// honest `0` — nothing is drainable *right now*, consistent with the
+    /// `drain` the figure exists to size — short-circuited before any file or
+    /// anchor work.
+    ///
     /// Returns the aggregate scalar only — [`drain_balance`] drops every
     /// reward-sequence coordinate (the F-D1 trust boundary), so no
     /// decomposition crosses this surface. "Spendable" is mature ∧
@@ -150,30 +164,54 @@ where
     /// netted out — the same "spendable = unreserved mature" definition the bond
     /// sweep uses, and the set a real drain's selection excludes. No seal
     /// (non-staker, or nothing scanned yet) is an honest `0`, never a fabricated
-    /// one over a failed read; the pscan load runs first so a fresh wallet
-    /// reports `0 drainable` rather than a spurious "syncing" against an empty
-    /// tree.
+    /// one over a failed read; the pscan load runs before anchoring so a fresh
+    /// wallet reports `0 drainable` rather than a spurious "syncing" against an
+    /// empty tree.
     ///
     /// # Errors
     ///
     /// - [`DrainBalanceReadError::Unanchorable`] — the reference anchor is not
     ///   yet available (transient; render "syncing").
     /// - [`DrainBalanceReadError::State`] — a non-transient fault (pscan-load,
-    ///   anchor build, or aggregation overflow); render an error, not a zero.
+    ///   persona resolution, anchor build, or aggregation overflow); render an
+    ///   error, not a zero.
     pub async fn drain_balance_aggregate(
         self_arc: Arc<RwLock<Self>>,
     ) -> Result<AtomicUnits, DrainBalanceReadError> {
         // Brief read: capture the public anchor operands (curve tree, synced
-        // tip, block-hash resolver), exactly the `assemble_bond_post` prelude.
-        // A balance read touches public material only — no actor handles, no
-        // secrets.
-        let (curve_tree, chain_tip, block_hash_at) = {
+        // tip, block-hash resolver), exactly the `assemble_bond_post` prelude,
+        // plus the stake handle for the active-persona scope. Public material
+        // only — the handle projects a public identity, no secret crosses.
+        let (curve_tree, chain_tip, block_hash_at, stake) = {
             let g = self_arc.read().await;
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
             let block_hash_at = move |h: u64| snap.block_hash_at(h);
-            (g.curve_tree.clone(), chain_tip, block_hash_at)
+            (
+                g.curve_tree.clone(),
+                chain_tip,
+                block_hash_at,
+                g.stake_handle(),
+            )
         };
+
+        // Active-persona scope: no stake engine / idle staker ⇒ an honest
+        // zero (the `drain` this figure sizes would refuse -29507/-29508),
+        // before any file I/O or anchoring.
+        let Some(stake) = stake else {
+            return Ok(AtomicUnits::from_raw(0));
+        };
+        let Some(identity) =
+            stake
+                .active_persona()
+                .await
+                .map_err(|e| DrainBalanceReadError::State {
+                    detail: e.to_string(),
+                })?
+        else {
+            return Ok(AtomicUnits::from_raw(0));
+        };
+        let active_slot = identity.p_slot;
 
         // Sealed funding set. No seal ⇒ non-staker / nothing scanned ⇒ honest
         // zero, short-circuited before anchoring (a fresh wallet has no tree to
@@ -209,26 +247,46 @@ where
             .map_err(anchor_err_to_read_err)?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
-        // Aggregate the mature, unreserved scalar at the reference —
-        // lineage-blind by construction.
-        let balance = drain_balance(pscan_state.funding_outputs(), reference_height, &reserved)
-            .map_err(|e| DrainBalanceReadError::State {
-                detail: e.to_string(),
-            })?;
-        Ok(balance.spendable)
+        scoped_spendable(
+            pscan_state.funding_outputs(),
+            active_slot,
+            reference_height,
+            &reserved,
+        )
     }
+}
+
+/// The active-persona-scoped aggregate: `records` filtered to `active_slot`'s
+/// own funding outputs — the same `r.p_slot == slot` predicate
+/// `drain_orchestrator`'s scoped projection applies before planning, so the
+/// advertised figure and the plannable set are one definition — then summed
+/// mature ∧ unreserved by [`drain_balance`]. `p_slot` is a public slot
+/// ordinal, not a mint-lineage coordinate, so the filter stays outside the
+/// §12.3 carve exactly as the orchestrator's copy does. A free function so
+/// the scoping is unit-testable without an anchored curve tree (the accessor
+/// above cannot reach this line offline — anchoring precedes it).
+fn scoped_spendable(
+    records: &[shekyl_engine_state::pscan_state::PFundingOutputRecord],
+    active_slot: shekyl_types::PSlot,
+    reference_height: BlockHeight,
+    reserved: &std::collections::BTreeSet<shekyl_types::GlobalOutputIndex>,
+) -> Result<AtomicUnits, DrainBalanceReadError> {
+    let scoped: Vec<_> = records
+        .iter()
+        .filter(|r| r.p_slot == active_slot)
+        .cloned()
+        .collect();
+    let balance = drain_balance(&scoped, reference_height, reserved).map_err(|e| {
+        DrainBalanceReadError::State {
+            detail: e.to_string(),
+        }
+    })?;
+    Ok(balance.spendable)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-    use shekyl_rpc_transport::HttpRpc;
-    use tempfile::TempDir;
-
-    use crate::engine::lifecycle::EngineCreateParams;
-    use crate::engine::{Credentials, DaemonClient, SoloSigner};
 
     // ---- error-taxonomy mapping (Fix 2 / DS-PR-3 locked decision) ----------
 
@@ -289,41 +347,125 @@ mod tests {
         );
     }
 
-    // ---- Ok(0) on no seal (real engine, no pscan) --------------------------
+    // ---- Active-persona scoping (the pure aggregation) ---------------------
 
-    /// Build a fresh `Engine<SoloSigner>` on a tempdir, wrapped in the
-    /// `Arc<RwLock<…>>` the accessor takes. A freshly-created wallet has no
-    /// pscan seal, so `load_pscan_state_for_engine` returns `None`. The daemon
-    /// points at an unreachable URL but is never contacted on this path (the
-    /// `None` short-circuit fires before anchoring).
-    async fn fresh_engine_arc() -> (Arc<RwLock<Engine<SoloSigner>>>, TempDir) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base_path = tmp.path().join("wallet");
-        let creds = Credentials::password_only(b"drain-balance-read tests");
-        let mut seed = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in seed.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
-        }
-        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let rpc = HttpRpc::new("http://127.0.0.1:1".to_string())
-            .await
-            .expect("construct HttpRpc against unreachable URL (no connect attempt yet)");
-        let daemon = DaemonClient::new(rpc);
-        let wallet = Engine::<SoloSigner>::create(params, daemon)
-            .expect("create FULL wallet for drain-balance-read tests");
-        (Arc::new(RwLock::new(wallet)), tmp)
+    use crate::engine::test_support::{activate_persona, funding_record, staker_engine};
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    use shekyl_types::PSlot;
+
+    /// This suite's deterministic-seed multiplier (`test_support::fixed_seed`).
+    const SEED_MULT: u8 = 13;
+
+    /// The scoped aggregate sums ONLY the active slot's records — a dormant
+    /// held persona's funds must not be advertised as drainable, because the
+    /// `drain` this figure sizes cannot spend them (its planning scopes to
+    /// the active slot). Bites against the slot filter being dropped, which
+    /// would regress the read to the wallet-wide sum this fix retired.
+    #[test]
+    fn scoped_spendable_sums_only_the_active_slot() {
+        let records = [
+            funding_record(3, 10, 5, 40_000, MintLineageOutput::EmissionReward),
+            funding_record(3, 11, 5, 2_000, MintLineageOutput::EmissionReward),
+            // Dormant persona's record: coverable value, wrong slot.
+            funding_record(7, 12, 5, 900_000, MintLineageOutput::EmissionReward),
+        ];
+        let spendable = scoped_spendable(
+            &records,
+            PSlot::from_raw(3),
+            BlockHeight::from_raw(1_000),
+            &Default::default(),
+        )
+        .expect("aggregate");
+        assert_eq!(
+            spendable,
+            AtomicUnits::from_raw(42_000),
+            "only the active slot's records may sum"
+        );
+
+        // Negative control: with the dormant slot active, its record is the
+        // whole answer — the filter selects, it does not merely subtract.
+        let other = scoped_spendable(
+            &records,
+            PSlot::from_raw(7),
+            BlockHeight::from_raw(1_000),
+            &Default::default(),
+        )
+        .expect("aggregate");
+        assert_eq!(other, AtomicUnits::from_raw(900_000));
     }
 
-    #[tokio::test]
-    async fn aggregate_is_zero_when_no_pscan_seal() {
-        let (arc, _tmp) = fresh_engine_arc().await;
+    // ---- Honest zeros before any anchor work (real engines, offline) -------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn aggregate_is_zero_when_no_stake_engine() {
+        let (_tmp, engine) = crate::engine::test_support::non_staker_engine(SEED_MULT);
+        let arc = Arc::new(RwLock::new(engine));
         let balance = Engine::drain_balance_aggregate(arc)
             .await
-            .expect("no seal must yield an honest Ok(0), not a syncing/state error");
+            .expect("a non-staker must yield an honest Ok(0), not a syncing/state error");
         assert_eq!(
             balance,
             AtomicUnits::from_raw(0),
             "a non-staker wallet drains nothing"
+        );
+    }
+
+    /// A staker with no active persona is an honest zero — nothing is
+    /// drainable *right now* (`drain` itself refuses `NoActivePersona`) —
+    /// short-circuited before the seal load and anchoring, which is what
+    /// makes this test runnable offline.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn aggregate_is_zero_when_no_active_persona() {
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let arc = Arc::new(RwLock::new(engine));
+        let balance = Engine::drain_balance_aggregate(arc)
+            .await
+            .expect("an idle staker must yield an honest Ok(0)");
+        assert_eq!(balance, AtomicUnits::from_raw(0));
+    }
+
+    /// With an active persona AND a sealed funding set, the read proceeds
+    /// past both scope gates to the anchor step — offline that is the
+    /// transient `Unanchorable` ("syncing"), never a fabricated zero. Proves
+    /// the persona gate does not false-refuse a real staker and that the
+    /// sealed set loads before anchoring.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn active_persona_with_sealed_funding_reaches_the_anchor() {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::PScanState;
+
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        activate_persona(&engine, 3).await;
+
+        // Seal a funding set through the engine's own persistence handle.
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            vec![funding_record(
+                3,
+                10,
+                5,
+                40_000,
+                MintLineageOutput::EmissionReward,
+            )],
+            Vec::new(),
+            Default::default(),
+        );
+        let bytes = state.to_postcard_bytes().expect("encode pscan state");
+        engine
+            .persistence()
+            .save_pscan_state(engine.state_wrap_key().as_bytes(), &bytes)
+            .expect("seal funding set");
+
+        let arc = Arc::new(RwLock::new(engine));
+        let err = Engine::drain_balance_aggregate(arc)
+            .await
+            .expect_err("a fresh tree cannot anchor — the read must say syncing, not 0");
+        assert!(
+            matches!(err, DrainBalanceReadError::Unanchorable { .. }),
+            "got {err:?}"
         );
     }
 }

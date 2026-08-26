@@ -74,8 +74,6 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{BlockHeight, SettlementEpoch};
-use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -843,9 +841,10 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
     }
 }
 
-/// Canonical [`PFundingOutputRecord`] test fixture — the single owner of the
-/// full field list, so a field added to the record is applied here once
-/// rather than hand-mirrored across every module's local builder.
+/// Canonical [`PFundingOutputRecord`] test fixture — delegates to the
+/// feature-gated `__test_helpers` builder, which owns the full field list
+/// (one owner: a field added to the record is applied there once, and the
+/// in-crate suites and the `test-helpers` downstream consumers share it).
 /// `spendable_height` is derived through the same shared X5 maturity math the
 /// production paths use (`transfer::eligible_height`, plain no-timelock
 /// maturity); tests exercising the immature-exclusion case override the field
@@ -857,23 +856,109 @@ pub(crate) fn funding_record(
     amount: u64,
     lineage: MintLineageOutput,
 ) -> PFundingOutputRecord {
-    PFundingOutputRecord {
-        p_slot: shekyl_types::PSlot::from_raw(p_slot),
-        index_in_transaction: 0,
-        gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
-        output_key: [1u8; 32],
-        commitment: [2u8; 32],
-        ciphertext_x25519: [3u8; 32],
-        ciphertext_ml_kem: vec![4u8; 8],
-        amount: AtomicUnits::from_raw(amount),
-        height: BlockHeight::from_raw(height),
-        epoch: SettlementEpoch::from_raw(0),
-        lineage,
-        spendable_height: shekyl_engine_state::transfer::eligible_height(
-            BlockHeight::from_raw(height),
-            shekyl_types::Timelock::None,
-        ),
+    crate::__test_helpers::funding_record_for_test(p_slot, gindex, height, amount, lineage)
+}
+
+// ---- Shared wallet fixtures (WI-RPC-5 hoist) -----------------------------
+//
+// One home for the never-connecting daemon / deterministic-seed / staker
+// wallet family that the staking suites (`principal_stake`, `drain_facade`,
+// `drain_read`, `stake_persist`, …) each carried a private copy of. The
+// bodies were byte-identical per copy (the seed multiplier aside, which is
+// the one legitimate per-suite degree of freedom — distinct multipliers keep
+// suites on distinct wallets), so the copies were pure drift surface.
+
+use crate::engine::{
+    Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
+};
+use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_engine_file::SafetyOverrides;
+use shekyl_types::PSlot;
+use tempfile::TempDir;
+
+/// A `DaemonClient` that never connects: paths under test short-circuit
+/// before any network I/O, and constructing the client attempts none.
+pub(crate) fn dummy_daemon() -> DaemonClient {
+    let rpc = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(shekyl_rpc_transport::HttpRpc::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+    })
+    .expect("construct HttpRpc (no actual connection attempted)");
+    DaemonClient::new(rpc)
+}
+
+/// Deterministic master seed; `multiplier` keeps distinct suites on
+/// distinct wallets (each former private copy had its own).
+pub(crate) fn fixed_seed(multiplier: u8) -> [u8; MASTER_SEED_BYTES] {
+    let mut s = [0u8; MASTER_SEED_BYTES];
+    for (i, b) in s.iter_mut().enumerate() {
+        *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(multiplier);
     }
+    s
+}
+
+/// The staking suites' shared credentials.
+pub(crate) fn test_creds() -> Credentials<'static> {
+    Credentials::password_only(b"correct horse battery staple")
+}
+
+/// A fresh **non-staker** full engine (no bond record → `stake_handle()` is
+/// `None`), on its own tempdir.
+pub(crate) fn non_staker_engine(seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().join("wallet");
+    let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
+    let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create non-staker");
+    (tmp, engine)
+}
+
+/// A **staker** engine (persists a bond record for `slot` →
+/// `staking_enabled`, then reopens so the `StakeEngine` spawns). Idle — the
+/// caller activates a persona if it needs one
+/// ([`activate_persona`]).
+pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().join("wallet");
+    let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
+    let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
+    let network = params.network;
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+    engine
+        .persist_bond_record(PSlot::from_raw(slot))
+        .expect("persist bond record → staking_enabled");
+    engine.close(&creds).expect("close created wallet");
+    let opened = Engine::<SoloSigner>::open_full(
+        &base,
+        &creds,
+        network,
+        dummy_daemon(),
+        SafetyOverrides::none(),
+    )
+    .expect("reopen staker wallet");
+    let engine = match opened {
+        OpenedEngine::Loaded(w) => w,
+        OpenedEngine::Restored { wallet, .. } => wallet,
+    };
+    assert!(
+        engine.stake_handle().is_some(),
+        "a staker reopen spawns the StakeEngine"
+    );
+    (tmp, engine)
+}
+
+/// Mint + activate persona `slot` on a staker engine.
+pub(crate) async fn activate_persona(engine: &Engine<SoloSigner>, slot: u32) {
+    let stake = engine.stake_handle().expect("staker has a StakeEngine");
+    let handle = stake
+        .mint_handle(PSlot::from_raw(slot))
+        .await
+        .expect("mint persona handle");
+    stake
+        .activate_persona(handle)
+        .await
+        .expect("activate persona");
 }
 
 #[cfg(test)]

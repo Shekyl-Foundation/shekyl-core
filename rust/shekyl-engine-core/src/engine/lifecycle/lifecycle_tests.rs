@@ -19,37 +19,14 @@ use shekyl_address::Network;
 use shekyl_crypto_pq::account::SeedFormat;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
-/// Produce a `DaemonClient` against a never-resolved URL. The
-/// lifecycle methods covered here do not issue any RPC calls;
-/// the daemon is held on the `Engine<S>` for refresh / submit
-/// paths that land in later commits.
-///
-/// **Runs inside the ambient test runtime.** Since `KeyEngineHandle::spawn`
-/// became require-ambient (§4.2), every engine-building lifecycle test is a
-/// `#[tokio::test(flavor = "multi_thread")]`. This helper therefore must not
-/// build a *nested* runtime (`block_on` inside a runtime panics); it bridges
-/// the async `HttpRpc::new` to the sync test body via
-/// `block_in_place` + the ambient handle — the same shape as
-/// [`super::drive_persistence`]'s multi-thread branch, and the reason the
-/// tests pin `flavor = "multi_thread"`.
-fn dummy_daemon() -> DaemonClient {
-    let rpc = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-    })
-    .expect("construct HttpRpc (no actual connection attempted)");
-    DaemonClient::new(rpc)
-}
+use crate::engine::test_support::dummy_daemon;
 
+/// This suite's deterministic seed (multiplier 7).
 fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
-    for (i, b) in s.iter_mut().enumerate() {
-        *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-    }
-    s
+    crate::engine::test_support::fixed_seed(7)
 }
 
 fn fixed_seed_other() -> [u8; MASTER_SEED_BYTES] {

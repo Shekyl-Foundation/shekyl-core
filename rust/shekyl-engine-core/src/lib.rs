@@ -34,6 +34,14 @@ pub use engine::{
     TxRecipientSummary, TxRequest, TxShapeEstimate, ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
+// The exclusive upper bound of `stake_in`'s system-drawn cover
+// (`Engine::stake_in` sends `amount + cover`, `cover ~ U[1, bound)`).
+// Re-exported so the RPC/CLI disclosure copy renders the bound from the
+// enforcing constant — a hardcoded "0.75 SKL" twin would silently lie the
+// day the rung moves. The exact per-draw figure is deliberately never
+// disclosed pre-send (a discard-and-rebuild loop could steer the submitted
+// cover distribution); only this bound is.
+pub use shekyl_standoff::COVER_RUNG_ATOMIC;
 // Re-exported so the wallet-RPC layer's `make_uri` / `parse_uri` projections
 // can consume the one payment-URI codec without a direct `shekyl-address`
 // dependency — mirroring the `ShekylAddress` re-export in [`engine`].
@@ -148,6 +156,87 @@ pub mod __test_helpers {
         engine
             .persist_bond_record(PSlot::from_raw(slot))
             .map(|_ticket| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Canonical [`PFundingOutputRecord`] test fixture — the single owner of
+    /// the full field list (a field added to the record is applied here once);
+    /// `engine::test_support::funding_record` delegates here, so the in-crate
+    /// suites and the feature-gated downstream consumers share one builder.
+    /// `spendable_height` is derived through the same shared X5 maturity math
+    /// the production paths use.
+    pub fn funding_record_for_test(
+        p_slot: u32,
+        gindex: u64,
+        height: u64,
+        amount: u64,
+        lineage: shekyl_engine_state::pscan_state::MintLineageOutput,
+    ) -> shekyl_engine_state::pscan_state::PFundingOutputRecord {
+        shekyl_engine_state::pscan_state::PFundingOutputRecord {
+            p_slot: shekyl_types::PSlot::from_raw(p_slot),
+            index_in_transaction: 0,
+            gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
+            output_key: [1u8; 32],
+            commitment: [2u8; 32],
+            ciphertext_x25519: [3u8; 32],
+            ciphertext_ml_kem: vec![4u8; 8],
+            amount: shekyl_units::AtomicUnits::from_raw(amount),
+            height: shekyl_types::BlockHeight::from_raw(height),
+            epoch: shekyl_types::SettlementEpoch::from_raw(0),
+            lineage,
+            spendable_height: shekyl_engine_state::transfer::eligible_height(
+                shekyl_types::BlockHeight::from_raw(height),
+                shekyl_types::Timelock::None,
+            ),
+        }
+    }
+
+    /// Seed a deterministic nonzero staking history into the wallet's sealed
+    /// P-scan state, through the engine's own persistence handle and resident
+    /// wrap key: one confirmed JoinMarket bond post under `slot` (→ a nonzero
+    /// `bonded_principal_confirmed` leg) and one emission-reward funding
+    /// output of `reward_atomic` under the same slot (→ a nonzero
+    /// `rewards_received_unspent` leg). Second `test-helpers` consumer after
+    /// [`make_staker_for_test`] (same rule-21 shape — a named downstream
+    /// consumer, `shekyl-wallet-rpc`, whose WI-RPC-5 staking-field wiring
+    /// test needs a wallet whose authoritative staking view is nonzero; no
+    /// production API reaches that state offline, and an all-zero fixture
+    /// cannot distinguish live projection from a hardcoded-zero regression).
+    ///
+    /// Overwrites any existing seal. Test-only (feature-gated); never
+    /// compiled into a default production build.
+    pub fn seed_staking_history_for_test(
+        engine: &Engine<SoloSigner>,
+        slot: u32,
+        reward_atomic: u64,
+    ) -> Result<(), String> {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::{BondPostRecord, MintLineageOutput, PScanState};
+
+        let persona = shekyl_types::PCanonicalId::from_bytes([0xA7; 32]);
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            Default::default(),
+            Default::default(),
+            vec![BondPostRecord {
+                height: shekyl_types::BlockHeight::from_raw(10),
+                p_canonical_id: persona,
+                post_kind: 0,
+            }],
+            vec![funding_record_for_test(
+                slot,
+                10,
+                5,
+                reward_atomic,
+                MintLineageOutput::EmissionReward,
+            )],
+            Vec::new(),
+            Default::default(),
+        );
+        let bytes = state.to_postcard_bytes().map_err(|e| e.to_string())?;
+        engine
+            .persistence()
+            .save_pscan_state(engine.state_wrap_key().as_bytes(), &bytes)
             .map_err(|e| e.to_string())
     }
 }
