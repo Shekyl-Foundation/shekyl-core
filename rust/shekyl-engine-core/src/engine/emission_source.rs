@@ -596,10 +596,54 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 /// to express a mismatched pair.
 ///
 /// This is one of **two** checks, not a replacement for the other. This one
-/// proves the facts describe the persona that was *fetched*. The `AssembleUnbond`
-/// handler separately proves the fetched persona is the one whose *handle* is
-/// being spent (`RecordPersonaMismatch`) — a caller can still fetch A honestly
-/// and present it with B's handle, and that is the handler's arm to refuse.
+/// proves the facts came back from a request that named this `P`. The
+/// `AssembleUnbond` handler separately proves that `P` is the one whose
+/// *handle* is being spent (`RecordPersonaMismatch`) — a caller can still fetch
+/// A honestly and present it with B's handle, and that is the handler's arm to
+/// refuse.
+///
+/// # What this type does NOT prove
+///
+/// **The pairing is request association, not response authentication.** It says
+/// what the wallet *asked for*; it says nothing about whether the daemon
+/// answered with that record. A stale cache, a misrouted reply, or a lying node
+/// can return B's facts to a request naming A, and this type will label them A
+/// honestly — every downstream equality check then agrees, because they are all
+/// checking the label. Do not read `p_id()` as "these facts belong to this
+/// persona".
+///
+/// **No echo — settled, not reopened here.** A responder-supplied `p_id` to
+/// check against is self-certified and would authenticate nothing while looking
+/// authoritative. That decision stands; the reasoning is pinned once in
+/// `the_fetch_binds_the_response_to_the_id_it_asked_for` rather than re-argued
+/// at every site that touches the pairing.
+///
+/// The residual is bounded. Consensus re-verifies every operand against the real
+/// record, so wrong facts produce a **rejected transaction**, not a wrong state
+/// transition, and the persona-key wipe is gated on confirmed on-chain evidence
+/// rather than anything read here. The cost of a wrong answer is a wrong
+/// *readiness verdict* on a screen that reads as irreversible — a UX failure on
+/// a serious screen, not a fund-loss one.
+///
+/// The *handle* side is not this type's problem, and it is a live hazard rather
+/// than a theoretical one — for a reason that is easy to get backwards. A wallet
+/// activates one persona at a time, but it **holds many**, and the exit path is
+/// precisely why the non-active ones stay resident: `ARCHIVAL_BOND_CONSTRUCTION.md`
+/// keeps the bonded *union* rather than a clean lookahead window because the
+/// archival model rotates *while bonded*, leaving a retired persona's bonds
+/// on-chain as dormant balances, and "unbonding a retired persona later needs
+/// that persona's `bond_spend` key" — dropping them "bricks unbonding". So the
+/// persona being exited is routinely **not** the active one, several are held at
+/// once, and a caller really can pair one persona's record with another's
+/// handle. That is the arm `AssembleUnbond` refuses.
+///
+/// It is also why the exit must **not** copy `drain_to_principal`'s shape. That
+/// façade resolves `active_persona()` and takes no slot parameter, which is
+/// right for a `P`-lane spend and wrong here: applied to the exit it would brick
+/// unbonding every retired-but-bonded persona. *One persona on the wire at a
+/// time* is the invariant (no simultaneous wire activity — the firewall permits
+/// the dormant balances); *"only the active persona can be unbonded"* is not,
+/// and the two read alike.
 #[derive(Debug, Clone)]
 pub struct ClaimSourceFor {
     p_id: PCanonicalId,
@@ -728,6 +772,16 @@ mod tests {
     /// daemon willing to send the wrong record is willing to echo the right id
     /// over it, so an echo would authenticate nothing while making the field
     /// look authoritative.
+    ///
+    /// **Read this test as a limit, not a guarantee.** The canned daemon here
+    /// hands the SAME record to two different requests and both wrappers come
+    /// back correctly labelled — which is the property being asserted, and is
+    /// also a demonstration that the label is not a claim about the facts. That
+    /// is exactly the shape of a dishonest or stale answer, and this test shows
+    /// it passing. It has to: [`ClaimSourceFor`] binds request association, and
+    /// its "What this type does NOT prove" section is the other half of this
+    /// test's meaning. Anyone reaching for this test as evidence that a response
+    /// is authenticated has it backwards.
     #[tokio::test]
     async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
         #[derive(Clone)]

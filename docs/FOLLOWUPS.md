@@ -333,12 +333,17 @@ sustainability is unaffected by the recalibration.
   `src/device/` has a named live consumer outside the directory, or is
   deleted. *Target: V3.1.*
 
-- **Staking has no exit: the wallet can build one of the four bond-post
-  kinds, and the refusal cites a consensus fact that is not true**
-  (added 2026-08-19, surfaced while scoping the Phase-5 deletion).
-  `bond_assembly.rs::wire_bond_post_input` accepts `JoinMarket` and
-  refuses every other `post_kind` with *"invalid at genesis"*. That
-  statement does not match consensus:
+- **Staking has no REACHABLE exit: the wallet can build two of the four
+  bond-post kinds, and neither is callable** (added 2026-08-19, surfaced
+  while scoping the Phase-5 deletion; heading corrected 2026-08-26 by
+  PR-P4 — it read "can build one of the four" and "the refusal cites a
+  consensus fact that is not true", and both halves moved: `Unbond` gained
+  a producer and that refusal is gone. The heading is the grep-visible
+  part, so it is corrected at source rather than only in the update below).
+  `bond_assembly.rs::wire_bond_post_input` accepted `JoinMarket` alone and
+  refused every other `post_kind` with *"invalid at genesis"* — it accepts
+  `Unbond` too as of PR-P4, and `Rebond` / `HoldingsUpdate` now refuse by
+  name. The original refusal's statement did not match consensus:
   [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §3.4 gives
   `Unbond` (`post_kind` 2) a full allowed-terms row with implemented
   verify (`verify_unbond_bond_post` / `unbond_connect` / `unbond_pop`,

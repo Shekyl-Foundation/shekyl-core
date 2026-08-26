@@ -288,7 +288,10 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Ask the actor to assemble the `Unbond` post's vin ([`AssembleUnbond`]).
+    /// Ask the actor to assemble the full `Unbond` exit transaction
+    /// ([`AssembleUnbond`]) — the persona-bound wire bytes, not the vin. It
+    /// returned a bare `UnbondVin` before slice 2b; callers get
+    /// [`AssembledUnbondPost`] now.
     ///
     /// **`pub(crate)`, and deliberately not wired to any RPC method or CLI verb.**
     /// The gate on this lane is reachability, not existence: the producer has to
