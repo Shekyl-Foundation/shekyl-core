@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The wallet can read the four `Unbond` verify operands and build the
+  `Unbond` post's vin (PR-P4).** Before this it held *none* of
+  `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`
+  or `last_settled_slash_epoch`, so an exit producer could only have
+  assembled blind. `/archival_claim_source` now marshals all four — the
+  interval-log count was the one missing from the original three, and it
+  is the operand with no absent state, which is exactly why it fell out
+  of a list — and the decoder makes every one a REQUIRED field: absence
+  is a decode error, never a default. The permissive reading is the
+  dangerous one here. `release_cooldown_elapsed` and
+  `slashes_settled_through` both treat an absent serve anchor as "clear",
+  and `0 < MAX_BOND_BAD_INTERVALS` passes, so a field that never arrived
+  would have told a user an irreversible exit was safe to take.
+  `ServeAnchor` and `SlashWatermark` keep "never served" / "nothing
+  settled" distinct from "never arrived" at the type level, and are the
+  single place either becomes an `Option` for consensus.
+  `build_unbond_vin` returns an `UnbondVin` witness whose sole
+  constructor establishes the genesis-frozen invariants, and
+  `UnbondRecordState::ensure_exit_ready` mirrors
+  `verify_unbond_bond_post`'s refusals **in the verifier's own order**, so
+  a wallet refusal and a consensus rejection cannot disagree about why.
+  **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
+  no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
+  RESERVED. The gate on this lane is reachability, not existence: nothing
+  on the exit path becomes callable until a regtest walk has exercised
+  the retire path end to end — the persona-key wipe, the funded gate, and
+  the seal-then-act crash ordering. That walk lands as its own PR, so the
+  producer merging is not the event that lifts RESERVED.
+
 ### Changed
 
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary

@@ -65,7 +65,6 @@ use super::types::*;
 /// absent field is a decode error — and these types carry that guarantee the
 /// rest of the way.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // PR-P4 slice 2b: the tx-assembly caller builds this from a claim-source read.
 pub(crate) struct UnbondRecordState {
     /// The persona these facts describe — checked against the handle's own
     /// derived id before anything is built for it.
@@ -97,7 +96,7 @@ impl UnbondRecordState {
     /// error. Both the record facts and `current_settlement_epoch` come from
     /// this one response, so the settled epoch a refusal quotes is the epoch
     /// the anchors were read against.
-    #[allow(dead_code)] // PR-P4 slice 2b: called by the tx-assembly path.
+    #[allow(dead_code)] // PR-P4 slice 2b: the tx-assembly path is its caller.
     pub(crate) fn from_claim_source(fetched: &ClaimSourceFor) -> Option<Self> {
         let source = fetched.source();
         let bond = source.bond.as_ref()?;
@@ -112,14 +111,12 @@ impl UnbondRecordState {
     }
 
     /// The persona these facts describe.
-    #[allow(dead_code)] // PR-P4 slice 2b: read by the `AssembleUnbond` binding check.
     pub(crate) fn p_id(&self) -> PCanonicalId {
         self.p_id
     }
 
     /// The exit's `bond_debit` by contract — `verify_unbond_bond_post` requires
     /// the vin's debit to equal this exactly.
-    #[allow(dead_code)] // PR-P4 slice 2b: read by the `AssembleUnbond` builder call.
     pub(crate) fn bonded_total_atomic(&self) -> u64 {
         self.bonded_total_atomic
     }
@@ -129,7 +126,6 @@ impl UnbondRecordState {
     /// Mirrors the verify arm's record-state checks in the same order, using the
     /// same predicates, so a refusal here and a rejection there cannot disagree
     /// about *why*.
-    #[allow(dead_code)] // PR-P4 slice 2b: called by the tx-assembly path.
     pub(crate) fn ensure_exit_ready(&self) -> Result<(), UnbondNotReady> {
         // FIRST, because it is first at the verifier: `NothingToUnbond` is
         // checked before the interval log, the cooldown, or the watermark
@@ -191,7 +187,6 @@ impl UnbondRecordState {
 /// outputs, the surface-A `pqc_auths` slot — is slice 2b, and is deliberately
 /// not reachable from any RPC method or CLI verb until slice 3's regtest walk
 /// has exercised the retire path end to end.
-#[allow(dead_code)] // PR-P4 slice 2b: sent by the tx-assembly path.
 pub(crate) struct AssembleUnbond {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,

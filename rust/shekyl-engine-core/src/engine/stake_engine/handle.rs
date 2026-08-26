@@ -300,7 +300,7 @@ impl StakeEngineHandle {
     /// This is the engine-internal seam the walk drives — and the seam an
     /// actor-level test uses to prove the handler's persona-binding refusal is
     /// reachable, which a unit test on `UnbondRecordState` cannot do.
-    #[allow(dead_code)] // PR-P4 slice 2b: the production caller lands with the walk; today's caller is `cfg(test)`.
+    #[allow(dead_code)] // PR-P4: retires with the `unstake` verb; today's caller is a test.
     pub(crate) async fn assemble_unbond(
         &self,
         msg: AssembleUnbond,

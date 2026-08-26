@@ -137,7 +137,20 @@
 #                                                   the funded gate, and the
 #                                                   seal-then-act crash
 #                                                   ordering. RESERVED stands
-#                                                   until that walk runs.)
+#                                                   until that walk runs.
+#                                                   The walk lands as its OWN
+#                                                   PR, separately from the
+#                                                   producer (ruled
+#                                                   2026-08-26): a walk
+#                                                   sharing a PR with the code
+#                                                   it judges creates pressure
+#                                                   to soften the walk when it
+#                                                   goes red. So the producer
+#                                                   merging is NOT the event
+#                                                   that lifts RESERVED — this
+#                                                   line is the only thing
+#                                                   binding the two once they
+#                                                   are split.)
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
 #       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
 #       it carries NO fee parameter — no FeePriority, no amount, no

@@ -38,12 +38,15 @@ filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
 `drain`; `get_balance.staked` / `claimable_rewards` are live projections,
 no longer hardcoded zeros) are live.
 
-RESERVED methods (`unstake` — gated on the Unbond producer — and
-`match_transfer_to_request` — gated on an Engine match method) remain
-Engine-gated; the claim-era names `claim` and `get_stakes` are REJECTED,
-not pending (emission claims are engine-side; `principal_stakes()` is
-RPC-forbidden as the P↔principal edge). See the OpenAPI header registry
-and `docs/FOLLOWUPS.md`.
+RESERVED methods remain Engine-gated: `unstake` and
+`match_transfer_to_request` (the latter gated on an Engine match
+method). `unstake` is no longer gated on a *missing producer* — PR-P4
+built the `Unbond` producer. Its gate is now REACHABILITY: nothing on
+the exit path becomes callable from RPC or CLI until the regtest walk
+has exercised the retire path end to end. The claim-era names `claim`
+and `get_stakes` are REJECTED, not pending (emission claims are
+engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
+edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.
 
 Honest `OUTGOING` transfer history landed with PR-SJ-2 (send-journal
 projection), closing the Phase 4b `get_transfers` OUTGOING-filter

@@ -388,6 +388,18 @@ sustainability is unaffected by the recalibration.
   `get_drain_balance` are the replacement). Both rejections are recorded
   rule-21-shaped in the `wallet_rpc.yaml` header registry.
 
+  **UPDATE 2026-08-26 (PR-P4): the `Unbond` producer is now partly built,
+  and the entry's core still stands — for a different reason.** The vin
+  producer (`build_unbond_vin`) and the engine-side preconditions
+  (`UnbondRecordState`, `AssembleUnbond`) landed; the tx assembly around
+  the vin (slice 2b) has not. Bond-out therefore remains impossible, but
+  from **unreachability** rather than absence: `assemble_unbond` is
+  `pub(crate)` with no RPC method and no CLI verb behind it. Read that as
+  a narrower guarantee than the original — absence needed no upkeep,
+  unreachability does, and it lapses the moment a caller outside
+  `cfg(test)` appears. `wallet_rpc.yaml`'s RESERVED `unstake` entry holds
+  that condition.
+
 - **Release-asset manifest signing owed before the first non-RC release
   tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
   task, not an open decision).** The original entry posed a three-way
@@ -4868,6 +4880,15 @@ sustainability is unaffected by the recalibration.
     fire this criterion by construction** — the façade takes no slot argument,
     resolves only the live active persona, and does not unbond anything; the
     criterion still awaits an unbond producer that could select arbitrary slots.
+    UPDATE 2026-08-26 (PR-P4): an `Unbond` producer now exists, so the premise
+    of the sentence above has moved — but the criterion still does not fire,
+    and the reason is worth stating exactly because it is weaker than the old
+    one. It is not that no producer exists; it is that no *reachable* one does
+    (`assemble_unbond` is `pub(crate)`, no RPC method, no CLI verb), and that
+    the handler refuses any record whose persona is not the handle's own, so a
+    caller cannot reach across slots even if it could reach the seam. **Reopen
+    on the RPC/CLI verb landing, not on the producer landing** — that is the
+    event this criterion was really about.
     **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with

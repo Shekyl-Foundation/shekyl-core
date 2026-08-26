@@ -369,7 +369,6 @@ impl PersonaIdentity {
 /// lifts, not merely that it applies. Every predicate behind these is
 /// consensus's own function, called rather than restated.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[allow(dead_code)] // PR-P4 slice 2b: constructed by `UnbondRecordState::ensure_exit_ready`.
 pub(crate) enum UnbondNotReady {
     /// The record has no bonded balance, so there is nothing to exit.
     ///

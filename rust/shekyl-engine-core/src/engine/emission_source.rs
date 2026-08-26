@@ -141,7 +141,6 @@ impl ServeAnchor {
     /// `release_cooldown_elapsed` / `slashes_settled_through` provably came
     /// from a daemon that said "never served" — not from a missing field.
     #[must_use]
-    #[allow(dead_code)] // PR-P4 slice 2: `AssembleUnbond` is the caller; it is the only conversion to the verifier's operand form.
     pub const fn as_verify_operand(self) -> Option<u64> {
         match self {
             Self::NeverServed => None,
@@ -182,7 +181,6 @@ pub enum SlashWatermark {
 impl SlashWatermark {
     /// The consensus predicate's operand form.
     #[must_use]
-    #[allow(dead_code)] // PR-P4 slice 2: `AssembleUnbond` is the caller; it is the only conversion to the verifier's operand form.
     pub const fn as_verify_operand(self) -> Option<u64> {
         match self {
             Self::NothingSettled => None,
@@ -219,7 +217,6 @@ pub struct BondContext {
     /// The record's current bonded balance — `verify_unbond_bond_post`'s first
     /// operand (`NothingToUnbond` at zero) and the exact value a full exit's
     /// `bond_debit` must equal.
-    #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` as the exit's `bond_debit`.
     pub bonded_total_atomic: u64,
     /// The record's interval-log length — `verify_unbond_bond_post`'s sixth
     /// and last record operand (`record_bad_interval_count`).
@@ -230,16 +227,11 @@ pub struct BondContext {
     /// field that never arrived would read as "the log has room" and let an
     /// unconnectable exit be assembled. Hence a required read, like every other
     /// exit operand.
-    #[allow(dead_code)]
-    // PR-P4 slice 2: read by `AssembleUnbond` as the `IntervalLogFull` operand.
     pub bad_interval_count: usize,
     /// The release-cooldown anchor. See [`ServeAnchor`] for why this is not an
     /// `Option<u64>`.
-    #[allow(dead_code)] // PR-P4 slice 2: read by `AssembleUnbond` / `unbond_readiness`.
     pub last_served: ServeAnchor,
     /// The slash scheduler's watermark. See [`SlashWatermark`].
-    #[allow(dead_code)]
-    // PR-P4 slice 2: read by `AssembleUnbond`'s slash-settlement precondition.
     pub last_settled_slash: SlashWatermark,
 }
 
@@ -651,7 +643,7 @@ impl ClaimSourceFor {
 /// pair cannot drift, and the bare form stays for consumers (the claim
 /// orchestrator, the serve-set pinner) that already carry `P` in their own
 /// context and read only the record's contents.
-#[allow(dead_code)] // PR-P4 slice 2b: the readiness/exit path is its caller.
+#[allow(dead_code)] // PR-P4 slice 2b: the tx-assembly path is its caller.
 pub async fn fetch_claim_source_for<R: Rpc>(
     rpc: &R,
     p_id: PCanonicalId,
