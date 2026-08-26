@@ -133,11 +133,18 @@ pub enum DrainToPrincipalError {
     },
     /// The daemon *answered* the fee query and the wallet refused the answer
     /// (`ValidatedFeeEstimates` ceiling) — retrying the connection does not
-    /// help (the `-29109` remedy shape).
-    #[error("drain fee estimate refused: {detail}")]
+    /// help (the `-29109` remedy shape). Carries the violation's public
+    /// scalars (daemon-quoted per-weight rate vs. the wallet's bound — chain
+    /// facts, never wallet amounts) so the RPC layer can fill `-29109`'s
+    /// structured `error.data` exactly as the send path does.
+    #[error("drain fee estimate refused by the wallet's sanity ceiling ({reason})")]
     FeeUnreasonable {
-        /// The ceiling violation's rendering.
-        detail: String,
+        /// Which interim check refused (engine-supplied static string).
+        reason: &'static str,
+        /// Offending per-weight rate (atomic units).
+        rate: u64,
+        /// The violated bound (atomic units per weight).
+        bound: u64,
     },
     /// A non-transient engine fault: a sealed-state read, a corrupted
     /// resident key, the curve-tree actor, or the assembly itself. Fail
@@ -260,7 +267,9 @@ where
         })?)
         .map_err(|e| match e {
             FeeEstimatorError::DaemonFeeUnreasonable(v) => DrainToPrincipalError::FeeUnreasonable {
-                detail: v.to_string(),
+                reason: v.reason(),
+                rate: v.rate(),
+                bound: v.bound(),
             },
             other => DrainToPrincipalError::FeeEstimate {
                 detail: other.to_string(),
