@@ -48,6 +48,35 @@ using namespace cryptonote;
 
 namespace {
 
+// The origin every bridged request carries.
+//
+// A handler asks `ctx` two questions: `m_restricted && ctx` — is this a
+// restricted listener answering a remote caller — and `ctx != NULL`, does
+// this request have an RPC origin at all. Both are true of everything that
+// reaches this bridge. It is the HTTP listener's only path into the
+// handlers, and the one caller that legitimately has no RPC origin is the
+// in-process console, which calls `core_rpc_server::on_*` directly and never
+// comes through here.
+//
+// Passing `nullptr` made both expressions false on every JSON and JSON-RPC
+// route, so no restricted policy in any bridged handler could fire: not the
+// request caps, and not the pool reads' `include_sensitive`, which decides
+// whether a transaction that has not been broadcast is disclosed at all.
+// Single-sourced here so there is one place to be wrong: the dispatchers
+// name this and nothing else, and `core_rpc_ffi_origin_is_present` fails if
+// it ever answers null again.
+//
+// The address is left default-constructed. `network_address::is_blockable()`
+// is false for one, which keeps `add_host_fail`'s per-host RPC ban scoring
+// the no-op it has always been on this path: this context asserts "an RPC
+// client asked", never "this particular peer asked", and a context shared by
+// every caller must not accumulate a ban score against one empty address.
+const core_rpc_server::connection_context* rpc_origin()
+{
+    static const core_rpc_server::connection_context ctx{};
+    return &ctx;
+}
+
 // JSON endpoint: deserialize request from JSON, call handler, serialize response to JSON.
 template<typename COMMAND>
 char* dispatch_json(core_rpc_server& rpc,
@@ -61,7 +90,7 @@ char* dispatch_json(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(body_json));
     }
 
-    (rpc.*handler)(req, res, nullptr);
+    (rpc.*handler)(req, res, rpc_origin());
 
     std::string out;
     epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), out);
@@ -81,7 +110,7 @@ char* dispatch_jsonrpc(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = (rpc.*handler)(req, res, nullptr);
+    bool ok = (rpc.*handler)(req, res, rpc_origin());
 
     std::string result_json;
     epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), result_json);
@@ -109,7 +138,7 @@ char* dispatch_jsonrpc_we(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = (rpc.*handler)(req, res, error_resp, nullptr);
+    bool ok = (rpc.*handler)(req, res, error_resp, rpc_origin());
 
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
@@ -367,6 +396,21 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
             + e.what() + R"("})";
         return strdup(err.c_str());
     }
+}
+
+// Test hooks (no production callers) for the two contracts of the origin
+// context above. `_is_present` is the one that makes `m_restricted && ctx`
+// mean `m_restricted`; `_is_blockable` must stay false or every bridged
+// request would score against one shared empty address.
+bool core_rpc_ffi_origin_is_present(void)
+{
+    return rpc_origin() != nullptr;
+}
+
+bool core_rpc_ffi_origin_is_blockable(void)
+{
+    const auto* ctx = rpc_origin();
+    return ctx && ctx->m_remote_address.is_blockable();
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }
