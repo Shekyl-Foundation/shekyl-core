@@ -573,7 +573,6 @@ pub struct RefreshHandle {
     /// actor's `StartRefresh` message must carry the same opts so
     /// the actor can re-invoke the same loop logic). Not used by
     /// the methods on the handle today.
-    #[allow(dead_code)] // Stage-4 reference + diagnostics
     opts: RefreshOptions,
 }
 

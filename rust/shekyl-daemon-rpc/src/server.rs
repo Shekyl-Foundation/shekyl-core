@@ -163,7 +163,6 @@ pub(crate) enum Endpoint {
     IsKeyImageSpent,
     SubmitTransaction,
     GetTransactionPool,
-    GetTransactionPoolHashesBin,
     GetTransactionPoolHashes,
     GetTransactionPoolStats,
     GetInfo,
@@ -238,11 +237,6 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::GetTransactionPool,
         paths: &["/get_transaction_pool"],
-        visibility: Visibility::Always,
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPoolHashesBin,
-        paths: &["/get_transaction_pool_hashes.bin"],
         visibility: Visibility::Always,
     },
     Route {
@@ -400,9 +394,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::SubmitTransaction => post(submit::submit_transaction),
         Endpoint::GetTransactionPool => {
             get(json::get_transaction_pool).post(json::get_transaction_pool)
-        }
-        Endpoint::GetTransactionPoolHashesBin => {
-            get(json::get_transaction_pool_hashes_bin).post(json::get_transaction_pool_hashes_bin)
         }
         Endpoint::GetTransactionPoolHashes => {
             get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes)
@@ -657,7 +648,6 @@ mod tests {
         "/is_key_image_spent",
         "/submit_transaction",
         "/get_transaction_pool",
-        "/get_transaction_pool_hashes.bin",
         "/get_transaction_pool_hashes",
         "/get_transaction_pool_stats",
         "/get_info",

@@ -386,11 +386,23 @@ moved from serialization to the four readers.
 **Does NOT change (and this is the round's main saving):** the vin layout,
 `ArchivalServeCreditResponse`'s fields, `canonical_bytes`' length, the pruned
 half, `SERVE_CREDIT_PRUNED_MAX_BYTES` and its pinned twin, and — because no
-persisted block byte moves — **rule 42 does not fire and no version constant
-bumps.** Each was on the opening draft's list and each comes off with the block
-going implicit. Recorded so nobody re-adds a schema bump "to be safe": a bump
-with no wire change is a false signal that costs the next reader a grounding
-pass.
+persisted block byte moves — **rule 42 does not fire and no persisted-block
+version constant bumps.** Each was on the opening draft's list and each comes
+off with the block going implicit. Recorded so nobody re-adds a wire-schema
+bump "to be safe": a bump with no wire change is a false signal that costs the
+next reader a grounding pass.
+
+**CORRECTED IN SCOPE 2026-08-26: a version DID bump — the other one.** The
+statement above is about rule 42's persisted-block wire constant, and it
+stands: no block blob byte moves (verified byte-identical in the fixture
+regen). But the **LMDB schema version** is a separate guard with a separate
+question — "can this code read an existing datadir" — and for that one the
+answer changed: a V9 datadir has 48-byte serve-credit rows, and this round's
+code against them silently misses every point read and then FATALs on the
+first scan. `db_lmdb.cpp` is now **V10** (delete-and-resync, the seed estate's
+live datadirs being exactly the population at risk). The two versions answer
+different questions and this round moved exactly one of them; writing "no
+version bumps" without naming which version was the error a reviewer caught.
 
 | # | Site | Change |
 |---|---|---|

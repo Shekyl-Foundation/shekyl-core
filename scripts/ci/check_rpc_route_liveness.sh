@@ -38,12 +38,6 @@ SERVER_RS="rust/shekyl-daemon-rpc/src/server.rs"
 # point: the cost of keeping dead surface should be visible.
 declare -A ALLOW=(
   ["/json_rpc"]="the JSON-RPC envelope itself; its methods are the surface, not this path"
-  # Found by this gate on its first run, and outside RK-4x's ruling. It is
-  # the .bin sibling of /get_transaction_pool_hashes, which IS called; this
-  # spelling is not, by anything. Retiring a served route is a surface
-  # decision, so it is recorded here rather than taken inside a slice.
-  # Remove this entry when it is disposed of either way.
-  ["/get_transaction_pool_hashes.bin"]="UNDISPOSED: no caller; awaiting a retire-or-keep ruling (found by this gate, RK-4x)"
 )
 
 # One entry per `paths:` line, so a route's aliases are checked as a unit: a

@@ -114,7 +114,19 @@ using namespace crypto;
 //   A new empty table is backward-compatible on an existing env — it does not
 //   change the block blob and needs no resync — so they ride the V9 boundary
 //   rather than asserting a false incompatibility with a bump.
-#define VERSION 9
+// V10: the `archival_serve_credit` key widens 48 → 56 B (PC-D4: BE(block_height)
+// appended, one row per CHALLENGE). A V9 datadir has 48-byte rows, and the V10
+// code against them fails in the WORST split of ways: point and prefix reads
+// silently miss every old row (a 56-byte probe never equals a 48-byte key),
+// while the full-scan `mv_size` guards throw FATAL — so a node would first
+// mispay/misjudge quietly and only crash on the next scan. Delete and resync.
+// This bump is the LMDB-schema guard doing its job; it is NOT rule 42's
+// persisted-block version, which correctly does not fire (no block blob byte
+// moves — verified byte-identical wire in the PC round's fixture regen).
+//   Within V10 (no bump): the additive `archival_settlement` table (SO-D2)
+//   rides this boundary for the same reason the witness tables rode V9 — a new
+//   empty table on an existing env asserts no incompatibility.
+#define VERSION 10
 
 namespace
 {
@@ -7116,11 +7128,14 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
   check_open();
 
   // One reverse-cursor seek per held shard over the BE composite key
-  // `P_id ‖ BE64(shard) ‖ BE64(epoch)` (P2B-8 Q1: the byte-sort IS
-  // (P, shard, epoch) ascending, so shard s's last-served epoch is the
-  // predecessor of the probe `P ‖ BE64(s) ‖ BE64(u64::MAX)`). Never-served
-  // shards are omitted from the result — the Rust fold treats them as
-  // carrying no cooldown anchor.
+  // `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(block_height)` (PC-D4 appended
+  // the height; P2B-8 Q1 still holds: the byte-sort IS (P, shard, epoch,
+  // height) ascending, so shard s's last-served epoch is the predecessor of
+  // the CEILING probe `P ‖ BE64(s) ‖ BE64(u64::MAX) ‖ BE64(u64::MAX)` — MAX
+  // in the appended component too, or the probe sorts BEFORE the rows it must
+  // sort after; see the note at the probe). Never-served shards are omitted
+  // from the result — the Rust fold treats them as carrying no cooldown
+  // anchor.
   std::vector<uint64_t> out;
   out.reserve(shard_ids.size());
 
@@ -7196,9 +7211,10 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
 
   // The all-shards form of the last-served marshal, for CompleteTree records
   // (they store no shard list — the record "holds" every shard). Hop scan
-  // over the same BE composite key `P_id ‖ BE64(shard) ‖ BE64(epoch)`: seek
-  // to each served shard's first row, jump straight to that shard's max
-  // epoch via the `epoch = u64::MAX` probe, record it, then hop to the next
+  // over the same BE composite key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖
+  // BE64(block_height)` (PC-D4): seek to each served shard's first row, jump
+  // straight to that shard's max epoch via the `epoch = height = u64::MAX`
+  // probe, record it, then hop to the next
   // shard's prefix — two seeks per *served* shard, never a row-by-row walk
   // of a shard's whole epoch history.
   std::vector<uint64_t> out;
@@ -8135,8 +8151,10 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
   // snapshot, and the claim-source window (WS-1 §5.5 single sourcing, C++
   // side): every consumer of the as-of-E gather funnels through this one
   // row-selection routine, so none can diverge on row selection. The epoch
-  // is the key SUFFIX (p_id | shard | epoch, BE), so a range seek by epoch
-  // is impossible — the full-table pass is inherent to the key layout; the
+  // is an INTERIOR key component at offset 40 (p_id | shard | epoch | height,
+  // BE — it was the suffix until PC-D4 appended the height), so a range seek
+  // by epoch is impossible — the full-table pass is inherent to the key
+  // layout; the
   // window form exists so the claim-source RPC pays it once per request,
   // not once per window epoch. Deterministic re-gather: serve-credit keys
   // are BE-ordered, cursor order is key order, and indices are assigned

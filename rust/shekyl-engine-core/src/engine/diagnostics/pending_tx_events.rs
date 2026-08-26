@@ -598,16 +598,10 @@ pub enum PendingTxDiagnostic {
 /// emit, so the coherence-property review surface is the method
 /// body, not the helper definition.
 ///
-/// `#[allow(dead_code)]`: the helper has no production caller until
-/// C5α's `LocalPendingTx::build` skeleton lands the first emission
-/// site. Same template as
-/// [`derive_snapshot_id`](crate::engine::refresh::derive_snapshot_id) in C1
-/// → C2γ (where the function was annotated with `dead_code` until
-/// `build_pending_tx_in_state` consumed it; here the dead-code
-/// annotation lifts at C5α). The annotation is itself a discipline
-/// pin: a future maintainer who wants to remove the helper must
-/// confirm no C5+ consumer exists first.
-#[allow(dead_code)]
+/// Lint-visible: the transfer path emits through this helper, so it carries no
+/// suppression. It followed the same arc as
+/// [`derive_snapshot_id`](crate::engine::refresh::derive_snapshot_id) — annotated
+/// while it had no caller, then unannotated once one landed.
 pub(crate) fn emit_pending_tx_diagnostic(sink: &dyn DiagnosticSink, event: PendingTxDiagnostic) {
     sink.emit_pending_tx(event);
 }

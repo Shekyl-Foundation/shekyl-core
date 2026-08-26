@@ -42,13 +42,11 @@ use crate::engine::{Network, ShekylAddress};
 /// tier; that confinement is the control, made a compile-time guarantee by the
 /// visibility bound (mirrors [`KeyEngineHandle`](super::key_actor::KeyEngineHandle)).
 #[derive(Clone)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
     pub(crate) actor: ActorRef<StakeEngine>,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl StakeEngineHandle {
     /// Spawn the StakeEngine over the pre-derived derive-forward set.
     ///
@@ -159,6 +157,7 @@ impl StakeEngineHandle {
 
     /// Activate the persona named by `handle` and return its public identity.
     /// Activation (with ephemeral-only wipe) when a different slot is active.
+    #[allow(dead_code)] // 2c-2a: the production caller lands with the assemble wiring; today's callers are all `cfg(test)`.
     pub(crate) async fn activate_persona(
         &self,
         handle: PersonaHandle,
@@ -244,7 +243,7 @@ impl StakeEngineHandle {
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
-    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
+    #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
     pub(crate) async fn plan_bond_post(
         &self,
         handle: PersonaHandle,
@@ -263,9 +262,9 @@ impl StakeEngineHandle {
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
     /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
-    /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
-    /// pruning **and** the RPC stake entry land — neither alone (half (a)
-    /// landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
+    /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
+    /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
+    /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,
@@ -305,9 +304,9 @@ impl StakeEngineHandle {
     /// the pending-drain record are the orchestrator's (DS-PR-2), outside this
     /// builder.
     ///
-    /// Dead_code allow: the assembly is wired; the Engine orchestrator entry
-    /// (DS-PR-2) and the RPC drain entry are the remaining consumers (rule-21).
-    #[allow(dead_code)]
+    /// The assembly is wired, so this carries no suppression; the Engine
+    /// orchestrator entry (DS-PR-2) and the RPC drain entry are the remaining
+    /// consumers (rule-21).
     pub(crate) async fn assemble_drain(
         &self,
         msg: AssembleDrain,
@@ -323,7 +322,6 @@ impl StakeEngineHandle {
     /// driving P-scan task (PR-B) calls this once per bounded batch, advancing the
     /// cursor over the returned range. `blocks[i]` must be the block at
     /// `range.start + i`.
-    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
     pub(crate) async fn scan_step(
         &self,
         range: BlockRange,
@@ -348,7 +346,6 @@ impl StakeEngineHandle {
     /// ([`RetireOutcome::SkippedFunded`], the funded-gate) rather than strand the
     /// funds. Idempotent: a persona already gone returns [`RetireOutcome::NotHeld`].
     /// The SP-5 task calls this when it confirms a persona is terminal.
-    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
     pub(crate) async fn retire_bonded_persona(
         &self,
         witness: RetirementWitness,
@@ -381,7 +378,6 @@ impl StakeEngineHandle {
 /// live transient. **Reversion clause:** if PR 2c+ introduces a bounded mailbox
 /// or an ask-timeout, that arm becomes reachable and must split into its own
 /// *retryable* `StakeEngineError` variant rather than collapse here.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 fn collapse_send_error<M>(err: SendError<M, StakeEngineError>) -> StakeEngineError {
     match err {
         SendError::HandlerError(e) => e,

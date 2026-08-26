@@ -757,8 +757,9 @@ public:
 
   /// Windowed snapshot gather: one snapshot per epoch in
   /// `[epoch_lo, epoch_hi)`, all rows collected in a SINGLE serve-credit
-  /// table pass (the epoch is the key suffix, so a per-epoch range seek is
-  /// impossible — the windowed pass is what bounds the unauthenticated
+  /// table pass (the epoch is an interior key component at offset 40 —
+  /// `p_id | shard | epoch | height` since PC-D4 — so a per-epoch range seek
+  /// is impossible; the windowed pass is what bounds the unauthenticated
   /// claim-source RPC to one scan per request instead of one per window
   /// epoch).
   virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,

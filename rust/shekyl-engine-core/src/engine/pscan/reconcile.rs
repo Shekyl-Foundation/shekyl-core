@@ -44,7 +44,6 @@ use super::scan_step::BondPostMatch;
 /// scanned" as "not present" (the SP-6 absence-≠-unscanned rule, made unrepresentable
 /// to violate rather than left as a caller obligation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the consumer is 2d-2 SP-R0's reconcile GC (downstream).
 pub(crate) enum ReconcileVerdict {
     /// A bond-post for this persona was found within `covered` — present. `height` /
     /// `post_kind` are its earliest post (the scan accumulates in height order).
@@ -74,7 +73,6 @@ pub(crate) enum ReconcileVerdict {
 /// A persona's absence is concludable only over `[floor, high)`; a persona
 /// with no floor row was never watched and gets no absence claim at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // transient — producer is the SP-5 sweep; consumer is 2d-2 SP-R0.
 pub(crate) struct PReconcileSet {
     covered: VerifiedRange,
     matches: Vec<BondPostMatch>,

@@ -1656,7 +1656,6 @@ where
         }
     }
 
-    #[allow(dead_code)] // trait surface only; production wiring lands with mempool eviction (V3.x).
     pub(super) fn signal_mempool_evicted_sync(
         &self,
         rid: ReservationId,

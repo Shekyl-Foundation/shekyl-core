@@ -597,13 +597,9 @@ pub struct Engine<
     /// the type-system signal that the orchestrator no longer owns key
     /// material (§6 step 3(c)).
     //
-    // `#[allow(dead_code)]`: at Stage 2 the field is held but not *read* on
-    // the production path — its load-bearing role is ownership (its `Drop`
-    // stops the actor and zeroizes the blob; `LocalSigner` carries a clone).
-    // Read sites land when the orchestrator routes key operations through the
-    // handle (Stage 4, per `STAGE_2_KEY_ENGINE_ACTOR.md` §8). The allow is
-    // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
+    // The field is read on the production path now, so it carries no
+    // suppression. Its other load-bearing role is ownership: its `Drop` stops
+    // the actor and zeroizes the blob (`LocalSigner` carries a clone).
     key: KeyEngineHandle,
 
     /// Handle to the wallet's [`CurveTreeActor`](super::curve_tree_actor::CurveTreeActor),
@@ -857,13 +853,11 @@ pub struct Engine<
     /// non-staker path. The actor's `Drop` (last handle clone) stops it and
     /// wipes the held bundles (`ZeroizeOnDrop`), mirroring `key`.
     //
-    // `#[allow(dead_code)]`: held but not yet *read* on any production path —
-    // the consumer (the JoinMarket bond request that mints a `PersonaHandle`
-    // and consumes a `PersistedBondTicket`) lands in 2c-2b. Its load-bearing
-    // role here is ownership: spawning the actor at open for stakers and
-    // wiping the bundles at close. The allow is reopened for deletion when
-    // 2c-2b's read sites land, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
+    // Read on a production path now, so it carries no suppression. Its other
+    // load-bearing role is ownership: spawning the actor at open for stakers
+    // and wiping the bundles at close. The JoinMarket bond request that mints
+    // a `PersonaHandle` and consumes a `PersistedBondTicket` still lands in
+    // 2c-2b.
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives

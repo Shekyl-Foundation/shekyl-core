@@ -64,4 +64,42 @@ macro_rules! bin_handler {
 }
 
 bin_handler!(get_blocks_by_height, "/get_blocks_by_height.bin");
-bin_handler!(get_o_indexes, "/get_o_indexes.bin");
+/// `/get_o_indexes.bin` — served natively (RK-4a), not dispatched to C++.
+///
+/// The first `.bin` method to answer from Rust. Every refusal keeps the
+/// shape the C++ gave: an unreadable request is a 400, and a transaction
+/// the store does not have is a **200 carrying a non-OK `status`**, because
+/// that is what the handler did (`res.status = "Failed"; return true`) and
+/// what the wallet client reads.
+pub async fn get_o_indexes(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
+    let Ok(request) = shekyl_rpc_types::GetOIndexesRequest::from_bin(&body) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    let core = state.core.clone();
+    let out = tokio::task::spawn_blocking(move || core.tx_output_indices(&request.txid)).await;
+    let reply = match out {
+        Ok(Ok((o_indexes, true))) => shekyl_rpc_types::GetOIndexesResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            o_indexes,
+        },
+        // No such transaction. The C++ answered 200 with `status: "Failed"`,
+        // and the wallet client branches on that; a transport-level error
+        // here would be a different reply, not a tidier one.
+        Ok(Ok((_, false))) => shekyl_rpc_types::GetOIndexesResponse {
+            status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
+            o_indexes: Vec::new(),
+        },
+        Ok(Err(_)) | Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
+        }
+    };
+    match reply.to_bin() {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "encode failed").into_response(),
+    }
+}

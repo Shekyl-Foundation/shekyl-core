@@ -94,7 +94,6 @@ pub(crate) enum Posture {
 
 /// Why a posture could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum PostureError {
     /// No posture was chosen **and** the local node is unreachable. The system
     /// **refuses** here — it does not fall back to a remote/third-party daemon.
@@ -182,7 +181,6 @@ pub(crate) enum BroadcastPosture {
 
 /// Why a broadcast posture could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum BroadcastPostureError {
     /// No posture was chosen **and** the local node is unreachable. The system
     /// **refuses** — it never falls back to a remote node the user did not name,

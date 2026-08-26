@@ -145,10 +145,6 @@ json_handler!(get_transactions, "/get_transactions");
 json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(is_key_image_spent, "/is_key_image_spent");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
-json_handler!(
-    get_transaction_pool_hashes_bin,
-    "/get_transaction_pool_hashes.bin"
-);
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
 json_handler!(get_limit, "/get_limit");

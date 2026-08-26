@@ -53,10 +53,6 @@ shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
 # matrix open).
 shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
 
-# LV-2a binary portable_storage codec. Unconditional std — this crate already
-# forces std via `shekyl-rpc-types`. Replaces the homegrown `get_o_indexes.bin`
-# parser. Decode uses `Limits::HTTP_BIN`.
-shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 
 [features]
 # NOTE: `std` here is aspirational while `shekyl-rpc-types` is a dependency

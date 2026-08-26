@@ -195,7 +195,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
         DJSON("/is_key_image_spent",                on_is_key_image_spent,           COMMAND_RPC_IS_KEY_IMAGE_SPENT),
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
-        DJSON("/get_transaction_pool_hashes.bin",   on_get_transaction_pool_hashes_bin, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN),
         DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
         DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),
         DJSON("/get_info",                          on_get_info,                     COMMAND_RPC_GET_INFO),
@@ -224,7 +223,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
     static const std::unordered_map<std::string, bin_fn> t = {
         DBIN("/get_blocks_by_height.bin",  on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
         DBIN("/getblocks_by_height.bin",   on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
-        DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
     };
     return t;
 }

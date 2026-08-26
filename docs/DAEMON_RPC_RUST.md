@@ -61,7 +61,7 @@ port — it is not part of this Phase 1 transport deletion.
 - **1 native Rust** endpoint: `POST /submit_transaction` — served
   directly by the Rust admission engine (`src/submit/`), never crossing
   the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
-- **Binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+- **Binary** endpoints (`/get_o_indexes.bin`, `/get_blocks_by_height.bin`)
   - POST-only; return **400 Bad Request** on parse failure
 - **JSON-RPC 2.0** methods via `POST /json_rpc` (includes curve-tree and
   `get_archival_emission_claim_source`)
@@ -76,6 +76,25 @@ Registration is FFI-table + Axum only — MAP macros are gone.
 distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
 distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
 with a named caller, never “keep epee.”
+
+### Deleted `.bin` pool-hashes sibling (no Axum route)
+
+`/get_transaction_pool_hashes.bin` and
+`COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN` are deleted. It is the binary
+spelling of `/get_transaction_pool_hashes`, which **is** called (the python
+framework's `daemon.py`); the `.bin` one was called by nothing. Both handlers
+performed the same two core reads and differed only in whether the hashes went
+out raw or hex, so the surviving JSON route keeps those reads and nothing else
+went callerless.
+
+Found by `ci/rpc-route-liveness` on its first run, and disposed of on the
+predicate already ruled for the batch-sync retirement below rather than
+carried as an exemption: an allowlist entry is a claim someone has to defend,
+and there was no defence to make.
+
+**Rule-21 reopen:** iff a named live consumer needs pool hashes in binary.
+Re-evaluation shape: a typed Rust route with that caller, not a restoration of
+the epee struct.
 
 ### Deleted batch sync (no Axum route)
 
@@ -276,7 +295,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_block_header_by_height` (+ `getblockheaderbyheight`) | `/json_rpc` | **native Rust** (RK-3: over `shekyl_rpc_block_header_at`) | wallet (`shekyl-rpc-client`), python-rpc, stressnet | migrated 2026-08-23 |
 | `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
-| `/get_o_indexes.bin` | yes | yes | wallet (`shekyl-rpc-client/src/lib.rs:577`) | keep (RK-4a) |
+| `/get_o_indexes.bin` | yes | **native Rust** (RK-4a: over `shekyl_rpc_tx_output_indices`, typed `.bin` map in `shekyl-rpc-types::bin_commands`) | wallet (`shekyl-rpc-client`) | migrated 2026-08-24 |
 | `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | yes | the engine's timing rig (`daemon_observability.rs`) | keep (RK-4b) |
 | `/get_blocks.bin` (+ `/getblocks.bin`), `/get_hashes.bin` (+ `/gethashes.bin`) | **no** | **removed** | none (wallet2's batch sync; `src/wallet/` deleted) | deleted (RK-4x, below) |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |

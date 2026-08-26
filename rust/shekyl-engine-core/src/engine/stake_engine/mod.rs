@@ -8,6 +8,32 @@
 //! Message handlers are split by family; the actor core keeps secrets (rule 36)
 //! behind `pub(crate)` fields reachable only inside this tree.
 //!
+//! # Re-checking the `#[allow(dead_code)]` markers in this tree
+//!
+//! Each marker carries its own trailing reason naming the consumer that retires
+//! it (CL-6). Those reasons are prose and can go stale silently — 32 of them did,
+//! and one was misread as evidence that a *sender* had not landed when it was
+//! describing a consumer that had. So the authority is the compiler, not the
+//! comments, and checking it takes three steps in this order:
+//!
+//! 1. **Strip every `#[allow(dead_code)]`** under `engine/stake_engine/`. This
+//!    step is not optional and is the whole procedure: while a marker is in
+//!    place it suppresses exactly the warning that would prove it stale, so
+//!    running clippy first proves nothing.
+//! 2. `cargo clippy -p shekyl-engine-core --all-targets -- -D warnings`, and
+//!    `cargo clippy -p shekyl-engine-core -- -D warnings` for the lib-only view.
+//!    Both must be run: the second strips test readers, so an item alive only
+//!    under `cfg(test)` shows up there and nowhere else.
+//! 3. **Restore only the sites clippy named**, and no others.
+//!
+//! `#[expect(dead_code)]` would do step 1–3 automatically, since it fails the
+//! build the moment an item becomes used. It cannot be used for the markers in
+//! this tree: their items *are* read by this crate's tests, so the expectation
+//! is fulfilled without `cfg(test)` and unfulfilled with it, and CI builds
+//! `--all-targets`. Observed as `this lint expectation is unfulfilled` on all
+//! six clippy lanes. Prefer `expect` for any *new* marker whose item is unused
+//! in every configuration.
+//!
 //! | Module | Role |
 //! |--------|------|
 //! | [`types`] | Domain values, errors, spawn args |

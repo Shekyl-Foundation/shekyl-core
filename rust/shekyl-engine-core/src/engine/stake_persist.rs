@@ -41,7 +41,7 @@
 //! This module *produces* the type (PR 2c-2a); the 2c-2b request path *consumes*
 //! it. The contract between the two PRs is a Rust type the consumer cannot
 //! forge, not a convention it has to remember. Inert until 2c-2b wires the
-//! consumer, so the producer carries `#[allow(dead_code)]`.
+//! consumer; the producer itself carries no dead-code suppression.
 
 use shekyl_engine_state::StakingBlock;
 use shekyl_types::PCanonicalId;
@@ -69,7 +69,6 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 /// Reopen this only if a 2c-2b caller provably needs to re-sign the *same*
 /// already-persisted record, with documented justification.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2b consumes it via plan_bond_post
 pub(crate) struct PersistedBondTicket {
     /// The persona slot whose live-bond record this ticket witnesses. Bound so
     /// 2c-2b's `plan_bond_post` can assert the ticket matches the persona being
@@ -77,7 +76,6 @@ pub(crate) struct PersistedBondTicket {
     p_slot: PSlot,
 }
 
-#[allow(dead_code)] // inert until 2c-2b consumes it via plan_bond_post
 impl PersistedBondTicket {
     /// The persona slot this ticket was minted for.
     #[must_use]
@@ -137,7 +135,6 @@ impl<
     /// [`PersistenceError`] if the durable `save_state` fails; in that case **no
     /// ticket is produced**, so the caller cannot proceed to sign — persist
     /// failure fails the operation closed, never open.
-    #[allow(dead_code)] // inert until 2c-2b consumes the ticket via plan_bond_post
     pub(crate) fn persist_bond_record(
         &self,
         slot: PSlot,

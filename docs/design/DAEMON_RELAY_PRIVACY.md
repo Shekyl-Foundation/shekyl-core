@@ -3118,6 +3118,24 @@ pre-Dandelion alternative of "censored entirely."
 
 ### 15.4 FTL and MIN_RELAY are *not* in this seam (a correction)
 
+> **VACATED for one class, 2026-08-25 — the statement is still true and has
+> stopped being informative.** This section cleared `MIN_RELAY_TIME` on the
+> ground that it *"governs an already-fluffed transaction, a different state
+> from the embargo"*, and §77.3 quoted that to refuse a re-run. Both were right
+> when written. `originated_stays_in_zone` (§89.8.3) then pinned an
+> anonymity-zone **origin** at `relay_method::local` permanently, creating a
+> class that is **never fluffed** and lives on the `get_relay_delay` branch for
+> its whole life.
+>
+> The disjointness below still holds — it holds *trivially* for that class,
+> which is exactly why it stopped carrying information. A guard that cannot
+> fail is not a guard, and re-reading the sentence does not reveal that,
+> because nothing in it became false.
+>
+> The consequence: an anonymity origin re-emitted at 300 s, **below its own
+> zone's embargo median of 346 s**. Repaired at §92.5c item 3 — the base of
+> that escalation is now derived from `EMBARGO_FULL_TRAVEL_PROBABILITY`.
+
 FTL (540 s) bounds how far ahead a block's **timestamp** may be relative to the
 node's median time — block-timestamp validation, not a tx-propagation or recovery
 deadline. Nothing about a black-holed tx's recovery latency "races the FTL
@@ -12717,6 +12735,15 @@ liveness and capacity question, not a precondition for D's correctness.
 
 ### 77.3 Correcting §73.6 — the cascade check is not owed
 
+> **The correction below is sound and its ground has narrowed, 2026-08-25.**
+> It refuses the re-run by quoting §15.4's *"`MIN_RELAY_TIME` governs an
+> already-fluffed transaction"*. That covers `fluff` and `block`; it does
+> **not** cover an anonymity origin, which `originated_stays_in_zone` keeps at
+> `local` for life. §73.6's cascade check was still not owed for the reason
+> given — during the embargo a *stem* is stem-governed — but the class this
+> quotation was read as covering turned out to have a member it never covered.
+> See §15.4's banner and §92.5c item 3.
+
 §73.6 said the `MIN_RELAY_TIME` cascade check *"must be re-run by the constants
 round"* because recovery p90 grows into the 300 s window. **That was wrong, and
 §15.4 had already dispositioned it:** `MIN_RELAY_TIME` governs an
@@ -13988,9 +14015,17 @@ argument and by link 1, not by execution.
 > **HISTORICAL as of Q12-U2 (2026-08-12).** This section is the #427
 > diagnosis. Link 5 is closed: an arrival is stemmed whatever transport
 > carried it, `relay_method::forward` is deleted, and coherence executes
-> on the live connection's zone. The pool re-relay does **not** read
-> `origin_zone`; expired stems leave as fluff at `zone::public_`, which
-> is the exit, not a leak. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+> on the live connection's zone. Expired stems leave as fluff at
+> `zone::public_`, which is the exit, not a leak. See
+> `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+>
+> **Amended 2026-08-25:** "the pool re-relay does not read `origin_zone`"
+> stood here and is now false. §92.5c item 3 made it a live timing input —
+> `local_relay_base` reads it to pick the retry's parameter class. That does
+> not reopen link 5 (the field selects a *wait*, not a route, and every entry
+> reaching it carries `invalid`), but the sentence was load-bearing for a
+> rule-15 deletion clause in `blockchain_db.h`, so it is corrected in both
+> places rather than left as a trap.
 
 **2026-08-10, review round on #427.** Three findings, all in §89's own
 territory, and the first two are the same mistake §63.9 named: reasoning from
@@ -14440,6 +14475,19 @@ taken in.
 
 ### 90.3 3500 ms is a FLOOR on `F′`, not a placeholder
 
+> **Levels re-read 2026-08-24; the ruling is unchanged.** Every millisecond
+> figure below is a **transit-less** reading — §91.6 later found the flood
+> model had no transit term and made `FloodParams::transit_ms` mandatory. The
+> same instrument now reads **11375 / 12375 / 13875** for the three rows
+> recorded here as 3000 / 3500 / 4750, and the shipped `fluff_return_ms` of
+> 3250 is itself the transit-less reading, proved in
+> `flood_transit_reconciliation.rs`. **The ordering — uniform-at-the-floor is
+> the conservative topology — is what this section argues and it survives
+> unchanged**, which is why the section stands rather than being reopened.
+> The levels move again when §94's measured constant lands; do not quote them
+> as `F′` candidates.
+
+
 The re-derivation was queued as *"apply both corrections together"* — the
 converged trial count **and** a churn-realistic degree distribution — and filed
 as blocked because the second input does not exist. **That framing was wrong,
@@ -14881,6 +14929,63 @@ prices them against each other rather than adopting `p` by default.
    already has the join key for.
 2. **`p` for branch (d)**, against measured `N` — and per §91.6 that measurement
    waits on the complete mechanism, not a simulation.
+3. **The interval — SETTLED 2026-08-25, and it was a defect rather than a
+   parameter.** Items 1 and 2 settle *whether* re-broadcast continues and *how
+   many* nodes do it. Neither settles *when the origin's first retry fires*,
+   and that was the inherited `MIN_RELAY_TIME` at 300 s — **below the anonymity
+   embargo's own median of 346 s**, so the origin re-emitted while more than
+   half the embargoes along its own stem were still running. Under-provisioned,
+   on the origination path, which is where the priority order says to spend
+   first.
+
+**The ruling: derive it from `alpha`, not from the emission count.**
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90` already pins the confidence at which a
+*relaying* node decides a stem has probably completed. The origin's retry is the
+same question asked by a different actor, so it is asked at the same confidence:
+`one_in = 1 / (1 - alpha) = 10`, and the 1-in-10 survival quantile of the
+adopted anonymity timer is **1148 s**
+(`shekyl_dandelionpp_origin_retry_interval_seconds`).
+
+That is a constant with a live provenance rather than a point inside a bracket:
+if `alpha` moves the interval follows, instead of decoupling silently. Same
+shape as §94.8's argument for deriving rather than choosing, and it removes the
+self-invented bar this arc has been bitten by twice.
+
+The **emission-count coincidence is a check, not the basis.** 1148 s is also the
+lowest quantile that leaves exactly one retry before the wallet's 2297 s failure
+verdict — which is the right relationship for it to have, and the more robust
+one, because that ceiling has **no live consumer**:
+`shekyl_dandelionpp_propagation_timeout_seconds()` is declared in
+`shekyl_ffi.h` and called by nobody since wallet2's consumer died with
+`src/wallet/`.
+
+**Scope of the change, stated because two things did NOT move.** The escalation
+*shape* is unchanged — the base is a parameter now, and every later gap is still
+the entry's age rounded to it, capped at `MAX_RELAY_TIME`. And the emission
+**count** barely moves (13 → 11 over the 36 h window), because `MAX_RELAY_TIME`
+and `max_age / 2` dominate the tail. So §92.5's pricing of branches (a)–(d)
+**stands**; this does not require the disarm round to re-do its arithmetic.
+
+**Only a transaction that was actually SENT asks this question.** `local` is
+worn by two entries. One has been dispatched and stayed `local` because
+`originated_stays_in_zone` pinned it there — that is the origin above, and its
+retry is the stem-completion question. The other has never been sent at all:
+`insert_attested_tx` stamps `relayed = false` and names this same loop the
+fallback if the engine's fire-and-forget submit nudge missed
+(`DAEMON_SUBMIT_VERDICT.md` §4.3 / §5.2 item 1). For that entry **no stem was
+launched and no embargo exists anywhere**, so the derived interval would be
+provisioning against an event that cannot have happened — 848 s of added
+latency on a *first* send, buying nothing. It keeps `MIN_RELAY_TIME`, which is
+the answer to the question it is actually asking ("did the nudge miss?").
+`local_relay_base` carries the split, and the two 400 s test cases differ in
+`relayed` alone so the discriminant cannot drift.
+
+**It provisions against an unobservable, and that is the honest framing.** The
+case this retry rescues is a swallow at hop 1: the first stem peer drops the
+transaction, no other node holds it, and **no embargo exists anywhere to fire**.
+There is no signal to wait for, so the number is a bet on a distribution rather
+than a response to an event. That is precisely what item 1's disarm predicate
+would fix — until it exists, the interval is doing both jobs.
 
 ### 92.6 The residual is a second independent argument for Tor-only
 
@@ -15211,6 +15316,46 @@ provenance is half-stale.
 Recording the split now matters because **the decision of what re-derives is
 exactly what a surprising measurement would distort.**
 
+> **CLOSED 2026-08-24 — and the five-file list was over-broad by three.** The
+> reconciliation ran, per file, by reproducing each recorded figure against the
+> instrument rather than by reading the list:
+>
+> | file | census |
+> | --- | --- |
+> | `flood_convergence` | **already reconciled** — asserts the criterion's behaviour and refuses to assert a level; its live output prints the reconciliation (`shipped 3250 ms; converged at the floor 12375 ms`) |
+> | `d9_alpha` | **already reconciled** — transit-bearing, records no level; its assertions are agreement (`|analytic − empirical| < 0.015`) and a pre-registered decision boundary |
+> | `d9_floor_locality` | **already reconciled** — "reports; it does not assert a threshold", by its own header |
+> | `f7_directed` | **a confound, not a stale number** — see below |
+> | `f_prime_admissible_region` | **one stale duplicate**, see below |
+>
+> **`f_prime_admissible_region`: the staleness was a COPY, not a reading.**
+> `alpha_degradation_when_the_network_leaves_the_region` carried a hardcoded
+> `SWEEP` of `(beta, F′)` pairs labelled *"from
+> `f_prime_against_tail_mass_at_the_measured_minimum`"* — and the sibling had
+> moved ~3.5× under §91.6 while the copy had not. Nothing detected it: the
+> assertions are about shape, and a copy that is uniformly wrong is still
+> monotone. Fixed by **deleting the copy**, not by re-synchronising it — both
+> tests now call one `sweep()` helper. The `DEGRADED_FLOOR = 0.891` level pin
+> went with it, replaced by relationships (alpha non-increasing in `beta`; no
+> cliff at the bound), because a level pinned at the assumption's output is the
+> artifact `flood_transit_reconciliation.rs` rules against.
+>
+> **`f7_directed`: the transit pairing reproduced F-7's own defect.**
+> `transit_for(reach)` put `EveryPeer` at 50 ms against `OutboundOnly` at
+> 1625 ms, so the reported gap charged the reach rule for a 32× latency
+> difference — a rule change and a network change moving together, in the file
+> named for that mistake. Both arms now run at one link class; the gap reads
+> **+46 %** where it read **+434 %**. (That figure is unrelated to §91.6's
+> "+42.9 % transit-less", which is the admissible region's *spread*. Two
+> different quantities that happen to land nearby — do not reconcile them.)
+>
+> **What did NOT change: any constant.** `fluff_return_ms` stays 3250 and
+> `ANON_ZONE_TRANSIT_ASSUMPTION_MS` stays 1625. Levels recorded in these files
+> now carry a grep-able marker — *instrument output at
+> `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1625); moves with §94* — so the
+> re-derivation round finds them by search rather than by hunt. §90.3's table
+> is bannered for the same reason.
+
 ### 94.4 What lands
 
 `ANON_ZONE_TRANSIT_MEASURED_MS` — registered at birth per rule 94 — replacing
@@ -15219,6 +15364,18 @@ introduced, so a reader can tell a measured value from a labelled assumption
 without leaving the code. The assumption constant is **deleted in the same
 commit**, not left beside its successor: two constants for one quantity is the
 duplicate-to-synchronise shape this arc has already paid for.
+
+**And the sweep of derived levels is gated, not remembered.** Recorded readings
+that were derived from the assumption carry a marker naming it (*"instrument
+output at `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1625); moves with §94"*), and
+`scripts/ci/check_transit_marker.sh` fails the build if the constant is deleted
+while any marker survives — naming every file. Deleting the constant breaks
+*code* references (`transit_for`, the reconciliation test) but not markers in
+doc comments and printed strings, so without the gate the sweep would depend on
+somebody thinking to grep. That is an armed marker with no trigger, a shape this
+arc has already paid for. **The gate is deleted by the commit that completes the
+sweep**, which is the point at which it has no subject left; it says so when it
+passes on that arm.
 
 ### 94.5 AMENDMENT, before the first sample (2026-08-20)
 

@@ -112,10 +112,9 @@ mod block_range {
         }
     }
 
-    // Constructor + bounds accessors. Held under a transient allow until the PR-B driving
-    // task fully wires them — kept separate from the live `impl` above so the dead-code lint
-    // still covers `block_count`/`height_at`.
-    #[allow(dead_code)]
+    // Constructor + bounds accessors. `BlockRange::new` is called by the pscan task, so
+    // this carries no suppression — kept as a separate `impl` from the one above so the
+    // dead-code lint still reports `block_count`/`height_at` individually.
     impl BlockRange {
         /// A **non-empty** half-open `[start, end)` range, or `None` if it would be empty or
         /// inverted (`start >= end`). The **sole** constructor: with the fields private to

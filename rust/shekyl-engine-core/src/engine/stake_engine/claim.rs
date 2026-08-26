@@ -87,8 +87,8 @@ pub(crate) struct AssembleEmissionClaim {
 // lib-target field readers arrive with the RPC stake entry (rule-21, the same
 // retirement condition as the seam's allow); the orchestrator e2e KAT reads
 // every field today.
-#[allow(dead_code)]
 #[derive(Debug)]
+#[allow(dead_code)] // 2c: the field readers land with the RPC stake entry (rule-21) / the wallet-side emission-claim builder (EMISSION_CLAIM_BUILDER.md).
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.
     pub bound_tx: PBoundBytes,

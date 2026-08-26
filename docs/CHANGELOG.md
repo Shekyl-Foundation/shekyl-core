@@ -4,6 +4,56 @@
 
 ### Removed
 
+- **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
+  a route that is called; nothing called this one. The two handlers made
+  the same two core reads and differed only in raw-versus-hex output, so
+  the surviving JSON route keeps them and nothing else went callerless.
+  `CORE_RPC_VERSION` is **3.24**. Found by `ci/rpc-route-liveness` on its
+  first run and held as an allowlist entry pending disposition; that entry
+  is now gone rather than permanent — an allowlist entry is a claim someone
+  has to defend, and there was no defence to make. Reopen clause in
+  `docs/DAEMON_RPC_RUST.md`.
+
+### Fixed
+
+- **The submit-shim fixture paid a fee it never put in the transaction.**
+  `make_tx` derived a floor-clearing fee, asserted it cleared the floor,
+  and stored it beside the transaction — while the transaction itself kept
+  the shape builder's hardcoded `txnFee = 1000000`. Both readings then
+  existed at once: `commit_tx` is handed the derived fee as an argument, so
+  every shim test paid it, and `tx_memory_pool::add_tx` reads
+  `get_tx_fee(tx)`, so the one test exercising that path paid 0.001. The
+  divergence was invisible until the dynamic minimum rose past the
+  constant, at which point `legacy_add_tx_double_spend_pin` failed on a fee
+  rejection while claiming to pin double-spend classification. The fee now
+  settles **into** the transaction — writing it changes the blob length,
+  which changes the fee required, so it iterates to a fixed point — and the
+  assertion is on the value `add_tx` will actually read rather than on the
+  local the test computed for itself. The bond-post builder, which had the
+  same derive-and-discard, shares the settle.
+
+### Changed
+
+- **`/get_o_indexes.bin` is served natively in Rust, and the `.bin` wire
+  now has a typed schema layer (RK-4a).** `shekyl-portable-storage` is the
+  codec; nothing mapped RPC commands onto it, and `shekyl-levin`'s schema
+  layer is for p2p by design. `shekyl-rpc-types::bin_commands` is that
+  layer, beside the JSON types, because one method has one definition
+  whichever encoding it speaks.
+  Two rules came from capturing epee's bytes rather than reading its
+  declarations, and neither is visible in the latter: a
+  `KV_SERIALIZE_VAL_POD_AS_BLOB` hash crosses as **32 raw bytes** where the
+  JSON side spells it as 64 hex characters, and an **empty sequence is
+  absent** rather than `[]`. Both are pinned against epee's own bytes,
+  compared as bytes — a byte-exactness claim checked through a text pipe
+  tests the pipe.
+  The wallet client's hand-rolled request build and reply walk are gone for
+  the shared map, and it no longer depends on the codec directly. The reply
+  shape is unchanged, including that an unknown transaction is a 200
+  carrying a non-OK `status` rather than a transport error.
+
+### Removed
+
 - **`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
   `/gethashes.bin`) are retired (RK-4x).** They were wallet2's batch sync;
   `src/wallet/` is gone and nothing called them — not Rust, not C++, not
@@ -34,8 +84,9 @@
   audit that had the rule written down. The gate now requires every path in
   the Axum route table to have a reference outside route registration, the
   FFI dispatch table, and comments — or an allowlist entry stating why it
-  is served without one. It found a third dead route on its first run
-  (`/get_transaction_pool_hashes.bin`, recorded pending disposition).
+  is served without one. It found a third dead route on its first run,
+  `/get_transaction_pool_hashes.bin`, which is retired above — the
+  allowlist it was held in is now empty of exemptions.
 
 ### Changed
 

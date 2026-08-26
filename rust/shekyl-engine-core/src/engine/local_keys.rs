@@ -171,7 +171,6 @@ impl LocalKeys {
     /// `RuntimeFailure` discipline that `LocalLedger` adopts for lock
     /// poisoning, the correct response to corrupt wallet state is
     /// process termination, not silent continuation.
-    #[allow(dead_code)] // orchestrator wiring lands in M3c+ when LocalKeys is bound at Engine::open_full / ::create.
     pub(crate) fn from_keys_blob(keys: AllKeysBlob) -> Self {
         // Test-only: the view scalar feeds the index-sensitivity helpers; the
         // production claim path never reads it (`x = ho + b`, no offset), so we
@@ -304,7 +303,6 @@ impl LocalKeys {
     /// [`STAGE_1_PR_3_MIGRATION_PLAN.md`]: ../../../../../docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md
     /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
     /// [`SourceSecretsBundle`]: super::traits::key::SourceSecretsBundle
-    #[allow(dead_code)] // Consumers land in M3b commits 7-8 (engine post-pass + property test)
     pub(crate) fn derive_primary_source_secrets_bundle(
         &self,
         source_ciphertext: &HybridCiphertext,

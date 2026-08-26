@@ -7,3 +7,7 @@ docs/test_vectors/** -text
 # RPC oracle vectors (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.5): epee's exact
 # bytes, CRLF included. Never apply EOL conversion.
 rust/shekyl-rpc-types/tests/vectors/rpc/** -text
+# The `.bin` vectors are portable_storage, not text: keep them out of
+# textual diffs too, so a reviewer sees "binary files differ" rather than a
+# mangled rendering that invites an edit. `-text` is already applied above.
+rust/shekyl-rpc-types/tests/vectors/rpc/*.bin -diff

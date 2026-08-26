@@ -189,10 +189,169 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
     })
 }
 
+/// How long an **origin** waits before re-broadcasting its own still-unseen
+/// transaction — **seconds**, per zone.
+///
+/// The pool's inherited re-broadcast loop escalates: this value is the base
+/// wait, and each subsequent gap is the entry's age rounded to it, capped at
+/// `MAX_RELAY_TIME`. This replaces `MIN_RELAY_TIME` as the **base** of that
+/// escalation for a `relay_method::local` entry that has already been **sent**;
+/// the shape of the escalation is unchanged, because repeated failure is a
+/// reason to back off and inventing a second schedule shape is not what the
+/// defect asks for.
+///
+/// An unsent `local` entry is not a caller. It exists because the engine's
+/// fire-and-forget submit nudge may have missed, and this loop is its named
+/// fallback — no stem was launched, so there is no completion to wait on and
+/// the derived interval would be latency bought with nothing. The pool keeps
+/// `MIN_RELAY_TIME` there; see `local_relay_base` in `tx_pool.cpp`.
+///
+/// # The quantile is derived, not chosen
+///
+/// [`shekyl_relay_privacy::params::origin_retry_one_in`] is
+/// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`: the
+/// origin asks *"has my stem probably completed?"* at the confidence the
+/// network already uses to answer it. On the adopted anonymity timer that is
+/// the 1-in-10 survival quantile, **1148 s**, against a 346 s median — so the
+/// retry no longer fires while most embargoes along its own stem are running,
+/// which the shipped 300 s did.
+///
+/// # It provisions against an unobservable, and that is the honest framing
+///
+/// The case this retry rescues is a swallow at hop 1: the first stem peer
+/// drops the transaction, no other node holds it, and **no embargo exists
+/// anywhere to fire**. So there is no signal to wait for, and this number is a
+/// bet on a distribution rather than a response to an event. That is what a
+/// re-broadcast disarm predicate would fix (§92.5c item 1, not built) — until
+/// it exists, this interval is doing both jobs: when to retry, and, by its
+/// escalation, how long to keep trying.
+///
+/// # Zone argument
+///
+/// `zone` is `epee::net_utils::zone` as a byte, as elsewhere in this module.
+/// A surviving `local` record **is** an anonymity origin — `originated_stays_
+/// in_zone` moves a clearnet origin to `Stem` — and originated traffic carries
+/// `origin_zone == invalid` because it did not arrive over anything. `invalid`
+/// resolves to the anonymity parameter class (it is not clearnet), which is
+/// the correct answer here and the fail-safe one: the longer wait.
+/// # Cost
+///
+/// Cached per parameter class, like the timers themselves: the relay loop asks
+/// once per `local` entry per pass, and the answer is a pure function of the
+/// shipped parameters. Computing a survival quantile per entry per pass would
+/// be work the pool lock is holding for no new information.
+#[no_mangle]
+pub extern "C" fn shekyl_dandelionpp_origin_retry_interval_seconds(zone: u8) -> u64 {
+    static RETRY_SECS: OnceLock<[u64; DandelionParams::ADOPTED_CLASSES]> = OnceLock::new();
+    let by_class = RETRY_SECS.get_or_init(|| {
+        DandelionParams::CLASS_REPRESENTATIVES.map(|class| {
+            u64::from(
+                embargo_timer(class)
+                    .judge_failed_after_secs(shekyl_relay_privacy::params::origin_retry_one_in()),
+            )
+        })
+    });
+    by_class[DandelionParams::adopted_class(RelayZone::from_ffi_u8(zone))]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_relay_privacy::params::{origin_retry_one_in, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::ADOPTED_PROPAGATION_TIMEOUT_SECS;
+
+    /// The rate must be the reciprocal of alpha's residual, exactly.
+    ///
+    /// What edit reds this: move `EMBARGO_FULL_TRAVEL_PROBABILITY` to a value
+    /// that is not `1 - 1/N` (0.93, say). The retry would then round to a rate
+    /// that asks a different question than the network does, and the point of
+    /// deriving it was that the two cannot drift apart.
+    #[test]
+    fn origin_retry_rate_is_the_reciprocal_of_alpha() {
+        let one_in = origin_retry_one_in();
+        assert_eq!(one_in, 10, "alpha = 0.90 gives a 1-in-10 residual");
+        #[allow(clippy::cast_precision_loss)]
+        let round_trip = 1.0 - 1.0 / one_in as f64;
+        assert!(
+            (round_trip - EMBARGO_FULL_TRAVEL_PROBABILITY).abs() < 1e-12,
+            "alpha {EMBARGO_FULL_TRAVEL_PROBABILITY} is not expressible as an integer \
+             1-in-N rate; the retry would ask a different question than the network"
+        );
+    }
+
+    /// The defect this constant exists to fix, asserted rather than described.
+    ///
+    /// What edit reds it: revert the C++ caller to `MIN_RELAY_TIME`, or move
+    /// the quantile below the median.
+    #[test]
+    fn the_origin_retry_clears_the_anonymity_embargo_median() {
+        let anon = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Tor.as_u8());
+        let median = u64::from(embargo_timer(RelayZone::Tor).judge_failed_after_secs(2));
+        assert!(
+            anon > median,
+            "an origin must not re-emit inside its own zone's embargo median: \
+             interval {anon} s against median {median} s"
+        );
+        assert_eq!(
+            anon, 1_148,
+            "the 1-in-10 quantile of the adopted anonymity timer"
+        );
+        assert!(
+            anon > 300,
+            "MIN_RELAY_TIME (300 s) is the value this replaces and is below the median"
+        );
+    }
+
+    /// The exported interval is the divisor of the pool's rounding grid, so
+    /// zero would be a SIGFPE in the relay loop, under the pool lock.
+    ///
+    /// A C++ runtime guard could not be the instrument here: the value has no
+    /// runtime inputs — it is a pure function of shipped constants, solved
+    /// once and cached — so a `base == 0` branch could never fire and would be
+    /// decorative by rule 50's test. The regression it would be guarding
+    /// against is a *source* change, which this catches at build time and
+    /// loudly, instead of silently substituting a different retry policy in a
+    /// running daemon.
+    ///
+    /// The bound is the pool's own `MIN_RELAY_TIME` rather than zero, because
+    /// that is the real invariant: this constant exists because 300 s was too
+    /// EAGER for an origin, so a parameter change that pushed any class below
+    /// 300 s would re-create the defect in the direction the PR fixed. Zero-
+    /// safety falls out of it.
+    ///
+    /// What edit reds it: lower `EMBARGO_FULL_TRAVEL_PROBABILITY` far enough
+    /// that the quantile drops under the floor, or shrink an embargo timer.
+    #[test]
+    fn every_parameter_class_clears_the_pool_floor() {
+        // `MIN_RELAY_TIME`, `src/cryptonote_core/tx_pool.cpp` — quoted here
+        // rather than shared, because a cross-language tripwire is the only
+        // job this literal has.
+        const POOL_MIN_RELAY_TIME_SECS: u64 = 300;
+        for zone in DandelionParams::CLASS_REPRESENTATIVES {
+            let secs = shekyl_dandelionpp_origin_retry_interval_seconds(zone.as_u8());
+            assert!(
+                secs > POOL_MIN_RELAY_TIME_SECS,
+                "{zone:?}: {secs} s is at or below the pool floor                  ({POOL_MIN_RELAY_TIME_SECS} s) this constant exists to raise;                  at 0 it would divide by zero in get_relay_delay"
+            );
+        }
+    }
+
+    /// `invalid` — what an originated entry actually carries — must resolve to
+    /// the anonymity wait, not the clearnet one.
+    #[test]
+    fn an_unknown_origin_zone_gets_the_longer_wait() {
+        let invalid = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Invalid.as_u8());
+        let anon = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Tor.as_u8());
+        let clear = shekyl_dandelionpp_origin_retry_interval_seconds(RelayZone::Public.as_u8());
+        assert_eq!(
+            invalid, anon,
+            "origin-unknown provisions at the anonymity class"
+        );
+        assert!(
+            anon > clear,
+            "the anonymity wait must exceed the clearnet one"
+        );
+    }
 
     #[test]
     fn embargo_boundary_hands_out_the_adopted_timer_not_the_inherited_39s() {

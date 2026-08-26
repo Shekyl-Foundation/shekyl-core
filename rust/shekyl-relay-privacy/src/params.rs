@@ -54,6 +54,51 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
+/// The false-retry rate for an **origin's** re-broadcast, as `1 / one_in` —
+/// derived from [`EMBARGO_FULL_TRAVEL_PROBABILITY`], not chosen beside it.
+///
+/// # Why the origin's retry is the network's question asked by a different actor
+///
+/// `EMBARGO_FULL_TRAVEL_PROBABILITY` pins the confidence at which a *relaying*
+/// node decides a stem has probably completed: at `alpha = 0.90`, a node's
+/// embargo is solved so that 9 stems in 10 finish before any node on the path
+/// fires. An origin re-broadcasting its own transaction is asking the same
+/// question — *has this stem probably completed?* — so it should ask it at the
+/// same confidence. The residual `1 - alpha` IS the rate at which retrying is
+/// premature, so `one_in = 1 / (1 - alpha)`.
+///
+/// Deriving rather than choosing is the point (§94.8's argument, one layer
+/// down): if `alpha` moves, this follows automatically instead of decoupling
+/// silently, and there is no self-invented bar to defend. The alternative on
+/// offer was a point inside a bracket, which is a bar of exactly that kind.
+///
+/// # What it replaces, and why the shipped value was a defect rather than a
+/// tuning question
+///
+/// The inherited `MIN_RELAY_TIME` (300 s) governs the pool's re-broadcast loop
+/// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
+/// neighbourhood on the ground that it *"governs an already-fluffed
+/// transaction, a different state from the embargo"* — true when written, and
+/// **vacated** by `originated_stays_in_zone`, which pins an anonymity-zone
+/// origin at `Local` permanently and so created a class that is never fluffed
+/// and lives on that branch for its whole life.
+///
+/// At 300 s that origin re-emits **below the anonymity embargo's median**
+/// (346 s): more than half the embargoes along its own stem are still running,
+/// so the retry fires while the transaction is propagating normally. That is
+/// the under-provisioning direction, on the origination path, where the thing
+/// being protected is the fact of origination.
+#[must_use]
+pub fn origin_retry_one_in() -> u64 {
+    // Rounded, then checked in `origin_retry_rate_is_the_reciprocal_of_alpha`:
+    // an `alpha` that is not of the form `1 - 1/N` cannot be expressed as an
+    // integer rate, and the test reds rather than this silently asking a
+    // different question than the network does.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let one_in = (1.0 / (1.0 - EMBARGO_FULL_TRAVEL_PROBABILITY)).round() as u64;
+    one_in
+}
+
 /// R-1 mixed eligibility: the chance an *originated* transaction takes the
 /// anonymity zone instead of the public one, in hundredths of a percent
 /// (so `100` = 1.00 %, `5000` = 50 %). One roll, at origination (Q12-D5a).

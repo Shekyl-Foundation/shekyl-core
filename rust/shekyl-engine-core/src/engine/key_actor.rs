@@ -43,8 +43,9 @@
 //! `STAGE_2_KEY_ENGINE_ACTOR.md` §6), [`LocalSigner`](super::signer::LocalSigner)
 //! holds a handle clone, and the merge post-pass reads
 //! [`HandleDerivationViewSecret`] (the 6-i construction-time projection). The
-//! `#[allow(dead_code)]` on [`SignTransaction`] and related items marks surfaces
-//! that remain cold until PR 5 / signing-engine work — not "unwired."
+//! [`SignTransaction`] and related items are reached from non-test code and
+//! carry no dead-code suppression; some stay cold until PR 5 / signing-engine
+//! work, which is not the same as "unwired."
 //!
 //! [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`]: ../../../../../docs/design/STAGE_2_KEY_ENGINE_ACTOR.md
 //! [`AllKeysBlob`]: shekyl_crypto_pq::account::AllKeysBlob
@@ -84,7 +85,6 @@ use super::traits::key::{
 ///
 /// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s owned key material.
 /// The actor's single-threaded message loop serializes access to `keys`.
-#[allow(dead_code)] // Stage 2 wires the handle into Engine in a later step; today: tests only.
 pub(crate) struct KeyActor {
     /// Wallet key material and derived scalars for signing.
     local: LocalKeys,
@@ -137,7 +137,6 @@ impl Actor for KeyActor {
 /// Carries the owned per-output detection context. The handle clones the
 /// trait's `&OutputDetectionInput` into this owned message (the input is all
 /// public on-chain data; the clone is cheap and secret-free).
-#[allow(dead_code)] // constructed by the handle; today exercised by tests only.
 pub(crate) struct ClaimOutput {
     pub input: OutputDetectionInput,
 }
@@ -320,7 +319,6 @@ impl Message<GenerateReserveProof> for KeyActor {
 /// [`KeyEngine::account_public_address`]. `Clone + Debug` is sound because
 /// it carries no secret bytes.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // read by the handle; today exercised by tests only.
 pub(crate) struct KeyPublicProjection {
     /// Cached account-level public address material; the source of the
     /// `&`-return from [`KeyEngine::account_public_address`].
@@ -344,7 +342,6 @@ pub(crate) struct KeyPublicProjection {
 /// [`KeyPublicProjection`], so the type system forbids the "it's just a view
 /// secret, I'll clone/reuse it" mistake. Non-`Clone`, no `Debug`, wipe-on-drop.
 #[derive(Zeroize)]
-#[allow(dead_code)] // read by `Engine::apply_scan_result`; today exercised by tests only.
 pub(crate) struct HandleDerivationViewSecret {
     /// View secret `view_sk` canonical bytes, fed to `populate_engine_handle_fields`.
     view_sk: Zeroizing<[u8; 32]>,
@@ -353,7 +350,6 @@ pub(crate) struct HandleDerivationViewSecret {
 impl HandleDerivationViewSecret {
     /// Project the merge view-secret out of `&keys` at construction time,
     /// before the blob is consumed by [`KeyEngineHandle::spawn`].
-    #[allow(dead_code)] // constructed in `assemble`; today exercised by tests only.
     pub(crate) fn from_keys(keys: &AllKeysBlob) -> Self {
         Self {
             view_sk: Zeroizing::new(*keys.view_sk.as_canonical_bytes()),
@@ -361,7 +357,6 @@ impl HandleDerivationViewSecret {
     }
 
     /// Borrow the view-secret canonical bytes for handle derivation.
-    #[allow(dead_code)] // read by `Engine::apply_scan_result`; today: tests only.
     pub(crate) fn as_canonical_bytes(&self) -> &[u8; 32] {
         &self.view_sk
     }
@@ -391,7 +386,6 @@ impl ZeroizeOnDrop for HandleDerivationViewSecret {}
 /// RPC tier; that confinement is the control (§3.2 / §7 T9), made a compile-
 /// time guarantee by the visibility bound.
 #[derive(Clone)]
-#[allow(dead_code)] // constructed once Engine wiring lands; today: tests only.
 pub(crate) struct KeyEngineHandle {
     /// Strong reference to the key actor's mailbox. `Clone + Send + Sync`.
     actor: ActorRef<KeyActor>,
@@ -438,7 +432,6 @@ impl KeyEngineHandle {
     ///   (`#[tokio::test]` / run inside a runtime) so a missing-runtime caller
     ///   fails loudly at the call site rather than via `kameo`'s lower-level
     ///   "no reactor running" panic.
-    #[allow(dead_code)] // Stage 2 wires this into Engine in a later step; today: tests only.
     pub(crate) fn spawn(keys: AllKeysBlob) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),

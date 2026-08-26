@@ -71,7 +71,6 @@ use super::scan_step::{BondPostMatch, FundingOutputMatch, ScanStepResult};
 /// **finalized** by the cursor-check — and "read a partial in-progress epoch" is
 /// structurally unrepresentable rather than a consumer obligation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the lib consumer is SP-7 `C_min` sizing.
 pub(crate) struct PFundingInflow {
     settlement_epoch: SettlementEpoch,
     atomic: AtomicUnits,
@@ -533,7 +532,6 @@ impl PScanAccrual {
     /// the funding-selection substrate for production bond assembly (WI-2 D-A2).
     /// Public output identity only; spend secrets are re-derived at assemble
     /// time inside the actor.
-    #[allow(dead_code)] // transient — the consumer is WI-2's funding selection.
     pub(crate) fn funding_outputs(&self) -> &[FundingOutputMatch] {
         &self.funding_outputs
     }
@@ -665,7 +663,6 @@ impl PScanAccrual {
     /// over `covered` *for each persona only from its floor onward*, because the
     /// scan is exhaustive across `covered` but watched only the union it held at
     /// each step.
-    #[allow(dead_code)] // transient — the consumer is 2d-2 SP-R0's reconcile GC.
     pub(crate) fn reconcile_set(&self) -> PReconcileSet {
         PReconcileSet::from_verified_scan(
             self.covered,

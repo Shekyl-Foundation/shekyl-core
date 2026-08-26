@@ -37,7 +37,6 @@ use super::types::*;
 /// The single-threaded message loop serializes access to `held`/`active`, so a
 /// activation (install-new-active, then wipe-retired-iff-ephemeral) is atomic with
 /// respect to other messages.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngine {
     /// The held derive-forward set, keyed by slot and tagged bonded/ephemeral.
     /// Activation wipes only the ephemeral retired slot; bonded personas stay
@@ -73,7 +72,6 @@ pub(crate) struct StakeEngine {
     pub(crate) observer: Box<dyn BroadcastTimelineObserver>,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl StakeEngine {
     /// Validate a presented handle: it must be from the current generation and
     /// name a still-held slot. A generation mismatch means an activation occurred

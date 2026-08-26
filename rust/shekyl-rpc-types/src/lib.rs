@@ -59,8 +59,10 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod bin_commands;
 pub mod chain;
 pub mod hash;
+pub use bin_commands::{BinError, GetOIndexesRequest, GetOIndexesResponse};
 pub use chain::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,

@@ -438,7 +438,6 @@ pub(crate) struct Reservation {
     /// Caller-supplied fee tier. Stored for diagnostics; the rate it
     /// resolved to is already charged in [`Self::fee_atomic_units`].
     /// Read only via `Debug` and tests.
-    #[allow(dead_code)]
     pub priority: FeePriority,
 }
 
@@ -541,12 +540,12 @@ pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 /// `ReservationTTLActor` reads the same `ReservationTTLConfig`
 /// and applies per-collection policy without trait revision.
 ///
-/// `dead_code` allow: no V3.0-time reader until C5α wires the
-/// constructor parameter; the type lands in C2γ alongside the
-/// `Reservation`/`PendingTx` field augmentation per the §7.X
-/// commit decomposition's "type substrate before consumers"
-/// ordering.
-#[allow(dead_code)]
+/// Constructed and stored on the production path (`lifecycle::assemble`), but
+/// no field is read yet — the TTL consumers above are still the readers this
+/// type is waiting for. It needs no `dead_code` allow because it is `pub` and
+/// re-exported, so the lint does not apply; that is not evidence of a reader.
+/// It landed in C2γ ahead of its consumers, per the §7.X commit decomposition's
+/// "type substrate before consumers" ordering.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReservationTTLConfig {
@@ -593,9 +592,8 @@ impl Default for ReservationTTLConfig {
 /// stores values; C2γ lands the type ahead of the storage so
 /// the type-substrate sub-commit is a coherent compile unit.
 ///
-/// `dead_code` allow: no V3.0-time reader until C5β wires the
-/// `in_flight` collection. Pattern matches the
-/// `ReservationTTLConfig` allow above.
+/// `submitted_at` has no reader until C5β wires the `in_flight` collection,
+/// which is what the `dead_code` allow below covers.
 ///
 /// # Why the full [`ConsumerHeldEntry`] rides along
 ///
