@@ -266,6 +266,22 @@ pub(crate) fn atomic_write_file_with<T>(
     // clean up on drop; nothing does that now, and without this arm every
     // failed rotation would strand a `.<random>.shekyl-tmp` beside the wallet.
     if let Err(e) = std::fs::rename(&kept, target) {
+        // Drop the hook's value before attempting the unlink. For password
+        // rotation `staged` is a `KeysFileLock` holding an open, byte-0-locked
+        // handle on the file we are about to remove.
+        //
+        // **This is hygiene, not a bug fix, and the distinction was measured
+        // rather than assumed.** On Windows 11 23H2 / NTFS the unlink succeeds
+        // with that lock still alive: Rust's std opens files with
+        // `FILE_SHARE_DELETE`, and a `LockFileEx` byte range does not block
+        // deletion. So the ordering is not load-bearing today — the tempting
+        // claim that a live handle is what would block the cleanup is false
+        // here, and was tested before being written down.
+        //
+        // It stays because "correct until a share mode changes underneath you"
+        // is a poor thing for a cleanup path to depend on, and `staged` has no
+        // use whatever on a path that returns `Err`.
+        drop(staged);
         if let Err(cleanup) = std::fs::remove_file(&kept) {
             // Best-effort: the rename failure is the one the caller must see,
             // and a stranded staged file is clutter rather than corruption —
@@ -432,7 +448,8 @@ mod tests {
             attrs & FILE_ATTRIBUTE_TEMPORARY,
             0,
             "`.wallet.keys` was left marked FILE_ATTRIBUTE_TEMPORARY (attrs=0x{attrs:08x}); \
-             the staged file's attribute survived the rename and the fsync guarantee is gone"
+             the staged file's attribute survived the rename, so a permanent wallet \
+             artifact now carries a temporary-file caching hint for every later writer"
         );
     }
 
@@ -517,12 +534,20 @@ mod tests {
         // had failed earlier the hook would never run, `staged` would be `None`,
         // and a suffix scan would have reported "no strays" for the wrong
         // reason — the very fail-open shape this suite keeps finding.
+        //
+        // The hook also takes a real `KeysFileLock`, which is what password
+        // rotation — the only production caller of this entry point — does, so
+        // the test exercises the production shape rather than a stub that holds
+        // no handle. It is worth being clear about what that does *not* buy:
+        // measured on Windows, an open byte-0-locked handle does **not** block
+        // the unlink, so this arm passes with or without the `drop(staged)` it
+        // sits next to. It guards the shape, not that specific hazard.
         let mut staged: Option<std::path::PathBuf> = None;
         let err = atomic_write_file_with(&target, b"NEW", |p| {
             staged = Some(p.to_path_buf());
-            Ok(())
+            KeysFileLock::acquire_staged(p, &target)
         })
-        .map(|((), d)| d)
+        .map(|(_lock, d)| d)
         .expect_err("renaming a file over a directory must fail");
 
         let staged = staged.expect(
