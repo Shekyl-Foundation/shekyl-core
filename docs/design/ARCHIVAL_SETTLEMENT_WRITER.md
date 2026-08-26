@@ -56,17 +56,20 @@ Grounded on `dev@cbba3e261`, 2026-08-23. Every row was read, not recalled.
 consumers that read **key presence** as "served", so any key written for any
 reason becomes a serve credit:
 
-- old-vin dedup — `blockchain.cpp:5307`
-- slash-window walk — `db_lmdb.cpp:5763`
-- fast-path miss check — `db_lmdb.cpp:5793`
-- emission gather — `db_lmdb.cpp:7801`, a **pure presence cursor-walk**
-  (`:7804`, no value-byte gate) feeding `r_market`/`σ_work`
+- old-vin dedup — `blockchain.cpp:5351`, `archival_serve_credit_pass_count > 0`
+  (pair-epoch-wide over the 48-byte prefix since `PC-D4`)
+- slash-window walk — `db_lmdb.cpp:5908`, the same prefix count per epoch
+- fast-path miss check — `db_lmdb.cpp:5940`, the same prefix count
+- emission gather — `db_lmdb.cpp:8134`, a **pure presence cursor-walk**
+  (no value-byte gate) folding per-challenge rows to one credit per
+  pair-epoch (`PC-D6`) and feeding `r_market`/`σ_work`
 
 The table's own declaration states the shape it can never carry more than:
-`m_archival_serve_credit` is `P_id[32]‖BE(shard)‖BE(E)` → `uint8_t 0x01`
-(`db_lmdb.h:881`). Writing a **Missed** cell there corrupts vin-dedup and
-emission simultaneously — a settlement outcome and a payment authorisation
-would share a key space where presence means pay.
+`m_archival_serve_credit` is `P_id[32]‖BE(shard)‖BE(E)‖BE(height)` (56 B,
+`PC-D4`) → `uint8_t 0x01` (`db_lmdb.h:922`). Writing a **Missed** cell there
+corrupts vin-dedup and emission simultaneously — presence under the pair-epoch
+prefix means pay, whichever block's key carries it — a settlement outcome and
+a payment authorisation would share a key space where presence means pay.
 
 **This is not a "keep them separate for tidiness" argument.** The two tables
 answer different questions and one of them is a *negative*: a table whose
@@ -226,6 +229,14 @@ seek on this layout, so a reader holding one key can probe the other table
 without re-encoding. Big-endian is load-bearing — it is what makes an LMDB
 range scan over `(P_id, shard)` return epochs in order, which is exactly the
 outer-window walk's access pattern.
+
+**PC-D4 (2026-08-26):** `m_archival_serve_credit` widened to 56 B
+(`BE(block_height)` appended, one row per challenge), so "byte-identical"
+expired — the 48-byte shape above survives as `ArchivalPairEpochKey`, now this
+table's key type (`ARCHIVAL_PER_CHALLENGE_RECORD.md` §5.2). The
+probe-either-table rationale holds as a prefix relation: a settlement key is
+byte-identical to a serve-credit key's first 48 bytes, exactly the prefix
+`archival_serve_credit_pass_count` counts over.
 
 **Value — 3 B:**
 

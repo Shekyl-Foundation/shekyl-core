@@ -372,7 +372,12 @@ against the pre-unify split: D-SC-C's inline native-endian `memcpy` key is
 replaced by `ArchivalServeCreditKey` (via a new `bytes()` accessor on the key
 type), the mirror's `serve_credit_block_key` re-points to the BE encoding,
 and the fixture re-pins with `expect_equal: true` — a reintroduced split now
-fails both legs' cross-checks. The decision-invariance property that licensed
+fails both legs' cross-checks. **PC-D4 (2026-08-26):** the key type this
+resolution names was the 48-byte `(P,s,E)` encoding, renamed
+`ArchivalPairEpochKey` when `ArchivalServeCreditKey` widened to 56 B
+per-challenge; the block pass builds `ArchivalPairEpochKey` today
+(`blockchain.cpp:6161`) and the mirror's `serve_credit_block_key` delegates
+to `pair_epoch_key_be`. The decision-invariance property that licensed
 the unify as behavior-preserving is held standing by the
 `fuzz_serve_credit_block_unique` target.
 

@@ -372,7 +372,10 @@ recompute, bond-record integration tests, 8c verifier hookup.
 - [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
 - [x] Pin serve-credit-ledger key `(P_id, shard_id, E)` — `archival_serve_credit` LMDB
       (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
-      gate-4-owned.
+      gate-4-owned. **Widened by `PC-D4` (2026-08-26):** `\|\| BE(block_height)`
+      appended — 56 B, one row per challenge; the 48-byte pair-epoch form
+      survives as `ArchivalPairEpochKey`
+      (`ARCHIVAL_PER_CHALLENGE_RECORD.md` §`PC-D4`).
 - [x] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
       LMDB `archival_r_market`; sweep in `process_archival_epoch_close_at_height` —
       gather/store only; arithmetic in Rust `epoch_close_compute`

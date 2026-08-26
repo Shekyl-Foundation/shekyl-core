@@ -295,11 +295,15 @@ pub struct EpochCloseShard {
     pub freeze_height: u64,
 }
 
-/// One serve-credit row at epoch close, as indices into the gather arrays.
+/// One credited (bond, shard) pair at epoch close, as indices into the
+/// gather arrays.
 ///
-/// Pairs are **distinct** by construction at the storage layer (the
-/// serve-credit ledger is keyed `(P_id, shard_id, E)`); duplicates would
-/// double-count `R_market` and work.
+/// Pairs are **distinct** by construction of the gather fold (`PC-D6`): the
+/// ledger holds one row per challenge (keyed `(P_id, shard_id, E, block)`,
+/// `PC-D4`), and the C++ gather folds rows sharing a 48-byte pair-epoch
+/// prefix into one entry before these indices are built. Duplicates would
+/// double-count `R_market` and work — removing the fold turns exactly its
+/// own test red.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CreditPair {
     pub bond_idx: usize,
