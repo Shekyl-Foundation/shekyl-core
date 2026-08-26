@@ -85,21 +85,50 @@
 #     get_transfers.attribution filter +           (FA-8 unattributed
 #       Transfer.attribution                        receives; CLI history
 #                                                   incoming --unattributed)
+#   SPECIFIED (WI-RPC-5 — archival principal staking actions):
+#     stake_in                                     (PR-P2 principal→P funding
+#                                                   leg over Engine::stake_in;
+#                                                   an ordinary transfer
+#                                                   through the pending-tx
+#                                                   confirm/submit path. Ships
+#                                                   with the GF-7
+#                                                   change-co-presence
+#                                                   disclosure — see
+#                                                   StakeInParams)
+#     get_drain_balance                            (F-D2 aggregate drainable
+#                                                   read; two-armed result —
+#                                                   never "0" while syncing)
+#     drain                                        (DS-PR-2 P→principal drain
+#                                                   send. Amount only:
+#                                                   fee / destination / slot
+#                                                   are engine-resolved,
+#                                                   never parameters — the
+#                                                   P-lane CONTRACT PIN below
+#                                                   applied)
 #   RESERVED (prerequisite in parentheses):
-#     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
-#                                                   Phase 2b orchestrator;
-#                                                   reward path blocked on
-#                                                   REWARD_EMISSION_LEG.md
-#                                                   PR-E1..E3 / C-1)
+#     unstake                                      (the Unbond PRODUCER.
+#                                                   Prerequisite rewritten by
+#                                                   WI-RPC-5 from the
+#                                                   claim-era "Stage 3
+#                                                   StakeEngine" wording:
+#                                                   every BondPostKind::Unbond
+#                                                   site on dev today is a
+#                                                   verifier, wire constant,
+#                                                   or test — no producer
+#                                                   exists; blocked on the
+#                                                   PostKindNotJoinMarket
+#                                                   connect path)
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
-#       V3_WALLET_DECISION_LOG.md "P-lane fees"): when these schemas land
-#       they carry NO fee parameter — no FeePriority, no amount, no
+#       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
+#       it carries NO fee parameter — no FeePriority, no amount, no
 #       cover-amount input. Every P-lane tx pays the canonical weight-priced
 #       floor fee from persona working capital (cover + earnings); a
 #       user-visible fee control would be a wallet-fingerprint channel in a
 #       cleartext field on P-attributed transactions. Unbonding is an
 #       autonomous first-class process: the surfaced method is at most a
 #       trigger plus read-only progress, never a parameterized action.
+#       (WI-RPC-5's drain method carries this pin already: amount is user
+#       intent, fee/destination are engine-resolved.)
 #     match_transfer_to_request                    (Phase 2c orchestrator
 #                                                   wrapper over the FA-8
 #                                                   engine substrate; the
@@ -107,6 +136,28 @@
 #                                                   landed with WI-RPC-1)
 #
 #   REJECTED (rule 21 reversion shape — removed from RESERVED, not landed):
+#     claim                                        (WI-RPC-5, 2026-08-26.
+#       Emission claims are engine-side automation, not a user action: the
+#       claim assembly/dispatch path (EMISSION_CLAIM_BUILDER.md) runs inside
+#       the Engine's staking machinery, and the CLI parity matrix already
+#       carries claims as "Out of scope" for the user surface. A user RPC
+#       named `claim` would imply a manual entitlement-collection step that
+#       does not exist in the archival design — the claim-era mental model
+#       PRINCIPAL_STAKE_LIFECYCLE.md §0 rejects by construction. Reopen
+#       when: a named operator emerges who needs a manual claim trigger
+#       (e.g. a recovery tool for a wedged claim), with the trigger-only
+#       shape the unstake CONTRACT PIN mandates; the re-evaluation shape is
+#       a fresh contract sub-PR citing this note.)
+#     get_stakes                                   (WI-RPC-5, 2026-08-26.
+#       PRINCIPAL_STAKE_LIFECYCLE.md §0/§firewall: `principal_stakes()` is
+#       RPC-FORBIDDEN — a per-stake enumeration is the principal↔P edge the
+#       archival firewall exists to keep dark, and any method shaped like
+#       "list my stakes with their personas" reconstructs it. The
+#       replacement surface already exists and is aggregate-only:
+#       get_staked_balance / get_staked_outputs / staking_info (WI-RPC-1)
+#       plus get_drain_balance (WI-RPC-5, F-D2 aggregate scalar). Reopen
+#       when: never as an enumeration; a new aggregate read gets its own
+#       method and contract round instead.)
 #     get_tx_key, check_tx_key                     (WI-RPC-3, 2026-07-23;
 #       rationale corrected 2026-07-24. Exporting the raw per-tx secret as
 #       a naked hex string is the wallet2-era mechanism. The OUTBOUND tx
@@ -172,7 +223,9 @@
 #   -29200..-29299           refresh / rescan
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (RESERVED range)
+#   -29500..-29599           staking (-29500..-29506 live on `stake`;
+#                            -29507..-29511 live on `drain` (WI-RPC-5);
+#                            rest reserved — never reuse an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
 #                            not pending work. A4 (2026-08-06) descoped
@@ -195,7 +248,12 @@
 openapi: 3.1.0
 info:
   title: Shekyl Wallet RPC
-  version: 0.1.0
+  # Contract-document semver. Bumped with each SPECIFIED-surface tranche
+  # (additive minor); the wire-compat integer clients branch on is
+  # GetVersionResult.api_version, which stays 1 pre-genesis (rule 16).
+  # 0.2.0: WI-RPC-5 — stake_in / get_drain_balance / drain, get_balance
+  # staked/claimable_rewards semantics, claim-era RESERVED→REJECTED rewrite.
+  version: 0.2.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -300,6 +358,9 @@ components:
             - get_staked_balance
             - get_staked_outputs
             - staking_info
+            - stake_in
+            - get_drain_balance
+            - drain
             - get_tx_proof
             - check_tx_proof
             - get_reserve_proof
@@ -394,6 +455,11 @@ components:
         - -29504   # STAKE_RECOVERED_PENDING_REOPEN
         - -29505   # STAKE_NO_SHARDS_AVAILABLE
         - -29506   # STAKE_FOUNDATION_UNACKNOWLEDGED
+        - -29507   # DRAIN_NOT_STAKER
+        - -29508   # DRAIN_NO_ACTIVE_PERSONA
+        - -29509   # DRAIN_RESERVE_BREACHED
+        - -29510   # DRAIN_UNANCHORABLE
+        - -29511   # DRAIN_IN_FLIGHT
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -594,6 +660,50 @@ components:
                                           round-trip the acknowledgment, so
                                           the terms are seen or deliberately
                                           echoed. Nothing was written
+          -29507 DRAIN_NOT_STAKER         drain: this wallet runs no stake
+                                          engine — it is not an archival
+                                          staker, and the drain path does
+                                          not exist here. Also the stake_in
+                                          refusal for the same condition
+                                          (no persona to fund)
+          -29508 DRAIN_NO_ACTIVE_PERSONA  drain/stake_in: the wallet is a
+                                          staker but no persona is currently
+                                          active. The drain façade resolves
+                                          the LIVE active persona from actor
+                                          state — there is no p_slot
+                                          parameter to point elsewhere
+                                          (type-level active-persona
+                                          restriction)
+          -29509 DRAIN_RESERVE_BREACHED   drain: the payment would spend a
+                                          LIVE persona's pool below the
+                                          exit-fee reserve (DS-4,
+                                          EXIT_FEE_RESERVE_ATOMIC) —
+                                          draining it there strands the
+                                          future terminal Unbond. Lower the
+                                          amount. Sweep-to-zero exists only
+                                          for a retired persona, which this
+                                          method cannot select. Scalar-free:
+                                          neither the payment nor the pool
+                                          magnitude is named
+          -29510 DRAIN_UNANCHORABLE       drain: the send-path reference
+                                          anchor is not yet available
+                                          (curve-tree ingest lagging, chain
+                                          shorter than the anchor age) —
+                                          transient; sync and retry. This is
+                                          the SEND-attempt mapping of the
+                                          syncing condition; get_drain_balance
+                                          renders the same condition as its
+                                          `status: syncing` result
+                                          discriminant, never this error
+          -29511 DRAIN_IN_FLIGHT          drain: a live pending drain already
+                                          exists for this persona (one live
+                                          drain per persona — the sealed
+                                          record IS the in-flight input
+                                          reservation). Wait for it to
+                                          confirm or fail, then retry. Also
+                                          the refusal when a concurrent
+                                          same-persona post raced this
+                                          drain's inputs — retry
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -951,19 +1061,34 @@ components:
       type: object
       required: [liquid, staked, unlocked, claimable_rewards, pending]
       description: >
-        Staking is first-class (locked JSON shape). `staked` and
-        `claimable_rewards` are "0" until the Stage 3 stake methods land;
-        the fields are present from the first release so the shape never
-        changes under clients.
+        Staking is first-class (locked JSON shape). As of WI-RPC-5 the
+        staking fields carry live values projected from the same
+        authoritative staking view `get_staked_balance` reads — never the
+        StakingBlock hint. For a non-staker wallet all staking fields are
+        genuinely "0" (there is nothing staked), which is a true zero, not
+        a placeholder.
       properties:
         liquid:
           $ref: "#/components/schemas/AtomicUnits"
         staked:
           $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Bond principal under confirmed live bonds PLUS principal
+            committed by in-flight sealed posts — the sum of
+            `get_staked_balance`'s two bonded legs. The legs stay separate
+            on that method; this scalar exists for the one-glance balance
+            surface.
         unlocked:
           $ref: "#/components/schemas/AtomicUnits"
         claimable_rewards:
           $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Emission-reward money received and still unspent in
+            staking-side outputs — the same quantity as
+            `get_staked_balance.rewards_received_unspent`. NOT a claim-era
+            "accrued but unclaimed" entitlement; no such user-visible
+            quantity exists in the archival design (claims are engine-side
+            automation).
         pending:
           $ref: "#/components/schemas/AtomicUnits"
 
@@ -1757,8 +1882,9 @@ components:
     # ── Staking reads — WI-RPC-1 ─────────────────────────────────────
     # Read-only projections of the authoritative staking view (reconcile
     # evidence + sealed pending posts + funding outputs). NEVER derived
-    # from the StakingBlock `bonded_slots` hint. The staking ACTION surface
-    # (unstake, claim) remains RESERVED.
+    # from the StakingBlock `bonded_slots` hint. Staking ACTIONS: stake_in
+    # and drain landed with WI-RPC-5 (schemas below); unstake remains
+    # RESERVED; claim / get_stakes are REJECTED (header registry).
     StakedBalance:
       type: object
       required:
@@ -1890,6 +2016,135 @@ components:
             "what is being served now" rather than "what was intended".
             Consequently it can be absent for a wallet that is bonded —
             which is the honest reading, not a gap.
+
+    # ── Archival principal staking actions — WI-RPC-5 ────────────────
+    # The principal↔P money legs that already exist in Engine: stake_in
+    # (PR-P2 funding leg), get_drain_balance (F-D2 aggregate read), drain
+    # (DS-PR-2 P→principal send). All three params schemas carry
+    # `additionalProperties: false`, and the server enforces it with
+    # `#[serde(deny_unknown_fields)]` — an unknown key is -32602, never
+    # silently dropped. That is load-bearing on `drain`: fee, destination,
+    # and persona slot are engine-resolved by design (P-lane fee
+    # uniformity CONTRACT PIN, T-DS-3 destination pinning, type-level
+    # active-persona scoping), so a client that believes it is steering
+    # them must be told it is not.
+    StakeInParams:
+      type: object
+      required: [amount]
+      additionalProperties: false
+      description: >
+        Fund the active persona's staking pool from principal (liquid)
+        balance. This is an ORDINARY principal transfer through the same
+        pending-tx confirm/submit path as `build_pending_tx`: the result
+        is a reservation the client confirms with `submit_pending_tx` or
+        abandons with `discard_pending_tx`. The structured cover amount is
+        system-drawn — never a parameter — and no P-address appears on
+        the wire in either direction.
+
+        GF-7 change-co-presence disclosure (clients MUST surface this
+        before confirm): this transaction also creates a change output
+        back to this wallet in the same tx as the staking-fund output.
+        An observer who later links that change output to this wallet can
+        correlate the staking fund with it. This residual linkage is open
+        (bond-funding separation is the named carrier); staking privacy
+        is not degraded beyond this co-presence.
+      properties:
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Principal amount to move into the staking pool. User intent
+            only — the fee is priced by the send path as usual and is NOT
+            part of this amount.
+
+    StakeInResult:
+      $ref: "#/components/schemas/BuildPendingTxResult"
+
+    GetDrainBalanceParams:
+      type: object
+      additionalProperties: false
+      description: No parameters. Extra keys are -32602 (F-1).
+
+    GetDrainBalanceResult:
+      description: >
+        Two-armed by contract (F-D2 / rule 82): a wallet that cannot yet
+        anchor the drainable set answers `syncing`, NEVER `"0"` — a zero
+        while syncing would be a lie a client cannot distinguish from an
+        empty pool. `spendable` is the aggregate drainable scalar across
+        the active persona's pool; there is deliberately no per-epoch or
+        per-output breakdown (the aggregate is the firewall-safe read).
+      oneOf:
+        - type: object
+          required: [status, spendable]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: ready
+            spendable:
+              $ref: "#/components/schemas/AtomicUnits"
+        - type: object
+          required: [status, detail]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: syncing
+            detail:
+              type: string
+              description: >
+                Human-readable transient condition (e.g. curve-tree ingest
+                behind the anchor age). Scalar-free: no amounts, no
+                indices.
+
+    DrainParams:
+      type: object
+      required: [amount]
+      additionalProperties: false
+      description: >
+        Move staking funds back to this wallet's own principal balance.
+        `amount` is the ONLY parameter, and that is a contract property,
+        not a first-draft economy: the fee is the canonical P-lane floor
+        quoted inside the Engine (P-lane fee uniformity CONTRACT PIN — a
+        user fee control would be a wallet fingerprint in a cleartext
+        field), the destination is engine-pinned to this wallet's primary
+        address (T-DS-3), and the persona is the live active persona
+        resolved from actor state (there is no slot parameter to point at
+        another persona, and a live persona is never treated as retired —
+        the exit-fee reserve gate stays on). A request carrying `fee`,
+        `destination`, or `p_slot` is -32602, enforced by
+        `deny_unknown_fields`, not by prose. `amount` is user intent and
+        is never pre-filled from a reward vector (F-D2).
+      properties:
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Amount to drain to principal. The canonical floor fee is paid
+            FROM the pool on top of this; a live persona refuses -29509
+            rather than dip below the exit-fee reserve.
+
+    DrainResult:
+      type: object
+      required: [tx_hash, verdict]
+      description: >
+        The drain was durably sealed BEFORE dispatch (persist-then-send:
+        a crash between the two leaves a sealed record, never a lost
+        send) and then submitted. There is no confirm step — the drain
+        pipeline seals and dispatches in one call; the one-live-drain
+        seal (-29511) is the in-flight brake.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        verdict:
+          type: string
+          enum: [BROADCAST, ALREADY_IN_CHAIN]
+          description: >
+            Success projection of the engine submit outcome. BROADCAST is
+            the normal arm; ALREADY_IN_CHAIN means a previously-sealed
+            identical drain was found confirmed at submit time.
+        confirmed_height:
+          type: integer
+          format: int64
+          description: Present iff verdict is ALREADY_IN_CHAIN.
 
     # ── Proofs — WI-RPC-3 (Phase 2c) ─────────────────────────────────
     # DLEQ-based payment and reserve proofs over rust/shekyl-proofs. Two
