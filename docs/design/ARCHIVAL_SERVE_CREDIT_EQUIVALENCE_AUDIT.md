@@ -207,6 +207,11 @@ name `serve_credit_decisions.rs`. No new crate; no new workspace dependency
 
 **Shape (illustrative signatures, subject to review — not yet written):**
 
+**PC-D4 (2026-08-26):** the 48-byte encoding below is `ArchivalPairEpochKey`
+/`pair_epoch_key_be`. `ArchivalServeCreditKey` is the 56-byte per-challenge
+ledger key and is not this function. The signatures record the substrate at
+the audit pin.
+
 ```rust
 /// D-SC-A sub-unit: the (P,s,E) LMDB dedup key (BE) + membership verdict.
 pub fn serve_credit_key_be(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> [u8; 48];

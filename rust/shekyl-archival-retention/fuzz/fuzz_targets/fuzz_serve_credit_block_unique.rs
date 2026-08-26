@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_archival_retention::serve_credit_decisions::{
-    serve_credit_block_key, serve_credit_block_unique, serve_credit_key_be, BlockUniqueVerdict,
+    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique, BlockUniqueVerdict,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -101,11 +101,11 @@ fuzz_target!(|data: &[u8]| {
     let mut distinct = BTreeSet::new();
     for (p, shard, epoch) in &triples {
         if distinct.insert((*p, *shard, *epoch)) {
-            assert!(be_keys.insert(serve_credit_key_be(p, *shard, *epoch)));
+            assert!(be_keys.insert(pair_epoch_key_be(p, *shard, *epoch)));
         }
         assert_eq!(
             serve_credit_block_key(p, *shard, *epoch),
-            serve_credit_key_be(p, *shard, *epoch),
+            pair_epoch_key_be(p, *shard, *epoch),
             "post-unify: one encoding for the logical key"
         );
     }

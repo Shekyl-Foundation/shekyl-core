@@ -570,6 +570,21 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
 }
 
+TEST(archival_substrate_lmdb, serve_credit_key_is_pair_epoch_plus_height)
+{
+  const crypto::hash p = make_hash(0x11);
+  const shekyl::db::ArchivalPairEpochKey pair(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 3);
+  const shekyl::db::ArchivalServeCreditKey sc(pair, 4100);
+  const MDB_val k = sc.as_mdb_val();
+  ASSERT_EQ(k.mv_size, shekyl::db::kArchivalServeCreditKeySize);
+  EXPECT_TRUE(pair.is_prefix_of(k.mv_data, k.mv_size));
+  EXPECT_EQ(shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 48), 4100u);
+  const shekyl::db::ArchivalPairEpochKey other(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 4);
+  EXPECT_FALSE(other.is_prefix_of(k.mv_data, k.mv_size));
+}
+
 // ── M-2/Q7 emission snapshot identity KATs ──────────────────────────────────
 // (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2)
 //
@@ -590,22 +605,22 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
+
 /// **`PC-D6`: the emission fold, and the test that fails when it is removed.**
 ///
 /// `PC-D4` made the serve-credit ledger per-CHALLENGE — one pair-epoch can hold
 /// up to `CHALLENGES_PER_PAIR_PER_EPOCH` rows. Emission stays per-PAIR-epoch:
 /// three passes credit a pair ONCE.
 ///
-/// The gather pushes one `credit_pair` per row, so without an explicit fold the
-/// pair is paid per challenge. Nothing about that failure looks wrong: every
-/// row is legitimate, every index is correct, the arrays are well formed, and
-/// the only symptom is a number three times too large in a place no assertion
-/// was watching. That is why this test exists at all, and why it asserts on the
-/// pair COUNT rather than on a downstream reward figure — the fold's absence is
-/// only visible on the axis the fold acts on.
+/// The gather would push one `credit_pair` per row without the prefix skip, so
+/// the pair is paid per challenge. Nothing about that failure looks wrong:
+/// every row is legitimate, every index is correct, the arrays are well
+/// formed, and the only symptom is a number three times too large in a place
+/// no assertion was watching. That is why this test exists at all, and why it
+/// asserts on the pair COUNT rather than on a downstream reward figure.
 ///
-/// The edit that makes this red is deleting the `pair_seen` guard in
-/// `gather_archival_emission_epoch_snapshot`'s scan.
+/// The edit that makes this red is deleting the pair-epoch prefix skip in
+/// `gather_archival_epoch_rows_window`.
 TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_credit_pair)
 {
   TempLMDB fixture;

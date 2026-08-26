@@ -176,9 +176,9 @@ pub use segment_freeze::{
     LeafChunkBounds, SEGMENT_LEAF_COUNT,
 };
 pub use serve_credit_decisions::{
-    serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
-    serve_credit_key_be, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
-    GateVerdict, ServeCreditGateInputs, SERVE_CREDIT_KEY_LEN,
+    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
+    serve_credit_gate_decision, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
+    GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{

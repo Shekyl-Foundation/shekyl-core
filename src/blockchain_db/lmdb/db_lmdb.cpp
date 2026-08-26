@@ -5183,10 +5183,12 @@ uint32_t BlockchainLMDB::archival_serve_credit_pass_count(const crypto::hash& p_
     throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for pass count: ",
       rc).c_str()));
 
-  // Floor probe at height 0: the appended height is the LAST component, so
-  // every row for this pair-epoch is contiguous from here.
-  shekyl::db::ArchivalServeCreditKey probe(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
-    settlement_epoch, 0);
+  // Floor probe at height 0: height is last, so every row for this pair-epoch
+  // is contiguous from here. The prefix comparison is the pair-epoch type,
+  // not a raw 48-byte slice of the 56-byte key.
+  shekyl::db::ArchivalPairEpochKey prefix(reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+    settlement_epoch);
+  shekyl::db::ArchivalServeCreditKey probe(prefix, 0);
   MDB_val probe_val = probe.as_mdb_val();
   MDB_val k = probe_val;
   MDB_val v;
@@ -5199,9 +5201,7 @@ uint32_t BlockchainLMDB::archival_serve_credit_pass_count(const crypto::hash& p_
       mdb_cursor_close(cur);
       throw std::runtime_error("FATAL: archival_serve_credit key size mismatch at pass count");
     }
-    // Compare the pair-epoch PREFIX only; the run ends at the first key that
-    // leaves it.
-    if (std::memcmp(k.mv_data, probe_val.mv_data, shekyl::db::kArchivalPairEpochKeySize) != 0)
+    if (!prefix.is_prefix_of(k.mv_data, k.mv_size))
       break;
     ++count;
     rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
@@ -7230,11 +7230,12 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
   bool shard_probe_wrapped = false;
   while (!shard_probe_wrapped)
   {
-    // First row at or past (P, next_shard, 0): the next served shard, if any.
-    // PC-D4: the key gained BE(block_height) as its LAST component, so a
-    // floor probe takes height 0 and the (P, shard) prefix positioning is
-    // unchanged -- append-ordering is what makes that true rather than an
-    // audit of each scan.
+    // First row at or past (P, next_shard, epoch=0, height=0): the next
+    // served shard, if any. Height is last, so the floor probe still
+    // positions on the (P, shard) prefix. The matching ceiling (below) is
+    // (MAX_EPOCH, MAX_HEIGHT) — MAX in both trailing components, or the
+    // predecessor of a height-0 MAX-epoch probe would skip every row at
+    // that epoch.
     shekyl::db::ArchivalServeCreditKey lo_probe(
       reinterpret_cast<const uint8_t*>(p_id.data), next_shard, 0, 0);
     MDB_val lo = lo_probe.as_mdb_val();
@@ -8168,14 +8169,10 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
     // bond table.
     std::vector<std::unordered_map<crypto::hash, size_t>> bond_index(window);
     std::vector<std::map<uint64_t, size_t>> shard_index(window);
-    // PC-D4/PC-D6: the ledger is per-CHALLENGE, so one pair-epoch can hold up
-    // to CHALLENGES_PER_PAIR_PER_EPOCH rows. Emission is per-PAIR-epoch: three
-    // passes credit a pair ONCE. Without this set the loop below pushes one
-    // credit_pair per ROW and the pair is paid per challenge -- silently,
-    // because every row is legitimate and every index is correct. This is the
-    // site where the widened key could inflate emission, and the fold is what
-    // preserves the payment granularity the key no longer carries.
-    std::vector<std::set<std::pair<size_t, size_t>>> pair_seen(window);
+    // PC-D6: emission is per pair-epoch. The ledger is per-challenge, so fold
+    // on the 48-byte prefix (the pair-epoch type) at the top of the scan —
+    // not after resolving bonds, and not on derived (bond, shard) indices.
+    std::vector<std::set<std::array<uint8_t, shekyl::db::kArchivalPairEpochKeySize>>> pair_epoch_seen(window);
     // Bond and shard-segment records are keyed by P / shard alone (not by
     // epoch), so within one read view a single decode serves every epoch in
     // the window.
@@ -8201,6 +8198,13 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
       if (epoch >= epoch_lo && epoch < epoch_hi)
       {
         const size_t w = static_cast<size_t>(epoch - epoch_lo);
+        std::array<uint8_t, shekyl::db::kArchivalPairEpochKeySize> prefix{};
+        std::memcpy(prefix.data(), ck.mv_data, prefix.size());
+        if (!pair_epoch_seen[w].insert(prefix).second)
+        {
+          rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_NEXT);
+          continue;
+        }
         ArchivalEmissionEpochSnapshot& out = outs[w];
         crypto::hash row_p_id{};
         std::memcpy(row_p_id.data, ck.mv_data, 32);
@@ -8276,13 +8280,7 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
             shard_it = shard_index[w].emplace(shard_id, out.shards.size()).first;
             out.shards.push_back(scached->second);
           }
-          // Fold: first row for this (bond, shard) in this epoch wins. Note
-          // this does NOT rely on the rows being adjacent -- they are, since
-          // the height is the key's last component, but a fold that depended
-          // on that would be correct by circumstance rather than by
-          // construction.
-          if (pair_seen[w].emplace(bond_it->second, shard_it->second).second)
-            out.credit_pairs.push_back({ bond_it->second, shard_it->second });
+          out.credit_pairs.push_back({ bond_it->second, shard_it->second });
         }
       }
       rc = mdb_cursor_get(credit_cur, &ck, &cv, MDB_NEXT);

@@ -632,7 +632,7 @@ TEST(serve_credit_equivalence, gate_vectors_live_cpp_verdict)
     fixture["gate"]["vectors"].GetArray().Size());
 }
 
-// ── D-SC-A: (P,s,E) key bytes pinned at the live ArchivalServeCreditKey ───
+// ── D-SC-A: (P,s,E) key bytes pinned at the live ArchivalPairEpochKey ───
 
 TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
 {
@@ -671,10 +671,10 @@ TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
 // connecting full blocks. Per §5 ("D-SC-C is trivially isolatable — pure, no
 // DB") this leg runs a VERBATIM transcription of that loop: the same
 // std::unordered_set<std::string> over the same 48-byte
-// ArchivalServeCreditKey bytes (the unified big-endian encoding, post-SCE-1
-// unify), first-collision-wins. The guard comment at the blockchain.cpp site
-// names this test; an edit to the live loop must update both in the same
-// commit.
+// ArchivalPairEpochKey bytes (the unified big-endian encoding, post-SCE-1
+// unify; PC-D4 left this width in place), first-collision-wins. The guard
+// comment at the blockchain.cpp site names this test; an edit to the live
+// loop must update both in the same commit.
 
 namespace {
 
@@ -745,7 +745,7 @@ TEST(serve_credit_equivalence, block_unique_vectors_verdict_and_key_pin)
     }
     if (vec.HasMember("expected_first_key_be_hex"))
     {
-      // Post-SCE-1-unify: the block key is the same BE ArchivalServeCreditKey
+      // Post-SCE-1-unify: the block key is the same BE ArchivalPairEpochKey
       // encoding D-SC-A persists (audit doc §6).
       EXPECT_EQ(out.first_key_hex,
         std::string(vec["expected_first_key_be_hex"].GetString())) << id;
@@ -777,7 +777,7 @@ TEST(serve_credit_equivalence, sce1_key_encoding_crosscheck)
   EXPECT_EQ(be_hex, std::string(x["key_be_hex"].GetString()));
   EXPECT_EQ(block_hex, std::string(x["key_block_hex"].GetString()));
   // Post-unify, expect_equal is true and load-bearing: the two decision
-  // paths must key with the one ArchivalServeCreditKey encoding — a
+  // paths must key with the one ArchivalPairEpochKey encoding — a
   // reintroduced split (SCE-1, audit doc §6) fails here.
   EXPECT_EQ(be_hex == block_hex, x["expect_equal"].GetBool());
 }

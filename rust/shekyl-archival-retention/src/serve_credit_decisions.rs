@@ -19,16 +19,21 @@
 //! The three decision sites, at the pinned substrate commit `ca8edce6b`:
 //!
 //! - **D-SC-A** — per-tx `(P, shard, E)` dedup against pre-block LMDB state
-//!   (`blockchain.cpp:4247`; key type `ArchivalServeCreditKey`,
-//!   `shekyl_types.h:405–412`, **big-endian** `u64` fields).
+//!   (`check_archival_serve_credit_input`; key type `ArchivalPairEpochKey`,
+//!   **big-endian** `u64` fields). The C++ read is
+//!   `archival_serve_credit_pass_count > 0` over that 48-byte prefix
+//!   (`PC-D4`: the 56-byte ledger key is per-challenge and is a different
+//!   type).
 //! - **D-SC-B** — the full per-tx acceptance gate
-//!   (`check_archival_serve_credit_input`, `blockchain.cpp:4224–4396`),
-//!   mirrored **wide**: the ordered predicate sequence returns the first
-//!   failing branch. A reorder is a behavior change; the ordering is audited.
+//!   (`check_archival_serve_credit_input`), mirrored **wide**: the ordered
+//!   predicate sequence returns the first failing branch. A reorder is a
+//!   behavior change; the ordering is audited.
 //! - **D-SC-C** — block-level cross-tx `(P, shard, E)` uniqueness
-//!   (`blockchain.cpp:4889–4910`; keyed with `ArchivalServeCreditKey` — the
+//!   (`handle_block_to_main_chain`; keyed with `ArchivalPairEpochKey` — the
 //!   same **big-endian** encoding D-SC-A persists, since the SCE-1 unify
 //!   commit replaced the original native-endian `memcpy` key, audit doc §6).
+//!   The block is common-mode inside one block, so this pass did not widen
+//!   with the ledger.
 //!
 //! Single-source rule (audit doc §2.2): predicates that already exist in Rust
 //! are *called*, never re-implemented — [`serve_credit_epoch_ok`] (step 4),
@@ -43,27 +48,27 @@ use crate::challenge::challenge_seal_on_chain;
 use crate::segment_freeze::challenge_leaf_chunk_bounds;
 use crate::serve_eligibility::serve_credit_epoch_ok;
 
-/// Byte length of the `(P, shard, E)` composite key — both the persistent
-/// LMDB key (D-SC-A) and the in-block key (D-SC-C) are
-/// `P_id[32] ‖ u64 ‖ u64`.
-pub const SERVE_CREDIT_KEY_LEN: usize = 48;
+/// Byte length of the `(P, shard, E)` composite key — C++
+/// `ArchivalPairEpochKey`. D-SC-A (prefix membership) and D-SC-C (in-block
+/// uniqueness) both use this encoding. The serve-credit *ledger* key is the
+/// 56-byte `ArchivalServeCreditKey` (this plus `BE(block_height)`) and is
+/// not constructed here: LMDB I/O stays C++.
+pub const PAIR_EPOCH_KEY_LEN: usize = 48;
 
 // ─── D-SC-A — per-tx (P, shard, E) dedup vs pre-block LMDB ────────────────
 
-/// The persistent LMDB serve-credit key, byte-for-byte as C++
-/// `ArchivalServeCreditKey` builds it (`shekyl_types.h:405–412`):
+/// The pair-epoch key, byte-for-byte as C++ `ArchivalPairEpochKey` builds it:
 /// `P_id[32] ‖ BE64(shard_id) ‖ BE64(settlement_epoch)`.
 ///
-/// Big-endian is load-bearing for the LMDB table's sort order
-/// (`db_lmdb.cpp:1657–1659`: composite keys are multi-field big-endian byte
-/// arrays, never native-endian integers).
+/// Big-endian is load-bearing for the LMDB table's sort order (composite keys
+/// are multi-field big-endian byte arrays, never native-endian integers).
 #[must_use]
-pub fn serve_credit_key_be(
+pub fn pair_epoch_key_be(
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
-) -> [u8; SERVE_CREDIT_KEY_LEN] {
-    let mut key = [0u8; SERVE_CREDIT_KEY_LEN];
+) -> [u8; PAIR_EPOCH_KEY_LEN] {
+    let mut key = [0u8; PAIR_EPOCH_KEY_LEN];
     key[..32].copy_from_slice(p_canonical_id);
     key[32..40].copy_from_slice(&shard_id.to_be_bytes());
     key[40..48].copy_from_slice(&settlement_epoch.to_be_bytes());
@@ -89,12 +94,12 @@ pub fn serve_credit_key_be(
 /// (P, shard, E)").
 #[must_use]
 pub fn serve_credit_preblock_duplicate(
-    preblock_keys: &BTreeSet<[u8; SERVE_CREDIT_KEY_LEN]>,
+    preblock_keys: &BTreeSet<[u8; PAIR_EPOCH_KEY_LEN]>,
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
 ) -> bool {
-    preblock_keys.contains(&serve_credit_key_be(
+    preblock_keys.contains(&pair_epoch_key_be(
         p_canonical_id,
         shard_id,
         settlement_epoch,
@@ -386,10 +391,8 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict
 
 // ─── D-SC-C — block-level (P, shard, E) uniqueness ─────────────────────────
 
-/// The in-block serve-credit key, byte-for-byte as the C++ block pass builds
-/// it: since the SCE-1 unify commit (audit doc §6) the block pass keys with
-/// `ArchivalServeCreditKey` — the same **big-endian** encoding as the
-/// persistent D-SC-A key — so this delegates to [`serve_credit_key_be`].
+/// The in-block uniqueness key, byte-for-byte as the C++ block pass builds
+/// it: `ArchivalPairEpochKey`. Delegates to [`pair_epoch_key_be`].
 ///
 /// **Finding SCE-1** (audit doc §6), for the record: pre-unify the C++ built
 /// a native-endian `memcpy` key here, the *other* encoding of the same
@@ -402,8 +405,8 @@ pub fn serve_credit_block_key(
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
-) -> [u8; SERVE_CREDIT_KEY_LEN] {
-    serve_credit_key_be(p_canonical_id, shard_id, settlement_epoch)
+) -> [u8; PAIR_EPOCH_KEY_LEN] {
+    pair_epoch_key_be(p_canonical_id, shard_id, settlement_epoch)
 }
 
 /// Verdict of the block-level uniqueness pass.
@@ -483,9 +486,9 @@ mod tests {
     }
 
     #[test]
-    fn key_be_matches_archival_serve_credit_key_layout() {
-        // shekyl_types.h:405–412 — P ‖ BE64(shard) ‖ BE64(E).
-        let key = serve_credit_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+    fn key_be_matches_archival_pair_epoch_key_layout() {
+        // ArchivalPairEpochKey — P ‖ BE64(shard) ‖ BE64(E).
+        let key = pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
         assert_eq!(&key[..32], &P);
         assert_eq!(&key[32..40], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(
@@ -496,13 +499,12 @@ mod tests {
 
     #[test]
     fn block_key_is_unified_onto_the_be_key() {
-        // Post-SCE-1-unify (audit doc §6): the block pass keys with
-        // ArchivalServeCreditKey, so D-SC-C's key IS D-SC-A's key —
-        // P ‖ BE64(shard) ‖ BE64(E), one encoding for the logical triple.
+        // Post-SCE-1-unify (audit doc §6): D-SC-C's key IS D-SC-A's key —
+        // ArchivalPairEpochKey, one encoding for the logical triple.
         let key = serve_credit_block_key(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
         assert_eq!(
             key,
-            serve_credit_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718)
+            pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718)
         );
         assert_eq!(&key[32..40], &[1, 2, 3, 4, 5, 6, 7, 8]);
     }
@@ -511,7 +513,7 @@ mod tests {
     fn preblock_duplicate_is_membership_over_be_keys() {
         let mut preblock = BTreeSet::new();
         assert!(!serve_credit_preblock_duplicate(&preblock, &P, 3, 100));
-        preblock.insert(serve_credit_key_be(&P, 3, 100));
+        preblock.insert(pair_epoch_key_be(&P, 3, 100));
         assert!(serve_credit_preblock_duplicate(&preblock, &P, 3, 100));
         // Field-swapped triples do not collide.
         assert!(!serve_credit_preblock_duplicate(&preblock, &P, 100, 3));

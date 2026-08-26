@@ -2201,26 +2201,15 @@ public:
   // source, and never read from ambient chain state: a pop that recomputed the
   // height from `height()` would delete a key it never wrote
   // (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
-  /// The exact per-challenge read: is there a row for this pair at THIS block.
+  /// Exact per-challenge read: a row for this pair at THIS block.
   ///
-  /// **No production caller today, deliberately, and that is not an oversight
-  /// to clean up.** The pop path uses `remove_...`, and the admission dedup is
-  /// pair-epoch-wide (`archival_serve_credit_pass_count() > 0`) until the
-  /// derived-assignment issuer is wired — see the corrected `PC-D7` in
-  /// ARCHIVAL_PER_CHALLENGE_RECORD.md and the cutover's inputs in
-  /// ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1. At that cutover the dedup becomes
-  /// this exact question, and this is the read it will use.
-  ///
-  /// Two warnings for whoever finds it:
-  ///
-  /// - **Do not delete it under rule 15.** Its caller is named and its blocker
-  ///   is named; it is the read half of a pair whose two writers
-  ///   (`set_`/`remove_`) are both production-called.
-  /// - **Do not read its tests as coverage of anything in production.** Only
-  ///   tests call it, and a primitive exercised solely by tests that supply
-  ///   its own arguments tells you nothing about a caller that does not exist
-  ///   yet. It is the same shape as a parameter "covered" by tests that pass
-  ///   it — thoroughly exercised, and evidence for nothing.
+  /// Admission stays pair-epoch-wide (`pass_count > 0`) while the live issuer
+  /// is the one-challenge-per-pair-epoch beacon (`challenge_fire_height` /
+  /// `challenge_leaf_index`). The assignment cutover (`assign_epoch` — Rust
+  /// only, no FFI; ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1) makes this the
+  /// uniqueness question. Named blocker, named caller: do not delete under
+  /// rule 15. Tests that pass their own height are not coverage of a
+  /// production caller that does not exist yet.
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
@@ -2228,13 +2217,10 @@ public:
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint64_t block_height) = 0;
 
-  /// Rows recorded for `(P, shard, E)` across every block that challenged it —
-  /// the enumeration `PC-D5` counts, over the key's 48-byte pair-epoch prefix.
-  ///
-  /// Distinct from `has_archival_serve_credit_bit`, which asks the exact
-  /// per-challenge question. Callers that mean "did this pair serve AT ALL
-  /// this epoch" want `> 0` here; under the old 48-byte key those were the
-  /// same question and the same call, which is why they need separating now.
+  /// Rows recorded for `(P, shard, E)` — the PC-D5 enumeration over the
+  /// pair-epoch prefix. Admission and the failure window collapse this to
+  /// `> 0` while the beacon still issues one challenge; the settlement writer
+  /// (SO-D7) and the assignment cutover's count bound consume the number.
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const = 0;
 

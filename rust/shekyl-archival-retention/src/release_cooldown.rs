@@ -9,14 +9,14 @@
 //! The cooldown anchor is a persona's **last-served settlement epoch**, and it is
 //! *derived*, never stored (P2B-8 Q1/Q2 — "derive from the landed source of truth,
 //! don't add a mutable field"). The serve-credit table is keyed
-//! `P_id ‖ BE64(shard) ‖ BE64(epoch)` (a big-endian composite,
-//! `serve_credit_decisions::serve_credit_key_be`), so its byte-sort *is*
-//! `(P_id, shard, epoch)` ascending; shard `s`'s last-served epoch is therefore the
-//! max `E` carrying a bit — a single reverse-cursor seek over the `P_id ‖ BE64(shard)`
-//! prefix. That LMDB cursor I/O stays C++-side (the standing schema exception); the
-//! derived per-shard maxima arrive here as data, and this module owns the
-//! decisions on top: the whole-record anchor (max over shards, for `Unbond`), the
-//! cooldown predicate, and the slash-settlement predicate.
+//! `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(block_height)` (`PC-D4`); byte-sort
+//! *is* `(P_id, shard, epoch, height)` ascending, so shard `s`'s last-served
+//! epoch is the predecessor of the ceiling probe
+//! `P ‖ BE64(s) ‖ BE64(u64::MAX) ‖ BE64(u64::MAX)` — MAX in the appended
+//! height too. That LMDB cursor I/O stays C++-side; the derived per-shard
+//! maxima arrive here as data, and this module owns the decisions on top:
+//! the whole-record anchor (max over shards, for `Unbond`), the cooldown
+//! predicate, and the slash-settlement predicate.
 //!
 //! ## The guarantee (ratified 2026-07-12, maintainer)
 //!

@@ -443,19 +443,21 @@ public:
     }
 
     // Raw key bytes for non-LMDB consumers — the block-level SCE-1 uniqueness
-    // pass in blockchain.cpp shares this encoding
-    // (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §6).
-    //
-    // That pass stays at PAIR-EPOCH width under PC-D4, and the reason is worth
-    // stating because "the ledger key widened, so this should too" is the
-    // natural inference: within ONE block every record shares the block, so
-    // the block component is common-mode there. Two records for the same pair
-    // in one block collide at the same `(P, s, E, h)` ledger key regardless,
-    // which leaves the `(P, s, E)` check the correct within-block enforcer
-    // rather than a leftover.
+    // pass in blockchain.cpp shares this encoding (the block is common-mode
+    // inside one block, so the 56-byte ledger key would add no discrimination).
     const std::array<uint8_t, kArchivalPairEpochKeySize>& bytes() const noexcept
     {
         return bytes_;
+    }
+
+    // Serve-credit rows are this encoding plus BE(height). Prefix scans,
+    // pass-count, and the emission fold ask this rather than a raw 48-byte
+    // memcmp, so the layout is a type invariant rather than a comment.
+    bool is_prefix_of(const void* key, size_t key_size) const noexcept
+    {
+        return key != nullptr
+            && key_size >= kArchivalPairEpochKeySize
+            && std::memcmp(key, bytes_.data(), kArchivalPairEpochKeySize) == 0;
     }
 
 private:
@@ -471,26 +473,25 @@ private:
 
 class ArchivalServeCreditKey {
 public:
+    // The ledger key IS a pair-epoch key plus the issuing block's index —
+    // composed, not re-encoded, so a later widening of one cannot silently
+    // rewrite the other's first 48 bytes.
+    ArchivalServeCreditKey(const ArchivalPairEpochKey& pair_epoch, uint64_t block_height) noexcept
+    {
+        std::memcpy(bytes_.data(), pair_epoch.bytes().data(), kArchivalPairEpochKeySize);
+        store_be64(bytes_.data() + kArchivalPairEpochKeySize, block_height);
+    }
+
     ArchivalServeCreditKey(const uint8_t p_id[32], uint64_t shard_id, uint64_t settlement_epoch,
                            uint64_t block_height) noexcept
-    {
-        std::memcpy(bytes_.data(), p_id, 32);
-        store_be64(bytes_.data() + 32, shard_id);
-        store_be64(bytes_.data() + 40, settlement_epoch);
-        // Appended: offsets 0..47 are exactly the pair-epoch layout, so a
-        // prefix probe over (P, s, E) still positions a cursor correctly and
-        // the epoch-ordered prune still reads the epoch at 40.
-        store_be64(bytes_.data() + 48, block_height);
-    }
+        : ArchivalServeCreditKey(ArchivalPairEpochKey(p_id, shard_id, settlement_epoch), block_height)
+    {}
 
     MDB_val as_mdb_val() const noexcept
     {
         return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
     }
 
-    // Raw key bytes for non-LMDB consumers (the block-level uniqueness pass in
-    // blockchain.cpp shares this encoding per SCE-1,
-    // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §6).
     const std::array<uint8_t, kArchivalServeCreditKeySize>& bytes() const noexcept
     {
         return bytes_;

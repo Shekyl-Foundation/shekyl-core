@@ -25,9 +25,9 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::challenge::challenge_fire_height;
 use shekyl_archival_retention::serve_credit_decisions::{
-    serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
-    serve_credit_key_be, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
-    GateVerdict, ServeCreditGateInputs, SERVE_CREDIT_KEY_LEN,
+    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
+    serve_credit_gate_decision, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
+    GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
 };
 
 const KAT: &str = include_str!("fixtures/serve_credit_equivalence_kat_v1.json");
@@ -195,14 +195,14 @@ fn dedup_vectors_verdict_and_key_pin() {
         let shard_id = vector["shard_id"].as_u64().unwrap();
         let epoch = vector["settlement_epoch"].as_u64().unwrap();
 
-        let key = serve_credit_key_be(&p, shard_id, epoch);
+        let key = pair_epoch_key_be(&p, shard_id, epoch);
         assert_eq!(
             key.to_vec(),
             hex_bytes(&vector["expected_key_be_hex"]),
             "vector {id}: BE key bytes"
         );
 
-        let preblock: BTreeSet<[u8; SERVE_CREDIT_KEY_LEN]> = vector["preblock_keys_hex"]
+        let preblock: BTreeSet<[u8; PAIR_EPOCH_KEY_LEN]> = vector["preblock_keys_hex"]
             .as_array()
             .expect("preblock keys")
             .iter()
@@ -262,9 +262,10 @@ fn block_unique_vectors_verdict_and_key_pin() {
 
 /// SCE-1 executable record, post-unify: the two decision paths (D-SC-A
 /// persistent, D-SC-C block-level) key the same logical `(P, shard, E)`
-/// triple with the *same* bytes — the unify commit re-pointed D-SC-C onto
-/// `ArchivalServeCreditKey` (audit doc §6). `expect_equal` is now `true` and
-/// load-bearing: a reintroduced encoding split fails here.
+/// triple with the *same* bytes — `ArchivalPairEpochKey` (audit doc §6;
+/// `PC-D4` left this width in place because the block is common-mode).
+/// `expect_equal` is now `true` and load-bearing: a reintroduced encoding
+/// split fails here.
 #[test]
 fn sce1_key_encoding_crosscheck() {
     let doc = fixture();
@@ -273,7 +274,7 @@ fn sce1_key_encoding_crosscheck() {
     let shard_id = x["shard_id"].as_u64().unwrap();
     let epoch = x["settlement_epoch"].as_u64().unwrap();
 
-    let key_be = serve_credit_key_be(&p, shard_id, epoch);
+    let key_be = pair_epoch_key_be(&p, shard_id, epoch);
     let key_block = serve_credit_block_key(&p, shard_id, epoch);
     assert_eq!(key_be.to_vec(), hex_bytes(&x["key_be_hex"]));
     assert_eq!(key_block.to_vec(), hex_bytes(&x["key_block_hex"]));
