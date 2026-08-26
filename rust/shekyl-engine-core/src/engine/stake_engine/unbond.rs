@@ -36,7 +36,7 @@ use shekyl_archival_retention::release_cooldown::{
 
 use shekyl_types::PCanonicalId;
 
-use crate::engine::emission_source::{EmissionClaimSource, ServeAnchor, SlashWatermark};
+use crate::engine::emission_source::{ClaimSourceFor, ServeAnchor, SlashWatermark};
 
 use super::actor::{persona_canonical_id, StakeEngine};
 use super::types::*;
@@ -83,8 +83,14 @@ pub(crate) struct UnbondRecordState {
 }
 
 impl UnbondRecordState {
-    /// Build from one decoded claim-source response and the `P` it was
-    /// requested for — the only production constructor.
+    /// Build from one [`ClaimSourceFor`] — the only production constructor.
+    ///
+    /// **Takes no `p_id` argument on purpose.** An earlier revision accepted the
+    /// id and the response separately, which labels rather than binds: passing
+    /// persona A's response with persona B's id produced A's facts wearing B's
+    /// name, and the handler's equality check then agreed with the name. The id
+    /// now arrives already fastened to the response by the code that sent the
+    /// request, so the mismatched pair cannot be expressed here at all.
     ///
     /// `None` when the daemon holds no bond record for that `P`: there is no
     /// exit to assess, which the caller reports rather than treating as an
@@ -92,13 +98,11 @@ impl UnbondRecordState {
     /// this one response, so the settled epoch a refusal quotes is the epoch
     /// the anchors were read against.
     #[allow(dead_code)] // PR-P4 slice 2b: called by the tx-assembly path.
-    pub(crate) fn from_claim_source(
-        p_id: PCanonicalId,
-        source: &EmissionClaimSource,
-    ) -> Option<Self> {
+    pub(crate) fn from_claim_source(fetched: &ClaimSourceFor) -> Option<Self> {
+        let source = fetched.source();
         let bond = source.bond.as_ref()?;
         Some(Self {
-            p_id,
+            p_id: fetched.p_id(),
             bonded_total_atomic: bond.bonded_total_atomic,
             bad_interval_count: bond.bad_interval_count,
             last_served: bond.last_served,
@@ -251,7 +255,7 @@ mod tests {
     };
     use shekyl_types::ChainCount;
 
-    use crate::engine::emission_source::BondContext;
+    use crate::engine::emission_source::{BondContext, EmissionClaimSource};
 
     use super::*;
 
@@ -365,7 +369,8 @@ mod tests {
             }),
             epochs: vec![],
         };
-        let state = UnbondRecordState::from_claim_source(want, &source)
+        let fetched = ClaimSourceFor::for_test(want, source);
+        let state = UnbondRecordState::from_claim_source(&fetched)
             .expect("the response carries a bond record");
         assert_eq!(state.p_id(), want);
         assert_ne!(state.p_id(), PCanonicalId::from_bytes([0x5A; 32]));
@@ -386,10 +391,8 @@ mod tests {
             bond: None,
             epochs: vec![],
         };
-        assert!(
-            UnbondRecordState::from_claim_source(PCanonicalId::from_bytes([1; 32]), &source)
-                .is_none()
-        );
+        let fetched = ClaimSourceFor::for_test(PCanonicalId::from_bytes([1; 32]), source);
+        assert!(UnbondRecordState::from_claim_source(&fetched).is_none());
     }
 
     /// Epoch 0 is a real settlement epoch, and this is the refusal that proves

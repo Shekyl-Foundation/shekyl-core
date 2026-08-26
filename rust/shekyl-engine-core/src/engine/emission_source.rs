@@ -45,7 +45,7 @@ use shekyl_archival_retention::{
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_types::ChainCount;
+use shekyl_types::{ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -588,6 +588,78 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
     EmissionClaimSource::from_json(&result)
 }
 
+/// A claim-source response **paired with the `P` it was actually requested
+/// for**, by the code that sent the request.
+///
+/// The pairing exists because `(p_id, response)` as two arguments is not a
+/// binding — it is a *label*. A caller holding persona A's response and persona
+/// B's id can pair them, and every downstream equality check then agrees with
+/// the label rather than with the record the facts came from: readiness gets
+/// computed from A's cooldown and watermark while B's post is built. On a path
+/// whose confirmation is an irreversible persona-key wipe, that answer being
+/// wrong is the whole hazard.
+///
+/// So the field is private and [`fetch_claim_source_for`] is the only
+/// constructor, writing the id from the argument it just sent. There is no way
+/// to express a mismatched pair.
+///
+/// This is one of **two** checks, not a replacement for the other. This one
+/// proves the facts describe the persona that was *fetched*. The `AssembleUnbond`
+/// handler separately proves the fetched persona is the one whose *handle* is
+/// being spent (`RecordPersonaMismatch`) — a caller can still fetch A honestly
+/// and present it with B's handle, and that is the handler's arm to refuse.
+#[derive(Debug, Clone)]
+pub struct ClaimSourceFor {
+    p_id: PCanonicalId,
+    source: EmissionClaimSource,
+}
+
+impl ClaimSourceFor {
+    /// The `P` the request named.
+    #[must_use]
+    pub fn p_id(&self) -> PCanonicalId {
+        self.p_id
+    }
+
+    /// The decoded response.
+    #[must_use]
+    pub fn source(&self) -> &EmissionClaimSource {
+        &self.source
+    }
+
+    /// Pair a response with an id **without** having sent the request.
+    ///
+    /// Test-only, and deliberately not `cfg(any(test, feature = ...))`: the
+    /// production path has exactly one way to obtain a pairing, and this is the
+    /// escape hatch that lets a test construct the mismatched state in order to
+    /// assert it is refused.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(p_id: PCanonicalId, source: EmissionClaimSource) -> Self {
+        Self { p_id, source }
+    }
+}
+
+/// Fetch the claim source for `p_id`, keeping the two bound together.
+///
+/// **Not a convenience wrapper over [`fetch_emission_claim_source`] — it is the
+/// binding.** The bare fetch returns facts with no record of whose they are, so
+/// a consumer that needs to know (anything on the `Unbond` readiness/exit path)
+/// would have to re-attach an id by hand, which is the mislabeling
+/// [`ClaimSourceFor`] exists to make impossible. Reach for this one there, and
+/// do not collapse the two: the delegation is a single line precisely so the
+/// pair cannot drift, and the bare form stays for consumers (the claim
+/// orchestrator, the serve-set pinner) that already carry `P` in their own
+/// context and read only the record's contents.
+#[allow(dead_code)] // PR-P4 slice 2b: the readiness/exit path is its caller.
+pub async fn fetch_claim_source_for<R: Rpc>(
+    rpc: &R,
+    p_id: PCanonicalId,
+) -> Result<ClaimSourceFor, EmissionSourceError> {
+    let source = fetch_emission_claim_source(rpc, p_id.as_bytes()).await?;
+    Ok(ClaimSourceFor { p_id, source })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,6 +718,71 @@ mod tests {
                 "{field} absent must be Malformed, got {err:?}"
             );
         }
+    }
+
+    /// The pairing follows the **request**, not anything the reply says.
+    ///
+    /// This canned daemon answers with the same fixture record no matter which
+    /// `P` is asked for — the shape of an honest-but-confused node, or a caching
+    /// proxy serving the wrong entry. The wrapper must still name the persona
+    /// the wallet *asked about*, because that is the fact the wallet holds
+    /// first-hand and the only one an untrusted reply cannot move.
+    ///
+    /// That is also why the response carries no `p_id` echo to check against: a
+    /// daemon willing to send the wrong record is willing to echo the right id
+    /// over it, so an echo would authenticate nothing while making the field
+    /// look authoritative.
+    #[tokio::test]
+    async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
+        #[derive(Clone)]
+        struct OneRecordDaemon(std::sync::Arc<Value>);
+
+        impl Rpc for OneRecordDaemon {
+            fn post(
+                &self,
+                route: &str,
+                _body: Vec<u8>,
+            ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+                let reply = serde_json::to_vec(&json!({ "result": *self.0 }))
+                    .expect("fixture result encodes");
+                let ok = route == "json_rpc";
+                async move {
+                    if ok {
+                        Ok(reply)
+                    } else {
+                        Err(RpcError::InternalError("unexpected route".into()))
+                    }
+                }
+            }
+        }
+
+        let daemon = OneRecordDaemon(std::sync::Arc::new(fixture()));
+        let asked = PCanonicalId::from_bytes([0x3C; 32]);
+        let fetched = fetch_claim_source_for(&daemon, asked)
+            .await
+            .expect("the canned reply decodes");
+
+        assert_eq!(fetched.p_id(), asked);
+        // And the facts really are the ones that came back, so the pairing is a
+        // binding rather than an id sitting beside an unrelated value.
+        assert_eq!(
+            fetched
+                .source()
+                .bond
+                .as_ref()
+                .expect("fixture has a bond record")
+                .bad_interval_count,
+            2
+        );
+
+        // A second request for a different `P` against the same daemon must not
+        // come back wearing the first one's name.
+        let other = PCanonicalId::from_bytes([0xC3; 32]);
+        let again = fetch_claim_source_for(&daemon, other)
+            .await
+            .expect("the canned reply decodes");
+        assert_eq!(again.p_id(), other);
+        assert_ne!(again.p_id(), fetched.p_id());
     }
 
     /// The interval-log length is read from the wire, not assumed.

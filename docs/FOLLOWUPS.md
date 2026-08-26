@@ -110,11 +110,22 @@ sustainability is unaffected by the recalibration.
   item that lost its docs. It was landed on `shekyl-archival-bond-builder`
   (0 violations) in the same commit.
 
-  `shekyl-ffi` measured **105** violations, which is a sweep rather than a gate,
-  so the lint is not landed there and the crate stays undetected for this defect
-  class. Two of its exported `unsafe extern "C"` functions had already drifted
-  this way — one inherited a `# Safety` section naming a parameter it does not
-  have. That is the cost of the gap, not the doc-coverage percentage.
+  `shekyl-ffi` measured **105** violations and `shekyl-engine-core` **12** (4 of
+  which are in the build script's `consensus_constants_generated.rs`, so that
+  crate needs a generator change as well as a sweep). Both are sweeps rather
+  than gates, so the lint is not landed in either and both stay undetected for
+  this defect class.
+
+  **The gap has now bitten three times in one PR**, which is the argument for
+  widening rather than the doc-coverage percentage. Two exported
+  `unsafe extern "C"` functions had already drifted this way — one inherited a
+  `# Safety` section naming a parameter it does not have — and while fixing
+  those, a third instance was introduced in `emission_source.rs` by inserting
+  `ClaimSourceFor` between `fetch_emission_claim_source`'s doc block and its
+  item. That one was caught only because the preceding doc happened to end in a
+  bullet list, which tripped `clippy::doc_lazy_continuation`; a doc block ending
+  in a paragraph would have passed every gate in CI. The class is easy to hit
+  precisely when editing near an existing doc block, which is most of the time.
 
 - **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
   production signing path** (surfaced 2026-08-22 while deleting the legacy
