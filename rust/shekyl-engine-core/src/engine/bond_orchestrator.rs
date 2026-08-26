@@ -41,13 +41,50 @@ use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
 
-/// Size ceiling for the first-stake bond-fee derivation: the single-input
-/// bond post is far under this, so a fee baked at assembly over this weight
-/// clears the daemon's per-byte floor even as estimates move (overpaying is a
-/// miner transfer, never a conservation term). Promoted from the PR-4 regtest
-/// harness (which now references this constant) to the production seam the
-/// WI-2 addendum reserved for the stake entry.
-pub(crate) const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+/// Structural weight ceiling for the `P`-lane fee derivation: the maximum
+/// predicted weight of any legal `P`-lane spend — up to
+/// [`shekyl_tx_builder::MAX_INPUTS`] funding inputs, up to two outputs
+/// (payment/bond + change), any tree depth up to
+/// [`shekyl_tx_weight::MAX_TREE_DEPTH`], worst-case fee varint. A fee baked
+/// at assembly over this weight clears the daemon's per-byte floor even as
+/// estimates move (overpaying is a miner transfer, never a conservation
+/// term), and every `P`-lane spend quoting the same ceiling keeps the fee
+/// uniform across the lane's tx shapes.
+///
+/// Until 2026-08-26 this was a hardcoded `32 * 1024`, sized for the
+/// single-input bond post — but the drain path spends up to `MAX_INPUTS`
+/// funding outputs, and the depth-24 8-input FCMP++ proof **alone** is
+/// 33,600 bytes, so a legal multi-input drain weighed more than the ceiling
+/// and its quoted fee undercut the daemon's per-byte floor (a relay
+/// refusal, and — until the drain lifecycle driver lands — a sealed record
+/// bricking that persona's drain lane). The exit-fee reserve derivation
+/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Unbond` over
+/// this same structural shape; its headroom arithmetic is derived against
+/// this computed ceiling (currently 80,456 bytes), and the ceiling test
+/// ties the two so a KAT-table regeneration that grows the ceiling forces
+/// the reserve derivation to be re-run.
+pub(crate) fn p_lane_weight_ceiling_bytes() -> usize {
+    static CEILING: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        let mut max = 0;
+        for n_in in 1..=shekyl_tx_builder::MAX_INPUTS {
+            // The proof-size table is non-monotonic in depth, so scan every
+            // legal (inputs, outputs, depth) cell rather than assuming the
+            // corner shape is the heaviest.
+            for n_out in 1..=2 {
+                for tree_depth in 1..=shekyl_tx_weight::MAX_TREE_DEPTH {
+                    max = max.max(super::tx_fee_model::predict_weight(
+                        super::tx_fee_model::InputCount::clamped(n_in),
+                        super::tx_fee_model::OutputCount::clamped(n_out),
+                        tree_depth,
+                        u64::MAX,
+                    ));
+                }
+            }
+        }
+        max
+    });
+    *CEILING
+}
 
 /// Bond fee for the first-stake post, from one daemon fee snapshot.
 ///
@@ -84,9 +121,9 @@ fn bond_fee_from_estimates(
 }
 
 /// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
-/// economy tier over the [`BOND_SIZE_CEILING_BYTES`] weight ceiling. **The
-/// single fee decision for every `P`-lane spend** — the bond post (via
-/// [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
+/// economy tier over the [`p_lane_weight_ceiling_bytes`] structural weight
+/// ceiling. **The single fee decision for every `P`-lane spend** — the bond
+/// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
 /// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
 /// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
 /// that can drift. Callers map [`FeeEstimatorError`] onto their own error
@@ -103,7 +140,7 @@ pub(crate) fn p_lane_floor_fee(
     // daemon-supplied number.
     Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
         &estimates.economy(),
-        BOND_SIZE_CEILING_BYTES,
+        p_lane_weight_ceiling_bytes(),
     )))
 }
 

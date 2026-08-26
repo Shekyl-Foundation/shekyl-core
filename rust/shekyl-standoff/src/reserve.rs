@@ -31,14 +31,21 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// - **Worst-case `Unbond` weight.** An `Unbond` spends the typed `P` pool
 ///   (cover + earnings) and pays out; bound by `MAX_INPUTS = 8` inputs, two
 ///   outputs, `MAX_TREE_DEPTH = 24`. The dominant term is the FCMP++ proof
-///   (`tx_fee_model::FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the
-///   per-input KEM/PQC-auth and per-output CT/KEM framing the whole tx is well
-///   under ~64_000 weight-bytes.
+///   (`FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the per-input
+///   KEM/PQC-auth and per-output CT/KEM framing the full structural weight is
+///   **80,456 bytes** — computed, not estimated, by engine-core's
+///   `p_lane_weight_ceiling_bytes()` (the same bound the P-lane floor fee is
+///   quoted over), and tied back to this constant by the
+///   `p_lane_ceiling_covers_the_heaviest_legal_shape` test. An earlier
+///   revision hand-estimated "well under ~64,000" here; the computed model
+///   corrected it upward.
 /// - **Pessimistic rate.** The economy floor rate is daemon-derived and
-///   historically ~1 atomic/weight-byte; this reserve provisions three orders
-///   of magnitude of head-room (~768 atomic/weight-byte), so
-///   `~64_000 × 768 ≈ 49.2M < 50M` covers a fee market far above any observed
-///   floor.
+///   historically ~1 atomic/weight-byte; this reserve provisions
+///   `>= 600 atomic/weight-byte` of head-room (`80_456 × 600 ≈ 48.3M < 50M`),
+///   covering a fee market ~600× above any observed floor. The engine-core
+///   ceiling test pins this 600 bound: a weight-model regeneration that grows
+///   the ceiling past `50M / 600` turns it red, forcing this derivation to be
+///   re-run rather than silently under-covering.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below).

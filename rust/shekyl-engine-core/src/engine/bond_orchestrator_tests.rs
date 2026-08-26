@@ -165,28 +165,16 @@ fn sweep_reference_height_equals_anchored_reference_block_height() {
 
 // ── first_stake guard matrix (wallet-level idempotency + slot guards) ──
 
-use crate::engine::{Credentials, DaemonClient, EngineCreateParams, SoloSigner};
+use crate::engine::{Credentials, EngineCreateParams, SoloSigner};
 use shekyl_engine_file::SafetyOverrides;
 use std::sync::Arc as StdArc;
 use tokio::sync::RwLock as TokioRwLock;
 
-/// Never-connecting daemon (no eager RPC before the guards under test).
-fn dummy_daemon() -> DaemonClient {
-    let rpc = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(shekyl_rpc_transport::HttpRpc::new(
-            "http://127.0.0.1:1".to_string(),
-        ))
-    })
-    .expect("construct HttpRpc (no connection attempted)");
-    DaemonClient::new(rpc)
-}
+use crate::engine::test_support::dummy_daemon;
 
+/// This suite's deterministic seed (multiplier 3).
 fn fixed_seed() -> [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] {
-    let mut s = [0u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    for (i, b) in s.iter_mut().enumerate() {
-        *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(3);
-    }
-    s
+    crate::engine::test_support::fixed_seed(3)
 }
 
 /// A fresh first-stake acts only on the monotone cursor: any other slot
@@ -713,7 +701,7 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
 /// is `fee_policy::tests`).
 #[test]
 fn bond_fee_refuses_what_the_send_path_refuses() {
-    use super::{bond_fee_from_estimates, FirstStakeError, BOND_SIZE_CEILING_BYTES};
+    use super::{bond_fee_from_estimates, p_lane_weight_ceiling_bytes, FirstStakeError};
     use crate::engine::fee_policy::{CeilingViolation, ValidatedFeeEstimates};
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
@@ -733,9 +721,9 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
             &FeeRate::new(340, 1).expect("rate"),
-            BOND_SIZE_CEILING_BYTES
+            p_lane_weight_ceiling_bytes()
         ),
-        "the bond fee is economy over the bond ceiling, via the shared formula"
+        "the bond fee is economy over the P-lane ceiling, via the shared formula"
     );
 
     // Economy itself over the absolute cap: refused as a REFUSAL, not
@@ -783,4 +771,55 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
             "send and bond disagree on ({e}, {s}, {p}) mask {m}"
         );
     }
+}
+
+/// The P-lane weight ceiling covers every legal spend shape — including the
+/// one the retired `32 * 1024` constant missed: the depth-24 8-input drain,
+/// whose FCMP++ proof alone (33,600 bytes, `FCMP_PROOF_SIZE_KAT[8][24]`)
+/// exceeded the old ceiling before a single input auth was counted. A fee
+/// quoted under a too-small ceiling undercut the daemon's per-byte floor, so
+/// a legal multi-input drain was refused at relay — and, until the drain
+/// lifecycle driver lands, its sealed record bricked the persona's drain
+/// lane. Bites against the ceiling being hardcoded back down or the scan
+/// grid being narrowed below the legal shape space.
+#[test]
+fn p_lane_ceiling_covers_the_heaviest_legal_shape() {
+    use super::p_lane_weight_ceiling_bytes;
+    use crate::engine::tx_fee_model::{predict_weight, InputCount, OutputCount};
+
+    let ceiling = p_lane_weight_ceiling_bytes();
+
+    // The corner shape the old constant missed, computed through the same
+    // KAT-validated model the send path prices with.
+    let heaviest = predict_weight(
+        InputCount::clamped(shekyl_tx_builder::MAX_INPUTS),
+        OutputCount::clamped(2),
+        shekyl_tx_weight::MAX_TREE_DEPTH,
+        u64::MAX,
+    );
+    assert!(
+        ceiling >= heaviest,
+        "ceiling {ceiling} does not cover the heaviest legal P-lane shape ({heaviest})"
+    );
+    assert!(
+        heaviest > 32 * 1024,
+        "the heaviest legal shape no longer exceeds the retired 32 KiB constant \
+         ({heaviest}); this test's premise — and the computed ceiling — should be re-examined"
+    );
+
+    // The exit-fee reserve derivation (`shekyl-standoff` reserve.rs) prices
+    // one pessimistic Unbond at >= 600 atomic/weight-byte of fee-spike
+    // headroom over this same structural worst case; the reserve must keep
+    // covering it, or a live persona's held-back reserve no longer funds its
+    // terminal Unbond at the documented headroom. If a KAT-table
+    // regeneration grows the ceiling past `50M / 600 ≈ 83_333`, this goes
+    // red and reserve.rs's derivation must be re-run, not this bound
+    // loosened in place.
+    assert!(
+        shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
+            >= u64::try_from(ceiling).expect("weight fits u64") * 600,
+        "EXIT_FEE_RESERVE_ATOMIC no longer covers a worst-case Unbond at the \
+         documented 600 atomic/weight-byte headroom (ceiling {ceiling}) — \
+         re-derive reserve.rs, do not loosen this bound"
+    );
 }
