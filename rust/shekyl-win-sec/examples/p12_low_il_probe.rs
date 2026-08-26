@@ -17,9 +17,24 @@
 //!
 //! Two reasons, and the second is the binding one.
 //!
-//! It needs a **second process** — a mandatory label is enforced by the OS
-//! against an opener, and a Low-IL thread inside the test binary is not a
-//! Low-IL opener. And §3 pre-declares this probe CI-fragile because a CI
+//! It needs a **second process**, because the adversary §6 puts in scope *is*
+//! a process — a Low-IL or AppContainer program running as the same user. A
+//! probe whose opener is a thread would be measuring something narrower than
+//! the thing the design defends against.
+//!
+//! An earlier form of this paragraph justified that differently, by asserting
+//! that "a Low-IL thread inside the test binary is not a Low-IL opener". That
+//! is a claim about how NT scopes a mandatory-label check against an
+//! impersonating thread, and it is **untested** — reasoned from labels being
+//! evaluated against the token on the opening handle, never observed. It is
+//! probably true and it is not relied on: the sentence above rests on the
+//! threat model, not on NT's thread semantics, and the reason below is the
+//! binding one regardless. Recorded rather than deleted because "probably
+//! true, stated as fact, untested" is the defect class this round kept
+//! finding, and an unmarked instance of it in this file's own rationale would
+//! be the least excusable place for one.
+//!
+//! The binding reason: §3 pre-declares this probe CI-fragile because a CI
 //! service account's token may not be a faithful thing to derestrict from;
 //! `scripts/ci/check_probe_registry.py` therefore asserts that §2/§3 probes
 //! have **no** test function in `tests/probes.rs`. Adding one would fail that
