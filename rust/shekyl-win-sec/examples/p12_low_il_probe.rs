@@ -78,11 +78,13 @@ fn main() {
 
 #[cfg(windows)]
 mod probe {
-    use std::ffi::c_void;
+    use std::ffi::{c_void, OsStr, OsString};
     use std::mem::size_of;
+    use std::os::windows::ffi::OsStrExt;
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, LocalFree, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSidToSidW,
@@ -97,7 +99,7 @@ mod probe {
     use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
     use windows_sys::Win32::System::Threading::{
         CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
-        WaitForSingleObject, CREATE_NO_WINDOW, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+        TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_INFORMATION, STARTUPINFOW,
     };
 
     use tokio::net::windows::named_pipe::ServerOptions;
@@ -120,6 +122,14 @@ mod probe {
 
     /// `ERROR_ACCESS_DENIED`, the predicted Low-child result.
     const ACCESS_DENIED: u32 = 5;
+
+    /// How long the parent waits for a spawned child before giving up.
+    ///
+    /// The child opens one local pipe and exits, so this is orders of magnitude
+    /// more than it needs; the number is a hang ceiling, not a deadline. It
+    /// exists because the runner is a script and an unbounded wait would hang
+    /// the whole probe sweep with nothing to read.
+    const CHILD_TIMEOUT_MS: u32 = 30_000;
 
     /// Spawn counters, so the listeners never share a name.
     const SPAWN_CONTROL: u64 = 1_201;
@@ -448,11 +458,22 @@ mod probe {
         startup.cb = u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or(0);
         let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-        let application = wide(&exe.to_string_lossy());
+        // Built from `OsStr`, never `to_string_lossy`: a Windows path is
+        // UTF-16 and `Path` stores it as WTF-8, so a lossy conversion would
+        // substitute U+FFFD for any unpaired surrogate and re-spawn a path
+        // that is not the one we are running from. `encode_wide` hands
+        // `CreateProcessAsUserW` the exact code units.
+        let application = wide_os(exe.as_os_str());
         // `lpCommandLine` is documented as writable, so it cannot be a
         // borrowed constant. argv[0] is quoted; the pipe name has no spaces
         // (it is a SID and two integers) but is quoted for the same reason.
-        let mut command = wide(&format!("\"{}\" --open \"{pipe}\"", exe.to_string_lossy()));
+        let mut command_line = OsString::new();
+        command_line.push("\"");
+        command_line.push(exe.as_os_str());
+        command_line.push("\" --open \"");
+        command_line.push(pipe);
+        command_line.push("\"");
+        let mut command = wide_os(&command_line);
 
         // SAFETY: both wide buffers are NUL-terminated and outlive the call;
         // `startup` and `info` are correctly sized and owned here.
@@ -475,8 +496,27 @@ mod probe {
             return Err(last_error());
         }
 
+        // Bounded, not `INFINITE`. This runs from `scripts/ci/windows_probe.ps1`,
+        // and a child that never exits would hang the whole probe run with no
+        // diagnosis. `WAIT_TIMEOUT` (258) is a real Win32 status, so it travels
+        // back through the existing `Err(u32)` channel and surfaces as the
+        // runner's UNRUN — a probe that did not run, which is exactly what a
+        // hung child means. Never a PASS.
+        //
         // SAFETY: `info.hProcess` is a live process handle from the call above.
-        unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
+        let waited = unsafe { WaitForSingleObject(info.hProcess, CHILD_TIMEOUT_MS) };
+        if waited != WAIT_OBJECT_0 {
+            // SAFETY: same live handle; the child is killed so its handles are
+            // released and the probe cannot leave a process behind.
+            unsafe { TerminateProcess(info.hProcess, 1) };
+            // SAFETY: both handles came from `CreateProcessAsUserW` and are
+            // closed exactly once on this path.
+            unsafe {
+                CloseHandle(info.hThread);
+                CloseHandle(info.hProcess);
+            }
+            return Err(WAIT_TIMEOUT);
+        }
         let mut code: u32 = 0;
         // SAFETY: same handle; the process has exited, so the code is final.
         let read = unsafe { GetExitCodeProcess(info.hProcess, &raw mut code) };
@@ -513,33 +553,67 @@ mod probe {
             unsafe { LocalFree(sid) };
             return Err(u32::MAX);
         };
-        let label = TOKEN_MANDATORY_LABEL {
-            Label: SID_AND_ATTRIBUTES {
-                Sid: sid,
-                Attributes: attributes,
-            },
-        };
         // The documented length is the struct plus the SID it points at, not
         // the struct alone — the same variable-length-SID subtlety P-14 exists
-        // for, in the writing direction.
+        // for, in the writing direction. That length has to describe a buffer
+        // that really is that long: a stack `TOKEN_MANDATORY_LABEL` is only
+        // `size_of::<TOKEN_MANDATORY_LABEL>()` bytes, so handing the kernel a
+        // pointer to one while claiming `len` bytes invites a read past the
+        // object. So the struct and the SID live in ONE allocation, with
+        // `Label.Sid` pointing inside it.
+        //
         // SAFETY: `sid` is a valid SID from the conversion above.
-        let len = size_of::<TOKEN_MANDATORY_LABEL>()
-            + usize::try_from(unsafe { GetLengthSid(sid) }).unwrap_or(0);
-        // SAFETY: `label` is a correctly-formed `TOKEN_MANDATORY_LABEL` and
-        // `len` describes it plus its SID, as the API documents.
+        let sid_len = usize::try_from(unsafe { GetLengthSid(sid) }).unwrap_or(0);
+        let len = size_of::<TOKEN_MANDATORY_LABEL>() + sid_len;
+
+        // `Vec<u64>`, not `Vec<u8>`, for the reason `sid.rs` gives at
+        // `current_user_sid`: `TOKEN_MANDATORY_LABEL` contains a pointer, so a
+        // `Vec<u8>` allocation is under-aligned and writing the struct through
+        // it is undefined behaviour. That is the exact soundness bug the
+        // Windows-target clippy run caught in WP-W1; this follows the fix.
+        let words = len.div_ceil(size_of::<u64>());
+        let mut buf: Vec<u64> = vec![0; words];
+        // The struct pointer is taken from the `*mut u64` directly rather than
+        // via a `*mut u8`: the allocation is 8-aligned either way, but routing
+        // it through a byte pointer hides that from the compiler and trips
+        // `cast_ptr_alignment` on the Windows-target clippy run — which is the
+        // gate that caught the original `TOKEN_USER` alignment bug, so it is
+        // worth keeping able to see what it is checking.
+        let label_ptr = buf.as_mut_ptr().cast::<TOKEN_MANDATORY_LABEL>();
+        let base = buf.as_mut_ptr().cast::<u8>();
+
+        // SAFETY: `buf` holds at least `len` bytes and is `u64`-aligned, so the
+        // struct write at offset 0 is aligned and in bounds, and the SID copy
+        // at `size_of::<TOKEN_MANDATORY_LABEL>()` occupies the remaining
+        // `sid_len` bytes without overlapping it. `sid` is a valid SID of
+        // exactly `sid_len` bytes. `Label.Sid` is set to the copy inside `buf`,
+        // which outlives the call below.
+        unsafe {
+            let sid_dst = base.add(size_of::<TOKEN_MANDATORY_LABEL>());
+            std::ptr::copy_nonoverlapping(sid.cast::<u8>(), sid_dst, sid_len);
+            label_ptr.write(TOKEN_MANDATORY_LABEL {
+                Label: SID_AND_ATTRIBUTES {
+                    Sid: sid_dst.cast::<c_void>(),
+                    Attributes: attributes,
+                },
+            });
+        }
+
+        // SAFETY: `base` addresses `len` initialised bytes holding a
+        // correctly-formed `TOKEN_MANDATORY_LABEL` followed by its SID.
         let set = unsafe {
             SetTokenInformation(
                 token,
                 TokenIntegrityLevel,
-                (&raw const label).cast::<c_void>(),
+                base.cast::<c_void>(),
                 u32::try_from(len).unwrap_or(0),
             )
         };
         let err = last_error();
         // SAFETY: `sid` came from `ConvertStringSidToSidW`, which documents
-        // `LocalFree` as its release. `label` borrows it but is dead from here
-        // — the token now holds its own copy of the label, which is the point
-        // of the call above.
+        // `LocalFree` as its release. Nothing borrows it any more — `buf` holds
+        // its own copy of the SID bytes, and the token holds a copy of the
+        // label, which is the point of the call above.
         unsafe { LocalFree(sid) };
 
         if set == 0 {
@@ -615,6 +689,14 @@ mod probe {
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// NUL-terminated UTF-16 from an `OsStr`, preserving the exact code units.
+    ///
+    /// Used for anything derived from a filesystem path. `wide` above is for
+    /// string literals and SID text, which are valid UTF-8 by construction.
+    fn wide_os(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
     }
 
     fn last_error() -> u32 {
