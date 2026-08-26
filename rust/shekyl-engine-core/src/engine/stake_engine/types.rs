@@ -361,6 +361,61 @@ impl PersonaIdentity {
 // Errors
 // ---------------------------------------------------------------------------
 
+/// Why a bonded record cannot exit yet.
+///
+/// One variant per record-state arm of `verify_unbond_bond_post`, carrying the
+/// operands the condition turned on — so a refusal can tell the user *when* it
+/// lifts, not merely that it applies. Every predicate behind these is
+/// consensus's own function, called rather than restated.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[allow(dead_code)] // PR-P4 slice 2b: constructed by `UnbondRecordState::ensure_exit_ready`.
+pub(crate) enum UnbondNotReady {
+    /// The record's interval log is at `MAX_BOND_BAD_INTERVALS`, so the
+    /// connect's clean interval-close could not append. Verify rejects this for
+    /// the same reason: a tx that verifies but cannot connect is a
+    /// deterministic halt, so both sides enforce one bound.
+    #[error("interval log is full ({count}/{max}); the clean close cannot append")]
+    IntervalLogFull {
+        /// The record's current interval-log length.
+        count: usize,
+        /// The genesis-frozen bound.
+        max: usize,
+    },
+
+    /// The release cooldown has not elapsed past the record's last served
+    /// epoch. The grace window is sized so every epoch up to the anchor reaches
+    /// its slash deadline before a release can verify.
+    #[error(
+        "release cooldown has not elapsed: last served epoch {last_served_epoch}, \
+         current settlement epoch {current_settlement_epoch}"
+    )]
+    CooldownNotElapsed {
+        /// The whole-record anchor the cooldown runs from.
+        last_served_epoch: u64,
+        /// The daemon's settled epoch at the read view.
+        current_settlement_epoch: u64,
+    },
+
+    /// The slash scheduler has not settled every epoch through the anchor.
+    ///
+    /// Distinct from the cooldown, and not implied by it: the cooldown alone
+    /// leaves a one-block connect-ordering race open, because an `Unbond` in the
+    /// first block past the anchor's slash deadline connects *before* that
+    /// block's slash fold. `watermark` is `None` when nothing has settled at
+    /// all — the fail-closed reading, and the one case where an absent operand
+    /// is restrictive rather than permissive.
+    #[error(
+        "slash settlement is pending through epoch {last_served_epoch} \
+         (watermark: {watermark:?})"
+    )]
+    SlashSettlementPending {
+        /// The anchor that must be covered.
+        last_served_epoch: u64,
+        /// The scheduler's watermark, absent when nothing has settled.
+        watermark: Option<u64>,
+    },
+}
+
 /// Errors surfaced by the StakeEngine handle.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StakeEngineError {
@@ -437,6 +492,19 @@ pub(crate) enum StakeEngineError {
         handle_slot: PSlot,
         ticket_slot: PSlot,
     },
+
+    /// The record cannot support a full exit yet — a **producer-side refusal**,
+    /// not a construction failure.
+    ///
+    /// These are the `verify_unbond_bond_post` arms no vin construction can
+    /// satisfy, so the alternative to refusing is assembling a well-formed post
+    /// the daemon then rejects. On the exit path that alternative is worse than
+    /// it sounds: the confirmation of an `Unbond` is what fires the irreversible
+    /// persona-key wipe, so a wallet that reports success and fails at the chain
+    /// has misled the user about an operation they cannot take back. The cause
+    /// is named so the wallet can say which condition, and when it lifts.
+    #[error("record is not ready to exit: {0}")]
+    UnbondNotReady(#[from] UnbondNotReady),
 
     /// Bond construction failed after the actor validated the handle and ticket
     /// (`PlanBondPost`, S2). The persona bundle was available but

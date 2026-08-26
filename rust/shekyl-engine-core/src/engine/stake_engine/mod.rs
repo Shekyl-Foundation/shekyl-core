@@ -87,6 +87,7 @@ pub(crate) mod serve_set_source;
 // and because `engine/mod.rs` sits at its decomposition ceiling.
 pub(crate) mod serving;
 mod types;
+mod unbond;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
