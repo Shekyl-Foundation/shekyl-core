@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
-**Last updated:** April 2026
-**DB version:** 8 (schema v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**Last updated:** August 2026
+**DB version:** 10 (schema v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -101,6 +101,21 @@ Offset  Size  Field
 | Writers | `add_block`, `remove_block` |
 | Readers | `get_block_info`, `get_block_cumulative_difficulty`, `get_block_already_generated_coins`, etc. |
 | Introduced | Genesis (DB v0, migrated through v2→v3→v4→v5 for struct growth) |
+
+### `block_burn`
+
+Per-height destroyed-amount record (the adaptive fee burn's destroyed
+share), so `pop_block` can roll `total_burned` back without recomputing the
+block's burn.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"block_burn"` |
+| Flags | `MDB_INTEGERKEY \| MDB_CREATE` |
+| Key | `uint64_t` block height (8 bytes, native-endian) |
+| Value | `uint64_t` burned amount (8 bytes, native-endian) |
+| Writers | `add_block_burn` (`handle_block_to_main_chain`, only when the amount is nonzero — absent height reads as 0), `remove_block_burn` (`pop_block_from_blockchain`) |
+| Readers | `get_block_burn` (`MDB_NOTFOUND` reads as 0) |
 
 ---
 
@@ -352,46 +367,10 @@ Set of all consumed key images. Uses the zerokval pattern.
 
 ## Staking
 
-### `staker_accrual`
-
-Per-block staking emission and fee pool records.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"staker_accrual"` |
-| Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) |
-| Value | `staker_accrual_record`, 40 bytes: |
-
-```
-Offset  Size  Field
-0        8    uint64_t staker_emission
-8        8    uint64_t staker_fee_pool
-16       8    uint64_t total_weighted_stake_lo   (low 64 bits of u128)
-24       8    uint64_t total_weighted_stake_hi   (high 64 bits of u128)
-32       8    uint64_t actually_destroyed
-```
-
-| Property | Value |
-|---|---|
-| Writers | `add_staker_accrual` (block connect, AFTER pool routing decision), `remove_staker_accrual` (block pop) |
-| Readers | `get_staker_accrual` (claim validation, reward estimation, reorg reversal) |
-| Notes | `total_weighted_stake` is the sum of `shekyl_stake_weight(amount, tier)` for all active staked outputs at that height, excluding outputs past `effective_lock_until` (`creation_height + tier_lock_blocks`). Stored as u128 (lo/hi u64 halves) to avoid saturation at moderate adoption with tier multipliers > 1.0. When `total_weighted_stake == 0`, `actually_destroyed` includes the staker inflow that was burned. The record is written after the no-staker burn decision, so `actually_destroyed` reflects the full burned amount. |
-| Introduced | HF1 (Shekyl genesis) |
-
-### `staker_claims`
-
-Per-staked-output watermark tracking the last claimed height.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"staker_claims"` |
-| Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` global output index of the staked output (8 bytes) |
-| Value | `uint64_t` last_claimed_height (8 bytes) |
-| Writers | `set_staker_claim_watermark` (after successful claim tx), `remove_staker_claim_watermark` (on staked output removal/pop) |
-| Readers | `get_staker_claim_watermark` (claim validation: `from_height` must equal watermark) |
-| Introduced | HF1 (Shekyl genesis) |
+The claim-era `staker_accrual` / `staker_claims` tables were **deleted with
+the claim-era C++ wire** (PR-4 retirement); staker inflow now persists
+through `archival_budget_accrual` → `archival_budget` (below). The coverage
+gate refuses a section for a table that is no longer in the live list.
 
 ### `archival_serve_credit`
 
@@ -536,6 +515,54 @@ Per-epoch `Σwork(E)` milli accumulator (`ARCHIVAL_CONSENSUS_STATE.md` §3.5).
 | Readers | `get_archival_sigma_work_milli` |
 | Prune | `prune_archival_epochs_before` when `E < tip − W` |
 
+### `archival_budget_accrual`
+
+Per-height staker-inflow accrual row (`ARCHIVAL_BUDGET_SCHEDULE.md` §3.1),
+summed once per epoch into the frozen `archival_budget` close row.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_budget_accrual"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height)` (8 bytes; `shekyl::db::ArchivalBudgetAccrualKey`, an alias of `ArchivalEpochCloseLogKey`) |
+| Value | `BE(u64)` staker-inflow amount (atomic units) |
+| Writers | `add_archival_budget_accrual` (from `BlockchainDB::add_block`, keyed at `prev_height`), `remove_archival_budget_accrual` (`pop_block`) |
+| Readers | `get_archival_budget_accrual` (`MDB_NOTFOUND` reads as 0), the close's bounded range-sum in `process_archival_epoch_close_at_height` |
+| Prune | `prune_archival_epochs_before` via `delete_archival_budget_accrual_before_height` at the retained epoch's open height |
+
+**Burn-record idiom:** the row is persisted only when the amount is nonzero —
+absent height reads as 0, and the pop removes the height row. BE keys make
+cursor order numeric order, which the close's range-sum over
+`[E·SEB, (E+1)·SEB)` and the prune walk depend on. Revert is asymmetric to
+the budget row's: accrual rows revert with their own block's pop, so a
+pop-and-re-close re-sums the retained rows plus the re-connecting block's
+fresh row and reproduces the budget byte-identically (§3.2, KAT B3). The sum
+aborts on u64 wrap rather than minting
+(`FATAL: archival budget accrual sum overflow on close`).
+
+### `archival_budget`
+
+Frozen `budget(E)` close row (`ARCHIVAL_BUDGET_SCHEDULE.md` §3.2): the
+bounded range-sum of the accrual rows over `[E·SEB, (E+1)·SEB)`, written in
+the same txn as the sigma row so budget and denominator freeze in the same
+close event (the M1 same-snapshot pin).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_budget"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(settlement_epoch)` (8 bytes; `shekyl::db::ArchivalBudgetKey`, an alias of `ArchivalSigmaWorkKey`) |
+| Value | `BE(u64)` budget (atomic units) |
+| Writers | `process_archival_epoch_close_at_height` (put), `revert_archival_epoch_close_at_height` via `delete_archival_budget_for_epoch` |
+| Readers | `get_archival_budget` (`MDB_NOTFOUND` laundered to 0), `has_archival_budget_row` (LMDB-class-only existence probe), `gather_archival_emission_window_snapshots` |
+| Prune | `prune_archival_epochs_before` via `delete_archival_budget_before_epoch` |
+
+**Written unconditionally, including zero:** a present-and-zero row is a
+closed zero-budget epoch (§5, structurally non-claimable), distinguishable
+from never-closed-or-pruned (`MDB_NOTFOUND` → gather failure, reject) — the
+distinction `has_archival_budget_row` exists to make. The verify-side gather
+reads the stored value and never re-sums the accrual rows (§3.3).
+
 ### `archival_epoch_close_log`
 
 Journal: block heights that finalized an epoch (pop revert).
@@ -616,6 +643,143 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 | Writers | `append_archival_slash_log`, deleted on slash revert |
 | Readers | `revert_archival_slashes_at_height` |
 | Introduced | HF1 (gate-2 §10 step 4) |
+
+### The four pre-image journals
+
+`archival_emission_claim_log`, `archival_bond_unbond_log`,
+`archival_bond_holdings_update_log`, and `archival_bond_rebond_log` share
+the slash log's row layout and the height-keyed journal scaffold in
+`db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
+`BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
+`ArchivalSlashLogKey`), seq dense from 0 per height, read-to-first-gap on
+pop, restore in reverse connect order, then delete `[0, count)`. All four
+key on the **block INDEX** `N = removed_block_height − 1` (F-B5b "convert,
+don't unify"), unlike the slash/close hooks, which take the post-block
+height. None uses the slash log's `0xFFFFFFFF` epoch-marker sentinel — that
+is the slash log's bespoke loop only. Pop ordering is **load-bearing** and
+documented at `BlockchainDB::pop_block`: every journal restore runs after
+the slash revert (the slash journal restores overlapping record fields;
+reordering trips the reverts' delta guards).
+
+### `archival_emission_claim_log`
+
+Per-block journal for the emission-claim dedup revert on `pop_block`
+(`REWARD_EMISSION_E3_GATING_ROUND.md` §6.3, WS-2 §6.2). The connect
+mutation is insert + window prune whose floor keys on the tip settled epoch
+(non-monotonic under reorg), so an insert-only journal cannot restore
+prune-evicted entries — a floor-lowering pop would leave an already-claimed
+epoch absent: the double-mint. The row therefore carries the FULL
+pre-mutation claimed set.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_emission_claim_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | `ArchivalEmissionClaimRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_first_paying_emission_height)[8] \|\| BE32(count) \|\| BE(pre_claimed_epochs[])` (45 + 8·count bytes; epochs strictly increasing, enforced on encode and decode) |
+| Writers | `apply_archival_emission_claim` (append; pre-image captured before the mutation), the revert's clear |
+| Readers | `revert_archival_emission_claims_at_height` |
+
+### `archival_bond_unbond_log`
+
+Per-block journal for the Unbond connect's record pre-image
+(`ARCHIVAL_BOND_GATE4.md` §3.5 connect step 1 / §5 pop twin). The vin
+carries the POST-connect state (§3.5 debit-path pin), so the pre-release
+holdings and interval log are not reconstructible at pop without this row;
+it carries exactly the three fields the connect mutates (`bonded_total`,
+holdings, `bad_intervals` — disjoint from the emission-claim journal's
+fields, so the two reverts compose in any order).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_bond_unbond_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | `ArchivalBondUnbondRevertValue` v2, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| pre_holdings_kind[1] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[]) \|\| BE32(interval_count) \|\| pre_bad_intervals[]` (50 + 16·shards + 16·intervals bytes; `pre_bonded_total == 0` refused on encode AND decode) |
+| Writers | `apply_archival_unbond` (append), the revert's clear |
+| Readers | `revert_archival_unbonds_at_height` (reverse-order restore through the Rust pop fold) |
+
+### `archival_bond_holdings_update_log`
+
+Per-block journal for the HoldingsUpdate connect's record pre-image
+(`ARCHIVAL_BOND_GATE4.md` §4.4, the add/drop grace-tail path). A
+HoldingsUpdate stays `Bonded` (no Exited transition, no clean
+interval-close), so it cannot share the Unbond journal or pop path; its
+connect mutates a strict subset of Unbond's fields, and the pre-image here
+is smaller than the Unbond value by exactly the two never-mutated fields
+(`holdings_kind`, `bad_intervals`) — an honest minimal journal, not the
+Unbond superset reused.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_bond_holdings_update_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | `ArchivalBondHoldingsUpdateRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (45 + 16·shards bytes; zero `pre_bonded_total` refused both ways) |
+| Writers | `apply_archival_holdings_update_add` / `_drop` via the single-sourced `apply_archival_bond_record_update` scaffold and `put_archival_holdings_update_journal`, the revert's clear |
+| Readers | `revert_archival_holdings_updates_at_height` |
+
+### `archival_bond_rebond_log`
+
+Per-block journal for the Rebond connect's record pre-image
+(`ARCHIVAL_BOND_GATE4.md` §3.4; P2B-9 reinstatement). Rebond is the one
+bond-post kind that mutates an EXISTING interval in place (`end_exclusive`:
+MAX → `E_rebond + 1`), so alongside the holdings pre-image the row carries
+the closed interval's index + start; the pop re-opens exactly that entry to
+MAX, with a belt that the start must match and the entry must currently be
+closed (`FATAL: archival rebond revert interval desync` otherwise).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_bond_rebond_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | `ArchivalBondRebondRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
+| Writers | `apply_archival_rebond` via the shared bond-record scaffold, the revert's clear |
+| Readers | `revert_archival_rebonds_at_height` |
+
+### `archival_attestation_witness`
+
+Credit-wire attestation witness (`ARCHIVAL_CREDIT_WIRE.md` §3.2/§4,
+transport B2): the per-block `r` + pass-signature admission witness —
+prunable, opaque at this layer (decode/verify live in Rust), never in the
+block blob. The mined commitment is the block header's `attestation_root`.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_attestation_witness"` |
+| Flags | `MDB_INTEGERKEY \| MDB_CREATE` |
+| Key | `uint64_t` (8 bytes, native-endian): the POST-add chain height — `archival_attestation_witness_key(block_index) = block_index + 1` (mirrors `store_curve_tree_root_at_height`); every site goes through the helper so the +1 cannot drift |
+| Value | variable-length opaque witness blob (`r ‖ pass signatures`); an empty witness writes NO row, absent reads as empty |
+| Writers | `store_archival_attestation_witness_at_height` (`add_block`, same write txn), `remove_archival_attestation_witness_at_height` (`pop_block`) |
+| Readers | `get_archival_attestation_witness_at_height` — single chain-layer read site is `Blockchain::get_block_attestation_witness` (CW-2: every outgoing `block_complete_entry` fills from here) |
+| Prune | `prune_archival_epochs_before` via `delete_archival_attestation_witness_before_height` |
+| Introduced | rides the v9 boundary (additive, no bump) |
+
+### `archival_alt_attestation_witness`
+
+Reorg-survival counterpart: the same opaque bytes, keyed by **block hash**
+— alt blocks are not height-canonical.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_alt_attestation_witness"` |
+| Flags | `MDB_CREATE` |
+| Key | `crypto::hash` block id (32 bytes) |
+| Value | variable-length opaque witness blob (same content as the height-keyed table); empty writes no row |
+| Comparators | `compare_hash32` (set at open) |
+| Writers | `store_archival_alt_attestation_witness` (`handle_alternative_block`, beside `add_alt_block`, same txn), `remove_archival_alt_attestation_witness` (from `remove_alt_block`), `drop_alt_blocks` |
+| Readers | `get_archival_alt_attestation_witness` (reorg promotion in `switch_to_alternative_blockchain`) |
+| Introduced | rides the v9 boundary (additive, no bump) |
+
+**One table, one owner.** Rows are owned by the alt block: written beside
+`add_alt_block`, removed by `remove_alt_block` / `drop_alt_blocks` /
+`reset()` — a row cannot outlive (or survive without) its alt block. The
+height-keyed retention prune structurally cannot see this table (hash
+keys), which is exactly why the lifetime is tied to the alt block instead:
+a row parked here by a pop would otherwise leak for the life of the
+database. A block moving between main and alt carries its witness
+explicitly through `block_connect_supplement`.
 
 ### `properties` — Staking keys
 
@@ -960,55 +1124,17 @@ General key-value store for database-level metadata.
 
 ---
 
-## Summary Table
+## Sub-database total
 
-| # | LMDB name | Key type | Value type | Size | Flags |
-|---|---|---|---|---|---|
-| 1 | `blocks` | `uint64_t` height | block blob | var | `INTEGERKEY` |
-| 2 | `block_heights` | zerokval | `blk_height` | 40 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 3 | `block_info` | zerokval | `mdb_block_info_4` | 96 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 4 | `txs_pruned` | `uint64_t` tx_id | tx prefix blob | var | `INTEGERKEY` |
-| 5 | `txs_pqc_auths` | `uint64_t` tx_id | PQC auth blob | var | `INTEGERKEY` |
-| 6 | `txs_prunable` | `uint64_t` tx_id | prunable blob | var | `INTEGERKEY` |
-| 7 | `txs_prunable_hash` | `uint64_t` tx_id | `crypto::hash` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 8 | `txs_prunable_tip` | `uint64_t` tx_id | `uint64_t` height | 8 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 9 | `tx_indices` | zerokval | `txindex` | 56 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 10 | `tx_outputs` | `uint64_t` tx_id | `uint64_t[]` indices | var | `INTEGERKEY` |
-| 11 | `output_txs` | zerokval | `outtx` | 48 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 12 | `output_amounts` | `uint64_t` amount | `outkey`/`pre_rct_outkey` | 96/64 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 13 | `output_metadata` | `uint64_t` global_idx | `output_pruning_metadata_t` | 88 | `INTEGERKEY` |
-| 14 | `spent_keys` | zerokval | `crypto::key_image` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 40 | `INTEGERKEY` |
-| 16 | `staker_claims` | `uint64_t` output_idx | `uint64_t` height | 8 | `INTEGERKEY` |
-| 17 | `archival_serve_credit` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
-| 18 | `archival_bond` | `P_id[32]` | `ArchivalBondValue` | var | `CREATE` only |
-| 19 | `archival_shard_segment` | `BE(shard_id)` | segment meta | 49 | `CREATE` only |
-| 20 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
-| 21 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
-| 22 | `archival_r_market` | `BE(shard)\|\|BE(E)` | `BE(u64)` count | 8 | `CREATE` only |
-| 23 | `archival_sigma_work` | `BE(E)` | `BE(u64)` sigma milli | 8 | `CREATE` only |
-| 24 | `archival_epoch_close_log` | `BE(block_height)` | `BE(E)` | 8 | `CREATE` only |
-| 25 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 26 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 27 | `curve_tree_meta` | string | varies | varies | — |
-| 28 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 29 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
-| 30 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 31 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 32 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 33 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 34 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 35 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 36 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 37 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 38 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 39 | `properties` | string | varies | varies | — |
-| 40 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
-| 41 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
-
-Total: **41 sub-databases** (`archival_shard_leaf` deleted pre-genesis by the
-segment-freeze pipeline; `mdb_env_set_maxdbs` stays at 42 —
-`mdb_env_set_maxdbs` is a capacity ceiling, not an exact count).
+Total: **49 sub-databases**. The single source of truth is the
+`SHEKYL_LMDB_TABLES` X-macro list in `db_lmdb.cpp`; its derived
+`kLmdbTableCount` is what `mdb_env_set_maxdbs` receives (`SO-D4`,
+`ARCHIVAL_SETTLEMENT_WRITER.md`), so the count is exact by construction with
+**no headroom** — a margin would silently absorb a table opened outside the
+list. (`archival_shard_leaf` was deleted pre-genesis by the segment-freeze
+pipeline and is not in the list.) The coverage gate
+(`scripts/ci/check_lmdb_schema_coverage.py`) holds this document to that
+list: every table must have a section here, and the total above must match.
 
 ### Schema v6 → v7 migration (breaking)
 
@@ -1016,7 +1142,7 @@ DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync fro
 - `pending_tree_leaves`: changed from `MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED` (key=maturity, dup=leaf) to composite 16-byte key `BE(maturity) || BE(output_index)` with `MDB_CREATE` only.
 - `pending_tree_drain`: same restructuring (key was block_height with DUPSORT, now composite key).
 - Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
-- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate required **42** (`db_lmdb.cpp`; the substrate's `archival_shard_leaf` was later deleted by the segment-freeze pipeline, leaving 41 live subdbs under the same ceiling).
+- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate later required **42**, and the hand-maintained ceiling grew with each table until `SO-D4` replaced it with the derived `kLmdbTableCount` (see the sub-database total above — the ceiling is now exact by construction, not a number anyone edits).
 - Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.
 
 ### Schema v7 → v8 (breaking, no migration path)
@@ -1027,3 +1153,32 @@ has `archival_shard_segment` rows the counter does not account for, so
 `BlockchainLMDB::migrate` **refuses any pre-v8 database loudly** and directs
 the operator to delete the data directory and resync. Pre-genesis, no
 in-Shekyl migration code is justified (`15-deletion-and-debt.mdc`).
+
+### Schema v8 → v9 (breaking, no migration path)
+
+DB v9: the block header gains `attestation_root` (`ARCHIVAL_CREDIT_WIRE.md`
+§3), so the persisted block blob in `blocks` grows 32 bytes; a pre-v9 blob
+has no `attestation_root` and the v9 parser cannot read it. Delete and
+resync. The block's boost serializer enforces the same boundary via
+`BOOST_CLASS_VERSION(cryptonote::block, 1)`: a pre-v9 archive is refused
+loudly, not misparsed. **Within v9 (no bump):** the additive
+`archival_attestation_witness` / `archival_alt_attestation_witness` tables
+ride the boundary — a new empty table on an existing env asserts no
+incompatibility.
+
+### Schema v9 → v10 (breaking, no migration path)
+
+DB v10: the `archival_serve_credit` key widens 48 → 56 B (`PC-D4`:
+`BE(block_height)` appended — one row per challenge). A v9 datadir has
+48-byte rows, and v10 code fails against them in the worst split of ways:
+point and prefix reads **silently miss** every old row (a 56-byte probe never
+equals a 48-byte key), while the full-scan `mv_size` guards throw FATAL — a
+node would first misjudge dedup and emission quietly and only crash on the
+next scan. Delete and resync. This bump is the LMDB-schema guard, **not**
+rule 42's persisted-block version, which correctly does not fire (no block
+blob byte moves). **Within v10 (no bump):** the additive
+`archival_settlement` table rides the boundary as the witness tables rode
+v9.
+
+`BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
+that tracks the constant, so each bump extends the refusal automatically.

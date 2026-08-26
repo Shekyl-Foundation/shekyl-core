@@ -5431,14 +5431,14 @@ namespace {
 
 // ─── Height-keyed archival journal helpers ─────────────────────────────────
 //
-// Three archival journals (slash log, emission-claim log, unbond log) share
-// the same BE(height)‖BE(seq) row layout and the same three sub-operations:
-// probe the next free seq for a height, read every row at a height, delete
-// every row at a height. `KeyT` is the row-key type (constructed from
-// (height, seq)); the write-txn and dbi are passed in so these stay storage
-// adapters with no consensus logic. The slash log's epoch-marker special seq
-// keeps its own bespoke loop; the emission-claim and unbond logs are the two
-// clean consumers.
+// Five archival journals (slash log, emission-claim log, unbond log,
+// holdings-update log, rebond log) share the same BE(height)‖BE(seq) row
+// layout and the same three sub-operations: probe the next free seq for a
+// height, read every row at a height, delete every row at a height. `KeyT`
+// is the row-key type (constructed from (height, seq)); the write-txn and
+// dbi are passed in so these stay storage adapters with no consensus logic.
+// The slash log's epoch-marker special seq keeps its own bespoke loop; the
+// other four are the clean consumers.
 
 // Next unused seq at `height` (linear probe from 0 — one journal holds only
 // the few rows a single block appended).
@@ -10269,11 +10269,13 @@ void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
   // Pre-genesis posture (15-deletion-and-debt.mdc, 60-no-monero-legacy.mdc):
   // no in-Shekyl migration code; `rm -rf` and resync is the migration path.
+  // V10 widened the `archival_serve_credit` key 48 → 56 B (PC-D4): a pre-V10
+  // DB's rows are invisible to the widened point reads and FATAL to its scans.
   // V9 added the block-header `attestation_root` (ARCHIVAL_CREDIT_WIRE.md §3):
   // a pre-V9 block blob has no attestation_root bytes, so the V9 parser cannot
   // read it. V8 added the persisted frozen-shard counter (properties
   // `archival_frozen_shard_count`); a pre-V8 DB carries segment rows the counter
-  // does not account for. Neither has an in-place path; refuse loudly. (The
+  // does not account for. None has an in-place path; refuse loudly. (The
   // Monero-era migrate_0_1..migrate_5_6 ladder was unreachable from this guard
   // and has been deleted.)
   if (oldversion < VERSION)

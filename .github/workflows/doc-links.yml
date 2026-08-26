@@ -71,3 +71,14 @@ jobs:
         # mask the other.
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_headings.py
+
+      - name: Run LMDB schema coverage check
+        # Every table in db_lmdb.cpp's SHEKYL_LMDB_TABLES list must have a
+        # section in docs/LMDB_SCHEMA.md, and the doc's stated total must
+        # match the list. Nine live tables had zero mentions when this gate
+        # was written — absence of a section reads as absence of a table.
+        #
+        # Runs even if earlier checks failed, for the same non-masking
+        # reason as above.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_lmdb_schema_coverage.py
