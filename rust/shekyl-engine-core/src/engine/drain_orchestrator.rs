@@ -258,14 +258,20 @@ fn project_drain_operands(
 /// materialises the stripped candidate vector the *select* stage consumes — a
 /// heap allocation a poll-frequency query has no use for. It observes the same
 /// carve: only `amount`, gated by the shared [`is_mature`] predicate.
-pub fn drain_balance(
-    records: &[PFundingOutputRecord],
+///
+/// Takes any borrowing iterator so a caller can chain its own scoping
+/// predicate (the read path filters to the active slot) without cloning the
+/// records — each carries an ML-KEM ciphertext buffer, and this runs at poll
+/// frequency — while the mature ∧ unreserved definition stays here, in one
+/// place.
+pub fn drain_balance<'a>(
+    records: impl IntoIterator<Item = &'a PFundingOutputRecord>,
     reference_height: BlockHeight,
     reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainBalance, DrainError> {
     let spendable = AtomicUnits::checked_sum(
         records
-            .iter()
+            .into_iter()
             .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
             .map(|r| r.amount),
     )

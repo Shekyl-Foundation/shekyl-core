@@ -271,12 +271,12 @@ fn scoped_spendable(
     reference_height: BlockHeight,
     reserved: &std::collections::BTreeSet<shekyl_types::GlobalOutputIndex>,
 ) -> Result<AtomicUnits, DrainBalanceReadError> {
-    let scoped: Vec<_> = records
-        .iter()
-        .filter(|r| r.p_slot == active_slot)
-        .cloned()
-        .collect();
-    let balance = drain_balance(&scoped, reference_height, reserved).map_err(|e| {
+    // Borrowed filter chained into `drain_balance`'s own predicates: no
+    // record is cloned (each carries an ML-KEM ciphertext buffer, and this
+    // runs at poll frequency), and the mature ∧ unreserved definition stays
+    // in `drain_balance` — scoping here, eligibility there, one copy of each.
+    let scoped = records.iter().filter(|r| r.p_slot == active_slot);
+    let balance = drain_balance(scoped, reference_height, reserved).map_err(|e| {
         DrainBalanceReadError::State {
             detail: e.to_string(),
         }
