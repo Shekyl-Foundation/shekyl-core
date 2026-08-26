@@ -408,6 +408,41 @@ Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch)` (gate-2 �
 | Encoder | `shekyl::db::ArchivalServeCreditKey` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
 
+### `archival_settlement`
+
+Three-valued settlement verdict per `(P_id, shard_id, settlement_epoch)`
+(`SO-D1`/`SO-D2`). **One row per pair with `issued >= 1`** — a pair the urn
+never reached is recorded by its ABSENCE, which is what makes *absent ⇒ never
+issued* a theorem about the writer rather than an inference. `issued = 0` is
+refused at the boundary (`SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO`), on both
+the write and the read.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_settlement"` |
+| Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
+| Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
+| Writers | `set_archival_settlement` — **not wired to production yet** (`SO-D8`); when it lands it runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event |
+| Readers | `get_archival_settlement` |
+| Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
+| Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
+| Encoder | key `shekyl::db::ArchivalServeCreditKey`; **value encoded in Rust only** |
+| Introduced | HF1 (Shekyl genesis) |
+
+**C++ never composes the value.** Rust folds `(passes, issued)` and emits the
+three bytes (`shekyl_archival_settlement_row`), so a row whose outcome
+contradicts its counts is not a state this side can express. The FFI writes
+nothing on any refusal, so a caller that ignored the return code still cannot
+store a fabricated settlement. The 3-byte length is a fixed-size FFI contract
+agreed at compile time on both sides (`SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES`,
+rule 40).
+
+**Not merged with `archival_serve_credit`.** This table records a NEGATIVE
+(Missed), while every consumer of the serve-credit ledger reads key-presence as
+"pay this pair" — so a Missed cell there would corrupt vin-dedup and emission at
+once (`SO-D4.3`).
+
 ### `archival_bond`
 
 Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads

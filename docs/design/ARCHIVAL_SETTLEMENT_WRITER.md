@@ -1,8 +1,16 @@
 # The settlement writer — design round (SO)
 
-**Status:** OPEN — round opened 2026-08-23. `SO-D1`…`SO-D5` and `SO-D7`
-**RULED** in this draft; `SO-D6` (reorg disposition) carries a lean and is the
-round's one genuinely open item.
+**Status:** OPEN — round opened 2026-08-23. `SO-D1`…`SO-D5` **RULED**;
+**`SO-D6` CLOSED 2026-08-24** by grounding (recompute, no alt twin — the
+mechanism is named, not just leaned toward); **`SO-D7` CORRECTED 2026-08-24 —
+it re-derived a constraint the tree already enforced**; **`SO-D8` OPENED** and
+assigned out of this round.
+
+**Implementation began 2026-08-24 and the first hour changed two dispositions.**
+That is the intended use of the round, not a failure of it: the ruling that the
+irreversible surfaces get design-first and the reversible ones get built and
+pivoted is what made cutting the writer the right next move. §12 records what
+contact with the code did to each disposition.
 
 **Unblocked by** — all four upstreams are closed, which is why this round can
 open now rather than wait:
@@ -159,9 +167,16 @@ it is the exact inverse of the §4.1 bias the drawability relocation fixed.
 
 So the writer cannot be record-driven. It must enumerate.
 
-**Ruled:** at epoch close the writer runs the assignment derivation over the
-closing epoch and writes **one row per `(P, s)` with `issued ≥ 1`**, carrying
-its observed pass count. Pairs with `issued = 0` are not written.
+**Ruled:** when the closing epoch is settled — **inside the slash scheduler's
+per-epoch pass**, per `SO-D7` below, not at a separate epoch-close event — the
+writer runs the assignment derivation over that epoch and writes **one row per
+`(P, s)` with `issued ≥ 1`**, carrying its observed pass count. Pairs with
+`issued = 0` are not written.
+
+(This paragraph said "at epoch close" until 2026-08-25. `SO-D7` moved the
+timing and this earlier ruling was not moved with it, leaving two
+authoritative timings in one record — the reader who stopped here got the
+superseded one.)
 
 This is §4.2's second branch, adopted **unconditionally** rather than as the
 fallback for a §7.1 variant that did not win. Three reasons, in priority order:
@@ -265,64 +280,129 @@ chain state**, so it is memoisable and parallelisable on the same
 `ArchivalSealHashCache` pattern; and it is off the transaction-admission path
 entirely — no incoming transaction waits on it.
 
-**Reopening criterion** (rule 21): if a rig run shows the close-block
-derivation exceeding the block-propagation budget at any `D` the network
-actually reaches, the fix is to amortise the derivation across the epoch's
-final `W₂` blocks — not to move it off-chain and not to persist urn state.
+**Reopening criterion** (rule 21): if a rig run shows the derivation exceeding
+the block-propagation budget at any `D` the network actually reaches, the fix
+is to amortise it across the blocks preceding the fold — not to move it
+off-chain and not to persist urn state.
 
-*When* it runs is a separate question with a wrong obvious answer — `SO-D7`.
+*(The spike lands on the fold block, not the close block: `SO-D7`'s correction
+moved the writer into the slash scheduler's pass. The `~972,000` figure and the
+argument for why it is tolerable are unchanged — both turn on the derivation
+being a pure function of final chain state and off the admission path, neither
+of which depended on which scheduled block it runs in.)*
+
+*Where* it runs was the open half, and the obvious answer was the wrong one —
+`SO-D7`.
+
+### 5.1 It cannot be live before the cutover, and that is a property of the mechanism
+
+Interim issuance is **one** beacon challenge per pair-epoch. Under absolute-2,
+`settle_epoch(passes, issued = 1)` settles **NonObservation for every pair,
+always** — correctly, by `SO-D1`'s own rule that a pair the urn could not reach
+twice is not a pair that failed.
+
+So until the cutover wires per-challenge admission, the writer would emit rows
+that are uniformly `NonObservation` and carry no information. **The rows must
+therefore have no consumer until derived assignment is live** — the writer
+lands with its KATs and its forcing-case red test, and the slash window keeps
+reading what it reads today.
+
+Stated here rather than discovered later, because "the writer is built" and
+"the writer is authoritative" are different claims, and the gap between them is
+exactly the §5 cutover (`SO-D8`).
+
+**Grounded 2026-08-24, and it went one step further than "unread": the writer
+is not *wired* either, and that is a ruling rather than an omission.**
+
+Both of its inputs are reachable today without touching the live slash
+predicate — `archival_challenge_failed_at_height` composes
+`has_archival_serve_credit_bit` (the interim `passes`) and
+`archival_baseline_observed_at_epoch` (the interim `issued`), both public const
+reads. So wiring it would be additive and safe. It is still wrong to do:
+
+1. **Every row would say `NonObservation`**, by the mechanism's own rule, not
+   by an implementation gap — beacon issuance is 1 per pair-epoch and
+   absolute-2 settles `issued = 1` as unobserved. The rows would carry no
+   information at all.
+2. **They would cost real storage** — one row per `(P, shard)` per epoch until
+   the prune horizon, to record a constant.
+3. **Both inputs change source at the cutover** (`passes` from a bit to a count
+   of admitted records, `issued` from the beacon to the urn derivation), so
+   what a beacon-era wiring would prove is not the thing that will run.
+
+**Named blocker, per rule 22:** the writer's call site lands with `SO-D8`'s
+cutover, which is what supplies both operands. **The revert is wired now**
+regardless, because it is pure cleanup with no such dependency, and it is the
+half `SO-D6` was actually open about — proven by a pop round-trip rather than
+by argument.
 
 ---
 
-## 6. `SO-D7` — RULED: the writer runs at `h_close + W₂`, not at `h_close`
+## 6. `SO-D7` — CORRECTED 2026-08-24: the constraint was already ruled and const-asserted; only the *writer's home* was open
 
-**Pass evidence is not final when the epoch closes.**
-`CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` (`constants.rs:147`), and
-`assign_epoch` issues on **every block of the epoch** — `prev_hashes.len()` *is*
-the epoch length (`challenge_assignment.rs:262–279`), with no cutoff near the
-end. So a challenge drawn at epoch-relative block 9,999 has a response window
-running 500 blocks into epoch `E+1`.
+**The opening draft presented this as a finding. It was a rediscovery, and the
+tree states it verbatim.** `constants.rs:190-199`:
 
-A writer running at `h_close` therefore counts every in-flight challenge as
-zero passes. **Up to `W₂/SEB = 5 %` of each epoch's issuance would settle as
-missed purely because the writer ran too early** — a slash bias against
-archivers who were serving normally, which is the same class of defect as the
-§4.1 finding this mechanism already fixed once.
+```rust
+// The slash fold for epoch E must not run before the response window of E's
+// last-issued challenge closes, or in-flight responses read as misses. The fold
+// runs strictly above the deadline (`failure_window.rs`), so `>=` is exact.
+const _: () = assert!(
+    CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS,
+    ...
+);
+```
 
-Two fixes were available and only one is this round's to take:
+*"or in-flight responses read as misses"* is `SO-D7`'s entire argument, written
+before this round opened, **enforced by a const-assert** rather than left to
+prose. `CHALLENGE_RESOLUTION_BLOCKS`'s own doc goes further and states the
+scenario I thought I had found — *"a challenge issued at the epoch's **last**
+block, `(E+1)·SEB − 1`, must be resolvable before the slash fold reads the
+epoch"* — and prices the slack: **one epoch dominates W₂ by a factor of
+twenty.**
 
-- *Stop issuing at `SEB − W₂`.* This makes `h_close` final, but it truncates
-  the urn's draw window by 5 %, which perturbs the redraw floor and the
-  wave-tail exposure arithmetic — both **ruled** on the full-epoch assumption
-  (§7.1, 2026-08-10). Re-opening a closed parameter to simplify a writer is
-  backwards.
-- **Run the writer at `h_close + W₂`.** `W₂` is the maximum response latency
-  *by construction*, so at that height every challenge issued in `E` has
-  either passed or expired. Evidence is final, nothing upstream moves.
+**This is the same dissolve-on-grounding class the `RF` round logged three
+times** (the W₂ floor check, the Pi-4 device question, `RF-D3`), now inside a
+round that cited those instances while committing the same error. The
+mechanism is identical each time: a residual carried into a new round and
+re-reasoned from the doc instead of re-grounded at source. The round's own §1
+discipline — *read every input at source* — was applied to the seven inputs in
+the table and **not** to the constraint the round believed it was deriving
+fresh.
 
-**Ruled: the second.** Settlement for epoch `E` lands 500 blocks (~16.7 h)
-into `E+1`.
+### 6.1 What survives, and the ruling that replaces it
 
-### 6.1 The lag is not free — the absent-row theorem gains a precondition
+The constants pin **when evidence is final**. They do not say **where the
+writer lives**, and that was the genuinely open half.
 
-`SO-D1`'s theorem (*absent ⇒ never issued ⇒ non-observation*) is now true only
-**after** the writer has run for that epoch. Between `h_close(E)` and
-`h_close(E) + W₂`, epoch `E`'s rows are absent because they have not been
-written yet — and a reader applying the theorem in that window reads a fully
-challenged epoch as unobserved.
+The opening draft answered it with a new event at `h_close + W₂`. Grounding
+says that is unnecessary and more expensive than the alternative:
 
-**So the theorem carries its precondition explicitly, and readers enforce it:**
-epoch `E` is only settled-readable at height `h ≥ h_close(E) + W₂`. A window
-walk must **exclude** any epoch not yet settled rather than count it as
-non-observation. This is stated as a constraint on the reader, not as a
-property of "the writer usually runs first" — the `RF-D7` lesson, applied a
-third time.
+- The **slash fold already is** a scheduled per-epoch event
+  (`process_archival_slash_for_epoch`, `db_lmdb.cpp:5996`), gated on
+  `block_height > h_slash_deadline(E)` where
+  `h_slash_deadline(E) = h_close(E) + CHALLENGE_RESOLUTION_BLOCKS`.
+- It runs **20× past** `h_close + W₂`, so evidence is final by the
+  const-asserted margin — the `SO-D7` requirement is met without asserting it
+  again.
+- It processes epochs in **ascending order** (stated at `db_lmdb.cpp:6040`),
+  so epoch `E`'s row exists before any later epoch's window walk reads it.
+- It already has a revert (`revert_archival_slashes_at_height`), which is what
+  closes `SO-D6`.
 
-**Verified, not assumed:** the emission gather does not read this table. It is
-a pure presence cursor-walk over `m_archival_serve_credit` (`db_lmdb.cpp:7801`,
-`:7804`), written at *admission*, so emission timing is untouched by the
-settlement lag. The consumer that does care is the slash-window walk, and the
-precondition above is exactly what it must respect.
+**RULED: the writer runs inside the slash scheduler's per-epoch pass — write
+the row, then fold it, in one hook.** A separate `h_close + W₂` event would
+have added a second scheduled event, a second height→epoch log, and a second
+revert path, to buy a margin the tree already guarantees.
+
+### 6.2 The precondition survives the correction, and is now free
+
+`SO-D1`'s theorem still needs *absent ⇒ non-observation* to hold only where the
+writer has run. Under this ruling that is no longer a constraint anyone must
+remember: **the only reader is the fold that just wrote the row**, in the same
+pass, so an unsettled epoch cannot be observed by its consumer. An invariant
+held by construction beats the same invariant held by a documented rule — which
+is the `RF-D7` lesson the opening draft invoked while writing the weaker form.
 
 ---
 
@@ -340,10 +420,25 @@ fresh environment, and fails when a node opens its database.
 **Ruled: the bump is not a bump.** Hardcoding 49 re-arms the same trap for the
 50th table. `maxdbs` becomes **derived from the table list** — the
 `LMDB_*` name constants gathered so the count is computed, not maintained, and
-`mdb_env_set_maxdbs` takes that count plus a stated headroom margin. This is
+`mdb_env_set_maxdbs` takes **exactly that count**. This is
 `45`/`47` discipline applied to a runtime ceiling: a gate that cannot notice its
 own subject is not a gate, and a hand-maintained count of a list that lives
 three hundred lines away will drift.
+
+**No headroom margin — corrected 2026-08-25, and the correction is the
+ruling's own logic applied one step further.** The draft said "that count plus
+a stated headroom margin", and the implementation passes the exact count; a
+reviewer reasonably flagged the disagreement. The *code* is right and the
+clause was the stale half.
+
+Headroom exists to absorb drift between a ceiling and a list. Deriving the
+ceiling **from** the list removes the drift, so the margin buys nothing — and
+it is worse than nothing, because the only thing it can absorb is a table
+opened **outside** the list, which is exactly the case that must fail loudly.
+With the exact count, such a table hits `MDB_DBS_FULL` at open; with a margin,
+it opens silently and the derived count is quietly wrong until the margin runs
+out. That is the "gate that cannot notice its own subject" failure this ruling
+was written to remove, re-created by its own safety clause.
 
 **Not sequenced behind the credit-wire deletion.** Deleting the old credit wire
 frees `archival_attestation_witness` and `archival_alt_attestation_witness`
@@ -375,29 +470,40 @@ proves that failure cannot happen.
 
 ---
 
-## 9. `SO-D6` — OPEN (lean: recompute, no alt twin)
+## 9. `SO-D6` — CLOSED 2026-08-24: recompute, no alt twin, and the revert already exists
 
-`archival_attestation_witness` carries a reorg-survival twin,
-`archival_alt_attestation_witness` (`db_lmdb.cpp:304–305`,
-`ARCHIVAL_CREDIT_WIRE.md` §3.2/§4). Does the settlement table need one?
+Held open in the opening draft on an explicit unread path: *"the argument
+assumes a reorg crossing a close boundary always re-runs the writer before any
+reader sees stale rows, an ordering claim about `pop_block`/emission-gather
+that I have not read at the depth the claim needs."* Read now.
 
-**Lean: no — recompute at close.** Settlement rows are a *memoised derivation*
-over final chain state, not received data. A reorg past an epoch boundary
-invalidates the rows for that epoch, and the correct response is to drop and
-recompute — behaviour-identical to `ArchivalSealHashCache`'s
-recompute-on-reorg, and the same reasoning §7.1 used to keep urn state out of a
-table. The alt twin exists for the witness table because a witness record is
-**received evidence** that would be *lost* on the losing branch and is not
-reproducible from chain state; a settlement row is reproducible by definition.
+**The lean was right and the codebase already contains the pattern, twice
+over.** `BlockchainDB::pop_block` (`blockchain_db.cpp:638`) is a chain of
+`revert_*_at_height` hooks, and they split exactly along the line `SO-D6`
+guessed at:
 
-**Why it stays open rather than ruled:** the argument above assumes an epoch
-close is never re-entered with *different* pass evidence — i.e. that a reorg
-crossing a close boundary always re-runs the writer before any reader observes
-the stale rows. That is an ordering claim about `pop_block` and the emission
-gather, and I have not read those paths at the depth the claim needs.
-**Naming the unread path rather than asserting the conclusion**, per the
-round's own §1 discipline. This is the disposition to close before
-implementation starts.
+| Kind of data | Revert shape | Example |
+|---|---|---|
+| **Received** evidence, unreproducible on a losing branch | pre-image **journal**, restored on pop | `archival_attestation_witness` + its alt twin; the unbond / holdings / rebond journals |
+| **Derived** from final chain state | **delete**, recompute on re-connect | `revert_archival_epoch_close_at_height` drops `r_market`, `sigma_work`, `budget` |
+
+A settlement row is the second kind — it is a fold over evidence that is
+itself already on chain. So it deletes and recomputes, and needs no twin.
+
+**And the ordering claim resolves without needing to be assumed**, because of
+`SO-D7`'s correction below: the writer runs **inside the slash scheduler's own
+per-epoch pass**, so its rows revert through `revert_archival_slashes_at_height`
+— a hook that already exists, already runs first in the pop chain, and already
+carries the ordering rationale for why it must. There is no second event to
+order against a reader, which is the strongest form of the answer: not "the
+writer runs first", but "there is no separate writer to run".
+
+**One consequence worth stating, since it was the reason the question felt
+hard:** `m_archival_epoch_close_log` is keyed at `(E+1)·SEB`, so it could not
+have driven the revert of rows written at a different height. Joining an
+existing scheduled event dissolves that problem rather than solving it — no new
+height→epoch log, and no second table against the `maxdbs` ceiling `SO-D4`
+already found.
 
 ---
 
@@ -500,17 +606,49 @@ every input at source instead of citing what the last round concluded.
 
 ---
 
-## 12. Disposition summary
+## 12. `SO-D8` — OPEN, and assigned OUT of this round: cross-epoch admission
+
+Grounding `SO-D7` surfaced a real gap, narrower than it first looked and **not
+this round's to rule.**
+
+The live admission gate refuses a serve-credit response once
+`current_height > h_close` (`SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE`,
+`serve_credit.rs:176`). Under derived assignment a challenge issued in the
+epoch's last `W₂` blocks resolves *after* `h_close`, so its response names
+epoch `E` while landing in `E+1`'s blocks.
+
+**That gate belongs to the interim beacon path**, the cluster the `challenge.rs`
+correction deliberately left unruled — under the beacon shape there was one
+challenge per pair-epoch and `h_close` was a sound deadline. The ruled
+per-challenge deadline already exists and is per-challenge, not per-epoch:
+W₂ is defined as *"blocks after a challenge's **issuing block** to accept its
+serve-credit response"* — which is precisely why
+`CHALLENGE_RESOLUTION_BLOCKS ≥ W₂` had to be asserted at all.
+
+**What is genuinely open** is the arithmetic at the boundary: a response naming
+`E` admitted during `E+1`, and what dedup and the emission gather do with it.
+
+**Why it is not ruled here, stated as a rule-22 blocker rather than a
+deferral:** this is **consensus-visible admission timing on a genesis-frozen
+surface** — a wrong byte is permanent. It is the design-first category, and it
+belongs to the old credit wire's §5 atomic cutover, which owns the admission
+path this round does not touch. **No admission code changes in this round's
+implementation.**
+
+---
+
+## 13. Disposition summary
 
 | ID | Disposition | State |
 |---|---|---|
 | `SO-D1` | Writer enumerates the issued set; one row per pair with `issued ≥ 1` | **RULED** |
 | `SO-D2` | Key `P_id‖BE(shard)‖BE(E)` (48 B); value `outcome‖passes‖issued` (3 B) | **RULED** |
-| `SO-D3` | One derivation per epoch, not incremental accumulation (timing is `SO-D7`) | **RULED** |
+| `SO-D3` | One derivation per epoch, not incremental accumulation (home is `SO-D7`) | **RULED** |
 | `SO-D4` | `maxdbs` derived from the table list, same commit | **RULED** |
 | `SO-D5` | Prune const-assert kept, failure direction inverted in its rationale | **RULED** |
-| `SO-D6` | Reorg: recompute vs alt twin | **OPEN** — lean recompute; blocked on reading `pop_block`/gather ordering |
-| `SO-D7` | Writer runs at `h_close + W₂`; absent-row theorem gains a settled-readable precondition | **RULED** |
+| `SO-D6` | Reorg: recompute, **no alt twin** — derived rows delete and recompute; reverts via the existing slash revert | **CLOSED 2026-08-24** |
+| `SO-D7` | ~~Writer runs at `h_close + W₂`~~ → **writer runs inside the slash scheduler's per-epoch pass**; the `≥ W₂` constraint was already const-asserted | **CORRECTED 2026-08-24** |
+| `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`) | **OPEN — assigned to the §5 cutover**, consensus-visible |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual

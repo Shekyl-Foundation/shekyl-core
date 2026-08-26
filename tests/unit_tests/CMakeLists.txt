@@ -111,6 +111,7 @@ set(unit_tests_sources
   archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
   archival_segment_freeze.cpp
+  archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
   archival_claim_source_rpc.cpp
   ct_balance_differential.cpp
