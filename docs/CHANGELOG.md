@@ -17,6 +17,14 @@
   as an **array of strings**, dropping each transaction's prunable hash.
   The array-of-objects form exists only on the p2p path, so modelling it
   here would have carried a variant the daemon cannot emit.
+  Two behaviours are recorded rather than silently carried. A height the
+  chain cannot produce still returns the blocks read **before** it, as the
+  C++ did — it cleared its list once before the loop and returned from the
+  failure without clearing again. And the restricted listener's 1000-block
+  cap now **fires**: the C++ gated it on `m_restricted && ctx` while the
+  bridge always passed a null `ctx`, so the check was dead and a restricted
+  listener accepted any number of heights. That is a deliberate fix, not
+  parity.
   The engine's timing rig stops hand-rolling the request and reply walk;
   `Section::collect_bytes_named`, a tree-scanning helper that existed for
   that walk, goes with its only caller, and `shekyl-engine-core` drops its

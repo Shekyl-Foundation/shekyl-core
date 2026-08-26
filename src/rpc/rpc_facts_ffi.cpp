@@ -461,6 +461,7 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
     std::unique_ptr<blocks_owner> owned(new blocks_owner());
     owned->blocks.reserve(heights_len);
     owned->txs.reserve(heights_len);
+    bool failed = false;
     for (size_t i = 0; i < heights_len; ++i)
     {
       cryptonote::block blk;
@@ -473,8 +474,15 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
         // A height this chain cannot produce is the caller's answer, not a
         // fault: the C++ replied with a status naming the height, and the
         // handler rebuilds that message from `out_failed_height`.
+        //
+        // The blocks already gathered are kept, because the C++ kept them:
+        // it cleared `res.blocks` once before the loop and returned from
+        // here without clearing again, so a request like `[0, past_tip]`
+        // carried block 0 alongside the error. Dropping the prefix would be
+        // a quieter reply and a different one.
         *out_failed_height = heights[i];
-        return SHEKYL_RPC_FACTS_OK;
+        failed = true;
+        break;
       }
       owned->blocks.push_back(cryptonote::block_to_blob(blk));
       std::vector<cryptonote::transaction> txs;
@@ -489,10 +497,13 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
 
     // Second pass: the vectors above are final, so views into them are
     // stable. Building them in the first pass would dangle on reallocation.
-    owned->tx_ptrs.resize(heights_len);
-    owned->tx_lens.resize(heights_len);
-    owned->entries.resize(heights_len);
-    for (size_t i = 0; i < heights_len; ++i)
+    // Sized by what was actually gathered, which is short of `heights_len`
+    // when a height failed and the prefix is being returned with it.
+    const size_t gathered = owned->blocks.size();
+    owned->tx_ptrs.resize(gathered);
+    owned->tx_lens.resize(gathered);
+    owned->entries.resize(gathered);
+    for (size_t i = 0; i < gathered; ++i)
     {
       const std::vector<std::string>& blobs = owned->txs[i];
       owned->tx_ptrs[i].reserve(blobs.size());
@@ -512,7 +523,7 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
 
     *out = owned->entries.empty() ? nullptr : owned->entries.data();
     *out_len = owned->entries.size();
-    *out_ok = 1;
+    *out_ok = failed ? 0 : 1;
     *out_owner = owned.release();
     return SHEKYL_RPC_FACTS_OK;
   }

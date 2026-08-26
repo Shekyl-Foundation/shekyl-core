@@ -148,6 +148,23 @@ namespace
       return m_height ? hash_at(top) : crypto::null_hash;
     }
 
+    // `get_block_from_height` is what `blocks_by_height` reads. BaseTestDB
+    // answers every height with a default-constructed block, so without this
+    // override a past-the-tip height would look like a successful read of an
+    // empty block — and a test asserting the failure path would pass while
+    // exercising the success one.
+    cryptonote::block get_block_from_height(const uint64_t& height) const override
+    {
+      // Out of range only — deliberately NOT honouring `m_missing`, which
+      // models a failing *hash* lookup. `HardFork::init` rescans every height
+      // through this call while the chain is being built, so throwing for a
+      // missing height here fails `init_blockchain` itself and the test never
+      // reaches its subject.
+      if (height >= m_height)
+        throw BLOCK_DNE("no block at that height");
+      return block_at(height);
+    }
+
     // `Blockchain::get_block_by_hash` reaches the store through
     // `BlockchainDB::get_block` -> `get_block_blob`.
     cryptonote::blobdata get_block_blob(const crypto::hash& h) const override
@@ -460,6 +477,17 @@ namespace
     void* owner = nullptr;
     ~BlockOwner() { shekyl_rpc_block_free(owner); }
   };
+
+  // Deliberately a separate type: a `blocks_by_height` owner is a different
+  // C++ object and must go through its own free. Releasing one with
+  // `shekyl_rpc_block_free` is not a leak, it is a wrong-type delete — which
+  // this fixture demonstrated by aborting with "free(): invalid pointer"
+  // before the two were split.
+  struct BlocksOwner
+  {
+    void* owner = nullptr;
+    ~BlocksOwner() { shekyl_rpc_blocks_by_height_free(owner); }
+  };
 }
 
 TEST(rpc_facts_shims, block_by_height_carries_the_header_and_its_payloads)
@@ -663,6 +691,40 @@ TEST(rpc_facts_shims, block_with_a_malformed_coinbase_is_inconsistent)
 // `core_rpc_server`, which is the whole reason the exports are thin adapters
 // over free functions. The owner slot in particular was checked for the
 // clear but not for the write, so a null there was undefined behaviour.
+// A failure part-way keeps what was already gathered. The C++ cleared its
+// block list once before its loop and returned from the failure without
+// clearing again, so `[0, past_tip]` carried block 0 alongside the error
+// status. Dropping the prefix would be a quieter reply and a different one —
+// and it is the reply, not debris, because a caller can read those blocks.
+TEST(rpc_facts_shims, blocks_by_height_keeps_the_prefix_when_a_later_height_fails)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+  const uint64_t heights[] = {0, 1, CHAIN_HEIGHT + 5};
+
+  const shekyl_rpc_block_entry* out = nullptr;
+  size_t len = 0;
+  uint64_t failed = 0;
+  uint8_t ok = 1;
+  BlocksOwner owned;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 3, &out, &len, &failed, &ok, &owned.owner));
+
+  EXPECT_EQ(0, ok) << "the third height cannot be read";
+  EXPECT_EQ(CHAIN_HEIGHT + 5, failed) << "and the failure names it";
+  ASSERT_EQ(2u, len) << "the two blocks read before it survive";
+  ASSERT_NE(nullptr, out);
+  ASSERT_NE(nullptr, owned.owner) << "a prefix comes with an owner to release";
+
+  for (size_t i = 0; i < len; ++i)
+  {
+    const cryptonote::block expected = block_at(i);
+    const std::string blob = cryptonote::block_to_blob(expected);
+    ASSERT_EQ(blob.size(), out[i].block_len) << "block " << i;
+    EXPECT_EQ(0, std::memcmp(out[i].block, blob.data(), blob.size())) << "block " << i;
+  }
+}
+
 TEST(rpc_facts_shims, blocks_by_height_refuses_every_null_out_parameter)
 {
   BlockchainAndPool bap;

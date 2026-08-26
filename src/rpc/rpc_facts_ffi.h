@@ -182,8 +182,11 @@ typedef struct shekyl_rpc_block_entry {
 // On OK with `*out_ok == 1` the view holds `heights_len` entries and
 // `*out_owner` must be released with `shekyl_rpc_blocks_by_height_free`.
 // When a height cannot be read the answer is `*out_ok == 0` with
-// `*out_failed_height` naming it and no owner handed back — the C++ replied
-// with a status naming that height, and the caller reproduces it.
+// `*out_failed_height` naming it — and the blocks gathered *before* it are
+// still returned, with an owner to release. The C++ cleared its block list
+// once before its loop and returned from the failure without clearing
+// again, so `[0, past_tip]` carried block 0 alongside the error; the prefix
+// is part of that reply, not debris.
 //
 // The restricted-listener block cap is NOT applied here: it is handler
 // policy, single-sourced in Rust (RK-D6), and this export answers what it

@@ -309,15 +309,19 @@ impl CoreRpc {
 
     /// Blocks at `heights`, in order.
     ///
-    /// `Ok(Ok(entries))` on success; `Ok(Err(height))` when the chain could
-    /// not produce that height, which is the caller's answer rather than a
-    /// fault. The owner is released here, after the copies and before any
-    /// verdict, so no path out can lose the free.
+    /// Returns the entries gathered and, when the chain could not produce a
+    /// height, that height alongside them.
+    ///
+    /// The two are not exclusive: a failure keeps the blocks read **before**
+    /// it, because the C++ did — it cleared its list once before the loop and
+    /// returned from the failure without clearing again, so `[0, past_tip]`
+    /// carried block 0 with the error. The owner is released here, after the
+    /// copies and before any verdict, so no path out can lose the free.
     #[allow(clippy::type_complexity)]
     pub fn blocks_by_height(
         &self,
         heights: &[u64],
-    ) -> Result<Result<Vec<(Vec<u8>, Vec<Vec<u8>>)>, u64>, i32> {
+    ) -> Result<(Vec<(Vec<u8>, Vec<Vec<u8>>)>, Option<u64>), i32> {
         if self.handle.is_null() {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
@@ -348,12 +352,10 @@ impl CoreRpc {
                 return Err(rc);
             }
             // Past this point an owner may exist, so nothing returns until
-            // it is released. The `ok == 0` verdict waits below rather than
-            // short-circuiting here: the export sets a null owner on that
-            // path today, but a contract kept only by the other side's
-            // current behaviour is one bad edit from a leak.
-            let mut out = Vec::with_capacity(if ok == 0 { 0 } else { len });
-            if ok != 0 && !rows.is_null() {
+            // it is released. The entries are copied whether or not `ok` is
+            // set: on a failure they are the prefix the C++ also returned.
+            let mut out = Vec::with_capacity(len);
+            if !rows.is_null() {
                 for entry in std::slice::from_raw_parts(rows, len) {
                     let block = if entry.block.is_null() || entry.block_len == 0 {
                         Vec::new()
@@ -376,10 +378,7 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_blocks_by_height_free(owner);
-            if ok == 0 {
-                return Ok(Err(failed_height));
-            }
-            Ok(Ok(out))
+            Ok((out, (ok == 0).then_some(failed_height)))
         }
     }
 
