@@ -108,7 +108,11 @@ pub enum DrainToPrincipalError {
         detail: String,
     },
     /// A live pending drain already exists for this persona — one live drain
-    /// per persona; wait for it to confirm or fail (`-29511`).
+    /// per persona (`-29511`). Releasing the seal (confirmation retire or
+    /// terminal-reject prune) is the drain lifecycle driver's job, and that
+    /// driver is not yet wired (`docs/FOLLOWUPS.md` "Drain dispatch driver",
+    /// WI-3 sibling, target V3.0 pre-genesis) — until it lands this refusal
+    /// persists across sessions, including after the first drain confirms.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     InFlight,
     /// A concurrent same-persona post reserved one of this drain's swept

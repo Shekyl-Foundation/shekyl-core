@@ -702,11 +702,19 @@ components:
                                           exists for this persona (one live
                                           drain per persona — the sealed
                                           record IS the in-flight input
-                                          reservation). Wait for it to
-                                          confirm or fail, then retry. Also
-                                          the refusal when a concurrent
-                                          same-persona post raced this
-                                          drain's inputs — retry
+                                          reservation). The seal is released
+                                          by the drain lifecycle driver
+                                          (confirmation retire /
+                                          terminal-reject prune), which is
+                                          NOT yet wired (FOLLOWUPS "Drain
+                                          dispatch driver", target V3.0
+                                          pre-genesis) — until it lands this
+                                          refusal persists across sessions,
+                                          including after the first drain
+                                          confirms. Also the refusal when a
+                                          concurrent same-persona post raced
+                                          this drain's inputs — that arm is
+                                          transient; retry
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over

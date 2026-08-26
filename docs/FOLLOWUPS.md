@@ -2068,7 +2068,12 @@ sustainability is unaffected by the recalibration.
   `submit_drain`; `wallet_rpc.yaml` `drain`), so a user can now dispatch a
   drain whose confirmation path is unwired: the receipt is a dispatch fact,
   not a settlement fact, and a `PendingDrain` that the network drops stays
-  pending until this driver exists. The contract and the CLI copy disclose
+  pending until this driver exists. The sharper consequence (surfaced by the
+  PR #567 review): the seal never releases on SUCCESS either — a confirmed
+  drain's record stays live, so the persona's drain lane refuses `-29511`
+  across sessions until this driver retires it. The money itself settles
+  (the principal output is scanned normally); only the drain-again lane is
+  sealed. The contract and the CLI copy disclose
   this rather than imply settlement. The driver remains the named blocker
   and WI-3 remains its owner; WI-RPC-5 deliberately did not re-implement it
   (plan pin: "this PR does not re-implement that driver"). The entry's
