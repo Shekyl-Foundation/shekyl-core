@@ -193,10 +193,12 @@ pub(crate) async fn get_balance(
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     // The non-reentrant-lock choreography (snapshot under one ledger guard →
-    // drop it → sealed staking read) lives in the shared helper; a failed
-    // staking read degrades to absent staking fields rather than blacking
-    // out the liquid balance (`ledger_snapshot_with_staking` docs).
-    let (summary, (), staking_view) = crate::staking::ledger_snapshot_with_staking(&engine, |_| ());
+    // drop it → sealed staking read) lives in the shared helper; an
+    // unreadable staking seal degrades to absent staking fields rather than
+    // blacking out the liquid balance, while a corrupt-total read (`?`) fails
+    // loud (`ledger_snapshot_with_staking` docs).
+    let (summary, (), staking_view) =
+        crate::staking::ledger_snapshot_with_staking(&engine, |_| ())?;
     let result = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
@@ -256,7 +258,7 @@ pub(crate) async fn get_wallet_info(
                 let restore_height =
                     i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
-            });
+            })?;
 
         let address = engine
             .primary_address()

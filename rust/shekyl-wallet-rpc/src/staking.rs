@@ -122,14 +122,22 @@ pub(crate) fn read_view_under_guard(
 /// `get_wallet_info` snapshots the flags under its ledger guard, drops that
 /// guard, then calls this — keeping the bits coherent with the rest of
 /// the aggregate without nesting `RwLock` reads.
-pub(crate) fn read_view_with_snapshot(
+///
+/// Returns the engine's own [`StakingReadError`] rather than a mapped
+/// [`WalletRpcError`]: the sole caller ([`ledger_snapshot_with_staking`])
+/// classifies the variants — an unreadable seal degrades, a corrupt total
+/// answers loud — and that split needs the variant, which the mapped form
+/// erases.
+///
+/// [`StakingReadError`]: shekyl_engine_core::StakingReadError
+fn read_view_with_snapshot(
     engine: &Engine<SoloSigner>,
     staking_enabled: bool,
     recovery_pending_reopen: bool,
-) -> Result<StakingReadView, WalletRpcError> {
-    map_staking_read(tokio::task::block_in_place(|| {
+) -> Result<StakingReadView, shekyl_engine_core::StakingReadError> {
+    tokio::task::block_in_place(|| {
         engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
-    }))
+    })
 }
 
 fn map_staking_read(
@@ -139,6 +147,45 @@ fn map_staking_read(
         tracing::warn!(error = %e, "staking read view failed");
         WalletRpcError::InternalError("staking state failed to load".into())
     })
+}
+
+/// Classify a staking read for the **degrading** callers (`get_balance`,
+/// `get_wallet_info`): which failures may be answered with structurally
+/// absent staking fields, and which must fail the request loudly.
+///
+/// - [`File`] / [`Codec`]: the seal could not be opened or decoded — the
+///   degrade arm. The wire contract defines absence as "the sealed staking
+///   state could not be read", and that is literally what happened.
+/// - [`Overflow`]: the seal **loaded** — its monetary totals overflowed the
+///   money type. That is corrupt-loud territory (`project.rs`'s pin on
+///   `get_balance_result`: deliberately NOT folded into the degrade arm);
+///   rendering it as absence would misreport a corrupt-but-readable seal as
+///   an unreadable one. Answers `-32603` with a detail-free client message.
+///
+/// Pure so the classification is unit-testable; the non-degrading staking
+/// methods (`get_staked_balance`, `staking_info`) keep [`map_staking_read`],
+/// which answers every arm loud.
+///
+/// [`File`]: shekyl_engine_core::StakingReadError::File
+/// [`Codec`]: shekyl_engine_core::StakingReadError::Codec
+/// [`Overflow`]: shekyl_engine_core::StakingReadError::Overflow
+fn degrade_or_loud(
+    result: Result<StakingReadView, shekyl_engine_core::StakingReadError>,
+) -> Result<Option<StakingReadView>, WalletRpcError> {
+    use shekyl_engine_core::StakingReadError;
+    match result {
+        Ok(view) => Ok(Some(view)),
+        Err(e @ (StakingReadError::File(_) | StakingReadError::Codec(_))) => {
+            tracing::warn!(error = %e, "staking read view failed; degrading staking fields");
+            Ok(None)
+        }
+        Err(e @ StakingReadError::Overflow) => {
+            tracing::warn!(error = %e, "staking read view corrupt");
+            Err(WalletRpcError::InternalError(
+                "staking totals overflowed the money type (corrupt staking state)".into(),
+            ))
+        }
+    }
 }
 
 /// One-guard ledger snapshot + sealed staking read, in the only safe order —
@@ -157,16 +204,20 @@ fn map_staking_read(
 /// caller's extra fields (heights, flags) stay coherent with the summary;
 /// `get_balance` passes `|_| ()`.
 ///
-/// The staking view comes back as an `Option`: `None` means the sealed read
-/// failed (already logged server-side via [`map_staking_read`]'s warn) and
-/// the caller **degrades** — liquid fields stay served, staking projections
-/// go structurally absent. Never `-32603` over the whole balance surface for
-/// a staking-side seal fault, and never zeros over a bad seal (the engine's
-/// fail-closed pin: absence is distinct from `"0"`).
+/// The staking view comes back as an `Option`, classified by
+/// [`degrade_or_loud`]: `None` means the seal could not be read
+/// (file/codec — logged server-side) and the caller **degrades** — liquid
+/// fields stay served, staking projections go structurally absent. Never
+/// `-32603` over the whole balance surface for an unreadable staking seal,
+/// and never zeros over a bad seal (the engine's fail-closed pin: absence
+/// is distinct from `"0"`). A seal that *loaded* but overflowed a money
+/// total is the one staking-side fault that IS `-32603` (this function's
+/// `Err`): that seal was readable, so absence would misdescribe it, and a
+/// corrupt total must fail loud (`project.rs`'s corrupt-loud pin).
 pub(crate) fn ledger_snapshot_with_staking<T>(
     engine: &Engine<SoloSigner>,
     under_guard: impl FnOnce(&shekyl_engine_state::WalletLedger) -> T,
-) -> (shekyl_scanner::BalanceSummary, T, Option<StakingReadView>) {
+) -> Result<(shekyl_scanner::BalanceSummary, T, Option<StakingReadView>), WalletRpcError> {
     let (summary, staking_enabled, extra) = {
         let wallet = engine.ledger();
         (
@@ -178,8 +229,12 @@ pub(crate) fn ledger_snapshot_with_staking<T>(
     // Guard dropped above (non-reentrant lock): the session-adoption flag
     // takes its own brief ledger read, then the sealed-file staking read.
     let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
-    let staking = read_view_with_snapshot(engine, staking_enabled, recovery_pending_reopen).ok();
-    (summary, extra, staking)
+    let staking = degrade_or_loud(read_view_with_snapshot(
+        engine,
+        staking_enabled,
+        recovery_pending_reopen,
+    ))?;
+    Ok((summary, extra, staking))
 }
 
 /// Acquire the engine read guard and compute the authoritative view.
@@ -242,6 +297,46 @@ fn staked_output_view(o: &StakedOutput) -> StakedOutputView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_engine_core::{StakedBalance, StakingReadError};
+
+    // ---- degrade_or_loud: the degrade/loud split for the balance surface ---
+
+    #[test]
+    fn readable_view_passes_through_the_degrade_classifier() {
+        let view = StakingReadView {
+            staking_enabled: false,
+            balance: StakedBalance::ZERO,
+            outputs: vec![],
+            pscan_synced_height: None,
+            recovery_pending_reopen: false,
+        };
+        let classified = degrade_or_loud(Ok(view)).expect("Ok is never loud");
+        assert!(classified.is_some(), "a readable view must project");
+    }
+
+    #[test]
+    fn unreadable_seal_degrades_to_absence() {
+        // File / codec: the seal could not be READ — exactly what the wire
+        // contract defines absence to mean. Degrade, never -32603.
+        let unreadable = StakingReadError::File(shekyl_engine_file::WalletFileError::Io(
+            std::io::Error::other("disk gone"),
+        ));
+        let classified = degrade_or_loud(Err(unreadable)).expect("an unreadable seal degrades");
+        assert!(classified.is_none(), "degrade arm is structural absence");
+    }
+
+    #[test]
+    fn overflow_is_loud_never_the_degrade_arm() {
+        // The seal LOADED but a money total overflowed: corrupt-loud
+        // (project.rs pin). Absence would misreport a corrupt-but-readable
+        // seal as an unreadable one.
+        let err = degrade_or_loud(Err(StakingReadError::Overflow))
+            .expect_err("a corrupt total must fail the request");
+        assert!(
+            matches!(err, WalletRpcError::InternalError(_)),
+            "expected -32603 InternalError, got {err:?}"
+        );
+    }
 
     #[test]
     fn posture_str_is_the_contract_spelling() {
