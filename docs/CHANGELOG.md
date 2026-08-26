@@ -7,9 +7,12 @@
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
   FFI dispatch bridge is deleted (RK-4b).** With RK-4a's `/get_o_indexes.bin`
   this was the last `.bin` route reaching C++, so `dispatch_bin`,
-  `bin_handler!`, `CoreRpc::bin_endpoint`, `core_rpc_ffi_bin_endpoint`, the
-  `DBIN` macro, `bin_fn` and `get_bin_table` all go: the binary half of the
-  epee dispatch bridge is gone ahead of RK-X.
+  `bin_handler!`, `CoreRpc::bin_endpoint`, `core_rpc_ffi_bin_endpoint`,
+  `core_rpc_ffi_free_buf`, the `DBIN` macro, `bin_fn` and `get_bin_table`
+  all go: the binary half of the epee dispatch bridge is gone ahead of RK-X.
+  `free_buf` had no caller once the endpoint that allocated through it was
+  deleted, and the header still advertised binary endpoints returning
+  buffers through it.
   The oracle capture settled a question the C++ declaration would have
   answered wrongly. `block_complete_entry` has five KV members and this
   handler sets two, so `pruned`, `block_weight` and `attestation_witness`

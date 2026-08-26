@@ -490,7 +490,6 @@ extern "C" {
     ) -> *mut c_char;
 
     pub fn core_rpc_ffi_free_string(s: *mut c_char);
-    pub fn core_rpc_ffi_free_buf(buf: *mut u8);
 
     // Submit shims (daemon_submit_ffi.h §4.1–§4.3). Contracts documented on
     // the C++ declarations; `FfiSubmitShim` is the only caller.

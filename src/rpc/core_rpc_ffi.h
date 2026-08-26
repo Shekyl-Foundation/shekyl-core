@@ -28,7 +28,6 @@
 
 // C FFI facade over core_rpc_server for consumption by Rust (shekyl-daemon-rpc).
 // JSON endpoints return heap-allocated strings freed with core_rpc_ffi_free_string().
-// Binary endpoints return heap-allocated buffers freed with core_rpc_ffi_free_buf().
 
 #pragma once
 
@@ -72,7 +71,6 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
     const char* method, const char* params_json);
 
 void core_rpc_ffi_free_string(char* s);
-void core_rpc_ffi_free_buf(uint8_t* buf);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -370,6 +370,5 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }
-void core_rpc_ffi_free_buf(uint8_t* buf) { free(buf); }
 
 } // extern "C"
