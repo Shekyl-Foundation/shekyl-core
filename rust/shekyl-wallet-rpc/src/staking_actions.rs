@@ -77,22 +77,29 @@ pub(crate) async fn stake_in(
     let amount = parse_atomic_units(&p.amount)?;
 
     let shared = require_open_engine(tenants).await?;
-    // `stake_in` is `&mut self` (the frozen PR-P2 signature) — a write
-    // guard, unlike `build_pending_tx`'s read-lock build. The exclusivity
-    // covers the address projection + build; concurrent reads queue behind
-    // it rather than interleave with a funding build.
-    let mut engine = shared.write().await;
+    // Read guard, exactly like `build_pending_tx`'s W-B step-1 build (which
+    // IS this call's body after the address projection): the slow FCMP++
+    // assembly is serialized by the pending-tx implementor's own permit, so
+    // concurrent read RPCs (`get_balance` polls, `get_height`) proceed while
+    // the funding build runs. A write guard here would queue every reader
+    // behind a daemon round trip + proving build — tokio's RwLock is FIFO,
+    // so one `stake_in` would hang the whole read surface — for exclusivity
+    // that binds nothing (`Engine::stake_in` is `&self`).
+    let engine = shared.read().await;
     let pending = engine.stake_in(amount).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize stake_in: {e}")))
 }
 
-/// `get_drain_balance` — the aggregate drainable `P` scalar, two-armed
+/// `get_drain_balance` — the aggregate drainable `P` scalar, **scoped to
+/// the live active persona** (the same slot-scoped set `drain` can spend,
+/// so the advertised figure is affordable by construction), two-armed
 /// (F-D2 / rule 82): `ready` with the amount, or `syncing` with a
-/// scalar-free detail — **never `"0"` while syncing**. A non-staker (or a
-/// staker that has scanned nothing) is an honest `ready` zero: there is
-/// nothing staked, which is a true answer, not a placeholder.
+/// scalar-free detail — **never `"0"` while syncing**. A non-staker, an
+/// idle staker (no active persona — `drain` would refuse `-29508`), or a
+/// staker that has scanned nothing is an honest `ready` zero: nothing is
+/// drainable right now, which is a true answer, not a placeholder.
 pub(crate) async fn get_drain_balance(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -100,25 +107,38 @@ pub(crate) async fn get_drain_balance(
     let _p: GetDrainBalanceParams = parse_optional_object(params, "get_drain_balance")?;
 
     let shared = require_open_engine(tenants).await?;
-    let result = match Engine::drain_balance_aggregate(shared).await {
-        Ok(spendable) => GetDrainBalanceResult::Ready {
-            spendable: atomic_units_string(spendable),
-        },
-        Err(DrainBalanceReadError::Unanchorable { detail }) => GetDrainBalanceResult::Syncing {
-            detail: detail.to_owned(),
-        },
-        // Non-transient read fault: fail closed (an error, never a zero).
-        // Category-only on the wire; the engine's rendering is public text
-        // but stays in the server log like every other internal fault.
-        Err(DrainBalanceReadError::State { detail }) => {
-            tracing::warn!(detail = %detail, "drain balance read failed");
-            return Err(WalletRpcError::InternalError(
-                "drain balance read failed".into(),
-            ));
-        }
-    };
+    let result = drain_balance_result(Engine::drain_balance_aggregate(shared).await)?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_drain_balance: {e}")))
+}
+
+/// Map the engine's aggregate-read outcome onto the two-armed wire contract
+/// — a pure function so the fail-closed arm is unit-testable (the corrupt
+/// seal that produces a real `State` error is not constructible through the
+/// HTTP fixture).
+///
+/// The `State` arm **fails closed** (an error, never a zero): collapsing it
+/// to `Ready { spendable: "0" }` would render a corrupt read as a plausible
+/// drained-to-zero balance — the exact fail-open F-D2/rule 82 forbids.
+/// Category-only on the wire; the engine's rendering is public text but
+/// stays in the server log like every other internal fault.
+fn drain_balance_result(
+    outcome: Result<shekyl_units::AtomicUnits, DrainBalanceReadError>,
+) -> Result<GetDrainBalanceResult, WalletRpcError> {
+    match outcome {
+        Ok(spendable) => Ok(GetDrainBalanceResult::Ready {
+            spendable: atomic_units_string(spendable),
+        }),
+        Err(DrainBalanceReadError::Unanchorable { detail }) => Ok(GetDrainBalanceResult::Syncing {
+            detail: detail.to_owned(),
+        }),
+        Err(DrainBalanceReadError::State { detail }) => {
+            tracing::warn!(detail = %detail, "drain balance read failed");
+            Err(WalletRpcError::InternalError(
+                "drain balance read failed".into(),
+            ))
+        }
+    }
 }
 
 /// `drain` — move `amount` from the live active persona's staking pool back
@@ -132,6 +152,19 @@ pub(crate) async fn drain(
 ) -> Result<Value, WalletRpcError> {
     let p: DrainParams = parse_required_object(params, "drain")?;
     let payment = parse_atomic_units(&p.amount)?;
+    // A zero drain is a malformed request, refused at the params boundary
+    // (`-32602`) before the wallet gate or any engine/daemon work. Folding
+    // it into `-29101` would hand out an unsatisfiable remedy ("lower the
+    // payment" has no answer at zero — rule 82); the engine façade carries
+    // its own `EmptyRequest` arm for direct embedder callers. `stake_in`
+    // deliberately has NO such check: a zero stake is designed-valid (DQ1,
+    // no floor), and the shared `parse_atomic_units` must keep accepting
+    // `"0"` for it.
+    if payment.is_zero() {
+        return Err(WalletRpcError::InvalidParams(
+            "the drain amount must be greater than zero".into(),
+        ));
+    }
 
     let shared = require_open_engine(tenants).await?;
     let outcome = Engine::drain_to_principal(shared, payment).await?;
@@ -245,5 +278,35 @@ mod tests {
         .expect("serialize");
         assert_eq!(in_chain["verdict"], "ALREADY_IN_CHAIN");
         assert_eq!(in_chain["confirmed_height"], 4242);
+    }
+
+    /// The engine outcome → wire mapping, all three arms — in particular the
+    /// fail-closed `State` arm: a non-transient read fault answers `-32603`,
+    /// NEVER `Ready {"0"}` (the fail-open would render a corrupt read as a
+    /// plausible drained-to-zero balance — F-D2 / rule 82). Unit-level
+    /// because a real corrupt seal is not constructible through the HTTP
+    /// fixture; the arm was previously only hand-described in a comment.
+    #[test]
+    fn drain_balance_outcome_maps_ready_syncing_and_fail_closed() {
+        use shekyl_engine_core::DrainBalanceReadError;
+        use shekyl_units::AtomicUnits;
+
+        let ready = drain_balance_result(Ok(AtomicUnits::from_raw(42_000))).expect("ready");
+        assert!(matches!(
+            &ready,
+            GetDrainBalanceResult::Ready { spendable } if spendable == "42000"
+        ));
+
+        let syncing = drain_balance_result(Err(DrainBalanceReadError::Unanchorable {
+            detail: "curve-tree ingest behind the anchor age",
+        }))
+        .expect("syncing is a result arm, not an error");
+        assert!(matches!(&syncing, GetDrainBalanceResult::Syncing { .. }));
+
+        let err = drain_balance_result(Err(DrainBalanceReadError::State {
+            detail: "seal version refused".into(),
+        }))
+        .expect_err("a state fault must fail closed, never render a zero");
+        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }
 }

@@ -245,15 +245,25 @@ pub struct GetBalanceResult {
     /// Bond principal under confirmed live bonds PLUS principal committed
     /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
     /// bonded legs (the legs stay separate on that method).
-    pub staked: AtomicUnitsString,
+    ///
+    /// **Absent (not `"0"`) when the wallet's sealed staking state cannot
+    /// be read**: the liquid fields stay authoritative while the staking
+    /// projection degrades, and absence is structurally distinct from a
+    /// zero — the engine pin "never render nothing-staked over a bad seal"
+    /// holds on the wire. A non-staker's `"0"` is a true zero and is
+    /// always present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staked: Option<AtomicUnitsString>,
     /// Unlocked / spendable now.
     pub unlocked: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
     /// "accrued but unclaimed" entitlement (no such user-visible quantity
-    /// exists in the archival design).
-    pub claimable_rewards: AtomicUnitsString,
+    /// exists in the archival design). Absent exactly when `staked` is
+    /// (unreadable staking seal — degrade, never a fabricated zero).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimable_rewards: Option<AtomicUnitsString>,
     /// Awaiting-confirmation / in-flight spend lock.
     pub pending: AtomicUnitsString,
 }
@@ -522,8 +532,13 @@ pub struct GetWalletInfoResult {
     pub restore_height: i64,
     /// Balance projection (same shape as `get_balance`).
     pub balance: GetBalanceResult,
-    /// Staking read projection (same shape as `staking_info`).
-    pub staking: StakingInfoResult,
+    /// Staking read projection (same shape as `staking_info`). **Absent
+    /// when the wallet's sealed staking state cannot be read** — the
+    /// liquid identity/height/balance fields stay served (degrade, never
+    /// a whole-surface `-32603` and never zeros over a bad seal); absent
+    /// together with `balance.staked` / `balance.claimable_rewards`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staking: Option<StakingInfoResult>,
 }
 
 /// `get_transfers` result.

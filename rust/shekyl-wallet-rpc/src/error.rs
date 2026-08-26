@@ -458,17 +458,26 @@ pub enum WalletRpcError {
         detail: String,
     },
     /// `drain` (`-29511`): a pending drain already exists for this persona
-    /// (one live drain per persona) — wait for it to confirm or fail.
+    /// (one live drain per persona). The message deliberately promises no
+    /// release trigger: releasing the seal is the drain lifecycle driver's
+    /// job, and until that driver lands (FOLLOWUPS "Drain dispatch
+    /// driver") the refusal persists across sessions — "wait for it to
+    /// confirm" would prescribe an event that cannot yet help. Automation
+    /// branches on `data.cause` (`"pending"` here vs `"raced"`), never by
+    /// parsing this prose.
     #[error(
-        "a drain is already in flight for this staking pool; wait for it \
-         to confirm or fail before starting another"
+        "a drain is already in flight for this staking pool; a new drain \
+         cannot start until the earlier drain's record is retired"
     )]
     DrainInFlight,
     /// `drain` (`-29511`, retry remedy): a concurrent same-persona post
     /// reserved one of this drain's inputs between snapshot and seal;
     /// nothing was sealed. Same code as [`Self::DrainInFlight`] (the
     /// one-live-drain seal is the shared cause class); the message carries
-    /// the different remedy — plain retry.
+    /// the different remedy — plain retry — and `data.cause` (`"raced"`)
+    /// carries it structurally, so a client that hardcodes one behavior
+    /// per numeric code is not forced to spin against the seal or abandon
+    /// a retryable race.
     #[error("a concurrent staking operation raced this drain; nothing was sent — retry")]
     DrainInputRaced,
 
@@ -567,6 +576,12 @@ impl WalletRpcError {
             Self::StakeNotReady { detail }
             | Self::RescanBlocked { detail }
             | Self::DrainUnanchorable { detail } => Some(json!({ "detail": detail })),
+            // The `-29511` pair shares one code with two remedies; the
+            // structured discriminant is what lets automation branch
+            // wait-vs-retry without parsing prose (the -29500 `data.detail`
+            // precedent, F-2).
+            Self::DrainInFlight => Some(json!({ "cause": "pending" })),
+            Self::DrainInputRaced => Some(json!({ "cause": "raced" })),
             Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
             Self::DaemonFeeUnreasonable {
                 reason,
@@ -823,11 +838,11 @@ impl From<StakeInError> for WalletRpcError {
     /// everything else is an internal fault with server-side detail.
     fn from(err: StakeInError) -> Self {
         match err {
-            StakeInError::NotStaking => Self::StakeNotReady {
-                detail: "wallet is not staking; no persona to fund".into(),
-            },
-            StakeInError::NoActivePersona => Self::StakeNotReady {
-                detail: "no active persona to fund".into(),
+            // The engine arm's own Display IS the wire `data.detail` (one
+            // body — a hardcoded copy here drifted the moment the engine
+            // rewords; the HTTP suite pins the current spelling).
+            e @ (StakeInError::NotStaking | StakeInError::NoActivePersona) => Self::StakeNotReady {
+                detail: e.to_string(),
             },
             // The -291xx family: recipient (unreachable here — the address
             // is engine-derived), funds, fee, and their internal residue.
@@ -862,6 +877,14 @@ impl From<DrainToPrincipalError> for WalletRpcError {
             DrainToPrincipalError::Unanchorable { detail } => Self::DrainUnanchorable { detail },
             DrainToPrincipalError::InFlight => Self::DrainInFlight,
             DrainToPrincipalError::InputRaced => Self::DrainInputRaced,
+            // A zero payment is a malformed request (`-32602`), never
+            // `-29101` — "lower the payment" is unsatisfiable at zero
+            // (rule 82). The `drain` handler already refuses zero at its
+            // params boundary, so through RPC this arm is defense in depth
+            // for the façade's own pre-check and the planner's zero arm.
+            DrainToPrincipalError::EmptyRequest => {
+                Self::InvalidParams("the drain amount must be greater than zero".into())
+            }
             DrainToPrincipalError::Refused { detail } => {
                 // Scalar-free planner reason (zero / exceeds spendable /
                 // uncoverable); logged server-side, category code on the
@@ -1284,8 +1307,28 @@ mod tests {
             assert_eq!(err.code().as_i32(), code, "{err:?}");
         }
 
-        // The shared-code pair keeps distinct remedies.
-        assert!(WalletRpcError::DrainInFlight.message().contains("wait"));
+        // The shared-code pair keeps distinct remedies — structurally, in
+        // `data.cause` (automation must never have to parse the prose), and
+        // in the prose itself. The in-flight message must NOT promise a
+        // confirmation-triggered release: the drain lifecycle driver that
+        // would deliver one is not wired yet (FOLLOWUPS), so "wait for it
+        // to confirm" prescribed an event that cannot help.
+        assert_eq!(
+            WalletRpcError::DrainInFlight.data().expect("data")["cause"],
+            "pending"
+        );
+        assert_eq!(
+            WalletRpcError::DrainInputRaced.data().expect("data")["cause"],
+            "raced"
+        );
+        assert!(WalletRpcError::DrainInFlight
+            .message()
+            .contains("already in flight"));
+        assert!(
+            !WalletRpcError::DrainInFlight.message().contains("confirm"),
+            "the in-flight message must not promise confirmation-release \
+             while the drain driver is unwired"
+        );
         assert!(WalletRpcError::DrainInputRaced.message().contains("retry"));
 
         // The transient arm carries its cause in data, like -29500 does.
@@ -1293,6 +1336,73 @@ mod tests {
             detail: "tree behind tip".into(),
         };
         assert_eq!(err.data().expect("data")["detail"], "tree behind tip");
+    }
+
+    /// The engine→wire map itself (`From<DrainToPrincipalError>`), arm by
+    /// arm — the code-table test above constructs wire variants directly and
+    /// cannot catch a swapped From-arm (e.g. `Refused` and `Submit` trading
+    /// codes), which every prior test would have survived.
+    #[test]
+    fn drain_engine_errors_map_onto_the_pinned_codes() {
+        use shekyl_engine_core::DrainToPrincipalError as E;
+
+        let table: [(E, i32); 10] = [
+            (E::NotStaker, -29507),
+            (E::NoActivePersona, -29508),
+            (E::ReserveBreached, -29509),
+            (
+                E::Unanchorable {
+                    detail: "tree behind tip".into(),
+                },
+                -29510,
+            ),
+            (E::InFlight, -29511),
+            (E::InputRaced, -29511),
+            (E::EmptyRequest, -32602),
+            (
+                E::Refused {
+                    detail: "exceeds spendable".into(),
+                },
+                -29101,
+            ),
+            (
+                E::FeeEstimate {
+                    detail: "connection refused".into(),
+                },
+                -29102,
+            ),
+            (
+                E::Submit {
+                    detail: "transport closed mid-dispatch".into(),
+                },
+                -29107,
+            ),
+        ];
+        for (engine_err, code) in table {
+            let wire: WalletRpcError = engine_err.into();
+            assert_eq!(wire.code().as_i32(), code, "{wire:?}");
+        }
+
+        // The refused-answer fee arm keeps the -29109 shape WITH its
+        // structured scalars (the send path's contract).
+        let wire: WalletRpcError = E::FeeUnreasonable {
+            reason: "economy above absolute cap",
+            rate: 9_999,
+            bound: 4_242,
+        }
+        .into();
+        assert_eq!(wire.code().as_i32(), -29109);
+        let data = wire.data().expect("fee data");
+        assert_eq!(data["rate"], 9_999);
+        assert_eq!(data["bound"], 4_242);
+
+        // State stays the category-only internal arm.
+        let wire: WalletRpcError = E::State {
+            context: "pscan state load",
+            detail: "seal version refused".into(),
+        }
+        .into();
+        assert_eq!(wire.code().as_i32(), -32603);
     }
 
     /// `stake_in` mints no new codes: the no-persona arms are `-29500`

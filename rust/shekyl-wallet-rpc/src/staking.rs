@@ -11,13 +11,15 @@
 //! engine read guard). Staking *actions* (unstake, claim) are out of scope:
 //! they need Engine surfacing first.
 //!
-//! `get_wallet_info` uses [`read_view_with_enabled`] after dropping its
-//! ledger guard — nested `ledger.read()` under a live
-//! [`shekyl_engine_core::LedgerReadGuard`] deadlocks.
+//! `get_balance` / `get_wallet_info` snapshot-then-read through
+//! [`ledger_snapshot_with_staking`] — nested `ledger.read()` under a live
+//! [`shekyl_engine_core::LedgerReadGuard`] deadlocks, so the guard-drop
+//! choreography lives in that one helper.
 
 use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, StakingReadView};
+use shekyl_scanner::WalletLedgerExt as _;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
@@ -137,6 +139,47 @@ fn map_staking_read(
         tracing::warn!(error = %e, "staking read view failed");
         WalletRpcError::InternalError("staking state failed to load".into())
     })
+}
+
+/// One-guard ledger snapshot + sealed staking read, in the only safe order —
+/// the shared choreography `get_balance` and `get_wallet_info` both need:
+///
+/// 1. snapshot the balance summary, `staking_enabled`, and the caller's
+///    `under_guard` extras under ONE ledger read guard (coherent snapshot);
+/// 2. **drop that guard** — `staking_read_view*` takes its own brief
+///    `ledger.read()`, and nesting it under a live guard deadlocks the
+///    non-reentrant `std::sync::RwLock`;
+/// 3. read the session-adoption flag and the sealed staking view.
+///
+/// One body rather than a per-handler copy of the sequence: the guard-drop
+/// step is the load-bearing line the type system cannot enforce, so it lives
+/// exactly once. `under_guard` runs while the ledger guard is live, so a
+/// caller's extra fields (heights, flags) stay coherent with the summary;
+/// `get_balance` passes `|_| ()`.
+///
+/// The staking view comes back as an `Option`: `None` means the sealed read
+/// failed (already logged server-side via [`map_staking_read`]'s warn) and
+/// the caller **degrades** — liquid fields stay served, staking projections
+/// go structurally absent. Never `-32603` over the whole balance surface for
+/// a staking-side seal fault, and never zeros over a bad seal (the engine's
+/// fail-closed pin: absence is distinct from `"0"`).
+pub(crate) fn ledger_snapshot_with_staking<T>(
+    engine: &Engine<SoloSigner>,
+    under_guard: impl FnOnce(&shekyl_engine_state::WalletLedger) -> T,
+) -> (shekyl_scanner::BalanceSummary, T, Option<StakingReadView>) {
+    let (summary, staking_enabled, extra) = {
+        let wallet = engine.ledger();
+        (
+            wallet.balance(),
+            wallet.staking.staking_enabled,
+            under_guard(&wallet),
+        )
+    };
+    // Guard dropped above (non-reentrant lock): the session-adoption flag
+    // takes its own brief ledger read, then the sealed-file staking read.
+    let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
+    let staking = read_view_with_snapshot(engine, staking_enabled, recovery_pending_reopen).ok();
+    (summary, extra, staking)
 }
 
 /// Acquire the engine read guard and compute the authoritative view.

@@ -47,6 +47,11 @@ pub use server::{
 // Re-exported so in-process hosts (shekyl-cli) can name the network a
 // spawned server binds to without a direct shekyl-engine-core dependency.
 pub use shekyl_engine_core::Network;
+// Part of the `stake_in` contract surface: the funded transfer carries
+// `amount + cover` with the cover strictly under this bound. Clients that
+// disclose the debit before confirmation (the CLI does; wrappers should)
+// render the bound from this constant, never a hardcoded twin.
+pub use shekyl_engine_core::COVER_RUNG_ATOMIC;
 pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
