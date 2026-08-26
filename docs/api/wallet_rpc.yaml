@@ -150,7 +150,29 @@
 #                                                   that lifts RESERVED — this
 #                                                   line is the only thing
 #                                                   binding the two once they
-#                                                   are split.)
+#                                                   are split.
+#                                                   UPDATE 2026-08-26: slice
+#                                                   2b landed, so "the
+#                                                   producer" now means the
+#                                                   WHOLE exit transaction —
+#                                                   funding, outputs, proving,
+#                                                   wire encoding, and the
+#                                                   surface-A pqc_auths slot
+#                                                   under bond_spend_pk — not
+#                                                   just the vin. Two things
+#                                                   still sit between that and
+#                                                   a working verb, and
+#                                                   neither is the walk:
+#                                                   nothing DISPATCHES the
+#                                                   assembled bytes yet, and
+#                                                   `unstake` is the composed
+#                                                   unbond() = post + a
+#                                                   decorrelated drain. Read
+#                                                   this entry as "the hard
+#                                                   part exists and is
+#                                                   unreachable", never as
+#                                                   "only a handler is
+#                                                   missing".)
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
 #       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
 #       it carries NO fee parameter — no FeePriority, no amount, no
