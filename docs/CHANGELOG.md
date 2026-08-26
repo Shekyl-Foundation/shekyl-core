@@ -30,11 +30,15 @@
   `TempPath::keep` + `rename`. The `keep` is not a cleanup formality: it is
   the `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)` that `persist` performed as
   its own first step, and without it the staged file's
-  `FILE_ATTRIBUTE_TEMPORARY` — which tells NTFS it may keep the data in
-  cache — rides onto `.wallet.keys` and silently undoes the preceding
-  `sync_all`. `keep` also disarms `tempfile`'s cleanup, so a failed rename
-  now unlinks the staged file explicitly instead of stranding it beside the
-  wallet. This is the same class as the mandatory-lock bug in the keys-file
+  `FILE_ATTRIBUTE_TEMPORARY` — which asks the cache manager to avoid
+  writing the data back while cache is available — rides onto
+  `.wallet.keys`, leaving a permanent wallet artifact permanently marked
+  temporary. It does **not** undo the preceding `sync_all`, which is
+  `FlushFileBuffers` on Windows and flushes unconditionally; what it
+  misdescribes is the file's whole subsequent life, as false metadata and
+  as a standing hint to any later writer that does not flush explicitly.
+  `keep` also disarms `tempfile`'s cleanup, so a failed rename now unlinks
+  the staged file explicitly instead of stranding it beside the wallet. This is the same class as the mandatory-lock bug in the keys-file
   read: POSIX-shaped reasoning about file replacement, invisible on Linux
   because `imp::keep` is a no-op there and `rename(2)` never cared about an
   advisory `flock`. Four tests pin it — `persist` must stay refused

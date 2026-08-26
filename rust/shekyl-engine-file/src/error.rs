@@ -131,12 +131,15 @@ pub enum WalletFileError {
     ///
     /// Distinct from [`Self::AtomicWriteRename`] on purpose. On Windows
     /// finalizing is `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`, clearing
-    /// the `FILE_ATTRIBUTE_TEMPORARY` that the staged file is created with;
-    /// it must succeed *before* the rename, because otherwise the attribute
-    /// rides onto the target and tells NTFS it may keep the data in cache
-    /// rather than writing it back — silently undoing the `fsync`. That is a
-    /// different failure from a refused swap, with a different remedy, so it
-    /// gets a different variant: collapsing the two would leave
+    /// the `FILE_ATTRIBUTE_TEMPORARY` that the staged file is created with.
+    /// It must succeed *before* the rename, because `rename` does not clear
+    /// it and the attribute would otherwise ride onto the target — leaving a
+    /// permanent wallet artifact marked temporary, which is false metadata
+    /// and a standing cache-manager hint for every later writer that does
+    /// not flush explicitly. It does **not** undo the preceding `sync_all`
+    /// (`FlushFileBuffers` flushes unconditionally). That is a different
+    /// failure from a refused swap, with a different remedy, so it gets a
+    /// different variant: collapsing the two would leave
     /// `AtomicWriteRename` unable to mean what its own name says.
     ///
     /// Structurally Unix-unreachable — `tempfile`'s `imp::keep` is `Ok(())`

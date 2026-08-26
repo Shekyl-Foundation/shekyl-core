@@ -75,16 +75,26 @@
 //!    still fails, and that is a known limitation rather than a
 //!    regression.
 //! 2. **`keep` is where `FILE_ATTRIBUTE_TEMPORARY` is cleared.**
-//!    `Builder::tempfile_in` stages with that attribute, which tells
-//!    NTFS to avoid writing the data back to mass storage while cache is
-//!    available — on a wallet keys file that silently undercuts step 3's
-//!    `sync_all`. `rename` does **not** clear it; the attribute survives
-//!    onto the target. `persist` cleared it as its own first step, and
-//!    `keep` performs exactly that call
-//!    (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`). Dropping the `keep`
-//!    and renaming a staged path directly would reintroduce the hazard
-//!    invisibly: the bytes are identical, only the durability guarantee
-//!    is gone. Observed end state is byte-identical to `persist`'s.
+//!    `Builder::tempfile_in` stages with that attribute, which asks the
+//!    cache manager to avoid writing the data back to mass storage while
+//!    cache is available — the usual case being a temp file that is
+//!    deleted soon after its handle closes. `rename` does **not** clear
+//!    it, so without the `keep` the attribute rides onto the target and a
+//!    permanent wallet artifact is left permanently marked temporary.
+//!
+//!    **It does not undo step 3.** `sync_all` is `FlushFileBuffers` on
+//!    Windows, which flushes unconditionally; a caching hint does not
+//!    override an explicit flush, and this write's durability is not at
+//!    risk either way. What the attribute misdescribes is the file's whole
+//!    subsequent life: it is false metadata on an artifact that is not
+//!    temporary, and it is a standing hint to the cache manager for any
+//!    later writer that does not flush explicitly. `tempfile` refuses to
+//!    persist a file still carrying it for the same reason, in `persist`'s
+//!    own first step, and `keep` performs exactly that call
+//!    (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`) — so keeping it is
+//!    also what makes this path behaviour-preserving against the `persist`
+//!    it replaced. Observed end state is byte-identical to `persist`'s
+//!    (attrs `0x20`, the same as any ordinary write).
 //!
 //! Neither difference is observable on Unix, where `imp::keep` is a
 //! no-op and `rename(2)` never cared about locks — which is why this
@@ -159,16 +169,21 @@ pub(crate) enum Durability {
 ///
 /// # Errors
 ///
-/// - [`WalletFileError::Io`] for any filesystem failure before or
-///   during the rename (create, write, fsync of the temp).
+/// - [`WalletFileError::Io`] for a filesystem failure while **producing**
+///   the staged file: create, write, or fsync of the temp.
+/// - [`WalletFileError::AtomicWriteFinalizeStaged`] for a failure to
+///   finalize the staged file for the swap (the `FILE_ATTRIBUTE_TEMPORARY`
+///   clear; Unix-unreachable). No `rename(2)` was attempted.
 /// - [`WalletFileError::AtomicWriteRename`] specifically for failures
-///   of the `rename(2)` step. The dedicated variant exists so callers
+///   of the `rename(2)` step. The dedicated variants exist so callers
 ///   can distinguish "couldn't write the bytes" from "wrote the bytes
 ///   but couldn't swap them in" — the latter means the target is
 ///   untouched, which is sometimes recoverable.
 ///
 /// Every error path leaves the target **byte-unchanged**; a post-rename
 /// failure is reported as `Ok(Durability::Unconfirmed)`, never as `Err`.
+/// Removal of the staged file is best-effort on every path (see the
+/// module docs, step 6) and is not part of the contract.
 pub(crate) fn atomic_write_file(
     target: &Path,
     bytes: &[u8],
@@ -184,6 +199,11 @@ pub(crate) fn atomic_write_file(
 ///
 /// The one caller is password rotation, which locks the staged file here
 /// so the keys-file lock follows the inode the path is about to name.
+///
+/// # Errors
+///
+/// Exactly [`atomic_write_file`]'s. A finalize or rename failure drops the
+/// hook's value along with the error; the target is untouched in both cases.
 pub(crate) fn atomic_write_file_with<T>(
     target: &Path,
     bytes: &[u8],
@@ -232,8 +252,10 @@ pub(crate) fn atomic_write_file_with<T>(
     //
     // `keep()` is the attribute clear (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`
     // on Windows, a no-op on Unix). It is guarded: a failure to clear returns
-    // `Err`, and the `TempPath` rides inside that error, so the staged file is
-    // still removed when it drops.
+    // `Err`, and the `TempPath` rides inside that error, so its drop guard is
+    // still armed and still *attempts* the unlink — best-effort, like every
+    // other cleanup path here (the guard ignores unlink errors). The target is
+    // untouched either way, which is the part that is guaranteed.
     let staged_path = tmp.into_temp_path();
     let kept = staged_path
         .keep()
@@ -383,12 +405,17 @@ mod tests {
     }
 
     /// The staged file is created by `tempfile` with `FILE_ATTRIBUTE_TEMPORARY`,
-    /// which tells NTFS it may keep the data in cache rather than writing it
-    /// back to mass storage. On a wallet artifact that silently undoes the
-    /// `sync_all` this module performs before the rename, and `rename` does
-    /// **not** clear the attribute — `TempPath::keep` does. If the `keep` is
-    /// ever refactored away as a cleanup formality, the bytes stay identical
-    /// and only the durability guarantee disappears; this test is what notices.
+    /// which asks the cache manager to avoid writing the data back while cache
+    /// is available. `rename` does **not** clear it — `TempPath::keep` does —
+    /// so without the `keep` a permanent wallet artifact is left permanently
+    /// marked temporary: false metadata, and a standing hint for any later
+    /// writer that does not flush explicitly. It does not undo this module's
+    /// own `sync_all`, which flushes unconditionally.
+    ///
+    /// The reason this needs a test rather than a comment is that the failure
+    /// is **invisible in the bytes**: a `keep` refactored away as a cleanup
+    /// formality changes no content and no test that compares content. Only
+    /// the attribute moves, and only here.
     #[cfg(windows)]
     #[test]
     fn the_target_is_never_left_marked_temporary() {
