@@ -47,6 +47,80 @@
 
 ### Fixed
 
+- **Every password rotation on Windows failed, and the crate that owns the
+  defect was tested on no Windows machine anywhere.** `rotate_password`
+  replaces `.wallet.keys` through the atomic writer while the wallet handle
+  still holds `LockFileEx` on byte 0 of it. `NamedTempFile::persist` issues
+  `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else, and a
+  byte-range lock on the target makes that `ERROR_ACCESS_DENIED` — surfaced
+  as `AtomicWriteRename` carrying os error 5, flattened by the RPC's classifier into
+  `-32603 "password rotation failed"`. `std::fs::rename` issues the same
+  call *and* retries on `ERROR_ACCESS_DENIED` through
+  `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics, which
+  supersedes the open target rather than deleting it, so step 4 is now
+  `TempPath::keep` + `rename`. The `keep` is not a cleanup formality: it is
+  the `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)` that `persist` performed as
+  its own first step, and without it the staged file's
+  `FILE_ATTRIBUTE_TEMPORARY` — which asks the cache manager to avoid
+  writing the data back while cache is available — rides onto
+  `.wallet.keys`, leaving a permanent wallet artifact permanently marked
+  temporary. It does **not** undo the preceding `sync_all`, which is
+  `FlushFileBuffers` on Windows and flushes unconditionally; what it
+  misdescribes is the file's whole subsequent life, as false metadata and
+  as a standing hint to any later writer that does not flush explicitly.
+  `keep` also disarms `tempfile`'s cleanup, so a failed rename now unlinks
+  the staged file explicitly instead of stranding it beside the wallet. This is the same class as the mandatory-lock bug in the keys-file
+  read: POSIX-shaped reasoning about file replacement, invisible on Linux
+  because `imp::keep` is a no-op there and `rename(2)` never cared about an
+  advisory `flock`. Four tests pin it — `persist` must stay refused
+  over a locked target on Windows and `rename` must stay able to supersede
+  it, the target must never be left marked temporary, and the whole
+  rotation shape must work under a live `KeysFileLock`. Known limitation,
+  stated rather than discovered: the `FileRenameInfoEx` path needs NTFS, so
+  rotation with a live lock still fails on exFAT or a share without
+  POSIX-semantics rename.
+
+- **Two `shekyl-engine-file` test oracles read the keys file through a
+  second handle**, which is `ERROR_LOCK_VIOLATION` on Windows for the same
+  mandatory-lock reason, so they could not run there at all. They now read
+  with no handle open. Reading the handle's cached envelope would have been
+  worse than leaving them broken: it would make a test whose entire purpose
+  is detecting an on-disk rewrite blind to one.
+
+- **`AtomicWriteRename` was reported for a step that may never have run.**
+  A `TempPath::keep` failure — the staged file's `FILE_ATTRIBUTE_TEMPORARY`
+  clear on Windows — was wrapped in the variant whose own documentation says
+  it carries the error from `rename(2)` specifically, so an error naming the
+  swap could be raised before any swap was attempted. Split into
+  `AtomicWriteFinalizeStaged`, because the two have different causes and
+  different remedies and one name cannot carry both. This is not only
+  tidiness: `keep()` leaves `tempfile`'s cleanup guard *armed* while a failed
+  rename does not, so the conflation had made the cleanup-arm test unable to
+  tell, on Windows, whether the arm it guards had run at all. Fixing the
+  error model removed that gap instead of documenting it. Also corrected:
+  the module and variant docs claimed the staged file "is removed" on
+  failure — cleanup is best-effort from both owners (`tempfile`'s guard
+  ignores unlink errors; ours logs and continues). The guarantee is that the
+  **target is byte-unchanged**; a stray `.shekyl-tmp` sibling is possible,
+  and is clutter rather than a wallet artifact.
+
+- **`BuildRust.cmake`'s Windows skip was justified by a blocker that no
+  longer exists.** Its comment said the Rust wallet stack was Unix-only, that
+  the Windows port was still an open design question (named-pipe ACLs vs.
+  UDS), and that building there would fail on the first of many sites. WP-Q1
+  ruled the pipe, WP-W2 shipped it, and both binaries were observed building
+  and linking for `x86_64-pc-windows-msvc` with `rpc_session_e2e` passing.
+  The rationale is corrected; **the gate is deliberately not flipped**, because
+  compiling is not installing and the CMake path, staging, `install()` and the
+  archive layout are all still unverified. WP-W5 owns that removal.
+
+- **`shekyl-engine-file` joined the Windows scouting step.** It owns the
+  atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and no Windows lane
+  covered it. The rotation bug therefore surfaced as an opaque `-32603`
+  from a `shekyl-wallet-rpc` lifecycle test instead of as four red tests in
+  the crate that owns it.
+
 - **The submit-shim fixture paid a fee it never put in the transaction.**
   `make_tx` derived a floor-clearing fee, asserted it cleared the floor,
   and stored it beside the transaction — while the transaction itself kept

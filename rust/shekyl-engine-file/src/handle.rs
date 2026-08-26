@@ -1556,17 +1556,35 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let handle = {
+        let keys_path = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFile::create(&params).expect("create")
+            let handle = WalletFile::create(&params).expect("create");
+            handle.keys_path().to_path_buf()
         };
 
-        let keys_before = std::fs::read(handle.keys_path()).unwrap();
+        // Both reads happen with NO wallet handle open, and that is the whole
+        // shape of this oracle. The keys-file lock is mandatory on Windows
+        // (`LockFileEx` covers byte 0), so `std::fs::read` on the path while a
+        // handle is live fails with `ERROR_LOCK_VIOLATION` — the platform fact
+        // pinned by `lock::tests::path_read_while_locked_is_platform_dependent`.
+        // Reading the handle's cached envelope instead would be worse than
+        // wrong: it would make this test blind to exactly the on-disk rewrite
+        // it exists to detect. So the handle is closed around each read.
+        //
+        // Re-opening between them is sound because `open` only *reads* the
+        // keys file (`KeysFileLock::acquire_and_read`); its sole writers are
+        // `create`, `rotate_password` and `save_as`.
+        let keys_before = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
+
+        let (handle, _) =
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("reopen");
         let wk = *handle.session_wrap_key_region_2();
         for _ in 0..8 {
             handle.save_state(&wk, &ledger).expect("save");
         }
-        let keys_after = std::fs::read(handle.keys_path()).unwrap();
+        drop(handle);
+
+        let keys_after = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
         assert_eq!(
             keys_before, keys_after,
             "`.wallet.keys` bytes MUST be byte-identical across auto-saves"
@@ -1581,20 +1599,29 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let handle = {
+        let (keys_path, state_path) = {
             let params = make_params(&fx, &base, b"old", &ledger, &cap);
-            WalletFile::create(&params).expect("create")
+            let handle = WalletFile::create(&params).expect("create");
+            (
+                handle.keys_path().to_path_buf(),
+                handle.state_path().to_path_buf(),
+            )
         };
 
-        let state_before = std::fs::read(handle.state_path()).unwrap();
-        let keys_before = std::fs::read(handle.keys_path()).unwrap();
+        // Read with no handle open — see `save_state_never_rewrites_keys_file`
+        // for why the cached envelope is not an acceptable substitute here.
+        let state_before = std::fs::read(&state_path).expect("read .wallet unlocked");
+        let keys_before = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
 
+        let (handle, _) =
+            WalletFile::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).expect("reopen");
         handle
             .rotate_password(b"old", b"new", None)
             .expect("rotate");
+        drop(handle);
 
-        let keys_after = std::fs::read(handle.keys_path()).unwrap();
-        let state_after = std::fs::read(handle.state_path()).unwrap();
+        let keys_after = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
+        let state_after = std::fs::read(&state_path).expect("read .wallet unlocked");
 
         // Wrap layer changes; region 1 (nonce + ct + tag) stays.
         assert_ne!(
@@ -1612,8 +1639,7 @@ mod tests {
             "`.wallet` must be untouched by rotation"
         );
 
-        // Drop the write-holding handle before re-opening.
-        drop(handle);
+        // The write-holding handle was already dropped above, for the read.
         // Old password now rejected.
         assert!(WalletFile::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).is_err());
         // New password works.

@@ -2251,6 +2251,58 @@ sustainability is unaffected by the recalibration.
   still informational (WP-W5 owns the flip, once observed green), and Windows
   release archives still carry the daemon but no wallet.
 
+  **UPDATE 2026-08-25 — the scouting step was red on `dev`, and WP-W5's
+  precondition was not met.** The `shekyl-cli` end-to-end half (P-10) executed
+  here for the first time on 2026-08-24 and **passed**, which closes the last
+  transport-side unknown. But the `shekyl-wallet-rpc` half exited 101 on every
+  run: `lifecycle_create_open_close_change_password` failed with
+  `-32603 "password rotation failed"`. It is the same test that found the
+  mandatory-lock bug, now failing one step further along — the shape §2 has
+  always predicted, where clearing one error reveals the next.
+
+  The cause was **`NamedTempFile::persist` cannot replace a file under a
+  byte-range lock on Windows**, and `rotate_password` replaces `.wallet.keys`
+  while the wallet handle holds exactly such a lock. Fixed in the atomic
+  writer (see `CHANGELOG` and `atomic.rs`'s *Why not `persist`*).
+
+  **The reporting lesson is the one worth carrying.** `shekyl-engine-file`
+  owns the atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and **no Windows lane
+  tested it**. The scouting step covered only `shekyl-wallet-rpc` and
+  `shekyl-cli`, which reach that crate only through the RPC surface, so a
+  defect in four of its own unit tests arrived as one opaque `-32603` from a
+  lifecycle test in a different crate. It is now in the scouting list. A
+  crate whose entire job is platform file behaviour was the last one that
+  should have been covered only by proxy, and the gate asymmetry recorded
+  above described the `cfg(windows)` *arms* while missing that a whole
+  platform-critical crate sat outside every Windows lane.
+
+  **The headline claim of this entry is now FALSE, and it is corrected here
+  rather than quietly left standing.** This entry has said since 2026-08-18
+  that `shekyl-cli` and `shekyl-wallet-rpc` "do not compile" for Windows, and
+  `BuildRust.cmake`'s skip said the same in stronger terms — that a Windows
+  port was still an unanswered design question and that building would fail on
+  the first of many sites. Measured on 2026-08-25:
+  `cargo build --locked -p shekyl-cli -p shekyl-wallet-rpc --bins` on a Windows
+  box **exits 0 and produces both `.exe`s**, and `shekyl-cli`'s
+  `rpc_session_e2e` passes there — so the cli's session path *runs*, not merely
+  type-checks. The design question was answered by WP-Q1 and shipped by WP-W2;
+  the prose outlived it. `BuildRust.cmake`'s comment is corrected in the same
+  commit.
+
+  **What that does NOT license is flipping the build gate.** Compiling is not
+  installing. Unverified: the CMake path itself (it cross-compiles with its own
+  target/linker wiring, not the host cargo build that was observed), staging
+  into `bin/`, `install()`, and the archive layout — which is what
+  `contrib/gitian/*.yml` tars. WP-W5 removes the gate deliberately, with the CI
+  job that builds and smoke-tests both binaries; nobody should remove it on the
+  strength of a `cargo build`.
+
+  **Still unmet:** the Rust binaries are not built for Windows *through CMake*,
+  the scouting step is still `continue-on-error`, and Windows release archives
+  still carry the daemon but no wallet. WP-W5's flip now needs one green
+  scouting run including the engine-file lane.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and

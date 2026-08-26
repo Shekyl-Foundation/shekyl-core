@@ -23,6 +23,21 @@ support".
 
 ## 1. Why this is a design round and not a port
 
+> **CORRECTION 2026-08-25 — the opening sentence below is no longer true, and
+> §2's table is a record of what *was* blocking, not what is.** Both binaries
+> now build and link for `x86_64-pc-windows-msvc`
+> (`cargo build --locked -p shekyl-cli -p shekyl-wallet-rpc --bins`, exit 0,
+> observed on a Windows box), and `shekyl-cli`'s `rpc_session_e2e` passes
+> there. All four WP-B sites are answered: WP-B1/WP-B2 by the named pipe
+> (WP-Q1 ruled, WP-W2 shipped), WP-B3 by `create_owner_only_file`, WP-B4 by
+> `shekyl_win_sec::free_bytes_available`. **The reasoning below is still why
+> this was a design round rather than a `cfg` sweep — that judgement was
+> correct and is the reason the port exists at all — but read it as history.**
+> What remains unbuilt is everything *after* compilation: nothing is built for
+> Windows through CMake (`BuildRust.cmake` still skips it, deliberately, per
+> §8's WP-W5), so staging, `install()` and the archive layout are unverified
+> and Windows release archives still carry the daemon and no wallet.
+
 The Rust wallet stack does not compile for Windows. That is easy to
 misread as a `cfg` sweep. It is not: three of the four blocking sites are
 the **implementation of a security boundary**, and the boundary is stated
