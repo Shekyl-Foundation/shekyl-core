@@ -62,6 +62,15 @@ hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
    remainder is now the **GUI wiring** — `EngineSession::drain_balance()`
    + `get_drain_balance` command + the "Drainable (P)" render — carried
    by DS-PR-3 PR-B in `shekyl-gui-wallet`.)*
+   *(UPDATE 2026-08-26, WI-RPC-5 review round: the aggregate is now
+   **scoped to the live active persona's slot** — the same
+   `r.p_slot == slot` scope the drain's own planning applies — because a
+   wallet-wide sum advertised dormant held personas' funds a `drain`
+   cannot spend, so a figure at or under the display could still refuse
+   as unaffordable. No stake engine / no active persona short-circuits
+   to an honest `Ok(0)` before any file or anchor work. The GUI's
+   `EngineSession::drain_balance()` inherits the corrected semantics
+   through the same accessor.)*
 2. **A drain tx-assembly path** — `plan_drain` returns a `DrainPlan`
    (amount, input gindices, change), not a signed/broadcast transaction;
    the assemble→sign→broadcast follow-on (the claim-assembly analog) is
