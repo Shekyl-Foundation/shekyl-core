@@ -48,12 +48,15 @@ use crate::challenge::challenge_seal_on_chain;
 use crate::segment_freeze::challenge_leaf_chunk_bounds;
 use crate::serve_eligibility::serve_credit_epoch_ok;
 
-/// Byte length of the `(P, shard, E)` composite key — C++
-/// `ArchivalPairEpochKey`. D-SC-A (prefix membership) and D-SC-C (in-block
-/// uniqueness) both use this encoding. The serve-credit *ledger* key is the
-/// 56-byte `ArchivalServeCreditKey` (this plus `BE(block_height)`) and is
-/// not constructed here: LMDB I/O stays C++.
+/// Byte length of C++ `ArchivalPairEpochKey`: `P ‖ BE64(shard) ‖ BE64(E)`.
+/// D-SC-A (prefix membership) and D-SC-C (in-block uniqueness) use this
+/// encoding because those decisions are pair-epoch-wide while the beacon
+/// still issues one challenge. Settlement and slash-applied share it.
 pub const PAIR_EPOCH_KEY_LEN: usize = 48;
+
+/// Byte length of C++ `ArchivalServeCreditKey`: the pair-epoch prefix plus
+/// `BE64(block_height)`. This is the ledger row. It is not the D-SC-A/C key.
+pub const SERVE_CREDIT_KEY_LEN: usize = 56;
 
 // ─── D-SC-A — per-tx (P, shard, E) dedup vs pre-block LMDB ────────────────
 
@@ -72,6 +75,26 @@ pub fn pair_epoch_key_be(
     key[..32].copy_from_slice(p_canonical_id);
     key[32..40].copy_from_slice(&shard_id.to_be_bytes());
     key[40..48].copy_from_slice(&settlement_epoch.to_be_bytes());
+    key
+}
+
+/// The serve-credit ledger key, byte-for-byte as C++ `ArchivalServeCreditKey`
+/// builds it: [`pair_epoch_key_be`] plus `BE64(block_height)`. Composed, not
+/// re-encoded, matching `shekyl_types.h`.
+#[must_use]
+pub fn serve_credit_key_be(
+    p_canonical_id: &[u8; 32],
+    shard_id: u64,
+    settlement_epoch: u64,
+    block_height: u64,
+) -> [u8; SERVE_CREDIT_KEY_LEN] {
+    let mut key = [0u8; SERVE_CREDIT_KEY_LEN];
+    key[..PAIR_EPOCH_KEY_LEN].copy_from_slice(&pair_epoch_key_be(
+        p_canonical_id,
+        shard_id,
+        settlement_epoch,
+    ));
+    key[PAIR_EPOCH_KEY_LEN..].copy_from_slice(&block_height.to_be_bytes());
     key
 }
 
@@ -494,6 +517,23 @@ mod tests {
         assert_eq!(
             &key[40..48],
             &[0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]
+        );
+    }
+
+    #[test]
+    fn serve_credit_key_is_pair_epoch_plus_height() {
+        let pair = pair_epoch_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+        let key = serve_credit_key_be(
+            &P,
+            0x0102_0304_0506_0708,
+            0x1112_1314_1516_1718,
+            0x2122_2324_2526_2728,
+        );
+        assert_eq!(key.len(), SERVE_CREDIT_KEY_LEN);
+        assert_eq!(&key[..PAIR_EPOCH_KEY_LEN], &pair);
+        assert_eq!(
+            &key[48..56],
+            &[0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28]
         );
     }
 
