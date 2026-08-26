@@ -206,7 +206,7 @@ pub(crate) async fn get_balance(
     let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
     let staking_view =
         crate::staking::read_view_with_snapshot(&engine, staking_enabled, recovery_pending_reopen)?;
-    let result = get_balance_result(&summary, &staking_view.balance);
+    let result = get_balance_result(&summary, &staking_view.balance)?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
 }
@@ -297,7 +297,7 @@ pub(crate) async fn get_wallet_info(
         // WI-RPC-5: the one-glance balance projects its staking fields from
         // the same authoritative view the staking block below reads — the
         // two surfaces of this aggregate cannot disagree.
-        let balance = get_balance_result(&summary, &staking_view.balance);
+        let balance = get_balance_result(&summary, &staking_view.balance)?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
