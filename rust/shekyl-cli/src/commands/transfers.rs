@@ -29,6 +29,7 @@ pub(crate) fn priority_tier(priority: Option<u32>) -> &'static str {
 
 /// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
 /// `stake_in` share this contract shape) that the confirm/submit flow needs.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BuiltPendingTx {
     pub id: String,
     pub seen_gen: i64,
@@ -36,48 +37,82 @@ pub(crate) struct BuiltPendingTx {
     pub fee_skl: String,
 }
 
-/// Extract the [`BuiltPendingTx`] fields from a build-phase response.
+/// Why a build-phase response could not be used, split by the axis that
+/// decides the abort path: whether a live reservation id was recovered.
 ///
-/// The build succeeded, so the server now holds a funds reservation keyed by
-/// `pending_tx_id`. Every abort path from here MUST release it, or the
-/// reserved outputs stay unspendable until the wallet is closed and reopened
-/// — so a malformed response discards the reservation before returning
-/// `None` (except when `pending_tx_id` itself is missing, in which case
-/// there is no handle to discard with; the contract guarantees the field, so
-/// its absence is a genuine protocol error).
+/// Typed rather than folded into a bare `None` so the discard-on-malformed
+/// contract is carried by the signature: a malformed response that names a
+/// `pending_tx_id` holds a **live server-side reservation**, and the caller
+/// cannot reach the id without going through the arm that says so.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MalformedBuild {
+    /// No `pending_tx_id` — there is no handle to discard with. The
+    /// contract guarantees the field, so its absence is a genuine protocol
+    /// error, not an abort-with-cleanup situation.
+    NoId,
+    /// A reservation id was recovered but a required field is missing. The
+    /// reservation is live: it MUST be discarded, or the reserved outputs
+    /// stay unspendable until the wallet is closed and reopened.
+    Discardable {
+        /// The live reservation to release.
+        id: String,
+        /// Which contractual field was missing (for the operator line).
+        missing: &'static str,
+    },
+}
+
+/// Parse the [`BuiltPendingTx`] fields from a build-phase response — the
+/// pure half of [`take_built_pending_tx`], split out so the never-default
+/// contract is unit-testable without a live session.
 ///
 /// `content_gen` and `fee` are contractually required. Do NOT default them:
-/// a wrong `seen_gen` guarantees a CONTENT_GEN_MISMATCH on submit (leaving
-/// the reservation live), and a missing fee would ask the user to confirm a
-/// send without its real cost.
-pub(crate) fn take_built_pending_tx(rpc: &RpcSession, built: &Value) -> Option<BuiltPendingTx> {
-    let Some(id) = built
+/// a defaulted `seen_gen` guarantees a CONTENT_GEN_MISMATCH on submit
+/// (leaving the reservation live), and a missing fee would ask the user to
+/// confirm a send without its real cost.
+pub(crate) fn parse_built_pending_tx(built: &Value) -> Result<BuiltPendingTx, MalformedBuild> {
+    let id = built
         .get("pending_tx_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned)
-    else {
-        eprintln!("Malformed build response (missing pending_tx_id).");
-        return None;
-    };
+        .ok_or(MalformedBuild::NoId)?;
     let Some(seen_gen) = built.get("content_gen").and_then(serde_json::Value::as_i64) else {
-        eprintln!("Malformed build response (missing content_gen).");
-        discard_reservation(rpc, &id);
-        return None;
+        return Err(MalformedBuild::Discardable {
+            id,
+            missing: "content_gen",
+        });
     };
     let Some(fee_skl) = built
         .get("fee")
         .and_then(|v| v.as_str())
         .map(format_amount_str)
     else {
-        eprintln!("Malformed build response (missing fee).");
-        discard_reservation(rpc, &id);
-        return None;
+        return Err(MalformedBuild::Discardable { id, missing: "fee" });
     };
-    Some(BuiltPendingTx {
+    Ok(BuiltPendingTx {
         id,
         seen_gen,
         fee_skl,
     })
+}
+
+/// Extract the [`BuiltPendingTx`] fields from a build-phase response,
+/// releasing the reservation on the malformed-with-id abort path
+/// (see [`MalformedBuild`] — the build succeeded, so the server holds a
+/// funds reservation keyed by `pending_tx_id`, and every abort from here
+/// must release it).
+pub(crate) fn take_built_pending_tx(rpc: &RpcSession, built: &Value) -> Option<BuiltPendingTx> {
+    match parse_built_pending_tx(built) {
+        Ok(built) => Some(built),
+        Err(MalformedBuild::NoId) => {
+            eprintln!("Malformed build response (missing pending_tx_id).");
+            None
+        }
+        Err(MalformedBuild::Discardable { id, missing }) => {
+            eprintln!("Malformed build response (missing {missing}).");
+            discard_reservation(rpc, &id);
+            None
+        }
+    }
 }
 
 /// Release a reservation the user declined, with a "nothing was sent" line.
@@ -400,7 +435,8 @@ pub fn cmd_history_incoming_unattributed(rpc: &RpcSession) {
 
 #[cfg(test)]
 mod tests {
-    use super::priority_tier;
+    use super::{parse_built_pending_tx, priority_tier, MalformedBuild};
+    use serde_json::json;
 
     /// The named tiers are the OpenAPI `FeePriority` enum values; the
     /// default (no flag) is the server's documented STANDARD default.
@@ -412,5 +448,58 @@ mod tests {
         assert_eq!(priority_tier(Some(2)), "STANDARD");
         assert_eq!(priority_tier(Some(3)), "PRIORITY");
         assert_eq!(priority_tier(Some(9)), "PRIORITY");
+    }
+
+    /// The never-default contract, whose violation is a fund-lock: a
+    /// missing `content_gen` MUST refuse (a defaulted `seen_gen` guarantees
+    /// CONTENT_GEN_MISMATCH on submit, leaving the reservation live), and
+    /// the refusal MUST carry the reservation id so the abort path can
+    /// release it — the `Discardable` arm is the type-level statement that
+    /// there is a live reservation to clean up. `transfer` and `stake_in`
+    /// both flow through this parse.
+    #[test]
+    fn missing_required_fields_refuse_with_the_discardable_id() {
+        let missing_gen = json!({ "pending_tx_id": "42", "fee": "700" });
+        assert_eq!(
+            parse_built_pending_tx(&missing_gen),
+            Err(MalformedBuild::Discardable {
+                id: "42".into(),
+                missing: "content_gen",
+            })
+        );
+
+        let missing_fee = json!({ "pending_tx_id": "42", "content_gen": 3 });
+        assert_eq!(
+            parse_built_pending_tx(&missing_fee),
+            Err(MalformedBuild::Discardable {
+                id: "42".into(),
+                missing: "fee",
+            })
+        );
+
+        // No id ⇒ nothing to discard with — the one malformed arm that is
+        // a protocol error rather than an abort-with-cleanup.
+        let missing_id = json!({ "content_gen": 3, "fee": "700" });
+        assert_eq!(
+            parse_built_pending_tx(&missing_id),
+            Err(MalformedBuild::NoId)
+        );
+    }
+
+    /// The well-formed shape parses to exactly the contract fields —
+    /// `seen_gen` is the response's `content_gen` verbatim (the value the
+    /// submit echo must match) and the fee renders as SKL.
+    #[test]
+    fn well_formed_build_response_parses_exact_fields() {
+        let built = json!({
+            "pending_tx_id": "42",
+            "content_gen": 7,
+            "fee": "700000000",
+            "built_at_height": 1234
+        });
+        let parsed = parse_built_pending_tx(&built).expect("well-formed");
+        assert_eq!(parsed.id, "42");
+        assert_eq!(parsed.seen_gen, 7);
+        assert_eq!(parsed.fee_skl, "0.700000000");
     }
 }
