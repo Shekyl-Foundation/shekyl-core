@@ -22,12 +22,25 @@ pub fn cmd_balance(rpc: &RpcSession) {
                     .map(format_amount_str)
                     .unwrap_or_else(|| "?".to_owned())
             };
+            // The staking fields are ABSENT — never "0" — when the wallet's
+            // staking state cannot be read (the wire degrade contract):
+            // that absence renders as unavailability, not the generic "?",
+            // and never as a zero that would read "nothing staked" (rule 82).
+            let staking_field = |name: &str| {
+                val.get(name)
+                    .and_then(|v| v.as_str())
+                    .map(|v| format!("{} SKL", format_amount_str(v)))
+                    .unwrap_or_else(|| "unavailable (staking state could not be read)".to_owned())
+            };
             println!("Balance:");
             println!("  Unlocked:           {} SKL", field("unlocked"));
             println!("  Liquid:             {} SKL", field("liquid"));
             println!("  Pending:            {} SKL", field("pending"));
-            println!("  Staked:             {} SKL", field("staked"));
-            println!("  Claimable rewards:  {} SKL", field("claimable_rewards"));
+            println!("  Staked:             {}", staking_field("staked"));
+            println!(
+                "  Claimable rewards:  {}",
+                staking_field("claimable_rewards")
+            );
         }
         Err(e) => rpc.report("Failed to get balance", &e),
     }
@@ -83,12 +96,21 @@ pub fn cmd_engine_info(rpc: &RpcSession) {
                 println!("  Balance unlocked: {} SKL", field("unlocked"));
                 println!("  Balance liquid:   {} SKL", field("liquid"));
             }
-            if let Some(staking) = val.get("staking") {
-                let enabled = staking
-                    .get("staking_enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                println!("  Staking enabled:  {enabled}");
+            match val.get("staking") {
+                Some(staking) => {
+                    let enabled = staking
+                        .get("staking_enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    println!("  Staking enabled:  {enabled}");
+                }
+                // The staking block is ABSENT when the wallet's staking state
+                // cannot be read (the wire degrade contract). Omitting the
+                // line would read as though the question was never asked
+                // (rule 82) — say what happened instead.
+                None => {
+                    println!("  Staking:          unavailable (staking state could not be read)");
+                }
             }
         }
         Err(e) => rpc.report("Failed to get wallet info", &e),
