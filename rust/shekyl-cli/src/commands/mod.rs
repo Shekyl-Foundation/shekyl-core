@@ -50,6 +50,13 @@ Transfers:
     [--no-confirm]                    Skip confirmation (non-TTY only)
   transfers                           Show recent transactions
   show_transfer <txid>                Show details for a transaction
+  get_tx_note <txid>                  Show the local note for a transaction
+  set_tx_note <txid> <note>           Attach a local note to a transaction
+                                      (the note is everything after the txid,
+                                      taken exactly as typed)
+  abandon <txid>                      Give up on a dispatched send (funds stay
+                                      locked until the network is confirmed to
+                                      have dropped it)
   fee [--inputs N] [--outputs N]      Show fee quotes and size estimate
 
 Receiving (payment requests):
@@ -70,6 +77,14 @@ Staking:
   staked_balance                      Show the staked-balance breakdown
   staked_outputs                      List unspent staking-side outputs
   staking_info                        Show staking state and scan height
+  stake_in <amount>                   Add funds to the staking balance (an
+                                      ordinary transfer from this wallet;
+                                      prints a privacy note, then confirms)
+  drain_balance                       Show how much staking money can be
+                                      moved back to this wallet
+  drain <amount>                      Move staking funds back to this wallet
+                                      (fee and destination are automatic; no
+                                      flags exist)
   chain_health                        Show daemon/chain health (separate conn)
 
 Proofs (multi-word [message] binds into the proof; the verifier must
@@ -209,6 +224,15 @@ pub fn repl(
                     ResolvedCommand::ShowTransfer { txid } => {
                         transfers::cmd_show_transfer(&rpc, &txid);
                     }
+                    ResolvedCommand::GetTxNote { txid } => {
+                        transfers::cmd_get_tx_note(&rpc, &txid);
+                    }
+                    ResolvedCommand::SetTxNote { txid, note } => {
+                        transfers::cmd_set_tx_note(&rpc, &txid, &note);
+                    }
+                    ResolvedCommand::Abandon { txid } => {
+                        transfers::cmd_abandon(&rpc, &txid);
+                    }
 
                     // Receiving (WI-RPC-1 surface)
                     ResolvedCommand::RequestNew {
@@ -240,6 +264,11 @@ pub fn repl(
                     ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
                     ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
                     ResolvedCommand::StakingInfo => staking::cmd_staking_info(&rpc),
+
+                    // Archival principal staking actions (WI-RPC-5)
+                    ResolvedCommand::StakeIn { amount } => staking::cmd_stake_in(&rpc, amount),
+                    ResolvedCommand::DrainBalance => staking::cmd_drain_balance(&rpc),
+                    ResolvedCommand::Drain { amount } => staking::cmd_drain(&rpc, amount),
 
                     // Fees (WI-RPC-1 surface)
                     ResolvedCommand::Fee {
@@ -360,6 +389,24 @@ pub(crate) fn confirm(prompt: &str) -> bool {
         return false;
     }
     input.trim() == "yes"
+}
+
+/// Confirmation for money-moving commands that ship no `--no-confirm`
+/// affordance (`stake_in`, `drain`): interactive "yes", and a loud refusal
+/// on non-interactive input. Reading [`confirm`] from a pipe would silently
+/// consume the next scripted line (or hit EOF) as the answer — automation
+/// would see funds "sent" that never moved, with no clear reason.
+/// `action` names the command in the refusal so a script's log says which
+/// step was blocked.
+pub(crate) fn confirm_interactive(prompt: &str, action: &str) -> bool {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "Refusing to {action} without confirmation on non-interactive \
+             input; run interactively."
+        );
+        return false;
+    }
+    confirm(prompt)
 }
 
 // ---------------------------------------------------------------------------

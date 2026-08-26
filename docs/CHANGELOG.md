@@ -182,6 +182,31 @@
 
 ### Added
 
+- **Archival staking parity on wallet-RPC and CLI (WI-RPC-5).** Three new
+  wallet-RPC methods over Engine surfaces that were built but unwired:
+  `stake_in` (fund the staking balance with an ordinary principal
+  transfer; same pending-tx confirm/submit path as `build_pending_tx`;
+  carries the GF-7 change-co-presence disclosure in the contract and the
+  CLI pre-confirm print), `get_drain_balance` (two-armed: `ready` with the
+  spendable amount, or `syncing` — never `"0"` while unanchored), and
+  `drain` (`{amount}` only — **no fee, destination, or `p_slot`
+  parameters**; the fee is the canonical P-lane floor computed
+  engine-side, the destination is engine-pinned to the principal, and the
+  persona is resolved from live actor state by the new
+  `Engine::drain_to_principal` façade, which keeps the DS-4
+  `EXIT_FEE_RESERVE_ATOMIC` gate on live-persona drains). The three
+  schemas set `additionalProperties: false` and the params structs use
+  `#[serde(deny_unknown_fields)]`, so extra keys answer `-32602` instead
+  of being silently dropped; drain application errors are pinned at
+  `-29507..-29511`. `get_balance.staked` and `.claimable_rewards` are now
+  live projections from the staking view instead of hardcoded `"0"`. New
+  CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
+  `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
+  and `get_stakes` are REJECTED (engine-side claims; archival firewall);
+  `unstake` stays RESERVED on the Unbond producer. The drain
+  confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
+  dispatch fact, not a settlement fact, and both surfaces say so.
+
 - **A CI gate that makes the RPC liveness rule executable
   (`ci/rpc-route-liveness`).** `DAEMON_RPC_RUST.md` has always said a
   method is live iff it has a route *and* a live consumer. Stated in prose,

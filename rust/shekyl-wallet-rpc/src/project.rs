@@ -7,6 +7,7 @@
 
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
+use shekyl_engine_core::StakedBalance;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
     DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails,
@@ -28,22 +29,50 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
     amount.to_raw().to_string()
 }
 
-/// Map scanner balance into the locked OpenAPI balance shape.
+/// Map scanner balance + the authoritative staking view into the locked
+/// OpenAPI balance shape (WI-RPC-5: staking fields carry live values, never
+/// the pre-Stage-3 `"0"` placeholder).
 ///
-/// `staked` / `claimable_rewards` stay `"0"` until Stage 3 stake methods
-/// land (OpenAPI contract). `liquid` mirrors `unlocked` until staking
-/// splits liquid from locked principal.
-impl From<&BalanceSummary> for GetBalanceResult {
-    fn from(b: &BalanceSummary) -> Self {
-        let unlocked = atomic_units_string(b.unlocked);
-        Self {
-            liquid: unlocked.clone(),
-            staked: "0".to_owned(),
-            unlocked,
-            claimable_rewards: "0".to_owned(),
-            pending: atomic_units_string(b.awaiting_confirmation),
-        }
-    }
+/// `staked` is the checked sum of the two bonded legs `get_staked_balance`
+/// keeps separate (confirmed + in-flight sealed principal);
+/// `claimable_rewards` is `rewards_received_unspent` — received-and-unspent
+/// staking-side money, not a claim-era entitlement. `liquid` mirrors
+/// `unlocked` until staking splits liquid from locked principal. For a
+/// non-staker the caller passes [`StakedBalance::ZERO`], which is a true
+/// zero (nothing is staked), not a placeholder.
+///
+/// # Errors
+///
+/// A bonded-principal sum that overflows the money type is a corrupt view
+/// (the supply cap keeps any legitimate sum far below `u64::MAX`). That
+/// arm answers [`WalletRpcError::InternalError`]: checked, not saturating,
+/// because a clamped `u64::MAX` would render as a plausible (absurd)
+/// balance instead of failing loudly — and a structured error, not a
+/// panic, because the workspace builds with `panic = "abort"`, so a panic
+/// on this hot path would take the whole wallet-rpc server down for a
+/// state one wallet file caused (same disposition as `transfer_view`'s
+/// internal-error arm and `StakeInError::CoverOverflow`).
+pub fn get_balance_result(
+    b: &BalanceSummary,
+    staking: &StakedBalance,
+) -> Result<GetBalanceResult, WalletRpcError> {
+    let unlocked = atomic_units_string(b.unlocked);
+    let staked = staking
+        .bonded_principal_confirmed
+        .to_raw()
+        .checked_add(staking.bonded_principal_pending.to_raw())
+        .ok_or_else(|| {
+            WalletRpcError::InternalError(
+                "bonded principal legs exceed the money type (corrupt staking view)".to_owned(),
+            )
+        })?;
+    Ok(GetBalanceResult {
+        liquid: unlocked.clone(),
+        staked: staked.to_string(),
+        unlocked,
+        claimable_rewards: atomic_units_string(staking.rewards_received_unspent),
+        pending: atomic_units_string(b.awaiting_confirmation),
+    })
 }
 
 /// Stable transfer id: `{tx_hash_hex}:{internal_output_index}`.
@@ -594,12 +623,63 @@ mod tests {
             frozen: AtomicUnits::ZERO,
             awaiting_confirmation: AtomicUnits::from_raw(5),
         };
-        let r = GetBalanceResult::from(&b);
+        let r = get_balance_result(&b, &StakedBalance::ZERO).expect("legs cannot overflow");
         assert_eq!(r.unlocked, "40");
         assert_eq!(r.liquid, "40");
         assert_eq!(r.pending, "5");
+        // A non-staker's zeros are true zeros (nothing staked), not the
+        // pre-WI-RPC-5 placeholder.
         assert_eq!(r.staked, "0");
         assert_eq!(r.claimable_rewards, "0");
+    }
+
+    /// WI-RPC-5: `staked` sums the two bonded legs `get_staked_balance`
+    /// keeps separate; `claimable_rewards` is `rewards_received_unspent`
+    /// verbatim. Bites against reverting to the hardcoded `"0"` projection
+    /// or against summing the wrong legs; it does NOT verify the Engine
+    /// aggregation behind `staking_read_view` (the engine-core staking_read
+    /// KATs cover that).
+    #[test]
+    fn balance_staking_fields_project_the_staking_view_legs() {
+        let b = BalanceSummary {
+            total: AtomicUnits::from_raw(100),
+            unlocked: AtomicUnits::from_raw(40),
+            locked_by_timelock: AtomicUnits::ZERO,
+            frozen: AtomicUnits::ZERO,
+            awaiting_confirmation: AtomicUnits::ZERO,
+        };
+        let staking = StakedBalance {
+            bonded_principal_confirmed: AtomicUnits::from_raw(70_000),
+            bonded_principal_pending: AtomicUnits::from_raw(30_000),
+            rewards_received_unspent: AtomicUnits::from_raw(1_234),
+        };
+        let r = get_balance_result(&b, &staking).expect("legs cannot overflow");
+        assert_eq!(r.staked, "100000", "confirmed + pending bonded legs");
+        assert_eq!(r.claimable_rewards, "1234");
+        assert_eq!(r.unlocked, "40", "principal legs are untouched");
+    }
+
+    /// A bonded-principal sum past the money type is a corrupt view and must
+    /// answer a structured internal error — not saturate to a plausible
+    /// (absurd) balance, and not panic (the workspace builds `panic = "abort"`,
+    /// so a panic here would abort the whole server on every `get_balance`
+    /// call against the corrupt state).
+    #[test]
+    fn balance_staking_leg_overflow_is_a_structured_error_not_a_panic() {
+        let b = BalanceSummary {
+            total: AtomicUnits::ZERO,
+            unlocked: AtomicUnits::ZERO,
+            locked_by_timelock: AtomicUnits::ZERO,
+            frozen: AtomicUnits::ZERO,
+            awaiting_confirmation: AtomicUnits::ZERO,
+        };
+        let staking = StakedBalance {
+            bonded_principal_confirmed: AtomicUnits::from_raw(u64::MAX),
+            bonded_principal_pending: AtomicUnits::from_raw(1),
+            rewards_received_unspent: AtomicUnits::ZERO,
+        };
+        let err = get_balance_result(&b, &staking).expect_err("overflow must not project");
+        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }
 
     fn sample_send_record(state: SendState) -> SendRecord {

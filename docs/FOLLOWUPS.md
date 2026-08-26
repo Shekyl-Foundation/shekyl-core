@@ -237,6 +237,22 @@ sustainability is unaffected by the recalibration.
   emission claim) have a plan-doc home. *Target: V3.0 pre-genesis —
   this is a genesis-freeze-sensitive surface, not a V3.1 item.*
 
+  **UPDATE 2026-08-26 (WI-RPC-5): the drain leg is user-reachable; the
+  registry no longer holds claim-era placeholders.** The `P`→principal
+  drain landed on RPC + CLI (`drain` over `Engine::drain_to_principal`;
+  `get_drain_balance` alongside), so of the three `unstake` legs only the
+  `Unbond` producer and the emission claim's wallet-side builder remain
+  unbuilt — the entry's core (bond-out is impossible) stands. In the same
+  contract pass, `unstake` stayed RESERVED with its prerequisite rewritten
+  to the Unbond producer, and the claim-era names were resolved per
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §0: **`claim` is REJECTED as a user RPC**
+  (emission claims are assembled and dispatched engine-side; reopen only
+  if a named operator needs a manual trigger) and **`get_stakes` is
+  REJECTED** (the archival firewall — `principal_stakes()` is
+  RPC-forbidden as the P↔principal edge; the staking reads +
+  `get_drain_balance` are the replacement). Both rejections are recorded
+  rule-21-shaped in the `wallet_rpc.yaml` header registry.
+
 - **Release-asset manifest signing owed before the first non-RC release
   tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
   task, not an open decision).** The original entry posed a three-way
@@ -2047,6 +2063,59 @@ sustainability is unaffected by the recalibration.
   duplicate the driver design WI-3 owns. **Reopen when** WI-3's dispatch-driver
   slice is scoped, or an RPC drain entry needs a live confirmation path before
   then. **Target: V3.0 pre-genesis.**
+  **UPDATE 2026-08-26 (WI-RPC-5): the second reopen criterion has fired** —
+  the RPC/CLI `drain` entry landed (`Engine::drain_to_principal` over
+  `submit_drain`; `wallet_rpc.yaml` `drain`), so a user can now dispatch a
+  drain whose confirmation path is unwired: the receipt is a dispatch fact,
+  not a settlement fact, and a `PendingDrain` that the network drops stays
+  pending until this driver exists. The sharper consequence (surfaced by the
+  PR #567 review): the seal never releases on SUCCESS either — a confirmed
+  drain's record stays live, so the persona's drain lane refuses `-29511`
+  across sessions until this driver retires it. The money itself settles
+  (the principal output is scanned normally); only the drain-again lane is
+  sealed. The contract and the CLI copy disclose
+  this rather than imply settlement. The driver remains the named blocker
+  and WI-3 remains its owner; WI-RPC-5 deliberately did not re-implement it
+  (plan pin: "this PR does not re-implement that driver"). The entry's
+  urgency changed, not its shape. **Target: V3.0 pre-genesis (now
+  user-reachable — schedule with the next WI-3 slice).**
+
+- **GF-7 `stake_in` change-co-presence residual — shipped with a warning,
+  not closed** (added 2026-08-26; WI-RPC-5,
+  `feat/wallet-rpc-wi-rpc-5-principal-stake`). `Engine::stake_in` funds the
+  staking balance with an ordinary principal transfer, which means the
+  `P`-output co-presents with the principal's own change output in the same
+  transaction — the open GF-7 linkage question documented at
+  `rust/shekyl-engine-core/src/engine/principal_stake.rs` (the "change
+  co-presence" doc block). WI-RPC-5 exposed `stake_in` on RPC + CLI
+  **with the `get_tx_proof` disclosure pattern** (yaml method description +
+  CLI pre-confirm print) rather than waiting on GF-7 — a decided
+  disposition, not an oversight. **Named carrier:** the bond-funding-
+  separation work (GF-7 family) — separating the staking-fund output from
+  the funder's change tx is what closes the linkage, at which point the
+  disclosure copy is deleted in the same PR. **Reopen when** that
+  separation design is scoped; the re-evaluation shape is its design
+  round's Round 1. **Target: V3.0 pre-genesis (privacy > features; the
+  warning is a stopgap, not a resolution).**
+
+- **Workspace-wide `deny_unknown_fields` on the remaining wallet-RPC params
+  structs — the F-1 out-of-scope half** (added 2026-08-26; WI-RPC-5 review
+  finding F-1). Serde's default drops unknown request keys silently, so
+  every params struct without `#[serde(deny_unknown_fields)]` accepts —
+  and ignores — fields the contract does not name; a client typo or a
+  steering attempt is swallowed instead of answered `-32602`. WI-RPC-5
+  fixed this for its own three methods (`StakeInParams`, `DrainParams`,
+  `GetDrainBalanceParams`, with `additionalProperties: false` in the yaml
+  and HTTP tests pinning the refusal) because the anti-fingerprint pin
+  made silent acceptance a correctness hazard there; the other SPECIFIED
+  methods still deserialize permissively. **The fix is mechanical** (one
+  attribute per struct + `additionalProperties: false` per schema + a
+  regression test per method) but touches every params struct, so it is
+  its own sweep PR, not a rider. **Reopen when** scheduled; the
+  re-evaluation shape is one PR sweeping `rust/shekyl-wallet-rpc/src/`
+  params structs against the yaml, with the contract updated in the same
+  change. **Target: V3.0 pre-genesis (contract-strictness debt compounds
+  with every new client).**
 
 - **Wallet thin-market entry disclosure — the §13.2 re-disposition's
   build item** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13.1,
@@ -4659,7 +4728,11 @@ sustainability is unaffected by the recalibration.
     of lifecycle order** (an RPC/CLI that unbonds an arbitrary held slot while an
     older funded one remains bonded): it must either enforce in-order defunding
     or the reconstruction must widen to inspect every slot below the cursor, not
-    just the burned-cursor lookahead. The drain RPC entry is not yet built.
+    just the burned-cursor lookahead. UPDATE 2026-08-26 (WI-RPC-5): a drain RPC
+    entry now exists (`drain` over `Engine::drain_to_principal`), but it **cannot
+    fire this criterion by construction** — the façade takes no slot argument,
+    resolves only the live active persona, and does not unbond anything; the
+    criterion still awaits an unbond producer that could select arbitrary slots.
     **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with

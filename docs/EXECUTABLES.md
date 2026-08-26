@@ -151,10 +151,12 @@ shekyld --prune-blockchain
 
 ## 2. `shekyl-cli` — Interactive CLI Wallet (Rust)
 
-A Rust-native interactive CLI wallet built on `shekyl-wallet-rpc` (library
-mode). Uses the same wallet stack as the GUI: wallet2 via FFI for lifecycle
-operations, Rust scanner for reads, and native-sign for transaction
-construction.
+A Rust-native interactive CLI wallet. It is a pure JSON-RPC client of
+`shekyl-wallet-rpc` (Shape B): by default it self-hosts a wallet-RPC server
+in-process over a private, owner-only local endpoint; with `--rpc-url` it
+connects to an external one instead. The contract is
+[`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml); the capability ledger is
+[`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 Replaces the legacy `shekyl-wallet-cli` (C++ simplewallet), which has been
 removed.
@@ -180,80 +182,90 @@ shekyl-cli [options]
 
 ### Interactive commands
 
+This section mirrors the live `help` output; where they disagree, the
+binary's `help` wins. Deleted wallet2-era commands (accounts, subaddresses,
+secret display, key images, sweeps, `get_tx_key`) refuse at parse time with
+guidance naming the Shekyl-native replacement; the full disposition ledger
+is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
+
 **Wallet lifecycle**
 
 | Command | Description |
 |---------|-------------|
-| `create <filename> [language]` | Create a new wallet |
+| `create <filename>` | Create a new wallet (also non-interactive: `create <name> --seed-out <path>`) |
 | `open <filename>` | Open an existing wallet |
-| `close` | Close the current wallet (auto-saves) |
-| `restore <file> <seed> [height]` | Restore from mnemonic seed |
-| `save` | Save wallet to disk |
+| `close` | Close the current wallet |
+| `restore <filename> <seed...>` | Restore from mnemonic seed |
 | `password` | Change wallet password |
+| `refresh` | Sync with the daemon |
+| `rescan` | Rebuild transaction history from the chain (`hard` accepted; same rescan) |
+| `status` | Wallet and daemon sync heights |
 
-**Queries**
-
-| Command | Description |
-|---------|-------------|
-| `address [account]` | Show wallet address |
-| `balance` | Show unlocked, locked, and staked balances |
-| `status` | Sync status and daemon info |
-| `transfers [in\|out\|pending\|failed\|all]` | Transaction history |
-| `show_transfer <txid>` | Details for a single transaction |
-| `wallet_info` | Wallet type, address, network |
-
-**Transactions**
+**Address and balance**
 
 | Command | Description |
 |---------|-------------|
-| `transfer <amount> <address> [priority]` | Send SKL |
-| `sweep_all <address>` | Send entire balance |
-| `refresh` | Sync from daemon |
+| `address` | Show the wallet's primary address |
+| `balance` | Balance breakdown |
+
+**Transfers**
+
+| Command | Description |
+|---------|-------------|
+| `transfer <amount> <address> [--priority N] [--no-confirm]` | Send SKL (build → confirm → submit/discard) |
+| `transfers` | Recent transactions |
+| `show_transfer <txid>` | Details for a transaction |
+| `get_tx_note <txid>` | Show the local note for a transaction |
+| `set_tx_note <txid> <note>` | Attach a local note (the note is everything after the txid, verbatim) |
+| `abandon <txid>` | Give up on a dispatched send; funds stay locked until the network is confirmed to have dropped it |
+| `fee [--inputs N] [--outputs N]` | Fee quotes and size estimate |
+
+**Receiving (payment requests)**
+
+| Command | Description |
+|---------|-------------|
+| `request new <amount> <label> [--expiry <height>]` | Create a payment request (`shekyl:` URI) |
+| `requests list [pending\|matched\|all]` | List payment requests |
+| `make_uri [--amount X] [--label L] [--address ADDR]` | Compose a `shekyl:` payment URI |
+| `parse_uri <uri>` | Decode a `shekyl:` payment URI |
+| `history incoming --unattributed` | Receives with no payment-request match |
 
 **Staking**
 
 | Command | Description |
 |---------|-------------|
-| `stake <tier> [amount]` | Stake to a tier |
-| `unstake [key_image]` | Request unstaking |
-| `claim` | Claim staking rewards |
-| `staking_info` | Current staking status |
-| `chain_health` | Network health via daemon RPC |
+| `stake [--complete-tree-foundation]` | Make this wallet a staker |
+| `staked_balance` | Staked-balance breakdown |
+| `staked_outputs` | Unspent staking-side outputs |
+| `staking_info` | Staking state and scan height |
+| `stake_in <amount>` | Add funds to the staking balance (prints a privacy note, then confirms) |
+| `drain_balance` | How much staking money can be moved back to this wallet |
+| `drain <amount>` | Move staking funds back to this wallet (fee and destination automatic; no flags) |
+| `chain_health` | Daemon/chain health (separate connection) |
 
-**Keys and proofs**
-
-| Command | Description |
-|---------|-------------|
-| `seed` | Display mnemonic seed (with confirmation gate) |
-| `viewkey` | Display private view key |
-| `spendkey` | Display private spend key |
-| `get_tx_key <txid>` | Get transaction secret key |
-| `check_tx_key <txid> <key> <addr>` | Verify a transaction proof |
-| `get_tx_proof <txid> <addr> [msg]` | Generate tx proof |
-| `check_tx_proof <txid> <addr> <sig> [msg]` | Verify tx proof |
-| `get_reserve_proof [amount]` | Generate reserve proof |
-| `check_reserve_proof <addr> <sig>` | Verify reserve proof |
-| `sign <file>` | Sign a file |
-| `verify <file> <addr> <sig>` | Verify a signed file |
-| `export_key_images <file>` | Export key images |
-| `import_key_images <file>` | Import key images |
-
-**Offline signing**
+**Proofs and message signing**
 
 | Command | Description |
 |---------|-------------|
-| `describe_transfer <file>` | Describe an unsigned transaction |
-| `sign_transfer <file>` | Sign an unsigned transaction |
-| `submit_transfer <file>` | Submit a signed transaction |
+| `get_tx_proof <txid> <address> [message]` | Prove a payment (open wallet required) |
+| `check_tx_proof <txid> <address> <proof> [message]` | Verify a tx proof (no wallet needed) |
+| `get_reserve_proof [amount] [message]` | Prove unspent reserve (FULL wallet) |
+| `check_reserve_proof <address> <proof> [message]` | Verify a reserve proof (no wallet needed) |
+| `sign <message>` | Sign a message as this wallet's address |
+| `verify <address> <signature> <message>` | Check a message signature (no wallet needed) |
 
-**Other**
+**Meta**
 
 | Command | Description |
 |---------|-------------|
-| `rescan` | Full blockchain rescan (requires confirmation) |
-| `version` | Show version |
-| `help [command]` | Show help |
-| `exit` / `quit` | Close wallet and exit |
+| `engine_info` | Wallet summary (height, balance, address) |
+| `version` | CLI and wallet-RPC versions |
+| `help` | Show help |
+| `exit` / `quit` | Exit shekyl-cli |
+
+Offline cold signing (`describe_transfer` / `sign_transfer` /
+`submit_transfer`) answers RESERVED: A4 descoped cold *signing* from V3.0
+(cold storage ships, cold signing does not).
 
 ### Examples
 

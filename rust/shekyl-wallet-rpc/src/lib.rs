@@ -33,6 +33,7 @@ pub mod receiving;
 pub mod send;
 pub mod server;
 pub mod staking;
+pub mod staking_actions;
 pub mod sync;
 pub mod tenant;
 pub mod types;

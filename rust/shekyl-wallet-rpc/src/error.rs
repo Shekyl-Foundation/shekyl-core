@@ -12,8 +12,9 @@ use shekyl_engine_core::engine::error::{
 };
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
-    RefreshError, SendError, ServingStartError, SetTxNoteError,
+    ChangePasswordError, DrainToPrincipalError, IoError, OpenError, PScanStartError,
+    PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError, SetTxNoteError,
+    StakeInError,
 };
 use shekyl_engine_file::WalletFileError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
@@ -154,6 +155,24 @@ pub enum WalletRpcErrorCode {
     /// Stake: the foundation posture was requested without the
     /// acknowledgment; the refusal message is the warning itself (D-4).
     StakeFoundationUnacknowledged = -29506,
+    /// Drain: this wallet runs no stake engine — it is not an archival
+    /// staker, and the drain path does not exist here (WI-RPC-5;
+    /// `stake_in`'s equivalent refusal is `-29500`).
+    DrainNotStaker = -29507,
+    /// Drain: the wallet is a staker but no persona is currently active.
+    /// The façade resolves the LIVE active persona from actor state — there
+    /// is no `p_slot` parameter to point elsewhere.
+    DrainNoActivePersona = -29508,
+    /// Drain: a live-persona drain would spend the pool below
+    /// `EXIT_FEE_RESERVE_ATOMIC` (DS-4). Lower the payment or retire first.
+    DrainReserveBreached = -29509,
+    /// Drain: no submittable curve-tree reference can be anchored yet —
+    /// transient; sync and retry. (The *read* method reports syncing as a
+    /// result discriminant, not this code; this fires on an attempted send.)
+    DrainUnanchorable = -29510,
+    /// Drain: the one-live-drain-per-persona seal (a pending drain exists,
+    /// or a concurrent post raced this drain's inputs — retry).
+    DrainInFlight = -29511,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -406,6 +425,53 @@ pub enum WalletRpcError {
     #[error("{}", FOUNDATION_POSTURE_WARNING)]
     StakeFoundationUnacknowledged,
 
+    /// `drain` (`-29507`): this wallet runs no stake engine — the drain
+    /// path does not exist here. Permanent for this wallet, not transient
+    /// (rule 82: "you are not a staker" is a different sentence from
+    /// "fund and retry", which is why `stake_in`'s no-persona refusal
+    /// stays on `-29500` while this one gets its own code).
+    #[error("this wallet is not a staker: there is no staking balance to drain")]
+    DrainNotStaker,
+    /// `drain` (`-29508`): the wallet is a staker but no persona is
+    /// currently active — nothing for a drain to act on. The Engine façade
+    /// resolved the live active persona from actor state (no slot
+    /// parameter exists to point elsewhere) and found none.
+    #[error("no active staking persona to drain")]
+    DrainNoActivePersona,
+    /// `drain` (`-29509`): the payment would spend a **live** persona's
+    /// pool below the exit-fee reserve (DS-4). Sweep-to-zero is only for a
+    /// retired persona, which this method cannot select — lower the
+    /// payment. Deliberately amount-free: the reserve constant and the
+    /// shortfall stay off the wire.
+    #[error(
+        "drain refused: the requested amount would leave the staking pool \
+         below its exit-fee reserve — lower the amount"
+    )]
+    DrainReserveBreached,
+    /// `drain` (`-29510`): no submittable reference can be anchored yet —
+    /// the wallet's staking-side view is still syncing. Transient; retry
+    /// after a refresh. (The `get_drain_balance` *read* reports this as
+    /// its `syncing` result arm, never as this error.)
+    #[error("drain unavailable while the wallet syncs — retry after a refresh")]
+    DrainUnanchorable {
+        /// Server-side transient cause (`error.data.detail`) — scalar-free.
+        detail: String,
+    },
+    /// `drain` (`-29511`): a pending drain already exists for this persona
+    /// (one live drain per persona) — wait for it to confirm or fail.
+    #[error(
+        "a drain is already in flight for this staking pool; wait for it \
+         to confirm or fail before starting another"
+    )]
+    DrainInFlight,
+    /// `drain` (`-29511`, retry remedy): a concurrent same-persona post
+    /// reserved one of this drain's inputs between snapshot and seal;
+    /// nothing was sealed. Same code as [`Self::DrainInFlight`] (the
+    /// one-live-drain seal is the shared cause class); the message carries
+    /// the different remedy — plain retry.
+    #[error("a concurrent staking operation raced this drain; nothing was sent — retry")]
+    DrainInputRaced,
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -472,6 +538,11 @@ impl WalletRpcError {
             Self::StakeFoundationUnacknowledged => {
                 WalletRpcErrorCode::StakeFoundationUnacknowledged
             }
+            Self::DrainNotStaker => WalletRpcErrorCode::DrainNotStaker,
+            Self::DrainNoActivePersona => WalletRpcErrorCode::DrainNoActivePersona,
+            Self::DrainReserveBreached => WalletRpcErrorCode::DrainReserveBreached,
+            Self::DrainUnanchorable { .. } => WalletRpcErrorCode::DrainUnanchorable,
+            Self::DrainInFlight | Self::DrainInputRaced => WalletRpcErrorCode::DrainInFlight,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -493,9 +564,9 @@ impl WalletRpcError {
             Self::AbandonStateForbids { state } => Some(json!({ "state": state.as_str() })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
-            Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
-                Some(json!({ "detail": detail }))
-            }
+            Self::StakeNotReady { detail }
+            | Self::RescanBlocked { detail }
+            | Self::DrainUnanchorable { detail } => Some(json!({ "detail": detail })),
             Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
             Self::DaemonFeeUnreasonable {
                 reason,
@@ -739,6 +810,82 @@ impl From<SendError> for WalletRpcError {
             }
             SendError::SubmitLoopBreakerTripped { .. } => {
                 Self::InternalError("submit loop-breaker tripped".into())
+            }
+        }
+    }
+}
+
+impl From<StakeInError> for WalletRpcError {
+    /// `stake_in` mints no new codes (WI-RPC-5 F-2 pin): the no-persona
+    /// refusals reuse `-29500` (`STAKE_NOT_READY` — the remedy really is
+    /// "get a funded persona, then retry"), the transfer-build failures
+    /// reuse the `-291xx` send codes via the [`SendError`] mapping, and
+    /// everything else is an internal fault with server-side detail.
+    fn from(err: StakeInError) -> Self {
+        match err {
+            StakeInError::NotStaking => Self::StakeNotReady {
+                detail: "wallet is not staking; no persona to fund".into(),
+            },
+            StakeInError::NoActivePersona => Self::StakeNotReady {
+                detail: "no active persona to fund".into(),
+            },
+            // The -291xx family: recipient (unreachable here — the address
+            // is engine-derived), funds, fee, and their internal residue.
+            StakeInError::Send(e) => e.into(),
+            StakeInError::StakeEngine(detail) => internal_detail("stake engine", detail),
+            StakeInError::Address(e) => internal_detail("staking address encoding", e),
+            StakeInError::RngSourceFailed(e) => {
+                internal_detail("entropy source unavailable for the cover draw", e)
+            }
+            // The Display carries the offending amounts; category-only on
+            // the wire, full detail server-side (`message()` contract).
+            e @ StakeInError::CoverOverflow { .. } => {
+                internal_detail("stake_in cover arithmetic overflow", e)
+            }
+        }
+    }
+}
+
+impl From<DrainToPrincipalError> for WalletRpcError {
+    /// The `drain` code table (WI-RPC-5 F-2): `-29507..-29511` for the five
+    /// named drain refusals; the fee arms reuse the send path's
+    /// `-29102`/`-29109` remedy split; a planner refusal of the payment
+    /// itself is `-29101` (the "lower the amount / wait for accrual" remedy
+    /// is exactly insufficient-funds'); a post-seal transport failure is
+    /// `-29107` (the sealed record's fate is the drain driver's — the
+    /// client must not re-fire blindly, which is the ambiguous contract).
+    fn from(err: DrainToPrincipalError) -> Self {
+        match err {
+            DrainToPrincipalError::NotStaker => Self::DrainNotStaker,
+            DrainToPrincipalError::NoActivePersona => Self::DrainNoActivePersona,
+            DrainToPrincipalError::ReserveBreached => Self::DrainReserveBreached,
+            DrainToPrincipalError::Unanchorable { detail } => Self::DrainUnanchorable { detail },
+            DrainToPrincipalError::InFlight => Self::DrainInFlight,
+            DrainToPrincipalError::InputRaced => Self::DrainInputRaced,
+            DrainToPrincipalError::Refused { detail } => {
+                // Scalar-free planner reason (zero / exceeds spendable /
+                // uncoverable); logged server-side, category code on the
+                // wire.
+                tracing::info!(detail = %detail, "drain payment refused by the planner");
+                Self::InsufficientFunds
+            }
+            DrainToPrincipalError::FeeEstimate { detail } => {
+                tracing::warn!(detail = %detail, "drain fee estimate failed");
+                Self::FeeEstimationFailed
+            }
+            DrainToPrincipalError::FeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            },
+            DrainToPrincipalError::State { context, detail } => internal_detail(context, detail),
+            DrainToPrincipalError::Submit { detail } => {
+                tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
+                Self::SubmitAmbiguous
             }
         }
     }
@@ -1110,5 +1257,96 @@ mod tests {
         let data = err.data().expect("data");
         assert_eq!(data["verdict"], "rejected");
         assert_eq!(data["cause"], "fee_too_low");
+    }
+
+    /// The WI-RPC-5 F-2 pin, mechanically: the five drain refusals carry
+    /// `-29507..-29511` exactly, and the two `-29511` arms (in-flight seal
+    /// vs. input race) share the code while keeping distinct remedies in
+    /// their messages. Bites against a re-numbering or an accidental reuse
+    /// of the live `-29500..-29506` stake codes; it does NOT exercise the
+    /// engine paths that produce these errors (the façade suite does).
+    #[test]
+    fn drain_refusals_carry_the_pinned_code_table() {
+        let table: [(WalletRpcError, i32); 6] = [
+            (WalletRpcError::DrainNotStaker, -29507),
+            (WalletRpcError::DrainNoActivePersona, -29508),
+            (WalletRpcError::DrainReserveBreached, -29509),
+            (
+                WalletRpcError::DrainUnanchorable {
+                    detail: "curve-tree ingest behind the anchor age".into(),
+                },
+                -29510,
+            ),
+            (WalletRpcError::DrainInFlight, -29511),
+            (WalletRpcError::DrainInputRaced, -29511),
+        ];
+        for (err, code) in table {
+            assert_eq!(err.code().as_i32(), code, "{err:?}");
+        }
+
+        // The shared-code pair keeps distinct remedies.
+        assert!(WalletRpcError::DrainInFlight.message().contains("wait"));
+        assert!(WalletRpcError::DrainInputRaced.message().contains("retry"));
+
+        // The transient arm carries its cause in data, like -29500 does.
+        let err = WalletRpcError::DrainUnanchorable {
+            detail: "tree behind tip".into(),
+        };
+        assert_eq!(err.data().expect("data")["detail"], "tree behind tip");
+    }
+
+    /// `stake_in` mints no new codes: the no-persona arms are `-29500`
+    /// (with distinguishing `data.detail`), the transfer-build arms are the
+    /// `-291xx` family, and internal arms are category-only `-32603`.
+    #[test]
+    fn stake_in_reuses_send_and_stake_not_ready_codes() {
+        let err: WalletRpcError = StakeInError::NotStaking.into();
+        assert_eq!(err.code().as_i32(), -29500);
+
+        let err: WalletRpcError = StakeInError::NoActivePersona.into();
+        assert_eq!(err.code().as_i32(), -29500);
+        assert_eq!(
+            err.data().expect("data")["detail"],
+            "no active persona to fund"
+        );
+
+        let err: WalletRpcError = StakeInError::Send(SendError::InsufficientFunds {
+            needed: 10,
+            available: 5,
+        })
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::InsufficientFunds);
+
+        // Internal arm: category-only on the wire, no amounts.
+        let err: WalletRpcError = StakeInError::CoverOverflow { stake: 7, cover: 3 }.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
+        assert!(
+            !err.message().contains('7') && !err.message().contains('3'),
+            "amounts must not reach the wire: {}",
+            err.message()
+        );
+    }
+
+    /// The drain façade's fee arms preserve the send path's remedy split:
+    /// a refused *answer* is `-29109` with the numeric facts in `data`; a
+    /// failed *query* is `-29102` with nothing to carry.
+    #[test]
+    fn drain_fee_arms_preserve_the_29109_vs_29102_split() {
+        let err: WalletRpcError = DrainToPrincipalError::FeeUnreasonable {
+            reason: "tier above absolute cap",
+            rate: 1_000_000,
+            bound: 500_000,
+        }
+        .into();
+        assert_eq!(err.code().as_i32(), -29109);
+        let data = err.data().expect("data");
+        assert_eq!(data["rate"], 1_000_000);
+        assert_eq!(data["bound"], 500_000);
+
+        let err: WalletRpcError = DrainToPrincipalError::FeeEstimate {
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(err.code().as_i32(), -29102);
     }
 }

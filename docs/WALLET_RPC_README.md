@@ -30,11 +30,20 @@ requests + URIs (no subaddresses).
 
 Phase 4b SPECIFIED methods, WI-RPC-1 (receiving / fees / staking reads),
 WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), Phase 4c
-(`rescan_blockchain` via `Engine::start_rescan`), and WI-RPC-4
+(`rescan_blockchain` via `Engine::start_rescan`), WI-RPC-4
 (`get_wallet_info` + `Transfer.attribution` / `get_transfers.attribution`
-filter) are live. RESERVED methods (`unstake` / `claim` / `sign` /
-`verify` / air-gapped bundles / `match_transfer_to_request`) remain
-Engine-gated — see the OpenAPI header registry and `docs/FOLLOWUPS.md`.
+filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
+(`abandon_tx`), SJ-DQ-7 (`get_tx_note` / `set_tx_note`), and WI-RPC-5
+(archival principal staking actions: `stake_in`, `get_drain_balance`,
+`drain`; `get_balance.staked` / `claimable_rewards` are live projections,
+no longer hardcoded zeros) are live.
+
+RESERVED methods (`unstake` — gated on the Unbond producer — and
+`match_transfer_to_request` — gated on an Engine match method) remain
+Engine-gated; the claim-era names `claim` and `get_stakes` are REJECTED,
+not pending (emission claims are engine-side; `principal_stakes()` is
+RPC-forbidden as the P↔principal edge). See the OpenAPI header registry
+and `docs/FOLLOWUPS.md`.
 
 Honest `OUTGOING` transfer history landed with PR-SJ-2 (send-journal
 projection), closing the Phase 4b `get_transfers` OUTGOING-filter
@@ -49,6 +58,8 @@ a correlated burst of segment fetches an unanonymized segment server can
 count). `build_pending_tx` itself no longer stalls read RPCs — it runs
 under a read lock, serialized by that engine-owned permit.
 
-Beyond Phase 4b, `abandon_tx` is design-gated to Phase 4d (PR-SJ-3).
-See `docs/FOLLOWUPS.md` for both, and `docs/design/WALLET_SEND_RECORD.md`
-for the send-journal design round.
+One WI-RPC-5 caveat, disclosed rather than hidden: `drain` dispatches a
+sealed drain, but the confirmation/prune driver that settles it is still
+a named FOLLOWUPS item (WI-3 sibling) — the receipt is a dispatch fact,
+not a settlement fact. See `docs/FOLLOWUPS.md`, and
+`docs/design/WALLET_SEND_RECORD.md` for the send-journal design round.
