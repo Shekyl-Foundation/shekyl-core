@@ -52,7 +52,8 @@ pub(crate) const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
 /// Bond fee for the first-stake post, from one daemon fee snapshot.
 ///
 /// Named and separated from `first_stake`'s body so the gate is
-/// visible and testable: this is the P-lane's only fee decision, and
+/// visible and testable: the P-lane's one fee decision (now the shared
+/// [`p_lane_floor_fee`] below, which the drain façade also quotes), and
 /// until 2026-08-17 it was the one production `get_fee_estimates`
 /// consumer that did **not** go through [`ValidatedFeeEstimates`] —
 /// reading `economy` straight off the raw snapshot with no ceiling.
@@ -76,10 +77,25 @@ pub(crate) const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
 fn bond_fee_from_estimates(
     estimates: super::traits::FeeEstimates,
 ) -> Result<AtomicUnits, FirstStakeError> {
-    let estimates = ValidatedFeeEstimates::try_new(estimates).map_err(|e| match e {
+    p_lane_floor_fee(estimates).map_err(|e| match e {
         FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
         other => FirstStakeError::FeeEstimate(other.to_string()),
-    })?;
+    })
+}
+
+/// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
+/// economy tier over the [`BOND_SIZE_CEILING_BYTES`] weight ceiling. **The
+/// single fee decision for every `P`-lane spend** — the bond post (via
+/// [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
+/// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
+/// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
+/// that can drift. Callers map [`FeeEstimatorError`] onto their own error
+/// surface, preserving the `-29109` (refused answer) vs `-29102` (failed
+/// query) remedy split.
+pub(crate) fn p_lane_floor_fee(
+    estimates: super::traits::FeeEstimates,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    let estimates = ValidatedFeeEstimates::try_new(estimates)?;
     // `tx_fee::fee_from_weight`, not `FeeRate::calculate_fee_from_weight`:
     // the latter multiplies unchecked and documents that it may panic. The
     // validated cap makes overflow unreachable here, but a wallet path

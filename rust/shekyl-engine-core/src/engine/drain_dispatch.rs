@@ -88,15 +88,18 @@ use super::Engine;
 /// What one dispatched drain did: the assembled drain's public facts plus the
 /// network verdict. Secrets never cross the boundary — the contained
 /// [`PBoundBytes`](super::bond_assembly::PBoundBytes) redacts its own `Debug`.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt's
-// production reader is the RPC drain entry (rule-21, the same retirement
-// condition `submit_emission_claim`'s receipt carries); the PR e2e is the test
-// consumer.
-#[allow(dead_code)]
+/// The production reader landed with WI-RPC-5: the drain façade
+/// ([`drain_facade`](super::drain_facade)) projects [`Self::submit`] into the
+/// public [`DrainOutcome`](super::drain_facade::DrainOutcome).
 #[derive(Debug)]
 pub(crate) struct DrainReceipt {
     /// The dispatched drain exactly as assembled (persona-bound bytes + the
     /// swept-input reservation set) — the actor's reply embedded whole.
+    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this
+    // field's production reader is the drain confirmation/prune driver (the
+    // WI-3 sibling, still FOLLOWUPS); the PR e2e is the test consumer. The
+    // façade reads only `submit`.
+    #[allow(dead_code)]
     pub drain: AssembledDrain,
     /// The daemon's submit verdict (network-exposed / already mined).
     pub submit: SubmitSuccess,
@@ -218,11 +221,10 @@ where
     /// until durable pruning of spent funding outputs lands, so a confirmed-but-
     /// unpruned output can never be re-swept into a double-spend; tests pass
     /// [`SpentRecordsDurablyPruned::for_test`].
-    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the
-    // production caller is the RPC drain entry — the same rule-21 retirement
-    // condition `submit_emission_claim` carries; the PR regtest e2e is the test
-    // consumer.
-    #[allow(dead_code)]
+    // The `dead_code` staging allow retired with WI-RPC-5: the production
+    // caller the rule-21 note reserved (the RPC drain entry) landed as
+    // [`Engine::drain_to_principal`](super::drain_facade), which calls this
+    // seam.
     pub(crate) async fn submit_drain(
         self_arc: Arc<RwLock<Self>>,
         p_slot: PSlot,

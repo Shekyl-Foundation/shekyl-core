@@ -240,6 +240,12 @@ pub(crate) mod drain_assembly;
 /// `PendingDrain` before any send, dispatch through the persona-transport
 /// choke point (T-DS-2). Scheduling stays external.
 pub(crate) mod drain_dispatch;
+/// WI-RPC-5: the **public** drain façade over the CB-3 dispatch seam — one
+/// embedder-callable `drain_to_principal(payment)` with no slot / fee /
+/// destination parameters (type-level active-persona restriction; the
+/// canonical P-lane floor fee and the SP-R0 witness are quoted/minted
+/// internally). The wallet-RPC `drain` handler is the production caller.
+pub(crate) mod drain_facade;
 /// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
 /// §12.3): the sole drain-path site holding the funding records, projecting
 /// them into the aggregate scalar + stripped candidate operands the guarded
@@ -456,6 +462,12 @@ pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
 // the arm across the command boundary without reaching into the `pub(crate)`
 // drain-read module (mirrors the `FirstStakeError` re-export just above).
 pub use drain_read::DrainBalanceReadError;
+// WI-RPC-5 archival principal staking actions, re-exported flat for the
+// wallet-RPC layer (the same shape as `FirstStakeError` above): the public
+// drain façade's outcome/error pair and the `stake_in` error the handler
+// matches on for its refusal codes.
+pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
+pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
