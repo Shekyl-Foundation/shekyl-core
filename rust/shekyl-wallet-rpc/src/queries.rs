@@ -20,14 +20,15 @@ use shekyl_types::TxHash;
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    atomic_units_string, attribution_matches, outgoing_block_height, outgoing_transfer_state,
-    outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
+    atomic_units_string, attribution_matches, get_balance_result, outgoing_block_height,
+    outgoing_transfer_state, outgoing_transfer_view, parse_lookup_id, transfer_state,
+    transfer_view, TransferLookupId,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    capability_mode_str, GetBalanceResult, GetHeightResult, GetPrimaryAddressResult,
-    GetStakedBalanceResult, GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult,
-    ReceiveAttributionFilter, StakingInfoResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetStakedBalanceResult,
+    GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter,
+    StakingInfoResult, TransferDirection, TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -192,9 +193,20 @@ pub(crate) async fn get_balance(
     require_empty_object(params, "get_balance")?;
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    let ledger = engine.ledger();
-    let summary = ledger.balance();
-    let result = GetBalanceResult::from(&summary);
+    // Snapshot ledger fields, then drop the ledger guard before the
+    // staking read: `staking_read_view` takes its own brief `ledger.read()`
+    // for `staking_enabled`, and nesting that under a live guard deadlocks
+    // on non-reentrant `std::sync::RwLock` (same discipline as
+    // `get_wallet_info` below). Passing the already-observed flag keeps the
+    // two halves coherent with one ledger snapshot.
+    let (summary, staking_enabled) = {
+        let wallet = engine.ledger();
+        (wallet.balance(), wallet.staking.staking_enabled)
+    };
+    let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
+    let staking_view =
+        crate::staking::read_view_with_snapshot(&engine, staking_enabled, recovery_pending_reopen)?;
+    let result = get_balance_result(&summary, &staking_view.balance)?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
 }
@@ -250,15 +262,15 @@ pub(crate) async fn get_wallet_info(
         // `LedgerReadGuard` deadlocks on non-reentrant `std::sync::RwLock`.
         // Pass the already-observed flag so the balance/enabled half of this
         // aggregate stays coherent with the ledger snapshot above.
-        let (balance, wallet_height, restore_height, staking_enabled) = {
+        let (summary, wallet_height, restore_height, staking_enabled) = {
             let wallet = engine.ledger();
             let height = wallet.ledger.height();
-            let balance = GetBalanceResult::from(&wallet.balance());
+            let summary = wallet.balance();
             let restore_height =
                 i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
             let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
             let staking_enabled = wallet.staking.staking_enabled;
-            (balance, wallet_height, restore_height, staking_enabled)
+            (summary, wallet_height, restore_height, staking_enabled)
         };
         // After the guard above is dropped (non-reentrant lock): the
         // session-adoption flag rides the same aggregate so a wallet whose
@@ -282,6 +294,10 @@ pub(crate) async fn get_wallet_info(
             staking_enabled,
             recovery_pending_reopen,
         )?;
+        // WI-RPC-5: the one-glance balance projects its staking fields from
+        // the same authoritative view the staking block below reads — the
+        // two surfaces of this aggregate cannot disagree.
+        let balance = get_balance_result(&summary, &staking_view.balance)?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {

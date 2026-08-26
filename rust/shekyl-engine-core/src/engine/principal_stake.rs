@@ -33,7 +33,6 @@ use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
 use super::pending::{PendingTx, TxRecipient, TxRequest};
-use super::stake_engine::StakeEngineError;
 use super::stake_timing::OsRngGapAdapter;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -52,8 +51,15 @@ const _: () = assert!(
 
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
+///
+/// `pub` (WI-RPC-5): the wallet-RPC `stake_in` handler matches on these arms
+/// to pick its refusal code (`-29500` for the no-persona arms, the `-291xx`
+/// send codes via [`Send`](Self::Send)). The actor arm carries the
+/// crate-private `StakeEngineError`'s **rendering**, not the type — its
+/// messages are already user-facing and scalar-free, and the actor error
+/// hierarchy stays inside the crate (rule 36 posture).
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StakeInError {
+pub enum StakeInError {
     /// This wallet is not an archival staker (no `StakeEngine`) — there is no
     /// persona to fund.
     #[error("wallet is not staking; no persona to fund")]
@@ -61,9 +67,10 @@ pub(crate) enum StakeInError {
     /// No persona is currently active — mint + activate one before funding it.
     #[error("no active persona to fund")]
     NoActivePersona,
-    /// The stake engine could not project the active persona's receive address.
+    /// The stake engine could not project the active persona's receive address
+    /// (the crate-private actor error's own user-facing rendering).
     #[error("stake engine: {0}")]
-    StakeEngine(#[source] StakeEngineError),
+    StakeEngine(String),
     /// Encoding `P`'s receive address failed.
     #[error("encoding P's receive address: {0}")]
     Address(#[source] AddressError),
@@ -86,9 +93,10 @@ pub(crate) enum StakeInError {
     CoverOverflow { stake: u64, cover: u64 },
 }
 
-// `dead_code`: `stake_in` is the built PR-P2 method; its production caller is the
-// principal-stake RPC surface (PR-P3+). The end-test is the current exerciser.
-#[allow(dead_code, private_bounds)] // private_bounds: same posture as build_pending_tx_async
+// The `dead_code` staging allow retired with WI-RPC-5: the production caller
+// the PR-P2 note reserved (the principal-stake RPC surface) landed as the
+// wallet-RPC `stake_in` handler, which calls this `pub` method.
+#[allow(private_bounds)] // same posture as build_pending_tx_async
 impl<S, D, L, E, R, P, F> super::Engine<S, D, L, E, R, P, F>
 where
     S: EngineSignerKind,
@@ -131,10 +139,7 @@ where
     ///
     /// [`StakeInError`]: not staking, no active persona, address encode, or the
     /// underlying transfer build ([`SendError`] — insufficient funds, etc.).
-    pub(crate) async fn stake_in(
-        &mut self,
-        amount: AtomicUnits,
-    ) -> Result<PendingTx, StakeInError> {
+    pub async fn stake_in(&mut self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
         let request = self.stake_in_request(amount).await?;
         self.build_pending_tx_async(&request)
             .await
@@ -205,7 +210,7 @@ where
         let address = stake
             .active_persona_receive_address(self.network)
             .await
-            .map_err(StakeInError::StakeEngine)?
+            .map_err(|e| StakeInError::StakeEngine(e.to_string()))?
             .ok_or(StakeInError::NoActivePersona)?
             .encode()
             .map_err(StakeInError::Address)?;

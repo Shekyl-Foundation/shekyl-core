@@ -1475,6 +1475,61 @@ uint8_t shekyl_archival_serve_credit_extract(
     uint64_t* out_shard_id,
     uint64_t* out_settlement_epoch);
 
+/// Settlement-outcome row encoding (SO-D2).
+///
+/// C++ owns the table and the 48-byte key (the same ArchivalServeCreditKey
+/// encoding); Rust owns the 3-byte value, because the value carries the
+/// invariant that its outcome byte equals the fold over its counts. There is
+/// deliberately NO outcome parameter: supplying one would reopen at the
+/// boundary the disagreement the Rust type closes.
+///
+/// Writes SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES bytes to out_row on OK (0) and
+/// writes NOTHING on any error, so a caller that ignores the code cannot store
+/// a fabricated settlement.
+///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte,
+///   4 = issued == 0 (SO-D1: a pair the urn never reached is recorded by its
+///       ABSENCE; writing a zero-issued row would make absence ambiguous).
+///
+/// Codes 5 and 6 are READ-ONLY -- the writer cannot produce them; see
+/// shekyl_archival_settlement_row_validate below.
+uint8_t shekyl_archival_settlement_row(
+    uint32_t passes,
+    uint32_t issued,
+    uint8_t* out_row);
+
+/// Encoded length of a settlement row — a FIXED-SIZE FFI contract, so both
+/// sides agree on it at COMPILE time (rule 40) rather than through a runtime
+/// query. Rust pins the same number with `const _: () = assert!(...)` beside
+/// its definition; a divergence fails the build on whichever side moved.
+#define SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES 3
+
+/// Validate a STORED settlement row: re-fold its counts and confirm the stored
+/// outcome is the one they derive. Returns 0 when canonical, otherwise the
+/// same code the writer would have refused it with.
+///
+/// The read half of the invariant. The write path cannot emit a row whose
+/// outcome contradicts its counts, or a zero-issued row -- but until this
+/// existed the read path could not ASK, because the check lives in Rust and
+/// C++ cannot reach it, so a corrupt cell came back as a valid settlement.
+/// C++ does not parse these bytes to check them (rule 40); it asks.
+///
+/// Takes the three bytes as SCALARS rather than a pointer: the row is a fixed
+/// 3 bytes, so there is no null case, no length to agree on, and nothing for
+/// either side to reconstruct. A `const uint8_t*` here would have been a
+/// larger boundary for no gain.
+///
+/// Codes: 0 = canonical, 2 = passes > issued, 3 = issued exceeds one byte,
+/// 4 = issued == 0, and two the WRITER cannot produce because they describe a
+/// stored row that no fold could have emitted:
+///   5 = the outcome byte is not one of the three live tags (a zero-filled or
+///       garbage cell);
+///   6 = the outcome is a live tag but not the one its own counts fold to.
+/// Kept distinct because this is a FATAL diagnostic and "which corruption" is
+/// the whole value of the code -- 5 points at the cell, 6 at the row's
+/// contents. Reporting either as 2 would name a count desync that did not
+/// happen.
+uint8_t shekyl_archival_settlement_row_validate(uint8_t outcome, uint8_t passes, uint8_t issued);
+
 /// The verifier-derived challenge leaf index (RF-D6: never on the wire).
 uint8_t shekyl_archival_challenge_leaf_index(
     const uint8_t* p_canonical_id,
@@ -2801,6 +2856,33 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 /// gets the worst zone's wait. The whole export is a deletion target — see
 /// DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
+
+/// How long an ORIGIN waits before re-broadcasting its own still-unseen
+/// transaction -- seconds, per zone.
+///
+/// The base of the pool's re-broadcast escalation for a `relay_method::local`
+/// entry that has ALREADY BEEN SENT, replacing `MIN_RELAY_TIME` on that arm
+/// only. Derived rather than chosen: the rate is
+/// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`, so the origin asks "has this
+/// stem probably completed?" at the confidence the network already uses to
+/// answer it. On the anonymity timer that is 1148 s against a 346 s median;
+/// `MIN_RELAY_TIME` at 300 s sat BELOW the median, re-emitting while most
+/// embargoes along the origin's own stem were still running.
+///
+/// An unsent `local` entry (`relayed == false`) is NOT a caller: no stem was
+/// launched, so there is no completion to wait on, and the pool keeps
+/// `MIN_RELAY_TIME` there. See `local_relay_base` in `tx_pool.cpp`.
+///
+/// `zone` is `epee::net_utils::zone` as a byte. Originated traffic carries
+/// `origin_zone == invalid` -- it did not arrive over anything -- and
+/// `invalid` resolves to the anonymity class, which is both correct here (a
+/// surviving `local` IS an anonymity origin) and the fail-safe direction.
+///
+/// CONTRACT: never zero, and never below the pool's own `MIN_RELAY_TIME`
+/// (300 s) for any zone -- the value is a pure function of shipped constants,
+/// and `every_parameter_class_clears_the_pool_floor` pins both bounds for
+/// every parameter class. The divisor in `get_relay_delay` rests on the first.
+uint64_t shekyl_dandelionpp_origin_retry_interval_seconds(uint8_t zone);
 
 
 // ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────

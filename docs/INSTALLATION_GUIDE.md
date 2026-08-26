@@ -184,10 +184,18 @@ The two wallet binaries are built from the Rust workspace by
 `cargo` step is needed, and `cargo` is already a build prerequisite.
 
 **Platform note.** The wallet binaries are produced for Unix targets
-(Linux, macOS). They are **not built for Windows**: the Rust wallet stack
-is Unix-only today — see `docs/FOLLOWUPS.md`, "Rust wallet stack: no
-Windows support". A Windows build produces `shekyld` and the blockchain
-utilities as before.
+(Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`
+skips them there, so a Windows build produces `shekyld` and the
+blockchain utilities as before, and Windows release archives carry the
+daemon but no wallet.
+
+That skip is no longer because the code cannot be built: as of
+2026-08-25 both `shekyl-cli` and `shekyl-wallet-rpc` compile and link for
+`x86_64-pc-windows-msvc`, and their end-to-end tests pass there. What is
+unverified is everything *after* compilation — the CMake cross-compile
+path, staging, `install()`, and the archive layout — so the gate stays
+until that is done deliberately rather than as a side effect. See
+`docs/FOLLOWUPS.md`, "Rust wallet stack: no Windows support" (WP-W5).
 
 Typical output location:
 

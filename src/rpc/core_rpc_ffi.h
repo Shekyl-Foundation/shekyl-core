@@ -28,7 +28,6 @@
 
 // C FFI facade over core_rpc_server for consumption by Rust (shekyl-daemon-rpc).
 // JSON endpoints return heap-allocated strings freed with core_rpc_ffi_free_string().
-// Binary endpoints return heap-allocated buffers freed with core_rpc_ffi_free_buf().
 
 #pragma once
 
@@ -63,14 +62,6 @@ char* core_rpc_ffi_stem_tallies(core_rpc_handle* h);
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json);
 
-// Binary endpoints (/get_blocks.bin, /get_hashes.bin, etc.).
-// On success: sets *out_buf and *out_len, returns 0. Caller frees with core_rpc_ffi_free_buf.
-// On failure: returns -1 (unknown URI or deserialization error).
-int core_rpc_ffi_bin_endpoint(core_rpc_handle* h,
-    const char* uri,
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len);
-
 // JSON-RPC 2.0 method dispatch.
 // Returns a JSON string:
 //   {"ok":true,"result":{...}}                     on success
@@ -80,7 +71,6 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
     const char* method, const char* params_json);
 
 void core_rpc_ffi_free_string(char* s);
-void core_rpc_ffi_free_buf(uint8_t* buf);
 
 #ifdef __cplusplus
 } // extern "C"

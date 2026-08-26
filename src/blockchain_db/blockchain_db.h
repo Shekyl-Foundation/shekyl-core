@@ -277,15 +277,26 @@ struct txpool_tx_meta_t
   // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is
   // daemon-side C++ LMDB, re-verified at pre-flight rather than inherited).
   //
-  // TELEMETRY, not a routing field. Three scoped consumers, none delivered:
-  // U1 pool-loop routing — deleted with `relay_method::forward` (Q12-D3);
-  // U2 re-relay origin bucketing — retracted (`2cd0fb72`, not a leak fix);
-  // U3 zone-labelled `/get_stem_tallies` — collection zone, not this field.
-  // Fourth consumer, named 2026-08-13: the Q12-D6a isolation arm
-  // (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) — distinguish originated-on-anon
-  // from relayed-on-anon. Production routing does not read this. Reopen
-  // for rule-15 deletion if that run ships without a `get_origin_zone`
-  // reader besides the HF preservation path.
+  // LIVE PRODUCTION INPUT since 2026-08-25, and the rule-15 deletion clause
+  // below is therefore SPENT. `tx_pool.cpp`'s `local_relay_base` reads this
+  // field on every relay pass to pick the parameter class for an origin's
+  // re-broadcast interval (DAEMON_RELAY_PRIVACY.md §92.5c item 3): a value
+  // change here changes when a transaction is re-emitted. Deleting the field
+  // now silently reverts every origin to the clearnet wait.
+  //
+  // It reached that state having been telemetry with three scoped consumers,
+  // none delivered: U1 pool-loop routing — deleted with
+  // `relay_method::forward` (Q12-D3); U2 re-relay origin bucketing — retracted
+  // (`2cd0fb72`, not a leak fix); U3 zone-labelled `/get_stem_tallies` —
+  // collection zone, not this field. Fourth consumer, named 2026-08-13: the
+  // Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) — distinguish
+  // originated-on-anon from relayed-on-anon.
+  //
+  // The reading it acquired is narrow and worth stating so it is not widened
+  // by accident: the retry timer asks only "anonymity class or clearnet
+  // class?", and every entry that reaches it carries `invalid`, which resolves
+  // to the anonymity class. It is not a routing decision and does not select a
+  // peer.
   //
   // NO MIGRATION, and the reason is load-bearing: `zone::invalid == 0`, and a
   // record written before this field existed has these bits zero, so it

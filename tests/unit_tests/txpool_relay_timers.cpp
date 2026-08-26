@@ -46,6 +46,8 @@
 // forward-declares it), needed by init_blockchain's fakechain options.
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
+#include "net/net_utils_base.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
@@ -216,12 +218,15 @@ struct RelayTimerFixture
 
   bool init() { return init_blockchain(bap.bc, db); }
 
-  void put(relay_method method, time_t receive_time, time_t last_relayed_time)
+  //! `relayed` defaults to the sent case; the unsent one is a `local`-only
+  //! state (`insert_attested_tx`) and the tests that drive it say so.
+  void put(relay_method method, time_t receive_time, time_t last_relayed_time,
+           bool relayed = true)
   {
     txpool_tx_meta_t meta = make_meta(100, receive_time);
     meta.set_relay_method(method);
     meta.last_relayed_time = last_relayed_time;
-    meta.relayed = true;
+    meta.relayed = relayed;
     db->add_txpool_tx(txid, {blob.data(), blob.size()}, meta);
   }
 
@@ -265,6 +270,87 @@ TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
   fx.put(relay_method::stem, now - 100000, now + 3600);
   EXPECT_FALSE(fx.relayable())
     << "a stem tx must stay held until its embargo deadline passes";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §92.5c item 3: an ORIGIN's re-broadcast is derived, not `MIN_RELAY_TIME`.
+//
+// `originated_stays_in_zone` pins an anonymity-zone origin at `local`
+// permanently, so that entry lives on the re-broadcast branch for its whole
+// life. §15.4 cleared `MIN_RELAY_TIME` from the embargo's neighbourhood
+// because it "governs an already-fluffed transaction" — true when written, and
+// vacated by that predicate, which created a class that is never fluffed.
+//
+// At 300 s the origin re-emitted BELOW its own zone's embargo median (346 s).
+// The base is now the 1-in-10 survival quantile — the confidence the network
+// itself uses (`EMBARGO_FULL_TRAVEL_PROBABILITY`) — which is 1148 s.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(txpool_relay_timers, local_holds_past_min_relay_time)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+  ASSERT_GT(derived, 300) << "the derived origin retry must exceed MIN_RELAY_TIME, "
+                             "or this test cannot discriminate";
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // THE discriminating case: SENT, and last relayed 400 s ago — past
+  // MIN_RELAY_TIME (300 s), short of the derived interval. Reverting the base
+  // to MIN_RELAY_TIME turns this green→red, which is the whole point of the
+  // case. `relayed` is what separates it from
+  // `an_unsent_local_still_falls_back_at_min_relay_time`, which is the same
+  // 400 s and expects the opposite verdict.
+  fx.put(relay_method::local, now - 400, now - 400, /*relayed=*/true);
+  EXPECT_FALSE(fx.relayable())
+    << "an origin must not re-emit at MIN_RELAY_TIME: that is inside its own "
+       "zone's embargo median, so the retry fires while the stem is still "
+       "propagating normally";
+}
+
+TEST(txpool_relay_timers, local_is_released_after_the_derived_interval)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // The other side, so the hold above is not simply "local never relays".
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60),
+         /*relayed=*/true);
+  EXPECT_TRUE(fx.relayable())
+    << "past the derived interval the origin's backstop must fire; a hold with "
+       "no release is not a backoff, it is a disarm nobody ruled on";
+}
+
+TEST(txpool_relay_timers, an_unsent_local_still_falls_back_at_min_relay_time)
+{
+  const time_t now = time(nullptr);
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // `insert_attested_tx`'s state: stamped `local`, never sent, this loop named
+  // as the fallback if the engine's fire-and-forget submit nudge missed. There
+  // is no stem to have completed and no embargo anywhere, so the derived
+  // interval provisions against an event that cannot have happened -- it would
+  // be 848 s of added latency on a FIRST send.
+  //
+  // Same 400 s as `local_holds_past_min_relay_time`, which is the point: the
+  // two cases differ only in `relayed`, so the base must discriminate on
+  // exactly that axis. Deleting the `!meta.relayed` arm of `local_relay_base`
+  // turns this green->red.
+  fx.put(relay_method::local, now - 400, now - 400, /*relayed=*/false);
+  EXPECT_TRUE(fx.relayable())
+    << "a local tx that was never sent must not inherit the origin's stem-"
+       "completion wait: the nudge-missed fallback is a liveness question, "
+       "not a privacy one";
 }
 
 TEST(txpool_relay_timers, fluff_still_obeys_min_relay_time)

@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
+  FFI dispatch bridge is deleted (RK-4b).** With RK-4a's `/get_o_indexes.bin`
+  this was the last `.bin` route reaching C++, so `dispatch_bin`,
+  `bin_handler!`, `CoreRpc::bin_endpoint`, `core_rpc_ffi_bin_endpoint`,
+  `core_rpc_ffi_free_buf`, the `DBIN` macro, `bin_fn` and `get_bin_table`
+  all go: the binary half of the epee dispatch bridge is gone ahead of RK-X.
+  `free_buf` had no caller once the endpoint that allocated through it was
+  deleted, and the header still advertised binary endpoints returning
+  buffers through it.
+  The oracle capture settled a question the C++ declaration would have
+  answered wrongly. `block_complete_entry` has five KV members and this
+  handler sets two, so `pruned`, `block_weight` and `attestation_witness`
+  never reach this wire — and with `pruned` false the map serializes `txs`
+  as an **array of strings**, dropping each transaction's prunable hash.
+  The array-of-objects form exists only on the p2p path, so modelling it
+  here would have carried a variant the daemon cannot emit.
+  Two behaviours are recorded rather than silently carried. A height the
+  chain cannot produce still returns the blocks read **before** it, as the
+  C++ did — it cleared its list once before the loop and returned from the
+  failure without clearing again. And the restricted listener's 1000-block
+  cap now **fires**: the C++ gated it on `m_restricted && ctx` while the
+  bridge always passed a null `ctx`, so the check was dead and a restricted
+  listener accepted any number of heights. That is a deliberate fix, not
+  parity.
+  The engine's timing rig stops hand-rolling the request and reply walk;
+  `Section::collect_bytes_named`, a tree-scanning helper that existed for
+  that walk, goes with its only caller, and `shekyl-engine-core` drops its
+  direct dependency on the codec.
+
 ### Removed
 
 - **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
@@ -15,6 +46,80 @@
   `docs/DAEMON_RPC_RUST.md`.
 
 ### Fixed
+
+- **Every password rotation on Windows failed, and the crate that owns the
+  defect was tested on no Windows machine anywhere.** `rotate_password`
+  replaces `.wallet.keys` through the atomic writer while the wallet handle
+  still holds `LockFileEx` on byte 0 of it. `NamedTempFile::persist` issues
+  `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else, and a
+  byte-range lock on the target makes that `ERROR_ACCESS_DENIED` — surfaced
+  as `AtomicWriteRename` carrying os error 5, flattened by the RPC's classifier into
+  `-32603 "password rotation failed"`. `std::fs::rename` issues the same
+  call *and* retries on `ERROR_ACCESS_DENIED` through
+  `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics, which
+  supersedes the open target rather than deleting it, so step 4 is now
+  `TempPath::keep` + `rename`. The `keep` is not a cleanup formality: it is
+  the `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)` that `persist` performed as
+  its own first step, and without it the staged file's
+  `FILE_ATTRIBUTE_TEMPORARY` — which asks the cache manager to avoid
+  writing the data back while cache is available — rides onto
+  `.wallet.keys`, leaving a permanent wallet artifact permanently marked
+  temporary. It does **not** undo the preceding `sync_all`, which is
+  `FlushFileBuffers` on Windows and flushes unconditionally; what it
+  misdescribes is the file's whole subsequent life, as false metadata and
+  as a standing hint to any later writer that does not flush explicitly.
+  `keep` also disarms `tempfile`'s cleanup, so a failed rename now unlinks
+  the staged file explicitly instead of stranding it beside the wallet. This is the same class as the mandatory-lock bug in the keys-file
+  read: POSIX-shaped reasoning about file replacement, invisible on Linux
+  because `imp::keep` is a no-op there and `rename(2)` never cared about an
+  advisory `flock`. Four tests pin it — `persist` must stay refused
+  over a locked target on Windows and `rename` must stay able to supersede
+  it, the target must never be left marked temporary, and the whole
+  rotation shape must work under a live `KeysFileLock`. Known limitation,
+  stated rather than discovered: the `FileRenameInfoEx` path needs NTFS, so
+  rotation with a live lock still fails on exFAT or a share without
+  POSIX-semantics rename.
+
+- **Two `shekyl-engine-file` test oracles read the keys file through a
+  second handle**, which is `ERROR_LOCK_VIOLATION` on Windows for the same
+  mandatory-lock reason, so they could not run there at all. They now read
+  with no handle open. Reading the handle's cached envelope would have been
+  worse than leaving them broken: it would make a test whose entire purpose
+  is detecting an on-disk rewrite blind to one.
+
+- **`AtomicWriteRename` was reported for a step that may never have run.**
+  A `TempPath::keep` failure — the staged file's `FILE_ATTRIBUTE_TEMPORARY`
+  clear on Windows — was wrapped in the variant whose own documentation says
+  it carries the error from `rename(2)` specifically, so an error naming the
+  swap could be raised before any swap was attempted. Split into
+  `AtomicWriteFinalizeStaged`, because the two have different causes and
+  different remedies and one name cannot carry both. This is not only
+  tidiness: `keep()` leaves `tempfile`'s cleanup guard *armed* while a failed
+  rename does not, so the conflation had made the cleanup-arm test unable to
+  tell, on Windows, whether the arm it guards had run at all. Fixing the
+  error model removed that gap instead of documenting it. Also corrected:
+  the module and variant docs claimed the staged file "is removed" on
+  failure — cleanup is best-effort from both owners (`tempfile`'s guard
+  ignores unlink errors; ours logs and continues). The guarantee is that the
+  **target is byte-unchanged**; a stray `.shekyl-tmp` sibling is possible,
+  and is clutter rather than a wallet artifact.
+
+- **`BuildRust.cmake`'s Windows skip was justified by a blocker that no
+  longer exists.** Its comment said the Rust wallet stack was Unix-only, that
+  the Windows port was still an open design question (named-pipe ACLs vs.
+  UDS), and that building there would fail on the first of many sites. WP-Q1
+  ruled the pipe, WP-W2 shipped it, and both binaries were observed building
+  and linking for `x86_64-pc-windows-msvc` with `rpc_session_e2e` passing.
+  The rationale is corrected; **the gate is deliberately not flipped**, because
+  compiling is not installing and the CMake path, staging, `install()` and the
+  archive layout are all still unverified. WP-W5 owns that removal.
+
+- **`shekyl-engine-file` joined the Windows scouting step.** It owns the
+  atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and no Windows lane
+  covered it. The rotation bug therefore surfaced as an opaque `-32603`
+  from a `shekyl-wallet-rpc` lifecycle test instead of as four red tests in
+  the crate that owns it.
 
 - **The submit-shim fixture paid a fee it never put in the transaction.**
   `make_tx` derived a floor-clearing fee, asserted it cleared the floor,
@@ -76,6 +181,31 @@
   a restoration of the epee structs (`docs/DAEMON_RPC_RUST.md`).
 
 ### Added
+
+- **Archival staking parity on wallet-RPC and CLI (WI-RPC-5).** Three new
+  wallet-RPC methods over Engine surfaces that were built but unwired:
+  `stake_in` (fund the staking balance with an ordinary principal
+  transfer; same pending-tx confirm/submit path as `build_pending_tx`;
+  carries the GF-7 change-co-presence disclosure in the contract and the
+  CLI pre-confirm print), `get_drain_balance` (two-armed: `ready` with the
+  spendable amount, or `syncing` — never `"0"` while unanchored), and
+  `drain` (`{amount}` only — **no fee, destination, or `p_slot`
+  parameters**; the fee is the canonical P-lane floor computed
+  engine-side, the destination is engine-pinned to the principal, and the
+  persona is resolved from live actor state by the new
+  `Engine::drain_to_principal` façade, which keeps the DS-4
+  `EXIT_FEE_RESERVE_ATOMIC` gate on live-persona drains). The three
+  schemas set `additionalProperties: false` and the params structs use
+  `#[serde(deny_unknown_fields)]`, so extra keys answer `-32602` instead
+  of being silently dropped; drain application errors are pinned at
+  `-29507..-29511`. `get_balance.staked` and `.claimable_rewards` are now
+  live projections from the staking view instead of hardcoded `"0"`. New
+  CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
+  `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
+  and `get_stakes` are REJECTED (engine-side claims; archival firewall);
+  `unstake` stays RESERVED on the Unbond producer. The drain
+  confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
+  dispatch fact, not a settlement fact, and both surfaces say so.
 
 - **A CI gate that makes the RPC liveness rule executable
   (`ci/rpc-route-liveness`).** `DAEMON_RPC_RUST.md` has always said a

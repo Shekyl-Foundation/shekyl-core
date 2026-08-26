@@ -387,16 +387,30 @@ endif()
 # tars whatever `bin/` holds, so this copy is what puts the binaries into the
 # release archives.
 #
-# NOT built for Windows. The Rust wallet stack is Unix-only today, and not by
-# oversight: `shekyl-cli` speaks to the RPC over a Unix domain socket, and
-# `shekyl-wallet-rpc` gates that socket to 0600 because its UDS deployments
-# run with HTTP auth disabled ("auth rides the transport"), as does the
-# scripted seed export. Those are security boundaries, so a Windows port is a
-# design question (named-pipe ACLs vs. UDS) and not a `cfg` sweep — see
-# docs/FOLLOWUPS.md "Rust wallet stack: no Windows support". Building here
-# would fail the whole Windows tree on the first of many such sites; skipping
-# keeps the C++ daemon building exactly as before and leaves one tracked
-# blocker instead of a half-ported wallet.
+# NOT built for Windows — but no longer for the reason this comment used to
+# give, and the difference matters to anyone deciding whether to flip the line.
+#
+# The original rationale said the Rust wallet stack was Unix-only, that a
+# Windows port was an unanswered design question (named-pipe ACLs vs. UDS), and
+# that building here would fail on the first of many such sites. All three are
+# now false. WP-Q1 ruled the named pipe, WP-W2 shipped it, `shekyl-win-sec` IS
+# the named-pipe ACL half, and on 2026-08-25 both binaries were observed to
+# build and link for `x86_64-pc-windows-msvc` on a Windows box
+# (`cargo build --locked -p shekyl-cli -p shekyl-wallet-rpc --bins`, exit 0),
+# with `shekyl-cli`'s `rpc_session_e2e` passing there. A comment naming as an
+# open blocker the exact thing a completed round closed is the drift this repo
+# keeps finding.
+#
+# What is still unverified is everything between "the binaries compile" and
+# "the release archive contains a working wallet": this CMake path itself
+# (which cross-compiles with its own target/linker wiring, not the host cargo
+# build that was observed), staging into `bin/`, `install()`, and the archive
+# layout. Compiling is not installing. So the skip stays until WP-W5 removes
+# it deliberately, together with the CI job that builds and smoke-tests both
+# binaries — see docs/FOLLOWUPS.md "Rust wallet stack: no Windows support" and
+# `WINDOWS_WALLET_SUPPORT.md` §8. Flipping this line on the strength of a
+# `cargo build` alone would be exactly the half-ported wallet the original
+# rationale was right to refuse.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
     set(_shekyl_rust_bins shekyl-cli shekyl-wallet-rpc)
 

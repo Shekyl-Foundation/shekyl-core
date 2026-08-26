@@ -44,7 +44,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (27 covered, 3 planned, 2 rejected, 49 out of scope)
+## Parity matrix (29 covered, 1 planned, 2 rejected, 49 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
@@ -98,7 +98,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
 | 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
-| 50 | `get_tx_note` | N/A | Planned | RPC **landed** (PR-SA-4 / SJ-DQ-7): `get_tx_note` in [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml). Only the CLI command is outstanding — unblocked, not gated |
+| 50 | `get_tx_note` | `get_tx_note` | Covered | Native `get_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. An absent note is also the answer for an unknown txid — the note store carries no existence claim |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
 | 52 | `hw_reconnect` | N/A | Out of scope | Hardware wallet, not supported |
 | 53 | `import_outputs` | N/A | Out of scope | As row 45 |
@@ -117,7 +117,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 66 | `set_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 67 | `set_log` | N/A | Out of scope | Log level, use RUST_LOG env var |
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
-| 69 | `set_tx_note` | N/A | Planned | RPC **landed** (PR-SA-4 / SJ-DQ-7): `set_tx_note` in [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml); empty note clears, 4096-UTF-8-byte ceiling. Only the CLI command is outstanding — unblocked, not gated |
+| 69 | `set_tx_note` | `set_tx_note` | Covered | Native `set_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. The note is the verbatim line remainder; a missing note is a usage error, never a silent clear (the wire's empty-note clear stays RPC-only). 4096-UTF-8-byte ceiling |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |
 | 71 | `start_mining` | N/A | Out of scope | Mining, daemon concern |
 | 72 | `start_mining_for_rpc` | N/A | Out of scope | RPC mining, removed |
@@ -130,3 +130,16 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 79 | `thaw` | N/A | Out of scope | As row 47 |
 | 80 | `unspent_outputs` | N/A | Out of scope | UTXO listing, low priority |
 | 81 | `welcome` | N/A | Out of scope | Interactive tutorial, replaced by help |
+
+## Shekyl-native commands with no simplewallet ancestor
+
+Capabilities `shekyl-cli` carries that the wallet2-era CLI never had. Same
+legend; numbered `S<n>` so the 81 historical rows stay stable.
+
+| # | shekyl-cli command | RPC method | Status | Notes |
+|---|---|---|---|---|
+| S1 | `request new` / `requests list` / `make_uri` / `parse_uri` | `create_payment_request` etc. | Covered | The payment-request receive-attribution surface (WI-RPC-1); replaces accounts/subaddresses per the 2026-07-19 note above |
+| S2 | `abandon <txid>` | `abandon_tx` | Covered | Give up on a dispatched send (PR-SJ-3); CLI landed WI-RPC-5. The copy states that input locks stay held until confirmed-absent evidence releases them, and a late confirmation flips the row back to CONFIRMED |
+| S3 | `stake_in <amount>` | `stake_in` | Covered | Fund the staking balance with an ordinary principal transfer (WI-RPC-5). Amount-only grammar — cover is system-drawn, no `P` address on the wire. Prints the GF-7 change-co-presence disclosure before confirming (residual carried in [`FOLLOWUPS.md`](FOLLOWUPS.md)) |
+| S4 | `drain_balance` | `get_drain_balance` | Covered | Aggregate drainable staking amount (WI-RPC-5); two-armed — while syncing it says so and never prints a zero that would lie (rule 82 / F-D2) |
+| S5 | `drain <amount>` | `drain` | Covered | Move staking funds back to this wallet (WI-RPC-5). No fee/destination/slot grammar exists, by contract: fee is the canonical P-lane floor, destination is engine-pinned to this wallet (T-DS-3); flag-shaped tokens are refused at parse |

@@ -196,6 +196,39 @@ writes a per-command exit table to the job summary, and fails the step (still
 non-blocking) when any command failed — so "informational" means *reported*,
 not *buried*.
 
+### 4.4 Fourth run (`dev` @ `4a76f490a`, 2026-08-23): the first machine with an interactive logon, and P-12's first result anywhere
+
+`LP7760-W1XMP6G3`, Windows 11 Enterprise 23H2 `10.0.22631.7517`, one console
+session, Medium integrity, not elevated; `rustc 1.94.0` per `rust-toolchain`.
+This is the machine §3 was waiting for — every prior run was CI, which has no
+interactive logon.
+
+| Date | Probe | Machine / build | Result | Consequence |
+|---|---|---|---|---|
+| 2026-08-23 | P-1, P-2, P-3, P-5, P-6, P-7, P-8, P-9, P-14, P-15, P-16 | `LP7760-W1XMP6G3`, `10.0.22631.7517` | **PASS** (11/11) | §1 reproduces off CI, on an account that is neither the CI service account nor an administrator — so the §4.2 platform fact about default-owner objects is not masking anything here |
+| 2026-08-23 | **P-12** (Low-IL opener) | `LP7760-W1XMP6G3`, `10.0.22631.7517` | **PASS — first execution anywhere** | A genuinely Low-integrity child was refused `ERROR_ACCESS_DENIED`, as predicted. **WP-D4 holds**: the server-side half blocks the only in-scope adversary per [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md) §6, and the client-side IL check is not load-bearing alone. Implementation, controls and the negative control in [`WINDOWS_WALLET_PROBE_RESULTS.md`](WINDOWS_WALLET_PROBE_RESULTS.md) §4 |
+| 2026-08-23 | P-13 (session separation) | `LP7760-W1XMP6G3` | **UNRUN** | **The blank stays a blank.** Two blockers, and the code one binds first: no P-13 probe exists in the tree at all, and this machine has one interactive session. Not approximated — a single-session stand-in would assert something P-13 does not ask |
+
+**P-12 was refused by the platform default, not by our label.** Recorded here
+because it qualifies what the pass means, and kept out of the prediction per
+§5. The same descriptor *minus* the mandatory label
+(`OwnerOnlyDescriptor::without_label_for_testing` — same owner, same
+session-scoped DACL) **also** refused the Low child: the child shares our logon
+session so the DACL never blocks it, and an unlabelled object is already Medium
+to the OS. This **confirms** `lib.rs`'s standing claim that
+`MEDIUM_INTEGRITY_SACL` is "an assertion rather than a gap being closed" —
+now observed rather than asserted. Deleting the string would not open the hole
+on this build; it is defence-in-depth against a future change to the default,
+which is a reason to keep it and a reason to re-run this if that default ever
+moves.
+
+**On the probe being an example rather than a `#[test]`.** P-12 needs a real
+second process at Low integrity, and `scripts/ci/check_probe_registry.py`
+asserts that §2/§3 probes have **no** test function in `tests/probes.rs`. A
+`p12_*` test would be a claim that this runs in CI, which §3 pre-declares it
+does not — so P-12 stays in §3, the gate stays green, and the runner's
+non-`-CiOnly` path is what executes it.
+
 ## 5. What a failure does *not* license
 
 Rewriting a prediction to match an observation. If a probe fails, the entry

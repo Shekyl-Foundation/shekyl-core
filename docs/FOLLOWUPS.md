@@ -317,6 +317,22 @@ sustainability is unaffected by the recalibration.
   emission claim) have a plan-doc home. *Target: V3.0 pre-genesis —
   this is a genesis-freeze-sensitive surface, not a V3.1 item.*
 
+  **UPDATE 2026-08-26 (WI-RPC-5): the drain leg is user-reachable; the
+  registry no longer holds claim-era placeholders.** The `P`→principal
+  drain landed on RPC + CLI (`drain` over `Engine::drain_to_principal`;
+  `get_drain_balance` alongside), so of the three `unstake` legs only the
+  `Unbond` producer and the emission claim's wallet-side builder remain
+  unbuilt — the entry's core (bond-out is impossible) stands. In the same
+  contract pass, `unstake` stayed RESERVED with its prerequisite rewritten
+  to the Unbond producer, and the claim-era names were resolved per
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §0: **`claim` is REJECTED as a user RPC**
+  (emission claims are assembled and dispatched engine-side; reopen only
+  if a named operator needs a manual trigger) and **`get_stakes` is
+  REJECTED** (the archival firewall — `principal_stakes()` is
+  RPC-forbidden as the P↔principal edge; the staking reads +
+  `get_drain_balance` are the replacement). Both rejections are recorded
+  rule-21-shaped in the `wallet_rpc.yaml` header registry.
+
 - **Release-asset manifest signing owed before the first non-RC release
   tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
   task, not an open decision).** The original entry posed a three-way
@@ -2127,6 +2143,59 @@ sustainability is unaffected by the recalibration.
   duplicate the driver design WI-3 owns. **Reopen when** WI-3's dispatch-driver
   slice is scoped, or an RPC drain entry needs a live confirmation path before
   then. **Target: V3.0 pre-genesis.**
+  **UPDATE 2026-08-26 (WI-RPC-5): the second reopen criterion has fired** —
+  the RPC/CLI `drain` entry landed (`Engine::drain_to_principal` over
+  `submit_drain`; `wallet_rpc.yaml` `drain`), so a user can now dispatch a
+  drain whose confirmation path is unwired: the receipt is a dispatch fact,
+  not a settlement fact, and a `PendingDrain` that the network drops stays
+  pending until this driver exists. The sharper consequence (surfaced by the
+  PR #567 review): the seal never releases on SUCCESS either — a confirmed
+  drain's record stays live, so the persona's drain lane refuses `-29511`
+  across sessions until this driver retires it. The money itself settles
+  (the principal output is scanned normally); only the drain-again lane is
+  sealed. The contract and the CLI copy disclose
+  this rather than imply settlement. The driver remains the named blocker
+  and WI-3 remains its owner; WI-RPC-5 deliberately did not re-implement it
+  (plan pin: "this PR does not re-implement that driver"). The entry's
+  urgency changed, not its shape. **Target: V3.0 pre-genesis (now
+  user-reachable — schedule with the next WI-3 slice).**
+
+- **GF-7 `stake_in` change-co-presence residual — shipped with a warning,
+  not closed** (added 2026-08-26; WI-RPC-5,
+  `feat/wallet-rpc-wi-rpc-5-principal-stake`). `Engine::stake_in` funds the
+  staking balance with an ordinary principal transfer, which means the
+  `P`-output co-presents with the principal's own change output in the same
+  transaction — the open GF-7 linkage question documented at
+  `rust/shekyl-engine-core/src/engine/principal_stake.rs` (the "change
+  co-presence" doc block). WI-RPC-5 exposed `stake_in` on RPC + CLI
+  **with the `get_tx_proof` disclosure pattern** (yaml method description +
+  CLI pre-confirm print) rather than waiting on GF-7 — a decided
+  disposition, not an oversight. **Named carrier:** the bond-funding-
+  separation work (GF-7 family) — separating the staking-fund output from
+  the funder's change tx is what closes the linkage, at which point the
+  disclosure copy is deleted in the same PR. **Reopen when** that
+  separation design is scoped; the re-evaluation shape is its design
+  round's Round 1. **Target: V3.0 pre-genesis (privacy > features; the
+  warning is a stopgap, not a resolution).**
+
+- **Workspace-wide `deny_unknown_fields` on the remaining wallet-RPC params
+  structs — the F-1 out-of-scope half** (added 2026-08-26; WI-RPC-5 review
+  finding F-1). Serde's default drops unknown request keys silently, so
+  every params struct without `#[serde(deny_unknown_fields)]` accepts —
+  and ignores — fields the contract does not name; a client typo or a
+  steering attempt is swallowed instead of answered `-32602`. WI-RPC-5
+  fixed this for its own three methods (`StakeInParams`, `DrainParams`,
+  `GetDrainBalanceParams`, with `additionalProperties: false` in the yaml
+  and HTTP tests pinning the refusal) because the anti-fingerprint pin
+  made silent acceptance a correctness hazard there; the other SPECIFIED
+  methods still deserialize permissively. **The fix is mechanical** (one
+  attribute per struct + `additionalProperties: false` per schema + a
+  regression test per method) but touches every params struct, so it is
+  its own sweep PR, not a rider. **Reopen when** scheduled; the
+  re-evaluation shape is one PR sweeping `rust/shekyl-wallet-rpc/src/`
+  params structs against the yaml, with the contract updated in the same
+  change. **Target: V3.0 pre-genesis (contract-strictness debt compounds
+  with every new client).**
 
 - **Wallet thin-market entry disclosure — the §13.2 re-disposition's
   build item** (added 2026-07-19; `ARCHIVAL_REWARD_GATE_M1.md` §13.1,
@@ -2330,6 +2399,58 @@ sustainability is unaffected by the recalibration.
   `BuildRust.cmake` still skips the Rust binaries there, the scouting step is
   still informational (WP-W5 owns the flip, once observed green), and Windows
   release archives still carry the daemon but no wallet.
+
+  **UPDATE 2026-08-25 — the scouting step was red on `dev`, and WP-W5's
+  precondition was not met.** The `shekyl-cli` end-to-end half (P-10) executed
+  here for the first time on 2026-08-24 and **passed**, which closes the last
+  transport-side unknown. But the `shekyl-wallet-rpc` half exited 101 on every
+  run: `lifecycle_create_open_close_change_password` failed with
+  `-32603 "password rotation failed"`. It is the same test that found the
+  mandatory-lock bug, now failing one step further along — the shape §2 has
+  always predicted, where clearing one error reveals the next.
+
+  The cause was **`NamedTempFile::persist` cannot replace a file under a
+  byte-range lock on Windows**, and `rotate_password` replaces `.wallet.keys`
+  while the wallet handle holds exactly such a lock. Fixed in the atomic
+  writer (see `CHANGELOG` and `atomic.rs`'s *Why not `persist`*).
+
+  **The reporting lesson is the one worth carrying.** `shekyl-engine-file`
+  owns the atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and **no Windows lane
+  tested it**. The scouting step covered only `shekyl-wallet-rpc` and
+  `shekyl-cli`, which reach that crate only through the RPC surface, so a
+  defect in four of its own unit tests arrived as one opaque `-32603` from a
+  lifecycle test in a different crate. It is now in the scouting list. A
+  crate whose entire job is platform file behaviour was the last one that
+  should have been covered only by proxy, and the gate asymmetry recorded
+  above described the `cfg(windows)` *arms* while missing that a whole
+  platform-critical crate sat outside every Windows lane.
+
+  **The headline claim of this entry is now FALSE, and it is corrected here
+  rather than quietly left standing.** This entry has said since 2026-08-18
+  that `shekyl-cli` and `shekyl-wallet-rpc` "do not compile" for Windows, and
+  `BuildRust.cmake`'s skip said the same in stronger terms — that a Windows
+  port was still an unanswered design question and that building would fail on
+  the first of many sites. Measured on 2026-08-25:
+  `cargo build --locked -p shekyl-cli -p shekyl-wallet-rpc --bins` on a Windows
+  box **exits 0 and produces both `.exe`s**, and `shekyl-cli`'s
+  `rpc_session_e2e` passes there — so the cli's session path *runs*, not merely
+  type-checks. The design question was answered by WP-Q1 and shipped by WP-W2;
+  the prose outlived it. `BuildRust.cmake`'s comment is corrected in the same
+  commit.
+
+  **What that does NOT license is flipping the build gate.** Compiling is not
+  installing. Unverified: the CMake path itself (it cross-compiles with its own
+  target/linker wiring, not the host cargo build that was observed), staging
+  into `bin/`, `install()`, and the archive layout — which is what
+  `contrib/gitian/*.yml` tars. WP-W5 removes the gate deliberately, with the CI
+  job that builds and smoke-tests both binaries; nobody should remove it on the
+  strength of a `cargo build`.
+
+  **Still unmet:** the Rust binaries are not built for Windows *through CMake*,
+  the scouting step is still `continue-on-error`, and Windows release archives
+  still carry the daemon but no wallet. WP-W5's flip now needs one green
+  scouting run including the engine-file lane.
 
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
@@ -4687,7 +4808,11 @@ sustainability is unaffected by the recalibration.
     of lifecycle order** (an RPC/CLI that unbonds an arbitrary held slot while an
     older funded one remains bonded): it must either enforce in-order defunding
     or the reconstruction must widen to inspect every slot below the cursor, not
-    just the burned-cursor lookahead. The drain RPC entry is not yet built.
+    just the burned-cursor lookahead. UPDATE 2026-08-26 (WI-RPC-5): a drain RPC
+    entry now exists (`drain` over `Engine::drain_to_principal`), but it **cannot
+    fire this criterion by construction** — the façade takes no slot argument,
+    resolves only the live active persona, and does not unbond anything; the
+    criterion still awaits an unbond producer that could select arbitrary slots.
     **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with

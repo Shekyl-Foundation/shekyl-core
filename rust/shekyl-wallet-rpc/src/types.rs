@@ -232,15 +232,27 @@ pub struct WalletHandle {
 pub type AtomicUnitsString = String;
 
 /// `get_balance` result.
+///
+/// As of WI-RPC-5 the staking fields carry live values projected from the
+/// same authoritative staking view `get_staked_balance` reads (see
+/// `project::get_balance_result`). For a non-staker wallet they are a
+/// genuine `"0"` — nothing is staked — never a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// Spendable liquid balance (maps from unlocked until staking lands).
+    /// Spendable liquid balance (maps from unlocked until staking splits
+    /// liquid from locked principal).
     pub liquid: AtomicUnitsString,
-    /// Staked principal; `"0"` until Stage 3 stake methods land.
+    /// Bond principal under confirmed live bonds PLUS principal committed
+    /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
+    /// bonded legs (the legs stay separate on that method).
     pub staked: AtomicUnitsString,
     /// Unlocked / spendable now.
     pub unlocked: AtomicUnitsString,
-    /// Claimable staking rewards; `"0"` until Stage 3.
+    /// Emission-reward money received and still unspent in staking-side
+    /// outputs — the same quantity as
+    /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
+    /// "accrued but unclaimed" entitlement (no such user-visible quantity
+    /// exists in the archival design).
     pub claimable_rewards: AtomicUnitsString,
     /// Awaiting-confirmation / in-flight spend lock.
     pub pending: AtomicUnitsString,
@@ -824,6 +836,59 @@ pub struct StakingInfoResult {
     /// standoff is not yet serving anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posture: Option<String>,
+}
+
+/// `get_drain_balance` result (WI-RPC-5 archival staking actions).
+///
+/// Two-armed by contract (F-D2 / rule 82): a wallet that cannot yet anchor
+/// the drainable set answers `syncing`, NEVER `"0"` — a zero while syncing
+/// would be a lie a client cannot distinguish from an empty pool. The tag
+/// mirrors the yaml `oneOf` discriminant exactly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GetDrainBalanceResult {
+    /// The drainable set is anchored; `spendable` is the aggregate scalar
+    /// across the active persona's pool (deliberately no per-epoch or
+    /// per-output breakdown — the aggregate is the firewall-safe read).
+    Ready {
+        /// Aggregate drainable amount (atomic units, decimal string).
+        spendable: AtomicUnitsString,
+    },
+    /// The read is transiently unanchorable (e.g. curve-tree ingest behind
+    /// the anchor age). `detail` is scalar-free: no amounts, no indices.
+    Syncing {
+        /// Human-readable transient condition.
+        detail: String,
+    },
+}
+
+/// Success verdict projection for `drain` — the client image of the
+/// Engine's `DrainOutcome` (WI-RPC-5). A distinct vocabulary from
+/// [`SubmitVerdictView`]: the drain pipeline seals before dispatch, so its
+/// success arms are the terminal dispatch facts, not the mempool-visibility
+/// ladder `submit_pending_tx` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DrainVerdictView {
+    /// Fresh broadcast success (the normal arm).
+    Broadcast,
+    /// A previously-sealed identical drain was found confirmed at submit
+    /// time; `confirmed_height` carries the daemon-claimed height.
+    AlreadyInChain,
+}
+
+/// `drain` result (WI-RPC-5): the sealed-then-dispatched drain's receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainResult {
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Success verdict.
+    pub verdict: DrainVerdictView,
+    /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
+    /// confirming height (untrusted display metadata — the drain
+    /// confirmation driver, still FOLLOWUPS, is the settlement authority).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<i64>,
 }
 
 /// `get_tx_proof` result (WI-RPC-3 proofs).

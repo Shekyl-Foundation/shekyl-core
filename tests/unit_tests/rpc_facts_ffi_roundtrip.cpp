@@ -116,4 +116,25 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(sizeof(shekyl_rpc_hardfork_entry) == 16, "hardfork entry POD changed size");
   static_assert(sizeof(shekyl_rpc_block_hash_facts) == 48, "block-hash facts POD changed size");
   static_assert(sizeof(shekyl_rpc_block_header_facts) == 304, "block-header facts POD changed size");
+
+  // The two pointer-bearing facts structs. A fill/check twin means nothing
+  // for a pointer — there is no seed value to compare — so what is pinned is
+  // the layout itself: size and every field offset, the same numbers on both
+  // sides (rust/shekyl-daemon-rpc/src/ffi.rs). Drift on either side is what
+  // makes the unsafe reads in `CoreRpc::blocks_by_height` interpret foreign
+  // memory, and it is invisible to every other test here.
+  static_assert(sizeof(shekyl_rpc_block_payload) == 48, "block payload changed size");
+  static_assert(offsetof(shekyl_rpc_block_payload, blob) == 0, "blob offset");
+  static_assert(offsetof(shekyl_rpc_block_payload, blob_len) == 8, "blob_len offset");
+  static_assert(offsetof(shekyl_rpc_block_payload, json) == 16, "json offset");
+  static_assert(offsetof(shekyl_rpc_block_payload, json_len) == 24, "json_len offset");
+  static_assert(offsetof(shekyl_rpc_block_payload, tx_hashes) == 32, "tx_hashes offset");
+  static_assert(offsetof(shekyl_rpc_block_payload, tx_hashes_len) == 40, "tx_hashes_len offset");
+
+  static_assert(sizeof(shekyl_rpc_block_entry) == 40, "block entry changed size");
+  static_assert(offsetof(shekyl_rpc_block_entry, block) == 0, "block offset");
+  static_assert(offsetof(shekyl_rpc_block_entry, block_len) == 8, "block_len offset");
+  static_assert(offsetof(shekyl_rpc_block_entry, txs) == 16, "txs offset");
+  static_assert(offsetof(shekyl_rpc_block_entry, tx_lens) == 24, "tx_lens offset");
+  static_assert(offsetof(shekyl_rpc_block_entry, tx_count) == 32, "tx_count offset");
 }

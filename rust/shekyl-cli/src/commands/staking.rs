@@ -4,16 +4,23 @@
 // BSD-3-Clause
 
 //! Staking commands over the WI-RPC-1 staking surface (WI-RPC-2b):
-//! `stake`, `staked_balance`, `staked_outputs`, `staking_info`.
+//! `stake`, `staked_balance`, `staked_outputs`, `staking_info` — plus the
+//! WI-RPC-5 archival principal actions `stake_in`, `drain_balance`, `drain`.
 //!
 //! The user asks to stake; the protocol dance (persona derivation, P-scan,
 //! bond assembly, dispatch) stays hidden per rule 81. Read commands surface
 //! the never-conflated staked-balance breakdown exactly as the RPC reports
-//! it.
+//! it. The WI-RPC-5 actions carry no fee/destination/slot parameters by
+//! contract — the parser refuses flag-shaped tokens before anything reaches
+//! the wire, and the copy talks about "staking funds" and "this wallet",
+//! never personas or slots (rule 81).
 
 use serde_json::{json, Value};
+use shekyl_wallet_rpc::types::{DrainResult, DrainVerdictView};
 
-use super::{confirm, opt_amount, read_password, require_open};
+use super::{
+    confirm, confirm_interactive, format_amount, opt_amount, read_password, require_open, transfers,
+};
 use crate::rpc_client::{params, RpcSession};
 
 /// The exact phrase a foundation stake requires, typed by the operator.
@@ -129,6 +136,141 @@ fn cmd_stake_foundation(rpc: &RpcSession) {
             println!("Track it with \"staking_info\".");
         }
         Err(e) => rpc.report("Failed to stake", &e),
+    }
+}
+
+/// `stake_in <amount>` — fund the staking balance with an ordinary principal
+/// transfer (WI-RPC-5).
+///
+/// The GF-7 change-co-presence disclosure prints BEFORE anything is built:
+/// the transaction carries this wallet's own change output next to the
+/// staking fund, an open linkage question this PR ships with a warning
+/// rather than a fix (carrier: bond-funding-separation, `docs/FOLLOWUPS.md`).
+/// The user must see it before deciding, not on a receipt.
+///
+/// After the disclosure the flow IS the transfer flow — `stake_in` returns a
+/// `build_pending_tx`-shaped reservation, confirmed with the actual fee and
+/// then submitted or discarded through the shared helpers.
+pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
+    if !require_open(rpc) {
+        return;
+    }
+    println!("Stake-in adds funds to your staking balance with an ordinary transfer");
+    println!("from this wallet.");
+    println!();
+    println!("Privacy note: like any send, this transaction also returns change to");
+    println!("this wallet. An observer who can already link that change output to");
+    println!("you could connect it to the staking funds in the same transaction.");
+    println!();
+
+    let response = match rpc.call("stake_in", json!({ "amount": amount.to_string() })) {
+        Ok(v) => v,
+        Err(e) => {
+            rpc.report("Failed to prepare the stake-in", &e);
+            return;
+        }
+    };
+    let Some(built) = transfers::take_built_pending_tx(rpc, &response) else {
+        return;
+    };
+
+    println!("Stake-in summary:");
+    println!("  Amount: {} SKL", format_amount(amount));
+    println!("  Fee:    {} SKL", built.fee_skl);
+
+    if !confirm_interactive("Fund staking with this transfer?", "stake in") {
+        transfers::discard_declined(rpc, &built);
+        return;
+    }
+    transfers::submit_pending(rpc, &built);
+}
+
+/// `drain_balance` — how much staking money can be moved back to this
+/// wallet (WI-RPC-5).
+///
+/// Two-armed by contract (F-D2 / rule 82): while the wallet cannot yet
+/// anchor the drainable set it says so — it NEVER prints a zero, which
+/// would read as "nothing to drain" and be indistinguishable from an
+/// empty pool.
+pub fn cmd_drain_balance(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_drain_balance", json!({})) {
+        Ok(val) => match val.get("status").and_then(Value::as_str) {
+            Some("ready") => println!(
+                "Staking funds available to move back to this wallet: {} SKL",
+                opt_amount(&val, "spendable")
+            ),
+            Some("syncing") => {
+                println!("The drainable amount is not known yet — the wallet is still syncing.");
+                println!("Run \"refresh\" and try again.");
+            }
+            _ => eprintln!("Malformed get_drain_balance response."),
+        },
+        Err(e) => rpc.report("Failed to read the drainable balance", &e),
+    }
+}
+
+/// `drain <amount>` — move staking funds back to this wallet (WI-RPC-5).
+///
+/// One shot: unlike `transfer`/`stake_in` there is no build-then-confirm
+/// reservation on the server, so the CLI confirms BEFORE firing — a drain
+/// cannot be discarded once sent. No fee or destination is shown as a
+/// choice because none exists (rule 81 / the anti-fingerprint pin): the fee
+/// is set automatically and the funds can only come back to this wallet.
+pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
+    if !require_open(rpc) {
+        return;
+    }
+    println!(
+        "This moves {} SKL of your staking funds back to this wallet's balance.",
+        format_amount(amount)
+    );
+    println!("The network fee is set automatically and is paid from the staking");
+    println!("funds on top of this amount.");
+
+    if !confirm_interactive("Move these funds?", "drain") {
+        println!("Drain cancelled; nothing was sent.");
+        return;
+    }
+
+    println!("Sending (this may take a while)...");
+    match rpc.call("drain", json!({ "amount": amount.to_string() })) {
+        // Decoded through the server's own result type (the `cmd_transfer`
+        // discipline): a new verdict arm fails this build instead of
+        // silently rendering as a plain success.
+        Ok(val) => match serde_json::from_value::<DrainResult>(val.clone()) {
+            Ok(result) => match result.verdict {
+                DrainVerdictView::Broadcast => {
+                    println!("Drain sent: {}", result.tx_hash);
+                    println!(
+                        "The funds arrive in this wallet's balance after the network \
+                         confirms the transaction."
+                    );
+                }
+                // The height is the daemon's claim, not an observation of
+                // ours — say "reported" so the user reads it as such.
+                DrainVerdictView::AlreadyInChain => match result.confirmed_height {
+                    Some(h) => println!(
+                        "An identical earlier drain is already confirmed on chain \
+                         (reported height {h}): {}",
+                        result.tx_hash
+                    ),
+                    None => println!(
+                        "An identical earlier drain is already confirmed on chain: {}",
+                        result.tx_hash
+                    ),
+                },
+            },
+            // A server newer than this CLI, or a malformed reply: the drain
+            // still went through — never swallow the hash.
+            Err(_) => {
+                let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("Drain sent (verdict not recognized): {tx_hash}");
+            }
+        },
+        Err(e) => rpc.report("Failed to drain", &e),
     }
 }
 

@@ -105,29 +105,6 @@ namespace cryptonote
   };
 
 
-  struct COMMAND_RPC_GET_BLOCKS_BY_HEIGHT
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> heights;
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(heights)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<block_complete_entry> blocks;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(blocks)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
     struct COMMAND_RPC_GET_ALT_BLOCKS_HASHES
     {

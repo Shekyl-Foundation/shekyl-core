@@ -296,7 +296,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
 | `/get_o_indexes.bin` | yes | **native Rust** (RK-4a: over `shekyl_rpc_tx_output_indices`, typed `.bin` map in `shekyl-rpc-types::bin_commands`) | wallet (`shekyl-rpc-client`) | migrated 2026-08-24 |
-| `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | yes | the engine's timing rig (`daemon_observability.rs`) | keep (RK-4b) |
+| `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | **native Rust** (RK-4b: over `shekyl_rpc_blocks_by_height`) | the engine's timing rig (`daemon_observability.rs`) | migrated 2026-08-25 |
 | `/get_blocks.bin` (+ `/getblocks.bin`), `/get_hashes.bin` (+ `/gethashes.bin`) | **no** | **removed** | none (wallet2's batch sync; `src/wallet/` deleted) | deleted (RK-4x, below) |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |
 | `POST /submit_transaction` | native Rust | n/a | wallets | keep |
