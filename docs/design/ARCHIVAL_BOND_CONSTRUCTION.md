@@ -457,11 +457,16 @@ flowchart LR
 ## 9. The other three kinds are provisional
 
 The four-kind architecture is designed here so JoinMarket-first does not paint
-into a corner, but only JoinMarket is exercised by the round-trip KAT. Rebond,
-Unbond, and HoldingsUpdate construction are **a hypothesis validated only on
-paper** until their verify + construct PRs land. They are **reopenable** when
-that work begins -- do not treat the deferred architecture as settled before
-anything exercises it. Each carries its named verify-side gap:
+into a corner. **UPDATE 2026-08-26 (PR-P4): `Unbond` is no longer provisional.**
+Its verify arm landed in #303 and its constructor (`build_unbond_vin`) now has
+its own round-trip KAT against `verify_unbond_bond_post`
+(`unbond_round_trip.rs`), so the section title overstates for that kind: two of
+the four are exercised, not one. **`Rebond` and `HoldingsUpdate` remain
+provisional** — both have verify arms, neither has a producer — and for them the
+paragraph below stands unchanged: construction is **a hypothesis validated only
+on paper**, **reopenable** when that work begins, and the deferred architecture
+must not be treated as settled before anything exercises it. Each carries its
+named verify-side gap:
 
 | Kind | Auth key (§3.5 step 5) | Verify side today | Construction status |
 | --- | --- | --- | --- |

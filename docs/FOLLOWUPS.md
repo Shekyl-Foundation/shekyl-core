@@ -94,6 +94,61 @@ sustainability is unaffected by the recalibration.
   tidied away: an oracle that calls the subject's helper agrees with it by
   construction and detects nothing.
 
+- **`get_archival_emission_claim_source` walks the ENTIRE serve-credit table on
+  every unauthenticated request** (measured 2026-08-26 in PR-P4 slice 2, while
+  reviewing a narrower version of the same concern).
+
+  **Trigger for this entry: any public-node RPC-hardening lane, or the first
+  serve-credit table large enough to make a full pass measurable.**
+
+  `gather_archival_epoch_rows_window` opens a cursor on `m_archival_serve_credit`
+  and walks `MDB_FIRST` to the end — **every persona, every shard, every epoch** —
+  filtering by epoch in the loop body. The `p_id` argument does **not** restrict
+  the scan; it only marks which bond index is the claimant's. The routine's own
+  comment states why: the epoch is the key *suffix* (`p_id ‖ shard ‖ epoch`), "so
+  a range seek by epoch is impossible — the full-table pass is inherent to the key
+  layout". The window form makes the RPC pay that pass once per request instead of
+  once per window epoch, which is the optimisation the comment claims, but the per
+  request term is still O(whole table).
+
+  **Measured shape of the endpoint's work, so a future fix targets the right
+  term:**
+
+  - window gather (part B, every request): **O(global serve-credit rows)** — all
+    personas, all shards, all epochs;
+  - cooldown anchor, compact record: ≤ `MAX_HOLDINGS_SHARDS` (4096) held shards,
+    2 seeks each, so ≤ 8192 seeks;
+  - cooldown anchor, `CompleteTree` record: 2 seeks per **served** shard, bounded
+    by that persona's own serve history rather than by a record-level cap.
+
+  A review pass raised only the third bullet. It is real but is the *smallest* of
+  the three and is asymptotically dominated by the first, so an aggregate that
+  fixed only the anchor would leave the dominant term untouched.
+
+  **Why the obvious fix is not a wallet-side change.** An O(1) maintained
+  whole-record anchor would have to become consensus's fold input too
+  (`blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post` call site) —
+  otherwise the daemon reports one derivation of a consensus operand to wallets
+  and computes another for itself, which is the exact divergence the exported fold
+  exists to prevent. So it lands on the **consensus + LMDB surface**: a maintained
+  aggregate needs a write path on serve-credit connect, a matching pop path, and a
+  persisted-schema snapshot (rule 42) — a different validation surface from the
+  wallet/RPC work that surfaced it (rule 19). That surface mismatch is the named
+  blocker rule 22 requires.
+
+  **Not an option: bounding the scan and refusing past the bound.** The refusal
+  would land on exactly the high-serve personas the readiness answer exists for,
+  and "cannot tell you whether your irreversible exit is safe" is a worse outcome
+  than the cost it avoids.
+
+  Worth noting for whoever takes it: the consensus path already treats this cost
+  as worth gating — `archival_debit_auth_pin` runs its two-vector compare
+  **before** any per-shard cursor scan precisely "so an unauthorized attempt is
+  rejected before it can cost LMDB seeks". The RPC has no equivalent gate because
+  it is deliberately unauthenticated (it answers about a public `P`), which is why
+  the work bound has to come from the data structure rather than from a caller
+  check.
+
 - **`shekyl-ffi` has 105 items with no docs, so `missing_docs` cannot gate it**
   (measured 2026-08-26 during PR-P4 slice 2).
 

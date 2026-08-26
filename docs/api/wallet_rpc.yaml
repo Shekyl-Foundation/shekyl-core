@@ -108,16 +108,36 @@
 #   RESERVED (prerequisite in parentheses):
 #     unstake                                      (the Unbond PRODUCER.
 #                                                   Prerequisite rewritten by
-#                                                   WI-RPC-5 from the
-#                                                   claim-era "Stage 3
-#                                                   StakeEngine" wording:
-#                                                   every BondPostKind::Unbond
-#                                                   site on dev today is a
-#                                                   verifier, wire constant,
-#                                                   or test — no producer
-#                                                   exists; blocked on the
+#                                                   WI-RPC-5, then CORRECTED
+#                                                   2026-08-26 by PR-P4: the
+#                                                   WI-RPC-5 text said "no
+#                                                   producer exists; blocked
+#                                                   on the
 #                                                   PostKindNotJoinMarket
-#                                                   connect path)
+#                                                   connect path". BOTH
+#                                                   clauses are now false.
+#                                                   PostKindNotJoinMarket
+#                                                   guards only the
+#                                                   JoinMarket verifier — the
+#                                                   Unbond verify + connect
+#                                                   arms landed in #303 — and
+#                                                   the producer itself
+#                                                   (build_unbond_vin +
+#                                                   AssembleUnbond) lands in
+#                                                   PR-P4. The prerequisite
+#                                                   is now the REACHABILITY
+#                                                   gate, not a missing
+#                                                   producer: nothing on the
+#                                                   exit path is callable
+#                                                   from any RPC verb or CLI
+#                                                   command until PR-P4's
+#                                                   regtest walk has
+#                                                   exercised the retire path
+#                                                   end to end — the wipe,
+#                                                   the funded gate, and the
+#                                                   seal-then-act crash
+#                                                   ordering. RESERVED stands
+#                                                   until that walk runs.)
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
 #       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
 #       it carries NO fee parameter — no FeePriority, no amount, no
