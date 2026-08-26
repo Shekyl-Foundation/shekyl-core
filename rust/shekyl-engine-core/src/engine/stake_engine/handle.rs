@@ -27,7 +27,10 @@ use super::persona::{
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
 };
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
+use shekyl_archival_bond_builder::UnbondVin;
+
 use super::types::*;
+use super::unbond::AssembleUnbond;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::drain_assembly::{AssembleDrain, AssembledDrain};
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch, ScanStep, ScanStepResult};
@@ -285,6 +288,24 @@ impl StakeEngineHandle {
             })
             .await
             .map_err(collapse_send_error)
+    }
+
+    /// Ask the actor to assemble the `Unbond` post's vin ([`AssembleUnbond`]).
+    ///
+    /// **`pub(crate)`, and deliberately not wired to any RPC method or CLI verb.**
+    /// The gate on this lane is reachability, not existence: the producer has to
+    /// exist before slice 3's regtest walk can exercise the retire path at all,
+    /// but nothing on the exit path becomes user-callable until that walk has
+    /// observed the wipe, the funded gate, and the seal-then-act crash ordering.
+    /// This is the engine-internal seam the walk drives — and the seam an
+    /// actor-level test uses to prove the handler's persona-binding refusal is
+    /// reachable, which a unit test on `UnbondRecordState` cannot do.
+    #[allow(dead_code)] // PR-P4 slice 2b: the production caller lands with the walk; today's caller is `cfg(test)`.
+    pub(crate) async fn assemble_unbond(
+        &self,
+        msg: AssembleUnbond,
+    ) -> Result<UnbondVin, StakeEngineError> {
+        self.actor.ask(msg).await.map_err(collapse_send_error)
     }
 
     /// Assemble the full, broadcast-ready emission-claim transaction

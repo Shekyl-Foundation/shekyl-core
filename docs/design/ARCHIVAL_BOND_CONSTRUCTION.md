@@ -468,13 +468,23 @@ on paper**, **reopenable** when that work begins, and the deferred architecture
 must not be treated as settled before anything exercises it. Each carries its
 named verify-side gap:
 
+**Table re-graded 2026-08-26 (PR-P4).** Every "absent" in the verify column was
+stale: all five arms landed in #303/#307. Kept as a column rather than deleted
+because the *construction* side is still uneven, which is the thing this section
+exists to track.
+
 | Kind | Auth key (§3.5 step 5) | Verify side today | Construction status |
 | --- | --- | --- | --- |
-| JoinMarket | `P_pubkey` | exists | PR 1 (KAT-validated) |
-| HoldingsUpdate add | `P_pubkey` | absent | provisional |
-| HoldingsUpdate drop | `bond_spend_pk` | absent | provisional (operator-guide footguns live here) |
-| Rebond | `P_pubkey` | absent | provisional |
-| Unbond | `bond_spend_pk` | absent | provisional |
+| JoinMarket | `P_pubkey` | `verify_join_market_bond_post` | PR 1 (KAT-validated) |
+| HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
+| HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
+| Rebond | `P_pubkey` | `verify_rebond_bond_post` | provisional — no producer |
+| Unbond | `bond_spend_pk` | `verify_unbond_bond_post` | PR-P4 `build_unbond_vin` (KAT-validated) |
+
+The `Auth key` column is unchanged and remains correct: `Unbond` and
+`HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,
+which consensus pins in `archival_debit_auth_pin` — never the identity key. SA-2b
+moved that key off the vin, not out of the requirement.
 
 ### 9.1 `CompleteTree` is a foundation-only constructor, structurally (naive-optimizer footgun)
 

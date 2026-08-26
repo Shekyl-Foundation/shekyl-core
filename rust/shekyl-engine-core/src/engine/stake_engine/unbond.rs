@@ -232,6 +232,12 @@ impl Message<AssembleUnbond> for StakeEngine {
         // Derived from the resident keys rather than carried on the handle:
         // `persona_canonical_id` hashes the same canonical bytes an on-chain
         // bond-post carries, so this compares the id the chain will see.
+        //
+        // `a_record_read_for_another_persona_is_refused_at_the_actor` drives
+        // this through the actor and goes red if the comparison is deleted. A
+        // unit test on `UnbondRecordState` cannot cover it: the id it would
+        // check is the one the test itself supplied, so the refusal has to be
+        // observed where the two independent values actually meet.
         let handle_p_id = persona_canonical_id(keys)
             .map_err(|e| StakeEngineError::ScanSetup(ScanSetupError::CanonicalId(e)))?;
         if handle_p_id != msg.record.p_id() {
@@ -255,7 +261,9 @@ mod tests {
     };
     use shekyl_types::ChainCount;
 
-    use crate::engine::emission_source::{BondContext, EmissionClaimSource};
+    use crate::engine::emission_source::{BondContext, ClaimSourceFor, EmissionClaimSource};
+
+    use super::super::test_fixtures::spawn_over;
 
     use super::*;
 
@@ -339,6 +347,78 @@ mod tests {
                 max: MAX_BOND_BAD_INTERVALS,
             })
         );
+    }
+
+    /// The handler refuses a record fetched for a different persona.
+    ///
+    /// This is the arm the constructor cannot cover. `ClaimSourceFor` proves the
+    /// facts describe the persona they were *fetched* for; only the handler can
+    /// prove that persona is the one whose *handle* is being spent, because the
+    /// handle is a separate value arriving on the same message. Driving it
+    /// through the actor is the only way the two meet.
+    ///
+    /// The positive control matters as much as the refusal: a record fetched for
+    /// the handle's own persona must get **past** this check. Without it the test
+    /// would still pass if the handler refused everything, which is the failure
+    /// mode a binding check is most likely to have.
+    #[tokio::test]
+    async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
+        let slot = 3u32;
+        let stake = spawn_over(&[slot], &[], Some(slot));
+        let p_slot = PSlot::from_raw(slot);
+
+        // A record that is ready in every respect EXCEPT whose persona it
+        // describes, so a refusal can only be the binding check.
+        let ready_source = || EmissionClaimSource {
+            chain_height: ChainCount::from_raw(30001),
+            current_settled_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
+            bond: Some(BondContext {
+                join_settlement_epoch: 1,
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: ShardSet::new(vec![4]).expect("one shard"),
+                },
+                claimed_settlement_epochs: vec![1],
+                bonded_total_atomic: 3 * 750_000_000,
+                bad_interval_count: 0,
+                last_served: ServeAnchor::ServedAt(4),
+                last_settled_slash: SlashWatermark::SettledThrough(4),
+            }),
+            epochs: vec![],
+        };
+
+        // Someone else's record, honestly fetched for THEM.
+        let stranger = PCanonicalId::from_bytes([0xEE; 32]);
+        let theirs = ClaimSourceFor::for_test(stranger, ready_source());
+        let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
+        let err = stake
+            .assemble_unbond(AssembleUnbond {
+                handle,
+                record: UnbondRecordState::from_claim_source(&theirs).expect("bond record"),
+            })
+            .await
+            .expect_err("a record read for another persona must not build this exit");
+        assert!(
+            matches!(err, StakeEngineError::RecordPersonaMismatch),
+            "expected RecordPersonaMismatch, got {err:?}"
+        );
+
+        // Positive control: the same record, fetched for THIS persona, clears
+        // the binding check and assembles.
+        let mine = stake
+            .persona_canonical_id(p_slot)
+            .await
+            .expect("project this persona's canonical id");
+        let ours = ClaimSourceFor::for_test(mine, ready_source());
+        let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
+        let vin = stake
+            .assemble_unbond(AssembleUnbond {
+                handle,
+                record: UnbondRecordState::from_claim_source(&ours).expect("bond record"),
+            })
+            .await
+            .expect("this persona's own record assembles");
+        assert_eq!(vin.vin().bond_debit, 3 * 750_000_000);
     }
 
     /// A record read for one persona cannot be spent through another's handle.

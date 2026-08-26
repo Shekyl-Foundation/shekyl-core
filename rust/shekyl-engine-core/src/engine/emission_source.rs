@@ -691,8 +691,12 @@ mod tests {
     ///
     /// **What this test covers, stated precisely.** It exercises the *decoder's*
     /// contract, not a shape today's wire produces: the C++ marshaler writes all
-    /// three operands whenever `has_bond_record` is set, so a current daemon
-    /// never omits them and this negative control cannot fire against one. Its
+    /// **four** exit operands whenever `has_bond_record` is set — the bonded
+    /// total, the interval-log count, and the two presence flags — so a current
+    /// daemon never omits them and this negative control cannot fire against
+    /// one. (It said "three" until 2026-08-26, which was the same undercount
+    /// that left `bad_interval_count` off the wire in the first place: the
+    /// operand with no absent state is the one that goes missing from a list.) Its
     /// value is forward-looking and is the reason it is worth keeping — a daemon
     /// that predates these fields, a field dropped in a future response edit, or
     /// a transport that elides scalars would all arrive here, and the decoder
