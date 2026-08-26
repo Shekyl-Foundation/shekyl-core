@@ -587,10 +587,14 @@ jobs:
         # so shekyld is now the shim's only caller.
         #
         # No wallet binary is checked on Windows because none is built
-        # there: the Rust wallet stack is Unix-only (UDS transport, 0600
-        # socket, 0600 seed export), tracked in docs/FOLLOWUPS.md under
-        # "Rust wallet stack: no Windows support". This job is the daemon's
-        # MSVC gate until that lands. --help
+        # there — `BuildRust.cmake` skips them, tracked in docs/FOLLOWUPS.md
+        # under "Rust wallet stack: no Windows support". Not because the
+        # stack is Unix-only: that stopped being true on 2026-08-25, when
+        # both binaries were observed compiling and linking for
+        # x86_64-pc-windows-msvc with their end-to-end tests passing. What
+        # is unverified is the CMake path, staging, install and archive
+        # layout, so WP-W5 removes the gate deliberately rather than as a
+        # side effect. This job is the daemon's MSVC gate until then. --help
         # exits 0 after printing the option list, which exercises the full
         # argument-parsing + logger-init path without waiting on a network
         # port. --detach is expected to exit nonzero with the V3.1
