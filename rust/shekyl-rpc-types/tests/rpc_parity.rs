@@ -19,7 +19,9 @@
 use serde_json::Value;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetBlockResponse,
-    GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_VERSION,
+    GetHeightResponse, GetTransactionsRequest, GetTransactionsResponse, GetVersionResponse,
+    HardForkEntry, HashHex, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
+    RpcStatus, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -367,5 +369,222 @@ fn get_block_without_transactions_omits_the_list() {
     assert!(
         !wire.contains("tx_hashes"),
         "an empty transaction list is dropped, not emitted as []: {wire}"
+    );
+}
+
+// ─── RK-4c: the transaction read set ─────────────────────────────────────────
+
+/// The emitter's `tagged_hex` — `tagged_hash` rendered the way a request
+/// carries it, since both request types take hashes as strings (RK-D12).
+fn tagged_hex(tag: u8) -> String {
+    tagged_hash(tag).to_string()
+}
+
+#[test]
+fn get_transactions_request_matches_the_oracle() {
+    let built = GetTransactionsRequest {
+        txs_hashes: vec![tagged_hex(1), tagged_hex(2)],
+        decode_as_json: true,
+        prune: true,
+        split: true,
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_request_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_request_defaults_matches_the_oracle() {
+    let built = GetTransactionsRequest {
+        txs_hashes: vec![tagged_hex(3)],
+        decode_as_json: false,
+        prune: false,
+        split: false,
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_request_defaults_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_chain_and_pool_matches_the_oracle() {
+    // The vector that pins `entry`'s branch: one mined entry and one pooled
+    // one, so both field sets are in the same document. The emitter set the
+    // *other* arm's members on each entry to non-default values, so a mirror
+    // that emitted them would not be parsed-equal here.
+    let mined = TxEntry {
+        tx_hash: tagged_hash(11),
+        as_hex: "0011223344".to_owned(),
+        pruned_as_hex: String::new(),
+        prunable_as_hex: String::new(),
+        prunable_hash: tagged_hash(12),
+        as_json: String::new(),
+        pruned: false,
+        double_spend_seen: false,
+        location: TxLocation::Mined {
+            block_height: 1_234_567,
+            confirmations: 89,
+            block_timestamp: 1_750_000_000,
+            output_indices: vec![7, 8, 4_294_967_296],
+        },
+    };
+    let pooled = TxEntry {
+        tx_hash: tagged_hash(21),
+        as_hex: "aabbcc".to_owned(),
+        pruned_as_hex: String::new(),
+        prunable_as_hex: String::new(),
+        prunable_hash: tagged_hash(22),
+        as_json: String::new(),
+        pruned: false,
+        double_spend_seen: true,
+        location: TxLocation::Pooled {
+            relayed: true,
+            received_timestamp: 1_750_000_123,
+        },
+    };
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs_as_hex: vec![mined.as_hex.clone(), pooled.as_hex.clone()],
+        txs_as_json: Vec::new(),
+        txs: vec![mined, pooled],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_chain_and_pool_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_split_form_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs_as_hex: vec![String::new()],
+        txs_as_json: Vec::new(),
+        txs: vec![TxEntry {
+            tx_hash: tagged_hash(31),
+            as_hex: String::new(),
+            pruned_as_hex: "0102030405".to_owned(),
+            prunable_as_hex: "0607".to_owned(),
+            prunable_hash: tagged_hash(32),
+            as_json: String::new(),
+            pruned: true,
+            double_spend_seen: false,
+            location: TxLocation::Mined {
+                block_height: 100,
+                confirmations: 1,
+                block_timestamp: 1_750_000_001,
+                // Empty inside the chain arm: dropped like every other empty
+                // sequence, which is what the vector proves.
+                output_indices: Vec::new(),
+            },
+        }],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_split_form_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_decoded_matches_the_oracle() {
+    let as_json = "{\"version\": 2, \"unlock_time\": 0}".to_owned();
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs_as_hex: vec!["00".to_owned()],
+        txs_as_json: vec![as_json.clone()],
+        txs: vec![TxEntry {
+            tx_hash: tagged_hash(41),
+            as_hex: "00".to_owned(),
+            pruned_as_hex: String::new(),
+            prunable_as_hex: String::new(),
+            prunable_hash: tagged_hash(42),
+            as_json,
+            pruned: false,
+            double_spend_seen: false,
+            location: TxLocation::Mined {
+                block_height: 7,
+                confirmations: 3,
+                block_timestamp: 1_750_000_007,
+                output_indices: vec![0],
+            },
+        }],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_decoded_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_missed_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs_as_hex: Vec::new(),
+        txs_as_json: Vec::new(),
+        txs: Vec::new(),
+        missed_tx: vec![tagged_hash(51), tagged_hash(52)],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_missed_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_refusal_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus("Too many transactions requested in restricted mode".to_owned()),
+        txs_as_hex: Vec::new(),
+        txs_as_json: Vec::new(),
+        txs: Vec::new(),
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_refusal_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_request_matches_the_oracle() {
+    let built = IsKeyImageSpentRequest {
+        key_images: vec![tagged_hex(61), tagged_hex(62), tagged_hex(63)],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_request_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_matches_the_oracle() {
+    let built = IsKeyImageSpentResponse {
+        status: RpcStatus::ok(),
+        spent_status: vec![
+            KeyImageStatus::Unspent,
+            KeyImageStatus::SpentInBlockchain,
+            KeyImageStatus::SpentInPool,
+        ],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_empty_matches_the_oracle() {
+    let built = IsKeyImageSpentResponse {
+        status: RpcStatus::ok(),
+        spent_status: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_empty_v1.json"),
+        &built,
     );
 }

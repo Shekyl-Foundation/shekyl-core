@@ -62,6 +62,7 @@ use serde::{Deserialize, Serialize};
 pub mod bin_commands;
 pub mod chain;
 pub mod hash;
+pub mod transactions;
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
     GetOIndexesResponse,
@@ -75,6 +76,11 @@ pub use chain::{
     CORE_RPC_VERSION_MINOR,
 };
 pub use hash::{HashHex, HashHexError};
+pub use transactions::{
+    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
+    TxLocation,
+};
 
 /// Request body for `POST /submit_transaction` (§2.4).
 ///
