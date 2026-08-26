@@ -283,6 +283,47 @@ namespace levin
       if (nzone != epee::net_utils::zone::public_)
         flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
 
+      /* A DEVELOPMENT FLAG, and deliberately not an operator switch. The
+         distinction is a ruling, not caution.
+
+         The carrier changes `hop` by roughly an order of magnitude — a
+         cadence residual of ~6.25 s against a cleartext-link transit of
+         ~715 ms — and `shekyl_dandelionpp_embargo_draw_seconds` takes a zone
+         and nothing else. So an operator switch would put two populations on
+         one encrypted zone drawing from ONE embargo distribution with hops
+         that differ ~9x. Provision at the low end and carrier-on nodes run
+         alpha far below the 0.90 pin; provision at the high end and every
+         carrier-off node on that zone pays a large over-provision.
+
+         A carrier-adaptive embargo is not the escape. §18 refused a
+         degree-adaptive embargo because embargo length is inferable from
+         fluff timing; §94.9 applied the same argument to posture. This is the
+         THIRD application, and the "but the carrier is already visible"
+         objection fails on AUDIENCE: the carrier is visible to a directly
+         connected peer, while embargo length is inferable by anyone who can
+         time a fluff. A carrier-adaptive embargo would republish an
+         adjacent-peer fact to every network observer.
+
+         So enabling this under today's constants is a privacy regression, not
+         a configuration. It is reachable here for development and tests, and
+         `SHEKYL_RELAY_ZONE_NOISE_ENABLED` stays off in every build that is
+         not one. See COVER_TRAFFIC_RESTORATION.md §3.1 for the two reopening
+         criteria that turn it into a shippable switch. */
+#ifdef SHEKYL_CARRIER_DEVELOPMENT
+      /* The carrier needs an ENCRYPTED link — it hides by payload
+         indistinguishability, which needs encryption at step one. That is
+         `LinkSecrecy`, a different axis from the outbound-fluff rule above
+         even though today's zone set makes the two conditions coincide: i2p
+         and tor are both encrypted AND anonymizing, and this line must not be
+         read as testing the second. P2P link encryption on a cleartext zone
+         would separate them.
+         Not duplicated: `LinkSecrecy::of` in Rust is the authority and
+         `Zone::new` REFUSES noise on a cleartext link, so if these ever
+         disagree the zone fails to construct rather than carrying quietly. */
+      if (nzone != epee::net_utils::zone::public_)
+        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
+#endif
+
       return shekyl_relay_zone_new(
         now_ms(), std::uint8_t(nzone), params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
@@ -489,30 +530,65 @@ namespace levin
         }
       }
 
-      /* The two noise effects below are UNREACHABLE from this process, and
-         they fail loudly rather than returning quietly.
+      /* The noise send below is REACHABLE now, and it transports rather than
+         logging. That is the carrier caller landing: `NoiseQueues` in
+         `shekyl-relay` holds the buffers, the join in `relay_zone_ffi`
+         resolves a fragment, and this arm puts it on the wire — the same
+         thing this file does for stem and fluff, which is why it never needed
+         the daemon cutover.
 
-         C++ no longer builds noise channels at all — `NoiseQueues` in
-         `shekyl-relay` is the carrier, and this file is a transport shim
-         until the daemon cutover deletes it (§2.9 step 5). Rust emits these
-         effects only for a zone with noise enabled, and no zone constructed
-         here can be: `make_relay_zone` never sets the flag. So reaching
-         either arm means a zone was enabled by a path that does not exist
-         yet, and the honest answer is to say so — a silent no-op would drop
-         a real carrier effect on the floor the moment that path is built. */
-      static void on_noise_unbind(void* ctx, std::size_t channel) noexcept
-      {
-        (void)ctx;
-        MERROR("noise unbind reached C++ for channel " << channel
-               << "; the carrier is Rust-owned and no zone here enables noise");
-      }
+         Its unbind sibling is GONE rather than kept as a loud failure: that
+         effect is now consumed inside Rust by `NoiseQueues::unbind`, and C++
+         has held no channel state since #515. A callback with no job is not a
+         backstop.
 
-      static void on_noise(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
+         Reaching this arm still requires a zone with the carrier enabled, and
+         `make_relay_zone` only enables it under the development flag — see
+         its comment for why that is a development flag and not a product
+         switch. */
+      /*! Put one carrier emission on the wire. Dummy and real fragment are
+          the same call and the same size by construction — this side cannot
+          tell them apart, and CV-4 is why it must not be able to.
+
+          The bytes arrive already framed: Rust built the levin message, so
+          there is no `make_tx_message` here and no padding decision. A
+          carrier emission is a fixed window; quantizing it would be
+          re-deriving a length that is already constant.
+
+          NOT compressed, and that is the same argument `make_payload_send_txs`
+          makes for a padded blob one level up. The window is constant so an
+          observer cannot read volume off the frame — compressing it would put
+          the frame size back in step with the real payload and hand back
+          exactly the signal the carrier spends bandwidth to hide.
+
+          The return is the token's resolution: true advances the queue past
+          this fragment, false leaves it for the next emission. */
+      static bool on_noise(void* ctx, std::size_t channel, const std::uint8_t* peer,
+                           const std::uint8_t* bytes, std::size_t len) noexcept
       {
-        (void)ctx;
-        (void)peer;
-        MERROR("noise send reached C++ for channel " << channel
-               << "; the carrier is Rust-owned and no zone here enables noise");
+        assert(ctx != nullptr);
+        try
+        {
+          detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
+          if (!z.p2p || bytes == nullptr || len == 0)
+            return false;
+
+          boost::uuids::uuid destination{};
+          std::memcpy(std::addressof(destination), peer, sizeof(destination));
+
+          epee::byte_slice blob{{reinterpret_cast<const char*>(bytes), len}};
+          return z.p2p->send(std::move(blob), destination);
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("noise send for channel " << channel << " threw: " << e.what());
+          return false;
+        }
+        catch (...)
+        {
+          MERROR("noise send for channel " << channel << " threw a non-standard exception");
+          return false;
+        }
       }
 
       //! Gather the outbound connection set on demand.
@@ -600,8 +676,7 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_noise_unbind,
-          relay_effects::on_noise
+          relay_effects::on_fluff, relay_effects::on_noise
         );
 
         arm(std::move(zone_), core_);
@@ -905,7 +980,7 @@ namespace levin
       shekyl_relay_zone_poll(
         z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
         std::addressof(sink), relay_effects::on_outbound,
-        relay_effects::on_fluff, relay_effects::on_noise_unbind, relay_effects::on_noise
+        relay_effects::on_fluff, relay_effects::on_noise
       );
       relay_wake::arm(z, core);
     });

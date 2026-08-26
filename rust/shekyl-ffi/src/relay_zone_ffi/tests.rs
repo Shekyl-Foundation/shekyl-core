@@ -24,9 +24,9 @@ const NOISE_ON_ENCRYPTED: u32 =
 #[derive(Default)]
 struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
-    unbinds: Vec<usize>,
     /// `(channel, peer)` — peer bytes are the marshalling half of CV-2.
-    noise: Vec<(usize, [u8; 16])>,
+    /// (channel, peer, emission length). Length, never content — see `rec_noise`.
+    noise: Vec<(usize, [u8; 16], usize)>,
 }
 
 thread_local! {
@@ -41,10 +41,6 @@ extern "C" fn rec_fluff(_: *mut c_void, peer: *const u8, blobs: *const ShekylRel
         .map(|b| unsafe { slice::from_raw_parts(b.ptr, b.len) }.to_vec())
         .collect();
     REC.with(|r| r.borrow_mut().fluffed.push((p, batch)));
-}
-
-extern "C" fn rec_unbind(_: *mut c_void, channel: usize) {
-    REC.with(|r| r.borrow_mut().unbinds.push(channel));
 }
 
 // The outbound-gather side of `poll`, simulated. `poll` pulls the connection
@@ -79,10 +75,21 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
     })
 }
 
-extern "C" fn rec_noise(_: *mut c_void, channel: usize, peer: *const u8) {
+extern "C" fn rec_noise(
+    _: *mut c_void,
+    channel: usize,
+    peer: *const u8,
+    bytes: *const u8,
+    len: usize,
+) -> bool {
     let mut p = [0u8; 16];
     unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-    REC.with(|r| r.borrow_mut().noise.push((channel, p)));
+    // The bytes are the carrier emission — recorded by LENGTH, never by
+    // content: a test that looked at the payload would be doing exactly what
+    // CV-4 forbids the scheduler to do, and would go green on a dummy.
+    let n = if bytes.is_null() { 0 } else { len };
+    REC.with(|r| r.borrow_mut().noise.push((channel, p, n)));
+    true
 }
 
 fn reset() {
@@ -221,10 +228,7 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
         // gather-call count is asserted zero below to prove no rollover
         // rewrote the fixture mid-drive.
         for _ in 0..12 {
-            let done = REC.with(|r| {
-                let r = r.borrow();
-                2 <= r.unbinds.len() && !r.noise.is_empty()
-            });
+            let done = REC.with(|r| 2 <= r.borrow().noise.len());
             if done {
                 break;
             }
@@ -235,7 +239,6 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
                 std::ptr::null_mut(),
                 rec_gather,
                 rec_fluff,
-                rec_unbind,
                 rec_noise,
             );
         }
@@ -244,29 +247,28 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
         // `keep` must outlive the recorder check below.
         REC.with(|r| {
             let rec = r.borrow();
-            assert!(
-                2 <= rec.unbinds.len(),
-                "the unbound channel's clear crosses at EVERY due tick — zero \
-                 means it never crossed, one means the emission became \
-                 transition-shaped and lossy"
-            );
-            assert!(
-                rec.unbinds.iter().all(|&c| c == 0),
-                "every unbind names the unbound channel's own index — 1 in \
-                 {:?} is the off-by-one defect",
-                rec.unbinds
-            );
+            // The unbind no longer crosses the boundary — it is consumed in
+            // Rust by `NoiseQueues::unbind`. What that CANNOT change is CV-2,
+            // and CV-2 is observable from the sends alone: an unbound slot
+            // emits nothing. So the property is asserted where it now lives.
             assert!(
                 !rec.noise.is_empty(),
                 "the bound channel really sent — liveness"
             );
-            for &(channel, peer) in &rec.noise {
+            for &(channel, peer, len) in &rec.noise {
                 assert_eq!(
                     (channel, peer),
                     (1, keep),
                     "NoiseSend must cross with the slot's own peer at its own \
-                     index — a wrong peer slice is invisible if only the \
+                     index, and the UNBOUND channel 0 must never appear here \
+                     (CV-2). A wrong peer slice is invisible if only the \
                      channel index is recorded"
+                );
+                assert_eq!(
+                    len,
+                    shekyl_relay_privacy::params::carrier::WINDOW_BYTES,
+                    "every emission is one window — a short one would let an \
+                     observer read the real payload's size off the frame"
                 );
             }
         });
@@ -454,7 +456,6 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
                 std::ptr::null_mut(),
                 rec_gather,
                 rec_fluff,
-                rec_unbind,
                 rec_noise,
             );
             REC.with(|r| assert!(r.borrow().fluffed.is_empty(), "not due yet"));
@@ -466,7 +467,6 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
             rec_noise,
         );
         shekyl_relay_zone_free(h);
@@ -513,7 +513,6 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
             rec_noise,
         );
 
@@ -604,7 +603,6 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
             rec_noise,
         );
         shekyl_relay_zone_free(null);
@@ -929,7 +927,6 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
             rec_noise,
         );
         let t = h
@@ -1207,5 +1204,63 @@ fn roll_originated_zone_returns_only_the_two_contract_bytes() {
     for _ in 0..64 {
         let z = shekyl_relay_zone_roll_originated_zone();
         assert!(z == 0 || z == 1, "roll returned byte {z}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The carrier caller (COVER_TRAFFIC_RESTORATION.md §3, "§2.9 step 2" row).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// §2.9b made structural: the crossing takes ONE transaction, so a batch is
+/// not sayable rather than refused.
+///
+/// What edit reds it: give `shekyl_relay_zone_noise_enqueue` a blob count, or
+/// let it take a vector — at which point two transactions share one window,
+/// one slot and one successor, which is the pairwise linkage the stem denies.
+#[test]
+fn the_enqueue_crossing_cannot_express_a_batch() {
+    // A compile-time property, asserted by taking the function's type: the
+    // signature has a single (ptr, len) pair for ONE blob, not a count.
+    let f: unsafe extern "C" fn(*mut RelayZoneHandle, usize, *const u8, usize) -> bool =
+        shekyl_relay_zone_noise_enqueue;
+    let _ = f;
+}
+
+/// A zone without the carrier refuses to enqueue rather than allocating a
+/// queue on demand — the flag decides, not the caller.
+///
+/// What edit reds it: make `noise` lazily constructed on first enqueue.
+#[test]
+fn a_zone_without_the_carrier_refuses_to_enqueue() {
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        assert!(!h.is_null());
+        let tx = [7u8; 32];
+        assert!(
+            !shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len()),
+            "a cleartext zone has no carrier, so nothing may be enqueued on it"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// The carrier zone accepts one transaction and frames it to a whole number
+/// of windows — the queue's own rule, applied to bytes Rust produced.
+///
+/// What edit reds it: drop the framing and enqueue the bare blob, which is not
+/// a window multiple and the queue refuses.
+#[test]
+fn a_carrier_zone_accepts_one_framed_transaction() {
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null(), "an encrypted zone may carry");
+        let tx = vec![9u8; 4_096];
+        assert!(
+            shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len()),
+            "one transaction, framed by Rust, must be a whole number of windows"
+        );
+        shekyl_relay_zone_free(h);
     }
 }

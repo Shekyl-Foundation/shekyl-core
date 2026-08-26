@@ -55,11 +55,12 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use shekyl_levin::{notify, NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayCarrier,
-    RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, NoiseQueues,
+    RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
-use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_relay_privacy::zone::{LinkSecrecy, RelayZone};
@@ -111,23 +112,20 @@ pub struct ShekylRelayBlob {
 pub type FluffCb =
     extern "C" fn(ctx: *mut c_void, peer: *const u8, blobs: *const ShekylRelayBlob, n: usize);
 
-/// Called when covert channel `channel` comes due with its stem slot unbound:
-/// clear it — nil the binding, discard buffers — on the channel's strand.
-///
-/// **The other half of the deleted slot array** (§20.3). The binding itself
-/// travels with each [`NoiseSendCb`] call; the *loss* of a binding cannot,
-/// because an unbound channel emits no sends (CV-2) — and without it the C++
-/// enqueue guard reads a stale binding forever, so a dormant channel
-/// accumulates queued messages without bound. One channel index crosses: no
-/// array, no slot order, no width for C++ to reconcile.
-///
-/// **Fires at every due tick while the slot stays unbound** — derived from the
-/// map at each poll, never pushed once at the transition — so the receiver
-/// must be idempotent (clearing a cleared channel is a no-op) and a lost or
-/// swallowed clear self-heals one covert interval later. This is why only
-/// [`shekyl_relay_zone_poll`] takes this callback: commands mutate and return
-/// nothing, and every covert consequence rides the schedule.
-pub type NoiseUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
+// `NoiseUnbindCb` is DELETED, not kept as a souvenir (rule 15).
+//
+// It carried "this channel's slot is unbound, clear it" to a C++ side that
+// held the buffers, and its doc argued the loss of a binding could not travel
+// with a send because an unbound channel emits none (CV-2). That reasoning is
+// intact; what changed is WHO clears. Since #515 the buffers are Rust's, and
+// since the carrier caller `Effect::NoiseUnbind` is consumed inside Rust by
+// `NoiseQueues::unbind` — the call that invalidates outstanding send tokens.
+// C++ has no channel state left, so the callback had no job the moment the
+// join landed, and a callback with no job is not a backstop.
+//
+// The idempotence it asked for still holds where the state now lives: the
+// effect still fires at every due tick while the slot stays unbound, and
+// `unbind` is a no-op on an already-cleared channel.
 
 /// Called when covert channel `channel` is due to send.
 ///
@@ -142,7 +140,13 @@ pub type NoiseUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
 /// **binding travels with the send** instead of as a pushed slot array: this is
 /// §20.3's inversion, and it is what lets the array (and its positional
 /// decoding on the C++ side) be deleted.
-pub type NoiseSendCb = extern "C" fn(ctx: *mut c_void, channel: usize, peer: *const u8);
+pub type NoiseSendCb = extern "C" fn(
+    ctx: *mut c_void,
+    channel: usize,
+    peer: *const u8,
+    bytes: *const u8,
+    len: usize,
+) -> bool;
 
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
@@ -194,6 +198,13 @@ pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *con
 /// Opaque zone handle. C++ holds `*mut RelayZoneHandle` and nothing else.
 pub struct RelayZoneHandle {
     driver: Driver,
+    /// The carrier's buffers, held **beside** [`Driver`] and never inside it.
+    ///
+    /// `None` on a zone without the carrier — which is every zone C++ builds
+    /// today, and every cleartext zone always. Ownership here rather than in
+    /// `Driver` is CV-4's type barrier expressed as a field: the scheduler
+    /// cannot consult what it cannot reach.
+    noise: Option<NoiseQueues>,
     rng: SecureRelayRng,
     /// Published derived facts for off-strand readers. Single writer: [`Self::publish`].
     ///
@@ -261,13 +272,19 @@ const _: () = assert!(std::mem::size_of::<ShekylStemTallyRow>() == STEM_TALLY_RO
 /// Hand each effect to the matching callback. Dispatch happens here, in Rust,
 /// so no variant tag ever crosses the boundary — the reason the C++ side has no
 /// decoding to get wrong (§18.4a).
+/// The carrier join lives here, and `queues` is borrowed rather than owned by
+/// [`Driver`] — CV-4's type barrier, unchanged. The cadence has already fixed
+/// *when* and *to whom* by the time `poll` returns its effects; only then is
+/// the queue consulted for *what*. A `Driver` that could see the queue could
+/// let the cadence react to traffic, which is the leak CV-4 forbids.
 fn dispatch(
     effects: Vec<Effect>,
     ctx: *mut c_void,
     fluff: FluffCb,
-    unbind: NoiseUnbindCb,
     noise: NoiseSendCb,
+    queues: Option<&mut NoiseQueues>,
 ) {
+    let mut queues = queues;
     for effect in effects {
         match effect {
             Effect::Fluff { peer, blobs } => {
@@ -282,19 +299,57 @@ fn dispatch(
                 fluff(ctx, peer.as_bytes().as_ptr(), spans.as_ptr(), spans.len());
             }
             Effect::NoiseSend { channel, peer } => {
-                noise(ctx, channel, peer.as_bytes().as_ptr());
+                // No queue means the zone has no carrier, and the cadence
+                // cannot have produced this effect — a zone only schedules
+                // noise when `noise_enabled`. Dropping silently would hide a
+                // real construction bug, so it fails loudly in debug and is
+                // inert in release rather than sending an unframed nothing.
+                let Some(q) = queues.as_deref_mut() else {
+                    debug_assert!(false, "NoiseSend on a zone with no carrier queue");
+                    continue;
+                };
+                let Some(send) = q.take_for_send(channel, peer) else {
+                    continue;
+                };
+                // `take_for_send` is NON-DESTRUCTIVE: it hands back the same
+                // fragment until something resolves the token. That is the
+                // whole reason the callback had to widen — without a status
+                // coming back, `sent` could never be called and every take
+                // would reproduce this fragment forever.
+                let bytes = send.bytes();
+                let delivered = noise(
+                    ctx,
+                    channel,
+                    peer.as_bytes().as_ptr(),
+                    bytes.as_ptr(),
+                    bytes.len(),
+                );
+                if delivered {
+                    send.sent(q);
+                } else {
+                    send.failed(q);
+                }
             }
             Effect::NoiseUnbind { channel } => {
-                unbind(ctx, channel);
+                // Consumed entirely in Rust. `unbind` is what invalidates
+                // outstanding tokens, so it is not the lesser half of the
+                // join — omitting it would leave a token resolvable against
+                // a slot that no longer has a peer.
+                if let Some(q) = queues.as_deref_mut() {
+                    q.unbind(channel);
+                }
             }
         }
     }
 }
 
-/// See [`noop_unbind`] — `force_fluff` releases batches and can produce
-/// neither covert variant.
-extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8) {
+/// A placeholder for the exports that cannot produce a `NoiseSend`.
+/// `force_fluff` releases batches and can produce neither covert variant;
+/// reaching this is a dispatch bug, so it asserts in debug rather than failing
+/// silently, and reports "not delivered" so no token is ever resolved by it.
+extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8, _: *const u8, _: usize) -> bool {
     debug_assert!(false, "force_fluff produced a NoiseSend effect");
+    false
 }
 
 /// # Safety
@@ -476,8 +531,22 @@ pub extern "C" fn shekyl_relay_zone_new(
     ) else {
         return core::ptr::null_mut();
     };
+    // The carrier's buffers are built exactly when the zone carries it. The
+    // window is `dummy.len()` and nothing else (`carrier::WINDOW_BYTES` is a
+    // construction parameter, never a runtime reference), so the dummy is
+    // sized here and the queue owns the length invariant from then on.
+    let noise = if noise_enabled {
+        let Some(q) = NoiseQueues::new(stems, vec![0u8; carrier::WINDOW_BYTES]) else {
+            // Same refusal channel as `Zone::new` above: a null handle.
+            return core::ptr::null_mut();
+        };
+        Some(q)
+    } else {
+        None
+    };
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
+        noise,
         rng,
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
@@ -485,6 +554,105 @@ pub extern "C" fn shekyl_relay_zone_new(
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
+}
+
+/// Hand the carrier **one** transaction to carry on `channel`.
+///
+/// Returns `true` if it was accepted. `false` means refused, and refusal is
+/// the queue's own rule: the framed notification must be a whole number of
+/// windows and at most `carrier::MAX_FRAGMENTS` of them.
+///
+/// # One transaction per notification, made unrepresentable
+///
+/// `COVER_TRAFFIC_RESTORATION.md` §2.9b requires the carrier's caller to
+/// normalise to one transaction per notification, because two transactions in
+/// one carrier message share **one window, one slot and one successor** — the
+/// pairwise linkage Dandelion++ exists to deny. No cap size fixes that, and
+/// the queue cannot enforce it because it sees opaque bytes.
+///
+/// So this crossing takes **one transaction blob**, not a vector, and Rust
+/// does the levin framing. A batch is not something a caller can express here
+/// and then be refused for; it is not sayable. That is the difference between
+/// a requirement and a check — §2.9b was documented for a later caller and
+/// nearly went to the wrong owner entirely, which is exactly how a rule that
+/// is only written down gets skipped.
+///
+/// `dandelionpp_fluff` is **false**: the carrier attaches *below* the phase,
+/// and a transaction travelling on it is stemming.
+///
+/// # Safety
+/// `handle` must be live. `tx` must cover `tx_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
+    handle: *mut RelayZoneHandle,
+    channel: usize,
+    tx: *const u8,
+    tx_len: usize,
+) -> bool {
+    if handle.is_null() || tx.is_null() || tx_len == 0 {
+        return false;
+    }
+    let h = &mut *handle;
+    let Some(q) = h.noise.as_mut() else {
+        return false;
+    };
+    // Through the crate's FFI-read seam rather than a raw `from_raw_parts`:
+    // it carries the `isize::MAX` language-level bound and the null check, and
+    // SA-R-7's ratchet exists so a new raw site has to justify itself instead
+    // of accruing quietly. There is nothing to justify here — this read is
+    // exactly what the seam is for.
+    let Some(blob) = crate::legacy_util::slice_from_ptr(tx, tx_len) else {
+        return false;
+    };
+    let blob = blob.to_vec();
+    let window = q.window();
+    let mut body = NewTransactions {
+        txs: vec![blob],
+        padding: Vec::new(),
+        dandelionpp_fluff: false,
+    };
+    // Frame once unpadded to MEASURE, then pad to the next whole window.
+    //
+    // The queue refuses anything that is not a window multiple, and it is
+    // right to: a short final emission would let an observer read the real
+    // payload's size off the frame, which is the whole thing the carrier
+    // spends bandwidth to hide. `NewTransactions` carries a `_` padding field
+    // for exactly this, so the padding rides inside the message rather than
+    // being appended to a finished frame where a decoder would reject it.
+    //
+    // Measured rather than predicted: the levin envelope steps with the
+    // blob's length varint (74 -> 75 -> 77 B), so a computed size would embed
+    // one shape's envelope into a shape-independent path.
+    let Ok(bare) = body.store() else {
+        return false;
+    };
+    let bare_len = notify(NOTIFY_NEW_TRANSACTIONS, &bare).len();
+    let target = bare_len.div_ceil(window) * window;
+    // Padding is a byte string inside the section, so adding `n` bytes of it
+    // grows the message by `n` plus whatever its own length varint widens by.
+    // Converge rather than solve: at most a couple of steps, and it terminates
+    // because each pass can only widen the varint once.
+    let mut pad = target - bare_len;
+    for _ in 0..8 {
+        body.padding = vec![0u8; pad];
+        let Ok(payload) = body.store() else {
+            return false;
+        };
+        let framed = notify(NOTIFY_NEW_TRANSACTIONS, &payload);
+        if framed.len() == target {
+            return q.enqueue(channel, framed);
+        }
+        // Correct toward the target in BOTH directions. Adding a byte of
+        // padding can widen the padding field's own length varint, which
+        // overshoots by one — the first draft here answered an overshoot by
+        // jumping to the next window and diverged, one window per pass.
+        let delta = target.cast_signed() - framed.len().cast_signed();
+        let Some(next) = pad.checked_add_signed(delta) else {
+            return false;
+        };
+        pad = next;
+    }
+    false
 }
 
 /// Free a zone. Null is a no-op; free exactly once.
@@ -1275,7 +1443,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     ctx: *mut c_void,
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
-    on_unbind: NoiseUnbindCb,
     on_noise: NoiseSendCb,
 ) {
     if handle.is_null() {
@@ -1294,7 +1461,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_unbind, on_noise);
+    dispatch(effects, ctx, on_fluff, on_noise, h.noise.as_mut());
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -1314,7 +1481,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_unbind, noop_noise);
+    dispatch(effects, ctx, on_fluff, noop_noise, None);
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives. No
@@ -1338,13 +1505,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
     let h = &mut *handle;
     h.driver.force_epoch(now_ms, &peers, &mut h.rng);
     h.publish();
-}
-
-/// Placeholders for the exports that cannot produce the other variants.
-/// Reaching one is a dispatch bug, so they assert in debug rather than failing
-/// silently.
-extern "C" fn noop_unbind(_: *mut c_void, _: usize) {
-    debug_assert!(false, "force_fluff produced a NoiseUnbind effect");
 }
 
 #[cfg(test)]

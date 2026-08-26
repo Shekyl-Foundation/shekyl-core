@@ -2939,16 +2939,15 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! N notifications, leaking the batch size as a per-peer message count.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
-//! Noise channel `channel` came due with its stem slot unbound: clear it —
-//! nil the binding, discard buffers — on the channel's own strand. The other
-//! half of the deleted slot array: the binding itself travels with each noise
-//! send, and the LOSS of a binding travels here, because an unbound channel
-//! emits no sends. One index crosses -- no array, no slot order, no width to
-//! reconcile. Fires at EVERY due tick while the slot stays unbound (derived
-//! from the map at each poll, never pushed once at a transition), so the
-//! receiver must be idempotent and a lost clear self-heals one noise interval
-//! later. Must not throw across the FFI boundary.
-typedef void (*ShekylRelayNoiseUnbindCb)(void* ctx, std::size_t channel);
+// ShekylRelayNoiseUnbindCb is DELETED, not kept as a souvenir (rule 15).
+// It carried "this channel's stem slot is unbound, clear it" to a C++ side
+// that held the buffers. Since #515 those buffers are Rust's, and since the
+// carrier caller `Effect::NoiseUnbind` is consumed entirely inside Rust by
+// `NoiseQueues::unbind` -- which is what invalidates outstanding send tokens.
+// C++ has no channel state left to clear, so the callback had no job the
+// moment the join landed. Its idempotence note went with it: the effect still
+// fires at every due tick while the slot stays unbound, and `unbind` is
+// idempotent on the Rust side where the state now lives.
 //! Supply the outbound connection set on demand: write the id count through
 //! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
@@ -2958,16 +2957,34 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 
 //! Noise channel `channel` is due to send.
 //!
-//! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
-//! send is a dummy or drains a queued real fragment is a queue question, and the
-//! queue is C++. Rust decides WHEN and WHICH CHANNEL; C++ decides WHAT. Adding a
-//! kind or a "has real pending" flag here would let the cadence react to traffic,
-//! and that change would look like a latency optimisation rather than the
-//! noise-channel leak it is. Must not throw across the FFI boundary.
+//! Carries the BYTES and returns whether they went out. Both halves are new
+//! as of the carrier caller; the queue moved to Rust in #515 and this
+//! signature had not followed it.
+//!
+//! Still carries NO payload discriminant, and that is still CV-4: whether this
+//! emission is a dummy or drains a queued real fragment must not be knowable to
+//! anything that could feed the cadence. What changed is only the DIRECTION of
+//! travel. CV-4 forbids handing the SCHEDULER traffic-dependent input -- a
+//! kind, a queue depth, a has-real-pending flag -- so the cadence cannot react
+//! to traffic. Opaque bytes travelling OUTWARD, chosen by Rust after the
+//! cadence has already fixed when and to whom, tell the scheduler nothing.
+//!
+//! The RETURN is not a convenience. `NoiseQueues::take_for_send` is
+//! deliberately NON-DESTRUCTIVE: only a resolved token advances the queue. With
+//! no status coming back there is no way to call `sent`, so every take would
+//! hand out the same fragment forever and `failed` would be unreachable. The
+//! widening is what makes the token's failure mode reachable at all.
+//!
+//! Return true if the bytes were handed to the transport, false otherwise; a
+//! false leaves the queue exactly as it was, so the fragment is retried rather
+//! than dropped. Must not throw across the FFI boundary.
+//!
 //! `peer` is the 16-byte connection id the channel's stem slot is bound to --
 //! never nil, since an unbound slot emits nothing (CV-2). The binding travels
 //! with the send (§20.3's inversion) rather than as a pushed slot array.
-typedef void (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer);
+//! `bytes` covers `len` readable bytes and is valid only for the call.
+typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer,
+                                       const std::uint8_t* bytes, std::size_t len);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
@@ -3160,7 +3177,7 @@ std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::ui
 //! epochs do not refresh. This is the production notify path: the refresh
 //! policy lives in Rust with the zone. No callback — commands return nothing;
 //! a noise channel the refresh leaves unbound clears at its next due tick
-//! through shekyl_relay_zone_poll's on_unbind.
+//! inside Rust, through NoiseQueues::unbind at the next poll.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
@@ -3195,8 +3212,22 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! release never triggers the connection scan.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
-                            ShekylRelayFluffCb on_fluff, ShekylRelayNoiseUnbindCb on_unbind,
+                            ShekylRelayFluffCb on_fluff,
                             ShekylRelayNoiseSendCb on_noise);
+
+//! Hand the carrier ONE transaction to carry on `channel`; true if accepted.
+//!
+//! Takes a single transaction blob rather than a vector, and Rust does the
+//! levin framing. That is COVER_TRAFFIC_RESTORATION.md §2.9b made structural:
+//! two transactions in one carrier message share one window, one slot and one
+//! successor -- the pairwise linkage Dandelion++ exists to deny -- and the
+//! queue cannot enforce it because it sees opaque bytes. A batch is not
+//! something this crossing can express, so it cannot be refused for it either.
+//!
+//! False means refused by the queue's own rule: a whole number of windows, at
+//! most SHEKYL_RELAY_MAX_FRAGMENTS of them.
+bool shekyl_relay_zone_noise_enqueue(RelayZoneHandle* handle, std::size_t channel,
+                                     const std::uint8_t* tx, std::size_t tx_len);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    void* ctx, ShekylRelayFluffCb on_fluff);
