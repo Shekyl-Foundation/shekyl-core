@@ -33,6 +33,7 @@ use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding};
 use shekyl_archival_retention::bond_connect::MAX_BOND_BAD_INTERVALS;
+use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::release_cooldown::{
     release_cooldown_elapsed, slashes_settled_through,
@@ -311,15 +312,42 @@ impl Message<AssembleUnbond> for StakeEngine {
         let bond_debit = built.vin().bond_debit;
         let debit_term = built.debit_term();
 
-        // ── Step 6: funding arithmetic — the DEBIT rule, and it inverts the
-        // credit path rather than sharing it. Released collateral is a
-        // *source*: `sum(funding) + bond_debit == sum(outputs) + fee`. On the
-        // bond path the floor was a cost the funding had to cover; here it is
-        // value arriving, so the only thing funding must cover is whatever the
-        // fee exceeds — and consensus requires at least one real spend input
-        // regardless ("Archival bond-post tx requires at least one
-        // txin_to_key funding input"), which is why the fee comes from P
-        // working capital and not from the released collateral alone.
+        // ── Step 6: funding — the SHAPE floor first, then the DEBIT rule.
+        //
+        // A bond post carries at least one real `txin_to_key` spend input,
+        // whatever the kind — so the fee comes from P working capital and never
+        // from released collateral alone. The predicate is CALLED, not
+        // restated: `bond_post_funding_floor_met` owns the rule
+        // (`shekyl-archival-retention`), the same way `verify_debit_funding`
+        // owns the balance rule below. The daemon still decides this one in C++
+        // (`blockchain.cpp`, "Archival bond-post tx requires at least one
+        // txin_to_key funding input"); that copy goes away with the
+        // tx-verification migration, and until it does, the wallet is not
+        // holding a second private copy of the rule.
+        //
+        // Placed after the record-state arms (steps 4-5) and before the
+        // arithmetic because that is where consensus places it — after
+        // `check_archival_bond_post_input`, before every amount rule — so a
+        // caller who also got the fee wrong is told about the missing input
+        // first, exactly as a node would.
+        //
+        // Nothing below could catch the empty set: released collateral alone
+        // clears the sufficiency test, and `verify_debit_funding` closes
+        // tautologically at zero funding because the outputs are derived from
+        // the same `sources` term. Un-guarded, this state reached the prover
+        // and came back as `TxBuilderError::NoInputs` under stage "proving" —
+        // naming the pipeline step where a condition belongs.
+        // `an_exit_with_no_funding_inputs_is_refused_by_name` goes red if this
+        // call is deleted.
+        if !bond_post_funding_floor_met(msg.funding.len()) {
+            return Err(BondAssemblyError::FundingInputsRequired.into());
+        }
+
+        // The DEBIT rule inverts the credit path rather than sharing it.
+        // Released collateral is a *source*: `sum(funding) + bond_debit ==
+        // sum(outputs) + fee`. On the bond path the floor was a cost the
+        // funding had to cover; here it is value arriving, so the only thing
+        // funding must cover is whatever the fee exceeds.
         let mut funding_total: u64 = 0;
         for ctx in &msg.funding {
             funding_total = funding_total
@@ -805,6 +833,73 @@ mod tests {
         assert_eq!(post.funding_gindexes.len(), 2);
         let mut cursor: &[u8] = post.bound_tx.bytes();
         Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+    }
+
+    /// An exit assembled with **no funding inputs** is refused by name, not by
+    /// the prover.
+    ///
+    /// A bond post carries at least one real `txin_to_key` spend input —
+    /// `bond_post_funding_floor_met`, which the handler calls rather than
+    /// restating, and which the daemon still decides in its own C++ copy
+    /// ("Archival bond-post tx requires at least one txin_to_key funding
+    /// input"). Consensus binds it *after* `check_archival_bond_post_input` and
+    /// *before* every amount rule (pseudoOuts count, reference block, balance);
+    /// the handler's call sits in the same place — after the record-state arms,
+    /// before the funding arithmetic — so the wallet and the chain cannot
+    /// disagree about why the exit was refused, and a caller who also got the
+    /// fee wrong is told about the missing input first, exactly as a node would.
+    ///
+    /// Nothing else on the wallet side catches this state, which is why the
+    /// guard is not redundant with the checks around it: the sufficiency test
+    /// compares `funding_total + bond_debit` against the fee and released
+    /// collateral alone clears it, and `verify_debit_funding` closes
+    /// tautologically because the outputs are derived from that same `sources`
+    /// term. Before the guard the refusal arrived from inside the prover as
+    /// `Build { stage: "proving" }` wrapping `TxBuilderError::NoInputs` —
+    /// naming the pipeline stage where a condition belongs.
+    ///
+    /// The positive control is the sibling actor tests: both assemble an
+    /// equivalently ready record with two real funding inputs from the same
+    /// fixture, so a guard that refused everything would take them red.
+    #[tokio::test]
+    async fn an_exit_with_no_funding_inputs_is_refused_by_name() {
+        let slot = 7u32;
+        let stake = spawn_over(&[slot], &[], Some(slot));
+        let p_slot = PSlot::from_raw(slot);
+        // The paths are drawn and then dropped: a tree context is still needed
+        // to form the message, and building it the ordinary way keeps the only
+        // difference from an assembling exit the funding vector itself.
+        let (_, tree_ctx) = exit_funding(slot);
+
+        // Ready in every respect except the funding, and bound to THIS handle's
+        // persona so step 3 cannot be what refuses.
+        let mine = stake
+            .persona_canonical_id(p_slot)
+            .await
+            .expect("project this persona's canonical id");
+        let record = UnbondRecordState {
+            p_id: mine,
+            ..ready()
+        };
+
+        let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
+        let err = stake
+            .assemble_unbond(AssembleUnbond {
+                handle,
+                record,
+                funding: vec![],
+                tree_ctx,
+                fee: EXIT_FEE,
+            })
+            .await
+            .expect_err("an exit with no funding input must not assemble");
+        assert!(
+            matches!(
+                err,
+                StakeEngineError::Assembly(BondAssemblyError::FundingInputsRequired)
+            ),
+            "expected FundingInputsRequired, got {err:?}"
+        );
     }
 
     /// **The exit authorizes under `bond_spend_pk` — never the identity key.**

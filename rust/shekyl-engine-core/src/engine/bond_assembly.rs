@@ -166,6 +166,25 @@ pub(crate) enum BondAssemblyError {
     )]
     NoSpendableFunding,
 
+    /// The presented input set carries **no funding input at all** — a
+    /// structural shape refusal, not a shortfall. The rule belongs to
+    /// [`bond_post_funding_floor_met`](shekyl_archival_retention::bond_post::bond_post_funding_floor_met):
+    /// a bond post carries at least one real `txin_to_key` spend input, checked
+    /// before any amount rule. This arm is what the producer raises when that
+    /// predicate says no — the condition is not restated here.
+    ///
+    /// Distinct from [`Self::NoSpendableFunding`], which names what the *sweep*
+    /// found eligible at its reference height. This arm is about the set a
+    /// caller actually presented — and it is the exit path that needs it,
+    /// because there the amount rules cannot see the difference: released
+    /// collateral alone covers the fee, so both the sufficiency check and the
+    /// balance equation close with an empty funding vector.
+    #[error(
+        "the transaction carries no funding input: consensus requires at least one \
+         txin_to_key spend input on a bond post"
+    )]
+    FundingInputsRequired,
+
     /// A live pending post already exists for this persona. JoinMarket-only
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.

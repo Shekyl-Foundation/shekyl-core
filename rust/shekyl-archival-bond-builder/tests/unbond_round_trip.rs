@@ -229,9 +229,25 @@ fn commit(amount: u64, mask: &Scalar) -> [u8; 32] {
 #[test]
 fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
     const FEE: u64 = 1_000;
-    // No funding inputs: the released collateral covers the fee and the rest
-    // lands in outputs. This is the ordinary exit shape — a debit path needs no
-    // credit funded, only its fee paid.
+    // Zero funding is exercised here as an AMOUNT-EQUATION case, not as a
+    // transaction shape. An earlier version of this comment called it "the
+    // ordinary exit shape", which is wrong: consensus rejects a bond-post tx
+    // with no real spend input ("Archival bond-post tx requires at least one
+    // txin_to_key funding input"), a rule owned by
+    // `shekyl_archival_retention::bond_post::bond_post_funding_floor_met` and
+    // still decided in C++ at the daemon's single enforcement site. The
+    // producer calls that predicate: `AssembleUnbond` refuses an empty funding
+    // vector by name — `FundingInputsRequired`, asserted by
+    // `an_exit_with_no_funding_inputs_is_refused_by_name` — before it does any
+    // funding arithmetic, so no such transaction is ever offered to a node.
+    //
+    // It stays zero deliberately, because the two rules live on **different
+    // validation surfaces** (rule 19) and `verify_debit_funding` owns only the
+    // scalar one: whether the amounts admit a balanced transaction. Folding an
+    // input-count floor into an amount rule would make the amount rule
+    // untestable at its own boundary and would put the shape rule somewhere
+    // nothing else looks for it. The shape floor is asserted where the
+    // transaction is built, not here.
     const FUNDING: u64 = 0;
     let out_total = BONDED + FUNDING - FEE;
 

@@ -288,6 +288,18 @@ pub fn verify_credit_funding(
 /// check; see `AssembleUnbond`. The one exception is a zero bonded total, which
 /// is refused here because it is the operand this function consumes.
 ///
+/// The same division governs the transaction's SHAPE, and it is worth stating
+/// because the arithmetic hides it: this function returns a vin, not a
+/// transaction, so it never sees the funding set — but the transaction built
+/// around this vin must carry **at least one `txin_to_key` funding input**, a
+/// rule consensus binds separately from every amount rule. On a debit the
+/// released collateral is a *source*, so an exit assembled with an empty
+/// funding set balances arithmetically and is still rejected on the wire.
+/// Enforcing that floor is the assembling caller's contract, and the rule to
+/// call for it is `shekyl_archival_retention::bond_post::bond_post_funding_floor_met`
+/// — not a locally restated count. `AssembleUnbond` calls it before any funding
+/// arithmetic.
+///
 /// # Errors
 ///
 /// - [`BondBuildError::NothingToUnbond`] if `record_bonded_total` is zero.

@@ -3787,6 +3787,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           if (std::holds_alternative<txin_to_key>(tx.vin[i]))
             spend_indices.push_back(i);
         }
+        // The funding-input floor is decided HERE, in C++, and it is the last
+        // copy of a rule Rust already owns: `bond_post_funding_floor_met`
+        // (`shekyl-archival-retention::bond_post`), which the wallet-side
+        // producer calls so the two sides state one rule. Marshaling
+        // `spend_indices.size()` to that predicate — the standing
+        // decision-placement pin, as `shekyl_archival_bond_post_block_unique`
+        // below — is what deletes this copy; do not repair a divergence by
+        // editing the condition here.
         if (spend_indices.empty())
         {
           MERROR_VER("Archival bond-post tx requires at least one txin_to_key funding input");
