@@ -88,6 +88,15 @@ impl std::fmt::Debug for DrainSelection {
 pub(crate) enum DrainSelectError {
     /// The provable (mature) candidate set cannot cover the drain amount.
     Insufficient,
+    /// The amount is coverable by the pool, but not within the
+    /// [`shekyl_tx_builder::MAX_INPUTS`] inputs one FCMP++ transaction can
+    /// spend. Exact, not heuristic: selection is largest-first, so the capped
+    /// prefix is the maximum any legal input set can sum — if it cannot cover
+    /// the amount, no legal selection can. Refused here as a user-actionable
+    /// planner arm ("lower the amount") rather than assembling a selection
+    /// the curve-tree actor's own `MAX_INPUTS` boundary check would reject as
+    /// an internal fault after the proof work.
+    InputCapExceeded,
     /// Summing candidate amounts overflowed `u64` atomic units.
     Overflow,
 }
@@ -127,6 +136,14 @@ pub(crate) fn select_for_drain(
     for candidate in mature {
         if input_total >= target {
             break;
+        }
+        // One FCMP++ tx spends at most MAX_INPUTS inputs (the curve-tree
+        // actor refuses more at the proof boundary). Largest-first makes the
+        // capped prefix the maximum sum of any legal selection, so hitting
+        // the cap short of the target is an exact "cannot cover within one
+        // drain" refusal, not a selection-order artifact.
+        if chosen.len() == shekyl_tx_builder::MAX_INPUTS {
+            return Err(DrainSelectError::InputCapExceeded);
         }
         chosen.push(candidate.output_id);
         input_total = input_total
@@ -256,5 +273,27 @@ mod tests {
         // 31 > affordable 31? affordable is 31, target 31 ok at amount stage,
         // but mature total is 30 < 31 → select refuses.
         assert_eq!(err, Err(DrainSelectError::Insufficient));
+    }
+
+    /// Selection stops at `MAX_INPUTS` with an exact refusal: largest-first
+    /// makes the capped prefix the maximum sum of ANY legal input set, so an
+    /// amount only coverable past the cap is `InputCapExceeded` — the
+    /// user-actionable planner arm ("lower the amount") — never a selection
+    /// handed to the curve-tree actor for its `MAX_INPUTS` boundary check to
+    /// refuse as an internal fault after the proof work. The at-cap amount
+    /// still selects (negative control: the cap refuses the ninth input, not
+    /// the eighth).
+    #[test]
+    fn selection_caps_at_max_inputs_with_an_exact_refusal() {
+        // Nine mature candidates of 10 each: the eight largest sum to 80.
+        let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
+
+        let over = select_for_drain(&candidates, amount(90, 90), BlockHeight::from_raw(10));
+        assert_eq!(over, Err(DrainSelectError::InputCapExceeded));
+
+        let at_cap = select_for_drain(&candidates, amount(80, 90), BlockHeight::from_raw(10))
+            .expect("eight inputs cover 80");
+        assert_eq!(at_cap.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        assert_eq!(at_cap.input_total, AtomicUnits::from_raw(80));
     }
 }

@@ -14,7 +14,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_state::{SendJournalBlock, TransferDetails};
 use shekyl_rpc_client::Rpc;
-use shekyl_scanner::WalletLedgerExt;
 use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
@@ -193,20 +192,14 @@ pub(crate) async fn get_balance(
     require_empty_object(params, "get_balance")?;
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    // Snapshot ledger fields, then drop the ledger guard before the
-    // staking read: `staking_read_view` takes its own brief `ledger.read()`
-    // for `staking_enabled`, and nesting that under a live guard deadlocks
-    // on non-reentrant `std::sync::RwLock` (same discipline as
-    // `get_wallet_info` below). Passing the already-observed flag keeps the
-    // two halves coherent with one ledger snapshot.
-    let (summary, staking_enabled) = {
-        let wallet = engine.ledger();
-        (wallet.balance(), wallet.staking.staking_enabled)
-    };
-    let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
-    let staking_view =
-        crate::staking::read_view_with_snapshot(&engine, staking_enabled, recovery_pending_reopen)?;
-    let result = get_balance_result(&summary, &staking_view.balance)?;
+    // The non-reentrant-lock choreography (snapshot under one ledger guard →
+    // drop it → sealed staking read) lives in the shared helper; an
+    // unreadable staking seal degrades to absent staking fields rather than
+    // blacking out the liquid balance, while a corrupt-total read (`?`) fails
+    // loud (`ledger_snapshot_with_staking` docs).
+    let (summary, (), staking_view) =
+        crate::staking::ledger_snapshot_with_staking(&engine, |_| ())?;
+    let result = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
 }
@@ -256,26 +249,16 @@ pub(crate) async fn get_wallet_info(
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
         let engine = shared.read().await;
 
-        // Snapshot ledger fields, then drop the ledger guard before the
-        // sealed-file staking read. `staking_read_view` takes its own brief
-        // `ledger.read()` for `staking_enabled`; nesting that under a live
-        // `LedgerReadGuard` deadlocks on non-reentrant `std::sync::RwLock`.
-        // Pass the already-observed flag so the balance/enabled half of this
-        // aggregate stays coherent with the ledger snapshot above.
-        let (summary, wallet_height, restore_height, staking_enabled) = {
-            let wallet = engine.ledger();
-            let height = wallet.ledger.height();
-            let summary = wallet.balance();
-            let restore_height =
-                i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
-            let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
-            let staking_enabled = wallet.staking.staking_enabled;
-            (summary, wallet_height, restore_height, staking_enabled)
-        };
-        // After the guard above is dropped (non-reentrant lock): the
-        // session-adoption flag rides the same aggregate so a wallet whose
-        // staking history was recovered mid-session reports it.
-        let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
+        // The non-reentrant-lock choreography lives in the shared helper
+        // (`ledger_snapshot_with_staking`): heights ride the closure so they
+        // stay coherent with the balance summary under ONE ledger guard.
+        let (summary, (wallet_height, restore_height), staking_view) =
+            crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
+                let wallet_height = i64::try_from(wallet.ledger.height()).unwrap_or(i64::MAX);
+                let restore_height =
+                    i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+                (wallet_height, restore_height)
+            })?;
 
         let address = engine
             .primary_address()
@@ -289,16 +272,14 @@ pub(crate) async fn get_wallet_info(
         }
         .to_owned();
 
-        let staking_view = crate::staking::read_view_with_snapshot(
-            &engine,
-            staking_enabled,
-            recovery_pending_reopen,
-        )?;
         // WI-RPC-5: the one-glance balance projects its staking fields from
-        // the same authoritative view the staking block below reads — the
-        // two surfaces of this aggregate cannot disagree.
-        let balance = get_balance_result(&summary, &staking_view.balance)?;
-        let staking = StakingInfoResult {
+        // the same authoritative view the staking block reads — the two
+        // surfaces of this aggregate cannot disagree, including in the
+        // degrade arm: an unreadable staking seal leaves BOTH the balance's
+        // staking fields and the `staking` block absent while the wallet's
+        // identity/height/liquid facts stay served.
+        let balance = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
+        let staking = staking_view.map(|staking_view| StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
                 bonded_principal_confirmed: atomic_units_string(
@@ -317,7 +298,7 @@ pub(crate) async fn get_wallet_info(
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
             recovery_pending_reopen: staking_view.recovery_pending_reopen,
             posture: crate::staking::posture_str(serving_posture),
-        };
+        });
 
         let daemon = engine.daemon().clone();
 

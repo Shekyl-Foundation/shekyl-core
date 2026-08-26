@@ -74,7 +74,7 @@ pub use types::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 #[cfg(test)]
 use crate::engine::error::{IoError, OpenError};
 #[cfg(test)]
-use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
+use crate::engine::{Capability, Engine, SoloSigner};
 #[cfg(test)]
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 #[cfg(test)]

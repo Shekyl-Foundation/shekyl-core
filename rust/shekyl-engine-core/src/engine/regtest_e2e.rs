@@ -1626,8 +1626,8 @@ async fn stake_persona_to_confirmed_bond(
     stake_entry: FixtureStake,
 ) -> ConfirmedBondFixture {
     use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
+    use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
-    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     use super::pscan::start::pending_post_store_for_engine;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
@@ -1660,7 +1660,7 @@ async fn stake_persona_to_confirmed_bond(
             .expect("daemon fee estimates");
         estimates
             .economy
-            .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES)
+            .calculate_fee_from_weight(p_lane_weight_ceiling_bytes())
     };
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 

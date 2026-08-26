@@ -38,8 +38,14 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
 /// `claimable_rewards` is `rewards_received_unspent` — received-and-unspent
 /// staking-side money, not a claim-era entitlement. `liquid` mirrors
 /// `unlocked` until staking splits liquid from locked principal. For a
-/// non-staker the caller passes [`StakedBalance::ZERO`], which is a true
-/// zero (nothing is staked), not a placeholder.
+/// non-staker the caller passes `Some(&StakedBalance::ZERO)`, which is a
+/// true zero (nothing is staked), not a placeholder.
+///
+/// `staking: None` is the **degrade** arm — the sealed staking read failed
+/// — and projects the staking fields *absent*: the liquid fields stay
+/// authoritative while nothing fabricates a zero over a bad seal (the
+/// engine's fail-closed pin, carried onto the wire as structural absence
+/// rather than a `-32603` blackout of the whole balance surface).
 ///
 /// # Errors
 ///
@@ -51,26 +57,34 @@ pub fn atomic_units_string(amount: AtomicUnits) -> String {
 /// panic, because the workspace builds with `panic = "abort"`, so a panic
 /// on this hot path would take the whole wallet-rpc server down for a
 /// state one wallet file caused (same disposition as `transfer_view`'s
-/// internal-error arm and `StakeInError::CoverOverflow`).
+/// internal-error arm and `StakeInError::CoverOverflow`). Deliberately
+/// NOT folded into the degrade arm: a view that *loaded* but sums past
+/// the money type is corrupt-loud territory, while the degrade arm is
+/// for a view that could not load at all.
 pub fn get_balance_result(
     b: &BalanceSummary,
-    staking: &StakedBalance,
+    staking: Option<&StakedBalance>,
 ) -> Result<GetBalanceResult, WalletRpcError> {
     let unlocked = atomic_units_string(b.unlocked);
     let staked = staking
-        .bonded_principal_confirmed
-        .to_raw()
-        .checked_add(staking.bonded_principal_pending.to_raw())
-        .ok_or_else(|| {
-            WalletRpcError::InternalError(
-                "bonded principal legs exceed the money type (corrupt staking view)".to_owned(),
-            )
-        })?;
+        .map(|s| {
+            s.bonded_principal_confirmed
+                .to_raw()
+                .checked_add(s.bonded_principal_pending.to_raw())
+                .map(|sum| sum.to_string())
+                .ok_or_else(|| {
+                    WalletRpcError::InternalError(
+                        "bonded principal legs exceed the money type (corrupt staking view)"
+                            .to_owned(),
+                    )
+                })
+        })
+        .transpose()?;
     Ok(GetBalanceResult {
         liquid: unlocked.clone(),
-        staked: staked.to_string(),
+        staked,
         unlocked,
-        claimable_rewards: atomic_units_string(staking.rewards_received_unspent),
+        claimable_rewards: staking.map(|s| atomic_units_string(s.rewards_received_unspent)),
         pending: atomic_units_string(b.awaiting_confirmation),
     })
 }
@@ -623,14 +637,14 @@ mod tests {
             frozen: AtomicUnits::ZERO,
             awaiting_confirmation: AtomicUnits::from_raw(5),
         };
-        let r = get_balance_result(&b, &StakedBalance::ZERO).expect("legs cannot overflow");
+        let r = get_balance_result(&b, Some(&StakedBalance::ZERO)).expect("legs cannot overflow");
         assert_eq!(r.unlocked, "40");
         assert_eq!(r.liquid, "40");
         assert_eq!(r.pending, "5");
         // A non-staker's zeros are true zeros (nothing staked), not the
         // pre-WI-RPC-5 placeholder.
-        assert_eq!(r.staked, "0");
-        assert_eq!(r.claimable_rewards, "0");
+        assert_eq!(r.staked.as_deref(), Some("0"));
+        assert_eq!(r.claimable_rewards.as_deref(), Some("0"));
     }
 
     /// WI-RPC-5: `staked` sums the two bonded legs `get_staked_balance`
@@ -653,9 +667,13 @@ mod tests {
             bonded_principal_pending: AtomicUnits::from_raw(30_000),
             rewards_received_unspent: AtomicUnits::from_raw(1_234),
         };
-        let r = get_balance_result(&b, &staking).expect("legs cannot overflow");
-        assert_eq!(r.staked, "100000", "confirmed + pending bonded legs");
-        assert_eq!(r.claimable_rewards, "1234");
+        let r = get_balance_result(&b, Some(&staking)).expect("legs cannot overflow");
+        assert_eq!(
+            r.staked.as_deref(),
+            Some("100000"),
+            "confirmed + pending bonded legs"
+        );
+        assert_eq!(r.claimable_rewards.as_deref(), Some("1234"));
         assert_eq!(r.unlocked, "40", "principal legs are untouched");
     }
 
@@ -678,7 +696,7 @@ mod tests {
             bonded_principal_pending: AtomicUnits::from_raw(1),
             rewards_received_unspent: AtomicUnits::ZERO,
         };
-        let err = get_balance_result(&b, &staking).expect_err("overflow must not project");
+        let err = get_balance_result(&b, Some(&staking)).expect_err("overflow must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }
 

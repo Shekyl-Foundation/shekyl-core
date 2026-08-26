@@ -174,9 +174,23 @@ pub fn cmd_stake_in(rpc: &RpcSession, amount: u64) {
         return;
     };
 
+    // The confirmation must not understate the debit: the transfer carries
+    // `amount + cover`, so a summary of Amount + Fee alone would confirm a
+    // smaller send than the one that fires (and `stake_in 0` would confirm a
+    // "zero" send that debits real money). Only the BOUND is shown — from
+    // the enforcing constant, never a hardcoded figure — because disclosing
+    // the exact draw before sending would let a discard-and-rebuild loop
+    // steer the cover distribution the privacy property depends on.
     println!("Stake-in summary:");
     println!("  Amount: {} SKL", format_amount(amount));
     println!("  Fee:    {} SKL", built.fee_skl);
+    println!();
+    println!(
+        "A randomized privacy amount (less than {} SKL) is sent on top of the",
+        format_amount(shekyl_wallet_rpc::COVER_RUNG_ATOMIC)
+    );
+    println!("amount above. It stays yours: it becomes part of your staking balance.");
+    println!("It is chosen automatically and cannot be shown before sending.");
 
     if !confirm_interactive("Fund staking with this transfer?", "stake in") {
         transfers::discard_declined(rpc, &built);
@@ -221,6 +235,13 @@ pub fn cmd_drain_balance(rpc: &RpcSession) {
 /// is set automatically and the funds can only come back to this wallet.
 pub fn cmd_drain(rpc: &RpcSession, amount: u64) {
     if !require_open(rpc) {
+        return;
+    }
+    // Refused locally, before the confirm prompt: a zero drain would
+    // otherwise print "This moves 0.000000000 SKL", ask for confirmation,
+    // and fire a request the server refuses as malformed (-32602).
+    if amount == 0 {
+        println!("Nothing to move: the amount must be greater than zero.");
         return;
     }
     println!(

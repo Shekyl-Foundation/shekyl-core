@@ -139,7 +139,18 @@ where
     ///
     /// [`StakeInError`]: not staking, no active persona, address encode, or the
     /// underlying transfer build ([`SendError`] — insufficient funds, etc.).
-    pub async fn stake_in(&mut self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
+    ///
+    /// `&self` (W-B step 1 parity with
+    /// [`build_pending_tx_async`](super::Engine::build_pending_tx_async), which
+    /// is the entire body after the address resolution): the slow FCMP++
+    /// assembly is serialized by the pending-tx implementor's own permit, so an
+    /// embedder holds a shared borrow across the build and concurrent read RPCs
+    /// proceed. The PR-P2 frozen contract is the `stake_in(amount) ->
+    /// PendingTx` shape; an earlier `&mut self` receiver predated the W-B
+    /// interior-mutability split and would force the wallet-RPC handler onto a
+    /// write guard, stalling every read RPC behind a daemon round trip + proving
+    /// build for exclusivity that binds nothing.
+    pub async fn stake_in(&self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
         let request = self.stake_in_request(amount).await?;
         self.build_pending_tx_async(&request)
             .await
@@ -228,105 +239,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::StakeInError;
-    use crate::engine::{
-        Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
-    };
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_rpc_transport::HttpRpc;
+    use crate::engine::test_support::{activate_persona, staker_engine};
     use shekyl_standoff::COVER_RUNG_ATOMIC;
-    use shekyl_types::PSlot;
     use shekyl_units::AtomicUnits;
-    use tempfile::TempDir;
 
-    /// A `DaemonClient` that never connects: `stake_in`'s tested paths (address
-    /// resolution + the `NotStaking` refusal) touch no network. (Same shape as
-    /// the lifecycle/pscan suites' helper; replicated because those are
-    /// test-private.)
-    fn dummy_daemon() -> DaemonClient {
-        let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-        })
-        .expect("construct HttpRpc (no actual connection attempted)");
-        DaemonClient::new(rpc)
-    }
-
-    fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in s.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-        }
-        s
-    }
-
-    fn creds() -> Credentials<'static> {
-        Credentials::password_only(b"correct horse battery staple")
-    }
-
-    /// A fresh **non-staker** full engine (no bond record → `stake_handle()` is
-    /// `None`).
-    fn non_staker_engine() -> (TempDir, Engine<SoloSigner>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let engine =
-            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create non-staker");
-        (tmp, engine)
-    }
-
-    /// A **staker** engine (persists a bond record for `slot` → `staking_enabled`,
-    /// then reopens so the StakeEngine spawns). Idle — the caller activates a
-    /// persona if it needs one.
-    fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let network = params.network;
-        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
-        engine
-            .persist_bond_record(PSlot::from_raw(slot))
-            .expect("persist bond record → staking_enabled");
-        engine.close(&creds).expect("close created wallet");
-        let opened = Engine::<SoloSigner>::open_full(
-            &base,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-        )
-        .expect("reopen staker wallet");
-        let engine = match opened {
-            OpenedEngine::Loaded(w) => w,
-            OpenedEngine::Restored { wallet, .. } => wallet,
-        };
-        assert!(
-            engine.stake_handle().is_some(),
-            "a staker reopen spawns the StakeEngine"
-        );
-        (tmp, engine)
-    }
-
-    /// Mint + activate persona `slot` on a staker engine.
-    async fn activate(engine: &Engine<SoloSigner>, slot: u32) {
-        let stake = engine.stake_handle().expect("staker has a StakeEngine");
-        let handle = stake
-            .mint_handle(PSlot::from_raw(slot))
-            .await
-            .expect("mint persona handle");
-        stake
-            .activate_persona(handle)
-            .await
-            .expect("activate persona");
-    }
+    /// This suite's deterministic-seed multiplier (`test_support::fixed_seed`).
+    const SEED_MULT: u8 = 7;
 
     /// A non-staker cannot fund a persona it does not have — refused up front,
     /// before any network / build. Exercises `stake_in` → `stake_in_request`.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_on_a_non_staker_is_not_staking() {
-        let (_tmp, mut engine) = non_staker_engine();
+        let (_tmp, engine) = crate::engine::test_support::non_staker_engine(SEED_MULT);
         let err = engine
             .stake_in(AtomicUnits::from_raw(50_000))
             .await
@@ -337,7 +261,7 @@ mod tests {
     /// A staker with no active persona has nothing to fund.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
         let err = engine
             .stake_in_request(AtomicUnits::from_raw(50_000))
             .await
@@ -350,8 +274,8 @@ mod tests {
     /// projects for that persona — the recipient side of the leg, funding aside.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_request_is_a_single_output_to_the_active_persona() {
-        let (_tmp, engine) = staker_engine(3);
-        activate(&engine, 3).await;
+        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        activate_persona(&engine, 3).await;
         let amount = AtomicUnits::from_raw(50_000);
 
         let request = engine

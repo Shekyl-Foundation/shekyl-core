@@ -252,7 +252,10 @@ info:
   # (additive minor); the wire-compat integer clients branch on is
   # GetVersionResult.api_version, which stays 1 pre-genesis (rule 16).
   # 0.2.0: WI-RPC-5 — stake_in / get_drain_balance / drain, get_balance
-  # staked/claimable_rewards semantics, claim-era RESERVED→REJECTED rewrite.
+  # staked/claimable_rewards semantics (live values; absent — never "0" —
+  # over an unreadable staking seal, with get_wallet_info.staking degrading
+  # alongside), the stake_in bounded-cover disclosure, -29511 data.cause,
+  # zero-drain -32602, claim-era RESERVED→REJECTED rewrite.
   version: 0.2.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -714,7 +717,16 @@ components:
                                           confirms. Also the refusal when a
                                           concurrent same-persona post raced
                                           this drain's inputs — that arm is
-                                          transient; retry
+                                          transient; retry. The two arms
+                                          share the code but carry a
+                                          structured discriminant:
+                                          error.data.cause is "pending"
+                                          (sealed drain live; retrying
+                                          cannot help until its record is
+                                          retired) or "raced" (nothing was
+                                          sealed; plain retry). Automation
+                                          MUST branch on data.cause, never
+                                          by parsing the message prose
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -1070,14 +1082,19 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, staked, unlocked, claimable_rewards, pending]
+      required: [liquid, unlocked, pending]
       description: >
         Staking is first-class (locked JSON shape). As of WI-RPC-5 the
         staking fields carry live values projected from the same
         authoritative staking view `get_staked_balance` reads — never the
         StakingBlock hint. For a non-staker wallet all staking fields are
         genuinely "0" (there is nothing staked), which is a true zero, not
-        a placeholder.
+        a placeholder. `staked` and `claimable_rewards` are ABSENT
+        (never "0") when the wallet's sealed staking state cannot be
+        read: the liquid fields stay authoritative while the staking
+        projection degrades, and absence is structurally distinct from a
+        zero — a client must render "staking unavailable", not
+        "nothing staked".
       properties:
         liquid:
           $ref: "#/components/schemas/AtomicUnits"
@@ -1088,7 +1105,8 @@ components:
             committed by in-flight sealed posts — the sum of
             `get_staked_balance`'s two bonded legs. The legs stay separate
             on that method; this scalar exists for the one-glance balance
-            surface.
+            surface. Absent when the staking seal is unreadable (see the
+            schema description).
         unlocked:
           $ref: "#/components/schemas/AtomicUnits"
         claimable_rewards:
@@ -1099,7 +1117,8 @@ components:
             `get_staked_balance.rewards_received_unspent`. NOT a claim-era
             "accrued but unclaimed" entitlement; no such user-visible
             quantity exists in the archival design (claims are engine-side
-            automation).
+            automation). Absent exactly when `staked` is (unreadable
+            staking seal — degrade, never a fabricated zero).
         pending:
           $ref: "#/components/schemas/AtomicUnits"
 
@@ -1522,12 +1541,17 @@ components:
         - address
         - wallet_height
         - balance
-        - staking
         - restore_height
       description: >
         One-round-trip wallet summary for CLI `engine_info` (WI-RPC-4).
         Composes `get_balance` / height / address / staking_info; no new
-        Engine API.
+        Engine API. `staking` is ABSENT (not required) exactly when the
+        wallet's sealed staking state cannot be read: the identity /
+        height / liquid-balance facts stay served while the staking
+        projection degrades, alongside the absent
+        `balance.staked` / `balance.claimable_rewards` — never a
+        whole-surface -32603 for a staking-side seal fault, and never
+        zeros over a bad seal.
       properties:
         name:
           type: string
@@ -2065,7 +2089,16 @@ components:
           description: >
             Principal amount to move into the staking pool. User intent
             only — the fee is priced by the send path as usual and is NOT
-            part of this amount.
+            part of this amount. The funded transfer carries amount PLUS a
+            system-drawn privacy cover, strictly positive and strictly
+            under 0.75 SKL (the cover rung): the principal debit exceeds
+            `amount` by that cover, and the cover credits the staking
+            balance as working capital (it is not a cost). Clients MUST
+            disclose the bounded cover before confirmation — the CLI
+            summary does — and the exact per-draw figure is deliberately
+            never returned (a rebuild loop could otherwise steer the
+            submitted cover distribution). Zero is a valid amount (no
+            floor, DQ1); the cover still applies on top.
 
     StakeInResult:
       $ref: "#/components/schemas/BuildPendingTxResult"
@@ -2081,8 +2114,14 @@ components:
         anchor the drainable set answers `syncing`, NEVER `"0"` — a zero
         while syncing would be a lie a client cannot distinguish from an
         empty pool. `spendable` is the aggregate drainable scalar across
-        the active persona's pool; there is deliberately no per-epoch or
-        per-output breakdown (the aggregate is the firewall-safe read).
+        the active persona's pool — the same slot-scoped set a `drain`
+        can actually spend, so an amount at or under the figure is never
+        refused as unaffordable for scope reasons; a wallet-wide sum
+        would advertise dormant held personas' funds `drain` cannot
+        move. A staker with no active persona reads a true `ready` "0":
+        nothing is drainable right now (`drain` itself would refuse
+        -29508). There is deliberately no per-epoch or per-output
+        breakdown (the aggregate is the firewall-safe read).
       oneOf:
         - type: object
           required: [status, spendable]
@@ -2129,9 +2168,12 @@ components:
         amount:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
-            Amount to drain to principal. The canonical floor fee is paid
-            FROM the pool on top of this; a live persona refuses -29509
-            rather than dip below the exit-fee reserve.
+            Amount to drain to principal; MUST be greater than zero (a
+            zero amount is -32602 at the params boundary — "lower the
+            payment" is no remedy for a request that moves nothing). The
+            canonical floor fee is paid FROM the pool on top of this; a
+            live persona refuses -29509 rather than dip below the
+            exit-fee reserve.
 
     DrainResult:
       type: object

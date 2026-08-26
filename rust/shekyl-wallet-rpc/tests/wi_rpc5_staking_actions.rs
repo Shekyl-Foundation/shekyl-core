@@ -226,3 +226,172 @@ async fn get_balance_staking_fields_match_the_staked_balance_legs() {
         "{info}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Zero-amount drain: a malformed request, not "insufficient funds"
+// ---------------------------------------------------------------------------
+
+/// `drain {"amount":"0"}` is `-32602` at the params boundary — before the
+/// wallet gate, the daemon fee round trip, or any engine work. `-29101`'s
+/// "lower the payment" remedy is unsatisfiable at zero (rule 82). The
+/// negative control is load-bearing: `stake_in {"amount":"0"}` must KEEP
+/// parsing (a zero stake is designed-valid — DQ1, no floor), so the zero
+/// rejection must never migrate into the shared amount parser.
+#[tokio::test]
+async fn drain_of_zero_is_invalid_params_and_stake_in_zero_stays_valid() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = state(&dir);
+
+    let r = rpc(state.clone(), "drain", json!({ "amount": "0" })).await;
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+
+    // stake_in "0" parses and reaches the wallet gate (-29001: no wallet
+    // open) — proving the rejection is drain-local, not parser-wide.
+    let r = rpc(state.clone(), "stake_in", json!({ "amount": "0" })).await;
+    assert_eq!(r["error"]["code"], -29001, "{r}");
+}
+
+// ---------------------------------------------------------------------------
+// Live staking fields: nonzero values project through the real handlers
+// ---------------------------------------------------------------------------
+
+/// The staking fields on `get_balance` / `get_wallet_info` carry the LIVE
+/// authoritative view — proven with a **nonzero** seeded staking history,
+/// because the all-zero fresh-wallet fixture cannot distinguish live
+/// projection from a regression to hardcoded zeros (a `&StakedBalance::ZERO`
+/// mutation in the handler wiring survived the previous suite green).
+/// Cross-method: expectations come from `get_staked_balance`'s live reply,
+/// never literals.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staking_fields_project_live_nonzero_values_through_the_handlers() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = state(&dir);
+    create_wallet(&state, "seeded").await;
+
+    // Seed a nonzero staking history through the engine's own persistence
+    // (the feature-gated test-helpers surface; no production API reaches
+    // this state offline).
+    {
+        let ts = state.tenants.lock().await;
+        let shared = ts.tenant.engine().expect("wallet open");
+        let engine = shared.read().await;
+        shekyl_engine_core::__test_helpers::seed_staking_history_for_test(&engine, 3, 1_234_567)
+            .expect("seed staking history");
+    }
+
+    let legs = rpc(state.clone(), "get_staked_balance", json!({})).await;
+    assert!(legs.get("error").is_none(), "{legs}");
+    let confirmed: u64 = legs["result"]["bonded_principal_confirmed"]
+        .as_str()
+        .expect("confirmed")
+        .parse()
+        .expect("decimal");
+    let pending: u64 = legs["result"]["bonded_principal_pending"]
+        .as_str()
+        .expect("pending")
+        .parse()
+        .expect("decimal");
+    let rewards: u64 = legs["result"]["rewards_received_unspent"]
+        .as_str()
+        .expect("rewards")
+        .parse()
+        .expect("decimal");
+    assert!(
+        confirmed + pending > 0 && rewards > 0,
+        "the seeded view must be nonzero on both legs or this test proves \
+         nothing beyond the fresh-wallet zeros: {legs}"
+    );
+
+    let bal = rpc(state.clone(), "get_balance", json!({})).await;
+    assert!(bal.get("error").is_none(), "{bal}");
+    assert_eq!(
+        bal["result"]["staked"],
+        (confirmed + pending).to_string(),
+        "{bal}"
+    );
+    assert_eq!(
+        bal["result"]["claimable_rewards"],
+        rewards.to_string(),
+        "{bal}"
+    );
+
+    let info = rpc(state.clone(), "get_wallet_info", json!({})).await;
+    assert!(info.get("error").is_none(), "{info}");
+    assert_eq!(
+        info["result"]["balance"]["staked"], bal["result"]["staked"],
+        "{info}"
+    );
+    assert_eq!(
+        info["result"]["staking"]["balance"]["rewards_received_unspent"],
+        rewards.to_string(),
+        "{info}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Corrupt staking seal: degrade to liquid, never a blackout, never zeros
+// ---------------------------------------------------------------------------
+
+/// A present-but-unreadable staking seal must NOT black out the whole
+/// balance surface (`-32603`) — the liquid principal is exactly what the
+/// user most needs to see when staking state is damaged — and must NOT
+/// render staking zeros over the bad seal (the engine's fail-closed pin).
+/// The degrade contract: `get_balance` serves the liquid fields with
+/// `staked` / `claimable_rewards` structurally ABSENT, and
+/// `get_wallet_info` serves identity/heights/balance with the `staking`
+/// block absent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corrupt_staking_seal_degrades_to_liquid_with_absent_staking_fields() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = state(&dir);
+    create_wallet(&state, "corrupt").await;
+
+    // Materialize a real seal first (a fresh wallet has none), then corrupt
+    // it on disk — the seal is re-read per call, so the next read sees the
+    // damage.
+    let seal_path = {
+        let ts = state.tenants.lock().await;
+        let shared = ts.tenant.engine().expect("wallet open");
+        let engine = shared.read().await;
+        shekyl_engine_core::__test_helpers::seed_staking_history_for_test(&engine, 3, 1)
+            .expect("seed a real seal");
+        drop(engine);
+        drop(ts);
+        let mut seals: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read tempdir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "pscan"))
+            .collect();
+        assert_eq!(seals.len(), 1, "exactly one pscan seal expected: {seals:?}");
+        seals.pop().expect("seal path")
+    };
+    std::fs::write(&seal_path, b"not a sealed pscan state").expect("corrupt the seal");
+
+    let bal = rpc(state.clone(), "get_balance", json!({})).await;
+    assert!(
+        bal.get("error").is_none(),
+        "a staking-seal fault must not black out the balance surface: {bal}"
+    );
+    let result = &bal["result"];
+    assert!(result.get("liquid").is_some(), "{bal}");
+    assert!(result.get("unlocked").is_some(), "{bal}");
+    assert!(
+        result.get("staked").is_none(),
+        "an unreadable seal must project ABSENT, never a fabricated value: {bal}"
+    );
+    assert!(result.get("claimable_rewards").is_none(), "{bal}");
+
+    let info = rpc(state.clone(), "get_wallet_info", json!({})).await;
+    assert!(info.get("error").is_none(), "{info}");
+    assert!(info["result"].get("address").is_some(), "{info}");
+    assert!(
+        info["result"].get("staking").is_none(),
+        "the staking block degrades to absent alongside the balance fields: {info}"
+    );
+
+    // The dedicated staking read methods stay fail-closed (-32603): they
+    // exist to answer the staking question and have nothing to degrade to.
+    let staked = rpc(state.clone(), "get_staked_balance", json!({})).await;
+    assert_eq!(staked["error"]["code"], -32603, "{staked}");
+}

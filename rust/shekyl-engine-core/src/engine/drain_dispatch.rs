@@ -66,7 +66,6 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState};
@@ -116,15 +115,12 @@ pub(crate) enum DrainRequestError {
     /// path does not exist here.
     #[error("this wallet is not a staker: no stake engine is running")]
     NotStaker,
-    /// A stake-actor call **outside** the assembly itself refused (persona
-    /// identity projection or handle mint); assembly-time refusals arrive as
-    /// [`Self::Drain`].
+    /// A stake-actor call **outside** the assembly itself refused (the
+    /// canonical-id projection — which folds a corrupted resident key's
+    /// encoding failure into its own error — or the handle mint);
+    /// assembly-time refusals arrive as [`Self::Drain`].
     #[error("stake engine: {0}")]
     Stake(#[from] StakeEngineError),
-    /// The persona's public identity key failed canonical encoding — a
-    /// corrupted resident key; fail closed.
-    #[error("persona identity encoding: {0}")]
-    Identity(shekyl_crypto_pq::CryptoError),
     /// The wallet's own principal view key did not map to a valid X25519
     /// point — a corrupted resident key; fail closed rather than assemble a
     /// drain whose output the wallet itself could never decap.
@@ -273,17 +269,12 @@ where
         // slot), the sealed P-scan state, and the live gindex reservations
         // (outputs committed to in-flight bond posts, claims, OR drains must not
         // be re-swept — an independent store over the engine-held write lock).
-        let (identity, pscan_state, reserved) = tokio::join!(
-            stake.persona_identity(p_slot),
+        let (p_canonical_id, pscan_state, reserved) = tokio::join!(
+            stake.persona_canonical_id(p_slot),
             load_pscan_state_for_engine(self_arc.clone()),
             store.read(shekyl_engine_state::PendingPostBlock::reserved_gindexes),
         );
-        let identity = identity?;
-        let bond_id_bytes = identity
-            .bond_id
-            .to_canonical_bytes()
-            .map_err(DrainRequestError::Identity)?;
-        let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&bond_id_bytes);
+        let p_canonical_id = p_canonical_id?;
 
         // Sealed funding records + this persona's exit-reserve exemption,
         // borrowed from the loaded seal. No P-scan seal ⇒ no funding to drain

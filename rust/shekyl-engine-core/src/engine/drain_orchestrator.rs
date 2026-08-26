@@ -139,6 +139,17 @@ pub enum DrainError {
     /// exceeding its candidate sum); [`plan_drain`] maps it for totality only.
     #[error("the spendable outputs cannot cover the drain amount")]
     InsufficientSpendable,
+    /// The amount is affordable against the aggregate scalar but needs more
+    /// inputs than one drain transaction can spend
+    /// (`shekyl_tx_builder::MAX_INPUTS`) — a fragmented pool. Reachable
+    /// through [`plan_drain`] (unlike [`Self::InsufficientSpendable`]): the
+    /// affordability check reads the whole spendable sum, while selection is
+    /// capped. User-actionable: lower the amount and drain in more passes.
+    #[error(
+        "the drain amount needs more inputs than one drain can spend — \
+         lower the amount and drain in more than one pass"
+    )]
+    InputCapExceeded,
     /// Atomic-unit arithmetic overflowed while aggregating or computing
     /// change (structurally unreachable under the supply cap; a corrupt state
     /// otherwise).
@@ -159,6 +170,7 @@ impl From<DrainSelectError> for DrainError {
     fn from(e: DrainSelectError) -> Self {
         match e {
             DrainSelectError::Insufficient => DrainError::InsufficientSpendable,
+            DrainSelectError::InputCapExceeded => DrainError::InputCapExceeded,
             DrainSelectError::Overflow => DrainError::AmountOverflow,
         }
     }
@@ -246,14 +258,20 @@ fn project_drain_operands(
 /// materialises the stripped candidate vector the *select* stage consumes — a
 /// heap allocation a poll-frequency query has no use for. It observes the same
 /// carve: only `amount`, gated by the shared [`is_mature`] predicate.
-pub fn drain_balance(
-    records: &[PFundingOutputRecord],
+///
+/// Takes any borrowing iterator so a caller can chain its own scoping
+/// predicate (the read path filters to the active slot) without cloning the
+/// records — each carries an ML-KEM ciphertext buffer, and this runs at poll
+/// frequency — while the mature ∧ unreserved definition stays here, in one
+/// place.
+pub fn drain_balance<'a>(
+    records: impl IntoIterator<Item = &'a PFundingOutputRecord>,
     reference_height: BlockHeight,
     reserved: &BTreeSet<GlobalOutputIndex>,
 ) -> Result<DrainBalance, DrainError> {
     let spendable = AtomicUnits::checked_sum(
         records
-            .iter()
+            .into_iter()
             .filter(|r| is_mature(r, reference_height) && !reserved.contains(&r.gindex))
             .map(|r| r.amount),
     )

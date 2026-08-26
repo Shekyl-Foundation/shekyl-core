@@ -232,80 +232,23 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_rpc_transport::HttpRpc;
-    use shekyl_types::PSlot;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
 
     use crate::engine::signer::SoloSigner;
-    use crate::engine::{Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine};
+    use crate::engine::Engine;
 
-    fn dummy_daemon() -> DaemonClient {
-        let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-        })
-        .expect("construct HttpRpc (no actual connection attempted)");
-        DaemonClient::new(rpc)
-    }
-
-    fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in s.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-        }
-        s
-    }
-
-    fn creds() -> Credentials<'static> {
-        Credentials::password_only(b"correct horse battery staple")
-    }
-
+    /// This suite's deterministic seed (multiplier 7).
     fn non_staker_engine() -> (TempDir, Engine<SoloSigner>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
-        (tmp, engine)
+        crate::engine::test_support::non_staker_engine(7)
     }
 
     fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base = tmp.path().join("wallet");
-        let (creds, seed) = (creds(), fixed_seed());
-        let params = EngineCreateParams::for_test_full(&base, &creds, &seed);
-        let network = params.network;
-        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
-        engine
-            .persist_bond_record(PSlot::from_raw(slot))
-            .expect("persist bond record");
-        engine.close(&creds).expect("close");
-        let opened = Engine::<SoloSigner>::open_full(
-            &base,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-        )
-        .expect("reopen staker");
-        let engine = match opened {
-            OpenedEngine::Loaded(w) => w,
-            OpenedEngine::Restored { wallet, .. } => wallet,
-        };
-        assert!(engine.stake_handle().is_some());
-        (tmp, engine)
+        crate::engine::test_support::staker_engine(slot, 7)
     }
 
     async fn activate(engine: &Engine<SoloSigner>, slot: u32) {
-        let stake = engine.stake_handle().expect("staker");
-        let handle = stake
-            .mint_handle(PSlot::from_raw(slot))
-            .await
-            .expect("mint");
-        stake.activate_persona(handle).await.expect("activate");
+        crate::engine::test_support::activate_persona(engine, slot).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

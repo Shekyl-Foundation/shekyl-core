@@ -36,7 +36,12 @@ filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
 (`abandon_tx`), SJ-DQ-7 (`get_tx_note` / `set_tx_note`), and WI-RPC-5
 (archival principal staking actions: `stake_in`, `get_drain_balance`,
 `drain`; `get_balance.staked` / `claimable_rewards` are live projections,
-no longer hardcoded zeros) are live.
+no longer hardcoded zeros — and structurally absent, never `"0"`, when
+the staking seal is unreadable, with `get_wallet_info.staking` degrading
+alongside while the liquid fields stay served) are live. `stake_in`
+builds under a read lock like `build_pending_tx` (one funding build never
+stalls the read RPCs), and `get_drain_balance` reports the active
+persona's own drainable pool — the set a `drain` can actually spend.
 
 RESERVED methods (`unstake` — gated on the Unbond producer — and
 `match_transfer_to_request` — gated on an Engine match method) remain

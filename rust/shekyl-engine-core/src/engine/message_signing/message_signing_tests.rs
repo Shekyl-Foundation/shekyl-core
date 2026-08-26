@@ -29,30 +29,18 @@ use shekyl_crypto_pq::account::{
 };
 use shekyl_crypto_pq::message_signing as ms;
 use shekyl_crypto_pq::schnorr;
-use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::lifecycle::{Credentials, EngineCreateParams};
 use crate::engine::signer::SoloSigner;
-use crate::engine::{DaemonClient, Engine};
+use crate::engine::Engine;
 
-/// Lifecycle helpers are private to that module; mirror the minimum
-/// fixture surface for Engine::sign_message coverage.
-fn dummy_daemon() -> DaemonClient {
-    let rpc = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-    })
-    .expect("construct HttpRpc (no actual connection attempted)");
-    DaemonClient::new(rpc)
-}
+use crate::engine::test_support::dummy_daemon;
 
+/// This suite's deterministic seed (multiplier 7).
 fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
-    for (i, b) in s.iter_mut().enumerate() {
-        *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-    }
-    s
+    crate::engine::test_support::fixed_seed(7)
 }
 
 struct CreateFixture {
