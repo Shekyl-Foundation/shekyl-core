@@ -5452,8 +5452,9 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   // arithmetic lives in Rust only (same one-site family as the freeze rule).
   // RF-D6: the challenged index is DERIVED, never read off the vin.
   // PC-D3: bound to the block this record rides in, so each of a pair-epoch's
-  // challenges samples a different leaf. An all-zero `prev_block_hash` is
-  // refused by the FFI rather than derived against.
+  // challenges samples an independently drawn leaf (independent, not
+  // guaranteed-distinct: draws can collide mod the leaf count). An all-zero
+  // `prev_block_hash` is refused by the FFI rather than derived against.
   uint32_t leaf_index = 0;
   const uint8_t leaf_index_rc = shekyl_archival_challenge_leaf_index(
     reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard_id, sc_settlement_epoch,

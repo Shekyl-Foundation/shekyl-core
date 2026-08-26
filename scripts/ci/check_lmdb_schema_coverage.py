@@ -66,20 +66,26 @@ def main() -> None:
 
     doc = DOC.read_text(encoding="utf-8")
 
-    missing = [t for t in tables if f'`"{t}"`' not in doc]
+    # Both directions compare against the parsed `LMDB name` property rows —
+    # the one line a section cannot exist without. A bare substring test for
+    # `"name"` would be satisfied by any prose mention (a migration note, a
+    # cross-reference), letting the gate stay green for exactly the
+    # undocumented-table drift it exists to catch.
+    documented = set(re.findall(r'\| LMDB name \| `"([a-z0-9_]+)"` \|', doc))
+
+    missing = [t for t in tables if t not in documented]
     errors = []
     if missing:
         errors.append(
             "these tables exist in SHEKYL_LMDB_TABLES but have no section in "
-            "docs/LMDB_SCHEMA.md (no `\"<name>\"` property row):\n  "
-            + "\n  ".join(missing))
+            "docs/LMDB_SCHEMA.md (no `| LMDB name | \"<name>\" |` property "
+            "row):\n  " + "\n  ".join(missing))
 
     # Ghost check — the inverse direction. A section whose `LMDB name`
     # property row names a table absent from the list documents a table that
     # does not exist (found live: `staker_accrual` / `staker_claims` kept
     # their sections after the claim-era wire deletion removed the tables).
-    documented = re.findall(r'\| LMDB name \| `"([a-z0-9_]+)"` \|', doc)
-    ghosts = sorted(set(documented) - set(tables))
+    ghosts = sorted(documented - set(tables))
     if ghosts:
         errors.append(
             "these tables have sections in docs/LMDB_SCHEMA.md but are NOT "

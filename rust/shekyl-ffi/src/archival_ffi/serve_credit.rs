@@ -181,9 +181,11 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
     // the signature preimage, so a prover that disagrees with them cannot
     // produce a verifying signature.
     // PC-D3: the index is derived against the block this record rides in, so
-    // each of a pair-epoch's challenges samples a different leaf. The
-    // unpopulated-sentinel refusal is up with the other ctx-population checks,
-    // above -- see there for why it cannot live here.
+    // each of a pair-epoch's challenges samples an independently drawn leaf
+    // (draws can collide mod the leaf count; independence is the guarantee,
+    // not distinctness). The unpopulated-sentinel refusal is up with the
+    // other ctx-population checks, above -- see there for why it cannot live
+    // here.
     let leaf_index = challenge_leaf_index(
         &response.p_canonical_id,
         response.shard_id,

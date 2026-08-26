@@ -61,10 +61,13 @@ use crate::hash::cshake256_32;
 ///
 /// **`-v2` because the derivation changed, not because a version was due.**
 /// `PC-D3` added `block_hash(h−1)` to the preimage so each of a pair-epoch's
-/// three challenges samples a different leaf. Under `-v1` the index was a
-/// function of `(P, s, E)` alone, so three per-challenge records carried three
-/// genuinely distinct countersignatures over three **identical** openings — an
-/// artifact that looks like three tests and contains one.
+/// three challenges samples an **independently drawn** leaf — independent
+/// draws, not guaranteed-distinct ones: two blocks can still land on the same
+/// leaf mod `segment_leaf_count`, and the test below tolerates exactly that.
+/// Under `-v1` the index was a function of `(P, s, E)` alone, so the three
+/// draws were never independent at all: three per-challenge records carried
+/// three genuinely distinct countersignatures over three **identical**
+/// openings — an artifact that looks like three tests and contains one.
 ///
 /// The label moves with the function (rule 30). Pre-genesis there is nothing to
 /// migrate; the bump exists so **one label never names two functions**, which is
