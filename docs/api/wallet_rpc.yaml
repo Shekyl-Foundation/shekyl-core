@@ -617,7 +617,11 @@ components:
                                           stake_in and/or let the persona
                                           scan catch up, then retry;
                                           data: {"detail": "..."} — never
-                                          amounts)
+                                          amounts). Also stake_in's refusal
+                                          when there is no persona to fund
+                                          (not a staker, or no active
+                                          persona) — stake_in mints no new
+                                          codes (WI-RPC-5 F-2 pin)
           -29501 STAKE_IN_FLIGHT          stake: a signed bond post is
                                           already sealed awaiting its
                                           scheduled broadcast
@@ -663,13 +667,12 @@ components:
           -29507 DRAIN_NOT_STAKER         drain: this wallet runs no stake
                                           engine — it is not an archival
                                           staker, and the drain path does
-                                          not exist here. Also the stake_in
-                                          refusal for the same condition
-                                          (no persona to fund)
-          -29508 DRAIN_NO_ACTIVE_PERSONA  drain/stake_in: the wallet is a
-                                          staker but no persona is currently
-                                          active. The drain façade resolves
-                                          the LIVE active persona from actor
+                                          not exist here (stake_in's
+                                          equivalent refusal is -29500)
+          -29508 DRAIN_NO_ACTIVE_PERSONA  drain: the wallet is a staker but
+                                          no persona is currently active.
+                                          The drain façade resolves the
+                                          LIVE active persona from actor
                                           state — there is no p_slot
                                           parameter to point elsewhere
                                           (type-level active-persona
