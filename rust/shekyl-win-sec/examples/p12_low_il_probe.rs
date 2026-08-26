@@ -291,6 +291,21 @@ mod probe {
 
         let code = match spawned {
             Ok(code) => code,
+            // A timeout gets its own arm because the remedies differ and the
+            // reader is about to go looking. "Could not spawn" sends someone to
+            // `CreateProcessAsUserW` when the child in fact started fine and
+            // then never exited — a diagnosis pointing at the wrong step costs
+            // more than no diagnosis (rule 82).
+            Err(WAIT_TIMEOUT) => {
+                println!(
+                    "P-12 UNRUN: the Low-integrity child started but did not exit within \
+                     {}s and was terminated (os error {WAIT_TIMEOUT}). It hung somewhere \
+                     after spawn — the pipe open is the only thing it does. The probe did \
+                     not execute; this is not a pass.",
+                    CHILD_TIMEOUT_MS / 1_000
+                );
+                return 2;
+            }
             Err(e) => {
                 println!(
                     "P-12 UNRUN: could not spawn a Low-integrity child: os error {e}. \
