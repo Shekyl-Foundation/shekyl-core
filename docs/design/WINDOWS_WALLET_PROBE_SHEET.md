@@ -11,17 +11,31 @@ behaviour, not observations. **2026-08-20, WP-W2:** P-16 added to §1; P-4,
 P-10 and P-11 re-celled in §2 for the self-hosted-only ruling
 (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 
-**2026-08-27: P-17 registered in §3, prediction first and code second — this
-commit carries no implementation.** It takes the half of WP-D6 that P-13 does
-not: `IPC$` reachability, which is the attack surface D6 was written for, where
-terminal-services separation is the same mechanism's secondary benefit. **P-13
-is not superseded and is not reshaped** — §5 forbids editing a pre-registration
-to fit, so it stays registered and visibly unrun. The two ask different
-questions of one underlying property: that the logon SID is unique to its logon
-session and absent from every other. Nothing in this sheet has tested that
-property; P-1 and P-15 establish only that the DACL grants exactly one ACE and
-that the SID is well-formed. Since PR #516 removed the user-SID grant, that one
-ACE is the whole session boundary.
+**2026-08-27: three probes now circle one property from three angles, because
+two of the three routes proved unavailable on this hardware.** The property is
+WP-D6's: the logon SID is unique to its logon session and absent from every
+other, so the single logon-SID ACE PR #516 left in the DACL is the whole
+session boundary. P-1 and P-15 establish only that the DACL holds exactly that
+ACE and that the SID is well-formed; none of the three tests the *refusal* of a
+foreign-session caller, which is the claim.
+
+- **P-17** takes the `IPC$` reachability D6 was written for — the network
+  transport. Registered prediction-first (no code in the registering commit).
+  Its first runs falsified the loopback premise and then found no single-box
+  transport crosses a session (§4.5); a genuine remote same-user caller needs
+  domain credentials on a second machine, which is a real wall — so P-17 is
+  **UNRUN**, transport-blocked, not a WP-D6 falsification.
+- **P-13** takes terminal-services separation — two concurrent interactive
+  logons. **Unachievable on this client SKU** (§4.6): one session per user.
+- **P-18** takes a same-user **batch (S4U) logon** — a second logon session
+  with no second machine, no network, and no stored credential, opening the
+  pipe **locally**. On this hardware it is the *only* runnable route to the
+  property, and it isolates the logon-SID ACE most cleanly of the three (a
+  local open has no `reject_remote_clients` fence to confound it).
+
+None of the three is superseded or reshaped (§5); each keeps its own prediction
+because each produces the foreign-session caller a different way, and which way
+is available is a property of the machine.
 
 **Why this exists.** [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
 rules a transport whose security properties have never been executed by anyone
@@ -109,6 +123,7 @@ for `#[ignore]`.
 |---|---|---|---|---|
 | P-12 | Does the Medium mandatory label block a **Low-IL** opener? | Needs a genuinely Low-integrity process. Creating one wants an interactive token to derestrict from; a CI service account's token may not be a faithful source | Low-IL open fails with `ERROR_ACCESS_DENIED` | **WP-D4** — this is the *only* in-scope adversary per §6. If the label does not block, the server-side half of D4 is doing nothing and the client-side IL check becomes load-bearing alone |
 | P-13 | Does the logon SID separate terminal-services sessions? | Needs two concurrent interactive logons | A second session's process cannot open the pipe | **WP-D6** — if it does not separate sessions, the logon SID is not the improvement on an `S-1-5-2` deny that D6 claims, and the explicit `NETWORK` deny comes back |
+| P-18 | Does the logon-SID ACE refuse a **same-user caller in a different logon session** on a **local** open — WP-D6's load-bearing half, reached without a remote caller or a second interactive session? Registered 2026-08-27 after P-17's transport route and P-13's interactive route both proved unavailable on this hardware | A second logon session as the same user, via an **S4U scheduled task** ("run whether logged on or not / do not store password" → Service-for-User): a new logon SID, the same user SID, **no credential stored anywhere**. Local `\\.\pipe\` open, so S4U's no-outbound-network limitation does not bite. Feasibility (does S4U yield a distinct logon SID for the same user?) is itself measured — the probe asserts it before touching a pipe, the way P-12 asserts its child's integrity level | Four: (a) **control** — a pipe granting the **user SID** is opened by the task process (proves same user, admitted where the user SID is granted); (b) **mechanism** — the task process's token carries our user SID but a **different** logon SID (asserted before any pipe touch); (c) **production shape** — the real pipe (logon-SID DACL + label) refuses it; (d) **the D6 claim proper** — a pipe with the logon-SID DACL and **no label** still refuses it with `ERROR_ACCESS_DENIED`, isolating the ACE (no `reject_remote_clients` confound, because a local open is not remote) | **WP-D6** — if **(d)** admits the task process, the logon-SID ACE does not carry the session boundary and PR #516's user-SID removal bought nothing. If (b) shows the same logon SID (S4U did not cross), the probe is **UNRUN**, not a pass. This is the runnable route to the property P-17 (network) and P-13 (interactive) each reach differently — and, on this hardware, the *only* runnable one |
 | P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If no transport crosses (b), the probe is **UNRUN**, not a pass, and — per the 2026-08-27 first run, §4.5 — this revisits **P-17's method** rather than WP-D6: loopback reuses the caller's token, so the question needs a genuinely remote caller, and the `reject_remote_clients` fence stays untested until one exists |
 
 **P-17's section is itself undecided, and that is why it is here.** §1 would
@@ -362,6 +377,21 @@ remote caller**: a second host on the subnet dialling
 `\\LP7760-W1XMP6G3\pipe\…`, or a VM with its own logon session. That is a
 machine to provision, not a code change — and the decision it informs is
 WP-D6's reason for existing, currently tested by nothing.
+
+### 4.6 P-13: the platform will not provide the precondition (2026-08-27)
+
+| Date | Probe | Machine / build | Result | Consequence |
+|---|---|---|---|---|
+| 2026-08-27 | P-13 (terminal-services session separation) | `LP7760-W1XMP6G3`, `10.0.22631.7517` | **UNACHIEVABLE HERE** — not merely unrun | This is a **client SKU** (`ProductType = 1`) with `fSingleSessionPerUser = 1`. A second interactive logon as the same user **takes over** the first rather than running concurrently, so "two concurrent interactive logons" cannot exist for one user without third-party session patching — which has no place near a security probe. The `rdp-tcp` listener being up (reported earlier) is necessary and not sufficient |
+
+**Recorded as a platform fact, not a backlog item.** P-13 stays registered and
+its prediction stands (§5); what has changed is that its precondition is
+**provably unavailable on this hardware**, which is a §3 result rather than an
+open TODO. The underlying property P-13 was to test — the logon SID separating
+sessions — is reached instead by **P-18** through an S4U batch logon, which does
+not need a second interactive session. P-13 reopens only on a machine (a
+Windows Server SKU, or a client with multi-session explicitly and legitimately
+enabled) where concurrent interactive logons are a supported configuration.
 
 ## 5. What a failure does *not* license
 
