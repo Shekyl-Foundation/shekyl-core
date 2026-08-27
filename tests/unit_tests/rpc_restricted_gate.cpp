@@ -47,6 +47,16 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include <boost/filesystem.hpp>
+
+#include "blockchain_db/blockchain_db.h"
+#include "blockchain_db/lmdb/db_lmdb.h"
+#include "crypto/crypto.h"
+#include "cryptonote_protocol/enums.h"
 #include "rpc/core_rpc_ffi.h"
 
 // The property the restricted gate rests on. Returning null here is exactly
@@ -82,12 +92,6 @@ TEST(rpc_bridge_origin, the_rpc_origin_is_not_a_bannable_host)
 // transaction is enumerated at all. These run against a real BlockchainLMDB,
 // not a test double, because the filter lives in the DB's own iteration and a
 // double that reimplemented it would be testing itself.
-
-#include <boost/filesystem.hpp>
-
-#include "blockchain_db/blockchain_db.h"
-#include "blockchain_db/lmdb/db_lmdb.h"
-#include "cryptonote_protocol/enums.h"
 
 namespace
 {
@@ -144,10 +148,11 @@ TEST(rpc_restricted_disclosure, the_sensitive_scope_is_the_not_yet_broadcast_set
   using cryptonote::relay_method;
   using cryptonote::relay_category;
 
+  // No HardFork is registered: this test never adds a block, and the txpool
+  // tables do not consult one. The block-adding tests nearby need it; copying
+  // it here would also outlive-invert it, since a HardFork declared after the
+  // DB is destroyed before the close that holds its pointer.
   TempLMDB env;
-  cryptonote::HardFork hf(env.db, 1, 0);
-  hf.init();
-  env.db.set_hard_fork(&hf);
 
   const crypto::hash fluffed = tagged(1);
   const crypto::hash stemming = tagged(2);

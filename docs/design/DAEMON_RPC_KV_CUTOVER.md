@@ -206,6 +206,14 @@ anyway, because "most of them are fine" is a claim, not a review.
 | 1880 | `on_get_output_histogram` | refuses the all-amounts query, clamps `recent_cutoff` | Cost guards, intended. A restricted caller can no longer ask the expensive form — which is the point of them |
 | 2071 | `on_relay_tx` | selects `broadcasted` vs `all` for the transaction it will relay | **Not a disclosure — an action.** See §7 |
 
+Two further bridged invocations are converted with no disposition owed:
+`dispatch_submitblock` and `dispatch_calcpow` are hand-written rather than
+template dispatchers, and neither `on_submitblock` nor `on_calcpow` reads
+`ctx` at all, so those two calls change nothing today. They move anyway,
+because a bridge rule with silent exceptions is how this survived: a
+`restricted` check added to either handler later would have been born dead
+in exactly the way the eleven were.
+
 The consumer question this raises is answered the same way each time: a
 legitimate caller that needs the unrestricted answer is on the unrestricted
 listener, where `m_restricted` is false and nothing here changed. What moves

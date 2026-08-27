@@ -62,9 +62,16 @@ namespace {
 // route, so no restricted policy in any bridged handler could fire: not the
 // request caps, and not the pool reads' `include_sensitive`, which decides
 // whether a transaction that has not been broadcast is disclosed at all.
-// Single-sourced here so there is one place to be wrong: the dispatchers
-// name this and nothing else, and `core_rpc_ffi_origin_is_present` fails if
-// it ever answers null again.
+// Single-sourced here so there is one place to be wrong: every dispatcher
+// names this and nothing else, and `core_rpc_ffi_origin_is_present` fails
+// if it ever answers null again.
+//
+// "Every" includes the two hand-written ones, `dispatch_submitblock` and
+// `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
+// change nothing — they are converted because a bridge rule with silent
+// exceptions is how this defect survived in the first place, and because a
+// `restricted` check added to either handler later would otherwise be born
+// dead exactly as the eleven were.
 //
 // The address is left default-constructed. `network_address::is_blockable()`
 // is false for one, which keeps `add_host_fail`'s per-host RPC ban scoring
@@ -238,7 +245,7 @@ char* dispatch_submitblock(core_rpc_server& rpc, const char* params_json) {
         }
     }
 
-    bool ok = rpc.on_submitblock(req, res, error_resp, nullptr);
+    bool ok = rpc.on_submitblock(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         std::string result_json;
@@ -263,7 +270,7 @@ char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json) {
         epee::serialization::load_t_from_json(static_cast<COMMAND_RPC_CALCPOW::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = rpc.on_calcpow(req, res, error_resp, nullptr);
+    bool ok = rpc.on_calcpow(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         oss << R"({"ok":true,"result":")" << res << R"("})";
