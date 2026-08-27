@@ -15056,6 +15056,25 @@ the answer to the question it is actually asking ("did the nudge miss?").
 `local_relay_base` carries the split, and the two 400 s test cases differ in
 `relayed` alone so the discriminant cannot drift.
 
+**The split is only as good as the bit, and the bit had a lying writer.**
+*(Found and fixed 2026-08-27.)* `dandelionpp_notify` called `record_relayed`
+**before** `make_payload_send_txs`, so `set_relayed` wrote `relayed = true` on
+paths where no stem was ever launched — `NoRoute`, and both send attempts
+failing. An entry in exactly the state this section reserves `MIN_RELAY_TIME`
+for therefore read as the *other* one and took the derived interval: the 848 s
+of added latency this argument rejects, arriving through the writer instead of
+through the reader.
+
+Worth stating as a shape rather than an incident. The discriminant was
+carefully chosen, correctly read, and pinned by two test cases differing in
+`relayed` alone — and none of that constrains **who sets it**. A test that
+varies a field cannot see a producer that writes the field wrongly; it is the
+same blindness as asserting on a value the fixture itself supplied. The record
+now arms where the send is known to have happened, beside
+`record_stem_observation`, which was already placed that way, and
+`a_failed_stem_is_not_recorded_as_relayed` holds the ordering from the
+producer's end.
+
 **Its referent is now EXACT, 2026-08-27 — same number, honest reason.** Item 1
 is settled and the disarm is wired: an origin that sees its transaction
 arrive from anywhere other than the peer it stemmed to stops re-broadcasting.
