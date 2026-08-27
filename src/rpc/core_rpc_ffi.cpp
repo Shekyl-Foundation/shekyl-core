@@ -66,10 +66,12 @@ namespace {
 // names this and nothing else. The guard that it keeps answering non-null is
 // `restricted_listener_applies_request_caps_through_the_ffi_bridge`
 // (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — a live daemon, a
-// restricted listener, and a real request over the cap. It has to be there
-// rather than beside this file: a C++ test of this helper cannot see whether
-// the dispatchers call it, so reverting one of them would leave such a test
-// green. That one goes red.
+// restricted listener, and real requests over the caps: REST ones through
+// `dispatch_json`, JSON-RPC ones through `dispatch_jsonrpc_we`, so both
+// templates are held separately rather than one standing in for the other.
+// It has to be there rather than beside this file: a C++ test of this helper
+// cannot see whether the dispatchers call it, so reverting one of them would
+// leave such a test green. Those go red.
 //
 // "Every" includes the two hand-written ones, `dispatch_submitblock` and
 // `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
@@ -107,33 +109,6 @@ char* dispatch_json(core_rpc_server& rpc,
     std::string out;
     epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), out);
     return strdup(out.c_str());
-}
-
-// JSON-RPC: handler without error_resp.
-template<typename COMMAND>
-char* dispatch_jsonrpc(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const char* params_json)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    if (params_json && params_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
-    }
-
-    bool ok = (rpc.*handler)(req, res, rpc_origin());
-
-    std::string result_json;
-    epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), result_json);
-
-    std::ostringstream oss;
-    if (ok) {
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        oss << R"({"ok":false,"error_code":-32603,"error_message":"Internal error"})";
-    }
-    return strdup(oss.str().c_str());
 }
 
 // JSON-RPC: handler with error_resp.
@@ -181,11 +156,6 @@ using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 #define DJSON(uri, handler, cmd) \
     {uri, [](core_rpc_server& rpc, const char* body) -> char* { \
         return dispatch_json<cmd>(rpc, &core_rpc_server::handler, body); \
-    }}
-
-#define DJRPC(method, handler, cmd) \
-    {method, [](core_rpc_server& rpc, const char* params) -> char* { \
-        return dispatch_jsonrpc<cmd>(rpc, &core_rpc_server::handler, params); \
     }}
 
 #define DJRPC_WE(method, handler, cmd) \

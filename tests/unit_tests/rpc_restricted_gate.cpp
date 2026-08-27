@@ -94,8 +94,10 @@ TEST(rpc_restricted_gate, the_shared_origin_is_not_a_bannable_host)
 
 // ─── What the flag actually gates ────────────────────────────────────────────
 //
-// The two tests above show the bridge now hands handlers a context. These show
-// what that changes for disclosure, which is the reason the fix matters:
+// That the dispatchers hand handlers a context at all is asserted on the
+// production path, in the Rust e2e named above — not here. What follows is the
+// other half: what having that context changes for disclosure, which is the
+// reason the fix matters:
 //
 //   allow_sensitive  ->  relay_category::all vs ::broadcasted   (tx_pool.cpp)
 //   category         ->  `if (!meta.matches(category)) continue` (db_lmdb.cpp)
