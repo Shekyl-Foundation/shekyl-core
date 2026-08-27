@@ -406,9 +406,41 @@ namespace cryptonote
            verdict. Provenance is permanent; liveness is conditional. This
            guard is that bit's precondition: without it the verdict is written
            and erased in one call chain, because §46 records arrivals before
-           admission. */
+           admission.
+
+           `block` IS EXCLUDED, and the line is a threat-model line rather than
+           a taxonomy one. Every other arrival class is a PEER'S ASSERTION —
+           anyone can send us our own transaction as `stem` or `fluff`, which
+           is exactly why the mark must survive it. A `block` arrival is backed
+           by PROOF OF WORK: `handle_alternative_block` checks the block hash
+           against the alt chain's difficulty before offering its pool
+           supplement here, so the arrival is not something an observer can
+           manufacture to strip the mark, and it means the transaction reached
+           a miner.
+
+           And once it has, holding the mark INVERTS: it makes this node the
+           only one that treats a transaction in a mined block as private.
+           Every other node receiving that alt block admits the supplement at
+           `block`, moves it into `relay_category::broadcasted`, and re-relays
+           on the ordinary grid. A pinned entry does none of that — a
+           behavioural difference keyed on the one fact the mark exists to
+           protect. Privacy here is served by being indistinguishable, not by
+           staying quiet.
+
+           It is also broken in the plain sense. The supplement path gates on
+           `have_tx(txid, relay_category::broadcasted)`, which a `local` entry
+           never matches, so every alt block carrying the transaction re-offers
+           it; and the entry never earns
+           `CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME`, the longer lifetime
+           that exists so an alt-chain transaction survives to be re-mined.
+
+           The two reorg paths that also pass `block` — `pop_block` and the
+           return of taken transactions — never reach this guard at all: the
+           transaction left the pool when the block was added, so they arrive
+           with `existing_tx == false`. */
         const bool origin_pinned =
-          existing_tx && meta.get_relay_method() == relay_method::local;
+          existing_tx && meta.get_relay_method() == relay_method::local &&
+          tx_relay != relay_method::block;
 
         if ((!origin_pinned && meta.upgrade_relay_method(tx_relay)) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {

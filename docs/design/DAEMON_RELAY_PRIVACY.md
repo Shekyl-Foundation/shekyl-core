@@ -14800,6 +14800,22 @@ responsibility, which should end when the transaction is observed circulating:
 > re-arrival of its own transaction; its re-broadcast responsibility is
 > separately disarmed when the transaction is observed circulating.**
 
+**"Re-arrival" means the relay path, and `Block` is deliberately outside it.**
+Every other arrival class is a peer's assertion — anyone can hand us back our
+own transaction as `Stem` or `Fluff`, which is precisely the case the pin
+exists for. A `Block` arrival is backed by proof of work
+(`handle_alternative_block` checks the block hash against the alt chain's
+difficulty before offering its pool supplement), so it cannot be manufactured
+to strip the mark, and it says the transaction reached a miner.
+
+Past that point the pin **inverts**. Every other node receiving that alt block
+admits the supplement at `Block`, moves it into `broadcasted`, and re-relays on
+the ordinary grid; a pinned node does none of those, which is a behavioural
+difference keyed on the one fact the mark protects. Once the transaction is in
+a mined block, privacy is served by being indistinguishable rather than by
+staying quiet — the same reasoning that makes `Block` the one class whose
+re-broadcast responsibility genuinely ends.
+
 Discipline #17 with **presence** as the signal: `T` returning is proof it is
 circulating, which is exactly the condition under which re-broadcast has no job
 left.
