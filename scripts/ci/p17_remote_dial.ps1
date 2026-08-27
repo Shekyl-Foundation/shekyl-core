@@ -96,7 +96,7 @@ function Try-Open([string]$role) {
 
 # Steps 1 and 2 first, so their results can be reported through step 3.
 $daclErr = Try-Open 'daclonly'
-Write-Host "  daclonly open -> os error $daclErr (expect 5 = ERROR_ACCESS_DENIED)"
+Write-Host "  daclonly open -> os error $daclErr (remote: expect 5 = ERROR_ACCESS_DENIED; on a same-box dry-run 0 is correct — the server's verdict is authoritative)"
 $prodErr = Try-Open 'prod'
 Write-Host "  prod open     -> os error $prodErr (expect refused)"
 

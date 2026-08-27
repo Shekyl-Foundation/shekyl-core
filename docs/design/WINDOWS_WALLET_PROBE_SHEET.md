@@ -393,6 +393,28 @@ not need a second interactive session. P-13 reopens only on a machine (a
 Windows Server SKU, or a client with multi-session explicitly and legitimately
 enabled) where concurrent interactive logons are a supported configuration.
 
+### 4.7 P-17 two-machine harness, local dry-run (2026-08-27, `edd471767`)
+
+Ran `--serve` and the real `p17_remote_dial.ps1` client against it in **one
+session** on `LP7760-W1XMP6G3`, before the second machine existed. It settled
+three things and measured a fourth that was not supposed to be reachable here.
+
+| Date | Observation | Result | Consequence |
+|---|---|---|---|
+| 2026-08-27 | The accept + impersonation + report protocol | **WORKS** | The accept thread's `ConnectNamedPipe` returns, the raw-handle move into the thread survives, the server reads *both* the caller's user and logon SID off the impersonation token, and the control-pipe write/read round-trips. None had executed before |
+| 2026-08-27 | The same-user/**same-session** guard | **HOLDS** | Presented with a same-session caller (logon SID `S-1-5-5-0-43722672` = the server's), the server printed `UNRUN: did not cross`, **not** a PASS. A false PASS here was the worst available failure; it is ruled out by observation, not by reading the code |
+| 2026-08-27 | **`reject_remote_clients`, isolated** | **VERIFIED, single box** | Same caller, same session, same instant, both pipes dialled over the same `\\HOST\pipe\` path: `daclonly` (no flag) **opened** (os 0), `prod` (flag) **refused** (os 5). The only difference is the flag, so it refuses a `\\HOST\pipe\` dial by the **path form**, not by whether the caller genuinely crossed a machine boundary. One of WP-D6's two fences, measured for the first time — and it did **not** need the second machine |
+
+**Correction to a claim made earlier in this round.** The two-machine mode was
+described as "what exercises the `reject_remote_clients` fence, which no
+single-box route could reach." The dry-run reached it: the flag keys on the
+path, so a same-box `\\HOST\pipe\` dial triggers it. What genuinely needs the
+second machine is **row (d) alone** — the logon-SID ACE. `prod` will refuse a
+remote caller too, but the dry-run now proves that tells us about the *flag*,
+so only the DACL-only pipe (no flag) can attribute a refusal to the ACE, and
+only a caller that truly crosses a session can be refused by it. That caller is
+the one thing a single box cannot produce (§4.5, §4.6).
+
 ## 5. What a failure does *not* license
 
 Rewriting a prediction to match an observation. If a probe fails, the entry
