@@ -40,8 +40,11 @@
   *and* persona so a persona holding both a stuck claim and a stuck drain gets
   both alarms. The record is HELD, matching the bond post's
   funds-safety-over-liveness posture — the alarm reports the stall, it does not
-  clear it. Terminal-reject prune (the case that produces a permanent stall)
-  remains a named FOLLOWUPS item.
+  clear it. Two cases still produce a permanent stall and both remain named
+  FOLLOWUPS items: a **terminal rejection**, and an **ambiguous submit** whose
+  bytes never reached the network — the seams seal before a single submit and
+  keep the record on a transport error by design, and nothing resubmits it
+  because the driver selects bond posts only.
 
 - **The wallet can read the four `Unbond` verify operands and assemble the
   full `Unbond` exit transaction (PR-P4).** Before this it held *none* of

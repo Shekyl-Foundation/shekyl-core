@@ -71,9 +71,14 @@ The WI-RPC-5 caveat here — `drain`'s receipt being a dispatch fact rather
 than a settlement fact — is **half retired (2026-08-27)**. A drain that
 confirms now releases its seal: the pscan driver retires the record once
 the inputs it reserved leave the wallet's live funding set, so the
-one-live-drain lane reopens on its own. What remains is the failure path:
-a drain the network rejects terminally never spends its inputs, so it
-never settles and holds the lane shut until terminal-reject prune lands
-(a named FOLLOWUPS item). A stall alarm names such a drain in the
-operator log rather than leaving it silent. See `docs/FOLLOWUPS.md`, and
+one-live-drain lane reopens on its own. What remains is the failure
+path, by two routes: a drain the network **rejects terminally**, and a
+drain whose submit was **ambiguous** (a transport error leaves the
+sealed record live on purpose, because the bytes may already have
+reached the network — and if they did not, nothing resubmits them; the
+driver resubmits bond posts only). Either way the inputs are never
+spent, so the drain never settles and the lane stays shut until
+terminal-reject prune and byte-identical resubmit land (named FOLLOWUPS
+items). A stall alarm names such a drain in the operator log rather than
+leaving it silent — so the wait is visible, not indefinite. See `docs/FOLLOWUPS.md`, and
 `docs/design/WALLET_SEND_RECORD.md` for the send-journal design round.

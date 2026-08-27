@@ -804,13 +804,21 @@ components:
                                           scan, at the reorg depth every other
                                           confirmation uses — the record and its
                                           reservation are released in one seal
-                                          and this lane reopens. Terminal-reject
-                                          prune is still unwired (FOLLOWUPS
-                                          "Drain dispatch driver", target V3.0
-                                          pre-genesis), so a drain the network
-                                          rejects terminally never spends its
-                                          inputs, never settles, and holds this
-                                          refusal until that half lands. The
+                                          and this lane reopens.
+                                          Two failure routes still hold this
+                                          refusal, and neither is wired: a
+                                          TERMINAL REJECTION, and an AMBIGUOUS
+                                          SUBMIT — the drain is sealed before a
+                                          single submit and a transport error
+                                          deliberately keeps the record, because
+                                          the bytes may already have reached the
+                                          network. If they did not, nothing
+                                          resubmits them (the driver resubmits
+                                          bond posts only), so the inputs stay
+                                          live and this refusal persists exactly
+                                          as in the terminal case. Both legs are
+                                          FOLLOWUPS "Drain/claim dispatch
+                                          driver", target V3.0 pre-genesis. A
                                           stall alarm names such a drain in the
                                           log rather than leaving it silent.
                                           Also the refusal when a

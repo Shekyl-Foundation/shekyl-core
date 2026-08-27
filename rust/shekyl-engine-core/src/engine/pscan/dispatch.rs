@@ -651,9 +651,19 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             );
         }
 
-        for persona in plan.settled.claims.iter().chain(plan.settled.drains.iter()) {
+        // Clear ONLY the key whose record actually settled. Clearing both for
+        // any settled persona would drop a still-live sibling's marker, and the
+        // marker is what makes the alarm fire once instead of once per tick —
+        // so a persona whose claim settled while its drain stayed stuck would
+        // re-alarm the drain on the very next sweep, forever. Alarm fatigue is
+        // itself an attack surface (see the post alarm's note), and the fix is
+        // the same discipline the insert side already had: the key is
+        // `(kind, persona)`, so every operation on it must be too.
+        for persona in &plan.settled.claims {
             self.alarmed_reservations
                 .remove(&(ReservationKind::Claim, *persona));
+        }
+        for persona in &plan.settled.drains {
             self.alarmed_reservations
                 .remove(&(ReservationKind::Drain, *persona));
         }

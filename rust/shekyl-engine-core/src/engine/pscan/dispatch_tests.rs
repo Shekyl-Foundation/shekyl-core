@@ -629,6 +629,109 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
     assert!(block.has_live_claim_for(&p) && block.has_live_drain_for(&p));
 }
 
+/// **Settling one kind must not un-alarm the other.**
+///
+/// The companion to `a_stalled_claim_and_drain_on_one_persona_both_alarm`, and
+/// the half that test did NOT cover: it pinned the key's shape on the *insert*
+/// side and said nothing about the clear. The first version of this driver
+/// cleared both keys for any settled persona, so a persona whose claim settled
+/// while its drain stayed stuck lost the drain's marker and re-alarmed it on
+/// every subsequent sweep — alarm-once silently becoming alarm-always, on the
+/// one record still in trouble.
+///
+/// Restoring the both-keys clear turns this red.
+#[tokio::test]
+async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
+    use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+    let p = persona(1);
+    let mut block = PendingPostBlock::empty();
+    assert!(block.push_claim(PendingEmissionClaim {
+        persona: p,
+        tx_bytes: vec![0xCD; 8],
+        fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+        state: PendingPostState::Pending,
+    }));
+    assert!(block.push_drain(PendingDrain {
+        persona: p,
+        tx_bytes: vec![0xEF; 8],
+        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+        state: PendingPostState::Pending,
+    }));
+    let at = BlockHeight::from_raw(100);
+    assert!(block.mark_claim_dispatched(&p, at).is_some());
+    assert!(block.mark_drain_dispatched(&p, at).is_some());
+
+    let store = std::sync::Arc::new(MemStore::default());
+    *store.block.lock().expect("mem store") = Some(block);
+    let mut driver = DispatchDriver::new(
+        store.clone(),
+        std::sync::Arc::new(ScriptedBroadcast::scripted(vec![])),
+        test_config(),
+        test_lock(),
+    );
+    let stalled_tip = BlockHeight::from_raw(100 + test_config().alarm_horizon_blocks);
+    let both_live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+        .map(shekyl_types::GlobalOutputIndex::from_raw)
+        .into();
+
+    // Tick 1: both stall, both alarm.
+    driver
+        .on_tick(
+            stalled_tip,
+            TickEvidence {
+                confirmed_posts: &BTreeSet::new(),
+                live_funding: &both_live,
+            },
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("tick");
+    assert!(driver
+        .alarmed_reservations
+        .contains(&(ReservationKind::Claim, p)));
+    assert!(driver
+        .alarmed_reservations
+        .contains(&(ReservationKind::Drain, p)));
+
+    // Tick 2: the CLAIM settles (gindex 11 gone); the drain is still stuck.
+    let drain_only: BTreeSet<shekyl_types::GlobalOutputIndex> =
+        [22].map(shekyl_types::GlobalOutputIndex::from_raw).into();
+    driver
+        .on_tick(
+            stalled_tip,
+            TickEvidence {
+                confirmed_posts: &BTreeSet::new(),
+                live_funding: &drain_only,
+            },
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("tick");
+
+    let block = store
+        .block
+        .lock()
+        .expect("mem store")
+        .clone()
+        .expect("sealed");
+    assert!(!block.has_live_claim_for(&p), "the claim settled");
+    assert!(block.has_live_drain_for(&p), "the drain is still stuck");
+
+    assert!(
+        !driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Claim, p)),
+        "the settled claim's marker is cleared — it can alarm again if it ever \
+         returns"
+    );
+    assert!(
+        driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Drain, p)),
+        "the still-stuck drain stays marked, so it does NOT re-alarm every tick"
+    );
+}
+
 // -- gate 6: terminal rejection --------------------------------------------
 
 /// A terminal verify rejection removes the record (releasing bytes +
