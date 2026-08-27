@@ -3104,8 +3104,12 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 //! Returns how many of `hashes` this arrival resolved as PROPAGATED and writes
 //! their 32-byte ids into `out_propagated` in order — the transactions for
 //! which "it came back from somewhere other than where I sent it" just became
-//! true. The count is bounded by `n`, so size the buffer once at 32*n; null
-//! returns the count and writes nothing.
+//! true. The count is bounded by `n`, so size the buffer once at 32*n.
+//!
+//! Passing `out_propagated == nullptr` -- and only that argument -- makes this
+//! a count-only call: the verdicts are still resolved, nothing is written. A
+//! null `handle` or `hashes` is a different case and returns 0 having done
+//! nothing.
 //!
 //! The verdict leaves HERE rather than being retained for a later query. A
 //! per-transaction outcome store would be a second copy of a fact the txpool

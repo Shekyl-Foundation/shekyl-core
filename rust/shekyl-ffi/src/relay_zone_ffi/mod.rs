@@ -339,7 +339,12 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
 /// the caller's batch.
 ///
 /// # Safety
-/// `hashes` must point to `n * 32` readable bytes, or be null with `n == 0`.
+/// `hashes` must point to `n * 32` readable bytes, **or be null** — which
+/// yields an empty batch whatever `n` says, rather than reading through it.
+/// The tolerance is `slice_from_ptr`'s and is deliberate at a C boundary: a
+/// caller that passes null with a non-zero count has a bug, and "record
+/// nothing" is the reading that does not corrupt anything on the way to
+/// finding it.
 unsafe fn read_tx_ids(hashes: *const u8, n: usize) -> Vec<TxId> {
     let Some(len) = n.checked_mul(32) else {
         debug_assert!(false, "read_tx_ids: n * 32 overflows");
@@ -657,14 +662,18 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
 ///
 /// Returns how many of `hashes` this arrival resolved as **propagated**, and
 /// writes their 32-byte ids into `out_propagated` in order. The count is
-/// bounded by `n`, so a caller sizes the buffer once at `32 * n`; passing null
-/// returns the count and writes nothing.
+/// bounded by `n`, so a caller sizes the buffer once at `32 * n`. Passing
+/// `out_propagated == null` — and only that argument — makes this a count-only
+/// call: the verdicts are still resolved, nothing is written.
 ///
 /// # Safety
 /// `handle` must be null (returns 0) or a live zone from
-/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable
-/// bytes, `from` at 16 when non-null, and `out_propagated` must be null or
-/// writable for `32 * n` bytes.
+/// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable bytes
+/// **or be null**, in which case nothing is recorded and the call returns 0 —
+/// the boundary is deliberately tolerant here, so a caller bug is an empty
+/// batch rather than undefined behaviour (see [`read_tx_ids`]). `from` must
+/// point at 16 readable bytes when non-null, and `out_propagated` must be
+/// null or writable for `32 * n` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     handle: *mut RelayZoneHandle,
