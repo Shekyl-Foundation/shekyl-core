@@ -165,6 +165,21 @@ flag is set; what is unverified is whether the layer WP-D6 *names* would hold
 if the flag were ever removed — which is exactly the question a defence-in-depth
 claim has to be able to answer, and which no one has asked.
 
+**What the session boundary does *not* mean — precluding the first misreading.**
+A user who remotes into their own machine and runs the wallet there is **fully
+supported, by construction**. The Windows wallet is self-hosted per session:
+`shekyl-cli` spawns its in-process server and dials its own pipe, so client and
+server are born in the *same* logon session and share a logon SID as siblings —
+an RDP logon gets a fresh logon SID and the wallet pair started inside it
+shares that one. The boundary refuses only a *cross-session* attach: a process
+in session A opening a pipe created in session B — which, with no external
+`npipe://` form (§8.1), is not a supported operation whose loss costs anything.
+The positive case needs no probe: it is structural, and P-5 already exercises
+the in-session open-and-verify. If a user's console wallet is still open when
+they try to start one over RDP, what refuses them is the **keys-file lock**
+(`AlreadyLocked`, "wallet is already open elsewhere") — the same behaviour as
+two terminals on Linux — not the pipe DACL.
+
 **Recording protocol.** A §3 result lands as a dated row appended to §4 below,
 naming the machine and Windows build. An unrun probe stays visibly unrun — a
 blank is a finding.
