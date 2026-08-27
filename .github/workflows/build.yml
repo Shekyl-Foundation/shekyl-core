@@ -251,6 +251,43 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
+      # The restricted-RPC gate's only production-path guard. It spawns the
+      # shekyld just built and puts real over-cap requests to a restricted
+      # listener, which is the one assertion that can see whether the C++
+      # dispatch bridge passes a connection context — the C++ unit tests
+      # cannot, by construction, and without this the privacy regression it
+      # guards could merge green.
+      #
+      # It runs here rather than in the test job because that job installs no
+      # Rust by design, and here the binary and the toolchain already coexist:
+      # no extra build, ~3 seconds. `--ignored` because the test is opted out
+      # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
+      # it finds one.
+      - name: restricted-RPC gate (live daemon, production path)
+        if: matrix.pack_ctest
+        env:
+          SHEKYLD_BIN: ${{ github.workspace }}/build/bin/shekyld
+        run: |
+          set -euo pipefail
+          test -x "$SHEKYLD_BIN" || { echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2; exit 1; }
+          cd rust
+          # The filter is the FULL test path: `--exact` matches against
+          # `module::path::name`, so the bare function name selects nothing —
+          # and `cargo test` reports "0 passed" and exits 0 when a filter
+          # matches nothing, which would make this step a green no-op. The
+          # count assertion below is what refuses that (rule 47: a gate must
+          # assert its own subject exists).
+          cargo test -p shekyl-engine-core --lib \
+            engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
+            -- --ignored --exact --nocapture 2>&1 | tee gate.log
+          status=${PIPESTATUS[0]}
+          [ "$status" -eq 0 ] || { echo "FATAL: the gate's test failed" >&2; exit "$status"; }
+          grep -qE '^test result: ok\. 1 passed' gate.log || {
+            echo "FATAL: the restricted-RPC gate selected no test — the filter or the test name moved" >&2
+            grep -E '^(running|test result)' gate.log >&2 || true
+            exit 1
+          }
+
       # Pack the CTest tree for the 24.04 test job. Same shape as
       # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
       # (CMakeLists.txt), so test binaries are statically linked against

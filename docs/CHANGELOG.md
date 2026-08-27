@@ -77,23 +77,40 @@
   the leaked set — they cannot exist in Shekyl: no RPC accepts the flag and
   the pool's only writer of it hardcodes 0.)
 
-- **`relay_tx` let an unauthenticated caller re-inject a transaction the node
-  had not broadcast.** This is the same dead expression with an *active*
-  consequence rather than a disclosure one, and it is listed separately
-  because it is a different failure. The handler reads
+- **The restricted-RPC gate now has a guard that CI actually runs.** The only
+  assertion that can observe whether the C++ dispatch bridge passes a
+  connection context is a live-daemon test, and live-daemon tests are
+  `#[ignore]`d because the Rust lane builds no `shekyld`. The `build-ubuntu`
+  job compiles one with `BUILD_TESTS=ON` and installs the Rust toolchain, so
+  the gate runs there against the tree just built — no extra build, about
+  three seconds. The step asserts that exactly one test ran: `--exact` matches
+  the full test path, and `cargo test` exits 0 reporting "0 passed" when a
+  filter matches nothing, so a moved or misspelled name would otherwise turn
+  the gate into a green no-op.
+
+- **`relay_tx`'s restricted arm is repaired as defense in depth.** The same
+  dead expression appears here with an *active* consequence rather than a
+  disclosure one, so it is listed separately. The handler reads
   `(broadcasted = get_pool_transaction(txid, ..., broadcasted)) || (!restricted
   && get_pool_transaction(txid, ..., all))`, and with `restricted`
-  false-by-construction the second arm was live on a restricted listener: a
-  stranger who named a txid could make the daemon fetch a still-stemming or
-  locally-submitted transaction and relay it. Because that arm sets
-  `relay_method::local` for anything not already broadcast, it also reached
-  the Q12-D5a residual documented at the call site — a transaction that had
-  already rolled clearnet and is still stemming gets re-decided onto the
-  anonymity zone, the once-at-origin violation that residual names, now
-  reachable by an unauthenticated caller rather than the operator. With the
-  fix, a restricted caller reaches only the `broadcasted` arm, so a
-  not-yet-broadcast transaction answers "transaction not found in pool" and
-  is neither disclosed nor relayed.
+  false-by-construction the second arm evaluates live — it will fetch a
+  still-stemming or locally-submitted transaction and relay it, setting
+  `relay_method::local` for anything not already broadcast and so reaching the
+  Q12-D5a residual documented at the call site (a transaction that has already
+  rolled clearnet and is still stemming gets re-decided onto the anonymity
+  zone).
+  **This was first published here as a live unauthenticated action, and that
+  was wrong.** `relay_tx` is listed in `RESTRICTED_METHODS`, the per-method
+  gate in the Rust JSON-RPC handler, and Axum has been the sole HTTP transport
+  since epee's was retired — so a restricted listener answers 403 `Method not
+  allowed in restricted mode` before any C++ runs. Measured on a live daemon:
+  403 on the restricted listener, and the C++ handler's own "transaction not
+  found in pool" on the admin one. The C++ arm is therefore unreachable from
+  the network in the posture that matters. Repairing it still earns its place
+  — it is the layer that has to be right if that method list changes, if a
+  transport is added, or when this handler migrates and takes its own posture
+  with it — but it is a second line, not a hole. Unlike the pool read
+  endpoints above, which are `Visibility::Always` and were reachable.
 
 - **Every password rotation on Windows failed, and the crate that owns the
   defect was tested on no Windows machine anywhere.** `rotate_password`
