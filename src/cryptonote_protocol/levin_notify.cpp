@@ -839,11 +839,30 @@ namespace levin
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
-          record_relayed(relay_method::stem);
+          /* THE RELAY IS RECORDED WHERE THE SEND IS KNOWN TO HAVE HAPPENED,
+             which is inside the success arms below rather than here.
 
+             Recording it up front told the pool a stem had been launched
+             before one had — and on the paths where none ever is (`NoRoute`,
+             or both send attempts failing) that claim was simply false. It is
+             not a cosmetic ordering: `set_relayed` sets `meta.relayed`, and
+             `local_relay_base` reads exactly that bit to choose an origin's
+             backoff. `relayed == false` means "no stem was ever launched, so
+             no embargo exists anywhere to complete" and keeps MIN_RELAY_TIME;
+             `relayed == true` buys the derived interval, which provisions for
+             a stem completing. A send that never happened was therefore
+             claiming the long wait on the strength of an event that did not
+             occur — the same falsification an unsent `local` entry was fixed
+             for.
+
+             The fluff record below still fires on every failure path, so the
+             pool is not left un-told; it is told the thing that actually
+             happened. `record_stem_observation` was already placed this way,
+             and the two records now arm on the same event. */
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
+            record_relayed(relay_method::stem);
             record_stem_observation(zone_->relay.get(), txs_, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
@@ -864,6 +883,7 @@ namespace levin
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
+            record_relayed(relay_method::stem);
             record_stem_observation(zone_->relay.get(), txs_, destination, source_);
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
