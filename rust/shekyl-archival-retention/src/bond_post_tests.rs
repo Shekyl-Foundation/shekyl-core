@@ -996,20 +996,3 @@ fn rebond_rejects_record_floor_drift() {
         Err(BondPostError::RebondRecordFloorBroken)
     );
 }
-
-/// The funding-input floor, at its boundary.
-///
-/// A count rule reduces to one comparison, so the test that matters is the pair
-/// either side of it: nothing admits nothing, and one real input is enough for
-/// every post kind (the floor is a shape rule — how much those inputs carry is
-/// the amount rules' business, and they run after it).
-///
-/// This is the wallet's rule too: `AssembleUnbond` calls this predicate rather
-/// than restating the condition, so a change made here reaches the producer
-/// instead of drifting away from it.
-#[test]
-fn the_funding_floor_refuses_none_and_admits_one() {
-    assert!(!bond_post_funding_floor_met(0));
-    assert!(bond_post_funding_floor_met(1));
-    assert!(bond_post_funding_floor_met(8));
-}

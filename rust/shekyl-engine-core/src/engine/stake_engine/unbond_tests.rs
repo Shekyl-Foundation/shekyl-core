@@ -19,7 +19,7 @@ use crate::engine::emission_source::{BondContext, ClaimSourceFor, EmissionClaimS
 
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_engine_state::pscan_state::MintLineageOutput;
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::engine::synthetic_tree::consistent_synthetic_path;
 

@@ -28,36 +28,26 @@
 
 use kameo::message::{Context, Message};
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::Scalar;
-use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding};
 use shekyl_archival_retention::bond_connect::MAX_BOND_BAD_INTERVALS;
-use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
+
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::release_cooldown::{
     release_cooldown_elapsed, slashes_settled_through,
 };
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
-use shekyl_scanner::extra::Extra;
-use shekyl_tx_builder::{
-    phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, PqcAuth, TreeContext, WireEncodeInput,
-};
+use shekyl_tx_builder::TreeContext;
 use shekyl_units::AtomicUnits;
-use shekyl_wire::Input;
-use zeroize::Zeroizing;
 
 use shekyl_types::PCanonicalId;
 
-use crate::engine::bond_assembly::{
-    finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
-};
+use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
 use crate::engine::emission_source::{ClaimSourceFor, ServeAnchor, SlashWatermark};
 
 use super::actor::{persona_canonical_id, StakeEngine};
-use super::helpers::{construct_vouts_to_base, prepare_funding_inputs, ConstructedVouts};
+use super::bond_post_assemble::{
+    assemble_signed_bond_post, require_funding_inputs, BondPostAssembleArgs,
+};
 use super::types::*;
 
 /// The record facts an exit's preconditions read, as the daemon reported them,
@@ -201,8 +191,14 @@ impl UnbondRecordState {
     }
 }
 
-/// Assemble the **full, broadcast-ready** `Unbond` exit transaction inside the
+/// Assemble the **full, wire-encoded** `Unbond` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
+///
+/// "Wire-encoded" is not "admitted". Native `/submit_transaction` still
+/// refuses non-JoinMarket bond posts (`verifier.rs` JoinMarket kind dispatch)
+/// until the Unbond submit fact set and Phase-D re-check land. This producer
+/// is the construction leg that fired that reopening criterion; it does not
+/// itself lift admission.
 ///
 /// The exit carries no ticket and draws no entry-gap offset. That seam exists
 /// to place a *bond post* at a random remove from the private funding intent
@@ -313,36 +309,13 @@ impl Message<AssembleUnbond> for StakeEngine {
         let bond_debit = built.vin().bond_debit;
         let debit_term = built.debit_term();
 
-        // ── Step 6: funding — the SHAPE floor first, then the DEBIT rule.
-        //
-        // A bond post carries at least one real `txin_to_key` spend input,
-        // whatever the kind — so the fee comes from P working capital and never
-        // from released collateral alone. The predicate is CALLED, not
-        // restated: `bond_post_funding_floor_met` owns the rule
-        // (`shekyl-archival-retention`), the same way `verify_debit_funding`
-        // owns the balance rule below. The daemon still decides this one in C++
-        // (`blockchain.cpp`, "Archival bond-post tx requires at least one
-        // txin_to_key funding input"); that copy goes away with the
-        // tx-verification migration, and until it does, the wallet is not
-        // holding a second private copy of the rule.
-        //
-        // Placed after the record-state arms (steps 4-5) and before the
-        // arithmetic because that is where consensus places it — after
-        // `check_archival_bond_post_input`, before every amount rule — so a
-        // caller who also got the fee wrong is told about the missing input
-        // first, exactly as a node would.
-        //
-        // Nothing below could catch the empty set: released collateral alone
-        // clears the sufficiency test, and `verify_debit_funding` closes
-        // tautologically at zero funding because the outputs are derived from
-        // the same `sources` term. Un-guarded, this state reached the prover
-        // and came back as `TxBuilderError::NoInputs` under stage "proving" —
-        // naming the pipeline step where a condition belongs.
-        // `an_exit_with_no_funding_inputs_is_refused_by_name` goes red if this
-        // call is deleted.
-        if !bond_post_funding_floor_met(msg.funding.len()) {
-            return Err(BondAssemblyError::FundingInputsRequired.into());
-        }
+        // Shape floor first — after the record-state arms, before every
+        // amount rule — matching consensus. Released collateral alone
+        // clears the sufficiency test, so without this an empty set reaches
+        // the prover as `NoInputs`. The shared tail repeats the check.
+        // `an_exit_with_no_funding_inputs_is_refused_by_name` goes red if
+        // both calls are deleted.
+        require_funding_inputs(msg.funding.len())?;
 
         // The DEBIT rule inverts the credit path rather than sharing it.
         // Released collateral is a *source*: `sum(funding) + bond_debit ==
@@ -367,6 +340,12 @@ impl Message<AssembleUnbond> for StakeEngine {
         }
         // Payout splits across TWO outputs (daemon prunable-tx floor:
         // `vout.size() < 2` rejects), as the credit path splits its change.
+        //
+        // These outputs return to P's OWN base address — never the principal.
+        // `unbond()` is post **plus a decorrelated drain** precisely so
+        // returning collateral never draws the P↔principal edge on-chain, and
+        // so the retire path's funded gate stays meaningful: wiping the slot
+        // while these outputs are unspent would strand them.
         let payout = sources - msg.fee;
         let payout_lo = payout / 2;
         let amounts = [payout_lo, payout - payout_lo];
@@ -395,204 +374,50 @@ impl Message<AssembleUnbond> for StakeEngine {
         )
         .map_err(StakeEngineError::BondBuild)?;
 
-        // ── Step 7: outputs to P's OWN base address — never the principal.
-        // This is the archival firewall, not a convenience: `unbond()` is post
-        // **plus a decorrelated drain** precisely so returning collateral never
-        // draws the P↔principal edge on-chain. Paying the exit straight to the
-        // principal would put that edge in one transaction and make the drain's
-        // decorrelation pointless.
-        //
-        // It is also what keeps the retire path's funded gate meaningful.
-        // `RetireBondedPersona` refuses the irreversible key wipe while the
-        // slot still holds unspent funding (`SkippedFunded`), and these outputs
-        // ARE that funding — so the wipe cannot land until the drain has moved
-        // them. Paying the exit straight to the principal would leave the slot
-        // unfunded the moment the exit confirmed, and the gate that exists to
-        // stop a premature wipe would wave it through.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
-        let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
-
-        let ConstructedVouts {
-            output_infos,
-            output_keys,
-            view_tags,
-            kem_blobs,
-            leaf_hash_blob,
-        } = construct_vouts_to_base(
-            keys,
-            &tx_key_secret,
-            &amounts,
-            "exit-output construction",
-            |_, _| {},
-        )?;
-
-        // ── Step 8: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
-        // PQC leaf hashes (without which the exit outputs ingest with a zero
-        // `h_pqc` leaf and are unspendable — which on this path would strand
-        // the returned collateral).
-        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-        extra.push_pqc_leaf_hashes(leaf_hash_blob);
-        let tx_extra = extra.serialize();
-
-        // ── Step 9: re-derive spend bundles, compute key images, build the
-        // tx-builder SpendInputs — the shared leg with the bond and emission
-        // handlers. Secrets stay inside this frame until they move into the
-        // proving closure.
-        let prepared = prepare_funding_inputs(keys, msg.funding)?;
-        let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
-        let funding_gindexes: Vec<shekyl_types::GlobalOutputIndex> =
-            prepared.iter().map(|p| p.gindex).collect();
-
-        // ── Step 10: the wire prefix input from the step-5 vin, then the
-        // prefix hash. The wire input carries no signature (SA-2b), so the
-        // prefix is fully determined here; the surface-A `pqc_auths` signature
-        // covers it whole.
-        let prefix_bond_input: Input = wire_bond_post_input(built.vin())?;
-        let extra_inputs = vec![prefix_bond_input];
-
-        let prefix_hash = tx_prefix_hash_from_parts_with_extra(
-            &key_images,
-            &extra_inputs,
-            &output_keys,
-            // Every exit output is confidential (wire amount 0) — derived from
-            // the count, same as the wire encode below, so the two sites
-            // cannot disagree on arity.
-            &vec![0; output_keys.len()],
-            &view_tags,
-            &tx_extra,
-        )
-        .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
-
-        // ── Step 11: offload the CPU-bound proving (Bp+ + FCMP membership) to
-        // `spawn_blocking`. The debit rides `extra_inputs`, the credit path's
-        // `extra_outputs` — one argument apart, and the wrong one is a
-        // transaction that balances for a different operation. It is not a
-        // choice made here: `debit_term()` returns an `InputTerm`, which only
-        // the inputs parameter accepts.
-        let mut spend_inputs = Vec::with_capacity(prepared.len());
-        let mut pqc_pubkeys = Vec::with_capacity(prepared.len());
-        for p in prepared {
-            spend_inputs.push(p.spend);
-            pqc_pubkeys.push(p.pqc_pubkey);
-        }
-        let outputs_for_prove = output_infos.clone();
-        let tree = msg.tree_ctx.clone();
-        let fee = msg.fee;
-        let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
-            sign_transaction_with_terms(
-                prefix_hash,
-                &spend_inputs,
-                &outputs_for_prove,
-                AtomicUnits::from_raw(fee),
-                &[debit_term],
-                &[],
-                &tree,
-            )
-            .map(|signed| (signed, spend_inputs))
-        })
-        .await
-        .map_err(|e| BondAssemblyError::build("proving offload join", e))?
-        .map_err(|e| BondAssemblyError::build("proving", e))?;
-
-        let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-            .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
-
-        // ── Step 12: assemble the wire input. `pqc_auths` is index-parallel
-        // with `vin`, and consensus reads the bond slot at the bond post's own
-        // vin index (`tx.pqc_auths[archival_bond_post_index]`), so the spend
-        // slots come first and the bond slot last — matching the prefix input
-        // order built above.
-        //
         // **The bond slot carries `bond_spend_pk`, NOT the identity key.** This
         // is the one place the exit diverges from every credit post, and it is
         // the whole of GF-1 debit authorization: `archival_debit_auth_pin`
         // requires this slot's key to equal the record's COMMITTED
         // `bond_spend_pk` and rejects the identity key by name. Signing a
         // value-out with `hybrid_sign_sk` is exactly what a compromised serving
-        // host could do, which is why consensus refuses it.
+        // host could do, which is why consensus refuses it. The shared tail
+        // does not choose the key; this closure does.
         let bond_auth_pk = keys
             .bond_spend_pk
             .to_canonical_bytes()
             .map_err(|e| BondAssemblyError::build("bond_spend_pk encoding", e))?;
 
-        let mut wire = WireEncodeInput {
-            key_images,
-            extra_inputs,
-            output_amounts: vec![0; output_keys.len()],
-            output_keys,
-            view_tags,
-            tx_extra,
-            fee,
-            enc_amounts: signed.enc_amounts,
-            enc_labels: signed.enc_labels,
-            out_commitments: signed.commitments,
-            pseudo_outs: signed.pseudo_outs,
-            bulletproof,
-            reference_block: signed.reference_block,
-            fcmp_proof: signed.fcmp_proof,
-            // Placeholder auths at real pubkeys (the phase-1 payload hash reads
-            // them); the fee-slot pubkeys MOVE in.
-            pqc_auths: pqc_pubkeys
-                .into_iter()
-                .map(|pk| PqcAuth {
-                    auth_version: 1,
-                    signature: Vec::new(),
-                    public_key: pk,
-                })
-                .chain(std::iter::once(PqcAuth {
-                    auth_version: 1,
-                    signature: Vec::new(),
-                    public_key: bond_auth_pk.clone(),
-                }))
-                .collect(),
-            fcmp_layers: signed.tree_depth,
-        };
-
-        // ── Step 13: PQC auth completion (fast; stays inline). The spend slots
-        // sign with output-derived keys; the bond slot signs with
-        // `bond_spend_sk` — the secret half of the key consensus pinned above,
-        // under the shared surface-A domain `verify_transaction_pqc_auth`
-        // applies to every slot.
-        let payload_hashes = phase1_payload_hashes(&wire)
-            .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
-        if payload_hashes.len() != spend_inputs.len() + 1 {
-            return Err(BondAssemblyError::build(
-                "phase1 payload hash",
-                format!(
-                    "expected {} payload hashes, got {}",
-                    spend_inputs.len() + 1,
-                    payload_hashes.len()
-                ),
-            )
-            .into());
-        }
-        let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
-            .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
-        let bond_payload_hash = payload_hashes[spend_inputs.len()];
-        let bond_sig = HybridEd25519MlDsa
-            .sign(
-                &keys.bond_spend_sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                &bond_payload_hash,
-            )
-            .map_err(|e| BondAssemblyError::build("debit pqc auth signing", e))?;
-        pqc_auths.push(PqcAuth {
-            auth_version: 1,
-            signature: bond_sig
-                .to_canonical_bytes()
-                .map_err(|e| BondAssemblyError::build("debit pqc auth encoding", e))?,
-            public_key: bond_auth_pk,
-        });
-        wire.pqc_auths = pqc_auths;
-        drop(spend_inputs); // secrets end here; nothing below needs them
-
-        // ── Step 14: encode + mint at the P-1 site ────────────────────────
-        let bound_tx = finalize_bond_tx(persona, &wire)?;
+        let assembled = assemble_signed_bond_post(
+            BondPostAssembleArgs {
+                keys,
+                persona,
+                funding: msg.funding,
+                tree_ctx: msg.tree_ctx,
+                fee: msg.fee,
+                amounts,
+                extra_input_terms: vec![debit_term],
+                extra_output_terms: vec![],
+                vin: built.vin(),
+                bond_auth_pk,
+                output_site: "exit-output construction",
+            },
+            |payload_hash| {
+                let sig = HybridEd25519MlDsa
+                    .sign(
+                        &keys.bond_spend_sk,
+                        shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                        payload_hash,
+                    )
+                    .map_err(|e| BondAssemblyError::build("debit pqc auth signing", e))?;
+                sig.to_canonical_bytes()
+                    .map_err(|e| BondAssemblyError::build("debit pqc auth encoding", e))
+            },
+        )
+        .await?;
 
         Ok(AssembledUnbondPost {
-            bound_tx,
-            funding_gindexes,
+            bound_tx: assembled.bound_tx,
+            funding_gindexes: assembled.funding_gindexes,
         })
     }
 }

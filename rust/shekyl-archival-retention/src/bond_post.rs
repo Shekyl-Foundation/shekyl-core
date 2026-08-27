@@ -717,3 +717,7 @@ pub fn bond_post_funding_floor_met(spend_input_count: usize) -> bool {
 #[cfg(test)]
 #[path = "bond_post_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bond_post_funding_tests.rs"]
+mod funding_floor_tests;
