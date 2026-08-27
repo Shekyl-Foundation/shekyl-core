@@ -48,28 +48,48 @@ Write-Host "P-17 dial: authenticating as SID $mySid to \\$Server"
 # Must match `p17_pipe_name(user_sid, role)` in the Rust probe.
 function Pipe-Name([string]$role) { "shekyl-wallet-$mySid-p17-$role" }
 
+# Map a PowerShell error record from a pipe open to a Win32-ish error code.
+#
+# The subtlety that makes this the load-bearing function: PowerShell wraps any
+# exception thrown by a .NET **method or constructor** in
+# `MethodInvocationException`, so a typed `catch [Win32Exception]` never matches
+# — the real exception is down the `InnerException` chain. And the exception
+# this probe most needs to survive is `UnauthorizedAccessException` ("Access to
+# the path is denied"), which is the PREDICTED, PASS-confirming result of steps
+# 1 and 2. A catch that missed it would abort the client on the exact outcome
+# the probe exists to observe, and the server would then report "no caller
+# connected" — the correct answer made unreportable and misread as a network
+# fault. So this walks the whole chain.
+function Map-PipeError($record) {
+    $ex = $record.Exception
+    while ($ex) {
+        if ($ex -is [System.TimeoutException]) { return 258 }          # WAIT_TIMEOUT sentinel: no instance answered
+        if ($ex -is [System.UnauthorizedAccessException]) { return 5 } # ERROR_ACCESS_DENIED — the refusal we test for
+        if ($ex -is [System.ComponentModel.Win32Exception]) { return $ex.NativeErrorCode }
+        $ex = $ex.InnerException
+    }
+    # Nothing on the chain was a type we map: best-effort low word of the top
+    # HResult (HRESULT_FROM_WIN32 keeps the Win32 code in the low 16 bits).
+    return ($record.Exception.HResult -band 0xFFFF)
+}
+
 # Open a named pipe on $Server as this user; return the Win32 error (0 = opened).
-# The stream is closed immediately on success — this probe measures whether the
-# open is permitted, nothing more. Default impersonation carries our identity
-# over SMB.
+# The stream is closed on the way out — this probe measures whether the open is
+# permitted, nothing more. Default impersonation carries our identity over SMB.
+# It NEVER throws: a refusal is data, and every path returns a code.
 function Try-Open([string]$role) {
-    $client = New-Object System.IO.Pipes.NamedPipeClientStream(
-        $Server, (Pipe-Name $role),
-        [System.IO.Pipes.PipeDirection]::InOut,
-        [System.IO.Pipes.PipeOptions]::None,
-        [System.Security.Principal.TokenImpersonationLevel]::Impersonation)
+    $client = $null
     try {
+        $client = New-Object System.IO.Pipes.NamedPipeClientStream(
+            $Server, (Pipe-Name $role),
+            [System.IO.Pipes.PipeDirection]::InOut,
+            [System.IO.Pipes.PipeOptions]::None,
+            [System.Security.Principal.TokenImpersonationLevel]::Impersonation)
         $client.Connect(30000)   # bounded, like the Rust side
-        $client.Dispose()
         return 0
     }
-    catch [System.ComponentModel.Win32Exception] {
-        return $_.Exception.NativeErrorCode
-    }
-    catch [System.TimeoutException] {
-        # No instance answered within the window. Distinct from a refusal:
-        # report a sentinel the server will treat as "did not measure".
-        return 258   # WAIT_TIMEOUT, reused as "no answer"
+    catch {
+        return (Map-PipeError $_)
     }
     finally { if ($client) { $client.Dispose() } }
 }
@@ -91,9 +111,13 @@ try {
     $control.Connect(30000)
 }
 catch {
-    Write-Host "P-17 dial UNRUN: could not open the control pipe: $($_.Exception.Message)"
-    Write-Host "  If this is ERROR_ACCESS_DENIED, the control pipe (granted to the USER SID)"
-    Write-Host "  refused us — which means we are not the same AD user as the server."
+    $code = Map-PipeError $_
+    Write-Host "P-17 dial UNRUN: could not open the control pipe (os error $code)."
+    if ($code -eq 5) {
+        Write-Host "  ERROR_ACCESS_DENIED on the control pipe, which is granted to the USER SID:"
+        Write-Host "  we are NOT the same AD user as the server. Log in as intranet\dawsonra."
+    }
+    $control.Dispose()
     exit 2
 }
 $line = "$daclErr $prodErr"
