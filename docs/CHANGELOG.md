@@ -251,7 +251,9 @@
   CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
   `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
   and `get_stakes` are REJECTED (engine-side claims; archival firewall);
-  `unstake` stays RESERVED on the Unbond producer. The drain
+  `unstake` stays RESERVED — its gate is now **reachability plus the
+  regtest walk**, not the producer, which exists (`build_unbond_vin` /
+  `AssembleUnbond`) and is deliberately unreachable. The drain
   confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
   dispatch fact, not a settlement fact, and both surfaces say so.
 

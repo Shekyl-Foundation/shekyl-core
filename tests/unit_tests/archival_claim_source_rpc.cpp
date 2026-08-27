@@ -407,6 +407,18 @@ TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
   // reading of the `IntervalLogFull` gate, so the round-trip has to pin it.
   EXPECT_NE(res.bad_interval_count, 0u) << "the fixture must carry a non-empty log";
   EXPECT_EQ(back.bad_interval_count, res.bad_interval_count);
+  // Presence on the wire is pinned by NAME, not by the round-trip below,
+  // because the round-trip cannot see a dropped flag whose fixture value is
+  // `false`: this fixture sets no slash watermark, so
+  // `res.has_last_settled_slash_epoch` is false, and a value-initialized
+  // `back{}` is false too — the equality then holds precisely when the member
+  // is missing, which is the state it exists to catch. The Rust decoder
+  // rejects such a response as malformed, so the C++ side would pass while the
+  // consumer fails. Same guard the interval count gets from its `EXPECT_NE`
+  // above, in the form that works for a bool: assert the member is there
+  // regardless of its value.
+  EXPECT_EQ(count("\"has_last_served_epoch\""), 1u) << json;
+  EXPECT_EQ(count("\"has_last_settled_slash_epoch\""), 1u) << json;
   EXPECT_EQ(back.has_last_served_epoch, res.has_last_served_epoch);
   EXPECT_EQ(back.last_served_epoch, res.last_served_epoch);
   EXPECT_EQ(back.has_last_settled_slash_epoch, res.has_last_settled_slash_epoch);
