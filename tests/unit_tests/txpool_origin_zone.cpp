@@ -91,9 +91,14 @@ namespace
   // padding rather than removing it, so that the members after it do not shift
   // position in a persisted record. `fcmp_verified` is the neighbour that would
   // move, and it is the one where a misread costs something: reading 1 where 0
-  // was written skips a proof re-verification. `set_relay_method` clears the
-  // reserved bit, so this also pins that it clears the RESERVED bit and not a
-  // live one next to it.
+  // was written skips a proof re-verification.
+  //
+  // The bit is LIVE again as of 2026-08-27 — `observed_circulating`, the stem
+  // watch's F-10 verdict — which makes this pin MORE load-bearing rather than
+  // less: `set_relay_method` still clears it, and this asserts that the clear
+  // lands on that bit and not on a neighbour. A reserved bit cleared into
+  // `fcmp_verified` was a latent bug; a live one is an observable wrong answer
+  // about whether a transaction is circulating.
   TEST(txpool_origin_zone, the_reclaimed_bit_does_not_disturb_its_neighbours)
   {
     for (const cryptonote::relay_method m : {

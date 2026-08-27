@@ -405,6 +405,29 @@ TEST(txpool_relay_timers, the_same_local_without_the_verdict_still_relays)
     << "past the derived interval and unobserved, the origin's backstop fires";
 }
 
+/* §92's third clause, first half — the origin mark surviving its own return —
+   is NOT covered here, and the reason is a fixture limit rather than a choice.
+
+   The guard sits in `add_tx`'s existing-entry branch, so a test has to get a
+   duplicate admitted. This fixture cannot: `get_tx_fee` fails on its synthetic
+   blob, so `add_tx` returns at the fee check long before the upgrade
+   (`fee_too_low`, observed). Passing `relay_method::block` clears the fee
+   check but then takes the failed-inputs branch, which force-sets the method
+   directly — a DIFFERENT path, and one that should upgrade, since a
+   transaction that reached a block is confirmed and the origin's re-broadcast
+   responsibility genuinely ends.
+
+   A first draft of this test asserted through `add_tx` and passed with the
+   guard REMOVED, because admission never reached the upgrade. It is deleted
+   rather than kept: a test green for a reason unrelated to its subject is
+   worse than none, because it reads as coverage.
+
+   Reaching it needs a real transaction and a chain that admits it — the
+   `t_core` arrival-leg harness already recorded as owed in FOLLOWUPS for the
+   same reason (§89.8's end-to-end arrival witness). The guard's argument is in
+   `tx_pool.cpp` at the site, and the bite check for it is that path, not this
+   file. */
+
 TEST(txpool_relay_timers, a_propagated_fluff_entry_is_not_disarmed)
 {
   const time_t now = time(nullptr);

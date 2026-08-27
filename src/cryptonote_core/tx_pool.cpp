@@ -378,7 +378,39 @@ namespace cryptonote
         else
           meta.set_relay_method(relay_method::none);
 
-        if (meta.upgrade_relay_method(tx_relay) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
+        /* §92's third clause, FIRST HALF: the origin mark is permanent.
+           An entry this node originated and kept at `local` does not leave
+           that class because its own transaction came back.
+
+           Without this the return DEFEATS the carve-out rather than closing
+           it. `upgrade_relay_method` moves the entry to `fluff`, and the two
+           selection arms differ in both axes: `local` re-broadcasts at the
+           derived 1148 s into `private_req` (`zone::invalid`, fail-closed
+           anonymity), while `fluff` re-broadcasts at MIN_RELAY_TIME's 300 s
+           into `public_req` (`zone::public_`). So the upgrade made the origin
+           re-emit its OWN transaction sooner and on the clear internet —
+           precisely what `originated_stays_in_zone` exists to prevent, and its
+           own note says so: "one record of Stem or Fluff moves the entry out
+           of Local permanently, and the next pool re-relay puts the user's own
+           transaction on the clear internet."
+
+           NARROW, and deliberately not a general suspension of monotonicity.
+           It refuses exactly one transition — out of `local` — and `local` is
+           set only by this node originating (`is_local`), never by an arrival.
+           So no peer can acquire the origin mark by relaying: the guard
+           protects a class nothing else can enter, which is what keeps the
+           mark unforgeable while making it permanent.
+
+           The SECOND half of that clause — when the re-broadcast RESPONSIBILITY
+           ends — is `observed_circulating`, set by the stem watch's F-10
+           verdict. Provenance is permanent; liveness is conditional. This
+           guard is that bit's precondition: without it the verdict is written
+           and erased in one call chain, because §46 records arrivals before
+           admission. */
+        const bool origin_pinned =
+          existing_tx && meta.get_relay_method() == relay_method::local;
+
+        if ((!origin_pinned && meta.upgrade_relay_method(tx_relay)) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {
           /* Q12-U2 deleted the bridge delay along with the class that used it.
              The randomized hold existed to blur the moment an anonymity

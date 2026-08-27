@@ -6157,7 +6157,8 @@ is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
 a tx originated from."* Checked: `txpool_tx_meta_t`
 ([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
 has **no zone field**, so the claim is accurate *as a description*. It is
-**false as a statement of feasibility**: the struct carries `bf_padding : 2` —
+**false as a statement of feasibility**: the struct carried `bf_padding : 2`
+at the time —
 the bitfield's exact remainder, and a zone enum is two bits — plus
 `padding[44]`. It is a node-local LMDB record with no consensus role,
 pre-genesis. **The space is already reserved.** Somebody read an inherited
@@ -11425,7 +11426,7 @@ is scoped by its own `globs` to `rust/shekyl-engine-state/**` and
 And the maintainer's loop closes better than "space is available":
 
 - `txpool_tx_meta_t` carries **`uint8_t bf_padding: 2`** and
-  `uint8_t padding[44]; // till 192 bytes` (`blockchain_db.h:198`, `:206`).
+  `uint8_t padding[44]; // till 192 bytes` (`blockchain_db.h:198`, `:206`). *(The bitfield has moved twice since: Q12-U1 took two bits for `origin_zone`, and 2026-08-27 made the last one live as `observed_circulating`. The reasoning below is the record of how the width was argued, not a description of the struct today.)*
 - A zone field needs **exactly 2 bits** — `public_`, `i2p`, `tor`, and
   `invalid` are four values. `bf_padding` is the right width, not merely
   spare room.
