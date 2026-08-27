@@ -337,6 +337,49 @@ sustainability is unaffected by the recalibration.
   out and is now wrong in a second way as well. Keep this entry open
   until `HoldingsUpdate` and `Rebond` have producers.
 
+  **UPDATE 2026-08-27 — the ENGINE walk landed (PR-P4 slice 3); two
+  items are registered out of it.** `engine/retire_walk.rs` asserts the
+  wipe and the funded gate at the actor, through
+  `persona_canonical_id` — a *different* handler reading the same `held`
+  map, so the walk is not grading `retire_bonded` by the enum
+  `retire_bonded` returns. Bite-checked: a `retire_bonded` that reports
+  `Retired { slot }` while removing nothing turns the walk red and
+  leaves **all eight** `pscan/task_tests.rs` tests green, which is the
+  measured gap the walk closes (those observe dispatch bookkeeping, and
+  `retired_this_session` is inserted on both the `Retired` and `NotHeld`
+  arms, so it cannot tell a wipe from a persona that was never held).
+
+  Two things do NOT close with it:
+
+  1. **Seal-then-act ordering is unobservable with current scaffolding
+     — needs a seam or the daemon walk.** `store.save` (sealing the
+     `pending_unbonds` trigger) and `dispatch_retires` (the wipe) both
+     sit inside `pscan_sweep`'s per-batch loop, so neither runs without
+     blocks to scan; the walk's subject needs a ~270k-block cursor for
+     its claim window to have expired, so the real loop cannot be driven
+     to that pair in a test. A draft that asserted the ordering anyway
+     **passed while doing nothing** (it read back its own pre-seeded
+     store); a save counter turned it red and is what found this. Closing
+     it needs either a seam reaching the seal/dispatch pair without a
+     270k-block scan — a production change with its own reasoning — or
+     the daemon walk below. *Target: V3.0 pre-genesis.*
+
+  2. **The DAEMON walk — the byte-level proposition the engine walk
+     structurally cannot judge.** The engine walk proves our own
+     components agree with each other; it asserts a well-formed `Unbond`
+     against **our own encoder**. What no Rust-side test can reach is
+     *the bytes we assemble are the bytes consensus accepts* —
+     cross-language, cross-process. `RF-D9` is the precedent: the
+     serve-credit wire had never round-tripped through the C++ oracle,
+     and no amount of Rust testing would have surfaced it. This walk is
+     **blocked today** — native `/submit_transaction` refuses `Unbond`
+     (`BondPostKind::Other`) as `Malformed`; the construction-leg reopen
+     fired, the Unbond submit fact set has not — so it lands **with that
+     slice**, not before. Registered now rather than left implicit
+     because its absence is currently invisible: everything is green and
+     nothing has ever put an `Unbond` on a wire. *Target: V3.0
+     pre-genesis; rides the submit fact set.*
+
   **Consequences as the code stands:** a staker can bond in and cannot
   bond out or adjust holdings. `stake_engine/retire.rs` performs an
   irreversible persona-key wipe on a confirmed `Unbond` witness, so a
