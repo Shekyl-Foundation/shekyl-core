@@ -108,16 +108,108 @@
 #   RESERVED (prerequisite in parentheses):
 #     unstake                                      (the Unbond PRODUCER.
 #                                                   Prerequisite rewritten by
-#                                                   WI-RPC-5 from the
-#                                                   claim-era "Stage 3
-#                                                   StakeEngine" wording:
-#                                                   every BondPostKind::Unbond
-#                                                   site on dev today is a
-#                                                   verifier, wire constant,
-#                                                   or test — no producer
-#                                                   exists; blocked on the
+#                                                   WI-RPC-5, then CORRECTED
+#                                                   2026-08-26 by PR-P4: the
+#                                                   WI-RPC-5 text said "no
+#                                                   producer exists; blocked
+#                                                   on the
 #                                                   PostKindNotJoinMarket
-#                                                   connect path)
+#                                                   connect path". BOTH
+#                                                   clauses are now false.
+#                                                   PostKindNotJoinMarket
+#                                                   guards only the
+#                                                   JoinMarket verifier — the
+#                                                   Unbond verify + connect
+#                                                   arms landed in #303 — and
+#                                                   the producer itself
+#                                                   (build_unbond_vin +
+#                                                   AssembleUnbond) lands in
+#                                                   PR-P4. The prerequisite
+#                                                   is now the REACHABILITY
+#                                                   gate, not a missing
+#                                                   producer: nothing on the
+#                                                   exit path is callable
+#                                                   from any RPC verb or CLI
+#                                                   command until PR-P4's
+#                                                   regtest walk has
+#                                                   exercised the retire path
+#                                                   end to end — the wipe,
+#                                                   the funded gate, and the
+#                                                   seal-then-act crash
+#                                                   ordering. RESERVED stands
+#                                                   until that walk runs.
+#                                                   The walk lands as its OWN
+#                                                   PR, separately from the
+#                                                   producer (ruled
+#                                                   2026-08-26): a walk
+#                                                   sharing a PR with the code
+#                                                   it judges creates pressure
+#                                                   to soften the walk when it
+#                                                   goes red. So the producer
+#                                                   merging is NOT the event
+#                                                   that lifts RESERVED — this
+#                                                   line is the only thing
+#                                                   binding the two once they
+#                                                   are split.
+#                                                   UPDATE 2026-08-26: slice
+#                                                   2b landed, so "the
+#                                                   producer" now means the
+#                                                   WHOLE exit transaction —
+#                                                   funding, outputs, proving,
+#                                                   wire encoding, and the
+#                                                   surface-A pqc_auths slot
+#                                                   under bond_spend_pk — not
+#                                                   just the vin. Three
+#                                                   things still sit between
+#                                                   that and a working verb,
+#                                                   and none of them is the
+#                                                   walk: nothing DISPATCHES
+#                                                   the assembled bytes yet;
+#                                                   native
+#                                                   `/submit_transaction`
+#                                                   still refuses Unbond
+#                                                   (`BondPostKind::Other`)
+#                                                   as Malformed — the
+#                                                   construction-leg reopen
+#                                                   has fired, the Unbond
+#                                                   submit fact set has not;
+#                                                   and `unstake` is the
+#                                                   composed unbond() = post
+#                                                   + a decorrelated drain.
+#                                                   Read this entry as "the
+#                                                   hard part exists and is
+#                                                   unreachable", never as
+#                                                   "only a handler is
+#                                                   missing".
+#                                                   WIRE-ACTIVITY PIN, owed by
+#                                                   this facade: a wallet
+#                                                   HOLDS many personas and
+#                                                   activates one. The exit is
+#                                                   deliberately NOT active-
+#                                                   scoped — bonded personas
+#                                                   stay resident precisely so
+#                                                   a RETIRED one can still be
+#                                                   unbonded (ARCHIVAL_BOND_CO
+#                                                   NSTRUCTION.md keeps the
+#                                                   bonded union rather than a
+#                                                   lookahead window, "bricks
+#                                                   unbonding otherwise"), so
+#                                                   copying
+#                                                   drain_to_principal's
+#                                                   active_persona()-only
+#                                                   shape here would be a
+#                                                   regression, not a
+#                                                   hardening. What the
+#                                                   firewall requires is NO
+#                                                   SIMULTANEOUS WIRE
+#                                                   ACTIVITY: dormant bonded
+#                                                   balances are permitted,
+#                                                   concurrent broadcast is
+#                                                   not. Nothing enforces that
+#                                                   yet because nothing on
+#                                                   this path broadcasts —
+#                                                   when this facade lands it
+#                                                   owns the serialization.)
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
 #       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
 #       it carries NO fee parameter — no FeePriority, no amount, no

@@ -8,6 +8,14 @@
 //! Structural bounds (hybrid pubkey length) and `P_canonical_id` hint checks stay
 //! in C++ consensus glue; this module covers post-kind, holdings, term rigidity,
 //! floor equality, and record-existence (via `record_exists` from LMDB).
+//!
+//! Two rules here are about the transaction or the block rather than the vin, so
+//! they sit outside the per-kind verifiers as free predicates:
+//! [`bond_post_block_unique`] (one bond post per `P` per block) and
+//! [`bond_post_funding_floor_met`] (at least one real spend input). Both follow
+//! the same decision-placement pin — C++ marshals the operands, Rust decides —
+//! though only the first is wired through the FFI so far; the second is called
+//! by the wallet-side producer while the daemon still counts inputs in C++.
 
 use thiserror::Error;
 
@@ -674,6 +682,42 @@ pub fn bond_post_block_unique(p_canonical_ids: &[[u8; 32]]) -> bool {
     all_distinct(p_canonical_ids)
 }
 
+/// Whether a bond-post **transaction** meets the funding-input floor: at least
+/// one real `txin_to_key` spend input, whatever the post kind.
+///
+/// A property of the transaction rather than of the bond vin, which is why it
+/// is a free predicate here and not an arm of the per-kind verifiers above —
+/// none of them is given the tx's input list. It binds on every kind: a credit
+/// post funds the floor from `P`'s spendable outputs, and a debit post still
+/// needs one real input for the fee, because released collateral enters the
+/// balance equation as a *source* term and cannot pay for an input that does
+/// not exist.
+///
+/// **Order matters to anyone mirroring this.** The floor binds *after* the
+/// per-kind semantic verify and *before* every amount rule (pseudoOuts count,
+/// reference block, CT balance). A producer that checks it later refuses a
+/// no-input transaction by naming some amount instead, and then the wallet and
+/// the chain disagree about why an irreversible operation was refused.
+///
+/// **Decision placement — the standing pin [`bond_post_block_unique`] carries:
+/// C++ marshals, Rust decides** (`ARCHIVAL_BOND_GATE4.md`).
+/// This predicate is the rule's Rust owner: `AssembleUnbond`
+/// (`shekyl-engine-core`) calls it instead of restating the condition. The
+/// daemon still decides it in C++ — `Blockchain::check_tx_inputs`
+/// (`src/cryptonote_core/blockchain.cpp`, *"Archival bond-post tx requires at
+/// least one txin_to_key funding input"*) counts `txin_to_key` vins inline —
+/// and that copy is the one to **delete** when the tx-verification path
+/// migrates, by marshaling the count to this function. It is not a second rule
+/// to keep in sync.
+#[must_use]
+pub fn bond_post_funding_floor_met(spend_input_count: usize) -> bool {
+    spend_input_count > 0
+}
+
 #[cfg(test)]
 #[path = "bond_post_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bond_post_funding_tests.rs"]
+mod funding_floor_tests;

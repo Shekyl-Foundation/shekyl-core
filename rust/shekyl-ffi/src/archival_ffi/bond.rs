@@ -10,7 +10,7 @@ use shekyl_archival_retention::{
     rebond_pop, unbond_connect, unbond_pop, verify_holdings_update_add,
     verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
     verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin, BadInterval,
-    BondPostKind, HoldingsDescriptor, HoldingsKind, ShardSet, ShardSetError,
+    BondPostKind, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError,
     HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
@@ -305,6 +305,105 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
     }
+}
+
+/// Fold the served shards' last-served epochs into the whole-record
+/// release-cooldown anchor — **the same fold** consensus applies inside
+/// [`shekyl_archival_verify_unbond_bond_post`], exported so a marshaling caller
+/// reports the anchor instead of deriving a second one.
+///
+/// The claim-source RPC is that caller: the wallet needs the anchor to answer
+/// `unbond_readiness(P)` and to know whether an `Unbond` can verify at all, and
+/// a C++-side or wallet-side re-fold would be a second derivation of a
+/// consensus operand — the failure mode `close_block_height` already forbids
+/// ("as the daemon sourced it; the wallet never re-derives").
+///
+/// Never-served shards are omitted by the caller's gather, so an empty slice is
+/// the legitimate "record exists, nothing has served yet" case and folds to
+/// *absent* rather than to an epoch. That distinction is load-bearing
+/// downstream: `release_cooldown_elapsed` and `slashes_settled_through` both
+/// treat an absent anchor as *permissive* (nothing served ⇒ nothing to cool
+/// down from), so a consumer must never be able to confuse it with "the value
+/// did not arrive". `out_present` is what keeps those two facts distinct on the
+/// wire — the value is reported, not inferred from a missing field.
+///
+/// Writes `*out_present = 1` and `*out_epoch = anchor` when at least one shard
+/// has served; `*out_present = 0` and `*out_epoch = 0` otherwise. Both outputs
+/// are written on every `OK` return, so a caller cannot read a stale slot.
+///
+/// # Safety
+/// When `per_shard_last_served_len > 0`, `per_shard_last_served_ptr` must be
+/// valid for that many `u64`s for the duration of the call. `out_present` and
+/// `out_epoch` must each be valid for one write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_whole_record_last_served(
+    per_shard_last_served_ptr: *const u64,
+    per_shard_last_served_len: usize,
+    out_present: *mut u8,
+    out_epoch: *mut u64,
+) -> u8 {
+    if out_present.is_null() || out_epoch.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let anchor = match unsafe {
+        with_bond_post_u64_slice(
+            per_shard_last_served_ptr,
+            per_shard_last_served_len,
+            whole_record_last_served,
+        )
+    } {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    unsafe {
+        match anchor {
+            Some(epoch) => {
+                *out_present = 1;
+                *out_epoch = epoch;
+            }
+            None => {
+                *out_present = 0;
+                *out_epoch = 0;
+            }
+        }
+    }
+    SHEKYL_ARCHIVAL_BOND_POST_OK
+}
+
+/// Decide which last-served LMDB scan a holdings kind uses.
+///
+/// This is the **kind→scan decision**, exhaustive on [`HoldingsKind`]: a third
+/// variant fails to compile in [`HoldingsKind::last_served_scan`] until its
+/// arm is written. The two C++ gather sites (Unbond verify in
+/// `blockchain.cpp`, claim-source marshal in `archival_claim_source.cpp`)
+/// ask this instead of branching on `is_complete_tree()` independently.
+///
+/// Writes `*out_scan` to [`LastServedScan::HeldShards`] (0) or
+/// [`LastServedScan::AllShards`] (1) on `OK`. An unknown `holdings_kind` is
+/// `ERR_HOLDINGS_KIND` and does not write.
+///
+/// # Safety
+/// `out_scan` must be valid for one write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_last_served_scan(
+    holdings_kind: u8,
+    out_scan: *mut u8,
+) -> u8 {
+    if out_scan.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let kind = match HoldingsKind::from_u8(holdings_kind) {
+        Ok(k) => k,
+        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND,
+    };
+    let scan = match kind.last_served_scan() {
+        LastServedScan::HeldShards => LastServedScan::HeldShards as u8,
+        LastServedScan::AllShards => LastServedScan::AllShards as u8,
+    };
+    unsafe {
+        *out_scan = scan;
+    }
+    SHEKYL_ARCHIVAL_BOND_POST_OK
 }
 
 /// Fold the `Unbond` block-connect state transition (gate-4 §4.3 "On confirm";

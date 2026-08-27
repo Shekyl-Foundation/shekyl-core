@@ -43,6 +43,52 @@
   clear it. Terminal-reject prune (the case that produces a permanent stall)
   remains a named FOLLOWUPS item.
 
+- **The wallet can read the four `Unbond` verify operands and assemble the
+  full `Unbond` exit transaction (PR-P4).** Before this it held *none* of
+  `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`
+  or `last_settled_slash_epoch`, so an exit producer could only have
+  assembled blind. `/archival_claim_source` now marshals all four — the
+  interval-log count was the one missing from the original three, and it
+  is the operand with no absent state, which is exactly why it fell out
+  of a list — and the decoder makes every one a REQUIRED field: absence
+  is a decode error, never a default. The permissive reading is the
+  dangerous one here. `release_cooldown_elapsed` and
+  `slashes_settled_through` both treat an absent serve anchor as "clear",
+  and `0 < MAX_BOND_BAD_INTERVALS` passes, so a field that never arrived
+  would have told a user an irreversible exit was safe to take.
+  `ServeAnchor` and `SlashWatermark` keep "never served" / "nothing
+  settled" distinct from "never arrived" at the type level, and are the
+  single place either becomes an `Option` for consensus.
+  `build_unbond_vin` returns an `UnbondVin` witness whose sole
+  constructor establishes the genesis-frozen invariants, and
+  `UnbondRecordState::ensure_exit_ready` mirrors
+  `verify_unbond_bond_post`'s refusals **in the verifier's own order**, so
+  a wallet refusal and a consensus rejection cannot disagree about why.
+  Around that vin, `AssembleUnbond` assembles the whole persona-bound
+  transaction: funding from the typed `P`-space pool (cover + earnings —
+  a principal output is unrepresentable in the selector's input type),
+  the released collateral entering as a **source** (`sum(funding) +
+  bond_debit == sum(outputs) + fee`, and the side is genesis-frozen in
+  the type — `debit_term()` returns an `InputTerm`, so it cannot be
+  placed on the output side), payout split across two outputs to `P`'s
+  **own base address** — never the principal, because the composed
+  `unbond()` is the post **plus a decorrelated drain** and paying the
+  exit straight out would put the P↔principal edge in one transaction.
+  The surface-A `pqc_auths` slot is signed under **`bond_spend_pk`**, not
+  the identity key: that is the whole of GF-1 debit authorization, which
+  consensus pins in `archival_debit_auth_pin` and which is the only thing
+  stopping a compromised serving host — it holds `hybrid_sign_sk` — from
+  authorizing a collateral-draining exit. `wire_bond_post_input` gained
+  its `Unbond` arm here; the refusal it replaced said the kind "has no
+  wallet-side producer yet", which was true when written and is not now.
+  **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
+  no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
+  RESERVED. The producer exists; what remains is reachability (the
+  regtest walk), dispatch of the assembled bytes, and native
+  `/submit_transaction` admission — Unbond is still `Malformed` there
+  until the submit fact set lands. The walk lands as its own PR, so the
+  producer merging is not the event that lifts RESERVED.
+
 ### Changed
 
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
@@ -244,7 +290,9 @@
   CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
   `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
   and `get_stakes` are REJECTED (engine-side claims; archival firewall);
-  `unstake` stays RESERVED on the Unbond producer. The drain
+  `unstake` stays RESERVED — its gate is now **reachability plus the
+  regtest walk**, not the producer, which exists (`build_unbond_vin` /
+  `AssembleUnbond`) and is deliberately unreachable. The drain
   confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
   dispatch fact, not a settlement fact, and both surfaces say so.
 

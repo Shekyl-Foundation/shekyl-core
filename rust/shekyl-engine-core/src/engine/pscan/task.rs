@@ -40,12 +40,12 @@ use crate::engine::stake_engine::{
 /// transports that byte unchanged (`Other(b)`), so the comparison in
 /// [`record_unbonds`] is the consensus definition, not a parallel constant.
 ///
-/// **Genesis-dormant.** `shekyl-wire` is JoinMarket-only at genesis
-/// (`shekyl_wire::transaction::BondPostKind`), so no `Unbond` post is wire-valid
-/// yet — this retire path is forward-looking and cannot fire until `Unbond` posts
-/// are added to the wire post-genesis. The byte equivalence (wire `Other(2)` ==
-/// `BondPostKind::Unbond as u8`) is pinned by a `scan_step` test so the two crates'
-/// assignments cannot drift before the wire format freezes.
+/// Unbond is a genesis-valid archival bond-post kind (wire `Other(2)` ==
+/// [`BondPostKind::Unbond`]). This retire path fires when pscan sees a
+/// confirmed Unbond. The producer exists (`AssembleUnbond`) and is deliberately
+/// unreachable from RPC/CLI until the regtest walk; the consumer here is live
+/// and waits for that evidence. The byte equivalence is pinned by a
+/// `scan_step` test so the two crates' assignments cannot drift.
 const UNBOND_POST_KIND: u8 = BondPostKind::Unbond as u8;
 
 /// Default per-step batch size — the bounded `ScanStep` the actor offloads (DQ6).

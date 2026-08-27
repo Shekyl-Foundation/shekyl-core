@@ -19,6 +19,7 @@ use shekyl_types::{PCanonicalId, SettlementEpoch};
 use crate::engine::bond_assembly::BondAssemblyError;
 use crate::engine::drain_assembly::DrainAssemblyError;
 use crate::engine::emission_claim::EmissionClaimError;
+use crate::engine::emission_source::{ServeAnchor, SlashWatermark};
 use crate::engine::pscan::persona_scanner::PersonaScanError;
 use crate::engine::pscan::scan_step::DualExtractError;
 
@@ -361,6 +362,85 @@ impl PersonaIdentity {
 // Errors
 // ---------------------------------------------------------------------------
 
+/// Why a bonded record cannot exit yet.
+///
+/// One variant per record-state arm of `verify_unbond_bond_post`, carrying the
+/// operands the condition turned on — so a refusal can tell the user *when* it
+/// lifts, not merely that it applies. Every predicate behind these is
+/// consensus's own function, called rather than restated.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum UnbondNotReady {
+    /// The record has no bonded balance, so there is nothing to exit.
+    ///
+    /// First, because it is first at the verifier (`verify_unbond_bond_post`
+    /// checks it before the interval log). `build_unbond_vin` refuses the same
+    /// state as its own constructor invariant; this arm exists so the *reason*
+    /// a caller is given matches the reason the chain would give, which a
+    /// later-firing check would not.
+    #[error("the record has no bonded balance; there is nothing to unbond")]
+    NothingToUnbond,
+
+    /// The record's interval log is at `MAX_BOND_BAD_INTERVALS`, so the
+    /// connect's clean interval-close could not append. Verify rejects this for
+    /// the same reason: a tx that verifies but cannot connect is a
+    /// deterministic halt, so both sides enforce one bound.
+    #[error("interval log is full ({count}/{max}); the clean close cannot append")]
+    IntervalLogFull {
+        /// The record's current interval-log length.
+        count: usize,
+        /// The genesis-frozen bound.
+        max: usize,
+    },
+
+    /// The release cooldown has not elapsed past the record's last served
+    /// epoch. The grace window is sized so every epoch up to the anchor reaches
+    /// its slash deadline before a release can verify.
+    #[error(
+        "release cooldown has not elapsed: last served {last_served}, \
+         current settlement epoch {current_settlement_epoch}"
+    )]
+    CooldownNotElapsed {
+        /// The whole-record anchor the cooldown runs from, carried in the form
+        /// it was read in.
+        ///
+        /// Typed rather than a `u64` because this arm is only reachable for a
+        /// served record — `release_cooldown_elapsed(None, _)` is `true` — and
+        /// the obvious way to spend that reasoning is to unwrap the operand
+        /// here. That would put `0` in the message for both a record served at
+        /// epoch 0 and a record with no anchor at all, which is the exact
+        /// collapse [`ServeAnchor`] exists to prevent, one layer further out.
+        /// Carrying the anchor costs nothing and reports whatever was actually
+        /// read — so if the predicate's absent arm ever moves, the refusal says
+        /// `never` instead of quietly saying `0`.
+        last_served: ServeAnchor,
+        /// The daemon's settled epoch at the read view.
+        current_settlement_epoch: u64,
+    },
+
+    /// The slash scheduler has not settled every epoch through the anchor.
+    ///
+    /// Distinct from the cooldown, and not implied by it: the cooldown alone
+    /// leaves a one-block connect-ordering race open, because an `Unbond` in the
+    /// first block past the anchor's slash deadline connects *before* that
+    /// block's slash fold. `watermark` is [`SlashWatermark::NothingSettled`]
+    /// when nothing has settled at all — the fail-closed reading, and the one
+    /// case where an absent operand is restrictive rather than permissive.
+    #[error(
+        "slash settlement is pending through {last_served} \
+         (watermark: {watermark})"
+    )]
+    SlashSettlementPending {
+        /// The anchor that must be covered. Typed for the reason given on
+        /// [`Self::CooldownNotElapsed`].
+        last_served: ServeAnchor,
+        /// The scheduler's watermark. Typed as well, so `NothingSettled` names
+        /// itself instead of arriving as a `Debug`-rendered `None` — this is
+        /// the operand whose absence is *restrictive*, and a refusal that turns
+        /// on it should say so in words.
+        watermark: SlashWatermark,
+    },
+}
+
 /// Errors surfaced by the StakeEngine handle.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StakeEngineError {
@@ -437,6 +517,33 @@ pub(crate) enum StakeEngineError {
         handle_slot: PSlot,
         ticket_slot: PSlot,
     },
+
+    /// The record cannot support a full exit yet — a **producer-side refusal**,
+    /// not a construction failure.
+    ///
+    /// These are the `verify_unbond_bond_post` arms no vin construction can
+    /// satisfy, so the alternative to refusing is assembling a well-formed post
+    /// the daemon then rejects. On the exit path that alternative is worse than
+    /// it sounds: the confirmation of an `Unbond` is what fires the irreversible
+    /// persona-key wipe, so a wallet that reports success and fails at the chain
+    /// has misled the user about an operation they cannot take back. The cause
+    /// is named so the wallet can say which condition, and when it lifts.
+    #[error("record is not ready to exit: {0}")]
+    UnbondNotReady(#[from] UnbondNotReady),
+
+    /// The record facts describe a different persona than the handle does.
+    ///
+    /// A handle proves its slot is held; it says nothing about *whose* record
+    /// was read. The two arrive as independent values, so an `Unbond` that
+    /// paired one persona's balance and cooldown anchors with another's keys
+    /// would answer readiness from the wrong record and then build a post for
+    /// the right one. Not a user-facing condition — it is a caller bug, and the
+    /// message says so rather than suggesting a remedy the user does not have.
+    #[error(
+        "internal error: the bond record and the persona handle name different personas; \
+         the exit was not assembled"
+    )]
+    RecordPersonaMismatch,
 
     /// Bond construction failed after the actor validated the handle and ticket
     /// (`PlanBondPost`, S2). The persona bundle was available but

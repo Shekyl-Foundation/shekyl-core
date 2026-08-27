@@ -1639,14 +1639,32 @@ against these.
    "`P` may hold nothing" to "`P` must hold at least the challenged leaf and
    its path". Weak and cheaply outsourced, but non-zero.
 
-   **Consequence: `verify_segment_path` and `challenge_leaf_index` came OFF
-   the deletion surface and are permanent consensus admission code**
-   (`blockchain.cpp:5412` → `shekyl-ffi`'s `serve_credit.rs`), where the index
-   and `R_k` are **verifier-derived** and never read off the wire — which is
-   what makes them soundness-bearing rather than vestigial. The hygiene
-   instruction inverts with it: `path.rs` carries the `RF-D8` ruling instead
-   of a deletion annotation, and the `challenge.rs` banner was corrected
-   2026-08-23 (it had kept the fired trigger and disagreed with `path.rs`).
+   **RETRACTED 2026-08-26 — everything in this entry from "`RF-D8` ruling (i)"
+   onward is withdrawn, including the "additively on top" argument above.**
+   The retraction and its reasoning live at `ARCHIVAL_RESPONSE_FORMAT.md`
+   (grep `RF-D8` (i)); they are not restated here, because a second copy is
+   how this entry and `path.rs` came to disagree in the first place.
+
+   The short of it, and the reason this is settled rather than merely flipped
+   again: **the argument is structural, not evidential.** "Additively on top"
+   was true of the *bytes* and false of the *information* — the
+   countersignature preimage names the challenged leaf, so `P` cannot sign it
+   without learning that this request is a challenge and every other request
+   is not. That is precisely what **§9's "the test IS a read" exists to
+   prevent**, and it is decided by this document's own ruling rather than by
+   weighing how much the opening proves. Both earlier passes weighed the
+   evidence, which is a genuinely balanced question ("a little, weakly"), and
+   so reached opposite answers.
+
+   **Consequence, inverted: `verify_segment_path` and `challenge_leaf_index`
+   go BACK on the deletion surface**, and `ARCHIVAL_CREDIT_WIRE.md` §2 —
+   which never stopped listing them — is correct as written. The hygiene
+   instruction inverts with it: `path.rs`, `wire.rs` and the `challenge.rs`
+   banner now carry deletion-bound notices pointing at the retraction rather
+   than restating the kept-opening reasoning. `PC-D3`'s block-bound leaf index
+   hardened a function that deletes; it was the explicitly-labelled interim
+   mitigation for `TJ-1` and remains load-bearing until the cutover removes
+   the whole cluster.
 
    **Acting on the struck text would delete live consensus code.** That is why
    it is struck in place — a reader who has already followed it needs to find

@@ -9,42 +9,34 @@
 //! matching the layer discipline of `shekyl-curve-tree::AssembledPath` but
 //! terminating at the segment root (gate-2 §5.1).
 //!
-//! # Mechanism status (2026-08-11): this is the RETIRED sampled-leaf mode
+//! # Mechanism status: DELETION-BOUND — `RF-D8` (i) RETRACTED 2026-08-26
 //!
-//! **The sampled-leaf opening, kept by the format round as SUPPLEMENTARY
-//! consensus-checkable evidence.** An earlier version of this header said the
-//! module was superseded wholesale by derived assignment and would delete with
-//! the format round. The format round (`ARCHIVAL_RESPONSE_FORMAT.md`, RF-D8,
-//! ruled 2026-08-20) examined that and **kept the opening**, for a reason the
-//! earlier note did not weigh:
+//! **This module deletes with the credit-wire cutover.** `RF-D8` (i) kept the
+//! sampled-leaf opening as supplementary consensus-checkable evidence, on the
+//! grounds that it is the one element consensus verifies independently of the
+//! witness. **That ruling is retracted.** The argument, the reason two passes
+//! reached opposite conclusions, and the consequences are recorded ONCE at
+//! `ARCHIVAL_RESPONSE_FORMAT.md` — **grep `RF-D8` (i)**, not a section number.
 //!
-//! Every other element of a pass record depends on witness honesty. The
-//! witness claims it fetched the whole shard and recomputed `R_k`; nothing on
-//! chain checks that claim, so a witness colluding with `P` can manufacture a
-//! pass with `P` holding zero bytes. **The opening is the one element
-//! consensus verifies independently of the witness**: `P` must produce a valid
-//! path for a leaf index it cannot choose, against a root it cannot supply
-//! (both verifier-derived), and every node checks it at admission. It raises
-//! the floor from "P may hold nothing" to "P must hold at least the challenged
-//! leaf and its path" -- weak, cheaply outsourced, but non-zero, and the only
-//! component that survives total witness collusion. That is what
-//! ~1,920 B/record buys.
+//! The one-line reason, so this header is not a second copy that can drift out
+//! of step with the ruling: the countersignature preimage **names the
+//! challenged leaf**, so `P` cannot sign it without learning that this request
+//! is a challenge and every other request is not — defeating the
+//! indistinguishability that `ARCHIVAL_CHALLENGE_MECHANISM.md` §9 ("the test
+//! IS a read") exists to provide. The retracted reasoning called the opening
+//! "additive"; that was true of the bytes and false of the information.
 //!
-//! Whole-shard fetching by the witness (`shekyl_curve_tree::recompute_segment_r_k`)
-//! remains the **mechanism**; the standing finding that sampled-leaf is
-//! insufficient as a *standalone* mechanism stands, and says nothing against
-//! an opening carried additively on top. (That finding was cited here as
-//! `ARCHIVAL_CHALLENGE_MECHANISM.md` §5.6 until 2026-08-23; **that document
-//! has no §5.6** and the anchor resolved nowhere, so the citation is dropped
-//! rather than repaired and the substance restated above. The correction is
-//! recorded in `ARCHIVAL_CHALLENGE_MECHANISM.md` — **grep `RF-D8` to find
-//! it**, not a section number. A rule-94 disposition ID is stable by
-//! construction, since the rule forbids renaming them; a section number is
-//! stable only until someone inserts a section, which is precisely how §5.6
-//! became unreachable. Replacing one drifting anchor with another would have
-//! reproduced the defect at a later date.) Accordingly
-//! [`crate::challenge::challenge_leaf_index`] comes **off** §2's deletion
-//! surface: it is the verifier-side derivation the opening is checked against.
+//! Accordingly [`crate::challenge::challenge_leaf_index`] is **on** the
+//! deletion surface after all — `ARCHIVAL_CREDIT_WIRE.md` §2 was correct as
+//! written, and the note that removed it from that surface is retracted with
+//! the ruling that motivated it. Nothing here is deleted yet: the removal is
+//! part of the cutover, and until it lands this module is still the live
+//! admission path.
+//!
+//! (The §5.6 anchor repair recorded here on 2026-08-23 stands as method — a
+//! rule-94 disposition ID is stable by construction, a section number is
+//! stable only until someone inserts a section — which is why the pointer
+//! above names `RF-D8` (i) rather than a §.)
 //!
 //! **Everything the verifier can derive, it derives** (RF-D6/RF-D8): `R_k`
 //! from its frozen-segment record, the leaf index from `challenge_leaf_index`,

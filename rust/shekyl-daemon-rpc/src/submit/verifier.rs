@@ -59,14 +59,15 @@
 //!   slash-settlement watermark, interval logs, the settlement epoch —
 //!   and each fact's Phase-D re-check/race classification are not yet
 //!   specified in `DAEMON_SUBMIT_VERDICT.md` §8.7.1 (which pins the
-//!   JoinMarket BP rows only), and no wallet constructs these kinds yet
-//!   (`shekyl-archival-bond-builder` is JoinMarket-only). Refused
-//!   `Malformed` in [`verify_bond_post`]. Reopening criterion (rule 21):
-//!   a wallet construction leg for a non-JoinMarket kind lands, or the
-//!   §8.7.1 matrix grows rows for it — extend [`SubmitFacts`] with that
-//!   kind's fact set (with Phase-D re-check semantics) and dispatch it
-//!   here, exactly as the C++ oracle's `archival_bond_post_kind` dispatch
-//!   does.
+//!   JoinMarket BP rows only). Refused `Malformed` in [`verify_bond_post`].
+//!   **Reopening criterion (rule 21) has fired for Unbond:**
+//!   `shekyl-archival-bond-builder::build_unbond_vin` and `AssembleUnbond`
+//!   are the wallet construction leg. What remains is the *submit* surface
+//!   — extend [`SubmitFacts`] with Unbond's fact set (Phase-D re-check
+//!   semantics) and dispatch `verify_unbond_bond_post` here, the same
+//!   function the C++ block path already calls. That is a different
+//!   validation surface from the producer (rule 19) and is not guessed
+//!   into this battery. HoldingsUpdate / Rebond still have no producer.
 //!
 //! Until a criterion fires, these arms refuse loudly-but-safely
 //! (`Malformed`, the §7.6 non-panicking posture) rather than carrying an

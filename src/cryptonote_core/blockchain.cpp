@@ -3823,6 +3823,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           if (std::holds_alternative<txin_to_key>(tx.vin[i]))
             spend_indices.push_back(i);
         }
+        // The funding-input floor is decided HERE, in C++, and it is the last
+        // copy of a rule Rust already owns: `bond_post_funding_floor_met`
+        // (`shekyl-archival-retention::bond_post`), which the wallet-side
+        // producer calls so the two sides state one rule. Marshaling
+        // `spend_indices.size()` to that predicate — the standing
+        // decision-placement pin, as `shekyl_archival_bond_post_block_unique`
+        // below — is what deletes this copy; do not repair a divergence by
+        // editing the condition here.
         if (spend_indices.empty())
         {
           MERROR_VER("Archival bond-post tx requires at least one txin_to_key funding input");
@@ -4898,16 +4906,19 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
     // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
-    // held shard; never-served shards omitted — a CompleteTree record stores
-    // no shard list, so its anchors come from the all-shards P-prefix scan
-    // instead of folding vacuously from an empty list) + the slash
-    // scheduler's settled watermark (the SLASH_SETTLEMENT_PENDING gate; u64
-    // max = no epoch settled yet). The fold to the whole-record anchor and
-    // every verdict stay Rust-side.
+    // held shard; never-served shards omitted) + the slash scheduler's
+    // settled watermark. The kind→scan decision is Rust
+    // (`shekyl_archival_last_served_scan`, exhaustive on HoldingsKind). This
+    // site only marshals the discriminant onto the matching DB accessor. The
+    // fold and every verdict stay Rust-side.
     std::vector<uint64_t> last_served;
     if (have_record)
     {
-      last_served = record.is_complete_tree()
+      uint8_t scan = 0;
+      if (shekyl_archival_last_served_scan(record.holdings_kind, &scan)
+          != SHEKYL_ARCHIVAL_BOND_POST_OK)
+        return false;
+      last_served = (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
         ? m_db->archival_bond_all_last_served_epochs(bond.p_canonical_id)
         : m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
             record.held_shard_ids);

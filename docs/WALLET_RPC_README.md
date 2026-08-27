@@ -43,12 +43,16 @@ builds under a read lock like `build_pending_tx` (one funding build never
 stalls the read RPCs), and `get_drain_balance` reports the active
 persona's own drainable pool — the set a `drain` can actually spend.
 
-RESERVED methods (`unstake` — gated on the Unbond producer — and
-`match_transfer_to_request` — gated on an Engine match method) remain
-Engine-gated; the claim-era names `claim` and `get_stakes` are REJECTED,
-not pending (emission claims are engine-side; `principal_stakes()` is
-RPC-forbidden as the P↔principal edge). See the OpenAPI header registry
-and `docs/FOLLOWUPS.md`.
+RESERVED methods remain Engine-gated: `unstake` and
+`match_transfer_to_request` (the latter gated on an Engine match
+method). `unstake` is no longer gated on a *missing producer* — PR-P4
+built the `Unbond` producer. Remaining gates: reachability (no RPC/CLI
+until the regtest walk), dispatch of the assembled bytes, and native
+`/submit_transaction` still refusing Unbond (`BondPostKind::Other`)
+until the Unbond submit fact set lands. The claim-era names `claim`
+and `get_stakes` are REJECTED, not pending (emission claims are
+engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
+edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.
 
 Honest `OUTGOING` transfer history landed with PR-SJ-2 (send-journal
 projection), closing the Phase 4b `get_transfers` OUTGOING-filter

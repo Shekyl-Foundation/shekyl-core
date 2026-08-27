@@ -92,6 +92,10 @@ struct ClaimSourceFixture
     shekyl::db::ArchivalBondValue bond{};
     EXPECT_TRUE(bdb().get_archival_bond_value(p1, bond));
     bond.claimed_settlement_epochs = {1};
+    // A NON-EMPTY interval log, so `bad_interval_count`'s assertion has an
+    // axis: against an empty log the marshaled count is 0, which is also what
+    // an unwritten field reads as, and the check could not tell them apart.
+    bond.bad_intervals = {{2, 3}, {5, 6}};
     bdb().put_archival_bond_value(p1, bond);
 
     db.fake_height = kTipHeight;
@@ -109,6 +113,14 @@ using cmd = COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE;
 // Watch item 1 (§7.1): every response field is a field-for-field copy of
 // the single landed gather on the same DB state — the marshal helper owns
 // no second gather path and reconstructs no operand.
+//
+// COVERS: what the marshaler *computes* — whether each field equals the value
+// its landed source produces on this DB state. This is the SEMANTICS test, and
+// it is the one that catches a mis-derived or unresolved operand (the storage
+// sentinel shipped raw fails here).
+// DOES NOT COVER: whether those values survive serialization. That is
+// `wire_roundtrip_sentinel_and_omit_empty`, below, and the two are not
+// substitutes — see its header for why.
 TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
 {
   ClaimSourceFixture fx;
@@ -129,6 +141,43 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
   EXPECT_EQ(res.holdings_kind, bond.holdings_kind);
   EXPECT_EQ(res.held_shard_ids, bond.held_shard_ids);
   EXPECT_EQ(res.claimed_settlement_epochs, std::vector<uint64_t>{1});
+
+  // The `Unbond` exit operands: same source, same fold, no second derivation.
+  EXPECT_EQ(res.bonded_total_atomic, bond.bonded_total_atomic);
+  // The interval-log length, from the record — the count only. The verify arm
+  // marshals `record.bad_intervals.size()`; this must be the same number.
+  EXPECT_EQ(res.bad_interval_count, bond.bad_intervals.size());
+  // The cooldown anchor is whatever the verify arm's gather + the exported
+  // Rust fold produce on this state — recomputed here through the SAME two
+  // calls rather than restated, so the assertion cannot drift from the
+  // marshaler by agreeing with a copy of its logic.
+  //
+  // DO NOT replace this branch with `shekyl_archival_last_served_scan`.
+  // That FFI is the subject's helper: an oracle that calls it agrees by
+  // construction and detects nothing. The restatement is the mechanism.
+  const std::vector<uint64_t> served = bond.is_complete_tree()
+    ? fx.bdb().archival_bond_all_last_served_epochs(fx.p1)
+    : fx.bdb().archival_bond_last_served_epochs(fx.p1, bond.held_shard_ids);
+  uint8_t want_present = 0;
+  uint64_t want_epoch = 0;
+  ASSERT_EQ(shekyl_archival_whole_record_last_served(
+              served.empty() ? nullptr : served.data(),
+              served.size(),
+              &want_present,
+              &want_epoch),
+    SHEKYL_ARCHIVAL_BOND_POST_OK);
+  EXPECT_EQ(res.has_last_served_epoch, want_present != 0);
+  EXPECT_EQ(res.last_served_epoch, want_epoch);
+
+  // The scheduler's storage sentinel is resolved here, never shipped raw: a
+  // consumer must not have to know that u64 max means "nothing settled".
+  const uint64_t watermark = fx.bdb().get_archival_last_slash_epoch();
+  EXPECT_EQ(res.has_last_settled_slash_epoch, watermark != UINT64_MAX);
+  if (res.has_last_settled_slash_epoch)
+    EXPECT_EQ(res.last_settled_slash_epoch, watermark);
+  else
+    EXPECT_EQ(res.last_settled_slash_epoch, 0u)
+      << "the sentinel must not leak through as a value";
 
   // Part B: the full window, ascending, one entry per epoch in
   // [claim_window_floor(settled), settled − 1].
@@ -200,6 +249,57 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
 // Watch item 2 (§7.2): the window shape is identical for a bonded,
 // credited claimant and a p_id with no bond record at all — nothing in
 // the response layout is claimable-set-derived.
+/// A complete-tree record's cooldown anchor must come from the all-shards scan,
+/// not from folding its (necessarily empty) held-shard list.
+///
+/// This is the one divergence the twin comments in `archival_claim_source.cpp`
+/// and `blockchain.cpp` warn about, and until this test existed the suite could
+/// not see it: deleting the `is_complete_tree()` branch from the marshaler left
+/// every other test in this file green. A complete-tree record stores NO shard
+/// list, so the compact accessor returns empty and the fold reports "never
+/// served" — which is the PERMISSIVE branch of both `release_cooldown_elapsed`
+/// and `slashes_settled_through`, for a record that has served and is still
+/// cooling down. The wallet would then report an irreversible exit as ready.
+TEST(archival_claim_source_rpc, complete_tree_anchor_comes_from_the_all_shards_scan)
+{
+  ClaimSourceFixture fx;
+
+  // Flip p1 to a complete-tree record, keeping the serve credit the KAT seeded
+  // for it. Complete-tree records carry no held-shard list by construction,
+  // which is exactly what makes the compact accessor the wrong source here.
+  shekyl::db::ArchivalBondValue bond{};
+  ASSERT_TRUE(fx.bdb().get_archival_bond_value(fx.p1, bond));
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
+  // Both lists, together: the encoder requires them equal in length, and a
+  // complete-tree record carries neither.
+  bond.held_shard_ids.clear();
+  bond.shard_add_epochs.clear();
+  fx.bdb().put_archival_bond_value(fx.p1, bond);
+
+  // Precondition, asserted rather than assumed: the two accessors must actually
+  // disagree on this record, or the test would pass against the wrong branch.
+  const std::vector<uint64_t> via_all =
+    fx.bdb().archival_bond_all_last_served_epochs(fx.p1);
+  const std::vector<uint64_t> via_held =
+    fx.bdb().archival_bond_last_served_epochs(fx.p1, bond.held_shard_ids);
+  ASSERT_FALSE(via_all.empty()) << "the KAT's serve credit must be visible to the scan";
+  ASSERT_TRUE(via_held.empty()) << "a complete-tree record holds no shard list";
+
+  cmd::response res{};
+  rpc::fill_archival_emission_claim_source(fx.db, fx.p1, res);
+
+  uint8_t want_present = 0;
+  uint64_t want_epoch = 0;
+  ASSERT_EQ(shekyl_archival_whole_record_last_served(
+              via_all.data(), via_all.size(), &want_present, &want_epoch),
+    SHEKYL_ARCHIVAL_BOND_POST_OK);
+  ASSERT_EQ(want_present, 1);
+
+  EXPECT_TRUE(res.has_last_served_epoch)
+    << "a served complete-tree record must not report as never-served";
+  EXPECT_EQ(res.last_served_epoch, want_epoch);
+}
+
 TEST(archival_claim_source_rpc, window_is_unconditional_and_cause_blind)
 {
   ClaimSourceFixture fx;
@@ -212,6 +312,15 @@ TEST(archival_claim_source_rpc, window_is_unconditional_and_cause_blind)
   EXPECT_FALSE(no_bond.has_bond_record);
   EXPECT_TRUE(no_bond.held_shard_ids.empty());
   EXPECT_TRUE(no_bond.claimed_settlement_epochs.empty());
+  // No record ⇒ no exit operands, and critically the FLAGS stay false. A
+  // false flag with a zero value is "absent"; a true flag with a zero value
+  // would assert a serve at epoch 0 — the earliest possible anchor, which
+  // reads as maximally cooled-down.
+  EXPECT_EQ(no_bond.bonded_total_atomic, 0u);
+  EXPECT_FALSE(no_bond.has_last_served_epoch);
+  EXPECT_EQ(no_bond.last_served_epoch, 0u);
+  EXPECT_FALSE(no_bond.has_last_settled_slash_epoch);
+  EXPECT_EQ(no_bond.last_settled_slash_epoch, 0u);
 
   // Same tip, same settled epoch, same window: entry count and epoch
   // sequence are byte-identical across claimant states.
@@ -232,6 +341,19 @@ TEST(archival_claim_source_rpc, window_is_unconditional_and_cause_blind)
 // Wire contract: epee KV JSON round-trip, the u64::MAX sentinel on the
 // wire, and epee's omit-empty-container behavior (the Rust decode's
 // absent-equals-empty rule pins against this).
+//
+// COVERS: TRANSPORT FIDELITY — that what the marshaler produced arrives
+// unchanged, fields and presence flags alike. The flags matter here
+// specifically: they are the only thing separating "the daemon says nothing has
+// served" from "the field did not arrive", so a transport that dropped one
+// would merge a permissive fact with a fail-closed one.
+// DOES NOT COVER: whether the value was right to begin with. This test compares
+// the decoded response to the SAME response it encoded, so a wrong value —
+// including a storage sentinel shipped raw instead of resolved — round-trips
+// perfectly and passes. That is correct for a transport test and a blind spot
+// for a semantics one; `fill_matches_single_gather_field_for_field` is the
+// other half. Observed, not assumed: biting the sentinel resolution failed that
+// test and left this one green.
 TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
 {
   ClaimSourceFixture fx;
@@ -272,6 +394,34 @@ TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
   EXPECT_EQ(back.holdings_kind, res.holdings_kind);
   EXPECT_EQ(back.held_shard_ids, res.held_shard_ids);
   EXPECT_EQ(back.claimed_settlement_epochs, res.claimed_settlement_epochs);
+  // The exit operands, flags included. The flags are the whole reason the
+  // wallet can tell "the daemon says nothing has served" from "the field did
+  // not arrive" — the first is permissive at consensus, the second must be
+  // fail-closed — so a transport that dropped them would silently merge the
+  // two. Pinned on the wire, not just in the struct.
+  EXPECT_EQ(back.bonded_total_atomic, res.bonded_total_atomic);
+  // The interval count carries no flag — an empty log is a length, not a
+  // silence — so the wire is the only thing separating "the log is empty" from
+  // "the field was dropped". Both would decode as 0, and 0 is the PERMISSIVE
+  // reading of the `IntervalLogFull` gate, so the round-trip has to pin it.
+  EXPECT_NE(res.bad_interval_count, 0u) << "the fixture must carry a non-empty log";
+  EXPECT_EQ(back.bad_interval_count, res.bad_interval_count);
+  // Presence on the wire is pinned by NAME, not by the round-trip below,
+  // because the round-trip cannot see a dropped flag whose fixture value is
+  // `false`: this fixture sets no slash watermark, so
+  // `res.has_last_settled_slash_epoch` is false, and a value-initialized
+  // `back{}` is false too — the equality then holds precisely when the member
+  // is missing, which is the state it exists to catch. The Rust decoder
+  // rejects such a response as malformed, so the C++ side would pass while the
+  // consumer fails. Same guard the interval count gets from its `EXPECT_NE`
+  // above, in the form that works for a bool: assert the member is there
+  // regardless of its value.
+  EXPECT_EQ(count("\"has_last_served_epoch\""), 1u) << json;
+  EXPECT_EQ(count("\"has_last_settled_slash_epoch\""), 1u) << json;
+  EXPECT_EQ(back.has_last_served_epoch, res.has_last_served_epoch);
+  EXPECT_EQ(back.last_served_epoch, res.last_served_epoch);
+  EXPECT_EQ(back.has_last_settled_slash_epoch, res.has_last_settled_slash_epoch);
+  EXPECT_EQ(back.last_settled_slash_epoch, res.last_settled_slash_epoch);
   ASSERT_EQ(back.epochs.size(), res.epochs.size());
   const uint64_t rt_floor = shekyl_archival_claim_window_floor(res.current_settled_epoch);
   ASSERT_GE(ClaimSourceFixture::kSettlementEpoch, rt_floor);
