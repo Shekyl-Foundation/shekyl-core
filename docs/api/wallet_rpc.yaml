@@ -720,7 +720,8 @@ components:
                                           inputs, never settles, and holds this
                                           refusal until that half lands. The
                                           stall alarm names such a drain in the
-                                          log rather than leaving it silent. Also the refusal when a
+                                          log rather than leaving it silent.
+                                          Also the refusal when a
                                           concurrent same-persona post raced
                                           this drain's inputs — that arm is
                                           transient; retry. The two arms
