@@ -2521,6 +2521,41 @@ sustainability is unaffected by the recalibration.
   still carry the daemon but no wallet. WP-W5's flip now needs one green
   scouting run including the engine-file lane.
 
+  **UPDATE 2026-08-27 — rule-82 forward item: `ERROR_ACCESS_DENIED` at the
+  wallet-pipe dial is cause-collapsed, and disambiguating it is a design
+  question, not a string swap.** Surfaced by asking whether a user may RDP
+  into their own machine to use their wallet (yes, by construction — the
+  self-hosted pair is born in one logon session and shares a logon SID; the
+  probe sheet §3.1 now says so). But the *refusal* case conflates: at
+  `CreateFileW` on the pipe, at least three distinct mechanisms surface as
+  the same os error 5, all landing in the undifferentiated
+  `DialError::Open(io::Error)` arm —
+  (1) **cross-session**: the caller's token lacks the logon SID that is the
+  DACL's only ACE (the P-13/P-17 subject);
+  (2) **same-session, Low/AppContainer**: the DACL admits the caller but the
+  `(ML;;NW;;;ME)` label blocks write-up (measured — P-12);
+  (3) **remote caller**: refused by `PIPE_REJECT_REMOTE_CLIENTS` before any
+  descriptor evaluation (documented as `ACCESS_DENIED`; **not yet observed** —
+  P-17 row (c) is its first observation).
+  Windows does not tell the caller which fired, and the caller cannot read the
+  pipe's descriptor to find out: the DACL grants `GA` to the logon SID alone,
+  so a cross-session caller lacks `READ_CONTROL` too — the open that would
+  answer the question is the open that just failed. **Partial client-side
+  disambiguation exists and is the avenue for the design round:** the dial
+  path can read its *own* integrity level and logon SID; at Medium-or-above
+  the label cannot be what refused it, so the message can say "a wallet pipe
+  exists, but this logon session's identity is not admitted — is the wallet
+  running in another session (console vs. remote)? Close it there or use it
+  there", and below Medium it can name the sandbox instead. The edges stay
+  disjunctive — the platform does not license a confident sentence, and rule
+  82 wants a guiding one, not a guessing one. **Deliberately not folded into
+  the P-17 probe PR** (mechanical vs. behavioural; the probe's rows are what
+  make the observable differences known before any message claims them).
+  **Close criterion:** a ruling on the disambiguation ladder, the
+  `DialError` variant(s) it implies, and the CLI text — landing with or after
+  P-17's results, which establish what each cause actually looks like from
+  the dial side.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and
