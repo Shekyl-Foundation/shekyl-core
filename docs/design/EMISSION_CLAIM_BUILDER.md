@@ -1146,7 +1146,7 @@ outcomes, recorded here because each changed a §8 surface:
    fee gindexes join the shared `reserved_gindexes` union (bond sweeps
    and claim sweeps read one exclusion set) and one-live-claim-per-
    persona is the in-flight epoch dedup (`ClaimPending` refusal;
-   `push_claim` under the write lock is the authoritative
+   `seal_claim` under the write lock is the authoritative
    serialization). Retirement + byte-identical resubmit = the claim
    dispatch driver, the WI-3-sibling slice (named, next).
 3. **The seam no longer rotates.** The claimant id derives from a

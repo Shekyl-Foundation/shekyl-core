@@ -285,7 +285,7 @@ where
             .ok_or(DrainToPrincipalError::NoActivePersona)?;
 
         // Advisory copy of the one-live-drain read, BEFORE the daemon fee
-        // round trip. The AUTHORITATIVE serialization stays `push_drain`
+        // round trip. The AUTHORITATIVE serialization stays `seal_drain`
         // under the write lock at the dispatch seam's seal; this read is
         // sound by that seam's own argument for its pre-assembly copy ("this
         // read only saves the wasted proof work") — here it saves the
@@ -520,12 +520,14 @@ mod tests {
     /// fix for the sealed-wallet-with-flaky-daemon misdiagnosis (the truthful
     /// refusal is the seal, not the daemon), and this is the dispatch-layer
     /// `-29511` path's first behavioral coverage — the seal is produced
-    /// through the same `push_drain` store mutation production seals with,
+    /// through the same `seal_drain` store mutation production seals with,
     /// not a hand-built error value.
     #[tokio::test(flavor = "multi_thread")]
     async fn sealed_live_drain_refuses_in_flight_before_the_fee_quote() {
         use crate::engine::pscan::start::pending_post_store_for_engine;
-        use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState};
+        use shekyl_engine_state::pending_post_block::{
+            PendingDrain, PendingPostState, SealAdmission,
+        };
         use shekyl_types::PSlot;
 
         let (_tmp, engine) = staker_engine(3, SEED_MULT);
@@ -548,13 +550,16 @@ mod tests {
         let store = pending_post_store_for_engine(engine.clone(), write_lock);
         let sealed = store
             .mutate(move |block| {
-                let ok = block.push_drain(PendingDrain {
-                    persona,
-                    tx_bytes: vec![0xd7; 32],
-                    funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
-                    state: PendingPostState::Pending,
-                });
-                (ok, ok)
+                let admitted = block.seal_drain(
+                    PendingDrain {
+                        persona,
+                        tx_bytes: vec![0xd7; 32],
+                        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
+                        state: PendingPostState::Pending,
+                    },
+                    shekyl_types::BlockHeight::from_raw(1),
+                ) == SealAdmission::Admit;
+                (admitted, admitted)
             })
             .await
             .expect("seal a live drain");

@@ -21,7 +21,7 @@ use shekyl_curve_tree::{
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState};
+use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
@@ -445,19 +445,6 @@ pub(crate) async fn anchored_reference_block(
     })
 }
 
-/// What the one locked bond-post seal pass decided — the drain and claim seams'
-/// outcome shape, so all three refuse for the same reasons under the same lock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PostSealOutcome {
-    /// The post record was sealed.
-    Sealed,
-    /// A live post already exists for this persona (persona dedup).
-    PersonaLive,
-    /// A concurrent claim or drain reserved one of this post's funding inputs
-    /// since the pre-assembly snapshot; nothing was sealed.
-    InputRaced,
-}
-
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -517,7 +504,7 @@ where
         // optimistic fast-fail only — it keys on `p_slot` (the sole identity
         // available before assembly; 1:1 with the persona canonical id, which
         // is not derivable until the tx is bound below). The *authoritative*
-        // one-post-per-persona serialization is `push_post` under the write
+        // one-post-per-persona serialization is `seal_post` under the write
         // lock (see the final seal), which rejects atomically by persona even
         // if two same-persona assembles race past this gate. Reopening
         // criterion (rule 21): if the RPC entry ever admits concurrent
@@ -650,14 +637,14 @@ where
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let outcome = store
+        let admission = store
             .mutate(|block| {
                 // Seal-time reservation re-check under the write lock — the
                 // drain seam's guard, which this path was missing. The
                 // `reserved` snapshot read before assembly is stale: a
                 // same-persona claim or drain assembled concurrently may have
-                // reserved one of these funding inputs since, and `push_post`'s
-                // persona dedup does not see a cross-kind gindex collision.
+                // reserved one of these funding inputs since, and persona
+                // dedup alone does not see a cross-kind gindex collision.
                 //
                 // It matters beyond the doomed record it avoids.
                 // `PendingPostBlock::remove_settled` retires a claim or drain
@@ -670,29 +657,15 @@ where
                 // not itself retired that way (its evidence is the pscan's own
                 // bond-post match), but it can falsify someone else's, so the
                 // guard belongs here as much as on the paths it protects.
-                let raced = {
-                    let reserved = block.reserved_gindexes();
-                    sealed.funding_gindexes.iter().any(|g| reserved.contains(g))
-                };
-                if raced {
-                    return (false, PostSealOutcome::InputRaced);
-                }
-                let ok = block.push_post(sealed);
-                (
-                    ok,
-                    if ok {
-                        PostSealOutcome::Sealed
-                    } else {
-                        PostSealOutcome::PersonaLive
-                    },
-                )
+                let admission = block.seal_post(sealed);
+                (admission == SealAdmission::Admit, admission)
             })
             .await
             .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
-        match outcome {
-            PostSealOutcome::Sealed => {}
-            PostSealOutcome::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
-            PostSealOutcome::InputRaced => return Err(BondAssemblyError::InputRaced.into()),
+        match admission {
+            SealAdmission::Admit => {}
+            SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
+            SealAdmission::InputRaced => return Err(BondAssemblyError::InputRaced.into()),
         }
 
         Ok(assembled)

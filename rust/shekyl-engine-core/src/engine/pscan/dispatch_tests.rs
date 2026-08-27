@@ -741,27 +741,44 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
 /// retires BOTH — reopening a gate whose transaction never landed, which is the
 /// one outcome the seal exists to prevent.
 ///
-/// Persona dedup does not give that: `push_post` / `push_claim` / `push_drain`
-/// each refuse a second record *for the same persona and kind*, and see nothing
-/// about a cross-kind gindex collision. The pre-assembly `reserved_gindexes`
+/// Persona dedup does not give that: it refuses a second record *for the same
+/// persona and kind*, and sees nothing about a cross-kind gindex collision. The pre-assembly `reserved_gindexes`
 /// snapshot does not give it either — it is stale by the time the seal runs.
 /// Only a re-check inside the same locked mutate does.
 ///
-/// The drain seam had it; the claim and bond-post seams did not, and were added
-/// in the same round as this retire (review #572) precisely because this
-/// method's safety argument names all three. A source pin rather than a
-/// behavioural test because these seams are engine-wide pipelines: the thing
-/// worth catching is a fourth writer sealing without the guard, and that is a
-/// structural fact.
+/// The drain seam had an overlap check but ran it BEFORE persona dedup; the
+/// claim and bond-post seams had none. Review #572 replaced all three with one
+/// shared decision, `PendingPostBlock::classify_seal`, reached only through the
+/// `seal_post` / `seal_claim` / `seal_drain` trio that also performs the insert
+/// — so the ordering and the overlap rule exist once and cannot drift, and a
+/// seam cannot classify without sealing or seal without classifying.
+///
+/// This pin is deliberately only the structural half: it asserts every writer
+/// routes through that trio. What the decision *does* — persona dedup
+/// outranking overlap, cross-kind collisions classified as raced, one-live being
+/// per kind — is covered behaviourally beside `classify_seal` itself, where a
+/// wrong answer can be observed rather than merely a missing call. Splitting it
+/// that way is what makes the pin honest: a grep can only ever prove the call
+/// site exists, which is why the seal it names is the one that cannot be
+/// performed wrongly.
 #[test]
 fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
     // Production halves only — a doc-comment mention must not satisfy the pin.
-    for (name, src) in [
-        ("drain_dispatch.rs", include_str!("../drain_dispatch.rs")),
-        ("claim_dispatch.rs", include_str!("../claim_dispatch.rs")),
+    for (name, src, seal) in [
+        (
+            "drain_dispatch.rs",
+            include_str!("../drain_dispatch.rs"),
+            ".seal_drain(",
+        ),
+        (
+            "claim_dispatch.rs",
+            include_str!("../claim_dispatch.rs"),
+            ".seal_claim(",
+        ),
         (
             "bond_orchestrator.rs",
             include_str!("../bond_orchestrator.rs"),
+            ".seal_post(",
         ),
     ] {
         let production = src
@@ -774,11 +791,20 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            code.contains("let reserved = block.reserved_gindexes();"),
-            "{name} seals a reservation without re-reading the live union under \
-             the write lock — `remove_settled` then cannot tell which of two \
-             records sharing a gindex actually confirmed"
+            code.contains(seal),
+            "{name} seals a reservation without routing through `{seal}` — \
+             `remove_settled` then cannot tell which of two records sharing a \
+             gindex actually confirmed, and the persona-vs-overlap ordering is \
+             free to drift in this seam"
         );
+        // The insert primitives bypass the classifier; only the trio may seal.
+        for bare in [".push_post(", ".push_claim(", ".push_drain("] {
+            assert!(
+                !code.contains(bare),
+                "{name} inserts a pending record with `{bare}`, which skips the \
+                 shared seal decision"
+            );
+        }
     }
 }
 

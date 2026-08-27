@@ -1716,7 +1716,7 @@ async fn stake_persona_to_confirmed_bond(
     eprintln!("pscan discovered {pre_post_discovered} persona funding output(s)");
 
     // The stake entry (both arms end at the same `.wallet.pending` seal —
-    // `assemble_bond_post`'s push_post — so everything downstream is
+    // `assemble_bond_post`'s seal_post — so everything downstream is
     // shared). The funding must be spendable at the anchored REFERENCE
     // block (tip − REF_ANCHOR_AGE), which lags tip maturity, so each arm
     // retries its typed not-ready refusals while mining.

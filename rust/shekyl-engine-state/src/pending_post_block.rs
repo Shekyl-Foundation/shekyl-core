@@ -230,6 +230,39 @@ impl std::fmt::Debug for PendingDrain {
         f.write_str("PendingDrain(<redacted pending-drain>)")
     }
 }
+
+/// Which pending record a seal attempt is for. Private: the kind is chosen by
+/// the `seal_*` method the caller picks, never passed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingKind {
+    /// A bond post.
+    Post,
+    /// An emission claim.
+    Claim,
+    /// A `P`→principal drain.
+    Drain,
+}
+
+/// What [`PendingPostBlock::classify_seal`] decided about a seal attempt.
+///
+/// The two refusals carry **contradictory remedies**, which is the whole reason
+/// they are separate and the whole reason their order matters:
+/// [`Self::PersonaLive`] means *wait* — retrying cannot help until the live
+/// record retires — while [`Self::InputRaced`] means *retry*, because the next
+/// assembly reads the current reservation set and selects around the taken
+/// input. Handing a caller the wrong one sends it into a loop or a stall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealAdmission {
+    /// No live record of this kind for this persona, and no gindex overlap.
+    Admit,
+    /// This persona already holds a live record of this kind (the authoritative
+    /// one-per-persona-per-kind refusal).
+    PersonaLive,
+    /// Another live record — of any kind — already reserves one of these
+    /// gindexes.
+    InputRaced,
+}
+
 /// What [`PendingPostBlock::remove_settled`] retired, split by kind.
 ///
 /// Two vectors rather than one merged list: the caller logs and books them
@@ -562,6 +595,106 @@ impl PendingPostBlock {
         retired
     }
 
+    /// Classify a seal attempt **under the write lock**, in the one order that
+    /// gives each refusal its documented remedy.
+    ///
+    /// Persona dedup is checked FIRST and is authoritative. Two same-persona
+    /// assemblies select the same deterministic inputs, so the second would
+    /// *also* trip the gindex overlap — and reporting that as `InputRaced`
+    /// tells the caller to retry when the truth is "wait for the live record to
+    /// retire". Retrying cannot help; the remedies are opposites. Overlap is
+    /// therefore only ever reported for what it actually means: a **cross-kind**
+    /// collision, where some other kind of record took the input.
+    ///
+    /// Both checks live here rather than at the three seams because all three
+    /// need the identical decision and had been hand-rolling it — the drain seam
+    /// with this same inverted order, and the claim and bond-post seams (until
+    /// review #572) with no overlap check at all. One implementation cannot
+    /// drift from itself.
+    ///
+    /// Private, and reached only through [`Self::seal_post`],
+    /// [`Self::seal_claim`], and [`Self::seal_drain`]: a seam that could
+    /// classify without sealing could also seal without classifying.
+    ///
+    /// The overlap half is [`Self::remove_settled`]'s premise, not local
+    /// hygiene: that retire reads "the inputs this record reserved are gone" as
+    /// proof this record's transaction confirmed, which holds only while one
+    /// live record can hold a given gindex.
+    #[must_use]
+    fn classify_seal(
+        &self,
+        kind: PendingKind,
+        persona: &PCanonicalId,
+        gindexes: &[GlobalOutputIndex],
+    ) -> SealAdmission {
+        let live = match kind {
+            PendingKind::Post => self.has_live_post_for(persona),
+            PendingKind::Claim => self.has_live_claim_for(persona),
+            PendingKind::Drain => self.has_live_drain_for(persona),
+        };
+        if live {
+            return SealAdmission::PersonaLive;
+        }
+        let reserved = self.reserved_gindexes();
+        if gindexes.iter().any(|g| reserved.contains(g)) {
+            return SealAdmission::InputRaced;
+        }
+        SealAdmission::Admit
+    }
+
+    /// Seal a bond post: classify, and insert it iff admitted.
+    ///
+    /// Deciding and inserting are one call because splitting them let each seam
+    /// re-derive the outcome from `push_post`'s bool — and after an `Admit` that
+    /// bool can only be `true`, so the `false` arm was dead code that reported
+    /// the *wait* remedy for what could only have been an internal break. There
+    /// is no bool here to re-derive from: the insert is unconditional on the
+    /// admitted path, because [`Self::classify_seal`] is what establishes the
+    /// one-live-per-persona-per-kind precondition `push_post` would re-check.
+    pub fn seal_post(&mut self, post: PendingBondPost) -> SealAdmission {
+        match self.classify_seal(PendingKind::Post, &post.persona, &post.funding_gindexes) {
+            SealAdmission::Admit => {}
+            refused => return refused,
+        }
+        self.posts.push(post);
+        SealAdmission::Admit
+    }
+
+    /// Seal an emission claim and stamp it `Dispatched` at `at`, the sibling of
+    /// [`Self::seal_post`].
+    ///
+    /// The record enters the block already dispatched rather than being pushed
+    /// `Pending` and transitioned by a second call. That is the same end state
+    /// the two-call form reached, minus the instant in between: this block is
+    /// persisted *before* the network send, so a `Pending` record that the
+    /// seam still owed a transition to could be persisted by a concurrent
+    /// writer's flush and read back as never-dispatched.
+    pub fn seal_claim(
+        &mut self,
+        mut claim: PendingEmissionClaim,
+        at: BlockHeight,
+    ) -> SealAdmission {
+        match self.classify_seal(PendingKind::Claim, &claim.persona, &claim.fee_gindexes) {
+            SealAdmission::Admit => {}
+            refused => return refused,
+        }
+        claim.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.claims.push(claim);
+        SealAdmission::Admit
+    }
+
+    /// Seal a `P`→principal drain and stamp it `Dispatched` at `at`, the
+    /// sibling of [`Self::seal_claim`].
+    pub fn seal_drain(&mut self, mut drain: PendingDrain, at: BlockHeight) -> SealAdmission {
+        match self.classify_seal(PendingKind::Drain, &drain.persona, &drain.funding_gindexes) {
+            SealAdmission::Admit => {}
+            refused => return refused,
+        }
+        drain.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.drains.push(drain);
+        SealAdmission::Admit
+    }
+
     /// Confirmation retire for the **reservation-observed** kinds — claims and
     /// drains — the sibling of [`Self::remove_confirmed`].
     ///
@@ -683,6 +816,156 @@ mod tests {
                 .collect(),
             state: PendingPostState::Pending,
         }
+    }
+
+    /// **Persona dedup outranks overlap, because their remedies are opposites.**
+    ///
+    /// Two same-persona assemblies select the same deterministic inputs, so the
+    /// second trips BOTH conditions. Reporting the overlap tells the caller to
+    /// retry; the truth is that retrying cannot help until the live record
+    /// retires. Checking overlap first — the order all three seams originally
+    /// used — turns this red.
+    #[test]
+    fn a_same_persona_race_is_persona_live_not_input_raced() {
+        let p = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(claim(0xAA, &[1, 2])));
+
+        // The second claim for the same persona reserves the same inputs.
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &p, &gindexes(&[1, 2])),
+            SealAdmission::PersonaLive,
+            "a live claim must be awaited, not retried around"
+        );
+    }
+
+    /// Overlap is reported only for what it means: another KIND took the input.
+    #[test]
+    fn a_cross_kind_collision_is_input_raced() {
+        let other = PCanonicalId::from_bytes([0xBB; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_drain(drain(0xAA, &[7])));
+
+        // A different persona's claim wanting the drain's input: no persona
+        // dedup applies, and the overlap is real.
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &other, &gindexes(&[7])),
+            SealAdmission::InputRaced
+        );
+        // Same persona, different kind, same input — still the overlap arm,
+        // because one-per-persona is per KIND.
+        let same = PCanonicalId::from_bytes([0xAA; 32]);
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &same, &gindexes(&[7])),
+            SealAdmission::InputRaced
+        );
+    }
+
+    /// A free persona and free inputs admit.
+    #[test]
+    fn a_clear_seal_is_admitted() {
+        let p = PCanonicalId::from_bytes([0xCC; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_drain(drain(0xAA, &[7])));
+        assert_eq!(
+            block.classify_seal(PendingKind::Drain, &p, &gindexes(&[8, 9])),
+            SealAdmission::Admit
+        );
+    }
+
+    /// One-live is per KIND, so a live drain does not block that persona's
+    /// claim — only a shared input does.
+    #[test]
+    fn one_live_is_per_kind_not_per_persona() {
+        let p = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_drain(drain(0xAA, &[7])));
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &p, &gindexes(&[8])),
+            SealAdmission::Admit,
+            "a live drain is not a live claim"
+        );
+    }
+
+    /// An admitted claim seal inserts the record **already dispatched** — the
+    /// end state the old push-then-mark pair reached, with no persistable
+    /// instant in between where the record is `Pending` and the seam still owes
+    /// it a transition.
+    #[test]
+    fn an_admitted_claim_seal_inserts_a_dispatched_record() {
+        let at = BlockHeight::from_raw(900);
+        let mut block = PendingPostBlock::empty();
+
+        assert_eq!(
+            block.seal_claim(claim(0xAA, &[1, 2]), at),
+            SealAdmission::Admit
+        );
+
+        let sealed = block.claims();
+        assert_eq!(sealed.len(), 1, "the admitted record must be present");
+        assert_eq!(
+            sealed[0].state,
+            PendingPostState::Dispatched { at, attempts: 1 },
+            "an admitted seal is a dispatch, not a pending insert"
+        );
+        assert_eq!(
+            block.reserved_gindexes(),
+            gindexes(&[1, 2]).into_iter().collect(),
+            "the seal is what makes the reservation visible to the next seal"
+        );
+    }
+
+    /// A bond post is *not* stamped dispatched: its send is a later step of the
+    /// pscan driver, so `seal_post` takes no height and leaves the state alone.
+    #[test]
+    fn an_admitted_post_seal_leaves_the_record_pending() {
+        let mut block = PendingPostBlock::empty();
+        assert_eq!(block.seal_post(post(0xAA, &[1])), SealAdmission::Admit);
+        assert_eq!(block.posts()[0].state, PendingPostState::Pending);
+    }
+
+    /// **A refused seal inserts nothing**, on both refusal arms. Deciding and
+    /// inserting in one call is only safe if the refusing paths leave the block
+    /// untouched — otherwise a doomed record would hold a reservation that
+    /// `remove_settled` later reads as evidence.
+    #[test]
+    fn a_refused_seal_inserts_nothing() {
+        let at = BlockHeight::from_raw(900);
+        let mut block = PendingPostBlock::empty();
+        assert_eq!(
+            block.seal_drain(drain(0xAA, &[7]), at),
+            SealAdmission::Admit
+        );
+
+        // Persona-live refusal: same persona, same kind.
+        assert_eq!(
+            block.seal_drain(drain(0xAA, &[8]), at),
+            SealAdmission::PersonaLive
+        );
+        // Input-raced refusal: different persona, gindex already reserved.
+        assert_eq!(
+            block.seal_claim(claim(0xBB, &[7]), at),
+            SealAdmission::InputRaced
+        );
+
+        assert_eq!(
+            block.drains().len(),
+            1,
+            "a refused drain must not be inserted"
+        );
+        assert!(
+            block.claims().is_empty(),
+            "a refused claim must not be inserted"
+        );
+        assert_eq!(
+            block.reserved_gindexes(),
+            gindexes(&[7]).into_iter().collect(),
+            "a refused seal must not widen the reservation set"
+        );
+    }
+
+    fn gindexes(v: &[u64]) -> Vec<GlobalOutputIndex> {
+        v.iter().copied().map(GlobalOutputIndex::from_raw).collect()
     }
 
     /// The accrual's live funding set, as `remove_settled` reads it.

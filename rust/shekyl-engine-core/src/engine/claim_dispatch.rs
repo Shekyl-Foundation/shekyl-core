@@ -58,7 +58,9 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingEmissionClaim, PendingPostState};
+use shekyl_engine_state::pending_post_block::{
+    PendingEmissionClaim, PendingPostState, SealAdmission,
+};
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -161,20 +163,6 @@ impl EmissionClaimRequestError {
     }
 }
 
-/// What the one locked seal pass decided — the drain seam's
-/// [`DrainSealOutcome`](super::drain_dispatch) shape, so the two paths refuse
-/// for the same reasons under the same lock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClaimSealOutcome {
-    /// The claim record was sealed and transitioned to `Dispatched`.
-    Sealed,
-    /// A live claim already exists for this persona (persona dedup).
-    PersonaLive,
-    /// A concurrent post reserved one of this claim's fee inputs since the
-    /// pre-assembly snapshot; nothing was sealed.
-    InputRaced,
-}
-
 #[allow(private_bounds)] // same Engine-trait privacy posture as assemble_bond_post
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -261,7 +249,7 @@ where
 
         // Optimistic fast-fail on a live claim (one live claim per persona —
         // the in-flight epoch dedup). The AUTHORITATIVE serialization is
-        // `push_claim` under the write lock at the seal below, which rejects
+        // `seal_claim` under the write lock at the seal below, which rejects
         // atomically even if two same-persona requests race past this gate;
         // this read only saves the wasted proof work.
         let already = store
@@ -310,51 +298,27 @@ where
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let outcome = store
+        let admission = store
             .mutate(move |block| {
-                // Seal-time reservation re-check under the write lock — the
-                // drain seam's guard, which this path was missing. The
-                // `reserved` snapshot read before proof assembly is stale: a
-                // same-persona bond post or drain assembled concurrently may
-                // have reserved one of these fee inputs since, and
-                // `push_claim`'s persona dedup does not see a cross-kind gindex
-                // collision.
+                // One locked decision, shared with the bond-post and drain
+                // seams: persona dedup first (remedy: wait), then cross-kind
+                // gindex overlap (remedy: retry). Order matters because two
+                // same-persona assemblies select the same inputs and would
+                // otherwise be told to retry a race they cannot win. The
+                // overlap half is also `remove_settled`'s sole-spender premise.
                 //
-                // It matters more than the doomed record it avoids. The
-                // confirmation retire in `PendingPostBlock::remove_settled`
-                // reads absence-from-the-live-funding-set as proof that THIS
-                // record's transaction confirmed, and that inference holds only
-                // while one record can reserve a given gindex. Two records
-                // sharing one input make either's confirmation retire both —
-                // reopening a gate whose transaction never landed. So this
-                // check is part of that retire's premise, not just local
-                // hygiene.
-                let raced = {
-                    let reserved = block.reserved_gindexes();
-                    sealed.fee_gindexes.iter().any(|g| reserved.contains(g))
-                };
-                if raced {
-                    return (false, ClaimSealOutcome::InputRaced);
-                }
-                let ok = block.push_claim(sealed)
-                    && block
-                        .mark_claim_dispatched(&persona, dispatch_tip)
-                        .is_some();
-                (
-                    ok,
-                    if ok {
-                        ClaimSealOutcome::Sealed
-                    } else {
-                        ClaimSealOutcome::PersonaLive
-                    },
-                )
+                // Deciding and inserting are one call so this seam cannot
+                // re-derive the outcome from a push bool whose refusal arm the
+                // decision above has already ruled out.
+                let admission = block.seal_claim(sealed, dispatch_tip);
+                (admission == SealAdmission::Admit, admission)
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
-        match outcome {
-            ClaimSealOutcome::Sealed => {}
-            ClaimSealOutcome::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
-            ClaimSealOutcome::InputRaced => return Err(EmissionClaimRequestError::InputRaced),
+        match admission {
+            SealAdmission::Admit => {}
+            SealAdmission::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
+            SealAdmission::InputRaced => return Err(EmissionClaimRequestError::InputRaced),
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited
@@ -387,7 +351,7 @@ mod tests {
     /// 2. dispatch rides ONLY the audited posture→submitter choke point
     ///    (the pre-bound `BroadcastSubmitter::local` construction +
     ///    `submit_bound`) — never a bare submitter;
-    /// 3. persist-before-dispatch: the pending-claim seal (`push_claim`)
+    /// 3. persist-before-dispatch: the pending-claim seal (`seal_claim`)
     ///    textually precedes the network send — the invariant is exercised
     ///    at runtime by the store, but the ordering pin catches a refactor
     ///    that moves the seal after the submit.
