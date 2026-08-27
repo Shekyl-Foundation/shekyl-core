@@ -888,10 +888,12 @@ would be spending the change and keeping the defect.
 ### `RF-D8` (i) — **RETRACTED 2026-08-26: the opening is incompatible with the mechanism, and the argument is structural**
 
 `RF-D8` kept `c1_layers`/`c2_layers` (and with them `leaf_bytes`) as
-**supplementary consensus-checkable evidence** — the reasoning is stated at
-length in the `path.rs` header: every other element of a pass record depends on
-witness honesty, and the opening is *"the one element consensus verifies
-independently of the witness."* **That ruling is retracted. The opening goes.**
+**supplementary consensus-checkable evidence**. The reasoning, which the
+`path.rs` header carried at length **until this retraction rewrote it** (the
+full text is in that file's history, not its current contents): every other
+element of a pass record depends on witness honesty, and the opening is *"the
+one element consensus verifies independently of the witness."*
+**That ruling is retracted. The opening goes.**
 
 **Why this kept flipping, recorded because the oscillation is the defect.**
 Both previous passes argued the same axis — *how much does the opening prove?* —
@@ -926,11 +928,11 @@ witness that received the shard proves possession **completely** by recomputing
 check it already performed in full. So both branches collapse: `P`-signed breaks
 §9; witness-computed is redundant. There is no third position.
 
-**What the retracted reasoning got wrong, precisely.** The `path.rs` header
-concedes that sampled-leaf is insufficient as a *standalone* mechanism and then
-says that finding *"says nothing against an opening carried additively on top."*
-It does. The addition is not free: it leaks the challenge. "Additive" was true
-of the **bytes** and false of the **information**.
+**What the retracted reasoning got wrong, precisely.** It conceded that
+sampled-leaf is insufficient as a *standalone* mechanism, then held that the
+finding *"says nothing against an opening carried additively on top."* It does.
+The addition is not free: it leaks the challenge. "Additive" was true of the
+**bytes** and false of the **information**.
 
 **Consequences.** The pass record becomes pure attestation —
 `p_canonical_id`, `shard_id`, `settlement_epoch`, Ed25519 kept, ML-DSA pruned.
