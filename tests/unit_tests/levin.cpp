@@ -2781,7 +2781,18 @@ TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_
     }
 }
 
-TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
+/*! The carrier is OFF BY DEFAULT, on both zone classes.
+
+    Renamed from `cpp_cannot_enable_the_noise_carrier`, because that property
+    stopped being true in this change: `set_carrier_development(true)` is a
+    C++ path that sets the flag. The test kept passing — it just no longer
+    tested what its name said, which is worse than failing, and the sibling
+    case above proves the opposite property deliberately.
+
+    What survives, and is worth a gate: the DEFAULT is off, and nothing in an
+    ordinary build turns it on. That is the invariant every other fixture in
+    this file leans on when it asserts `has_noise == false`. */
+TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
 {
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
@@ -2797,19 +2808,20 @@ TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
         /* Read what each arm actually demonstrates, because they are NOT the
            same refusal and only one of them is this test's subject.
 
-           On i2p, `has_noise` is false because no C++ path sets the flag —
-           the property named above. On the PUBLIC zone there are two refusals
-           stacked, and the second one never runs: even with the flag forced
-           on, `Zone::new` rejects a noise carrier on a cleartext link (§93.2)
-           before the C++ question is reached. Verified by forcing the flag in
-           `make_relay_zone` — only the i2p arm reds.
+           On i2p, `has_noise` is false because the development opt-in is off
+           — the property named above, and the one the sibling test flips. On
+           the PUBLIC zone there are two refusals stacked, and the second never
+           runs: even with the opt-in ON, `Zone::new` rejects a noise carrier
+           on a cleartext link (§93.2) before the flag is consulted. The
+           sibling test asserts exactly that, so the claim is now covered
+           rather than argued.
 
            So the public arm is coverage of the Rust gate, not of this test's
-           claim, and a reader taking both arms as evidence for "C++ cannot
-           enable noise" would be over-reading it by one refusal. */
+           claim, and a reader taking both arms as evidence for "the default is
+           off" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
-            << "no C++ path sets the noise flag; the carrier is Rust-owned "
+            << "the carrier is off unless a development build turns it on "
             << "(zone is " << (is_public ? "public" : "i2p") << ")";
     }
 }

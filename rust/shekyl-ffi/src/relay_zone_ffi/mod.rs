@@ -200,9 +200,19 @@ pub struct RelayZoneHandle {
     driver: Driver,
     /// The carrier's buffers, held **beside** [`Driver`] and never inside it.
     ///
-    /// `None` on a zone without the carrier — which is every zone C++ builds
-    /// today, and every cleartext zone always. Ownership here rather than in
-    /// `Driver` is CV-4's type barrier expressed as a field: the scheduler
+    /// `None` on a zone without the carrier. Two postures, and they must be
+    /// stated apart because this PR made the first sentence of the earlier
+    /// draft false:
+    ///
+    /// - **shipped default** — every zone, C++-built or otherwise, since
+    ///   `make_relay_zone` sets the noise flag only behind
+    ///   `set_carrier_development`, which defaults off;
+    /// - **development-enabled** — an ENCRYPTED zone built after
+    ///   `set_carrier_development(true)` holds `Some`. A cleartext one still
+    ///   does not, and that refusal is `Zone::new`'s (§93.2), not the flag's.
+    ///
+    /// Ownership here rather than in `Driver` is CV-4's type barrier expressed
+    /// as a field, and that is unchanged by either posture: the scheduler
     /// cannot consult what it cannot reach.
     noise: Option<NoiseQueues>,
     rng: SecureRelayRng,
@@ -553,6 +563,10 @@ pub extern "C" fn shekyl_relay_zone_new(
     // construction parameter, never a runtime reference), so the dummy is
     // sized here and the queue owns the length invariant from then on.
     //
+    // Built when the zone carries — which, by default, is never: the flag
+    // comes from `set_carrier_development`, off unless a test or a developer
+    // turns it on. `Some` here is the development posture, not the shipped one.
+    //
     // `noise_notify` and not `vec![0; N]`: the dummy goes ON THE WIRE, so it
     // has to BE a levin message — command 0, `B|E`, body length written into
     // the header — or the peer rejects the zero signature and closes the
@@ -586,9 +600,21 @@ pub extern "C" fn shekyl_relay_zone_new(
 
 /// Hand the carrier **one** transaction to carry on `channel`.
 ///
-/// Returns `true` if it was accepted. `false` means refused, and refusal is
-/// the queue's own rule: the framed notification must be a whole number of
-/// windows and at most `carrier::MAX_FRAGMENTS` of them.
+/// Returns `true` if it was accepted. `false` covers **every** refusal, and a
+/// caller cannot tell them apart from the return alone — so they are listed
+/// rather than implied, because "refused" reads as the queue's size rule and
+/// most of these are not that:
+///
+/// - a null `handle` or `tx`, or `tx_len == 0`;
+/// - a zone with **no carrier** — the ordinary case, since the flag defaults
+///   off, and the one most likely to be misread as a fragment-size violation;
+/// - serialising or framing the notification failed;
+/// - the queue refused it: no such `channel`, or the framed message is not a
+///   whole number of windows / exceeds `carrier::MAX_FRAGMENTS`.
+///
+/// A single boolean is kept deliberately: none of these is recoverable by the
+/// caller, and a status enum would invite branching on a distinction that
+/// only matters to a developer reading a log.
 ///
 /// # One transaction per notification, made unrepresentable
 ///

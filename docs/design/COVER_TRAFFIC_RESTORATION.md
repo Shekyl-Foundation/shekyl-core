@@ -138,7 +138,7 @@ entirely:
 One C++ witness replaced them rather than none:
 `levin_notify.noise_does_not_override_the_phase`. *(Superseded 2026-08-20:
 that witness has itself been replaced. Its subject — a noise-enabled C++ zone —
-no longer exists, so it gave way to `levin_notify.cpp_cannot_enable_the_noise_carrier`,
+no longer exists, so it gave way to `levin_notify.the_noise_carrier_is_off_by_default` (renamed from `cpp_cannot_enable_the_noise_carrier` when the runtime opt-in made that name false),
 which pins the invariant that makes the two remaining noise effect callbacks
 unreachable. The phase-versus-carrier property now lives only in Rust, which is
 correct: the carrier is only in Rust.)* Its discriminant is the peer
@@ -545,8 +545,11 @@ no longer a C++ inventory executing the carrier at all.)*
 
 Nothing of the carrier. `NoiseQueues` holds the buffers; C++ is transport
 (asio, levin framing, `p2p->send`) until step 5. The two noise effect
-callbacks remain as loud failures so a future in-process path cannot drop
-a real send on the floor.
+callbacks were loud failures so a future in-process path could not drop a
+real send on the floor. *(Superseded 2026-08-27: that path was built. The
+send callback TRANSPORTS now, and its unbind sibling is deleted — unbind is
+consumed inside Rust by `NoiseQueues::unbind`, and C++ has held no channel
+state since #515.)*
 
 *(The table of `covert_payload` / `noise_channel` / `send_noise` that used
 to sit here was deleted with those types in #515.)*
@@ -754,7 +757,7 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
 | **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; the skip's condition EXPIRED** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier: C++ cannot enable noise at all. **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, on an independent ground that did discharge**: #515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere. What the expiry actually leaves owed is the step-2 caller above — **in Rust**, per `20-rust-vs-cpp-policy`, not as the C++ shim this row skipped. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
 | §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
-| **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. |
+| **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. **Superseded 2026-08-27 on all three counts, by the change that built the executor's caller:** `make_relay_zone` sets the flag again for an ENCRYPTED zone behind `set_carrier_development` (off by default, so `has_noise` is still false in a shipped build); the send callback transports rather than failing loudly; and its unbind sibling is **deleted**, since unbind is consumed inside Rust and C++ has no channel state to clear. |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
 
 ### 3.1 Why the switch is a DEVELOPMENT FLAG (2026-08-26)
