@@ -6,8 +6,15 @@
 //! FFI surface for the live relay zone — RP-3a of `DAEMON_RELAY_PRIVACY.md`.
 //!
 //! The C++ `cryptonote::levin::notify` forwards here; the scheduling logic lives
-//! in `shekyl-relay`. Transaction bodies cross as opaque blobs, because framing,
-//! padding and the socket stay C++ (§18.2).
+//! in `shekyl-relay`. On the ORDINARY path transaction bodies cross as opaque
+//! blobs, because framing, padding and the socket stay C++ (§18.2).
+//!
+//! The CARRIER is the one exception, and it is a narrow one: a real fragment
+//! is framed and padded HERE (`fragmented_notify`) before it enters the queue,
+//! because the carrier's unit is a fixed window rather than a message. C++
+//! could not do that framing without knowing the window, which is
+//! `NoiseQueues`' own invariant and deliberately not exported. The socket
+//! stays C++ on both paths.
 //!
 //! # Why there is no `Effect` marshalling
 //!

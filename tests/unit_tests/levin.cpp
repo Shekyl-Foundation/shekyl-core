@@ -57,8 +57,24 @@ namespace
         boost::asio::io_context& io_service_;
         std::size_t ref_count_;
 
+      public:
+        /*! When false, every `do_send` fails — the transport rejecting a write.
+
+            Process-wide because `test_endpoint` is constructed deep inside the
+            connection machinery and has no seam a fixture could thread a flag
+            through. Restored by RAII at each use; a leaked `false` would fail
+            unrelated fixtures and read as a flake. */
+        static bool& deliver()
+        {
+            static bool value = true;
+            return value;
+        }
+
+      private:
         virtual bool do_send(epee::byte_slice message) override final
         {
+            if (!deliver())
+                return false;
             send_queue_.push_back(std::move(message));
             return true;
         }
@@ -2792,6 +2808,63 @@ TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_
     What survives, and is worth a gate: the DEFAULT is off, and nothing in an
     ordinary build turns it on. That is the invariant every other fixture in
     this file leans on when it asserts `has_noise == false`. */
+/* The `res > 0` fix has NO regression test here, and the obstacle is the
+   harness rather than the fix.
+
+   `test_endpoint::deliver()` above is the injection it needs and it works —
+   `do_send` returns false on demand. What does not work is an oracle around
+   it: a failed write tears the connection down inside the levin machinery,
+   and `TearDown`'s `relayed_method_size() == 0` then fires because
+   `dandelionpp_notify` calls `record_relayed` BEFORE `make_payload_send_txs`,
+   so a relay is recorded for a send that never happened. Draining that does
+   not settle it either — a second failure surfaces from the teardown path.
+
+   A test built against that would be asserting around the fixture's own
+   lifecycle, and it would be flaky rather than wrong. Left uncovered, with
+   the injection kept because it is the half that is genuinely reusable.
+
+   The fix itself is `net_node.inl:2503-2504`'s check applied to the same
+   call: `connections::send` returns 1/0/-1 and both sites now compare `> 0`.
+   The pre-`record_relayed` ordering noted above is a separate, pre-existing
+   question — a relay recorded for a transaction that never left — and it is
+   the more interesting one, since F-10's tallies read that record. */
+
+/*! The carrier actually EMITS through `on_noise`, and the frames are levin.
+
+    The C++ half of the boundary this change widened, and it was uncovered:
+    the opt-in test above only checks a constructed bit, and the Rust tests
+    stop at the FFI. So "the callback marshals bytes correctly" rested on
+    nothing on this side, which is where the raw-zeros dummy would have shown
+    up as dropped peers rather than a failing assertion. */
+TEST_F(levin_notify, the_carrier_emits_levin_frames_through_on_noise)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    // OUTBOUND connections: noise channels are stem slots, and an unbound slot
+    // emits nothing at all (CV-2). Incoming ones never enter the stem map.
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    const std::size_t sent =
+      drive_schedule(notifier, [](std::size_t n) { return n != 0; });
+    EXPECT_LT(0u, sent)
+      << "a carrier zone must emit on its cadence — zero means `on_noise` "
+         "never reached the transport, which is the state this PR's Rust-side "
+         "tests cannot see";
+}
+
 TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
 {
     for (unsigned count = 0; count < 10; ++count)

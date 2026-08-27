@@ -139,9 +139,15 @@ One C++ witness replaced them rather than none:
 `levin_notify.noise_does_not_override_the_phase`. *(Superseded 2026-08-20:
 that witness has itself been replaced. Its subject — a noise-enabled C++ zone —
 no longer exists, so it gave way to `levin_notify.the_noise_carrier_is_off_by_default` (renamed from `cpp_cannot_enable_the_noise_carrier` when the runtime opt-in made that name false),
-which pins the invariant that makes the two remaining noise effect callbacks
-unreachable. The phase-versus-carrier property now lives only in Rust, which is
-correct: the carrier is only in Rust.)* Its discriminant is the peer
+which pins the invariant every other `has_noise == false` fixture leans on.
+**Superseded again 2026-08-27:** "the two remaining noise effect callbacks are
+unreachable" and "the carrier is only in Rust" both stopped being true in the
+change that built the executor's caller. There is now ONE noise callback — the
+unbind sibling is deleted — it is REACHABLE, and it transports. What the
+renamed test pins is the DEFAULT being off, not unreachability; the sibling
+`the_development_opt_in_enables_the_carrier_on_an_encrypted_zone` asserts the
+other side. The phase-versus-carrier property does still live only in
+Rust.)* Its discriminant is the peer
 count — a stem reaches **one** peer, and the deleted all-channel broadcast
 reached two — which is the assertion the deleted branch would fail. It is
 driven on `relay_method::local` because RD-4 makes that arm deterministic;

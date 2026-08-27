@@ -3239,7 +3239,9 @@ void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void*
 //! the queue's size rule and most of these are not that: a null handle or tx,
 //! a zone with NO CARRIER (the ordinary case, since the development opt-in
 //! defaults off), a framing failure, an unknown channel, or the queue's own
-//! rule (a whole number of windows, at most SHEKYL_RELAY_MAX_FRAGMENTS).
+//! rule (a whole number of windows, at most `carrier::MAX_FRAGMENTS` — the
+//! Rust-owned cap in `shekyl-relay-privacy`, which has no C macro mirror and
+//! deliberately so: one owner, not a constant to synchronise).
 bool shekyl_relay_zone_noise_enqueue(RelayZoneHandle* handle, std::size_t channel,
                                      const std::uint8_t* tx, std::size_t tx_len);
 //! Release every pending fluff batch — what notify::run_fluff() drives.

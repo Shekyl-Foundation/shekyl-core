@@ -268,13 +268,16 @@ namespace levin
 
     /*! Build the Rust relay zone for `nzone`.
 
-        **No noise flag.** C++ cannot enable the carrier any more: the machinery
-        that executed it here is deleted and `NoiseQueues` is the port. The FFI
-        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and whatever
-        eventually enables the carrier will set it. NOTHING DOES TODAY: no such
-        caller has been built, and this function never sets the flag either,
-        which is why `get_status().has_noise` reads false everywhere and
-        `select_anonymity`'s noise-priority arm stays dormant.
+        **The noise flag is set here again, behind a development opt-in.**
+        #515 deleted the C++ machinery that used to execute the carrier and
+        `NoiseQueues` is the port; what this function now does is turn the
+        Rust-owned carrier ON for an encrypted zone when
+        `set_carrier_development` says so.
+
+        BY DEFAULT IT DOES NOT. The opt-in is off unless a test or a developer
+        sets it, so in a shipped build `get_status().has_noise` still reads
+        false everywhere and `select_anonymity`'s noise-priority arm stays
+        dormant — the property every `has_noise == false` fixture leans on.
 
         That caller does not wait on the daemon cutover, and C++ stays the
         transport for the carrier as it is for stem and fluff.
@@ -1203,21 +1206,24 @@ namespace levin
        Dandelion++ defends against an **internal** adversarial peer. Enabling
        one is not a reason to disable the other. The Rust executor
        (`NoiseQueues`) owns the carrier and attaches it *below* the phase
-       (`plan_dispatch`). The executor has no caller yet, and that is NOT
-       step 5's to give — C++ performs the transport for the carrier exactly
-       as it does for stem and fluff today. What IS owed is four pieces, not
-       the single Rust-internal join an earlier draft of this comment named:
-       an owner for `NoiseQueues`, an enqueue path, the join for BOTH of
-       `Driver::poll`'s noise effects (send and unbind), and a WIDER
-       `NoiseSendCb`
-       (today it carries neither bytes out nor a send status back, so the
-       non-destructive token cannot be resolved). `make_relay_zone`'s comment
-       carries the full list and why widening does not breach CV-4.
+       (`plan_dispatch`). Three of the four pieces that were owed are BUILT:
+       `RelayZoneHandle` owns the queue, `dispatch` joins BOTH of
+       `Driver::poll`'s noise effects, and `NoiseSendCb` carries bytes out and
+       a send status back. The enqueue CROSSING exists too.
 
-       Until all four exist no zone here enables noise at all, so the branch
-       was unreachable in production either way — both notifier constructions
-       pass a null noise payload. See `COVER_TRAFFIC_RESTORATION.md` §3's
-       status table, the row headed "§2.9 step 2 — covert executor".
+       WHAT IS STILL OWED is its producer: nothing calls
+       `shekyl_relay_zone_noise_enqueue`, so a carrier zone emits dummies only
+       and real transactions stay on the ordinary path below.
+       `COVER_TRAFFIC_RESTORATION.md` §3.1a names the remaining work —
+       swapping this function's `plan_relay` for
+       `plan_dispatch_with_refresh`, which already returns the carrier and
+       channel it needs.
+
+       In a shipped build no zone here enables noise at all — the opt-in
+       defaults off — so the deleted branch was unreachable in production
+       either way; both notifier constructions pass a null noise payload. See
+       `COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
+       "§2.9 step 2 — covert executor".
 
        Recording parity was checked before the deletion. `fluff` makes the
        identical `on_transactions_relayed` call below. `stem`/`local` are
