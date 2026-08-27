@@ -57,8 +57,24 @@ namespace
         boost::asio::io_context& io_service_;
         std::size_t ref_count_;
 
+      public:
+        /*! When false, every `do_send` fails — the transport rejecting a write.
+
+            Process-wide because `test_endpoint` is constructed deep inside the
+            connection machinery and has no seam a fixture could thread a flag
+            through. Restored by RAII at each use; a leaked `false` would fail
+            unrelated fixtures and read as a flake. */
+        static bool& deliver()
+        {
+            static bool value = true;
+            return value;
+        }
+
+      private:
         virtual bool do_send(epee::byte_slice message) override final
         {
+            if (!deliver())
+                return false;
             send_queue_.push_back(std::move(message));
             return true;
         }
@@ -2766,7 +2782,117 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     The phase-versus-carrier property itself now lives only in Rust
     (`a_noise_carrier_does_not_change_the_phase`), which is correct: the
     carrier is only in Rust. */
-TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
+/*! The development opt-in reaches the carrier, and CI can run it.
+
+    The point of a RUNTIME flag rather than `#ifdef`: behind a compile-time
+    gate the only configuration that runs the carrier is the one CI never
+    builds, so the code would be untestable by the repository's own gate. The
+    default is unchanged — every `has_noise == false` fixture in this file
+    still passes untouched — and this case is the one that flips it. */
+TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_zone)
+{
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    /* Restored however this test leaves, because the flag is process-wide and
+       a leaked `true` would silently arm every fixture that runs after it —
+       the failure would land in an unrelated test and read as a flake. */
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    {
+        // ENCRYPTED zone: the carrier engages.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_TRUE(notifier_ptr->get_status().has_noise)
+            << "the development opt-in must reach an encrypted zone, or the "
+               "carrier has no configuration a gate can exercise";
+    }
+    {
+        // CLEARTEXT zone: still refused, and by Rust rather than by this flag.
+        // `Zone::new` rejects a noise carrier on a cleartext link (§93.2), so
+        // the opt-in cannot force one — the carrier hides by payload
+        // indistinguishability, which needs encryption at step one.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_FALSE(notifier_ptr->get_status().has_noise)
+            << "link secrecy is the carrier's precondition; the opt-in does "
+               "not get to override the Rust gate that enforces it";
+    }
+}
+
+/*! The carrier is OFF BY DEFAULT, on both zone classes.
+
+    Renamed from `cpp_cannot_enable_the_noise_carrier`, because that property
+    stopped being true in this change: `set_carrier_development(true)` is a
+    C++ path that sets the flag. The test kept passing — it just no longer
+    tested what its name said, which is worse than failing, and the sibling
+    case above proves the opposite property deliberately.
+
+    What survives, and is worth a gate: the DEFAULT is off, and nothing in an
+    ordinary build turns it on. That is the invariant every other fixture in
+    this file leans on when it asserts `has_noise == false`. */
+/* The `res > 0` fix has NO regression test here, and the obstacle is the
+   harness rather than the fix.
+
+   `test_endpoint::deliver()` above is the injection it needs and it works —
+   `do_send` returns false on demand. What does not work is an oracle around
+   it: a failed write tears the connection down inside the levin machinery,
+   and `TearDown`'s `relayed_method_size() == 0` then fires because
+   `dandelionpp_notify` calls `record_relayed` BEFORE `make_payload_send_txs`,
+   so a relay is recorded for a send that never happened. Draining that does
+   not settle it either — a second failure surfaces from the teardown path.
+
+   A test built against that would be asserting around the fixture's own
+   lifecycle, and it would be flaky rather than wrong. Left uncovered, with
+   the injection kept because it is the half that is genuinely reusable.
+
+   The fix itself is `net_node.inl:2503-2504`'s check applied to the same
+   call: `connections::send` returns 1/0/-1 and both sites now compare `> 0`.
+   The pre-`record_relayed` ordering noted above is a separate, pre-existing
+   question — a relay recorded for a transaction that never left — and it is
+   the more interesting one, since F-10's tallies read that record. */
+
+/*! The carrier actually EMITS through `on_noise`, and the frames are levin.
+
+    The C++ half of the boundary this change widened, and it was uncovered:
+    the opt-in test above only checks a constructed bit, and the Rust tests
+    stop at the FFI. So "the callback marshals bytes correctly" rested on
+    nothing on this side, which is where the raw-zeros dummy would have shown
+    up as dropped peers rather than a failing assertion. */
+TEST_F(levin_notify, the_carrier_emits_levin_frames_through_on_noise)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    // OUTBOUND connections: noise channels are stem slots, and an unbound slot
+    // emits nothing at all (CV-2). Incoming ones never enter the stem map.
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    const std::size_t sent =
+      drive_schedule(notifier, [](std::size_t n) { return n != 0; });
+    EXPECT_LT(0u, sent)
+      << "a carrier zone must emit on its cadence — zero means `on_noise` "
+         "never reached the transport, which is the state this PR's Rust-side "
+         "tests cannot see";
+}
+
+TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
 {
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
@@ -2782,19 +2908,20 @@ TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
         /* Read what each arm actually demonstrates, because they are NOT the
            same refusal and only one of them is this test's subject.
 
-           On i2p, `has_noise` is false because no C++ path sets the flag —
-           the property named above. On the PUBLIC zone there are two refusals
-           stacked, and the second one never runs: even with the flag forced
-           on, `Zone::new` rejects a noise carrier on a cleartext link (§93.2)
-           before the C++ question is reached. Verified by forcing the flag in
-           `make_relay_zone` — only the i2p arm reds.
+           On i2p, `has_noise` is false because the development opt-in is off
+           — the property named above, and the one the sibling test flips. On
+           the PUBLIC zone there are two refusals stacked, and the second never
+           runs: even with the opt-in ON, `Zone::new` rejects a noise carrier
+           on a cleartext link (§93.2) before the flag is consulted. The
+           sibling test asserts exactly that, so the claim is now covered
+           rather than argued.
 
            So the public arm is coverage of the Rust gate, not of this test's
-           claim, and a reader taking both arms as evidence for "C++ cannot
-           enable noise" would be over-reading it by one refusal. */
+           claim, and a reader taking both arms as evidence for "the default is
+           off" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
-            << "no C++ path sets the noise flag; the carrier is Rust-owned "
+            << "the carrier is off unless a development build turns it on "
             << "(zone is " << (is_public ? "public" : "i2p") << ")";
     }
 }

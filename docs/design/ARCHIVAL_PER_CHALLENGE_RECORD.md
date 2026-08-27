@@ -131,6 +131,29 @@ Cheaper *and* more robust is not a trade, so this is ruled rather than balanced.
 
 ### `PC-D3` — `challenge_leaf_index` takes `block_hash(h−1)`
 
+> **DISPOSITION, added 2026-08-26: this hardened a function that DELETES, and
+> the round's record says so rather than leaving it as an achievement.**
+> `RF-D8` ruling (i) — which kept the sampled-leaf opening, and which is why
+> `challenge_leaf_index` looked permanent when this round ran — was
+> **retracted** (`ARCHIVAL_RESPONSE_FORMAT.md`, grep `RF-D8` (i)): `P` cannot
+> countersign a preimage naming the challenged leaf without learning which
+> request is the challenge, defeating §9's *"the test IS a read"*. The whole
+> leaf-opening cluster is back on `ARCHIVAL_CREDIT_WIRE.md` §2's deletion
+> surface, this derivation included.
+>
+> **It was not wasted and must not be reverted early.** `TJ-1` (CRITICAL, live
+> consensus path) names restoring the beacon input to `τ` as its *interim
+> mitigation*, and that is exactly what this ruling did — it closed the
+> precomputable-schedule free-ride, where a `P` keeps ~82 KB of challenged
+> leaves and discards the 3.33 MB shard. That mitigation is load-bearing for
+> as long as the beacon still issues, which is until the cutover deletes the
+> cluster entirely. The `-v2` separator and the retired `-v1` row retire with
+> it, moving the registry count pins in the same change.
+>
+> **Scope: only `PC-D3` is affected.** `PC-D2`, `PC-D4`, `PC-D6` and `PC-D7`
+> govern record *multiplicity* and settlement, not the record's contents, and
+> survive a pure-attestation payload unchanged.
+
 The preimage gains the **hash**, not the height.
 
 **Height and hash are not equivalent and the difference is the ruling.** A height

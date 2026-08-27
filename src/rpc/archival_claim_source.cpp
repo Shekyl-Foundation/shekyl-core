@@ -6,6 +6,8 @@
 #include "rpc/archival_claim_source.h"
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "blockchain_db/blockchain_db.h"
@@ -43,6 +45,74 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     res.holdings_kind = bond.holdings_kind;
     res.held_shard_ids = bond.held_shard_ids;
     res.claimed_settlement_epochs = bond.claimed_settlement_epochs;
+    res.bonded_total_atomic = bond.bonded_total_atomic;
+    // The interval-log length, as the verify arm marshals it
+    // (`record.bad_intervals.size()` at the
+    // `shekyl_archival_verify_unbond_bond_post` call site) — the count only,
+    // never the intervals themselves, which no exit precondition reads.
+    res.bad_interval_count = bond.bad_intervals.size();
+
+    // The `Unbond` cooldown-anchor gather. The kind→scan decision is Rust
+    // (`shekyl_archival_last_served_scan`, exhaustive on HoldingsKind) — the
+    // same function the Unbond verify arm asks — so a third record kind fails
+    // to compile until its scan is written, rather than silently folding an
+    // empty compact list into "never served" (the permissive cooldown branch).
+    // This site marshals the discriminant onto the matching DB accessor.
+    // Never-served shards are omitted by both accessors, so an empty result
+    // is the legitimate "record exists, nothing served yet" case.
+    //
+    // The fold to the whole-record anchor stays Rust-side, through the same
+    // function consensus uses. A C++ max() here would be a second derivation of
+    // a consensus operand and could drift from the verifier that decides the
+    // tx — the failure `close_block_height` is already shaped to prevent.
+    uint8_t scan = 0;
+    const uint8_t scan_rc = shekyl_archival_last_served_scan(bond.holdings_kind, &scan);
+    if (scan_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+      throw std::runtime_error(
+        "last-served scan dispatch failed (rc=" + std::to_string(scan_rc) + ")");
+    const std::vector<uint64_t> last_served =
+      (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
+        ? db.archival_bond_all_last_served_epochs(p_id)
+        : db.archival_bond_last_served_epochs(p_id, bond.held_shard_ids);
+    uint8_t anchor_present = 0;
+    uint64_t anchor_epoch = 0;
+    // A non-OK return is a marshaling bug on THIS side (null pointer with a
+    // positive length, or a length past the slice-soundness bound), never a
+    // property of the record — so there is no anchor to report and no honest
+    // way to describe this record's exit state.
+    //
+    // Throwing is the fail-closed choice, and the alternative is worse than it
+    // looks: leaving the fields at their value-initialized defaults reports
+    // `has_last_served_epoch = false`, which the wallet decodes as
+    // `NeverServed` — the PERMISSIVE branch of both cooldown predicates. A
+    // record that has served would then read as ready to exit, on an operand
+    // this function failed to compute. (An earlier revision of this comment
+    // called that default "the fail-closed reading". It is the opposite, and
+    // the mistake is worth leaving recorded: on this operand, absence means
+    // permissive.)
+    //
+    // The handler wraps this call in try/catch and answers a non-OK status,
+    // which the wallet's decoder rejects before reading any payload field — so
+    // an internal error cannot decode as a claim about the record.
+    const uint8_t fold_rc = shekyl_archival_whole_record_last_served(
+      last_served.empty() ? nullptr : last_served.data(),
+      last_served.size(),
+      &anchor_present,
+      &anchor_epoch);
+    if (fold_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+      throw std::runtime_error(
+        "whole-record last-served fold failed (rc=" + std::to_string(fold_rc) + ")");
+    res.has_last_served_epoch = anchor_present != 0;
+    res.last_served_epoch = anchor_epoch;
+
+    // The scheduler's watermark, with the storage sentinel resolved here so no
+    // consumer has to carry it. Unlike the anchor above, absence on THIS
+    // operand is fail-closed at consensus (`slashes_settled_through`), so the
+    // two flags are not interchangeable.
+    const uint64_t slash_watermark = db.get_archival_last_slash_epoch();
+    res.has_last_settled_slash_epoch = slash_watermark != UINT64_MAX;
+    if (res.has_last_settled_slash_epoch)
+      res.last_settled_slash_epoch = slash_watermark;
   }
 
   // Full window, unconditionally (§7.2): the low end resolves through the

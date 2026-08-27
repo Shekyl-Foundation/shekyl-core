@@ -47,6 +47,102 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **[Done 2026-08-27, PR-P4]** The claim-source gather and the `Unbond`
+  verify gather are no longer coupled by comments. `HoldingsKind::last_served_scan`
+  is the exhaustive kind→scan decision (a third variant fails to compile);
+  `shekyl_archival_last_served_scan` is the FFI both C++ sites ask; they marshal
+  the discriminant onto the matching DB accessor. The claim-source fidelity
+  test still restates `is_complete_tree()` as the oracle — an oracle that
+  called the subject's helper would detect nothing.
+
+- **`get_archival_emission_claim_source` walks the ENTIRE serve-credit table on
+  every unauthenticated request** (measured 2026-08-26 in PR-P4 slice 2, while
+  reviewing a narrower version of the same concern).
+
+  **Trigger for this entry: any public-node RPC-hardening lane, or the first
+  serve-credit table large enough to make a full pass measurable.**
+
+  `gather_archival_epoch_rows_window` opens a cursor on `m_archival_serve_credit`
+  and walks `MDB_FIRST` to the end — **every persona, every shard, every epoch** —
+  filtering by epoch in the loop body. The `p_id` argument does **not** restrict
+  the scan; it only marks which bond index is the claimant's. The routine's own
+  comment states why: the epoch is the key *suffix* (`p_id ‖ shard ‖ epoch`), "so
+  a range seek by epoch is impossible — the full-table pass is inherent to the key
+  layout". The window form makes the RPC pay that pass once per request instead of
+  once per window epoch, which is the optimisation the comment claims, but the per
+  request term is still O(whole table).
+
+  **Measured shape of the endpoint's work, so a future fix targets the right
+  term:**
+
+  - window gather (part B, every request): **O(global serve-credit rows)** — all
+    personas, all shards, all epochs;
+  - cooldown anchor, compact record: ≤ `MAX_HOLDINGS_SHARDS` (4096) held shards,
+    2 seeks each, so ≤ 8192 seeks;
+  - cooldown anchor, `CompleteTree` record: 2 seeks per **served** shard, bounded
+    by that persona's own serve history rather than by a record-level cap.
+
+  A review pass raised only the third bullet. It is real but is the *smallest* of
+  the three and is asymptotically dominated by the first, so an aggregate that
+  fixed only the anchor would leave the dominant term untouched.
+
+  **Why the obvious fix is not a wallet-side change.** An O(1) maintained
+  whole-record anchor would have to become consensus's fold input too
+  (`blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post` call site) —
+  otherwise the daemon reports one derivation of a consensus operand to wallets
+  and computes another for itself, which is the exact divergence the exported fold
+  exists to prevent. So it lands on the **consensus + LMDB surface**: a maintained
+  aggregate needs a write path on serve-credit connect, a matching pop path, and a
+  persisted-schema snapshot (rule 42) — a different validation surface from the
+  wallet/RPC work that surfaced it (rule 19). That surface mismatch is the named
+  blocker rule 22 requires.
+
+  **Not an option: bounding the scan and refusing past the bound.** The refusal
+  would land on exactly the high-serve personas the readiness answer exists for,
+  and "cannot tell you whether your irreversible exit is safe" is a worse outcome
+  than the cost it avoids.
+
+  Worth noting for whoever takes it: the consensus path already treats this cost
+  as worth gating — `archival_debit_auth_pin` runs its two-vector compare
+  **before** any per-shard cursor scan precisely "so an unauthorized attempt is
+  rejected before it can cost LMDB seeks". The RPC has no equivalent gate because
+  it is deliberately unauthenticated (it answers about a public `P`), which is why
+  the work bound has to come from the data structure rather than from a caller
+  check.
+
+- **`shekyl-ffi` has 105 items with no docs, so `missing_docs` cannot gate it**
+  (measured 2026-08-26 during PR-P4 slice 2).
+
+  **Trigger for this entry: anyone widening the rustdoc gate's `-p` list, or the
+  separate whole-workspace rustdoc hygiene task already noted in
+  `rust-audit-test.yml`.**
+
+  Context, because the number alone understates the point. Two doc blocks landed
+  detached from their items in this PR — a new function inserted between an
+  existing block and the item it documented, which silently re-attaches the docs
+  to the newcomer and leaves the original undocumented. **Rustdoc does not warn**:
+  adjacent doc blocks simply concatenate, so `RUSTDOCFLAGS=-D warnings` is blind
+  to the whole class. `missing_docs` *is* the detector, because it fires on the
+  item that lost its docs. It was landed on `shekyl-archival-bond-builder`
+  (0 violations) in the same commit.
+
+  `shekyl-ffi` measured **105** violations and `shekyl-engine-core` **12** (4 of
+  which are in the build script's `consensus_constants_generated.rs`, so that
+  crate needs a generator change as well as a sweep). Both are sweeps rather
+  than gates, so the lint is not landed in either and both stay undetected for
+  this defect class.
+
+  **The gap has now bitten three times in one PR**, which is the argument for
+  widening rather than the doc-coverage percentage. Two exported
+  `unsafe extern "C"` functions had already drifted this way — one inherited a
+  `# Safety` section naming a parameter it does not have — and while fixing
+  those, a third instance was introduced in `emission_source.rs` by inserting
+  `ClaimSourceFor` between `fetch_emission_claim_source`'s doc block and its
+  item. That one was caught only because the preceding doc happened to end in a
+  bullet list, which tripped `clippy::doc_lazy_continuation`; a doc block ending
+  in a paragraph would have passed every gate in CI. The class is easy to hit
+  precisely when editing near an existing doc block, which is most of the time.
+
 - **[Done 2026-08-23] Nothing forced an `enc_label` through encryption on the
   production signing path** (surfaced 2026-08-22 while deleting the legacy
   prove seam; the only stated enforcement had been an unreachable check inside
@@ -198,12 +294,17 @@ sustainability is unaffected by the recalibration.
   `src/device/` has a named live consumer outside the directory, or is
   deleted. *Target: V3.1.*
 
-- **Staking has no exit: the wallet can build one of the four bond-post
-  kinds, and the refusal cites a consensus fact that is not true**
-  (added 2026-08-19, surfaced while scoping the Phase-5 deletion).
-  `bond_assembly.rs::wire_bond_post_input` accepts `JoinMarket` and
-  refuses every other `post_kind` with *"invalid at genesis"*. That
-  statement does not match consensus:
+- **Staking has no REACHABLE exit: the wallet can build two of the four
+  bond-post kinds, and neither is callable** (added 2026-08-19, surfaced
+  while scoping the Phase-5 deletion; heading corrected 2026-08-26 by
+  PR-P4 — it read "can build one of the four" and "the refusal cites a
+  consensus fact that is not true", and both halves moved: `Unbond` gained
+  a producer and that refusal is gone. The heading is the grep-visible
+  part, so it is corrected at source rather than only in the update below).
+  `bond_assembly.rs::wire_bond_post_input` accepted `JoinMarket` alone and
+  refused every other `post_kind` with *"invalid at genesis"* — it accepts
+  `Unbond` too as of PR-P4, and `Rebond` / `HoldingsUpdate` now refuse by
+  name. The original refusal's statement did not match consensus:
   [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §3.4 gives
   `Unbond` (`post_kind` 2) a full allowed-terms row with implemented
   verify (`verify_unbond_bond_post` / `unbond_connect` / `unbond_pop`,
@@ -216,6 +317,25 @@ sustainability is unaffected by the recalibration.
   matrix's row 9 note ("unbonding entry design pending") understates it,
   because the blocker is an explicit refusal in the assembler, not an
   absent design.
+
+  **UPDATE 2026-08-26 (PR-P4): the `Unbond` half is DISCHARGED; the other
+  two kinds are not.** `wire_bond_post_input` now maps `Unbond` as well,
+  and the wallet assembles the full exit — `build_unbond_vin` for the
+  witness, `AssembleUnbond` for the persona-bound transaction around it
+  (funding from the typed `P`-space pool, payout to `P`'s own base
+  address, and the surface-A `pqc_auths` slot under `bond_spend_pk`).
+  `Rebond` and `HoldingsUpdate` still refuse, and the refusal now names
+  them rather than being everything-else. **The consumer/producer
+  inversion below is therefore half-resolved and worth restating
+  precisely:** the producer exists, but it is not *reachable* — no RPC
+  method, no CLI verb — so a staker still cannot bond out today. What
+  changed is the nature of the gap: it was a missing producer, and it is
+  now an unlanded regtest walk (its own PR) that must exercise the
+  irreversible wipe before anything opens the path. `CLI_PARITY_MATRIX.md`
+  row 9 was corrected in the same pass — it no longer reads "unbonding
+  entry design pending", which was the understatement this entry called
+  out and is now wrong in a second way as well. Keep this entry open
+  until `HoldingsUpdate` and `Rebond` have producers.
 
   **Consequences as the code stands:** a staker can bond in and cannot
   bond out or adjust holdings. `stake_engine/retire.rs` performs an
@@ -252,6 +372,19 @@ sustainability is unaffected by the recalibration.
   RPC-forbidden as the P↔principal edge; the staking reads +
   `get_drain_balance` are the replacement). Both rejections are recorded
   rule-21-shaped in the `wallet_rpc.yaml` header registry.
+
+  **UPDATE 2026-08-26 (PR-P4): the `Unbond` producer is now partly built,
+  and the entry's core still stands — for a different reason.** The vin
+  producer (`build_unbond_vin`), the engine-side preconditions
+  (`UnbondRecordState`), and the persona-bound transaction around the vin
+  (`AssembleUnbond`, slice 2b) all landed. Bond-out therefore remains
+  impossible, but
+  from **unreachability** rather than absence: `assemble_unbond` is
+  `pub(crate)` with no RPC method and no CLI verb behind it. Read that as
+  a narrower guarantee than the original — absence needed no upkeep,
+  unreachability does, and it lapses the moment a caller outside
+  `cfg(test)` appears. `wallet_rpc.yaml`'s RESERVED `unstake` entry holds
+  that condition.
 
 - **Release-asset manifest signing owed before the first non-RC release
   tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
@@ -578,21 +711,37 @@ sustainability is unaffected by the recalibration.
   remaining non-consensus constants — stays as filed: per-constant pins
   until the full generator migration.
 
-- **TJ-1 (CRITICAL, live consensus path) — the challenged leaf index carries no
-  beacon: a SPEC/CODE DIVERGENCE** (added 2026-07-29,
-  `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §10.1). 8C §4's **pinned
-  BUILD pattern** is `τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ dom )`
-  with the rationale *"leaf index unknown before that block exists"*;
-  `challenge.rs:55–71` derives `τ` from `p_id ‖ shard_id ‖ settlement_epoch`
-  **only** — the beacon input is absent. Consequence: the entire future
-  challenge schedule is precomputable, so a `P` retains just the challenged
-  leaves + openings (**~82 KB across a 26-epoch horizon**) and passes every
-  baseline having discarded the 3.33 MB shard. **Topology does not bind it**
-  (no helper, no relay), so this is an independent free-riding path none of the
-  TJ rulings cover. **Disposition:** TJ-B's charter amended to **DELETE** the
-  vin-carried opening path rather than extend it; **interim mitigation if TJ-B
-  lands late** — restore `block_hash[H_challenge]` to `τ` (spec conformance,
-  not new design).
+- **TJ-1 (was CRITICAL, live consensus path) — the challenged leaf index
+  carried no beacon: MITIGATED 2026-08-24, closes by DELETION at the cutover**
+  (added 2026-07-29, `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §10.1;
+  status corrected 2026-08-26). 8C §4's **pinned BUILD pattern** is
+  `τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ dom )` with the rationale
+  *"leaf index unknown before that block exists"*. This entry read, until
+  2026-08-26, that `challenge.rs` derives `τ` from
+  `p_id ‖ shard_id ‖ settlement_epoch` **only**, with the beacon input absent.
+  **That is no longer true and had not been since `PC-D3` landed** — the
+  preimage gained `block_hash(h−1)` under a `-v2` separator, which is this
+  entry's own prescribed interim mitigation, executed.
+
+  **What the mitigation bought.** The precomputation attack is closed: nobody
+  can know which leaf is challenged before the block exists, so the ~82 KB
+  retain-the-schedule strategy no longer passes. **What it did not buy:**
+  under the live beacon a response may land anywhere in its window, so a
+  prover gets roughly `CHALLENGE_RESPONSE_BLOCKS` draws and needs one leaf it
+  holds — the floor is "best of a window" rather than "the one assigned
+  leaf". `RF-D8` rules that residual weak-but-nonzero; pinning responses to
+  their assignment blocks is what closes it, and that is the cutover.
+
+  **Disposition (unchanged, and now the operative one): TJ-B's charter
+  DELETES the vin-carried opening path rather than extending it.** `RF-D8`
+  ruling (i) briefly kept the opening as supplementary evidence; that ruling
+  was **retracted 2026-08-26** (see `ARCHIVAL_RESPONSE_FORMAT.md`, grep
+  `RF-D8` (i)) because the countersignature preimage names the challenged
+  leaf and so tells `P` which request is the challenge — defeating the
+  indistinguishability §9 depends on. So this entry closes the way it
+  originally said it would: **by deletion**, taking `challenge_leaf_index`
+  and `PC-D3`'s block binding with it. Until then the mitigation is
+  load-bearing and must not be reverted as dead code.
 
 - **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item
   is discharged, one dependent fix remains.** `constants.rs` is now
@@ -4733,6 +4882,15 @@ sustainability is unaffected by the recalibration.
     fire this criterion by construction** — the façade takes no slot argument,
     resolves only the live active persona, and does not unbond anything; the
     criterion still awaits an unbond producer that could select arbitrary slots.
+    UPDATE 2026-08-26 (PR-P4): an `Unbond` producer now exists, so the premise
+    of the sentence above has moved — but the criterion still does not fire,
+    and the reason is worth stating exactly because it is weaker than the old
+    one. It is not that no producer exists; it is that no *reachable* one does
+    (`assemble_unbond` is `pub(crate)`, no RPC method, no CLI verb), and that
+    the handler refuses any record whose persona is not the handle's own, so a
+    caller cannot reach across slots even if it could reach the seam. **Reopen
+    on the RPC/CLI verb landing, not on the producer landing** — that is the
+    event this criterion was really about.
     **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with
