@@ -144,14 +144,24 @@ pub(crate) enum DrainRequestError {
     /// drain to confirm or fail before re-draining.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     DrainPending,
-    /// A concurrent same-persona post (a bond or an emission claim) reserved one
-    /// of this drain's swept inputs between the pre-assembly reservation read
-    /// and the seal. The optimistic `reserved` snapshot is stale under
-    /// concurrency; the authoritative re-check under the write lock caught the
-    /// collision and refused **before** sealing, so no doomed record is left
-    /// behind. Retry — the next assembly reads the now-current reservation set
-    /// and selects around the reserved input.
-    #[error("a concurrent post reserved one of this drain's inputs; retry")]
+    /// This drain's swept inputs are no longer selectable, for either of the
+    /// two reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **bond post or emission claim** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly read and the
+    ///   seal (`SealAdmission::Stale`), so the set this assembly swept against
+    ///   no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this drain still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry against a current snapshot. One variant
+    /// because one remedy; the message names both causes because naming only
+    /// one sends a caller looking for a collision that may not exist.
+    #[error(
+        "this drain's inputs are no longer current — another live record holds \
+         one, or a reservation was released mid-assembly; retry"
+    )]
     InputRaced,
     /// The drain pipeline refused (reference anchor, exit-reserve, planning,
     /// path assembly, or the actor's assembly itself).
@@ -257,7 +267,9 @@ where
         let (p_canonical_id, pscan_state, reserved) = tokio::join!(
             stake.persona_canonical_id(p_slot),
             load_pscan_state_for_engine(self_arc.clone()),
-            store.read(shekyl_engine_state::PendingPostBlock::reserved_gindexes),
+            // Generation and reservation set in ONE locked read: the counter
+            // is only meaningful paired with the set it describes.
+            store.read(|block| (block.generation(), block.reserved_gindexes())),
         );
         let p_canonical_id = p_canonical_id?;
 
@@ -284,7 +296,8 @@ where
         let retired = pscan_state
             .as_ref()
             .is_some_and(|s| s.pending_unbonds().contains_key(&p_canonical_id));
-        let reserved = reserved.map_err(|e| DrainRequestError::state("reserved gindexes", e))?;
+        let (snapshot_generation, reserved) =
+            reserved.map_err(|e| DrainRequestError::state("reserved gindexes", e))?;
 
         // Optimistic fast-fail on a live drain (one live drain per persona —
         // the in-flight input reservation). The AUTHORITATIVE serialization is
@@ -355,7 +368,7 @@ where
                 // RETRY when the truth was `DrainPending` — wait for the live
                 // record. The remedies are opposites, so the misclassification
                 // sent a caller into a loop it could not win.
-                let admission = block.seal_drain(sealed, dispatch_tip);
+                let admission = block.seal_drain(sealed, dispatch_tip, snapshot_generation);
                 (admission == SealAdmission::Admit, admission)
             })
             .await
@@ -363,7 +376,11 @@ where
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(DrainRequestError::DrainPending),
-            SealAdmission::InputRaced => return Err(DrainRequestError::InputRaced),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(DrainRequestError::InputRaced)
+            }
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited

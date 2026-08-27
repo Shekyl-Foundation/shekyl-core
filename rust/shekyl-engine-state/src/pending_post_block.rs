@@ -68,7 +68,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 7;
+pub const PENDING_POST_VERSION: u32 = 8;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -261,6 +261,16 @@ pub enum SealAdmission {
     /// Another live record — of any kind — already reserves one of these
     /// gindexes.
     InputRaced,
+    /// A reservation was **released** between the assembly's snapshot and this
+    /// seal, so the snapshot the inputs were selected against is no longer
+    /// current. The released record may have confirmed and spent inputs this
+    /// assembly still believes are fundable; admitting it would seal a
+    /// transaction the network will reject, whose absent inputs the next
+    /// settlement tick would then misread as its own confirmation.
+    ///
+    /// Same remedy as [`Self::InputRaced`] — retry against a fresh snapshot —
+    /// but a distinct cause, and the only one the union check cannot see.
+    Stale,
 }
 
 /// What [`PendingPostBlock::remove_settled`] retired, split by kind.
@@ -296,6 +306,23 @@ pub struct PendingPostBlock {
     /// Per-block schema version — [`PENDING_POST_VERSION`] on construction,
     /// version-gated on load.
     version: u32,
+    /// **Monotonic count of reservation RELEASES.** Bumped by every method that
+    /// drops a live record, and compared at [`Self::classify_seal`] against the
+    /// value an assembly read when it snapshotted the reservation set.
+    ///
+    /// The union check sees reservations that are *present*; this makes
+    /// reservations that were *released* visible. Comparing the reservation
+    /// sets themselves cannot: a record that seals, confirms and retires during
+    /// an assembly returns the set to exactly its snapshot value, so the
+    /// snapshot and the seal read as identical while the inputs behind them
+    /// have been spent. Only a monotonic counter distinguishes "unchanged" from
+    /// "changed back".
+    ///
+    /// Persisted rather than in-memory because the engine's pending-post store
+    /// reloads the block from the seal on every read and every mutation — an
+    /// unpersisted counter would reset to zero on each load and never refuse
+    /// anything.
+    generation: u64,
     /// The live pending posts. At most one per persona at genesis
     /// (JoinMarket-only; the assemble path refuses a second — `ARCHIVAL_BOND_WI2_ASSEMBLY.md`
     /// §3.5 "one live post per persona").
@@ -314,6 +341,10 @@ impl std::fmt::Debug for PendingPostBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingPostBlock")
             .field("version", &self.version)
+            // Shown, not redacted: a count of reservation releases names no
+            // persona, gindex or amount, and it is the one value worth having
+            // in a log when a seal was refused as `Stale`.
+            .field("generation", &self.generation)
             .field("posts", &"<redacted pending-posts>")
             .field("claims", &"<redacted pending-claims>")
             .field("drains", &"<redacted pending-drains>")
@@ -332,6 +363,7 @@ impl PendingPostBlock {
     pub fn empty() -> Self {
         Self {
             version: PENDING_POST_VERSION,
+            generation: 0,
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
@@ -344,6 +376,7 @@ impl PendingPostBlock {
     pub fn new(posts: Vec<PendingBondPost>) -> Self {
         Self {
             version: PENDING_POST_VERSION,
+            generation: 0,
             posts,
             claims: Vec::new(),
             drains: Vec::new(),
@@ -470,6 +503,7 @@ impl PendingPostBlock {
     #[must_use]
     pub fn remove_claim(&mut self, persona: &PCanonicalId) -> Option<PendingEmissionClaim> {
         let idx = self.claims.iter().position(|c| &c.persona == persona)?;
+        self.generation += 1;
         Some(self.claims.remove(idx))
     }
 
@@ -517,6 +551,7 @@ impl PendingPostBlock {
     #[must_use]
     pub fn remove_drain(&mut self, persona: &PCanonicalId) -> Option<PendingDrain> {
         let idx = self.drains.iter().position(|d| &d.persona == persona)?;
+        self.generation += 1;
         Some(self.drains.remove(idx))
     }
 
@@ -566,6 +601,7 @@ impl PendingPostBlock {
     #[must_use]
     pub fn remove_post(&mut self, persona: &PCanonicalId) -> Option<PendingBondPost> {
         let idx = self.posts.iter().position(|p| &p.persona == persona)?;
+        self.generation += 1;
         Some(self.posts.remove(idx))
     }
 
@@ -592,7 +628,16 @@ impl PendingPostBlock {
                 true
             }
         });
+        self.generation += u64::try_from(retired.len()).unwrap_or(u64::MAX);
         retired
+    }
+
+    /// The reservation-release counter an assembly must carry from its
+    /// snapshot to its seal. See the field docs for why a counter rather than a
+    /// set comparison.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Classify a seal attempt **under the write lock**, in the one order that
@@ -626,7 +671,9 @@ impl PendingPostBlock {
         kind: PendingKind,
         persona: &PCanonicalId,
         gindexes: &[GlobalOutputIndex],
+        snapshot_generation: u64,
     ) -> SealAdmission {
+        // A current-state fact, true regardless of how old the snapshot is.
         let live = match kind {
             PendingKind::Post => self.has_live_post_for(persona),
             PendingKind::Claim => self.has_live_claim_for(persona),
@@ -634,6 +681,13 @@ impl PendingPostBlock {
         };
         if live {
             return SealAdmission::PersonaLive;
+        }
+        // Only now ask whether the snapshot is still a basis worth reasoning
+        // from. A conclusion drawn from a stale reservation set — including
+        // "these gindexes are free" — is not evidence, so this precedes the
+        // union check rather than following it.
+        if snapshot_generation != self.generation {
+            return SealAdmission::Stale;
         }
         let reserved = self.reserved_gindexes();
         if gindexes.iter().any(|g| reserved.contains(g)) {
@@ -651,8 +705,13 @@ impl PendingPostBlock {
     /// is no bool here to re-derive from: the insert is unconditional on the
     /// admitted path, because [`Self::classify_seal`] is what establishes the
     /// one-live-per-persona-per-kind precondition `push_post` would re-check.
-    pub fn seal_post(&mut self, post: PendingBondPost) -> SealAdmission {
-        match self.classify_seal(PendingKind::Post, &post.persona, &post.funding_gindexes) {
+    pub fn seal_post(&mut self, post: PendingBondPost, snapshot_generation: u64) -> SealAdmission {
+        match self.classify_seal(
+            PendingKind::Post,
+            &post.persona,
+            &post.funding_gindexes,
+            snapshot_generation,
+        ) {
             SealAdmission::Admit => {}
             refused => return refused,
         }
@@ -673,8 +732,14 @@ impl PendingPostBlock {
         &mut self,
         mut claim: PendingEmissionClaim,
         at: BlockHeight,
+        snapshot_generation: u64,
     ) -> SealAdmission {
-        match self.classify_seal(PendingKind::Claim, &claim.persona, &claim.fee_gindexes) {
+        match self.classify_seal(
+            PendingKind::Claim,
+            &claim.persona,
+            &claim.fee_gindexes,
+            snapshot_generation,
+        ) {
             SealAdmission::Admit => {}
             refused => return refused,
         }
@@ -685,8 +750,18 @@ impl PendingPostBlock {
 
     /// Seal a `P`→principal drain and stamp it `Dispatched` at `at`, the
     /// sibling of [`Self::seal_claim`].
-    pub fn seal_drain(&mut self, mut drain: PendingDrain, at: BlockHeight) -> SealAdmission {
-        match self.classify_seal(PendingKind::Drain, &drain.persona, &drain.funding_gindexes) {
+    pub fn seal_drain(
+        &mut self,
+        mut drain: PendingDrain,
+        at: BlockHeight,
+        snapshot_generation: u64,
+    ) -> SealAdmission {
+        match self.classify_seal(
+            PendingKind::Drain,
+            &drain.persona,
+            &drain.funding_gindexes,
+            snapshot_generation,
+        ) {
             SealAdmission::Admit => {}
             refused => return refused,
         }
@@ -772,6 +847,8 @@ impl PendingPostBlock {
                 true
             }
         });
+        let released = out.claims.len() + out.drains.len();
+        self.generation += u64::try_from(released).unwrap_or(u64::MAX);
         out
     }
 
@@ -833,7 +910,12 @@ mod tests {
 
         // The second claim for the same persona reserves the same inputs.
         assert_eq!(
-            block.classify_seal(PendingKind::Claim, &p, &gindexes(&[1, 2])),
+            block.classify_seal(
+                PendingKind::Claim,
+                &p,
+                &gindexes(&[1, 2]),
+                block.generation()
+            ),
             SealAdmission::PersonaLive,
             "a live claim must be awaited, not retried around"
         );
@@ -849,14 +931,24 @@ mod tests {
         // A different persona's claim wanting the drain's input: no persona
         // dedup applies, and the overlap is real.
         assert_eq!(
-            block.classify_seal(PendingKind::Claim, &other, &gindexes(&[7])),
+            block.classify_seal(
+                PendingKind::Claim,
+                &other,
+                &gindexes(&[7]),
+                block.generation()
+            ),
             SealAdmission::InputRaced
         );
         // Same persona, different kind, same input — still the overlap arm,
         // because one-per-persona is per KIND.
         let same = PCanonicalId::from_bytes([0xAA; 32]);
         assert_eq!(
-            block.classify_seal(PendingKind::Claim, &same, &gindexes(&[7])),
+            block.classify_seal(
+                PendingKind::Claim,
+                &same,
+                &gindexes(&[7]),
+                block.generation()
+            ),
             SealAdmission::InputRaced
         );
     }
@@ -868,7 +960,12 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         assert!(block.push_drain(drain(0xAA, &[7])));
         assert_eq!(
-            block.classify_seal(PendingKind::Drain, &p, &gindexes(&[8, 9])),
+            block.classify_seal(
+                PendingKind::Drain,
+                &p,
+                &gindexes(&[8, 9]),
+                block.generation()
+            ),
             SealAdmission::Admit
         );
     }
@@ -881,7 +978,7 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         assert!(block.push_drain(drain(0xAA, &[7])));
         assert_eq!(
-            block.classify_seal(PendingKind::Claim, &p, &gindexes(&[8])),
+            block.classify_seal(PendingKind::Claim, &p, &gindexes(&[8]), block.generation()),
             SealAdmission::Admit,
             "a live drain is not a live claim"
         );
@@ -896,8 +993,9 @@ mod tests {
         let at = BlockHeight::from_raw(900);
         let mut block = PendingPostBlock::empty();
 
+        let g = block.generation();
         assert_eq!(
-            block.seal_claim(claim(0xAA, &[1, 2]), at),
+            block.seal_claim(claim(0xAA, &[1, 2]), at, g),
             SealAdmission::Admit
         );
 
@@ -920,7 +1018,8 @@ mod tests {
     #[test]
     fn an_admitted_post_seal_leaves_the_record_pending() {
         let mut block = PendingPostBlock::empty();
-        assert_eq!(block.seal_post(post(0xAA, &[1])), SealAdmission::Admit);
+        let g = block.generation();
+        assert_eq!(block.seal_post(post(0xAA, &[1]), g), SealAdmission::Admit);
         assert_eq!(block.posts()[0].state, PendingPostState::Pending);
     }
 
@@ -932,19 +1031,22 @@ mod tests {
     fn a_refused_seal_inserts_nothing() {
         let at = BlockHeight::from_raw(900);
         let mut block = PendingPostBlock::empty();
+        let g = block.generation();
         assert_eq!(
-            block.seal_drain(drain(0xAA, &[7]), at),
+            block.seal_drain(drain(0xAA, &[7]), at, g),
             SealAdmission::Admit
         );
 
-        // Persona-live refusal: same persona, same kind.
+        // Persona-live refusal: same persona, same kind. Sealing releases
+        // nothing, so `g` is still current and these reach their own arms
+        // rather than the staleness one.
         assert_eq!(
-            block.seal_drain(drain(0xAA, &[8]), at),
+            block.seal_drain(drain(0xAA, &[8]), at, g),
             SealAdmission::PersonaLive
         );
         // Input-raced refusal: different persona, gindex already reserved.
         assert_eq!(
-            block.seal_claim(claim(0xBB, &[7]), at),
+            block.seal_claim(claim(0xBB, &[7]), at, g),
             SealAdmission::InputRaced
         );
 
@@ -961,6 +1063,125 @@ mod tests {
             block.reserved_gindexes(),
             gindexes(&[7]).into_iter().collect(),
             "a refused seal must not widen the reservation set"
+        );
+    }
+
+    /// **The staleness the union check cannot see** (review #572, round 5).
+    ///
+    /// The exact interleaving: assembly A snapshots the reservation set, and
+    /// while its proof work runs, drain B seals A's chosen input, confirms, and
+    /// is retired by `remove_settled`. B's reservation is now *gone*, so the
+    /// union check A performs at seal time sees the gindex free and admits —
+    /// sealing a transaction whose input B already spent. Worse, the next tick
+    /// sees that input absent from live funding and reads it as A's OWN
+    /// confirmation, retiring a record whose transaction the network rejected.
+    ///
+    /// The generation counter is what makes the release visible. Note the
+    /// reservation set is byte-identical at snapshot and at seal — empty both
+    /// times — so no comparison of the sets themselves could catch this.
+    #[test]
+    fn a_reservation_released_during_assembly_refuses_the_stale_seal() {
+        let a = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+
+        // A snapshots: nothing reserved, so gindex 7 looks free and A selects
+        // it. Proof work begins.
+        let a_snapshot = block.generation();
+        assert!(block.reserved_gindexes().is_empty());
+
+        // B seals the same input and confirms; the settlement tick retires it.
+        assert_eq!(
+            block.seal_drain(drain(0xBB, &[7]), BlockHeight::from_raw(900), a_snapshot),
+            SealAdmission::Admit
+        );
+        let retired = block.remove_settled(&live(&[]));
+        assert_eq!(retired.drains.len(), 1, "B must have been retired");
+
+        // The set A would compare against is identical to its snapshot.
+        assert!(
+            block.reserved_gindexes().is_empty(),
+            "the release returned the set to its snapshot value — this is why a \
+             set comparison cannot detect it"
+        );
+
+        // A now seals. The union check would admit; the generation refuses.
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &a, &gindexes(&[7]), a_snapshot),
+            SealAdmission::Stale,
+            "a seal whose snapshot predates a release must be refused"
+        );
+
+        // Control: the same seal against a CURRENT snapshot is admitted, so it
+        // is the staleness being refused and not the persona or the gindex.
+        assert_eq!(
+            block.classify_seal(PendingKind::Claim, &a, &gindexes(&[7]), block.generation()),
+            SealAdmission::Admit
+        );
+    }
+
+    /// Every reservation-releasing method moves the generation, and the
+    /// non-releasing ones do not. A release that forgot to bump would leave
+    /// exactly the window the test above closes.
+    #[test]
+    fn every_release_moves_the_generation_and_only_a_release_does() {
+        let at = BlockHeight::from_raw(900);
+        let p = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+
+        // Sealing reserves; it must NOT move the generation, or every seal
+        // would invalidate every other assembly in flight.
+        let g0 = block.generation();
+        assert_eq!(block.seal_post(post(0xAA, &[1]), g0), SealAdmission::Admit);
+        assert_eq!(
+            block.seal_claim(claim(0xAA, &[2]), at, g0),
+            SealAdmission::Admit
+        );
+        assert_eq!(
+            block.seal_drain(drain(0xAA, &[3]), at, g0),
+            SealAdmission::Admit
+        );
+        assert_eq!(
+            block.generation(),
+            g0,
+            "reserving is not releasing; a seal must not invalidate other assemblies"
+        );
+
+        // Each remover releases, and each must be visible.
+        assert!(block.remove_claim(&p).is_some());
+        assert_eq!(block.generation(), g0 + 1, "remove_claim");
+        assert!(block.remove_drain(&p).is_some());
+        assert_eq!(block.generation(), g0 + 2, "remove_drain");
+        assert!(block.remove_post(&p).is_some());
+        assert_eq!(block.generation(), g0 + 3, "remove_post");
+
+        // A remover that removes nothing releases nothing.
+        let g = block.generation();
+        assert!(block.remove_post(&p).is_none());
+        assert_eq!(block.generation(), g, "a no-op remove must not move it");
+
+        // The batched retires, by count.
+        let g = block.generation();
+        assert_eq!(block.seal_post(post(0xCC, &[4]), g), SealAdmission::Admit);
+        let confirmed: BTreeSet<PCanonicalId> =
+            [PCanonicalId::from_bytes([0xCC; 32])].into_iter().collect();
+        assert_eq!(block.remove_confirmed(&confirmed).len(), 1);
+        assert_eq!(block.generation(), g + 1, "remove_confirmed");
+
+        let g = block.generation();
+        assert_eq!(
+            block.seal_claim(claim(0xDD, &[5]), at, g),
+            SealAdmission::Admit
+        );
+        assert_eq!(
+            block.seal_drain(drain(0xDD, &[6]), at, g),
+            SealAdmission::Admit
+        );
+        let retired = block.remove_settled(&live(&[]));
+        assert_eq!(retired.claims.len() + retired.drains.len(), 2);
+        assert_eq!(
+            block.generation(),
+            g + 2,
+            "remove_settled must count both kinds it retired"
         );
     }
 
@@ -1116,6 +1337,7 @@ mod tests {
     fn version_mismatch_fails_closed() {
         let wrong = PendingPostBlock {
             version: PENDING_POST_VERSION + 1,
+            generation: 0,
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
@@ -1138,6 +1360,7 @@ mod tests {
     fn v1_seal_fails_closed_under_v2_binary() {
         let v1 = PendingPostBlock {
             version: 1,
+            generation: 0,
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),

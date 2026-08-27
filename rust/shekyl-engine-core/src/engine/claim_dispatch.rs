@@ -133,14 +133,25 @@ pub(crate) enum EmissionClaimRequestError {
         "a pending emission claim already exists for this persona; one live claim per persona"
     )]
     ClaimPending,
-    /// A concurrent same-persona bond post or drain reserved one of this
-    /// claim's fee inputs between the pre-assembly snapshot and the seal. The
-    /// optimistic `reserved` snapshot is stale under concurrency; the
-    /// authoritative re-check under the write lock caught the collision and
-    /// refused **before** sealing, so no doomed record is left behind. Retry —
-    /// the next assembly reads the now-current reservation set and selects
-    /// around the reserved input.
-    #[error("a concurrent post reserved one of this claim's fee inputs; retry")]
+    /// This claim's fee inputs are no longer selectable, for either of the two
+    /// reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **bond post or drain** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly snapshot and
+    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
+    ///   against no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this claim still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry, and the next assembly selects against
+    /// a current snapshot. They are one variant because they are one remedy;
+    /// the message names both because naming only one sends a caller looking
+    /// for a collision that may not exist.
+    #[error(
+        "this claim's fee inputs are no longer current — another live record \
+         holds one, or a reservation was released mid-assembly; retry"
+    )]
     InputRaced,
     /// The claim pipeline refused (fetch, anchor, designation, sweep, path
     /// assembly, or the actor's assembly itself).
@@ -224,7 +235,9 @@ where
         let (identity, pscan_state, reserved) = tokio::join!(
             stake.persona_identity(p_slot),
             load_pscan_state_for_engine(self_arc.clone()),
-            store.read(shekyl_engine_state::PendingPostBlock::reserved_gindexes),
+            // Generation and reservation set in ONE locked read: the counter
+            // is only meaningful paired with the set it describes.
+            store.read(|block| (block.generation(), block.reserved_gindexes())),
         );
         let identity = identity?;
         let bond_id_bytes = identity
@@ -244,7 +257,7 @@ where
                 .as_ref()
                 .map(|s| (s.funding_outputs(), s.bond_post_matches()))
                 .unwrap_or((&[], &[]));
-        let reserved =
+        let (snapshot_generation, reserved) =
             reserved.map_err(|e| EmissionClaimRequestError::state("reserved gindexes", e))?;
 
         // Optimistic fast-fail on a live claim (one live claim per persona —
@@ -310,7 +323,7 @@ where
                 // Deciding and inserting are one call so this seam cannot
                 // re-derive the outcome from a push bool whose refusal arm the
                 // decision above has already ruled out.
-                let admission = block.seal_claim(sealed, dispatch_tip);
+                let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
                 (admission == SealAdmission::Admit, admission)
             })
             .await
@@ -318,7 +331,11 @@ where
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
-            SealAdmission::InputRaced => return Err(EmissionClaimRequestError::InputRaced),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(EmissionClaimRequestError::InputRaced)
+            }
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited

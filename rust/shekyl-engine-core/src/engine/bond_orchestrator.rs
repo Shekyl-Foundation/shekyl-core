@@ -527,7 +527,7 @@ where
         // preflight ran (`sweep_bond_funding`), re-run at this path's own
         // fresh reference/state so the persist→assemble window cannot ride
         // stale inputs.
-        let (selection, reference) = Self::sweep_bond_funding(
+        let (selection, reference, snapshot_generation) = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
@@ -657,7 +657,7 @@ where
                 // not itself retired that way (its evidence is the pscan's own
                 // bond-post match), but it can falsify someone else's, so the
                 // guard belongs here as much as on the paths it protects.
-                let admission = block.seal_post(sealed);
+                let admission = block.seal_post(sealed, snapshot_generation);
                 (admission == SealAdmission::Admit, admission)
             })
             .await
@@ -665,7 +665,11 @@ where
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
-            SealAdmission::InputRaced => return Err(BondAssemblyError::InputRaced.into()),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(BondAssemblyError::InputRaced.into())
+            }
         }
 
         Ok(assembled)
@@ -691,7 +695,7 @@ where
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
-    ) -> Result<(FundingSelection, ReferenceBlock), BondAssemblyError> {
+    ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
@@ -703,8 +707,12 @@ where
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
 
-        let reserved = store
-            .read(shekyl_engine_state::PendingPostBlock::reserved_gindexes)
+        // Generation and reservation set in ONE locked read: the counter is
+        // only meaningful paired with the set it describes. It rides out to the
+        // seal so `seal_post` can tell whether this selection's basis still
+        // holds.
+        let (snapshot_generation, reserved) = store
+            .read(|block| (block.generation(), block.reserved_gindexes()))
             .await
             .map_err(|e| BondAssemblyError::build("reserved gindexes", e))?;
 
@@ -728,7 +736,7 @@ where
             required,
             reference_height,
         )?;
-        Ok((selection, reference))
+        Ok((selection, reference, snapshot_generation))
     }
 }
 

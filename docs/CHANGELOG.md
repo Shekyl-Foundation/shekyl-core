@@ -33,6 +33,29 @@
   mint — would otherwise retire the instant it was sealed, before its bytes
   reached the network.
 
+- **A seal whose snapshot predates a retirement is refused, not sealed against
+  spent inputs** (`PENDING_POST_VERSION` v7 → v8). Retiring on
+  reservation-absence needs one live record per gindex, and the seal-time union
+  check alone does not give it across an assembly: A snapshots the reservation
+  set, and while its proof work runs, B seals A's chosen input, confirms, and is
+  retired. B's reservation is now gone, so A's union check sees the input free
+  and admits — sealing a transaction whose input B already spent, whose absence
+  the *next* tick then reads as A's own confirmation. A record the network
+  rejected would be booked as settled.
+
+  The block carries a monotonic count of reservation **releases**, bumped by
+  every method that drops a live record and compared at the seal against the
+  value the assembly read with its snapshot. The union check sees reservations
+  that are present; the generation makes reservations that were *released*
+  visible. Comparing the reservation sets themselves cannot: the release returns
+  the set to exactly its snapshot value, so snapshot and seal read identical
+  while the inputs behind them have been spent. Persisted rather than in-memory
+  because the pending-post store reloads the block from the seal on every read
+  and every mutation — an unpersisted counter would reset to zero on each load
+  and never refuse anything. Same remedy as the existing input race (retry
+  against a fresh snapshot), so it surfaces through the same refusal, whose
+  message now names every cause rather than only a concurrent post.
+
 ### Added
 
 - **A stall alarm for pending claims and drains.** A record dispatched but not

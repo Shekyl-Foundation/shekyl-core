@@ -109,15 +109,21 @@ pub enum DrainToPrincipalError {
         detail: String,
     },
     /// A live pending drain already exists for this persona — one live drain
-    /// per persona (`-29511`). Releasing the seal (confirmation retire or
-    /// terminal-reject prune) is the drain lifecycle driver's job, and that
-    /// driver is not yet wired (`docs/FOLLOWUPS.md` "Drain dispatch driver",
-    /// WI-3 sibling, target V3.0 pre-genesis) — until it lands this refusal
-    /// persists across sessions, including after the first drain confirms.
+    /// per persona (`-29511`). Releasing the seal is the drain lifecycle
+    /// driver's job, and that driver is **half wired** as of PR #572: a drain
+    /// that CONFIRMS now releases its seal (retired against its reserved inputs
+    /// leaving the wallet's live funding set), so this refusal no longer
+    /// outlives a successful drain. It still persists across sessions for a
+    /// drain the network rejects **terminally** — that transaction never spends
+    /// its inputs, so it never settles; the terminal-reject prune and the
+    /// byte-identical resubmit remain open (`docs/FOLLOWUPS.md` "Drain dispatch
+    /// driver", target V3.0 pre-genesis), and a stall alarm names the stuck
+    /// lane in the operator log rather than leaving it silent.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     InFlight,
-    /// A concurrent same-persona post reserved one of this drain's swept
-    /// inputs between snapshot and seal; nothing was sealed — retry
+    /// This drain's swept inputs are no longer current — either a concurrent
+    /// bond post or emission claim reserves one, or a reservation was released
+    /// mid-assembly; nothing was sealed — retry
     /// (`-29511`, retry remedy).
     #[error("a concurrent post reserved one of this drain's inputs; retry")]
     InputRaced,
@@ -550,6 +556,7 @@ mod tests {
         let store = pending_post_store_for_engine(engine.clone(), write_lock);
         let sealed = store
             .mutate(move |block| {
+                let g = block.generation();
                 let admitted = block.seal_drain(
                     PendingDrain {
                         persona,
@@ -558,6 +565,7 @@ mod tests {
                         state: PendingPostState::Pending,
                     },
                     shekyl_types::BlockHeight::from_raw(1),
+                    g,
                 ) == SealAdmission::Admit;
                 (admitted, admitted)
             })
