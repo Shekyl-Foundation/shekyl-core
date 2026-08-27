@@ -335,9 +335,18 @@ fn dispatch(
                 // outstanding tokens, so it is not the lesser half of the
                 // join — omitting it would leave a token resolvable against
                 // a slot that no longer has a peer.
-                if let Some(q) = queues.as_deref_mut() {
-                    q.unbind(channel);
-                }
+                //
+                // Asserts on a missing queue for the same reason the send arm
+                // does, and the premise is the same one: `Driver::poll` emits
+                // EITHER noise effect only behind `due_noise_channel`, which
+                // is `None` unless the zone's schedule is `On`. So a zone that
+                // can produce this cannot lack a queue, and silence here would
+                // hide the construction bug rather than the scheduling one.
+                let Some(q) = queues.as_deref_mut() else {
+                    debug_assert!(false, "NoiseUnbind on a zone with no carrier queue");
+                    continue;
+                };
+                q.unbind(channel);
             }
         }
     }

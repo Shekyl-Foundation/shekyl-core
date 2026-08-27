@@ -576,7 +576,17 @@ namespace levin
           boost::uuids::uuid destination{};
           std::memcpy(std::addressof(destination), peer, sizeof(destination));
 
-          epee::byte_slice blob{{reinterpret_cast<const char*>(bytes), len}};
+          /* Spelled as a span of the type it actually is. The cast that stood
+             here was not merely redundant: `epee::span`'s converting ctor
+             refuses `const char*` -> `const uint8_t*` (`safe_conversion`
+             allows only an exact match or added const), so `{char*, len}`
+             could not select the initializer_list-of-spans ctor at all. It
+             selected `byte_slice(std::string&&)` instead, via `std::string`'s
+             `(ptr, count)` ctor — a working line that did something other
+             than what it read as. A reviewer read it as the span form and
+             called it a compile error; it compiled, and both of us were
+             reading a different overload than the compiler chose. */
+          epee::byte_slice blob{epee::span<const std::uint8_t>{bytes, len}};
           return z.p2p->send(std::move(blob), destination);
         }
         catch (const std::exception& e)
