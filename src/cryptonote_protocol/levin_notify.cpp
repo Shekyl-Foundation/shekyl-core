@@ -42,6 +42,7 @@
 
 #include "levin_notify.h"
 
+#include <atomic>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/post.hpp>
@@ -78,6 +79,41 @@ namespace cryptonote
 {
 namespace levin
 {
+  /*! Development opt-in for the noise carrier. Defaults OFF, and the
+      default is the shipped behaviour.
+
+      A RUNTIME switch rather than a compile-time one, and that is the
+      difference between a gate and a hope. Behind `#ifdef` the only
+      configuration that reaches the carrier is the one CI never builds, so
+      the code would be untestable by the repository's own gate — the
+      failure mode a reviewer named on the first draft. Defaulting off and
+      letting a test turn it on means the carrier's path is exercised by the
+      ordinary suite, and every existing `has_noise == false` fixture keeps
+      passing untouched because the default did not move.
+
+      NOT an operator switch, and §3.1 of `COVER_TRAFFIC_RESTORATION.md` is
+      the ruling rather than the caution: one encrypted zone has ONE embargo
+      distribution, the carrier moves `hop` by ~9x, and a carrier-adaptive
+      embargo is refused by §18's argument at its third application. Enabling
+      this under today's constants runs the zone's alpha below the 0.90 pin.
+      It exists so the mechanism can be built and tested before the two
+      reopening criteria are met, not so an operator can choose it. */
+  std::atomic<bool>& carrier_development_flag() noexcept
+  {
+    static std::atomic<bool> enabled{false};
+    return enabled;
+  }
+
+  bool carrier_development_enabled() noexcept
+  {
+    return carrier_development_flag().load(std::memory_order_relaxed);
+  }
+
+  bool set_carrier_development(const bool enabled) noexcept
+  {
+    return carrier_development_flag().exchange(enabled, std::memory_order_relaxed);
+  }
+
   namespace
   {
     constexpr const std::size_t connection_id_reserve_size = 100;
@@ -309,7 +345,6 @@ namespace levin
          `SHEKYL_RELAY_ZONE_NOISE_ENABLED` stays off in every build that is
          not one. See COVER_TRAFFIC_RESTORATION.md §3.1 for the two reopening
          criteria that turn it into a shippable switch. */
-#ifdef SHEKYL_CARRIER_DEVELOPMENT
       /* The carrier needs an ENCRYPTED link — it hides by payload
          indistinguishability, which needs encryption at step one. That is
          `LinkSecrecy`, a different axis from the outbound-fluff rule above
@@ -317,12 +352,12 @@ namespace levin
          and tor are both encrypted AND anonymizing, and this line must not be
          read as testing the second. P2P link encryption on a cleartext zone
          would separate them.
+
          Not duplicated: `LinkSecrecy::of` in Rust is the authority and
          `Zone::new` REFUSES noise on a cleartext link, so if these ever
          disagree the zone fails to construct rather than carrying quietly. */
-      if (nzone != epee::net_utils::zone::public_)
+      if (carrier_development_enabled() && nzone != epee::net_utils::zone::public_)
         flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
-#endif
 
       return shekyl_relay_zone_new(
         now_ms(), std::uint8_t(nzone), params.stems,

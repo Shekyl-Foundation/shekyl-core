@@ -750,7 +750,7 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
 | **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
-| **§2.9 step 2 — covert executor** | **LANDED 2026-08-26 — caller built, behind a development flag (§3.1)** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **BUILT 2026-08-26.** All four: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only under `SHEKYL_CARRIER_DEVELOPMENT`; §3.1 is why that is a ruling and not caution. |
+| **§2.9 step 2 — covert executor** | **THREE PIECES AND A CROSSING, 2026-08-27 — the producer is still owed (§3.1a)** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **PARTLY BUILT 2026-08-26/27, and the remainder is named at §3.1a.** Three of the four, plus the enqueue CROSSING but not its caller: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only under `SHEKYL_CARRIER_DEVELOPMENT`; §3.1 is why that is a ruling and not caution. |
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
 | **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; the skip's condition EXPIRED** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier: C++ cannot enable noise at all. **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, on an independent ground that did discharge**: #515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere. What the expiry actually leaves owed is the step-2 caller above — **in Rust**, per `20-rust-vs-cpp-policy`, not as the C++ shim this row skipped. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
 | §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
@@ -820,6 +820,45 @@ The flag becomes a shippable operator switch when **both** hold:
 
 Until both, enabling the carrier is a privacy regression rather than a
 configuration, and a switch that reads as a preference would be a footgun.
+
+### 3.1a The producer is owed, and what it costs (2026-08-27)
+
+`shekyl_relay_zone_noise_enqueue` exists and nothing calls it. A
+development-flag zone therefore emits **dummies only**: the cadence runs, the
+frames are valid, and no real transaction ever rides the carrier.
+`dandelionpp_notify` still sends stem transactions directly through
+`make_payload_send_txs`.
+
+**Stated plainly because the first draft of this row said "built".** The
+four-piece decomposition was right and the fourth piece is half-done — the
+crossing without its caller — which is exactly the shape §92.5c item 1 was
+stuck in for weeks: a mechanism whose consumer nobody wired, recorded as
+complete because the hard part was.
+
+**The remaining work is small and its seam already exists.**
+`shekyl_relay_zone_plan_dispatch_with_refresh` returns `out_carrier` and
+`out_channel`; `dandelionpp_notify` currently calls `plan_relay`, which
+returns neither. So the producer is: swap the planning call, and on
+`SHEKYL_RELAY_CARRIER_COVERT` enqueue on the returned channel instead of
+sending directly. That is §2.9 step 4's own description — *"`send_txs`
+consumes `plan_dispatch`"* — reaching its first real use.
+
+**Why it is not in the change that built the executor.** That change shipped
+two wire-corrupting defects found in review — a dummy of raw zero bytes, and
+single-bucket framing across a fragmenting queue — both of which were
+invisible because the test recorded only emission *length*. The producer
+swaps the planning call on the **live stem path** for every zone. Landing it
+in the same change, on the strength of the same test discipline that missed
+those two, is how a third arrives.
+
+It lands once the carrier path is exercisable end to end, which the runtime
+opt-in (§3.1) now makes possible and the `#ifdef` it replaced did not: a
+compile-time gate put the only carrier-running configuration in a build CI
+never makes.
+
+**Reopening criterion:** the producer is owed by the next carrier change, and
+this row is not marked landed until a test drives a real transaction through
+the queue onto the wire.
 
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 

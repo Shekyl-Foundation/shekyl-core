@@ -2739,6 +2739,48 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     The phase-versus-carrier property itself now lives only in Rust
     (`a_noise_carrier_does_not_change_the_phase`), which is correct: the
     carrier is only in Rust. */
+/*! The development opt-in reaches the carrier, and CI can run it.
+
+    The point of a RUNTIME flag rather than `#ifdef`: behind a compile-time
+    gate the only configuration that runs the carrier is the one CI never
+    builds, so the code would be untestable by the repository's own gate. The
+    default is unchanged — every `has_noise == false` fixture in this file
+    still passes untouched — and this case is the one that flips it. */
+TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_zone)
+{
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    /* Restored however this test leaves, because the flag is process-wide and
+       a leaked `true` would silently arm every fixture that runs after it —
+       the failure would land in an unrelated test and read as a flake. */
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    {
+        // ENCRYPTED zone: the carrier engages.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_TRUE(notifier_ptr->get_status().has_noise)
+            << "the development opt-in must reach an encrypted zone, or the "
+               "carrier has no configuration a gate can exercise";
+    }
+    {
+        // CLEARTEXT zone: still refused, and by Rust rather than by this flag.
+        // `Zone::new` rejects a noise carrier on a cleartext link (§93.2), so
+        // the opt-in cannot force one — the carrier hides by payload
+        // indistinguishability, which needs encryption at step one.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_FALSE(notifier_ptr->get_status().has_noise)
+            << "link secrecy is the carrier's precondition; the opt-in does "
+               "not get to override the Rust gate that enforces it";
+    }
+}
+
 TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
 {
     for (unsigned count = 0; count < 10; ++count)

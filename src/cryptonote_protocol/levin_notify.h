@@ -67,6 +67,20 @@ namespace levin
 
   using connections = epee::levin::async_protocol_handler_config<detail::p2p_context>;
 
+  /*! Turn the noise carrier on for ENCRYPTED zones built after this call.
+      Development only; defaults off, and the default is shipped behaviour.
+
+      Runtime rather than `#ifdef` so the carrier's path is reachable by the
+      ordinary test suite: a compile-time gate makes the only configuration
+      that runs the carrier the one CI never builds. Not an operator switch —
+      `COVER_TRAFFIC_RESTORATION.md` §3.1 is the ruling, and enabling it under
+      today's embargo constants runs an encrypted zone's alpha below the
+      0.90 pin. Returns the previous value so a test can restore it. */
+  bool set_carrier_development(bool enabled) noexcept;
+
+  //! Whether the development carrier opt-in is currently set.
+  bool carrier_development_enabled() noexcept;
+
   //! Provides tx notification privacy
   class notify
   {

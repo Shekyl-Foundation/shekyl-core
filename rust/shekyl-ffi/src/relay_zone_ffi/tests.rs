@@ -25,8 +25,8 @@ const NOISE_ON_ENCRYPTED: u32 =
 struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
     /// `(channel, peer)` — peer bytes are the marshalling half of CV-2.
-    /// (channel, peer, emission length). Length, never content — see `rec_noise`.
-    noise: Vec<(usize, [u8; 16], usize)>,
+    /// (channel, peer, the emitted bytes). Full payload — see `rec_noise`.
+    noise: Vec<(usize, [u8; 16], Vec<u8>)>,
 }
 
 thread_local! {
@@ -84,12 +84,28 @@ extern "C" fn rec_noise(
 ) -> bool {
     let mut p = [0u8; 16];
     unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-    // The bytes are the carrier emission — recorded by LENGTH, never by
-    // content: a test that looked at the payload would be doing exactly what
-    // CV-4 forbids the scheduler to do, and would go green on a dummy.
-    let n = if bytes.is_null() { 0 } else { len };
-    REC.with(|r| r.borrow_mut().noise.push((channel, p, n)));
-    true
+    // The emission is recorded IN FULL, and the earlier refusal to do so was
+    // a misreading of CV-4. CV-4 constrains what the SCHEDULER may see, so a
+    // cadence cannot react to traffic. This callback is the transport, after
+    // the cadence has already chosen; a test observing it learns nothing the
+    // scheduler could act on.
+    //
+    // Recording only the length made the boundary untestable in exactly the
+    // ways that matter: always sending the dummy, or reversing the
+    // `sent`/`failed` resolution, both stayed green.
+    let payload = if bytes.is_null() {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(bytes, len) }.to_vec()
+    };
+    REC.with(|r| r.borrow_mut().noise.push((channel, p, payload)));
+    NOISE_DELIVERS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    /// What `rec_noise` reports back — the token's resolution. `false` drives
+    /// the `failed` arm, which is otherwise unreachable from a test.
+    static NOISE_DELIVERS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 fn reset() {
@@ -255,7 +271,8 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
                 !rec.noise.is_empty(),
                 "the bound channel really sent — liveness"
             );
-            for &(channel, peer, len) in &rec.noise {
+            for (channel, peer, bytes) in &rec.noise {
+                let (channel, peer, len) = (*channel, *peer, bytes.len());
                 assert_eq!(
                     (channel, peer),
                     (1, keep),
@@ -1250,6 +1267,139 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
 ///
 /// What edit reds it: drop the framing and enqueue the bare blob, which is not
 /// a window multiple and the queue refuses.
+/// Bind both slots and poll until exactly one more noise send has crossed.
+///
+/// # Safety
+/// `h` must be a live zone handle.
+unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
+    let peers: Vec<u8> = [id(1), id(2)].concat();
+    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
+
+    let before = REC.with(|r| r.borrow().noise.len());
+    // Covert ticks are 10-15 s apart and the epoch minimum is 600 s, so a
+    // handful of wakes stays well inside one epoch.
+    for _ in 0..16 {
+        if REC.with(|r| r.borrow().noise.len()) > before {
+            return;
+        }
+        let due = shekyl_relay_zone_next_wake(h);
+        shekyl_relay_zone_poll(
+            h,
+            due,
+            std::ptr::null_mut(),
+            rec_gather,
+            rec_fluff,
+            rec_noise,
+        );
+    }
+    panic!("fixture: no noise send crossed in 16 wakes");
+}
+
+/// The emission must be a LEVIN FRAME, dummy included.
+///
+/// This is the test whose absence let the carrier ship a dummy of raw zero
+/// bytes: the right length, not a message. A peer rejects the zero signature
+/// and closes the connection, so the failure is invisible locally and drops
+/// every peer in production.
+///
+/// What edit reds it: build the dummy as `vec![0; WINDOW_BYTES]` again.
+#[test]
+fn every_emission_is_a_levin_frame_even_the_dummy() {
+    reset();
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        drive_one_noise_send(h);
+        shekyl_relay_zone_free(h);
+    }
+    REC.with(|r| {
+        let rec = r.borrow();
+        let (_, _, bytes) = rec.noise.first().expect("a carrier tick emitted");
+        assert_eq!(
+            bytes.len(),
+            shekyl_relay_privacy::params::carrier::WINDOW_BYTES,
+            "every emission is one window"
+        );
+        // The signature is the first field of a levin header, and it is what a
+        // peer checks before anything else. Zeros fail it.
+        let mut sig = [0u8; 8];
+        sig.copy_from_slice(&bytes[..8]);
+        assert_eq!(
+            u64::from_le_bytes(sig),
+            shekyl_levin::LEVIN_SIGNATURE,
+            "an idle carrier tick must be a discardable FRAME, not zero bytes: \
+             a peer rejects the zero signature and closes the connection"
+        );
+    });
+}
+
+/// The token's two resolutions, both driven.
+///
+/// `take_for_send` is non-destructive, so `sent` advancing and `failed`
+/// leaving the queue alone is the whole contract of the widened callback.
+/// With the recorder reporting a constant `true`, reversing the two arms was
+/// invisible.
+///
+/// What edit reds it: swap `send.sent(q)` and `send.failed(q)` in `dispatch`.
+#[test]
+fn a_failed_send_leaves_the_fragment_for_the_next_tick() {
+    reset();
+    let real = vec![7u8; 4_096];
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        assert!(shekyl_relay_zone_noise_enqueue(
+            h,
+            0,
+            real.as_ptr(),
+            real.len()
+        ));
+
+        // Compared PER CHANNEL: `due_noise_channel` serves whichever channel
+        // is due, so consecutive ticks alternate and the un-enqueued channel
+        // only ever carries the dummy. Comparing "the last two emissions"
+        // would compare a fragment against a dummy and fail for a reason that
+        // has nothing to do with the token.
+        let on_zero = || {
+            REC.with(|r| {
+                r.borrow()
+                    .noise
+                    .iter()
+                    .filter(|(c, _, _)| *c == 0)
+                    .map(|(_, _, b)| b.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        // Fail every send until channel 0 has been served once.
+        NOISE_DELIVERS.with(|d| d.set(false));
+        while on_zero().is_empty() {
+            drive_one_noise_send(h);
+        }
+        let first = on_zero().last().expect("channel 0 emitted").clone();
+
+        // Then succeed, and channel 0's next emission must be the SAME
+        // fragment — the failed send resolved nothing.
+        NOISE_DELIVERS.with(|d| d.set(true));
+        let seen = on_zero().len();
+        while on_zero().len() == seen {
+            drive_one_noise_send(h);
+        }
+        let second = on_zero().last().expect("channel 0 emitted again").clone();
+
+        assert_eq!(
+            first, second,
+            "a failed send must leave the queue exactly as it was — the \
+             fragment is retried, not dropped"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
 #[test]
 fn a_carrier_zone_accepts_one_framed_transaction() {
     // SAFETY: constructed here, freed below, not shared.

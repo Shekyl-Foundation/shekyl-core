@@ -55,7 +55,7 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_levin::{notify, NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
+use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
     AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, NoiseQueues,
     RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
@@ -544,8 +544,19 @@ pub extern "C" fn shekyl_relay_zone_new(
     // window is `dummy.len()` and nothing else (`carrier::WINDOW_BYTES` is a
     // construction parameter, never a runtime reference), so the dummy is
     // sized here and the queue owns the length invariant from then on.
+    //
+    // `noise_notify` and not `vec![0; N]`: the dummy goes ON THE WIRE, so it
+    // has to BE a levin message — command 0, `B|E`, body length written into
+    // the header — or the peer rejects the zero signature and closes the
+    // connection. An all-zeros buffer is the right length and not a frame,
+    // which is the failure that looks like a working carrier locally and
+    // drops every peer in production. The queue's own module doc names this
+    // constructor; the first draft here ignored it.
     let noise = if noise_enabled {
-        let Some(q) = NoiseQueues::new(stems, vec![0u8; carrier::WINDOW_BYTES]) else {
+        let Ok(dummy) = shekyl_levin::noise_notify(carrier::WINDOW_BYTES) else {
+            return core::ptr::null_mut();
+        };
+        let Some(q) = NoiseQueues::new(stems, dummy) else {
             // Same refusal channel as `Zone::new` above: a null handle.
             return core::ptr::null_mut();
         };
@@ -613,55 +624,32 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
     let Some(blob) = crate::legacy_util::slice_from_ptr(tx, tx_len) else {
         return false;
     };
-    let blob = blob.to_vec();
-    let window = q.window();
-    let mut body = NewTransactions {
-        txs: vec![blob],
+    let body = NewTransactions {
+        txs: vec![blob.to_vec()],
         padding: Vec::new(),
         dandelionpp_fluff: false,
     };
-    // Frame once unpadded to MEASURE, then pad to the next whole window.
-    //
-    // The queue refuses anything that is not a window multiple, and it is
-    // right to: a short final emission would let an observer read the real
-    // payload's size off the frame, which is the whole thing the carrier
-    // spends bandwidth to hide. `NewTransactions` carries a `_` padding field
-    // for exactly this, so the padding rides inside the message rather than
-    // being appended to a finished frame where a decoder would reject it.
-    //
-    // Measured rather than predicted: the levin envelope steps with the
-    // blob's length varint (74 -> 75 -> 77 B), so a computed size would embed
-    // one shape's envelope into a shape-independent path.
-    let Ok(bare) = body.store() else {
+    let Ok(payload) = body.store() else {
         return false;
     };
-    let bare_len = notify(NOTIFY_NEW_TRANSACTIONS, &bare).len();
-    let target = bare_len.div_ceil(window) * window;
-    // Padding is a byte string inside the section, so adding `n` bytes of it
-    // grows the message by `n` plus whatever its own length varint widens by.
-    // Converge rather than solve: at most a couple of steps, and it terminates
-    // because each pass can only widen the varint once.
-    let mut pad = target - bare_len;
-    for _ in 0..8 {
-        body.padding = vec![0u8; pad];
-        let Ok(payload) = body.store() else {
-            return false;
-        };
-        let framed = notify(NOTIFY_NEW_TRANSACTIONS, &payload);
-        if framed.len() == target {
-            return q.enqueue(channel, framed);
-        }
-        // Correct toward the target in BOTH directions. Adding a byte of
-        // padding can widen the padding field's own length varint, which
-        // overshoots by one — the first draft here answered an overshoot by
-        // jumping to the next window and diverged, one window per pass.
-        let delta = target.cast_signed() - framed.len().cast_signed();
-        let Some(next) = pad.checked_add_signed(delta) else {
-            return false;
-        };
-        pad = next;
-    }
-    false
+
+    // `fragmented_notify`, NOT `notify`. The queue slices what it is given
+    // into window-sized emissions, so a single ordinary bucket puts a header
+    // on the FIRST window only — and that header claims the whole body. Every
+    // later window then goes out as headerless bytes, and the peer reads the
+    // next ordinary message on that connection as a continuation of a body
+    // that never ends. That corrupts the stream rather than losing a message.
+    //
+    // This is exactly what `fragmented_notify` exists for: each window gets
+    // its own header (`B` / middle / `E`) and the last is zero-padded to the
+    // window. It also SUPERSEDES the pad-to-a-whole-window loop that stood
+    // here — padding to the window is its job, and it does it without the
+    // convergence dance the padding field's own length varint forced.
+    let Ok(framed) = shekyl_levin::fragmented_notify(q.window(), NOTIFY_NEW_TRANSACTIONS, &payload)
+    else {
+        return false;
+    };
+    q.enqueue(channel, framed)
 }
 
 /// Free a zone. Null is a no-op; free exactly once.
