@@ -160,6 +160,28 @@ if ($CiOnly) {
 }
 
 # ---------------------------------------------------------------------------
+# P-17 — the IPC$ half of WP-D6. Runs in BOTH modes: its precondition is a
+# loopback SMB path (`LanmanServer` / the `IPC$` share), not an interactive
+# logon, and whether the runner has one is the §3.1 promotion question. The
+# probe detects that precondition itself and reports UNRUN when it is absent,
+# so it is safe to run unconditionally — exit 2 is a reportable outcome, never
+# a pass, and never a hard failure of the run.
+# ---------------------------------------------------------------------------
+Write-Host ''
+Write-Host '-- P-17: does the logon SID alone refuse a cross-session (IPC$) caller? --'
+Push-Location (Join-Path $repo 'rust')
+try {
+    cargo run --locked -q -p shekyl-win-sec --features test-utils --example p17_ipc_logon_sid_probe
+    $p17Exit = $LASTEXITCODE
+} finally { Pop-Location }
+
+switch ($p17Exit) {
+    0 { Add-Result 'P-17' 'PASS' 'the logon-SID ACE alone refused a loopback caller with ERROR_ACCESS_DENIED' }
+    1 { Add-Result 'P-17' 'FAIL' 'a prediction was falsified — see output above; revisits WP-D6, not the probe' }
+    default { Add-Result 'P-17' 'UNRUN' "could not attribute a refusal (exit $p17Exit) — usually no loopback IPC`$ path; not a pass" }
+}
+
+# ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host '== SUMMARY ==' -ForegroundColor Cyan
 $results | Format-Table -AutoSize

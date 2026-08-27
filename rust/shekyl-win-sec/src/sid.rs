@@ -195,13 +195,7 @@ pub(crate) fn logon_sid_of(token: HANDLE) -> Result<SidString, SidError> {
     let mut needed: u32 = 0;
     // SAFETY: the documented sizing form (null buffer, zero length).
     unsafe {
-        GetTokenInformation(
-            token,
-            TokenGroups,
-            std::ptr::null_mut(),
-            0,
-            &raw mut needed,
-        );
+        GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &raw mut needed);
     }
     if needed == 0 {
         return Err(SidError::QueryToken(last_error()));

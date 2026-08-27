@@ -112,6 +112,23 @@ pub fn sid_for_testing(s: &str) -> SidString {
     SidString::from_raw(s.to_owned())
 }
 
+/// [`current_logon_sid`]'s reader pointed at an **arbitrary** token, for
+/// probes only.
+///
+/// Behind `test-utils` because production never needs it: the wallet reads
+/// only its own token. P-17's mechanism row must read the logon SID off an
+/// **impersonation** token — the thread token adopted from a caller that
+/// arrived over loopback SMB — to establish that the caller crossed a logon-
+/// session boundary before any refusal can be attributed to the DACL's
+/// logon-SID ACE. Safe rather than `unsafe`: a stale or wrong handle makes
+/// `GetTokenInformation` fail, it does not corrupt memory.
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn logon_sid_of_token_for_testing(
+    token: *mut core::ffi::c_void,
+) -> Result<SidString, SidError> {
+    sid::logon_sid_of(token)
+}
+
 /// The pipe-name prefix. The SID goes in literally (WP-D1), so the client can
 /// compare the owner it reads back against the SID it derived the name from.
 #[cfg(windows)]
