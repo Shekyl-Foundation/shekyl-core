@@ -24,25 +24,27 @@
 //! | Row | Pipe | Path | Predicted |
 //! |---|---|---|---|
 //! | (a) control | production shape (flag + DACL + label) | `\\.\pipe\…` | opens — the DACL admits its own session |
-//! | (b) mechanism | permissive (`D:(A;;GA;;;WD)`, no flag, no label) | `\\localhost\pipe\…` | opens, and the caller's logon SID **differs** from ours |
-//! | (c) production | production shape | `\\localhost\pipe\…` | refused — by *some* fence; which one is deliberately not claimed |
-//! | (d) the D6 claim | DACL only (no flag, no label) | `\\localhost\pipe\…` | refused with `ERROR_ACCESS_DENIED` — and now only the logon-SID ACE can be the refuser |
+//! | (b) mechanism | permissive (`D:(A;;GA;;;WD)`, no flag, no label) | `\\<host>\pipe\…` | opens, and the caller's logon SID **differs** from ours |
+//! | (c) production | production shape | `\\<host>\pipe\…` | refused — by *some* fence; which one is deliberately not claimed |
+//! | (d) the D6 claim | DACL only (no flag, no label) | `\\<host>\pipe\…` | refused with `ERROR_ACCESS_DENIED` — and now only the logon-SID ACE can be the refuser |
 //!
-//! Row (b) is what turns "loopback SMB produces a distinct logon session"
-//! from a premise into an observation: the server impersonates the caller
-//! and reads the logon SID off the impersonation token. If (b) cannot
-//! connect, everything downstream is **UNRUN** — a refusal would be
-//! unattributed. If (b) connects and the SIDs are *equal*, the prediction is
-//! falsified outright (exit 1): loopback does not cross sessions and WP-D6's
-//! `IPC$` story needs revisiting.
+//! Row (b) is what turns "an SMB path produces a distinct logon session"
+//! from a premise into an observation: the server impersonates the caller and
+//! reads the logon SID off the impersonation token. **The first run
+//! (2026-08-27) falsified that premise for `\\localhost\…`** — a loopback
+//! caller reuses its own token and arrives as us — so the mechanism now
+//! probes each host in [`transport_hosts`] and uses the first observed to
+//! cross. If none crosses, everything downstream is **UNRUN**: a refusal
+//! would be unattributed, and the honest reading is that no single-box
+//! transport can pose as a foreign session (§4, and the sheet's §3.1).
 //!
 //! # Exit codes
 //!
 //! | Code | Meaning |
 //! |---|---|
-//! | `0` | all four rows as predicted — the logon-SID ACE alone carries the boundary |
-//! | `1` | a prediction was **falsified** — revisits WP-D6, see the sheet |
-//! | `2` | UNRUN — a precondition (usually the loopback SMB path) is absent, or the harness could not attribute; never a pass |
+//! | `0` | a crossing transport was found and all four rows held — the logon-SID ACE alone carries the boundary |
+//! | `1` | a prediction was **falsified** — a crossing caller was *admitted* by a shape that should refuse; revisits WP-D6, see the sheet |
+//! | `2` | UNRUN — no transport crossed a session boundary, or a precondition was absent; never a pass, and NOT a WP-D6 falsification |
 
 fn main() {
     #[cfg(windows)]
@@ -129,13 +131,40 @@ mod probe {
             .unwrap_or(0)
     }
 
-    /// `\\.\pipe\X` → `\\localhost\pipe\X`: the same pipe, addressed through
-    /// the loopback SMB path instead of the local pipe namespace. The name is
-    /// what changes the transport; the object is identical.
-    fn loopback_form(local: &str) -> Option<String> {
+    /// `\\.\pipe\X` → `\\<host>\pipe\X`: the same pipe object, addressed
+    /// through the SMB `IPC$` path under `host` instead of the local pipe
+    /// namespace. The name is what changes the transport; the object is
+    /// identical.
+    ///
+    /// `host` is `localhost` or this machine's own name — see
+    /// [`transport_hosts`] for why both are tried and why neither is
+    /// assumed to cross a logon-session boundary.
+    fn remote_form(local: &str, host: &str) -> Option<String> {
         local
             .strip_prefix(r"\\.\pipe\")
-            .map(|tail| format!(r"\\localhost\pipe\{tail}"))
+            .map(|tail| format!(r"\\{host}\pipe\{tail}"))
+    }
+
+    /// The SMB hosts P-17 tries as cross-session transports, in order.
+    ///
+    /// **The first run (2026-08-27) falsified the original premise** that
+    /// `\\localhost\pipe\…` produces a distinct logon session: measured, a
+    /// loopback caller reuses the caller's own token and arrives with *our*
+    /// logon SID. So `localhost` is kept only as the recorded control — it is
+    /// known not to cross — and the machine's own name is tried as the
+    /// candidate that *might*, because a connection to a name that is not
+    /// `localhost`/`127.0.0.1` can take the network-provider path and land in
+    /// a network logon. **That is a claim to be measured, not asserted** — the
+    /// mechanism row reads the caller's logon SID for each host and only a
+    /// host observed to differ from ours is used for the attribution rows.
+    fn transport_hosts() -> Vec<String> {
+        let mut hosts = vec!["localhost".to_owned()];
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            if !name.is_empty() {
+                hosts.push(name);
+            }
+        }
+        hosts
     }
 
     /// Try to open `name` for read+write. `0` means it opened (the handle is
@@ -260,27 +289,56 @@ mod probe {
             return 2;
         };
 
-        // ---- (b) mechanism, first: everything downstream leans on it. ----
-        let caller_logon = match mechanism_row(&me) {
-            Ok(sid) => sid,
-            Err(verdict) => return verdict,
-        };
-        if caller_logon == my_logon {
-            println!(
-                "P-17 FAIL: the loopback caller carries OUR logon SID ({}). Loopback SMB \
-                 does not cross a logon-session boundary on this build, so the logon-SID \
-                 ACE cannot be what stands between the pipe and `IPC$`. Revisits WP-D6 \
-                 (sheet §3).",
-                caller_logon.as_str()
-            );
-            return 1;
+        // ---- (b) mechanism: find a transport that actually crosses a
+        // logon-session boundary, or report that none on this box does. ----
+        //
+        // A same-session caller cannot attribute a refusal in (c)/(d) — the
+        // refusal would be measuring a local open wearing a remote name. So
+        // every host is probed for the caller's logon SID, and the first one
+        // observed to DIFFER from ours is the transport the attribution rows
+        // use. A host that reuses our token is reported and skipped, not
+        // failed: it is correct behaviour (that caller genuinely is us), just
+        // useless for this question.
+        let mut crossing_host: Option<String> = None;
+        for host in transport_hosts() {
+            match mechanism_row(&me, &host) {
+                Ok(caller_logon) if caller_logon != my_logon => {
+                    println!(
+                        "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries logon SID \
+                         {} — distinct from ours ({}). This transport crosses a session \
+                         boundary; the attribution rows use it.",
+                        caller_logon.as_str(),
+                        my_logon.as_str()
+                    );
+                    crossing_host = Some(host);
+                    break;
+                }
+                Ok(caller_logon) => {
+                    println!(
+                        "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries OUR logon \
+                         SID ({}) — this transport reuses the caller's token and does not \
+                         cross a session boundary. Recorded, skipped.",
+                        caller_logon.as_str()
+                    );
+                }
+                Err(detail) => {
+                    println!("P-17 mechanism: `\\\\{host}\\pipe\\` did not measure — {detail}");
+                }
+            }
         }
-        println!(
-            "P-17 mechanism: the loopback caller's logon SID ({}) differs from ours ({}) \
-             — loopback SMB is a distinct logon session, observed.",
-            caller_logon.as_str(),
-            my_logon.as_str()
-        );
+        let Some(host) = crossing_host else {
+            println!(
+                "P-17 UNRUN: no single-box SMB transport crossed a logon-session boundary \
+                 (localhost reuses the token by construction; the machine-name form did \
+                 not cross either, or was unavailable). WP-D6's `IPC$` claim — and the \
+                 `reject_remote_clients` second fence — therefore remain UNTESTED, and \
+                 need a genuinely remote caller: a second host on the subnet dialling \
+                 `\\\\<this-machine>\\pipe\\…`, or a VM with its own logon session. Not a \
+                 pass, and NOT a falsification of WP-D6: the method could not reach the \
+                 question."
+            );
+            return 2;
+        };
 
         // ---- (a) control: the production shape admits its own session. ----
         let Ok(descriptor) = OwnerOnlyDescriptor::new(&me, &my_logon) else {
@@ -307,9 +365,9 @@ mod probe {
         }
         println!("P-17 control: the production pipe opens locally at Medium (as expected).");
 
-        // ---- (c) production shape over loopback: refused by SOMETHING. ----
+        // ---- (c) production shape over the crossing transport. ----
         let prod_name = self_hosted_pipe_name(&me, SPAWN_PROD);
-        let Some(prod_loopback) = loopback_form(&prod_name) else {
+        let Some(prod_remote) = remote_form(&prod_name, &host) else {
             println!("P-17 UNRUN: pipe name did not carry the expected prefix.");
             return 2;
         };
@@ -320,18 +378,20 @@ mod probe {
                 return 2;
             }
         };
-        let prod_result = try_open(&prod_loopback);
+        let prod_result = try_open(&prod_remote);
         drop(prod);
         if prod_result == 0 {
             println!(
-                "P-17 FAIL: the PRODUCTION-SHAPE pipe admitted a loopback caller. That is \
-                 a live `IPC$` hole, not a documentation gap. Revisits WP-D6 — urgently."
+                "P-17 FAIL: the PRODUCTION-SHAPE pipe admitted a cross-session caller over \
+                 `\\\\{host}\\pipe\\`. That is a live `IPC$` hole, not a documentation gap. \
+                 Revisits WP-D6 — urgently."
             );
             return 1;
         }
         println!(
-            "P-17 production: the loopback open is refused (os error {prod_result}); which \
-             fence refused it is deliberately not claimed — that is row (d)'s job."
+            "P-17 production: the cross-session open is refused (os error {prod_result}); \
+             which of the three fences refused it is deliberately not claimed — that is \
+             row (d)'s job."
         );
 
         // ---- (d) the D6 claim proper: DACL alone, every other fence down. --
@@ -347,7 +407,7 @@ mod probe {
             return 2;
         };
         let d_name = self_hosted_pipe_name(&me, SPAWN_DACL_ONLY);
-        let Some(d_loopback) = loopback_form(&d_name) else {
+        let Some(d_remote) = remote_form(&d_name, &host) else {
             println!("P-17 UNRUN: pipe name did not carry the expected prefix.");
             return 2;
         };
@@ -358,7 +418,7 @@ mod probe {
                 return 2;
             }
         };
-        let d_result = try_open(&d_loopback);
+        let d_result = try_open(&d_remote);
         drop(d_pipe);
         match d_result {
             0 => {
@@ -391,40 +451,35 @@ mod probe {
         }
     }
 
-    /// Row (b): a permissive pipe, a loopback client, and the caller's logon
-    /// SID read off the impersonation token. `Err` carries the process exit
-    /// code (always `2`, UNRUN — nothing here is a prediction failure except
-    /// the SID comparison, which the caller does).
-    fn mechanism_row(me: &shekyl_win_sec::SidString) -> Result<shekyl_win_sec::SidString, i32> {
-        let sd = match PermissiveSd::new() {
-            Ok(sd) => sd,
-            Err(e) => {
-                println!("P-17 UNRUN: could not build the permissive descriptor (os error {e}).");
-                return Err(2);
-            }
-        };
+    /// Row (b) for one host: a permissive pipe, a client that dials
+    /// `\\<host>\pipe\…`, and the caller's logon SID read off the
+    /// impersonation token. `Ok` is that SID (the caller comparison — crosses
+    /// or not — is the caller's job). `Err` is a one-line reason the host did
+    /// not measure, which `main` prints; it is always UNRUN, never a
+    /// falsification.
+    fn mechanism_row(
+        me: &shekyl_win_sec::SidString,
+        host: &str,
+    ) -> Result<shekyl_win_sec::SidString, String> {
+        let sd = PermissiveSd::new()
+            .map_err(|e| format!("could not build the permissive descriptor (os error {e})"))?;
         let mech_name = self_hosted_pipe_name(me, SPAWN_MECH);
-        let Some(mech_loopback) = loopback_form(&mech_name) else {
-            println!("P-17 UNRUN: pipe name did not carry the expected prefix.");
-            return Err(2);
+        let Some(mech_remote) = remote_form(&mech_name, host) else {
+            return Err("pipe name did not carry the expected prefix".to_owned());
         };
-        let server = match create_instance(&mech_name, sd.attributes_ptr(), false) {
-            Ok(h) => h,
-            Err(e) => {
-                println!("P-17 UNRUN: could not bind the mechanism pipe (os error {e}).");
-                return Err(2);
-            }
-        };
+        let server = create_instance(&mech_name, sd.attributes_ptr(), false)
+            .map_err(|e| format!("could not bind the mechanism pipe (os error {e})"))?;
 
-        // The client: open over loopback, write one byte (impersonation
-        // requires the server to have read from the caller), report the open
-        // result, then block on a read until the server releases it. If the
-        // server bails early, dropping its guard closes the instance and the
-        // blocked read fails — the thread cannot outlive the row.
+        // The client: open over `\\<host>\pipe\`, write one byte
+        // (impersonation requires the server to have read from the caller),
+        // report the open result, then block on a read until the server
+        // releases it. If the server bails early, dropping its guard closes
+        // the instance and the blocked read fails — the thread cannot outlive
+        // the row.
         let (tx, rx) = mpsc::channel::<u32>();
         let client = std::thread::spawn(move || {
             {
-                let wide_name = wide(&mech_loopback);
+                let wide_name = wide(&mech_remote);
                 // SAFETY: NUL-terminated, outlives the call.
                 let handle = unsafe {
                     CreateFileW(
@@ -438,8 +493,7 @@ mod probe {
                     )
                 };
                 if handle == INVALID_HANDLE_VALUE {
-                    let e = last_error();
-                    _ = tx.send(e);
+                    _ = tx.send(last_error());
                     return;
                 }
                 let guard = HandleGuard(handle);
@@ -456,8 +510,7 @@ mod probe {
                     )
                 };
                 if wrote == 0 || written != 1 {
-                    let e = last_error();
-                    _ = tx.send(e);
+                    _ = tx.send(last_error());
                     return;
                 }
                 _ = tx.send(0);
@@ -480,121 +533,96 @@ mod probe {
             }
         });
 
-        let Ok(open_code) = rx.recv_timeout(CLIENT_TIMEOUT) else {
-            println!(
-                "P-17 UNRUN: the loopback client reported nothing within {}s — the \
-                 SMB connect neither succeeded nor failed in bounded time.",
-                CLIENT_TIMEOUT.as_secs()
-            );
-            drop(server); // fail the client's read, then reap it
-            drop(client.join());
-            return Err(2);
-        };
-        if open_code != 0 {
-            println!(
-                "P-17 UNRUN: the loopback open of a PERMISSIVE pipe failed (os error \
-                 {open_code}). The loopback SMB path itself is absent or refused — \
-                 nothing downstream can attribute anything. On a box without \
-                 `LanmanServer`/`IPC$` this is the expected disposition, and it is \
-                 not a pass."
-            );
-            drop(server);
-            drop(client.join());
-            return Err(2);
-        }
-
-        // Accept the (already-arrived) connection, read the caller's byte,
-        // impersonate, read the logon SID off the thread token, revert.
-        // SAFETY: live server instance from create_instance above.
-        let connected = unsafe { ConnectNamedPipe(server.0, std::ptr::null_mut()) };
-        if connected == 0 && last_error() != ERROR_PIPE_CONNECTED {
-            let e = last_error();
-            println!("P-17 UNRUN: ConnectNamedPipe failed (os error {e}).");
-            drop(server);
-            drop(client.join());
-            return Err(2);
-        }
-        let mut byte = [0u8; 1];
-        let mut got: u32 = 0;
-        // SAFETY: live handle, valid buffer.
-        let read_ok = unsafe {
-            ReadFile(
-                server.0,
-                byte.as_mut_ptr(),
-                1,
-                &raw mut got,
-                std::ptr::null_mut(),
-            )
-        };
-        if read_ok == 0 || got != 1 {
-            let e = last_error();
-            println!("P-17 UNRUN: could not read the caller's byte (os error {e}).");
-            drop(server);
-            drop(client.join());
-            return Err(2);
-        }
-
-        // SAFETY: the caller has written and we have read, which is the
-        // documented precondition; the impersonation is reverted on every
-        // path below, and a failed revert aborts the process outright —
-        // continuing to run with a caller's identity on this thread is not a
-        // state this probe is allowed to be in.
-        let imp = unsafe { ImpersonateNamedPipeClient(server.0) };
-        if imp == 0 {
-            let e = last_error();
-            println!("P-17 UNRUN: ImpersonateNamedPipeClient failed (os error {e}).");
-            drop(server);
-            drop(client.join());
-            return Err(2);
-        }
-        let mut token: HANDLE = std::ptr::null_mut();
-        // SAFETY: current thread pseudo-handle; OpenAsSelf=1 so the query is
-        // made with the PROCESS identity — querying an impersonation token
-        // while impersonating a caller that cannot open its own token is the
-        // documented trap this flag exists for.
-        let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
-        let token_guard = HandleGuard(token);
-        let sid = if opened == 0 {
-            Err(last_error())
-        } else {
-            logon_sid_of_token_for_testing(token_guard.0).map_err(|_| 0u32)
-        };
-        // SAFETY: paired with the successful impersonation above.
-        let reverted = unsafe { RevertToSelf() };
-        if reverted == 0 {
-            eprintln!("P-17: RevertToSelf FAILED — aborting rather than run impersonated.");
-            std::process::abort();
-        }
-        // Release the client and reap it before judging the SID: the row is
-        // over either way, and no thread outlives it.
-        let release = [0u8; 1];
-        let mut sent: u32 = 0;
-        // SAFETY: live handle, valid buffer.
-        unsafe {
-            WriteFile(
-                server.0,
-                release.as_ptr(),
-                1,
-                &raw mut sent,
-                std::ptr::null_mut(),
-            )
-        };
-        drop(server);
-        drop(client.join());
-
-        match sid {
-            Ok(sid) => Ok(sid),
-            Err(0) => {
-                println!(
-                    "P-17 UNRUN: the caller's token has no logon SID — the identity \
-                     arrived, but not in a shape the DACL could ever have matched."
-                );
-                Err(2)
+        // Everything that touches the server borrows it inside this closure;
+        // the client is joined exactly once afterwards. `client.join()`
+        // consumes the handle, so it cannot live in a reusable closure — the
+        // single join below is the only reap, and dropping the server closes
+        // it, which fails the client's blocking read and lets its thread exit.
+        let sid_result: Result<shekyl_win_sec::SidString, String> = (|| {
+            let Ok(open_code) = rx.recv_timeout(CLIENT_TIMEOUT) else {
+                return Err(format!(
+                    "the client reported nothing within {}s — the SMB connect neither \
+                     succeeded nor failed in bounded time",
+                    CLIENT_TIMEOUT.as_secs()
+                ));
+            };
+            if open_code != 0 {
+                return Err(format!(
+                    "the open of a PERMISSIVE pipe failed (os error {open_code}) — this \
+                     transport is absent or refused even a wide-open pipe; on a box \
+                     without a working `LanmanServer`/`IPC$` path this is expected"
+                ));
             }
-            Err(e) => {
-                println!("P-17 UNRUN: could not open the impersonation token (os error {e}).");
-                Err(2)
+
+            // SAFETY: live server instance from create_instance above.
+            let connected = unsafe { ConnectNamedPipe(server.0, std::ptr::null_mut()) };
+            if connected == 0 && last_error() != ERROR_PIPE_CONNECTED {
+                return Err(format!(
+                    "ConnectNamedPipe failed (os error {})",
+                    last_error()
+                ));
             }
-        }
+            let mut byte = [0u8; 1];
+            let mut got: u32 = 0;
+            // SAFETY: live handle, valid buffer.
+            let read_ok = unsafe {
+                ReadFile(
+                    server.0,
+                    byte.as_mut_ptr(),
+                    1,
+                    &raw mut got,
+                    std::ptr::null_mut(),
+                )
+            };
+            if read_ok == 0 || got != 1 {
+                return Err(format!(
+                    "could not read the caller's byte (os error {})",
+                    last_error()
+                ));
+            }
+
+            // SAFETY: the caller has written and we have read (the documented
+            // precondition). The impersonation is reverted on every path out
+            // of this block, and a failed revert ABORTS — continuing to run
+            // with a caller's identity on this thread is not a state this
+            // probe may be in.
+            let imp = unsafe { ImpersonateNamedPipeClient(server.0) };
+            if imp == 0 {
+                return Err(format!(
+                    "ImpersonateNamedPipeClient failed (os error {})",
+                    last_error()
+                ));
+            }
+            let mut token: HANDLE = std::ptr::null_mut();
+            // SAFETY: current-thread pseudo-handle; OpenAsSelf=1 so the query
+            // is made with the PROCESS identity — the documented trap for a
+            // caller that cannot open its own token.
+            let opened =
+                unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
+            let token_guard = HandleGuard(token);
+            let sid = if opened == 0 {
+                Err(format!(
+                    "could not open the impersonation token (os error {})",
+                    last_error()
+                ))
+            } else {
+                logon_sid_of_token_for_testing(token_guard.0).map_err(|_| {
+                    "the caller's token has no logon SID — the identity arrived, but not in \
+                     a shape the DACL could ever have matched"
+                        .to_owned()
+                })
+            };
+            // SAFETY: paired with the successful impersonation above.
+            let reverted = unsafe { RevertToSelf() };
+            if reverted == 0 {
+                eprintln!("P-17: RevertToSelf FAILED — aborting rather than run impersonated.");
+                std::process::abort();
+            }
+            sid
+        })();
+
+        drop(server); // closes the server end, failing the client's blocked read
+        drop(client.join()); // the single reap; the thread's own result is not the verdict
+        sid_result
     }
 }

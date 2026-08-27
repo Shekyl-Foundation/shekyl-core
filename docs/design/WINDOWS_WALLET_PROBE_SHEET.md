@@ -109,7 +109,7 @@ for `#[ignore]`.
 |---|---|---|---|---|
 | P-12 | Does the Medium mandatory label block a **Low-IL** opener? | Needs a genuinely Low-integrity process. Creating one wants an interactive token to derestrict from; a CI service account's token may not be a faithful source | Low-IL open fails with `ERROR_ACCESS_DENIED` | **WP-D4** — this is the *only* in-scope adversary per §6. If the label does not block, the server-side half of D4 is doing nothing and the client-side IL check becomes load-bearing alone |
 | P-13 | Does the logon SID separate terminal-services sessions? | Needs two concurrent interactive logons | A second session's process cannot open the pipe | **WP-D6** — if it does not separate sessions, the logon SID is not the improvement on an `S-1-5-2` deny that D6 claims, and the explicit `NETWORK` deny comes back |
-| P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If (b) fails the probe is **UNRUN**, not a pass: any refusal would then be unattributed |
+| P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If no transport crosses (b), the probe is **UNRUN**, not a pass, and — per the 2026-08-27 first run, §4.5 — this revisits **P-17's method** rather than WP-D6: loopback reuses the caller's token, so the question needs a genuinely remote caller, and the `reject_remote_clients` fence stays untested until one exists |
 
 **P-17's section is itself undecided, and that is why it is here.** §1 would
 claim CI-durability nobody has established; §3 pre-declares CI-*fragility*,
@@ -310,6 +310,44 @@ asserts that §2/§3 probes have **no** test function in `tests/probes.rs`. A
 `p12_*` test would be a claim that this runs in CI, which §3 pre-declares it
 does not — so P-12 stays in §3, the gate stays green, and the runner's
 non-`-CiOnly` path is what executes it.
+
+### 4.5 P-17 first run (2026-08-27): the premise was false, and it was the *method* not WP-D6
+
+`LP7760-W1XMP6G3`, Windows 11 23H2 `10.0.22631.7517`, at `19b379c37`.
+
+| Date | Probe | Machine / build | Result | Consequence |
+|---|---|---|---|---|
+| 2026-08-27 | P-17 row (b) | `LP7760-W1XMP6G3`, `10.0.22631.7517` | **FALSIFIED** — the `\\localhost\pipe\…` caller carried **our** logon SID (`S-1-5-5-0-43722672`) | See below. Rows (a), (c), (d) did not run — the probe returns at (b) rather than measuring a local open wearing a remote name |
+
+**What was measured, and how carefully.** The loopback caller's logon SID was
+identical to ours, verified two ways by the runner — `current_logon_sid()` and
+a scratch binary both returned `S-1-5-5-0-43722672`, matching what the server
+read off the impersonation token — and `remote_form`'s rewrite to
+`\\localhost\pipe\…` was confirmed real, so this is not a probe quietly dialling
+the local path. `LanmanServer` is running, `IPC$` present, the connection
+**succeeded**, and impersonation worked. The transport is functional; it simply
+does not cross a session.
+
+**This is §4.1's shape, not a WP-D6 falsification — the distinction is
+load-bearing.** What broke is the *premise* "loopback SMB produces a distinct
+logon session": a loopback caller reuses its own token, so it **is** us, in our
+session. The DACL admitting it is correct behaviour, not a hole. WP-D6's claim
+is about a caller in a *different* logon session, and P-17 has said nothing
+about that caller yet. Exactly as P-1's first run failed on SDDL canonicalisation
+while the descriptor was correct all along, here the method was wrong and the
+policy is untouched. Per §5 the row-(b) prediction stays on record as
+falsified; what changes is the consequence — it revisits **P-17's method**, and
+the second fence (`reject_remote_clients`) remains equally untested, since
+nothing in this run was a remote client.
+
+**Re-method (same commit family, before any further run).** The probe now tries
+each host in `transport_hosts()` — `localhost` (known not to cross, kept as the
+recorded control) and the machine's own name (a candidate that *might* take the
+network-provider path into a network logon; **measured, not asserted**). Only a
+host whose caller SID differs from ours is used for the attribution rows; if
+none crosses, the verdict is **UNRUN** with "no single-box transport crosses —
+needs a genuinely remote caller." Whether the machine-name form crosses on this
+box is the next observation.
 
 ## 5. What a failure does *not* license
 
