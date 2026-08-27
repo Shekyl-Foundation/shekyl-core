@@ -97,13 +97,14 @@ pub use bond_floor::{
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
-    bond_post_block_unique, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_rebond_bond_post, verify_unbond_bond_post, BondPostError,
+    bond_post_block_unique, bond_post_funding_floor_met, verify_holdings_update_add,
+    verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
+    verify_unbond_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
-    VIN_TYPE_ARCHIVAL_BOND_POST,
+    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
+    MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,

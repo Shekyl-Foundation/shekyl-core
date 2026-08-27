@@ -1933,6 +1933,44 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
     uint64_t last_settled_slash_epoch,
     uint64_t current_settlement_epoch);
 
+// Fold the served shards' last-served epochs into the whole-record
+// release-cooldown anchor -- the SAME fold
+// `shekyl_archival_verify_unbond_bond_post` applies internally, exported so a
+// marshaling caller reports the anchor instead of deriving a second one in C++.
+//
+// `out_present` is written 1 with the anchor in `out_epoch`, or 0 with
+// `out_epoch = 0` when no shard has served. Both outputs are written on every
+// OK return. The flag is load-bearing rather than cosmetic: the two consensus
+// predicates that consume the anchor treat an ABSENT anchor as permissive
+// (nothing served => nothing to cool down from), so a consumer that inferred
+// absence from a missing or zero field would route "we do not know" into the
+// permissive branch. Epoch 0 is a real settlement epoch; only the flag
+// separates it from "never served".
+//
+// Callers gather the slice exactly as the Unbond verify arm does: the record's
+// held shards for a compact set, the all-shards P-prefix scan for a
+// complete-tree record (which stores no shard list); never-served shards are
+// omitted by the DB accessors, so an empty slice is the legitimate
+// "record exists, nothing served" case.
+uint8_t shekyl_archival_whole_record_last_served(
+    const uint64_t* per_shard_last_served_ptr,
+    size_t per_shard_last_served_len,
+    uint8_t* out_present,
+    uint64_t* out_epoch);
+
+// Kind→scan decision for the last-served gather that
+// `shekyl_archival_whole_record_last_served` folds. Exhaustive on the Rust
+// `HoldingsKind` enum: a third variant fails to compile until its arm is
+// written. C++ marshals this discriminant and calls the matching DB accessor
+// -- it does not re-derive the kind decision. Compact holdings (0) fold the
+// record's held shards; complete-tree (1) scans every served shard, because
+// a complete-tree record stores no shard list.
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_HELD_SHARDS 0
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS  1
+uint8_t shekyl_archival_last_served_scan(
+    uint8_t holdings_kind,
+    uint8_t* out_scan);
+
 // Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no

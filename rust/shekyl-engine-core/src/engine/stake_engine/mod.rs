@@ -38,9 +38,11 @@
 //! |--------|------|
 //! | [`types`] | Domain values, errors, spawn args |
 //! | [`helpers`] | Shared funding/vout prep, P-secrets, entry-gap draw |
+//! | [`bond_post_assemble`] | Shared prove/sign/encode tail for JoinMarket and Unbond |
 //! | [`actor`] | `StakeEngine` struct, spawn, inherent methods, Actor |
 //! | [`persona`] | Mint / activate / identity / PlanBondPost |
-//! | [`bond`] | AssembleBond |
+//! | [`bond`] | AssembleBond (credit policy + identity-key slot) |
+//! | [`unbond`] | AssembleUnbond (debit policy + `bond_spend_sk` slot) |
 //! | [`drain`] | AssembleDrain shell |
 //! | [`claim`] | AssembleEmissionClaim |
 //! | [`scan`] | ScanStep |
@@ -73,6 +75,7 @@ compile_error!(
 
 mod actor;
 mod bond;
+mod bond_post_assemble;
 mod claim;
 mod drain;
 mod handle;
@@ -87,6 +90,7 @@ pub(crate) mod serve_set_source;
 // and because `engine/mod.rs` sits at its decomposition ceiling.
 pub(crate) mod serving;
 mod types;
+mod unbond;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
