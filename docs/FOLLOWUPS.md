@@ -578,21 +578,37 @@ sustainability is unaffected by the recalibration.
   remaining non-consensus constants — stays as filed: per-constant pins
   until the full generator migration.
 
-- **TJ-1 (CRITICAL, live consensus path) — the challenged leaf index carries no
-  beacon: a SPEC/CODE DIVERGENCE** (added 2026-07-29,
-  `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §10.1). 8C §4's **pinned
-  BUILD pattern** is `τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ dom )`
-  with the rationale *"leaf index unknown before that block exists"*;
-  `challenge.rs:55–71` derives `τ` from `p_id ‖ shard_id ‖ settlement_epoch`
-  **only** — the beacon input is absent. Consequence: the entire future
-  challenge schedule is precomputable, so a `P` retains just the challenged
-  leaves + openings (**~82 KB across a 26-epoch horizon**) and passes every
-  baseline having discarded the 3.33 MB shard. **Topology does not bind it**
-  (no helper, no relay), so this is an independent free-riding path none of the
-  TJ rulings cover. **Disposition:** TJ-B's charter amended to **DELETE** the
-  vin-carried opening path rather than extend it; **interim mitigation if TJ-B
-  lands late** — restore `block_hash[H_challenge]` to `τ` (spec conformance,
-  not new design).
+- **TJ-1 (was CRITICAL, live consensus path) — the challenged leaf index
+  carried no beacon: MITIGATED 2026-08-24, closes by DELETION at the cutover**
+  (added 2026-07-29, `design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §10.1;
+  status corrected 2026-08-26). 8C §4's **pinned BUILD pattern** is
+  `τ = H( block_hash[H_challenge] ‖ P_id ‖ s ‖ E ‖ dom )` with the rationale
+  *"leaf index unknown before that block exists"*. This entry read, until
+  2026-08-26, that `challenge.rs` derives `τ` from
+  `p_id ‖ shard_id ‖ settlement_epoch` **only**, with the beacon input absent.
+  **That is no longer true and had not been since `PC-D3` landed** — the
+  preimage gained `block_hash(h−1)` under a `-v2` separator, which is this
+  entry's own prescribed interim mitigation, executed.
+
+  **What the mitigation bought.** The precomputation attack is closed: nobody
+  can know which leaf is challenged before the block exists, so the ~82 KB
+  retain-the-schedule strategy no longer passes. **What it did not buy:**
+  under the live beacon a response may land anywhere in its window, so a
+  prover gets roughly `CHALLENGE_RESPONSE_BLOCKS` draws and needs one leaf it
+  holds — the floor is "best of a window" rather than "the one assigned
+  leaf". `RF-D8` rules that residual weak-but-nonzero; pinning responses to
+  their assignment blocks is what closes it, and that is the cutover.
+
+  **Disposition (unchanged, and now the operative one): TJ-B's charter
+  DELETES the vin-carried opening path rather than extending it.** `RF-D8`
+  ruling (i) briefly kept the opening as supplementary evidence; that ruling
+  was **retracted 2026-08-26** (see `ARCHIVAL_RESPONSE_FORMAT.md`, grep
+  `RF-D8` (i)) because the countersignature preimage names the challenged
+  leaf and so tells `P` which request is the challenge — defeating the
+  indistinguishability §9 depends on. So this entry closes the way it
+  originally said it would: **by deletion**, taking `challenge_leaf_index`
+  and `PC-D3`'s block binding with it. Until then the mitigation is
+  load-bearing and must not be reverted as dead code.
 
 - **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item
   is discharged, one dependent fix remains.** `constants.rs` is now

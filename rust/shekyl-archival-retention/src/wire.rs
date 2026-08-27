@@ -66,10 +66,17 @@ pub struct ArchivalServeCreditResponse {
 /// The **pruned** half of a pass record (`RF-D1`), carried inside the
 /// transaction's prunable region, one per serve-credit vin in vin order.
 ///
-/// The opening is the only element of a pass record consensus verifies
-/// independently of the witness (`path.rs` header); the ML-DSA leg is pruned
-/// because at 3,309 B it dominates the record and a pruning node can still
-/// check the classical leg.
+/// The ML-DSA leg is pruned because at 3,309 B it dominates the record and a
+/// pruning node can still check the classical leg.
+///
+/// **`path` is deletion-bound** (`RF-D8` (i) RETRACTED 2026-08-26; the
+/// argument is at `ARCHIVAL_RESPONSE_FORMAT.md`, grep `RF-D8` (i)). This
+/// doc previously justified the field as "the only element consensus verifies
+/// independently of the witness" — that justification is withdrawn: `P`
+/// cannot countersign a preimage naming the challenged leaf without learning
+/// which request is the challenge, which defeats the indistinguishability the
+/// mechanism depends on. The field goes with the cutover, leaving this struct
+/// holding the countersignature alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalServeCreditPruned {
     pub path: SegmentPathOpening,

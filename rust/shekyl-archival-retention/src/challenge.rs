@@ -17,31 +17,36 @@
 //! `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s slash-eligibility
 //! consumer).
 //!
-//! # It does NOT delete wholesale, and the trigger that said so has fired
+//! # The leaf-opening half IS deletion-bound — `RF-D8` (i) RETRACTED 2026-08-26
 //!
-//! The 2026-08-11 wording said this module "deletes wholesale with that
-//! round's deletion surface", naming the **format round** as the trigger.
-//! That round landed 2026-08-21 (PR #522) and **ruled the opposite way** for
-//! the leaf-opening half: `RF-D8` ruling (i) kept the ~1,920 B opening as the
-//! one element consensus verifies independently of the witness, so
-//! [`challenge_leaf_index`] came **off** the deletion surface and is now
-//! permanent consensus admission code — derived verifier-side and fed
-//! straight into path verification and the signature preimage
-//! (`shekyl-ffi/src/archival_ffi/serve_credit.rs`, reached from
-//! `blockchain.cpp`). [`crate::path`] already records that correction; this
-//! banner did not, and the two modules disagreed for three days.
+//! This banner has now said both things, so the history matters. The
+//! 2026-08-11 wording said the module "deletes wholesale"; `RF-D8` ruling (i)
+//! (2026-08-21) then **kept** the ~1,920 B opening as the one element
+//! consensus verifies independently of the witness, and this banner was
+//! rewritten to call [`challenge_leaf_index`] permanent consensus code.
+//! **That ruling is retracted and the original wording was right.**
 //!
-//! Deleting on the strength of the old wording would remove **live consensus
-//! code**, which is why the correction is written here rather than left to a
-//! reader to reconcile against [`crate::path`].
+//! The argument is recorded ONCE at `ARCHIVAL_RESPONSE_FORMAT.md` — **grep
+//! `RF-D8` (i)**. The one-line reason: the countersignature preimage **names
+//! the challenged leaf**, so `P` cannot sign it without learning that this
+//! request is a challenge and every other request is not, which is exactly
+//! the state `ARCHIVAL_CHALLENGE_MECHANISM.md` §9 ("the test IS a read")
+//! exists to prevent. Evidence strength was never the deciding axis, which is
+//! why arguing it twice produced two answers.
 //!
-//! **What is settled:** the leaf-opening cluster is kept by `RF-D8`. It spans
-//! three modules — [`challenge_leaf_index`] here,
+//! **What this changes for a reader planning the deletion:** the cluster is
+//! back on `ARCHIVAL_CREDIT_WIRE.md` §2's deletion surface, and §2 is correct
+//! as written. It still spans three modules — [`challenge_leaf_index`] here,
 //! [`crate::challenge_leaf_chunk_bounds`] and
 //! [`crate::challenged_leaf_offset_in_chunk`] in `segment_freeze`, and
 //! [`crate::challenged_leaf_bytes`] in `path` — which is worth stating,
-//! because "the sampled-leaf path" reads like one module and deleting it as
-//! one is how the fired trigger above would have been executed.
+//! because "the sampled-leaf path" reads like one module and it is not.
+//!
+//! **Nothing is deleted yet, and deleting it early would remove live
+//! consensus code.** Until the cutover lands, this derivation is still on the
+//! admission path and `PC-D3`'s block binding is what holds `TJ-1` closed in
+//! the interim. The removal belongs to the cutover, with the domain-registry
+//! rows and their count pins moving in the same change.
 //!
 //! **What is not settled here:** the beacon-timing cluster
 //! ([`challenge_seal_height`], [`challenge_seal_on_chain`],
