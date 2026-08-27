@@ -394,7 +394,7 @@ mod tests {
         );
 
         // Persist-before-dispatch ordering pin.
-        let seal_call = concat!(".push_", "claim(");
+        let seal_call = concat!(".seal_", "claim(");
         let seal_at = seam
             .find(seal_call)
             .expect("the seam must seal a pending claim");
