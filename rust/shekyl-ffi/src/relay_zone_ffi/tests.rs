@@ -93,11 +93,13 @@ extern "C" fn rec_noise(
     // Recording only the length made the boundary untestable in exactly the
     // ways that matter: always sending the dummy, or reversing the
     // `sent`/`failed` resolution, both stayed green.
-    let payload = if bytes.is_null() {
-        Vec::new()
-    } else {
-        unsafe { slice::from_raw_parts(bytes, len) }.to_vec()
-    };
+    // Through the crate's FFI-read seam, not a raw `from_raw_parts` — SA-R-7's
+    // ratchet counts test sites too, and it is right to: a recorder that reads
+    // a boundary pointer has the same `isize::MAX` and null obligations as the
+    // production reader beside it.
+    let payload = unsafe { crate::legacy_util::slice_from_ptr(bytes, len) }
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
     REC.with(|r| r.borrow_mut().noise.push((channel, p, payload)));
     NOISE_DELIVERS.with(std::cell::Cell::get)
 }
