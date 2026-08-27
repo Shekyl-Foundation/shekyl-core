@@ -349,12 +349,6 @@ void core_rpc_ffi_destroy(core_rpc_handle* h)
     delete h;
 }
 
-bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
-{
-    if (!h || !h->rpc) return true;
-    return h->rpc->is_restricted();
-}
-
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
 {
     if (!h || !h->rpc) return nullptr;

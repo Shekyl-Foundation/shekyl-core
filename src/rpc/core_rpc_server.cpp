@@ -206,7 +206,7 @@ namespace cryptonote
   bool core_rpc_server::on_get_info(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_info);
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
 
     crypto::hash top_hash;
     m_core.get_blockchain_top(res.height, top_hash);
@@ -343,8 +343,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transactions);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
+    const bool restricted = caller_is_restricted(ctx);
 
     if (restricted && req.txs_hashes.size() > RESTRICTED_TRANSACTIONS_COUNT)
     {
@@ -385,7 +384,7 @@ namespace cryptonote
     if (!missed_txs.empty())
     {
       std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>> pool_txs;
-      bool r = m_core.get_pool_transactions_info(missed_txs, pool_txs, !request_has_rpc_origin || !restricted);
+      bool r = m_core.get_pool_transactions_info(missed_txs, pool_txs, !restricted);
       if(r)
       {
         // sort to match original request
@@ -580,7 +579,7 @@ namespace cryptonote
   {
     RPC_TRACKER(is_key_image_spent);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
 
     if (restricted && req.key_images.size() > RESTRICTED_SPENT_KEY_IMAGES_COUNT)
     {
@@ -884,9 +883,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    const bool allow_sensitive = !request_has_rpc_origin || !restricted;
+    const bool restricted = caller_is_restricted(ctx);
+    const bool allow_sensitive = !restricted;
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -905,9 +903,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_hashes);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    const bool allow_sensitive = !request_has_rpc_origin || !restricted;
+    const bool restricted = caller_is_restricted(ctx);
+    const bool allow_sensitive = !restricted;
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -927,9 +924,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_stats);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    m_core.get_pool_transaction_stats(res.pool_stats, !request_has_rpc_origin || !restricted);
+    const bool restricted = caller_is_restricted(ctx);
+    m_core.get_pool_transaction_stats(res.pool_stats, !restricted);
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -1529,7 +1525,7 @@ namespace cryptonote
       error_resp.message = "Internal error: can't get last block.";
       return false;
     }
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     bool response_filled = fill_block_header_response(last_block, false, last_block_height, last_block_hash, res.block_header, req.fill_pow_hash && !restricted);
     if (!response_filled)
     {
@@ -1545,7 +1541,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_block_header_by_hash);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     if (restricted && req.hashes.size() > RESTRICTED_BLOCK_COUNT)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
@@ -1616,7 +1612,7 @@ namespace cryptonote
       error_resp.message = "Invalid start/end heights.";
       return false;
     }
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     if (restricted && req.end_height - req.start_height > RESTRICTED_BLOCK_HEADER_RANGE)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
@@ -1877,7 +1873,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_output_histogram);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     size_t amounts = req.amounts.size();
     if (restricted && amounts == 0)
     {
@@ -2068,7 +2064,7 @@ namespace cryptonote
   {
     RPC_TRACKER(relay_tx);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
 
     bool failed = false;
     res.status = "";

@@ -35,6 +35,14 @@
 
 ### Removed
 
+- **`core_rpc_ffi_is_restricted` and the accessor it was the only caller
+  of.** The export had no caller in any language — the Rust server takes its
+  posture from its own configuration, never by asking C++ — and it was the
+  sole user of `core_rpc_server::is_restricted()`, so both go (rule 15).
+  Found while fixing the restricted gate above: an export whose whole
+  purpose was to report restrictedness across the boundary, in a tree where
+  the restrictedness had never crossed it.
+
 - **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
   a route that is called; nothing called this one. The two handlers made
   the same two core reads and differed only in raw-versus-hex output, so
@@ -46,6 +54,46 @@
   `docs/DAEMON_RPC_RUST.md`.
 
 ### Fixed
+
+- **A restricted RPC listener disclosed transactions the node had not
+  broadcast.** Every C++ handler decides its caller's posture from
+  `m_restricted && ctx`, and the dispatch bridge passed `nullptr` for `ctx`
+  on every JSON and JSON-RPC route, so that expression was false however the
+  daemon was configured. On the pool paths it is not a request cap: the
+  sensitive flag selects `relay_category::all` over `::broadcasted`, and the
+  DB's iteration skips what does not match the category — so the flag decides
+  whether a transaction is enumerated at all, not which of its fields are
+  shown. A `--restricted-rpc` listener therefore answered with transactions
+  in the `stem` and `local` states: still-stemming ones, and the node's own
+  submissions before they were relayed. `/get_transactions` disclosed them by
+  hash; `/get_transaction_pool` and `/get_transaction_pool_hashes` enumerated
+  them with no argument at all, which hands over the identifiers to ask
+  about. The listener's own help text is "do not return privacy sensitive
+  data in RPC calls". The bridge now passes a shared origin context, which
+  restores the intended meaning for every bridged handler at once; the
+  unrestricted listener is unaffected, because `m_restricted` is false there
+  and the expression was false before and after. No wire shape changes, so
+  `CORE_RPC_VERSION` is untouched. (`do_not_relay` transactions are *not* in
+  the leaked set — they cannot exist in Shekyl: no RPC accepts the flag and
+  the pool's only writer of it hardcodes 0.)
+
+- **`relay_tx` let an unauthenticated caller re-inject a transaction the node
+  had not broadcast.** This is the same dead expression with an *active*
+  consequence rather than a disclosure one, and it is listed separately
+  because it is a different failure. The handler reads
+  `(broadcasted = get_pool_transaction(txid, ..., broadcasted)) || (!restricted
+  && get_pool_transaction(txid, ..., all))`, and with `restricted`
+  false-by-construction the second arm was live on a restricted listener: a
+  stranger who named a txid could make the daemon fetch a still-stemming or
+  locally-submitted transaction and relay it. Because that arm sets
+  `relay_method::local` for anything not already broadcast, it also reached
+  the Q12-D5a residual documented at the call site — a transaction that had
+  already rolled clearnet and is still stemming gets re-decided onto the
+  anonymity zone, the once-at-origin violation that residual names, now
+  reachable by an unauthenticated caller rather than the operator. With the
+  fix, a restricted caller reaches only the `broadcasted` arm, so a
+  not-yet-broadcast transaction answers "transaction not found in pool" and
+  is neither disclosed nor relayed.
 
 - **Every password rotation on Windows failed, and the crate that owns the
   defect was tested on no Windows machine anywhere.** `rotate_password`

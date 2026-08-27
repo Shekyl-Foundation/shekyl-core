@@ -46,9 +46,6 @@ typedef struct core_rpc_handle core_rpc_handle;
 core_rpc_handle* core_rpc_ffi_create(void* rpc_server_ptr);
 void core_rpc_ffi_destroy(core_rpc_handle* h);
 
-// True if the wrapped server was created with restricted=true.
-bool core_rpc_ffi_is_restricted(const core_rpc_handle* h);
-
 // JSON REST endpoints (/get_info, /get_transactions, etc.).
 // Returns serialized JSON response body, or NULL if the URI is unknown.
 //! \brief §55: relay stem-outcome tallies as a JSON array (caller frees with
