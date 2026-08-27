@@ -47,52 +47,13 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **The claim-source gather and the `Unbond` verify gather are coupled by
-  comments only** (surfaced 2026-08-25 in PR-P4 slice 1, while biting the
-  complete-tree branch).
-
-  **Trigger for this entry: a new `ArchivalBondValue::holdings_kind` variant.**
-  Two sites branch on record kind to build the release-cooldown anchor's input
-  — `blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post` call site
-  (which decides whether an `Unbond` verifies) and
-  `rpc/archival_claim_source.cpp` (which tells a wallet whether one *would*).
-  They must agree, and nothing enforces it: each carries a comment naming the
-  other, which is the whole mechanism.
-
-  **Why divergence is not a cosmetic bug.** A kind whose records store no shard
-  list makes the compact accessor return empty; the fold then reports "never
-  served"; and an absent anchor is the *permissive* branch of both
-  `release_cooldown_elapsed` and `slashes_settled_through`. The wallet would
-  report an irreversible persona-key wipe as ready for a record that has served
-  and is still cooling down. That is not hypothetical — it is exactly what
-  deleting the `is_complete_tree()` branch does today, and before slice 1 every
-  test in `archival_claim_source_rpc.cpp` stayed green while it did.
-
-  `complete_tree_anchor_comes_from_the_all_shards_scan` closes the two kinds
-  that exist. It does **not** generalise: a third kind arrives untested on both
-  sides at once, and this row decays at that other item's rate rather than its
-  own. Options when the trigger fires, cheapest first: give the branch one home
-  both sites call (an FFI or a shared C++ helper taking the record), so there is
-  one place to update; or a gate asserting the two branch sets match. Prefer the
-  first — a shared callee cannot diverge, while a gate only reports that it did.
-
-  **Shape the shared callee should take** (recorded 2026-08-26, when a review
-  pass re-proposed centralising the branch): one C++ callee holding the branch is
-  only half the answer, because it dedups the two call sites without making a
-  third record kind announce itself — a new `kHoldings*` constant obliges
-  nothing. Put the kind→scan decision in Rust as an exhaustive `match` on
-  `HoldingsKind` behind FFI (the `holdings_kind: u8` + `from_u8` + rejection-code
-  shape `archival_admission_ffi.rs` already uses), and let the C++ callee ask it.
-  Then a third variant fails to *compile* until its arm is written, which is the
-  gate this row is asking for, sited where it cannot be skipped. Both sites
-  currently read the branch from `ArchivalBondValue::is_complete_tree()`, so the
-  C++ change is one predicate swap per site.
-
-  **The test oracle stays hand-written.** `archival_claim_source_rpc.cpp`'s
-  fidelity test restates the branch to check the marshaler's output against an
-  independent gather. That restatement is the oracle, not a third copy to be
-  tidied away: an oracle that calls the subject's helper agrees with it by
-  construction and detects nothing.
+- **[Done 2026-08-27, PR-P4]** The claim-source gather and the `Unbond`
+  verify gather are no longer coupled by comments. `HoldingsKind::last_served_scan`
+  is the exhaustive kind→scan decision (a third variant fails to compile);
+  `shekyl_archival_last_served_scan` is the FFI both C++ sites ask; they marshal
+  the discriminant onto the matching DB accessor. The claim-source fidelity
+  test still restates `is_complete_tree()` as the oracle — an oracle that
+  called the subject's helper would detect nothing.
 
 - **`get_archival_emission_claim_source` walks the ENTIRE serve-credit table on
   every unauthenticated request** (measured 2026-08-26 in PR-P4 slice 2, while

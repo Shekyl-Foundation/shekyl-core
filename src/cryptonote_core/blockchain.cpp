@@ -4870,22 +4870,19 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
     // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
-    // held shard; never-served shards omitted — a CompleteTree record stores
-    // no shard list, so its anchors come from the all-shards P-prefix scan
-    // instead of folding vacuously from an empty list) + the slash
-    // scheduler's settled watermark (the SLASH_SETTLEMENT_PENDING gate; u64
-    // max = no epoch settled yet). The fold to the whole-record anchor and
-    // every verdict stay Rust-side.
-    // TWIN GATHER: `rpc/archival_claim_source.cpp` performs this same
-    // shard-kind branch to tell a wallet whether an `Unbond` can verify. A
-    // record kind added here without being added there makes the wallet fold a
-    // vacuously-empty list into "never served" -- the permissive branch of
-    // `release_cooldown_elapsed` and `slashes_settled_through` -- and report an
-    // irreversible exit as ready. Change both.
+    // held shard; never-served shards omitted) + the slash scheduler's
+    // settled watermark. The kind→scan decision is Rust
+    // (`shekyl_archival_last_served_scan`, exhaustive on HoldingsKind). This
+    // site only marshals the discriminant onto the matching DB accessor. The
+    // fold and every verdict stay Rust-side.
     std::vector<uint64_t> last_served;
     if (have_record)
     {
-      last_served = record.is_complete_tree()
+      uint8_t scan = 0;
+      if (shekyl_archival_last_served_scan(record.holdings_kind, &scan)
+          != SHEKYL_ARCHIVAL_BOND_POST_OK)
+        return false;
+      last_served = (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
         ? m_db->archival_bond_all_last_served_epochs(bond.p_canonical_id)
         : m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
             record.held_shard_ids);

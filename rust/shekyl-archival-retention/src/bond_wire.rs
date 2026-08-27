@@ -65,6 +65,38 @@ impl HoldingsKind {
             _ => Err(WireError::InvalidHoldingsKind(v)),
         }
     }
+
+    /// Which LMDB scan produces the per-shard last-served slice that
+    /// [`crate::whole_record_last_served`] folds into the release-cooldown
+    /// anchor.
+    ///
+    /// Exhaustive on this enum: a third holdings kind fails to compile until
+    /// its scan is written. That is the gate the two C++ gather sites cannot
+    /// provide — they used to branch on `is_complete_tree()` independently,
+    /// coupled only by comments. Compact holdings store a shard list; a
+    /// complete-tree record stores none, so folding that empty list reports
+    /// "never served" (the permissive cooldown branch) for a record that has.
+    pub const fn last_served_scan(self) -> LastServedScan {
+        match self {
+            Self::ShardSetCompact => LastServedScan::HeldShards,
+            Self::CompleteTree => LastServedScan::AllShards,
+        }
+    }
+}
+
+/// The gather the Unbond cooldown-anchor fold consumes, decided by
+/// [`HoldingsKind::last_served_scan`].
+///
+/// C++ marshals this discriminant and calls the matching DB accessor; it does
+/// not re-derive the kind→scan decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LastServedScan {
+    /// Fold the record's held shards (`archival_bond_last_served_epochs`).
+    HeldShards = 0,
+    /// Complete-tree records store no shard list: scan every served shard
+    /// (`archival_bond_all_last_served_epochs`).
+    AllShards = 1,
 }
 
 /// A bounded, duplicate-free list of held shard ids — the validated form of a
@@ -704,6 +736,25 @@ mod tests {
         assert_eq!(
             read_holdings_descriptor(&mut [0x00u8, 0x02, 0x2A, 0x07].as_slice()).unwrap(),
             holdings
+        );
+    }
+
+    #[test]
+    fn last_served_scan_is_exhaustive_on_holdings_kind() {
+        // A third HoldingsKind variant fails to compile in last_served_scan
+        // until its arm is written — that is the gate. This test pins the
+        // two kinds that exist so a silent swap of the arms goes red.
+        assert_eq!(
+            HoldingsKind::ShardSetCompact.last_served_scan(),
+            LastServedScan::HeldShards
+        );
+        assert_eq!(
+            HoldingsKind::CompleteTree.last_served_scan(),
+            LastServedScan::AllShards
+        );
+        assert_ne!(
+            LastServedScan::HeldShards as u8,
+            LastServedScan::AllShards as u8
         );
     }
 

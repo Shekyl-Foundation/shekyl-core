@@ -10,7 +10,7 @@ use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_compute, epoch_close_height,
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, BadInterval, CreditPair,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    HoldingsKind, LastServedScan, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
@@ -1993,6 +1993,45 @@ fn whole_record_fold_rejects_null_outputs_and_bad_spans() {
                 ptr::from_mut(&mut epoch),
             )
         },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+}
+
+#[test]
+fn last_served_scan_is_the_holdings_kind_decision() {
+    let mut scan = 7u8;
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::ShardSetCompact as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::HeldShards as u8);
+
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::CompleteTree as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::AllShards as u8);
+
+    // Unknown kind: fail closed, do not write.
+    scan = 7;
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(99, ptr::from_mut(&mut scan)) },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND
+    );
+    assert_eq!(scan, 7, "a rejected kind must not write a scan");
+
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(0, ptr::null_mut()) },
         SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
     );
 }

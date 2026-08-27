@@ -103,8 +103,8 @@ pub use bond_post::{
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
-    VIN_TYPE_ARCHIVAL_BOND_POST,
+    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
+    MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,

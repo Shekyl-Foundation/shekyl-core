@@ -52,28 +52,28 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     // never the intervals themselves, which no exit precondition reads.
     res.bad_interval_count = bond.bad_intervals.size();
 
-    // The `Unbond` cooldown anchor, gathered EXACTLY as the Unbond verify arm
-    // gathers it -- `blockchain.cpp`'s `shekyl_archival_verify_unbond_bond_post`
-    // call site, which carries the twin of this comment. THE TWO GATHERS MUST
-    // MOVE TOGETHER: this one only tells the wallet whether an exit can verify,
-    // so if they diverge the wallet reports readiness the chain then refuses --
-    // or, worse, reports "never served" for a record kind the verify arm knows
-    // has served, which is the permissive branch of both cooldown predicates.
-    // Nothing but these two comments couples them; a new record kind added to
-    // one is a silent divergence in the other (gate-4 §3.5): the record's held shards for
-    // a compact set, the all-shards P-prefix scan for a complete-tree record
-    // (which stores no shard list, so folding its empty list would report
-    // "never served" for a record that has). Never-served shards are omitted
-    // by both accessors, so an empty result is the legitimate
-    // "record exists, nothing served yet" case.
+    // The `Unbond` cooldown-anchor gather. The kind→scan decision is Rust
+    // (`shekyl_archival_last_served_scan`, exhaustive on HoldingsKind) — the
+    // same function the Unbond verify arm asks — so a third record kind fails
+    // to compile until its scan is written, rather than silently folding an
+    // empty compact list into "never served" (the permissive cooldown branch).
+    // This site marshals the discriminant onto the matching DB accessor.
+    // Never-served shards are omitted by both accessors, so an empty result
+    // is the legitimate "record exists, nothing served yet" case.
     //
     // The fold to the whole-record anchor stays Rust-side, through the same
     // function consensus uses. A C++ max() here would be a second derivation of
     // a consensus operand and could drift from the verifier that decides the
     // tx — the failure `close_block_height` is already shaped to prevent.
-    const std::vector<uint64_t> last_served = bond.is_complete_tree()
-      ? db.archival_bond_all_last_served_epochs(p_id)
-      : db.archival_bond_last_served_epochs(p_id, bond.held_shard_ids);
+    uint8_t scan = 0;
+    const uint8_t scan_rc = shekyl_archival_last_served_scan(bond.holdings_kind, &scan);
+    if (scan_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+      throw std::runtime_error(
+        "last-served scan dispatch failed (rc=" + std::to_string(scan_rc) + ")");
+    const std::vector<uint64_t> last_served =
+      (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
+        ? db.archival_bond_all_last_served_epochs(p_id)
+        : db.archival_bond_last_served_epochs(p_id, bond.held_shard_ids);
     uint8_t anchor_present = 0;
     uint64_t anchor_epoch = 0;
     // A non-OK return is a marshaling bug on THIS side (null pointer with a

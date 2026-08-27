@@ -152,10 +152,9 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
   // calls rather than restated, so the assertion cannot drift from the
   // marshaler by agreeing with a copy of its logic.
   //
-  // DO NOT deduplicate this branch against the marshaler's. The twin-gather
-  // FOLLOWUPS row proposes one shared callee for the two PRODUCTION sites; this
-  // is the oracle, and an oracle that calls the subject's helper agrees with it
-  // by construction and detects nothing. The restatement is the mechanism.
+  // DO NOT replace this branch with `shekyl_archival_last_served_scan`.
+  // That FFI is the subject's helper: an oracle that calls it agrees by
+  // construction and detects nothing. The restatement is the mechanism.
   const std::vector<uint64_t> served = bond.is_complete_tree()
     ? fx.bdb().archival_bond_all_last_served_epochs(fx.p1)
     : fx.bdb().archival_bond_last_served_epochs(fx.p1, bond.held_shard_ids);

@@ -1913,6 +1913,19 @@ uint8_t shekyl_archival_whole_record_last_served(
     uint8_t* out_present,
     uint64_t* out_epoch);
 
+// Kind→scan decision for the last-served gather that
+// `shekyl_archival_whole_record_last_served` folds. Exhaustive on the Rust
+// `HoldingsKind` enum: a third variant fails to compile until its arm is
+// written. C++ marshals this discriminant and calls the matching DB accessor
+// -- it does not re-derive the kind decision. Compact holdings (0) fold the
+// record's held shards; complete-tree (1) scans every served shard, because
+// a complete-tree record stores no shard list.
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_HELD_SHARDS 0
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS  1
+uint8_t shekyl_archival_last_served_scan(
+    uint8_t holdings_kind,
+    uint8_t* out_scan);
+
 // Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no

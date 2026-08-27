@@ -10,7 +10,7 @@ use shekyl_archival_retention::{
     rebond_pop, unbond_connect, unbond_pop, verify_holdings_update_add,
     verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
     verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin, BadInterval,
-    BondPostKind, HoldingsDescriptor, HoldingsKind, ShardSet, ShardSetError,
+    BondPostKind, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError,
     HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
@@ -366,6 +366,42 @@ pub unsafe extern "C" fn shekyl_archival_whole_record_last_served(
                 *out_epoch = 0;
             }
         }
+    }
+    SHEKYL_ARCHIVAL_BOND_POST_OK
+}
+
+/// Decide which last-served LMDB scan a holdings kind uses.
+///
+/// This is the **kind→scan decision**, exhaustive on [`HoldingsKind`]: a third
+/// variant fails to compile in [`HoldingsKind::last_served_scan`] until its
+/// arm is written. The two C++ gather sites (Unbond verify in
+/// `blockchain.cpp`, claim-source marshal in `archival_claim_source.cpp`)
+/// ask this instead of branching on `is_complete_tree()` independently.
+///
+/// Writes `*out_scan` to [`LastServedScan::HeldShards`] (0) or
+/// [`LastServedScan::AllShards`] (1) on `OK`. An unknown `holdings_kind` is
+/// `ERR_HOLDINGS_KIND` and does not write.
+///
+/// # Safety
+/// `out_scan` must be valid for one write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_last_served_scan(
+    holdings_kind: u8,
+    out_scan: *mut u8,
+) -> u8 {
+    if out_scan.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let kind = match HoldingsKind::from_u8(holdings_kind) {
+        Ok(k) => k,
+        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND,
+    };
+    let scan = match kind.last_served_scan() {
+        LastServedScan::HeldShards => LastServedScan::HeldShards as u8,
+        LastServedScan::AllShards => LastServedScan::AllShards as u8,
+    };
+    unsafe {
+        *out_scan = scan;
     }
     SHEKYL_ARCHIVAL_BOND_POST_OK
 }
