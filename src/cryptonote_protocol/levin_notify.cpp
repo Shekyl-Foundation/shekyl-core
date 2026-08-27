@@ -425,7 +425,19 @@ namespace levin
       // Pinned by the levin_notify.padding_survives_the_emit_path gtest.
       if (!pad)
         blob = epee::levin::try_compress_message(std::move(blob));
-      return p2p.send(std::move(blob), destination);
+      /* Same `res > 0` as the carrier's send below, and INHERITED WRONG here:
+         this returned `p2p.send(...)` straight into a `bool`, so -1 ("the send
+         failed") reported success.
+
+         It matters on the live stem path. `dandelionpp_notify` treats a true
+         return as "sent" — it records a stem observation and returns without
+         retrying. So a transport failure charged a successor with an
+         observation for a transaction that never left, and F-10's accounting
+         then waited on a silence that peer was never given a chance to break.
+         Found sweeping the carrier's own conversion; fixed here rather than
+         left as the next instance of it. */
+      const int res = p2p.send(std::move(blob), destination);
+      return res > 0;
     }
 
     /* The current design uses `asio::strand`s. The documentation isn't as clear
@@ -622,7 +634,14 @@ namespace levin
              called it a compile error; it compiled, and both of us were
              reading a different overload than the compiler chose. */
           epee::byte_slice blob{epee::span<const std::uint8_t>{bytes, len}};
-          return z.p2p->send(std::move(blob), destination);
+          /* `res > 0`, not a bare conversion. `connections::send` returns an
+             INT: 1 sent, 0 no such connection, -1 the send itself failed. A
+             direct `int -> bool` makes -1 report DELIVERED, so Rust resolves
+             the token with `sent` and the fragment is dropped for good — the
+             precise failure the status return exists to prevent, inverted.
+             Same check `net_node.inl` uses at its own send site. */
+          const int res = z.p2p->send(std::move(blob), destination);
+          return res > 0;
         }
         catch (const std::exception& e)
         {

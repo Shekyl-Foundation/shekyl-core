@@ -316,6 +316,14 @@ fn dispatch(
                 // whole reason the callback had to widen — without a status
                 // coming back, `sent` could never be called and every take
                 // would reproduce this fragment forever.
+                //
+                // The two resolutions are not symmetric. `sent` advances one
+                // fragment; `failed` RESTARTS the channel — offset and binding
+                // cleared, epoch bumped — so a multi-window message resumes
+                // from its first fragment rather than its current one. A
+                // half-delivered message must not be finished to a different
+                // successor, and the queue cannot know how much of it the
+                // failed send reached the wire with.
                 let bytes = send.bytes();
                 let delivered = noise(
                     ctx,

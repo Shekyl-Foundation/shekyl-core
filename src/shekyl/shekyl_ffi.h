@@ -2975,9 +2975,19 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! hand out the same fragment forever and `failed` would be unreachable. The
 //! widening is what makes the token's failure mode reachable at all.
 //!
-//! Return true if the bytes were handed to the transport, false otherwise; a
-//! false leaves the queue exactly as it was, so the fragment is retried rather
-//! than dropped. Must not throw across the FFI boundary.
+//! Return true if the bytes were handed to the transport, false otherwise.
+//!
+//! A false RESTARTS the channel rather than re-offering this one fragment:
+//! `NoiseSend::failed` clears the channel's offset and its binding and bumps
+//! the epoch, so a multi-window notification resumes from its FIRST fragment
+//! on a later tick, against whatever peer the slot holds then. That is CV-1's
+//! restart, not a per-fragment retry — a half-delivered message must not be
+//! completed to a different successor, and the queue cannot know how much of
+//! it the failed send actually put on the wire.
+//!
+//! Stated because the single-window case makes the two indistinguishable, and
+//! an earlier draft of this contract described that case as the general rule.
+//! Must not throw across the FFI boundary.
 //!
 //! `peer` is the 16-byte connection id the channel's stem slot is bound to --
 //! never nil, since an unbound slot emits nothing (CV-2). The binding travels

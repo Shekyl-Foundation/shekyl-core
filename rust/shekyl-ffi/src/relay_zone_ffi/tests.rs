@@ -1338,18 +1338,25 @@ fn every_emission_is_a_levin_frame_even_the_dummy() {
     });
 }
 
-/// The token's two resolutions, both driven.
+/// The token's two resolutions, on a MULTI-WINDOW message.
 ///
 /// `take_for_send` is non-destructive, so `sent` advancing and `failed`
-/// leaving the queue alone is the whole contract of the widened callback.
-/// With the recorder reporting a constant `true`, reversing the two arms was
+/// restarting is the whole contract of the widened callback. With the
+/// recorder reporting a constant `true`, reversing the two arms was
 /// invisible.
+///
+/// **Multi-window on purpose.** A single-window message makes "restart the
+/// channel" and "retry this fragment" indistinguishable, so the one-window
+/// version of this test encoded the narrower behaviour as the contract — the
+/// exact over-reading the header doc had. At >1 window a failure must return
+/// the FIRST fragment, not the one that failed.
 ///
 /// What edit reds it: swap `send.sent(q)` and `send.failed(q)` in `dispatch`.
 #[test]
-fn a_failed_send_leaves_the_fragment_for_the_next_tick() {
+fn a_failed_send_restarts_the_message_from_its_first_fragment() {
     reset();
-    let real = vec![7u8; 4_096];
+    // Comfortably over one window (20,480 B) and under `MAX_FRAGMENTS`.
+    let real = vec![7u8; 40_000];
     // SAFETY: constructed here, freed below, not shared.
     unsafe {
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
@@ -1395,8 +1402,26 @@ fn a_failed_send_leaves_the_fragment_for_the_next_tick() {
 
         assert_eq!(
             first, second,
-            "a failed send must leave the queue exactly as it was — the \
-             fragment is retried, not dropped"
+            "a failed send RESTARTS the channel, so the next emission is the \
+             message's FIRST fragment again — not the fragment that failed, \
+             and not the next one. A half-delivered message must not be \
+             completed to whatever successor the slot holds later."
+        );
+        // And the restart is a real restart: with >1 window enqueued, a
+        // SUCCEEDING send must then advance, or "restart" would be
+        // indistinguishable from "stuck".
+        let after = on_zero().len();
+        while on_zero().len() == after {
+            drive_one_noise_send(h);
+        }
+        let third = on_zero()
+            .last()
+            .expect("channel 0 emitted a third time")
+            .clone();
+        assert_ne!(
+            second, third,
+            "after a successful send the channel must advance to the next \
+             fragment; equal bytes here would mean the queue never moves"
         );
         shekyl_relay_zone_free(h);
     }
