@@ -178,12 +178,25 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
         return Err(SidError::OpenToken(last_error()));
     }
     let token = TokenGuard(token);
+    logon_sid_of(token.0)
+}
 
+/// The logon SID of an **arbitrary** token, by the same `TokenGroups` walk.
+///
+/// Split out of [`current_logon_sid`] so the same reader can be pointed at a
+/// token that is not this process's — specifically an impersonation token, for
+/// P-17, which has to establish that a caller arriving over `IPC$` carries a
+/// *different* logon SID before a refusal on the restrictive pipe can be
+/// attributed to the ACE rather than to the transport.
+///
+/// The caller owns `token` and must keep it open across the call. Nothing here
+/// closes it.
+pub(crate) fn logon_sid_of(token: HANDLE) -> Result<SidString, SidError> {
     let mut needed: u32 = 0;
     // SAFETY: the documented sizing form (null buffer, zero length).
     unsafe {
         GetTokenInformation(
-            token.0,
+            token,
             TokenGroups,
             std::ptr::null_mut(),
             0,
@@ -202,7 +215,7 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
     // SAFETY: `buf` is at least `needed` bytes and outlives the call.
     let read = unsafe {
         GetTokenInformation(
-            token.0,
+            token,
             TokenGroups,
             buf.as_mut_ptr().cast::<c_void>(),
             needed,

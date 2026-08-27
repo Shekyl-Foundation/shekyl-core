@@ -109,7 +109,7 @@ for `#[ignore]`.
 |---|---|---|---|---|
 | P-12 | Does the Medium mandatory label block a **Low-IL** opener? | Needs a genuinely Low-integrity process. Creating one wants an interactive token to derestrict from; a CI service account's token may not be a faithful source | Low-IL open fails with `ERROR_ACCESS_DENIED` | **WP-D4** — this is the *only* in-scope adversary per §6. If the label does not block, the server-side half of D4 is doing nothing and the client-side IL check becomes load-bearing alone |
 | P-13 | Does the logon SID separate terminal-services sessions? | Needs two concurrent interactive logons | A second session's process cannot open the pipe | **WP-D6** — if it does not separate sessions, the logon SID is not the improvement on an `S-1-5-2` deny that D6 claims, and the explicit `NETWORK` deny comes back |
-| P-17 | Does the logon SID refuse a caller from a **different logon session** — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27 | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Three, and all three must hold: (a) **control** — the restrictive pipe opens locally via `\\.\pipe\…`, proving the pipe works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **the question** — the restrictive pipe opened via `\\localhost\pipe\…` fails with `ERROR_ACCESS_DENIED` | **WP-D6** — if (c) succeeds, the logon SID does not carry the `IPC$` boundary, removing the user-SID ACE in PR #516 bought nothing on that axis, and the explicit `NETWORK` (`S-1-5-2`) deny comes back. If (b) fails the probe is **UNRUN**, not a pass: a refusal in (c) would then be unattributed |
+| P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If (b) fails the probe is **UNRUN**, not a pass: any refusal would then be unattributed |
 
 **P-17's section is itself undecided, and that is why it is here.** §1 would
 claim CI-durability nobody has established; §3 pre-declares CI-*fragility*,
@@ -135,6 +135,35 @@ produces a *distinct logon session* server-side is documented behaviour we have
 never observed. It is row (b), not a premise — the same discipline that turned
 "a Low-IL thread is not a Low-IL opener" from a confident sentence into a
 measured falsehood.
+
+### 3.1 P-17's correction, made before the first run
+
+**Production has two fences against `IPC$`, and this sheet's first form of P-17
+knew about one.** `pipe.rs::create_instance` sets
+`reject_remote_clients(true)` — `PIPE_REJECT_REMOTE_CLIENTS` — on every
+instance, so a remote client is refused by the pipe *flag*, before any DACL
+evaluation. **`WINDOWS_WALLET_SUPPORT.md` records this nowhere**; WP-D6 reads
+as though the logon-SID grant is the whole answer, and the only place the
+second fence appears is a code comment which asserts it is "a second fence
+against the `IPC$` path WP-D6's logon-SID grant *already closes*".
+
+That assertion is the thing P-17 exists to test, written as settled fact. It is
+the same class this round has spent itself on, so it is named here rather than
+inherited.
+
+**What it changes.** With both fences up, a refused loopback open proves
+nothing about the logon SID — it is the P-7 shape again, a refusal that looks
+like a pass. So the probe must **lower the flag it is not testing**, exactly as
+P-12 built a descriptor *without* the mandatory label to attribute its refusal.
+Row (d) is the D6 claim proper: same owner-only DACL, `reject_remote_clients`
+**off**, and the open must still be refused. Row (c) keeps the production shape
+so the two are distinguishable.
+
+**What it does not change.** P-17 is now explicitly a **defence-in-depth
+verification, not a live-hole test.** Production is closed either way while the
+flag is set; what is unverified is whether the layer WP-D6 *names* would hold
+if the flag were ever removed — which is exactly the question a defence-in-depth
+claim has to be able to answer, and which no one has asked.
 
 **Recording protocol.** A §3 result lands as a dated row appended to §4 below,
 naming the machine and Windows build. An unrun probe stays visibly unrun — a
