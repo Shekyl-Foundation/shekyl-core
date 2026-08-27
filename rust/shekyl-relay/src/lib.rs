@@ -42,9 +42,11 @@
 //!   noise schedule — is owned **here**, mutated only through `&mut Zone`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
 //!   owner. Noise **schedule** is owned here. Noise **buffers** live here
-//!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ cannot enable the
-//!   carrier; it is transport until step 5. The inherited covert branch
-//!   in `send_txs` is already deleted (§2.9 step 4).
+//!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ enables the carrier
+//!   only behind a development opt-in that defaults off, and performs its
+//!   transport — as it does for stem and fluff — until step 5 deletes that
+//!   file. The inherited covert branch in `send_txs` is already deleted
+//!   (§2.9 step 4).
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
