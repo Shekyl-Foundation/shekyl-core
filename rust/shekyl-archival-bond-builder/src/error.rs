@@ -7,7 +7,8 @@
 
 use thiserror::Error;
 
-/// Errors raised while constructing a JoinMarket archival bond post.
+/// Errors raised while constructing an archival bond-post vin (JoinMarket
+/// credit or Unbond debit).
 #[derive(Debug, Error)]
 pub enum BondBuildError {
     /// `bond_floor(holdings)` was zero — structurally invalid holdings (empty
@@ -78,6 +79,6 @@ pub enum BondBuildError {
     },
 
     /// A funding or output amount, or their sum, overflowed `u64`.
-    #[error("credit witness amount arithmetic overflowed u64")]
+    #[error("bond-post witness amount arithmetic overflowed u64")]
     AmountOverflow,
 }

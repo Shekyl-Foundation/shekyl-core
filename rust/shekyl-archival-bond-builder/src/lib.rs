@@ -3,28 +3,30 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Deterministic construction of JoinMarket archival bond posts.
+//! Deterministic construction of archival bond-post vins.
 //!
 //! This crate is the **construct** side of the archival bond, the mirror of the
 //! `shekyl-archival-retention` **verify** side. It is deterministic, holds no
 //! async runtime, and runs no actor: it builds the bond-post `vin` (no on-vin
-//! signature — SA-2b) and supplies the single-sourced [`OutputTerm`] for the
-//! CT balance. Surface-A signing of the whole-tx payload happens later in the
-//! assemble path. Funding selection, standoff timing, and broadcast live in
-//! the `StakeEngine` (PR 2); `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
+//! signature — SA-2b) and supplies the single-sourced CT-balance term. Surface-A
+//! signing of the whole-tx payload happens later in the assemble path. Funding
+//! selection, standoff timing, and broadcast live in the `StakeEngine`;
+//! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
 //!
-//! ## What this crate produces (PR 1)
+//! ## What this crate produces
 //!
-//! 1. [`ArchivalBondPostVin`] for [`BondPostKind::JoinMarket`] with
+//! 1. [`JoinMarketVin`]: [`BondPostKind::JoinMarket`] with
 //!    `bonded_total_atomic == bond_credit == bond_floor(holdings)` and
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
 //!    an on-vin blob (ARCHIVAL_BOND_GATE4.md §3.4.1; SA-2b, SIGNATURE_ALIGNMENT.md §2.2).
-//! 2. The credit balance term: `bond_credit = floor` rides the **output** side
-//!    as an [`OutputTerm`] (the single-sourced cleartext term, §7.2), fed to
-//!    `shekyl-tx-builder::sign_transaction_with_terms` by the engine.
-//! 3. The credit funding rule: a credit path's committed funding must exceed
-//!    `outputs + fee` by exactly `bond_credit` ([`verify_credit_funding`], §7.3).
+//! 2. [`UnbondVin`]: [`BondPostKind::Unbond`] with empty holdings,
+//!    `bonded_total_atomic == bond_credit == 0`, and
+//!    `bond_debit == record_bonded_total`. The debit term rides the **input**
+//!    side as an [`InputTerm`].
+//! 3. The two amount-level funding rules, as separate functions because the
+//!    side is genesis-frozen: [`verify_credit_funding`] (credit is a sink) and
+//!    [`verify_debit_funding`] (debit is a source).
 //!
 //! ## What this crate does NOT do
 //!

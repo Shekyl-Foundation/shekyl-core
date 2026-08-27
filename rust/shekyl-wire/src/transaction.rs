@@ -68,7 +68,9 @@ pub const CT_TYPE_NULL: u8 = 0x00;
 pub const CT_TYPE_FCMP: u8 = 0x01;
 /// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
 pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
-/// `txin_archival_bond_post` tag (gate-4, JoinMarket-only at genesis).
+/// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Unbond
+/// (debit) are the wallet-constructible archival kinds; Rebond and
+/// HoldingsUpdate have verify arms and no producer yet.
 pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose
 /// codec is owned by `shekyl-archival-retention::emission_wire`
@@ -78,7 +80,7 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
-/// `post_kind` value for a JoinMarket bond post (the only kind valid at genesis).
+/// `post_kind` value for a JoinMarket archival bond post.
 /// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
 /// `holdings.kind` for a compact shard-set (carries an explicit shard list).
@@ -332,7 +334,8 @@ pub enum Input {
         /// Complete Rust canonical encoding of the kept half (tag included).
         canonical_bytes: Vec<u8>,
     },
-    /// Archival bond-post (dense tag `0x03`, gate-4) — JoinMarket-only at genesis.
+    /// Archival bond-post (dense tag `0x03`, gate-4). JoinMarket and Unbond
+    /// are wallet-constructible; the kind byte is `BondPostKind`.
     BondPost(Box<BondPost>),
     /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
     /// canonical encoding as an **opaque blob**, leading wire tag `0x04` included.
@@ -591,8 +594,8 @@ fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
 /// to construct.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BondPostKind {
-    /// JoinMarket post (`post_kind` `0x00`, the only kind valid at genesis) — carries
-    /// `bond_spend_pk`, the GF-1 debit authorizer (§9.11).
+    /// JoinMarket post (`post_kind` `0x00`) — carries `bond_spend_pk`, the
+    /// GF-1 debit authorizer (§9.11). The credit path; Unbond is `Other(2)`.
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
@@ -603,10 +606,9 @@ pub enum BondPostKind {
     Other(u8),
 }
 
-/// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1). JoinMarket-only at
-/// genesis. The `post_kind`/`bond_spend_pk` coupling (§9.11) — which the current
-/// `shekyl-archival-retention::bond_wire` omits and the impl must add — is carried in
-/// [`BondPostKind`].
+/// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1).
+/// The `post_kind`/`bond_spend_pk` coupling (§9.11) is carried in [`BondPostKind`]:
+/// JoinMarket carries the key; every other archival kind is `Other(tag)`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BondPost {
     /// `P`'s canonical hybrid public key.

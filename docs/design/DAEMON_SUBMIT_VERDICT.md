@@ -1384,18 +1384,17 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond) — scoped out
-with a named reopen (rule 21).** The block path verifies them today
-(`archival_bond_post_kind` dispatch, all Rust-backed), but their
-*submit-side* fact sets — per-shard last-served cursors, the
+**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond).** The block path
+verifies them today (`archival_bond_post_kind` dispatch, all Rust-backed).
+Their *submit-side* fact sets — per-shard last-served cursors, the
 slash-settlement watermark, interval logs, the settlement epoch — and each
 fact's Phase-D re-check/race classification are not specified in this
-matrix, and no wallet constructs these kinds
-(`shekyl-archival-bond-builder` is JoinMarket-only). The submit battery
-refuses them `Malformed` (loud, logged). Reopening criterion: a wallet
-construction leg for a non-JoinMarket kind lands, or this matrix grows
-rows for it — then extend `SubmitFacts` with that kind's fact set (with
-Phase-D re-check semantics) and dispatch it in the same arm.
+matrix. The submit battery refuses them `Malformed` (loud, logged).
+**Unbond's construction-leg reopening criterion has fired (PR-P4):**
+`build_unbond_vin` / `AssembleUnbond` exist. What remains is this matrix
+growing Unbond rows and `SubmitFacts` carrying that fact set — a daemon
+submit surface, not a wallet-producer one (rule 19). HoldingsUpdate /
+Rebond still have no producer.
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):
