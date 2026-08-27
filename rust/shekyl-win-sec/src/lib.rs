@@ -129,6 +129,14 @@ pub fn logon_sid_of_token_for_testing(
     sid::logon_sid_of(token)
 }
 
+/// [`current_user_sid`]'s reader pointed at an **arbitrary** token, for probes
+/// only. See [`logon_sid_of_token_for_testing`]: P-17's server reads both off
+/// the caller's impersonation token to assert *same user, different session*.
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn user_sid_of_token_for_testing(token: *mut core::ffi::c_void) -> Result<SidString, SidError> {
+    sid::user_sid_of(token)
+}
+
 /// The pipe-name prefix. The SID goes in literally (WP-D1), so the client can
 /// compare the owner it reads back against the SID it derived the name from.
 #[cfg(windows)]

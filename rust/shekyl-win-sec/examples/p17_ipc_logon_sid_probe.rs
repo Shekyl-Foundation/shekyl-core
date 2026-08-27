@@ -82,7 +82,7 @@ mod probe {
 
     use shekyl_win_sec::{
         current_logon_sid, current_user_sid, logon_sid_of_token_for_testing, self_hosted_pipe_name,
-        OwnerOnlyDescriptor,
+        user_sid_of_token_for_testing, OwnerOnlyDescriptor,
     };
 
     /// `ERROR_ACCESS_DENIED` — the (d) prediction, and the only code that row
@@ -97,6 +97,11 @@ mod probe {
     /// either completes or fails within the SMB connect timeout (seconds);
     /// this is a hang ceiling for the harness, not a deadline for the OS.
     const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// How long `--serve` waits for the remote caller. Longer than
+    /// [`CLIENT_TIMEOUT`] because two machines are coordinated by hand; still
+    /// bounded, so a second box that never dials cannot hang the operator.
+    const SERVE_TIMEOUT: Duration = Duration::from_secs(120);
 
     /// Spawn counters, so no two rows ever share a pipe name — a consumed or
     /// squatted instance must not be able to confound a neighbouring row.
@@ -241,10 +246,31 @@ mod probe {
     /// state, and every fence must be down so that the *only* question it
     /// answers is "what identity does a loopback caller arrive with". A
     /// refusal here would be unattributable noise.
-    struct PermissiveSd(*mut c_void, SECURITY_ATTRIBUTES);
-    impl PermissiveSd {
-        fn new() -> Result<Self, u32> {
-            let sddl = wide("D:(A;;GA;;;WD)");
+    /// A P-17 pipe name that **two machines can compute identically**, without
+    /// exchanging it.
+    ///
+    /// Deliberately **not** [`self_hosted_pipe_name`]: that embeds the serving
+    /// process's PID (`pipe.rs`, WP-D1's in-process-collision hygiene, which
+    /// its own module docs mark as "not security"), which the dialling machine
+    /// cannot derive — it would compute a different name, `CreateFile` would
+    /// return `ERROR_FILE_NOT_FOUND`, and the run would report a refusal for a
+    /// pipe never dialled (the P-7 shape). Both machines run as the same AD
+    /// user, so the **user SID** is the shared component; a fixed `-p17-<role>`
+    /// discriminator names the three pipes with no PID and no exchange.
+    ///
+    /// This is a name, not a descriptor. Rows (c)/(d) test the production
+    /// **descriptor** — the DACL, label, and `reject_remote_clients` flag —
+    /// which is what WP-D6 is about; production *naming* is out of scope, and
+    /// dropping the PID costs the probe nothing it measures.
+    fn p17_pipe_name(user_sid: &shekyl_win_sec::SidString, role: &str) -> String {
+        format!(r"\\.\pipe\shekyl-wallet-{}-p17-{role}", user_sid.as_str())
+    }
+
+    /// A security descriptor built from an SDDL string, owning the allocation.
+    struct SdFromSddl(*mut c_void, SECURITY_ATTRIBUTES);
+    impl SdFromSddl {
+        fn new(sddl: &str) -> Result<Self, u32> {
+            let sddl = wide(sddl);
             let mut sd: *mut c_void = std::ptr::null_mut();
             // SAFETY: `sddl` is NUL-terminated; `sd` is written only on
             // success and freed by Drop below, per the API's LocalFree
@@ -271,13 +297,245 @@ mod probe {
             &raw const self.1
         }
     }
-    impl Drop for PermissiveSd {
+    impl Drop for SdFromSddl {
         fn drop(&mut self) {
             // SAFETY: `sd` came from the converter, which documents LocalFree.
             unsafe { LocalFree(self.0) };
         }
     }
     use std::mem::size_of;
+
+    /// `--serve` — the two-machine server (WP-D6's genuine remote caller).
+    ///
+    /// Stands up the three pipes a remote same-user caller dials, reads the
+    /// caller's identity off the impersonation token to assert *same user,
+    /// different logon session* (authoritative, not the client's self-report),
+    /// and combines that with the caller's report of which pipes refused it —
+    /// which only the caller can observe, because a refused open never reaches
+    /// the server. The wait is bounded: a machine that never dials yields
+    /// UNRUN, never a hang.
+    fn serve(me: &shekyl_win_sec::SidString, my_logon: &shekyl_win_sec::SidString) -> i32 {
+        // Control: granted to the USER SID (not the logon SID), no label, no
+        // reject-remote flag — the remote same-user caller must open it (the
+        // attribution control) and report through it.
+        let control_sd = match SdFromSddl::new(&format!("D:(A;;GA;;;{})", me.as_str())) {
+            Ok(sd) => sd,
+            Err(e) => {
+                println!("P-17 UNRUN: could not build the control descriptor (os error {e}).");
+                return 2;
+            }
+        };
+        let Ok(dacl_only) = OwnerOnlyDescriptor::without_label_for_testing(me, my_logon) else {
+            println!("P-17 UNRUN: could not build the DACL-only descriptor.");
+            return 2;
+        };
+        let Ok(production) = OwnerOnlyDescriptor::new(me, my_logon) else {
+            println!("P-17 UNRUN: could not build the production descriptor.");
+            return 2;
+        };
+
+        let control_name = p17_pipe_name(me, "control");
+        let dacl_name = p17_pipe_name(me, "daclonly");
+        let prod_name = p17_pipe_name(me, "prod");
+
+        let control = match create_instance(&control_name, control_sd.attributes_ptr(), false) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("P-17 UNRUN: could not bind the control pipe (os error {e}).");
+                return 2;
+            }
+        };
+        // `_dacl` / `_prod` are bound (not `_`) so the pipes stay alive across
+        // the wait for the caller to attempt them; a refused open is denied at
+        // `CreateFile`, so the server never accepts on these two.
+        let _dacl = match create_instance(&dacl_name, dacl_only.attributes_ptr(), false) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("P-17 UNRUN: could not bind the DACL-only pipe (os error {e}).");
+                return 2;
+            }
+        };
+        let _prod = match create_instance(&prod_name, production.attributes_ptr(), true) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("P-17 UNRUN: could not bind the production pipe (os error {e}).");
+                return 2;
+            }
+        };
+
+        let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| ".".to_owned());
+        let strip = |n: &str| n.strip_prefix(r"\\.\pipe\").unwrap_or(n).to_owned();
+        let dial = |n: &str| format!(r"\\{host}\pipe\{}", strip(n));
+        println!("P-17 SERVE ready on host {host}. The remote same-user caller, in order:");
+        println!(
+            "  1. open {} -> expect ERROR_ACCESS_DENIED (5)",
+            dial(&dacl_name)
+        );
+        println!(
+            "  2. open {} -> expect refused (reject-remote flag)",
+            dial(&prod_name)
+        );
+        println!(
+            "  3. open {} and write one ASCII line: \"<step1-oserr> <step2-oserr>\"",
+            dial(&control_name)
+        );
+
+        // Accept + impersonate on a thread so the wait can be bounded. HANDLE
+        // is not Send, so the raw pointer is carried across as a usize; the
+        // thread reconstructs the guard and owns the close. On timeout the
+        // thread is left blocked in ConnectNamedPipe and dies when the process
+        // exits after the verdict.
+        let (tx, rx) = mpsc::channel::<Result<(String, String, u32, u32), String>>();
+        let control_raw = control.0 as usize;
+        std::mem::forget(control);
+        std::thread::spawn(move || {
+            let server = HandleGuard(control_raw as HANDLE);
+            // SAFETY: our own pipe instance.
+            let connected = unsafe { ConnectNamedPipe(server.0, std::ptr::null_mut()) };
+            if connected == 0 && last_error() != ERROR_PIPE_CONNECTED {
+                _ = tx.send(Err(format!(
+                    "ConnectNamedPipe failed (os error {})",
+                    last_error()
+                )));
+                return;
+            }
+            // Read the caller's report first — this also satisfies the
+            // "server has read from the client" precondition for impersonation.
+            let mut buf = [0u8; 128];
+            let mut got: u32 = 0;
+            // SAFETY: live handle, valid buffer.
+            let read_ok = unsafe {
+                ReadFile(
+                    server.0,
+                    buf.as_mut_ptr(),
+                    128,
+                    &raw mut got,
+                    std::ptr::null_mut(),
+                )
+            };
+            if read_ok == 0 || got == 0 {
+                _ = tx.send(Err(format!(
+                    "could not read the caller's report (os error {})",
+                    last_error()
+                )));
+                return;
+            }
+            let report = String::from_utf8_lossy(&buf[..got as usize])
+                .trim()
+                .to_owned();
+            let mut parts = report.split_whitespace();
+            let dacl_err: u32 = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u32::MAX);
+            let prod_err: u32 = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u32::MAX);
+            // SAFETY: read precondition satisfied above; reverted on every path.
+            let imp = unsafe { ImpersonateNamedPipeClient(server.0) };
+            if imp == 0 {
+                _ = tx.send(Err(format!(
+                    "ImpersonateNamedPipeClient failed (os error {})",
+                    last_error()
+                )));
+                return;
+            }
+            let mut token: HANDLE = std::ptr::null_mut();
+            // SAFETY: current-thread pseudo-handle, OpenAsSelf=1.
+            let opened =
+                unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
+            let token_guard = HandleGuard(token);
+            let sids = if opened == 0 {
+                Err(format!(
+                    "could not open the impersonation token (os error {})",
+                    last_error()
+                ))
+            } else {
+                match (
+                    user_sid_of_token_for_testing(token_guard.0),
+                    logon_sid_of_token_for_testing(token_guard.0),
+                ) {
+                    (Ok(u), Ok(l)) => Ok((u.as_str().to_owned(), l.as_str().to_owned())),
+                    _ => Err("could not read the caller's user or logon SID".to_owned()),
+                }
+            };
+            // SAFETY: paired with the impersonation above.
+            let reverted = unsafe { RevertToSelf() };
+            if reverted == 0 {
+                eprintln!("P-17: RevertToSelf FAILED — aborting rather than run impersonated.");
+                std::process::abort();
+            }
+            _ = tx.send(sids.map(|(u, l)| (u, l, dacl_err, prod_err)));
+        });
+
+        match rx.recv_timeout(SERVE_TIMEOUT) {
+            Err(_) => {
+                println!(
+                    "P-17 UNRUN: no remote caller connected within {}s. Not a pass — the second \
+                     machine did not dial, or could not reach IPC$.",
+                    SERVE_TIMEOUT.as_secs()
+                );
+                2
+            }
+            Ok(Err(detail)) => {
+                println!("P-17 UNRUN: {detail}.");
+                2
+            }
+            Ok(Ok((caller_user, caller_logon, dacl_err, prod_err))) => {
+                println!("P-17 SERVE: caller user SID {caller_user}, logon SID {caller_logon}.");
+                if caller_user != me.as_str() {
+                    println!(
+                        "P-17 UNRUN: the caller is a DIFFERENT user than the server ({}). A refusal \
+                         would be over-determined (they are not in the DACL at all), not attributable \
+                         to the logon SID. Log the second machine in as the same AD user.",
+                        me.as_str()
+                    );
+                    return 2;
+                }
+                if caller_logon == my_logon.as_str() {
+                    println!(
+                        "P-17 UNRUN: the caller shares OUR logon SID — it did not cross a session \
+                         boundary. Not a pass."
+                    );
+                    return 2;
+                }
+                println!(
+                    "P-17 SERVE: same user, different logon session — a genuine cross-session caller, \
+                     observed."
+                );
+                if dacl_err == 0 {
+                    println!(
+                        "P-17 FAIL: the DACL-only pipe ADMITTED a cross-session same-user caller. The \
+                         logon-SID ACE does not carry the boundary; PR #516's user-SID removal bought \
+                         nothing. Revisits WP-D6."
+                    );
+                    return 1;
+                }
+                if prod_err == 0 {
+                    println!(
+                        "P-17 FAIL: the PRODUCTION pipe admitted a remote caller — a live IPC$ hole \
+                         past the reject-remote flag. Revisits WP-D6, urgently."
+                    );
+                    return 1;
+                }
+                if dacl_err != ACCESS_DENIED {
+                    println!(
+                        "P-17 UNRUN: the DACL-only open was refused with os error {dacl_err}, not \
+                         ERROR_ACCESS_DENIED — some other mechanism refused it, so the ACE is not \
+                         attributed."
+                    );
+                    return 2;
+                }
+                println!(
+                    "P-17 PASS: a genuine cross-session same-user caller is refused by the logon-SID \
+                     ACE alone (ERROR_ACCESS_DENIED), and by the production shape (os error \
+                     {prod_err}). WP-D6's IPC$ claim is now an observation."
+                );
+                0
+            }
+        }
+    }
 
     pub fn main() -> i32 {
         let Ok(me) = current_user_sid() else {
@@ -288,6 +546,17 @@ mod probe {
             println!("P-17 UNRUN: cannot read this process's logon SID.");
             return 2;
         };
+
+        // `--serve` is the two-machine mode: a genuinely remote caller (a
+        // second domain-joined box dialling `\\<this-host>\pipe\…` as the same
+        // AD user over SSO) is the only thing that crosses a logon session on
+        // this hardware — single-box transports reuse the token (§4.5) and a
+        // second interactive session is not available on a client SKU (§4.6).
+        // Without `--serve` the probe runs the single-box transport survey,
+        // which is now expected to report UNRUN and stands as that evidence.
+        if std::env::args().any(|a| a == "--serve") {
+            return serve(&me, &my_logon);
+        }
 
         // ---- (b) mechanism: find a transport that actually crosses a
         // logon-session boundary, or report that none on this box does. ----
@@ -461,7 +730,7 @@ mod probe {
         me: &shekyl_win_sec::SidString,
         host: &str,
     ) -> Result<shekyl_win_sec::SidString, String> {
-        let sd = PermissiveSd::new()
+        let sd = SdFromSddl::new("D:(A;;GA;;;WD)")
             .map_err(|e| format!("could not build the permissive descriptor (os error {e})"))?;
         let mech_name = self_hosted_pipe_name(me, SPAWN_MECH);
         let Some(mech_remote) = remote_form(&mech_name, host) else {

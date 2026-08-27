@@ -111,14 +111,24 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
         return Err(SidError::OpenToken(last_error()));
     }
     let token = TokenGuard(token);
+    user_sid_of(token.0)
+}
 
+/// The user SID of an **arbitrary** token, by the same `TokenUser` read.
+///
+/// Split out of [`current_user_sid`] so the same reader can be pointed at an
+/// impersonation token — P-17's two-machine server reads the *caller's* user
+/// SID this way to assert same-user before believing a refusal, alongside the
+/// logon SID from [`logon_sid_of`]. The caller owns `token` and keeps it open
+/// across the call; nothing here closes it.
+pub(crate) fn user_sid_of(token: HANDLE) -> Result<SidString, SidError> {
     // Sizing call. It is EXPECTED to fail with ERROR_INSUFFICIENT_BUFFER; the
     // value we want is `needed`, so the return code is deliberately ignored
     // and only a zero `needed` is treated as failure.
     let mut needed: u32 = 0;
     // SAFETY: a null buffer with zero length is the documented sizing form.
     unsafe {
-        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &raw mut needed);
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &raw mut needed);
     }
     if needed == 0 {
         return Err(SidError::QueryToken(last_error()));
@@ -136,7 +146,7 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     // of `u64`s), is 8-byte aligned by construction, and outlives the call.
     let read = unsafe {
         GetTokenInformation(
-            token.0,
+            token,
             TokenUser,
             buf.as_mut_ptr().cast::<c_void>(),
             needed,
