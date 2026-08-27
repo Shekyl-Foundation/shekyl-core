@@ -11,6 +11,18 @@ behaviour, not observations. **2026-08-20, WP-W2:** P-16 added to §1; P-4,
 P-10 and P-11 re-celled in §2 for the self-hosted-only ruling
 (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 
+**2026-08-27: P-17 registered in §3, prediction first and code second — this
+commit carries no implementation.** It takes the half of WP-D6 that P-13 does
+not: `IPC$` reachability, which is the attack surface D6 was written for, where
+terminal-services separation is the same mechanism's secondary benefit. **P-13
+is not superseded and is not reshaped** — §5 forbids editing a pre-registration
+to fit, so it stays registered and visibly unrun. The two ask different
+questions of one underlying property: that the logon SID is unique to its logon
+session and absent from every other. Nothing in this sheet has tested that
+property; P-1 and P-15 establish only that the DACL grants exactly one ACE and
+that the SID is well-formed. Since PR #516 removed the user-SID grant, that one
+ACE is the whole session boundary.
+
 **Why this exists.** [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
 rules a transport whose security properties have never been executed by anyone
 on this project. That is exactly the condition in which an unprepared
@@ -97,6 +109,32 @@ for `#[ignore]`.
 |---|---|---|---|---|
 | P-12 | Does the Medium mandatory label block a **Low-IL** opener? | Needs a genuinely Low-integrity process. Creating one wants an interactive token to derestrict from; a CI service account's token may not be a faithful source | Low-IL open fails with `ERROR_ACCESS_DENIED` | **WP-D4** — this is the *only* in-scope adversary per §6. If the label does not block, the server-side half of D4 is doing nothing and the client-side IL check becomes load-bearing alone |
 | P-13 | Does the logon SID separate terminal-services sessions? | Needs two concurrent interactive logons | A second session's process cannot open the pipe | **WP-D6** — if it does not separate sessions, the logon SID is not the improvement on an `S-1-5-2` deny that D6 claims, and the explicit `NETWORK` deny comes back |
+| P-17 | Does the logon SID refuse a caller from a **different logon session** — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27 | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Three, and all three must hold: (a) **control** — the restrictive pipe opens locally via `\\.\pipe\…`, proving the pipe works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **the question** — the restrictive pipe opened via `\\localhost\pipe\…` fails with `ERROR_ACCESS_DENIED` | **WP-D6** — if (c) succeeds, the logon SID does not carry the `IPC$` boundary, removing the user-SID ACE in PR #516 bought nothing on that axis, and the explicit `NETWORK` (`S-1-5-2`) deny comes back. If (b) fails the probe is **UNRUN**, not a pass: a refusal in (c) would then be unattributed |
+
+**P-17's section is itself undecided, and that is why it is here.** §1 would
+claim CI-durability nobody has established; §3 pre-declares CI-*fragility*,
+which is also unestablished. It sits in §3 because that is the section whose
+protocol tolerates a probe that may not run — it reports UNRUN and the blank
+stays visible — where a §1 row that silently skipped would be the coverage
+claim this sheet exists to refuse. **Promotion criterion:** if it runs green on
+the CI runner, it moves to §1 and becomes a `#[test]`; "CI is the durable half"
+(§0) and a probe that only a laptop ever executes verifies once.
+
+**Why the mechanism row (b) exists, and why a refusal alone would not do.**
+§4.2 records P-7 failing because it never reached the label path it existed to
+test — it was refused, and the refusal looked exactly like a pass. A loopback
+open that fails could equally mean the SMB path is absent, the share is
+disabled, or the name resolved somewhere unexpected. So the probe first
+connects a **deliberately permissive** second pipe over the same loopback path
+and reads the caller's logon SID off the impersonation token: only once that
+SID is observed to differ from ours is a refusal on the restrictive pipe
+attributable to the logon-SID ACE rather than to the transport.
+
+**The claim being measured, stated as a claim.** That a loopback SMB open
+produces a *distinct logon session* server-side is documented behaviour we have
+never observed. It is row (b), not a premise — the same discipline that turned
+"a Low-IL thread is not a Low-IL opener" from a confident sentence into a
+measured falsehood.
 
 **Recording protocol.** A §3 result lands as a dated row appended to §4 below,
 naming the machine and Windows build. An unrun probe stays visibly unrun — a
