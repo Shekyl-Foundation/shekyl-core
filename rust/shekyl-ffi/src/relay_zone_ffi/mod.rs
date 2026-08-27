@@ -655,27 +655,46 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
 /// holding the pending entry can resolve it — *the zone is unconstrained, the
 /// peer is not.*
 ///
+/// Returns how many of `hashes` this arrival resolved as **propagated**, and
+/// writes their 32-byte ids into `out_propagated` in order. The count is
+/// bounded by `n`, so a caller sizes the buffer once at `32 * n`; passing null
+/// returns the count and writes nothing.
+///
 /// # Safety
-/// `handle` must be null (no-op) or a live zone from
+/// `handle` must be null (returns 0) or a live zone from
 /// [`shekyl_relay_zone_new`]. `hashes` must point at `32 * n` readable
-/// bytes, and `from` at 16 when non-null.
+/// bytes, `from` at 16 when non-null, and `out_propagated` must be null or
+/// writable for `32 * n` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     handle: *mut RelayZoneHandle,
     hashes: *const u8,
     n: usize,
     from: *const u8,
-) {
-    let Some(h) = handle.as_mut() else { return };
+    out_propagated: *mut u8,
+) -> usize {
+    let Some(h) = handle.as_mut() else { return 0 };
     let ids = read_tx_ids(hashes, n);
     if ids.is_empty() {
-        return;
+        return 0;
     }
     // One call with the whole batch, not one per id: `record_arrival` takes a
     // slice, and the per-id loop was re-entering the zone `n` times to do work
     // it does in one pass.
-    h.driver.zone_mut().record_arrival(&ids, read_id(from));
+    let propagated = h.driver.zone_mut().record_arrival(&ids, read_id(from));
     h.publish();
+
+    // The verdicts leave through a caller-sized buffer rather than a callback
+    // or a retained store. Bounded by construction — `propagated` is a subset
+    // of `ids` — so the caller sizes at `32 * n` once and never probes for a
+    // count it might race.
+    if out_propagated.is_null() {
+        return propagated.len();
+    }
+    for (i, tx) in propagated.iter().enumerate() {
+        core::ptr::copy_nonoverlapping(tx.as_bytes().as_ptr(), out_propagated.add(i * 32), 32);
+    }
+    propagated.len()
 }
 
 /// Copy this zone's published stem-outcome rows into `buf` (§55).

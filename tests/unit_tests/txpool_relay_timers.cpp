@@ -353,6 +353,77 @@ TEST(txpool_relay_timers, an_unsent_local_still_falls_back_at_min_relay_time)
        "not a privacy one";
 }
 
+// §92.5c item 1: the disarm predicate. F-10 already computes it — "this came
+// back from somewhere other than where I sent it" — and this is the consumer.
+//
+// The re-broadcast exists because an origin cannot observe its own stem. The
+// moment it can, the reason is gone, so the predicate retires the timer rather
+// than shortening it.
+
+// ONE `relayable()` CALL PER FIXTURE, and the reason is load-bearing.
+// `get_relayable_transactions` sets `m_next_check = now + 2 min` on every
+// call, so a second call in the same test returns false whatever the entry
+// says. A before/after pair inside one fixture therefore goes green on the
+// clock rather than on the subject — which is how the first draft of the
+// disarm test below passed while asserting nothing. Each case builds its own
+// pool and asks once.
+
+TEST(txpool_relay_timers, an_observed_local_stops_re_broadcasting)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // Past the derived interval, so the TIMER would release it — the disarm has
+  // to be what holds it, or this case proves nothing.
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60), /*relayed=*/true);
+  fx.bap.txpool.on_stem_propagated(epee::to_span(std::vector<crypto::hash>{fx.txid}));
+
+  EXPECT_FALSE(fx.relayable())
+    << "an origin that has seen its transaction circulating has nothing left "
+       "to rescue; the re-broadcast must retire, not merely wait longer";
+}
+
+TEST(txpool_relay_timers, the_same_local_without_the_verdict_still_relays)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // The control for the case above: same entry, same age, no verdict. Without
+  // this pair the disarm test cannot distinguish "the predicate fired" from
+  // "nothing was ever relayable".
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60), /*relayed=*/true);
+
+  EXPECT_TRUE(fx.relayable())
+    << "past the derived interval and unobserved, the origin's backstop fires";
+}
+
+TEST(txpool_relay_timers, a_propagated_fluff_entry_is_not_disarmed)
+{
+  const time_t now = time(nullptr);
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // The scoping check. The watch resolves observations for every stem this
+  // node placed, relayed ones included — and a relayed entry sits at `fluff`,
+  // where MIN_RELAY_TIME governs and nobody asked the origin's question.
+  // Letting a verdict reach that arm would silence a timer on a class that
+  // never armed a disarm.
+  fx.put(relay_method::fluff, now - 400, now - 400, /*relayed=*/true);
+  fx.bap.txpool.on_stem_propagated(epee::to_span(std::vector<crypto::hash>{fx.txid}));
+
+  EXPECT_TRUE(fx.relayable())
+    << "the disarm is the local arm's alone — a propagation verdict for a "
+       "relayed entry must leave its ordinary re-relay untouched";
+}
+
 TEST(txpool_relay_timers, fluff_still_obeys_min_relay_time)
 {
   const time_t now = time(nullptr);

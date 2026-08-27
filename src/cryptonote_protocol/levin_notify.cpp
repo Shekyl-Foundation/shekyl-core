@@ -934,14 +934,30 @@ namespace levin
        read-modify of the zone's stem watch, so it takes the same path as
        every other handle call rather than racing them. Hashes are the join
        key — the caller already parsed once for the whole fan-out. */
-    boost::asio::dispatch(zone_->strand, [zone = zone_, hashes = std::move(hashes), from] ()
+    boost::asio::dispatch(zone_->strand, [zone = zone_, hashes = std::move(hashes), from, core = core_] ()
     {
       /* `from` identifies the arriving peer so the watch can refuse to
          resolve an observation charged to that same peer (F-10). A nil uuid
          means "no peer", which never matches a successor. */
-      shekyl_relay_zone_record_arrival(
+      std::vector<crypto::hash> propagated(hashes->size());
+      const std::size_t n = shekyl_relay_zone_record_arrival(
         zone->relay.get(), reinterpret_cast<const std::uint8_t*>(hashes->data()), hashes->size(),
-        from.is_nil() ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(from)));
+        from.is_nil() ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(from)),
+        reinterpret_cast<std::uint8_t*>(propagated.data()));
+
+      /* The verdicts that fired on THIS arrival, forwarded once. Sized at the
+         arrival count because the propagated set is a subset of it, so the
+         buffer is exact without a probe call.
+
+         Same seam `on_transactions_relayed` uses, for the same reason: the
+         relay strand owns the handle and holds no pool reference, and core is
+         the only thing that reaches both. Nothing is decided here — the pool
+         scopes the fact to the entry class that asked the question. */
+      if (n != 0 && core != nullptr)
+      {
+        propagated.resize(n);
+        core->on_stem_propagated(epee::to_span(propagated));
+      }
     });
   }
 

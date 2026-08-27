@@ -1078,6 +1078,17 @@ namespace cryptonote
           case relay_method::none:
             return true;
           case relay_method::local:
+            /* DISARMED — the stem watch saw this transaction arrive from
+               somewhere other than the peer it was stemmed to (F-10, §49), so
+               it is circulating and the origin has nothing left to rescue.
+               §92.5c item 1.
+
+               This is a PREDICATE, not a timer, and that is the whole point:
+               the re-broadcast exists because an origin cannot see its own
+               stem, and the moment it can see it, the reason is gone. */
+            if (meta.observed_circulating)
+              return true; // continue to next tx
+
             // An origin's re-broadcast is derived from the network's own
             // full-travel confidence, not the inherited 300 s grid; an entry
             // that has never been sent keeps the grid. `local_relay_base`
@@ -1130,6 +1141,41 @@ namespace cryptonote
     lock.commit();
     m_next_check = time_t(next_check);
     return true;
+  }
+  //---------------------------------------------------------------------------------
+  void tx_memory_pool::on_stem_propagated(const epee::span<const crypto::hash> hashes)
+  {
+    if (hashes.empty())
+      return;
+
+    CRITICAL_REGION_LOCAL(m_transactions_lock);
+    CRITICAL_REGION_LOCAL1(m_blockchain);
+    LockedTXN lock(m_blockchain.get_db());
+    for (const auto& hash : hashes)
+    {
+      try
+      {
+        txpool_tx_meta_t meta;
+        if (!m_blockchain.get_txpool_tx_meta(hash, meta))
+          continue;
+        /* `local` only — see the declaration. A relayed entry's propagation is
+           a real verdict about a real stem, and it is simply not this arm's
+           question. */
+        if (meta.get_relay_method() != relay_method::local)
+          continue;
+        if (meta.observed_circulating)
+          continue;
+        meta.observed_circulating = 1;
+        m_blockchain.update_txpool_tx(hash, meta);
+      }
+      catch (const std::exception &e)
+      {
+        MERROR("Failed to record stem propagation for a txpool entry: " << e.what());
+        // continue: a missed disarm costs a redundant re-broadcast, which is
+        // the direction that fails safe.
+      }
+    }
+    lock.commit();
   }
   //---------------------------------------------------------------------------------
   void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)

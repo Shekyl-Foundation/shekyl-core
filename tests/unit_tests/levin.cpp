@@ -131,6 +131,16 @@ namespace
             return 0;
         }
 
+        //! Propagation verdicts, recorded so a test can assert the disarm
+        //! signal actually crossed rather than inferring it from the pool.
+        std::vector<crypto::hash> stem_propagated_;
+
+        virtual void on_stem_propagated(epee::span<const crypto::hash> txids) override final
+        {
+            for (const auto& id : txids)
+                stem_propagated_.push_back(id);
+        }
+
         virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
         {
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
