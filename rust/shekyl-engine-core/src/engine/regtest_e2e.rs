@@ -198,7 +198,22 @@ impl RegtestDaemon {
             "--log-level",
             "0",
         ]);
-        let restricted_port = restricted_listener.then(Self::free_port);
+        // Distinct from the main port. Both probes bind :0 and release
+        // immediately, so the kernel is free to hand back the same number
+        // twice — and the daemon would then try to bind both listeners to it
+        // and die at startup, intermittently. (The pre-existing TOCTOU window
+        // between releasing a probe and the daemon binding is unchanged; this
+        // only removes the self-collision, which is the part we create.)
+        let restricted_port = restricted_listener.then(|| {
+            let mut port = Self::free_port();
+            for _ in 0..64 {
+                if port != rpc_port {
+                    return port;
+                }
+                port = Self::free_port();
+            }
+            panic!("could not obtain a restricted port distinct from {rpc_port}");
+        });
         if let Some(port) = restricted_port {
             // A second listener on the same daemon. This flag binds an extra
             // server with `restricted = true` fixed; the main listener keeps
