@@ -408,24 +408,31 @@ namespace cryptonote
            and erased in one call chain, because §46 records arrivals before
            admission.
 
-           `block` IS EXCLUDED, and the line is a threat-model line rather than
-           a taxonomy one. Every other arrival class is a PEER'S ASSERTION —
+           THE PIN HOLDS AGAINST A PEER'S ASSERTION AND YIELDS TO PROOF OF
+           WORK. Stated as a boundary rather than as "`block` is excluded",
+           because the class name does not carry the reason and an exception
+           invites removal where a boundary tells the next reader which side a
+           new arrival class belongs on.
+
+           A peer's assertion is free to make —
            anyone can send us our own transaction as `stem` or `fluff`, which
            is exactly why the mark must survive it. A `block` arrival is backed
-           by PROOF OF WORK: `handle_alternative_block` checks the block hash
-           against the alt chain's difficulty before offering its pool
-           supplement here, so the arrival is not something an observer can
-           manufacture to strip the mark, and it means the transaction reached
-           a miner.
+           by PROOF OF WORK, and it is neither free nor an assertion:
+           `handle_alternative_block` rejects on
+           `!check_hash(proof_of_work, current_diff)` (`blockchain.cpp:2347`)
+           before its pool supplement is ever offered here, so the arrival is
+           not something an observer can manufacture to strip the mark — and it
+           means the transaction reached a miner.
 
-           And once it has, holding the mark INVERTS: it makes this node the
-           only one that treats a transaction in a mined block as private.
-           Every other node receiving that alt block admits the supplement at
-           `block`, moves it into `relay_category::broadcasted`, and re-relays
-           on the ordinary grid. A pinned entry does none of that — a
-           behavioural difference keyed on the one fact the mark exists to
-           protect. Privacy here is served by being indistinguishable, not by
-           staying quiet.
+           And once it has, holding the mark INVERTS. Every other node holding
+           that transaction admits at `block`, matches
+           `relay_category::broadcasted`, and re-relays on the ordinary grid. A
+           pinned entry does none of those: it sits on `private_req` at the
+           derived 1148 s on the anonymity zone, ALONE, after the transaction is
+           already public. That is a behavioural difference keyed on exactly the
+           fact the mark is meant to conceal — the absence-oracle shape — and it
+           appears at the moment the concealment has stopped being worth
+           anything.
 
            It is also broken in the plain sense. The supplement path gates on
            `have_tx(txid, relay_category::broadcasted)`, which a `local` entry

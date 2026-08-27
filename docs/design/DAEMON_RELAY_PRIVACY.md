@@ -14800,22 +14800,35 @@ responsibility, which should end when the transaction is observed circulating:
 > re-arrival of its own transaction; its re-broadcast responsibility is
 > separately disarmed when the transaction is observed circulating.**
 
-**"Re-arrival" means the relay path, and `Block` is deliberately outside it.**
-Every other arrival class is a peer's assertion — anyone can hand us back our
-own transaction as `Stem` or `Fluff`, which is precisely the case the pin
-exists for. A `Block` arrival is backed by proof of work
-(`handle_alternative_block` checks the block hash against the alt chain's
-difficulty before offering its pool supplement), so it cannot be manufactured
-to strip the mark, and it says the transaction reached a miner.
+The pin's scope is a threat-model boundary, and is stated as one rather than as
+a list of excluded classes:
 
-Past that point the pin **inverts**. Every other node receiving that alt block
-admits the supplement at `Block`, moves it into `broadcasted`, and re-relays on
-the ordinary grid; a pinned node does none of those, which is a behavioural
-difference keyed on the one fact the mark protects. Once the transaction is in
-a mined block, privacy is served by being indistinguishable rather than by
-staying quiet — the same reasoning that makes `Block` the one class whose
-re-broadcast responsibility genuinely ends.
+> **The pin holds against a peer's assertion, and yields to proof of work.**
 
+Written that way deliberately. *"`Block` is excluded"* names a category without
+carrying its reason, and a reader who meets it later sees an **exception** —
+something to tidy away — rather than a **boundary** that tells them which side a
+new arrival class belongs on.
+
+**A peer's assertion is free to make.** Anyone can hand us back our own
+transaction and claim it as `Stem` or `Fluff`; that is precisely the case the
+pin exists for. **Proof of work is neither free nor an assertion.**
+`handle_alternative_block` rejects on `!check_hash(proof_of_work, current_diff)`
+(`blockchain.cpp:2347`) before its pool supplement is ever offered to `add_tx`,
+so a `Block` arrival cannot be manufactured to strip the mark — and it says the
+transaction reached a miner.
+
+**Past that point the pin's sign flips.** Every other node holding that
+transaction admits at `Block`, matches `broadcasted`, and re-relays on the
+ordinary grid. A pinned node does none of those: it sits on `private_req` at the
+derived **1148 s** on the anonymity zone, **alone**, after the transaction is
+already public. That is a behavioural difference keyed on exactly the fact the
+mark is meant to conceal — the **absence-oracle shape** again — and it appears at
+the moment the concealment has stopped being worth anything.
+
+So the mark is not weakened by yielding here. Concealment that no longer conceals
+anything, but still distinguishes the node holding it, is a cost with no
+remaining benefit.
 Discipline #17 with **presence** as the signal: `T` returning is proof it is
 circulating, which is exactly the condition under which re-broadcast has no job
 left.
