@@ -178,7 +178,7 @@ try {
 switch ($p17Exit) {
     0 { Add-Result 'P-17' 'PASS' 'the logon-SID ACE alone refused a loopback caller with ERROR_ACCESS_DENIED' }
     1 { Add-Result 'P-17' 'FAIL' 'a prediction was falsified — see output above; revisits WP-D6, not the probe' }
-    default { Add-Result 'P-17' 'UNRUN' "could not attribute a refusal (exit $p17Exit) — usually no loopback IPC`$ path; not a pass" }
+    default { Add-Result 'P-17' 'UNRUN' "no transport crossed a session boundary (exit $p17Exit) — see the probe output for which host reused the token; not a pass" }
 }
 
 # ---------------------------------------------------------------------------
@@ -193,5 +193,11 @@ if ($failed -gt 0) {
     Write-Host "$failed probe group(s) FAILED." -ForegroundColor Red
     exit 1
 }
-Write-Host 'All run probes passed. TODO/SKIP rows are not passes.' -ForegroundColor Green
+# "All run probes passed" means no FAIL. A non-FAIL status is not a pass, and
+# the disclaimer names every one that can appear so a reader scanning only this
+# line cannot mistake an unreached question for a green: UNRUN (the probe could
+# not reach what it measures), TODO (not implemented on this host), SKIP
+# (pre-declared out of scope for this mode). None increments $failed; none is a
+# pass.
+Write-Host 'No probe FAILED. UNRUN / TODO / SKIP rows are not passes — read their detail.' -ForegroundColor Green
 exit 0

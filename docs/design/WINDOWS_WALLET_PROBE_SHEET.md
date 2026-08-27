@@ -340,14 +340,28 @@ falsified; what changes is the consequence — it revisits **P-17's method**, an
 the second fence (`reject_remote_clients`) remains equally untested, since
 nothing in this run was a remote client.
 
-**Re-method (same commit family, before any further run).** The probe now tries
-each host in `transport_hosts()` — `localhost` (known not to cross, kept as the
-recorded control) and the machine's own name (a candidate that *might* take the
+**Re-method (same commit family).** The probe now tries each host in
+`transport_hosts()` — `localhost` (known not to cross, kept as the recorded
+control) and the machine's own name (a candidate that *might* take the
 network-provider path into a network logon; **measured, not asserted**). Only a
 host whose caller SID differs from ours is used for the attribution rows; if
-none crosses, the verdict is **UNRUN** with "no single-box transport crosses —
-needs a genuinely remote caller." Whether the machine-name form crosses on this
-box is the next observation.
+none crosses, the verdict is **UNRUN** with "needs a genuinely remote caller."
+
+**Second run (2026-08-27, `4c31c518a`): the machine-name form does not cross
+either — the cheap route is closed.**
+
+| Date | Probe | Machine / build | Result | Consequence |
+|---|---|---|---|---|
+| 2026-08-27 | P-17, both single-box transports | `LP7760-W1XMP6G3`, `10.0.22631.7517` | **UNRUN** | `\\localhost\pipe\` **and** `\\LP7760-W1XMP6G3\pipe\` both carried `S-1-5-5-0-43722672` — our SID, byte-for-byte. The machine-name form **connected and impersonated** (no NTLM-loopback refusal, no `ERROR_ACCESS_DENIED`); it simply short-circuits to the same local token. No single-box SMB path on this build crosses a logon-session boundary |
+
+**What this settles.** The free experiment — can one box pose as a foreign
+session over its own name? — is answered **no**, and answered by measurement
+rather than left as an untried maybe. WP-D6's `IPC$` claim, and the
+`reject_remote_clients` fence, are therefore reachable only by a **genuinely
+remote caller**: a second host on the subnet dialling
+`\\LP7760-W1XMP6G3\pipe\…`, or a VM with its own logon session. That is a
+machine to provision, not a code change — and the decision it informs is
+WP-D6's reason for existing, currently tested by nothing.
 
 ## 5. What a failure does *not* license
 
