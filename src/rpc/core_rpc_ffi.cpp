@@ -63,8 +63,13 @@ namespace {
 // request caps, and not the pool reads' `include_sensitive`, which decides
 // whether a transaction that has not been broadcast is disclosed at all.
 // Single-sourced here so there is one place to be wrong: every dispatcher
-// names this and nothing else, and `core_rpc_ffi_origin_is_present` fails
-// if it ever answers null again.
+// names this and nothing else. The guard that it keeps answering non-null is
+// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — a live daemon, a
+// restricted listener, and a real request over the cap. It has to be there
+// rather than beside this file: a C++ test of this helper cannot see whether
+// the dispatchers call it, so reverting one of them would leave such a test
+// green. That one goes red.
 //
 // "Every" includes the two hand-written ones, `dispatch_submitblock` and
 // `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
@@ -397,21 +402,6 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
             + e.what() + R"("})";
         return strdup(err.c_str());
     }
-}
-
-// Test hooks (no production callers) for the two contracts of the origin
-// context above. `_is_present` is the one that makes `m_restricted && ctx`
-// mean `m_restricted`; `_is_blockable` must stay false or every bridged
-// request would score against one shared empty address.
-bool core_rpc_ffi_origin_is_present(void)
-{
-    return rpc_origin() != nullptr;
-}
-
-bool core_rpc_ffi_origin_is_blockable(void)
-{
-    const auto* ctx = rpc_origin();
-    return ctx && ctx->m_remote_address.is_blockable();
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }

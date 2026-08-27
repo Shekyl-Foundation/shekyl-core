@@ -40,10 +40,17 @@
 // submitted one — is disclosed at all. A restricted, public listener was
 // answering with them.
 //
-// These two tests guard the fix's contracts. Neither can prove that the
-// dispatch tables *call* `rpc_origin()` — that is what the live check in the
-// commit message did — but both go red on the ways the helper itself can
-// regress.
+// What is here is what only C++ can see: the shared context must not be a
+// bannable host, and the relay-category filter the sensitive flag selects
+// between must exclude every pre-broadcast state.
+//
+// What is NOT here, deliberately, is "the dispatchers pass the context". A
+// unit test of the helper cannot observe its call sites, so such a test stays
+// green through exactly the regression it advertises. That assertion lives on
+// the production path instead, in Rust:
+// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) spawns a daemon with
+// both listeners and puts a real over-cap request to each.
 
 #include <gtest/gtest.h>
 
@@ -57,27 +64,32 @@
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "crypto/crypto.h"
 #include "cryptonote_protocol/enums.h"
-#include "rpc/core_rpc_ffi.h"
+#include "rpc/core_rpc_server.h"
 
-// The property the restricted gate rests on. Returning null here is exactly
-// the bug that was fixed, and this test is what would have caught it.
-TEST(rpc_bridge_origin, a_bridged_request_has_an_rpc_origin)
+// The shared origin context must not be a bannable host.
+//
+// `add_host_fail` scores `ctx->m_remote_address` and blocks the host past a
+// threshold. The bridge hands every caller the *same* context, so if its
+// address were blockable, unrelated callers would accumulate a single ban
+// score against one empty address and eventually ban it. Leaving the address
+// default-constructed is what prevents that, and this asserts the epee
+// property that makes it work.
+//
+// The other half of the contract — that the dispatchers actually pass this
+// context, so `m_restricted && ctx` means `m_restricted` — is deliberately
+// NOT tested here. A unit test of the helper cannot see its call sites:
+// reverting any dispatcher to `nullptr` would leave such a test green, which
+// makes it decorative on exactly the boundary it claims to guard. That guard
+// is `restricted_listener_applies_request_caps_through_the_ffi_bridge` in
+// rust/shekyl-engine-core/src/engine/regtest_e2e.rs, which puts a real
+// over-cap request to a real `--restricted-rpc` listener and goes red when a
+// dispatcher stops passing the origin.
+TEST(rpc_restricted_gate, the_shared_origin_is_not_a_bannable_host)
 {
-  EXPECT_TRUE(core_rpc_ffi_origin_is_present())
-    << "a bridged request must carry a non-null connection context, or "
-       "`m_restricted && ctx` is false on every route and no restricted "
-       "policy can fire";
-}
-
-// The other half: having given the bridge a context, it must not be one that
-// per-host ban scoring will act on. `add_host_fail` takes `ctx->m_remote_address`
-// and scores it; a shared, default-constructed address is not any caller, so
-// it must not be blockable.
-TEST(rpc_bridge_origin, the_rpc_origin_is_not_a_bannable_host)
-{
-  EXPECT_FALSE(core_rpc_ffi_origin_is_blockable())
-    << "the shared origin context must not be blockable, or every bridged "
-       "request scores RPC ban points against one empty address";
+  const cryptonote::core_rpc_server::connection_context ctx{};
+  EXPECT_FALSE(ctx.m_remote_address.is_blockable())
+    << "a default-constructed address must not be blockable, or every bridged "
+       "request would score RPC ban points against one shared empty address";
 }
 
 // ─── What the flag actually gates ────────────────────────────────────────────

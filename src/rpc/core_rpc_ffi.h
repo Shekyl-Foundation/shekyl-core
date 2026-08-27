@@ -67,17 +67,6 @@ char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
 char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
     const char* method, const char* params_json);
 
-// Test hooks (no production callers): the two contracts of the origin
-// context the dispatch tables hand every bridged handler.
-//
-// `_is_present` is what makes `m_restricted && ctx` mean `m_restricted` in
-// a handler — it was false for every JSON route until 2026-08-26, which is
-// why no bridged restricted policy could fire. `_is_blockable` must stay
-// false: the context says "an RPC client asked", not which one, and per-host
-// RPC ban scoring against one shared empty address would be wrong.
-bool core_rpc_ffi_origin_is_present(void);
-bool core_rpc_ffi_origin_is_blockable(void);
-
 void core_rpc_ffi_free_string(char* s);
 
 #ifdef __cplusplus
