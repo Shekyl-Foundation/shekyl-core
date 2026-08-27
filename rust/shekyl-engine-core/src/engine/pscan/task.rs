@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use super::accrual::{AccrualError, PScanAccrual};
 use super::block_source::{BlockSource, BlockSourceError};
 use super::cadence::ScanSchedule;
-use super::dispatch::{DispatchError, DispatchTick};
+use super::dispatch::{DispatchError, DispatchTick, TickEvidence};
 use super::exhaustiveness::{verify_exhaustive, ExhaustivenessError};
 use super::scan_step::{BlockRange, BondPostMatch, FundingOutputMatch, MAX_SCAN_STEP_BLOCKS};
 use crate::engine::stake_engine::{
@@ -407,8 +407,22 @@ where
     // the accrual's reorg-deep JoinMarket confirmations (§3.5: our own verified
     // scan, never a daemon claim). Runs after the catch-up loop so a due-check
     // against a fresh tip never races the same sweep's confirmation retire.
+    // The reservation-observed kinds (claims, drains) settle against the live
+    // funding set rather than a match: each spends the outputs it reserved, so
+    // once none of them remain here, its transaction confirmed. Built from the
+    // same accrual as the JoinMarket set above — one scan, one frontier, one
+    // reorg depth for every kind's evidence.
+    let live_funding: BTreeSet<shekyl_types::GlobalOutputIndex> =
+        accrual.funding_outputs().iter().map(|f| f.gindex).collect();
     dispatch
-        .on_tick(tip, &accrual.confirmed_join_market_personas(), cancel)
+        .on_tick(
+            tip,
+            TickEvidence {
+                confirmed_posts: &accrual.confirmed_join_market_personas(),
+                live_funding: &live_funding,
+            },
+            cancel,
+        )
         .await?;
     Ok(())
 }

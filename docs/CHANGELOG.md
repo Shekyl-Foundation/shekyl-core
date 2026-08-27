@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A confirmed emission claim or drain now releases its seal — before this,
+  neither ever did.** Both paths seal a one-live-per-persona record before
+  dispatch (the record *is* the input reservation), and only the bond post's
+  seal was ever retired. `remove_claim` and `remove_drain` existed with callers
+  only under `#[cfg(test)]`, so nothing in production released either gate.
+
+  The drain leak was visible: drain once, and that persona's lane refused
+  `-29511 DRAIN_IN_FLIGHT` across sessions, permanently, even though the money
+  had settled normally. **The claim leak was worse because nothing surfaced it**
+  — claims are engine-automated, so the persona simply stopped claiming, with no
+  user action to correlate the silence against.
+
+  `PendingPostBlock::remove_settled` retires either kind once **every** funding
+  gindex it reserved has left the accrual's live funding set, called from the
+  existing WI-3 dispatch tick inside the same locked mutate, so the record and
+  its reservation are released in one seal (R2-4). The evidence is the wallet's
+  own verified scan at the reorg depth the bond post's confirmation already
+  uses. It is deliberately **not** the bond post's confirmation set: that set is
+  filtered to the JoinMarket post kind, and crossing the two would retire a live
+  drain because the persona's *bond post* confirmed — a different transaction.
+
+  Two edges are handled rather than assumed. A **partly** spent reservation is
+  not settlement (a drain spends all its inputs in one transaction, so a
+  half-gone reservation is a state the confirming spend cannot produce) and is
+  held. An **empty** reservation is never settled: `[].all(..)` is `true`, so
+  the Q11 zero-fee-input claim — which reserves nothing, paying its fee from the
+  mint — would otherwise retire the instant it was sealed, before its bytes
+  reached the network.
+
+### Added
+
+- **A stall alarm for pending claims and drains.** A record dispatched but not
+  settled past the alarm horizon is named in the operator log, keyed by kind
+  *and* persona so a persona holding both a stuck claim and a stuck drain gets
+  both alarms. The record is HELD, matching the bond post's
+  funds-safety-over-liveness posture — the alarm reports the stall, it does not
+  clear it. Terminal-reject prune (the case that produces a permanent stall)
+  remains a named FOLLOWUPS item.
+
 ### Changed
 
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary

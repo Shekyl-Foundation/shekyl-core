@@ -705,16 +705,22 @@ components:
                                           exists for this persona (one live
                                           drain per persona — the sealed
                                           record IS the in-flight input
-                                          reservation). The seal is released
-                                          by the drain lifecycle driver
-                                          (confirmation retire /
-                                          terminal-reject prune), which is
-                                          NOT yet wired (FOLLOWUPS "Drain
-                                          dispatch driver", target V3.0
-                                          pre-genesis) — until it lands this
-                                          refusal persists across sessions,
-                                          including after the first drain
-                                          confirms. Also the refusal when a
+                                          reservation). The SUCCESS path now
+                                          releases the seal: once the drain's
+                                          reserved inputs have left the wallet's
+                                          live funding set — its own verified
+                                          scan, at the reorg depth every other
+                                          confirmation uses — the record and its
+                                          reservation are released in one seal
+                                          and this lane reopens. Terminal-reject
+                                          prune is still unwired (FOLLOWUPS
+                                          "Drain dispatch driver", target V3.0
+                                          pre-genesis), so a drain the network
+                                          rejects terminally never spends its
+                                          inputs, never settles, and holds this
+                                          refusal until that half lands. The
+                                          stall alarm names such a drain in the
+                                          log rather than leaving it silent. Also the refusal when a
                                           concurrent same-persona post raced
                                           this drain's inputs — that arm is
                                           transient; retry. The two arms

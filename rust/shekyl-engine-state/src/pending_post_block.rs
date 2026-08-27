@@ -230,6 +230,28 @@ impl std::fmt::Debug for PendingDrain {
         f.write_str("PendingDrain(<redacted pending-drain>)")
     }
 }
+/// What [`PendingPostBlock::remove_settled`] retired, split by kind.
+///
+/// Two vectors rather than one merged list: the caller logs and books them
+/// separately (a retired claim releases the epoch-dedup gate, a retired drain
+/// releases the one-live-drain lane), and merging them would force a second
+/// lookup to tell which gate just opened.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SettledRetirement {
+    /// Personas whose live emission claim settled.
+    pub claims: Vec<PCanonicalId>,
+    /// Personas whose live `P`→principal drain settled.
+    pub drains: Vec<PCanonicalId>,
+}
+
+impl SettledRetirement {
+    /// Nothing retired this tick — the common case, and the one the caller
+    /// short-circuits on rather than sealing an unchanged block.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty() && self.drains.is_empty()
+    }
+}
 
 /// The durable pending-post block: every live pending bond post, sealed as
 /// one atomic unit to the `P`-isolated `.wallet.pending` sibling file.
@@ -540,6 +562,71 @@ impl PendingPostBlock {
         retired
     }
 
+    /// Confirmation retire for the **reservation-observed** kinds — claims and
+    /// drains — the sibling of [`Self::remove_confirmed`].
+    ///
+    /// A bond post is retired against a direct on-chain observation of itself
+    /// (`confirmed_join_market_personas`: the pscan matched the post). Claims
+    /// and drains have no such match set, so their settlement is observed
+    /// **through their reservation**: each spends the funding outputs it holds,
+    /// so once every reserved gindex has left the accrual's live funding set,
+    /// the transaction that spent them confirmed.
+    ///
+    /// That inference is sound only because the reservation makes the record the
+    /// *sole* possible spender inside this wallet: `push_claim` / `push_drain`
+    /// admit one live record per persona, the seam re-checks the live union for
+    /// a cross-kind gindex collision before sealing, and pin P-2 means a retry
+    /// re-sends the same bytes rather than building a competing transaction. No
+    /// path outside the wallet can spend `P`'s outputs at all. So "these inputs
+    /// are gone" and "this record's transaction confirmed" are the same fact.
+    ///
+    /// **An empty reservation is never settled.** A record holding no gindexes
+    /// would satisfy "all of them are gone" vacuously and retire the instant it
+    /// was sealed — before its transaction reached the network. That is not
+    /// hypothetical: the Q11 zero-fee-input emission claim (the destitute corner,
+    /// where the fee comes out of the mint) holds exactly zero `fee_gindexes`.
+    /// The empty case is therefore excluded explicitly rather than left to
+    /// `all()`'s vacuous truth, which is the permissive-default shape this
+    /// codebase keeps finding. Such a claim's seal stays live until a direct
+    /// claim-match observation exists to retire it against — recorded in
+    /// FOLLOWUPS as the named residual, and fail-closed in the meantime
+    /// (a held seal refuses a second claim; a wrongly-released one would let a
+    /// second claim race the first's inputs).
+    ///
+    /// Walks the live records once, like [`Self::remove_confirmed`], so the cost
+    /// is bounded by in-flight records rather than by `|live_funding|`.
+    #[must_use]
+    pub fn remove_settled(
+        &mut self,
+        live_funding: &std::collections::BTreeSet<GlobalOutputIndex>,
+    ) -> SettledRetirement {
+        fn settled(
+            reserved: &[GlobalOutputIndex],
+            live: &std::collections::BTreeSet<GlobalOutputIndex>,
+        ) -> bool {
+            !reserved.is_empty() && reserved.iter().all(|g| !live.contains(g))
+        }
+
+        let mut out = SettledRetirement::default();
+        self.claims.retain(|claim| {
+            if settled(&claim.fee_gindexes, live_funding) {
+                out.claims.push(claim.persona);
+                false
+            } else {
+                true
+            }
+        });
+        self.drains.retain(|drain| {
+            if settled(&drain.funding_gindexes, live_funding) {
+                out.drains.push(drain.persona);
+                false
+            } else {
+                true
+            }
+        });
+        out
+    }
+
     /// Serialize to postcard bytes (the inner half of the seal; the engine
     /// layer applies the AEAD + atomic write to the sibling file).
     pub fn to_postcard_bytes(&self) -> Result<Vec<u8>, WalletLedgerError> {
@@ -581,6 +668,113 @@ mod tests {
                 .collect(),
             state: PendingPostState::Pending,
         }
+    }
+
+    /// The accrual's live funding set, as `remove_settled` reads it.
+    fn live(v: &[u64]) -> std::collections::BTreeSet<GlobalOutputIndex> {
+        v.iter().copied().map(GlobalOutputIndex::from_raw).collect()
+    }
+
+    /// The seal releases when the reservation is gone — the whole point of the
+    /// driver, and the defect this closes: before it, a confirmed drain's record
+    /// stayed live forever and the persona's drain lane refused across sessions.
+    #[test]
+    fn a_spent_reservation_retires_its_claim_and_its_drain() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(claim(0xAA, &[1, 2])));
+        assert!(block.push_drain(drain(0xBB, &[3])));
+
+        // Neither reservation is live any more: both transactions confirmed.
+        let out = block.remove_settled(&live(&[99]));
+
+        assert_eq!(out.claims, vec![PCanonicalId::from_bytes([0xAA; 32])]);
+        assert_eq!(out.drains, vec![PCanonicalId::from_bytes([0xBB; 32])]);
+        assert!(!block.has_live_claim_for(&PCanonicalId::from_bytes([0xAA; 32])));
+        assert!(!block.has_live_drain_for(&PCanonicalId::from_bytes([0xBB; 32])));
+    }
+
+    /// A reservation still on chain is still in flight.
+    #[test]
+    fn a_live_reservation_holds_its_seal() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_drain(drain(0xBB, &[3, 4])));
+        let out = block.remove_settled(&live(&[3, 4]));
+        assert!(out.is_empty());
+        assert!(block.has_live_drain_for(&PCanonicalId::from_bytes([0xBB; 32])));
+    }
+
+    /// **Partial spend is not settlement.** A drain spends all its inputs in one
+    /// transaction, so a half-gone reservation is not "mostly confirmed" — it is
+    /// a state the confirming transaction cannot produce. Retiring on `any`
+    /// would release the seal on an anomaly; holding is fail-closed.
+    #[test]
+    fn a_partly_spent_reservation_is_not_settled() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_drain(drain(0xBB, &[3, 4])));
+        let out = block.remove_settled(&live(&[4]));
+        assert!(
+            out.is_empty(),
+            "one input gone is not the confirming spend of both"
+        );
+        assert!(block.has_live_drain_for(&PCanonicalId::from_bytes([0xBB; 32])));
+    }
+
+    /// **The vacuous-truth guard.** `[].iter().all(..)` is `true`, so a record
+    /// holding no reservation would read as settled the instant it was sealed —
+    /// retired before its bytes ever reached the network, releasing the gate that
+    /// stops a second transaction racing the first.
+    ///
+    /// This is not a theoretical shape: the Q11 zero-fee-input emission claim
+    /// (fee out of the mint, the destitute corner) carries exactly zero
+    /// `fee_gindexes`. Deleting the `!reserved.is_empty()` term turns this test
+    /// red, which is the only reason it is a test rather than a comment.
+    #[test]
+    fn an_empty_reservation_is_never_settled() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(claim(0xAA, &[])));
+        let out = block.remove_settled(&live(&[]));
+        assert!(
+            out.is_empty(),
+            "a zero-fee-input claim has nothing to observe and must not retire vacuously"
+        );
+        assert!(block.has_live_claim_for(&PCanonicalId::from_bytes([0xAA; 32])));
+    }
+
+    /// **The negative control that matters.** Posts and the reservation-observed
+    /// kinds are retired against *different evidence*, and the two must not be
+    /// crossed: `remove_settled` never touches a bond post, whose settlement is
+    /// the pscan's own match (`remove_confirmed`), and whose funding reservation
+    /// disappearing means only that its funding was spent — which is what the
+    /// bond post itself does.
+    #[test]
+    fn remove_settled_never_retires_a_bond_post() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xCC, &[7, 8])));
+        let out = block.remove_settled(&live(&[]));
+        assert!(out.is_empty());
+        assert!(
+            block.has_live_post_for(&PCanonicalId::from_bytes([0xCC; 32])),
+            "a bond post is retired by its own on-chain match, never by its reservation"
+        );
+    }
+
+    /// The mirror of the above: the post path must not retire a claim or drain
+    /// just because their persona confirmed a bond post.
+    #[test]
+    fn remove_confirmed_never_retires_a_claim_or_drain() {
+        let persona = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(claim(0xAA, &[1])));
+        assert!(block.push_drain(drain(0xAA, &[2])));
+
+        let retired = block.remove_confirmed(&[persona].into_iter().collect());
+
+        assert!(retired.is_empty(), "there was no live post to retire");
+        assert!(
+            block.has_live_claim_for(&persona) && block.has_live_drain_for(&persona),
+            "a JoinMarket bond-post confirmation says nothing about this persona's \
+             claim or drain — they are different transactions"
+        );
     }
 
     #[test]

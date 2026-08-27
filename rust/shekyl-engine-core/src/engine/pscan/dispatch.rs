@@ -304,6 +304,35 @@ fn select_dispatch_candidate<'a>(
 // The driver
 // ---------------------------------------------------------------------------
 
+/// The confirmation evidence one tick reads — **one source per record kind**,
+/// deliberately not one set.
+///
+/// The three pending kinds settle against different on-chain facts, and the
+/// tempting simplification (a single "confirmed personas" set) is wrong for two
+/// of them. A bond post is observed directly: the pscan matches the post itself.
+/// A claim and a drain have no match set, so each is observed through the
+/// funding it reserved — every input it spends leaving the accrual's live set.
+///
+/// Keeping them apart in the type is the point. `confirmed_posts` reads like a
+/// general "these personas confirmed something" set and is nothing of the kind
+/// (`confirmed_join_market_personas` filters to `BOND_POST_KIND_JOINMARKET`);
+/// crossing the two would retire a live drain because its persona's *bond post*
+/// confirmed — a different transaction entirely.
+pub(crate) struct TickEvidence<'a> {
+    /// Personas with a reorg-deep **JoinMarket bond-post** match. Retires
+    /// pending posts only.
+    pub(crate) confirmed_posts: &'a BTreeSet<PCanonicalId>,
+    /// The accrual's live `P`-owned funding outputs, by global index. A claim or
+    /// drain is settled once **every** gindex it reserved has left this set.
+    ///
+    /// Same provenance as `confirmed_posts` — our own verified, exhaustive scan
+    /// behind the finality horizon, never a daemon claim — so releasing a seal
+    /// against it is the same quality of evidence at the same reorg depth. That
+    /// equivalence is why this is a second field rather than a second driver
+    /// with its own notion of "confirmed".
+    pub(crate) live_funding: &'a BTreeSet<shekyl_types::GlobalOutputIndex>,
+}
+
 /// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
 /// task (`run_pscan_task`) is generic over it, so the loop tests run with
 /// the [`()`](impl@DispatchTick) no-op and never build a driver.
@@ -314,7 +343,7 @@ pub(crate) trait DispatchTick: Send + 'static {
     fn on_tick(
         &mut self,
         tip: BlockHeight,
-        confirmed: &BTreeSet<PCanonicalId>,
+        evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
     ) -> impl std::future::Future<Output = Result<(), DispatchError>> + Send;
 }
@@ -325,7 +354,7 @@ impl DispatchTick for () {
     async fn on_tick(
         &mut self,
         _tip: BlockHeight,
-        _confirmed: &BTreeSet<PCanonicalId>,
+        _evidence: TickEvidence<'_>,
         _cancel: &CancellationToken,
     ) -> Result<(), DispatchError> {
         Ok(())
@@ -334,14 +363,41 @@ impl DispatchTick for () {
 
 /// What one locked read-modify-seal pass decided (phase 1 of a tick).
 struct TickPlan {
-    /// Personas retired by confirmation this tick (records removed).
+    /// Personas whose pending **post** was retired by confirmation this tick.
     retired: Vec<PCanonicalId>,
+    /// Claims and drains retired this tick by their reservation settling.
+    settled: shekyl_engine_state::pending_post_block::SettledRetirement,
+    /// Dispatched-but-unsettled claims/drains newly past the alarm horizon:
+    /// `(kind, persona, first-dispatch tip)`.
+    reservation_alarms: Vec<(ReservationKind, PCanonicalId, BlockHeight)>,
     /// Dispatched-but-unconfirmed posts newly past the alarm horizon:
     /// `(persona, first-dispatch tip, total attempts)`.
     alarms: Vec<(PCanonicalId, BlockHeight, u32)>,
     /// The post sealed as `Dispatched` this tick (a clone of the sealed
     /// record) and its post-transition attempt count.
     dispatched: Option<(PendingBondPost, u32)>,
+}
+
+/// Which reservation-observed record a stall alarm is about. Alarms are keyed
+/// by `(kind, persona)` rather than persona alone: one persona can hold a live
+/// claim and a live drain at once, and a shared key would let the first alarm
+/// silence the second — the alarm-once rule turning into an alarm-never.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ReservationKind {
+    /// A pending emission claim.
+    Claim,
+    /// A pending `P`→principal drain.
+    Drain,
+}
+
+impl ReservationKind {
+    /// The word the operator log uses.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Claim => "emission claim",
+            Self::Drain => "drain",
+        }
+    }
 }
 
 /// The block-timed dispatch driver. Owned by the pscan task; [`Self::on_tick`]
@@ -363,6 +419,10 @@ pub(crate) struct DispatchDriver<S, T> {
     /// the durable record stays held (funds-safety over liveness), so a
     /// restart re-raises the alarm, which is the desired resume behavior.
     alarmed_this_session: BTreeSet<PCanonicalId>,
+    /// Claims/drains already alarmed this session, keyed by kind AND persona.
+    /// Same alarm-once discipline as the post set, and the same resume
+    /// behaviour: the record is held, so a restart re-raises.
+    alarmed_reservations: BTreeSet<(ReservationKind, PCanonicalId)>,
     /// GF-7 timeline seam (hooks-spec §3/§4 discipline): production injects
     /// [`NoOpObserver`](shekyl_standoff::gf7::NoOpObserver); only the sim
     /// wires a recording observer.
@@ -387,6 +447,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
             config,
             held_this_session: BTreeSet::new(),
             alarmed_this_session: BTreeSet::new(),
+            alarmed_reservations: BTreeSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
         }
@@ -449,7 +510,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     async fn on_tick(
         &mut self,
         tip: BlockHeight,
-        confirmed: &BTreeSet<PCanonicalId>,
+        evidence: TickEvidence<'_>,
         cancel: &CancellationToken,
     ) -> Result<(), DispatchError> {
         // -- Phase 1: one locked read-modify-seal pass ----------------------
@@ -460,6 +521,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // closure is sync; the sets are this driver's own fields).
         let held = &self.held_this_session;
         let alarmed = &self.alarmed_this_session;
+        let reservation_alarmed = &self.alarmed_reservations;
         let horizon = self.config.alarm_horizon_blocks;
         let plan = self
             .store
@@ -473,9 +535,50 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 // release in one seal (R2-4). Batched over the LIVE posts
                 // (`remove_confirmed`) so the cost is bounded by in-flight
                 // posts, not by the ever-growing `confirmed` set.
-                let retired = block.remove_confirmed(confirmed);
+                let retired = block.remove_confirmed(evidence.confirmed_posts);
                 if !retired.is_empty() {
                     changed = true;
+                }
+
+                // Confirmation retire for the reservation-observed kinds. Same
+                // seal, same pass: a claim or drain whose inputs are gone has
+                // confirmed, and its record + reservation are released together
+                // (R2-4). This is what releases the one-live gates — until it
+                // existed, a settled claim left `has_live_claim_for` true
+                // forever (the persona silently stopped claiming) and a settled
+                // drain left the lane refusing `-29511` across sessions.
+                let settled = block.remove_settled(evidence.live_funding);
+                if !settled.is_empty() {
+                    changed = true;
+                }
+
+                // Stall alarm for the reservation-observed kinds. A claim or
+                // drain that never settles holds its one-live gate shut, and
+                // the failure paths that produce one are silent by nature: a
+                // terminally-rejected transaction never spends its inputs, so
+                // it never settles and nothing else says so. Naming it in the
+                // log is the honest half-measure while terminal-reject prune
+                // is a separate slice — the record is HELD, matching the bond
+                // post's funds-safety-over-liveness posture.
+                let mut reservation_alarms = Vec::new();
+                for (kind, persona, state) in block
+                    .claims()
+                    .iter()
+                    .map(|c| (ReservationKind::Claim, c.persona, c.state))
+                    .chain(
+                        block
+                            .drains()
+                            .iter()
+                            .map(|d| (ReservationKind::Drain, d.persona, d.state)),
+                    )
+                {
+                    if let PendingPostState::Dispatched { at, .. } = state {
+                        if tip.to_raw() >= at.to_raw().saturating_add(horizon)
+                            && !reservation_alarmed.contains(&(kind, persona))
+                        {
+                            reservation_alarms.push((kind, persona, at));
+                        }
+                    }
                 }
 
                 // Alarm scan (§3.4 resubmit bound): dispatched, unconfirmed,
@@ -511,6 +614,8 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     changed,
                     TickPlan {
                         retired,
+                        settled,
+                        reservation_alarms,
                         alarms,
                         dispatched,
                     },
@@ -531,6 +636,45 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                  funding reservation released in one seal"
             );
         }
+        if !plan.settled.claims.is_empty() {
+            tracing::info!(
+                count = plan.settled.claims.len(),
+                "emission claim: reservation settled — pending claim(s) retired, fee \
+                 reservation released, and the persona's epoch-dedup gate reopened"
+            );
+        }
+        if !plan.settled.drains.is_empty() {
+            tracing::info!(
+                count = plan.settled.drains.len(),
+                "drain: reservation settled — pending drain(s) retired, funding \
+                 reservation released, and the persona's one-live-drain lane reopened"
+            );
+        }
+
+        for persona in plan.settled.claims.iter().chain(plan.settled.drains.iter()) {
+            self.alarmed_reservations
+                .remove(&(ReservationKind::Claim, *persona));
+            self.alarmed_reservations
+                .remove(&(ReservationKind::Drain, *persona));
+        }
+        for (kind, persona, at) in &plan.reservation_alarms {
+            self.alarmed_reservations.insert((*kind, *persona));
+            tracing::error!(
+                kind = kind.as_str(),
+                persona = ?persona,
+                dispatched_at = at.to_raw(),
+                tip = tip.to_raw(),
+                horizon_blocks = self.config.alarm_horizon_blocks,
+                "reservation STALL: a dispatched {} has not settled past the alarm horizon — \
+                 its inputs are still unspent, so its one-live gate stays shut and this \
+                 persona cannot start another. The record and its reservation are HELD \
+                 (funds-safety over liveness). A terminal rejection looks exactly like this \
+                 until terminal-reject prune lands. Operator action: check daemon \
+                 connectivity / chain health",
+                kind.as_str()
+            );
+        }
+
         for (persona, at, attempts) in &plan.alarms {
             self.alarmed_this_session.insert(*persona);
             // Truncated `Debug` on `PCanonicalId` — enough for the operator
@@ -839,7 +983,10 @@ mod tests {
         driver
             .on_tick(
                 BlockHeight::from_raw(tip),
-                &BTreeSet::new(),
+                TickEvidence {
+                    confirmed_posts: &BTreeSet::new(),
+                    live_funding: &BTreeSet::new(),
+                },
                 &CancellationToken::new(),
             )
             .await
@@ -944,7 +1091,10 @@ mod tests {
         let result = driver
             .on_tick(
                 BlockHeight::from_raw(100),
-                &BTreeSet::new(),
+                TickEvidence {
+                    confirmed_posts: &BTreeSet::new(),
+                    live_funding: &BTreeSet::new(),
+                },
                 &CancellationToken::new(),
             )
             .await;
@@ -1055,7 +1205,10 @@ mod tests {
         driver
             .on_tick(
                 BlockHeight::from_raw(101),
-                &confirmed,
+                TickEvidence {
+                    confirmed_posts: &confirmed,
+                    live_funding: &BTreeSet::new(),
+                },
                 &CancellationToken::new(),
             )
             .await
@@ -1072,6 +1225,204 @@ mod tests {
             block.reserved_gindexes().is_empty(),
             "the derived reservation released with the records — same seal, no second write"
         );
+    }
+
+    // -- gate 5b: reservation settlement (claims + drains) ---------------------
+
+    /// Seed a driver whose block also carries a live claim and a live drain,
+    /// each reserving one funding output.
+    fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
+        use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(PendingEmissionClaim {
+            persona: persona(1),
+            tx_bytes: vec![0xCD; 8],
+            fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+            state: PendingPostState::Pending,
+        }));
+        assert!(block.push_drain(PendingDrain {
+            persona: persona(2),
+            tx_bytes: vec![0xEF; 8],
+            funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+            state: PendingPostState::Pending,
+        }));
+        let store = std::sync::Arc::new(MemStore::default());
+        *store.block.lock().expect("mem store") = Some(block);
+        let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(vec![]));
+        let driver = DispatchDriver::new(store.clone(), broadcast, test_config(), test_lock());
+        (driver, store)
+    }
+
+    /// **The negative control, and it goes first.** A JoinMarket bond-post
+    /// confirmation must not retire a live claim or a live drain.
+    ///
+    /// `confirmed_join_market_personas` reads like a general "these personas
+    /// confirmed" set and is filtered to `BOND_POST_KIND_JOINMARKET` by
+    /// construction. Handing it to the reservation-observed kinds would retire a
+    /// drain because that persona's *bond post* confirmed — a different
+    /// transaction, releasing the gate that stops a second drain racing the
+    /// first's inputs. Both records here name a persona in `confirmed_posts`, so
+    /// a driver that crossed the two evidence sources retires them and this test
+    /// goes red.
+    #[tokio::test]
+    async fn a_bond_post_confirmation_never_retires_a_claim_or_drain() {
+        let (mut driver, store) = driver_with_reservations();
+
+        // Both personas confirmed a bond post; both reservations are still live.
+        let confirmed: BTreeSet<PCanonicalId> = [persona(1), persona(2)].into();
+        let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+            .map(shekyl_types::GlobalOutputIndex::from_raw)
+            .into();
+        driver
+            .on_tick(
+                BlockHeight::from_raw(100),
+                TickEvidence {
+                    confirmed_posts: &confirmed,
+                    live_funding: &live,
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("tick");
+
+        let block = store
+            .block
+            .lock()
+            .expect("mem store")
+            .clone()
+            .expect("sealed");
+        assert!(
+            block.has_live_claim_for(&persona(1)),
+            "a bond-post confirmation is not this claim's settlement"
+        );
+        assert!(
+            block.has_live_drain_for(&persona(2)),
+            "a bond-post confirmation is not this drain's settlement"
+        );
+    }
+
+    /// The seal releases when the reservation settles — the defect this driver
+    /// closes, for both kinds.
+    ///
+    /// Before it, a confirmed drain left `has_live_drain_for` true forever (the
+    /// persona's lane refused `-29511` across sessions) and a confirmed claim
+    /// left `has_live_claim_for` true forever — the worse of the two, because
+    /// claims are engine-automated: the persona simply stopped claiming, with no
+    /// user action to correlate the silence against.
+    #[tokio::test]
+    async fn a_settled_reservation_retires_the_claim_and_the_drain() {
+        let (mut driver, store) = driver_with_reservations();
+
+        // Neither reservation remains in the accrual's live funding set: both
+        // transactions spent their inputs and confirmed.
+        driver
+            .on_tick(
+                BlockHeight::from_raw(100),
+                TickEvidence {
+                    confirmed_posts: &BTreeSet::new(),
+                    live_funding: &BTreeSet::new(),
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("tick");
+
+        let block = store
+            .block
+            .lock()
+            .expect("mem store")
+            .clone()
+            .expect("sealed");
+        assert!(
+            !block.has_live_claim_for(&persona(1)),
+            "claim gate reopened"
+        );
+        assert!(
+            !block.has_live_drain_for(&persona(2)),
+            "drain lane reopened"
+        );
+        assert!(
+            block.reserved_gindexes().is_empty(),
+            "records and their reservations released in the same seal (R2-4)"
+        );
+    }
+
+    /// A dispatched claim and drain that never settle both alarm — and the
+    /// **same persona gets both**.
+    ///
+    /// That is the whole reason alarms are keyed by `(kind, persona)`. Keying on
+    /// persona alone would let the claim's alarm mark the persona as alarmed and
+    /// silence the drain's, turning alarm-once into alarm-never for the second
+    /// kind — on exactly the persona that has two things stuck at once, which is
+    /// the case an operator most needs to see. Collapsing the key makes this
+    /// test red.
+    #[tokio::test]
+    async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
+        use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+        let p = persona(1);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_claim(PendingEmissionClaim {
+            persona: p,
+            tx_bytes: vec![0xCD; 8],
+            fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+            state: PendingPostState::Pending,
+        }));
+        assert!(block.push_drain(PendingDrain {
+            persona: p,
+            tx_bytes: vec![0xEF; 8],
+            funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+            state: PendingPostState::Pending,
+        }));
+        let at = BlockHeight::from_raw(100);
+        assert!(block.mark_claim_dispatched(&p, at).is_some());
+        assert!(block.mark_drain_dispatched(&p, at).is_some());
+
+        let store = std::sync::Arc::new(MemStore::default());
+        *store.block.lock().expect("mem store") = Some(block);
+        let mut driver = DispatchDriver::new(
+            store.clone(),
+            std::sync::Arc::new(ScriptedBroadcast::scripted(vec![])),
+            test_config(),
+            test_lock(),
+        );
+
+        // Well past the horizon, with both reservations still on chain.
+        let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+            .map(shekyl_types::GlobalOutputIndex::from_raw)
+            .into();
+        driver
+            .on_tick(
+                BlockHeight::from_raw(100 + test_config().alarm_horizon_blocks),
+                TickEvidence {
+                    confirmed_posts: &BTreeSet::new(),
+                    live_funding: &live,
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("tick");
+
+        assert!(
+            driver
+                .alarmed_reservations
+                .contains(&(ReservationKind::Claim, p)),
+            "the stalled claim must alarm"
+        );
+        assert!(
+            driver
+                .alarmed_reservations
+                .contains(&(ReservationKind::Drain, p)),
+            "the stalled drain must alarm too — one persona, two stuck records"
+        );
+
+        // Both records are HELD: the alarm names the stall, it does not resolve it.
+        let block = store
+            .block
+            .lock()
+            .expect("mem store")
+            .clone()
+            .expect("sealed");
+        assert!(block.has_live_claim_for(&p) && block.has_live_drain_for(&p));
     }
 
     // -- gate 6: terminal rejection --------------------------------------------
