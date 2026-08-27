@@ -71,7 +71,8 @@ use super::claim_orchestrator::{
 };
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
-use super::pscan::start::{load_pscan_state_for_engine, pending_post_store_for_engine};
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
+use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledEmissionClaim, PSlot, StakeEngineError};
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
@@ -232,14 +233,19 @@ where
         // live gindex reservations (outputs committed to in-flight bond
         // posts OR live claims must not be swept as claim fee inputs —
         // WI-2 F-1: an independent store over the engine-held write lock).
-        let (identity, pscan_state, reserved) = tokio::join!(
+        // The seal basis is ONE ordered read — pending block, then pscan seal
+        // (see `load_seal_basis`: reading them concurrently pairs stale funding
+        // with a current generation and reopens the race the counter closes).
+        // The identity fetch stays concurrent because it touches neither store.
+        let (identity, basis) = tokio::join!(
             stake.persona_identity(p_slot),
-            load_pscan_state_for_engine(self_arc.clone()),
-            // Generation and reservation set in ONE locked read: the counter
-            // is only meaningful paired with the set it describes.
-            store.read(|block| (block.generation(), block.reserved_gindexes())),
+            load_seal_basis(self_arc.clone(), &store),
         );
         let identity = identity?;
+        let basis = basis.map_err(|e| match e {
+            SealBasisError::Pending(e) => EmissionClaimRequestError::state("reserved gindexes", e),
+            SealBasisError::PScan(e) => EmissionClaimRequestError::state("pscan state load", e),
+        })?;
         let bond_id_bytes = identity
             .bond_id
             .to_canonical_bytes()
@@ -250,15 +256,12 @@ where
         // from the loaded seal (empty sets when no P-scan seal exists yet —
         // a wallet that never scanned has nothing to claim WITH, and the
         // pipeline refuses loudly downstream).
-        let pscan_state =
-            pscan_state.map_err(|e| EmissionClaimRequestError::state("pscan state load", e))?;
-        let (funding_records, bond_posts): (&[PFundingOutputRecord], &[BondPostRecord]) =
-            pscan_state
-                .as_ref()
-                .map(|s| (s.funding_outputs(), s.bond_post_matches()))
-                .unwrap_or((&[], &[]));
-        let (snapshot_generation, reserved) =
-            reserved.map_err(|e| EmissionClaimRequestError::state("reserved gindexes", e))?;
+        let (funding_records, bond_posts): (&[PFundingOutputRecord], &[BondPostRecord]) = basis
+            .pscan()
+            .map(|s| (s.funding_outputs(), s.bond_post_matches()))
+            .unwrap_or((&[], &[]));
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved();
 
         // Optimistic fast-fail on a live claim (one live claim per persona —
         // the in-flight epoch dedup). The AUTHORITATIVE serialization is
@@ -286,7 +289,7 @@ where
                 pruning_landed,
                 funding_records,
                 bond_posts,
-                reserved: &reserved,
+                reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
             },

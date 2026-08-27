@@ -69,7 +69,7 @@ use std::sync::Arc;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState, SealAdmission};
-use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
+use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -77,7 +77,8 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::drain_assembly::{AssembledDrain, DrainDestination};
 use super::drain_orchestrator::{orchestrate_drain, DrainCtx, DrainOrchestrationError};
 use super::pscan::block_source::daemon_claimed_tip;
-use super::pscan::start::{load_pscan_state_for_engine, pending_post_store_for_engine};
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
+use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::{PSlot, StakeEngineError};
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
@@ -264,24 +265,28 @@ where
         // slot), the sealed P-scan state, and the live gindex reservations
         // (outputs committed to in-flight bond posts, claims, OR drains must not
         // be re-swept — an independent store over the engine-held write lock).
-        let (p_canonical_id, pscan_state, reserved) = tokio::join!(
+        // The seal basis is ONE ordered read — pending block, then pscan seal
+        // (see `load_seal_basis`: reading them concurrently pairs stale funding
+        // with a current generation and reopens the race the counter closes).
+        // The persona id stays concurrent because it touches neither store.
+        let (p_canonical_id, basis) = tokio::join!(
             stake.persona_canonical_id(p_slot),
-            load_pscan_state_for_engine(self_arc.clone()),
-            // Generation and reservation set in ONE locked read: the counter
-            // is only meaningful paired with the set it describes.
-            store.read(|block| (block.generation(), block.reserved_gindexes())),
+            load_seal_basis(self_arc.clone(), &store),
         );
         let p_canonical_id = p_canonical_id?;
+        let basis = basis.map_err(|e| match e {
+            SealBasisError::Pending(e) => DrainRequestError::state("reserved gindexes", e),
+            SealBasisError::PScan(e) => DrainRequestError::state("pscan state load", e),
+        })?;
 
         // Sealed funding records + this persona's exit-reserve exemption,
         // borrowed from the loaded seal. No P-scan seal ⇒ no funding to drain
         // (the pipeline refuses loudly downstream) and "not exempt" (the safe
         // default: a live persona keeps its exit reserve).
-        let pscan_state =
-            pscan_state.map_err(|e| DrainRequestError::state("pscan state load", e))?;
+        let pscan_state = basis.pscan();
         let funding_records: &[PFundingOutputRecord] = pscan_state
             .as_ref()
-            .map(PScanState::funding_outputs)
+            .map(|s| s.funding_outputs())
             .unwrap_or(&[]);
         // Exempt from the exit-fee reserve once the persona's terminal `Unbond`
         // has confirmed — i.e. it lives in `pending_unbonds`, the authoritative
@@ -296,8 +301,8 @@ where
         let retired = pscan_state
             .as_ref()
             .is_some_and(|s| s.pending_unbonds().contains_key(&p_canonical_id));
-        let (snapshot_generation, reserved) =
-            reserved.map_err(|e| DrainRequestError::state("reserved gindexes", e))?;
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved();
 
         // Optimistic fast-fail on a live drain (one live drain per persona —
         // the in-flight input reservation). The AUTHORITATIVE serialization is
@@ -323,7 +328,7 @@ where
                 tree: &curve_tree,
                 pruning_landed,
                 funding_records,
-                reserved: &reserved,
+                reserved,
                 dest,
                 payment: payment.to_raw(),
                 fee: fee.to_raw(),

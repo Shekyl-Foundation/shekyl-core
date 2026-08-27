@@ -56,6 +56,19 @@
   against a fresh snapshot), so it surfaces through the same refusal, whose
   message now names every cause rather than only a concurrent post.
 
+  The two reads that form that snapshot are **ordered**, which the first cut of
+  the guard got wrong: all three seams read the pending block and the pscan seal
+  concurrently in one `join!`, so the pscan load could return a funding set from
+  *before* a settlement while the pending read returned the generation from
+  *after* it. Stale funding paired with a current generation passes the seal —
+  the same admission the counter was added to prevent. The pending block is now
+  read to completion first, then the pscan seal, so every release either
+  precedes both reads (and the spent input is never offered) or moves the
+  generation (and the seal refuses). The ordering lives in one place,
+  `load_seal_basis`, whose result type has private fields and no other
+  constructor, because a source pin over the seams can only prove the function
+  is called — never that a hand-rolled equivalent got the order right.
+
 ### Added
 
 - **A stall alarm for pending claims and drains.** A record dispatched but not

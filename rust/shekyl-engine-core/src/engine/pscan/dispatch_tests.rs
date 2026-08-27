@@ -805,6 +805,17 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
                  shared seal decision"
             );
         }
+        // The generation the seal compares is only sound if the pending block
+        // was read BEFORE the pscan seal — otherwise stale funding pairs with a
+        // current generation and the seal admits an already-spent input.
+        // `load_seal_basis` owns that ordering; a seam that took the two reads
+        // itself would be free to concurrently join them again, which is
+        // exactly the regression review #572 round 6 found.
+        assert!(
+            code.contains("load_seal_basis("),
+            "{name} builds its seal basis without `load_seal_basis`, so nothing \
+             holds the pending read ahead of the pscan load"
+        );
     }
 }
 

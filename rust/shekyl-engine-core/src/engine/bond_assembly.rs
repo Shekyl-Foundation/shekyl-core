@@ -191,12 +191,24 @@ pub(crate) enum BondAssemblyError {
     #[error("a pending bond post already exists for this persona; one live post per persona")]
     PendingPostExists,
 
-    /// A concurrent same-persona claim or drain reserved one of this post's
-    /// funding inputs between the pre-assembly snapshot and the seal. The
-    /// authoritative re-check under the write lock caught it and refused
-    /// **before** sealing, so no doomed record is left behind. Retry — the next
-    /// assembly reads the now-current reservation set and selects around it.
-    #[error("a concurrent claim or drain reserved one of this post's inputs; retry")]
+    /// This post's funding inputs are no longer selectable, for either of the
+    /// two reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **claim or drain** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly snapshot and
+    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
+    ///   against no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this post still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry against a current snapshot. One variant
+    /// because one remedy; the message names both causes because naming only
+    /// one sends a caller looking for a collision that may not exist.
+    #[error(
+        "this post's funding inputs are no longer current — another live record \
+         holds one, or a reservation was released mid-assembly; retry"
+    )]
     InputRaced,
 
     /// The curve-tree / ledger anchoring procedure could not produce a

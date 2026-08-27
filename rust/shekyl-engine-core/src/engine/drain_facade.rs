@@ -113,12 +113,18 @@ pub enum DrainToPrincipalError {
     /// driver's job, and that driver is **half wired** as of PR #572: a drain
     /// that CONFIRMS now releases its seal (retired against its reserved inputs
     /// leaving the wallet's live funding set), so this refusal no longer
-    /// outlives a successful drain. It still persists across sessions for a
-    /// drain the network rejects **terminally** — that transaction never spends
-    /// its inputs, so it never settles; the terminal-reject prune and the
-    /// byte-identical resubmit remain open (`docs/FOLLOWUPS.md` "Drain dispatch
-    /// driver", target V3.0 pre-genesis), and a stall alarm names the stuck
-    /// lane in the operator log rather than leaving it silent.
+    /// outlives a successful drain. It still persists across sessions on the
+    /// failure path, by **two** routes — a drain the network rejects
+    /// **terminally**, and a drain whose submit was **ambiguous** (a transport
+    /// error leaves the sealed record live on purpose, because the bytes may
+    /// already have reached the network; if they did not, nothing resubmits
+    /// them — the driver resubmits bond posts only). Either way the inputs are
+    /// never spent, so the drain never settles and the lane stays shut until
+    /// terminal-reject prune and byte-identical resubmit land
+    /// (`docs/FOLLOWUPS.md` "Drain/claim dispatch driver — terminal-reject
+    /// prune + byte-identical resubmit", target V3.0 pre-genesis). A stall
+    /// alarm names the stuck lane in the operator log rather than leaving it
+    /// silent.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     InFlight,
     /// This drain's swept inputs are no longer current — either a concurrent

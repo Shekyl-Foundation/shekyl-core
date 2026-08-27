@@ -243,7 +243,7 @@ enum PendingKind {
     Drain,
 }
 
-/// What [`PendingPostBlock::classify_seal`] decided about a seal attempt.
+/// What `PendingPostBlock`'s seal classifier decided about a seal attempt.
 ///
 /// The two refusals carry **contradictory remedies**, which is the whole reason
 /// they are separate and the whole reason their order matters:
@@ -306,9 +306,15 @@ pub struct PendingPostBlock {
     /// Per-block schema version — [`PENDING_POST_VERSION`] on construction,
     /// version-gated on load.
     version: u32,
-    /// **Monotonic count of reservation RELEASES.** Bumped by every method that
-    /// drops a live record, and compared at [`Self::classify_seal`] against the
-    /// value an assembly read when it snapshotted the reservation set.
+    /// **Monotonic count of reservation-releasing OPERATIONS.** Bumped once by
+    /// every method call that drops at least one live record, and compared at
+    /// `classify_seal` against the value an assembly read when it snapshotted
+    /// the reservation set.
+    ///
+    /// Counting operations rather than records is deliberate: only inequality
+    /// is ever read, so the magnitude carries no meaning, and counting records
+    /// would need a `usize`→`u64` conversion whose saturating arm fails *open*
+    /// — a counter pinned at its maximum stops refusing anything.
     ///
     /// The union check sees reservations that are *present*; this makes
     /// reservations that were *released* visible. Comparing the reservation
@@ -341,10 +347,12 @@ impl std::fmt::Debug for PendingPostBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingPostBlock")
             .field("version", &self.version)
-            // Shown, not redacted: a count of reservation releases names no
-            // persona, gindex or amount, and it is the one value worth having
-            // in a log when a seal was refused as `Stale`.
-            .field("generation", &self.generation)
+            // Redacted like the record collections, and for the same reason
+            // this type already gives above: a count IS `P`-activity volume.
+            // This one is a lifetime total of settled records, so it is
+            // strictly more telling than the in-flight count the doc names.
+            // The field is kept so a reader can see the guard exists.
+            .field("generation", &"<redacted release count>")
             .field("posts", &"<redacted pending-posts>")
             .field("claims", &"<redacted pending-claims>")
             .field("drains", &"<redacted pending-drains>")
@@ -628,7 +636,9 @@ impl PendingPostBlock {
                 true
             }
         });
-        self.generation += u64::try_from(retired.len()).unwrap_or(u64::MAX);
+        if !retired.is_empty() {
+            self.generation += 1;
+        }
         retired
     }
 
@@ -703,7 +713,7 @@ impl PendingPostBlock {
     /// bool can only be `true`, so the `false` arm was dead code that reported
     /// the *wait* remedy for what could only have been an internal break. There
     /// is no bool here to re-derive from: the insert is unconditional on the
-    /// admitted path, because [`Self::classify_seal`] is what establishes the
+    /// admitted path, because `classify_seal` is what establishes the
     /// one-live-per-persona-per-kind precondition `push_post` would re-check.
     pub fn seal_post(&mut self, post: PendingBondPost, snapshot_generation: u64) -> SealAdmission {
         match self.classify_seal(
@@ -847,8 +857,9 @@ impl PendingPostBlock {
                 true
             }
         });
-        let released = out.claims.len() + out.drains.len();
-        self.generation += u64::try_from(released).unwrap_or(u64::MAX);
+        if !out.is_empty() {
+            self.generation += 1;
+        }
         out
     }
 
@@ -1180,8 +1191,8 @@ mod tests {
         assert_eq!(retired.claims.len() + retired.drains.len(), 2);
         assert_eq!(
             block.generation(),
-            g + 2,
-            "remove_settled must count both kinds it retired"
+            g + 1,
+            "remove_settled bumps once for the retirement, both kinds included"
         );
     }
 

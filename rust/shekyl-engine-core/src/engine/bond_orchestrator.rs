@@ -37,6 +37,7 @@ use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
@@ -700,21 +701,25 @@ where
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
-        // Sealed funding records (empty set if no pscan seal yet).
-        let funding_records = load_pscan_state_for_engine(self_arc)
+        // The seal basis is ONE ordered read — pending block, then pscan seal.
+        // The order is `load_seal_basis`'s guarantee: loading the pscan seal
+        // first (as this path did until review #572 round 6) can pair funding
+        // from before a settlement with a generation from after it, so the seal
+        // admits an input the settled record already spent. The generation
+        // rides out to the seal so `seal_post` can tell whether this
+        // selection's basis still holds.
+        let basis = load_seal_basis(self_arc, store)
             .await
-            .map_err(|e| BondAssemblyError::build("pscan state load", e))?
+            .map_err(|e| match e {
+                SealBasisError::Pending(e) => BondAssemblyError::build("reserved gindexes", e),
+                SealBasisError::PScan(e) => BondAssemblyError::build("pscan state load", e),
+            })?;
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved().clone();
+        let funding_records = basis
+            .into_pscan()
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
-
-        // Generation and reservation set in ONE locked read: the counter is
-        // only meaningful paired with the set it describes. It rides out to the
-        // seal so `seal_post` can tell whether this selection's basis still
-        // holds.
-        let (snapshot_generation, reserved) = store
-            .read(|block| (block.generation(), block.reserved_gindexes()))
-            .await
-            .map_err(|e| BondAssemblyError::build("reserved gindexes", e))?;
 
         let floor = AtomicUnits::from_raw(bond_floor(holdings));
         // Align with the wire builder / retention verifier: a zero floor is
