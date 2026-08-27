@@ -2064,7 +2064,21 @@ namespace cryptonote
   {
     RPC_TRACKER(relay_tx);
 
-    const bool restricted = caller_is_restricted(ctx);
+    /* No restricted gate here, deliberately. `relay_tx` is admin-only, and
+       that is decided once — in Rust, at the only transport (`RESTRICTED_METHODS`
+       in `handlers/json_rpc.rs`), which answers 403 before this function is
+       entered. Membership of that list is pinned against an independent
+       specification by `restricted_method_list_matches_the_specification`, so
+       dropping `relay_tx` from it fails a test rather than opening this path.
+
+       This handler used to compute `m_restricted && ctx` and skip the
+       `relay_category::all` arm when it held. That expression could not hold in
+       any reachable state: the restricted listener never gets here, and on the
+       admin listener `m_restricted` is false. It was not defence in depth, it
+       was residue — and residue on a security-shaped expression costs more than
+       it looks, because two reviewers and this author each read it as a live
+       path and priced an exploit from it. RK-D6: the restricted posture is
+       single-sourced in Rust. */
 
     bool failed = false;
     res.status = "";
@@ -2082,7 +2096,7 @@ namespace cryptonote
       //TODO: The get_pool_transaction could have an optional meta parameter
       bool broadcasted = false;
       cryptonote::blobdata txblob;
-      if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || (!restricted && m_core.get_pool_transaction(txid, txblob, relay_category::all)))
+      if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || m_core.get_pool_transaction(txid, txblob, relay_category::all))
       {
         // Q12-D5a residual absorption. Always passes `invalid`. Anything not
         // yet fluff/block (`local` AND `stem` — stem is outside

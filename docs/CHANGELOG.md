@@ -88,29 +88,20 @@
   filter matches nothing, so a moved or misspelled name would otherwise turn
   the gate into a green no-op.
 
-- **`relay_tx`'s restricted arm is repaired as defense in depth.** The same
-  dead expression appears here with an *active* consequence rather than a
-  disclosure one, so it is listed separately. The handler reads
-  `(broadcasted = get_pool_transaction(txid, ..., broadcasted)) || (!restricted
-  && get_pool_transaction(txid, ..., all))`, and with `restricted`
-  false-by-construction the second arm evaluates live — it will fetch a
-  still-stemming or locally-submitted transaction and relay it, setting
-  `relay_method::local` for anything not already broadcast and so reaching the
-  Q12-D5a residual documented at the call site (a transaction that has already
-  rolled clearnet and is still stemming gets re-decided onto the anonymity
-  zone).
-  **This was first published here as a live unauthenticated action, and that
-  was wrong.** `relay_tx` is listed in `RESTRICTED_METHODS`, the per-method
-  gate in the Rust JSON-RPC handler, and Axum has been the sole HTTP transport
-  since epee's was retired — so a restricted listener answers 403 `Method not
-  allowed in restricted mode` before any C++ runs. Measured on a live daemon:
-  403 on the restricted listener, and the C++ handler's own "transaction not
-  found in pool" on the admin one. The C++ arm is therefore unreachable from
-  the network in the posture that matters. Repairing it still earns its place
-  — it is the layer that has to be right if that method list changes, if a
-  transport is added, or when this handler migrates and takes its own posture
-  with it — but it is a second line, not a hole. Unlike the pool read
-  endpoints above, which are `Visibility::Always` and were reachable.
+- **`relay_tx`'s C++ restricted gate is deleted, not repaired.** The handler
+  computed `m_restricted && ctx` and skipped the `relay_category::all` arm
+  when it held. That expression cannot hold in any reachable state: `relay_tx`
+  is admin-only, decided once in Rust at the only transport
+  (`RESTRICTED_METHODS`), which answers 403 before C++ is entered — so the
+  restricted listener never arrives, and on the admin listener `m_restricted`
+  is false. An earlier draft of this entry reported it as a live
+  unauthenticated relay, and a later one kept the check as defence in depth;
+  both were wrong. It defended nothing, and membership of the Rust list is
+  itself pinned against an independent specification by a test, so loosening
+  that gate fails in Rust rather than falling through to here. Removed under
+  rule 15, which takes the site count in the design doc from eleven to ten.
+  Of those eleven methods `relay_tx` is the only one Rust gates per-method, so
+  this is a bounded sweep rather than an open class.
 
 - **Every password rotation on Windows failed, and the crate that owns the
   defect was tested on no Windows machine anywhere.** `rotate_password`
