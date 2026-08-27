@@ -169,7 +169,34 @@ namespace cryptonote
     bool on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
-    bool is_restricted() const { return m_restricted; }
+    /* The one question a handler asks about its caller.
+     *
+     * `m_restricted` is the listener's configured policy; `ctx` says whether
+     * a remote caller is on the other end, or whether this is the in-process
+     * console calling `on_*` directly. A restricted *caller* is both.
+     *
+     * Handlers used to spell this inline, and the sensitive-data sites spelled
+     * a second, longer form beside it:
+     *
+     *     allow_sensitive = !request_has_rpc_origin || !restricted
+     *
+     * which is `!restricted` for every one of the four (ctx, m_restricted)
+     * combinations — the extra term never changed an answer. It did make the
+     * expression half-repairable: deleting the `&& ctx` conjunct, the obvious
+     * cleanup, leaves `!request_has_rpc_origin` forcing `allow_sensitive`
+     * unconditionally true while looking exactly like a fix. One predicate,
+     * derived once, is why that shape no longer exists to be half-repaired.
+     *
+     * The `&& ctx` idiom is inherited: upstream a null `ctx` meant "an
+     * internal call, trust it". Here the bridge is the *only* caller of most
+     * of these handlers, so the same idiom quietly reads as "trust
+     * everything" — an inherited model whose premise the port changed
+     * (rule 16). Worth suspecting wherever else it appears.
+     */
+    bool caller_is_restricted(const connection_context* ctx) const
+    {
+      return m_restricted && ctx;
+    }
 
 private:
     bool check_core_busy();

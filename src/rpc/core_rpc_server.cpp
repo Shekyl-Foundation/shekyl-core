@@ -206,7 +206,7 @@ namespace cryptonote
   bool core_rpc_server::on_get_info(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_info);
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
 
     crypto::hash top_hash;
     m_core.get_blockchain_top(res.height, top_hash);
@@ -343,8 +343,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transactions);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
+    const bool restricted = caller_is_restricted(ctx);
 
     if (restricted && req.txs_hashes.size() > RESTRICTED_TRANSACTIONS_COUNT)
     {
@@ -385,7 +384,7 @@ namespace cryptonote
     if (!missed_txs.empty())
     {
       std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>> pool_txs;
-      bool r = m_core.get_pool_transactions_info(missed_txs, pool_txs, !request_has_rpc_origin || !restricted);
+      bool r = m_core.get_pool_transactions_info(missed_txs, pool_txs, !restricted);
       if(r)
       {
         // sort to match original request
@@ -580,7 +579,7 @@ namespace cryptonote
   {
     RPC_TRACKER(is_key_image_spent);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
 
     if (restricted && req.key_images.size() > RESTRICTED_SPENT_KEY_IMAGES_COUNT)
     {
@@ -884,9 +883,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    const bool allow_sensitive = !request_has_rpc_origin || !restricted;
+    const bool restricted = caller_is_restricted(ctx);
+    const bool allow_sensitive = !restricted;
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -905,9 +903,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_hashes);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    const bool allow_sensitive = !request_has_rpc_origin || !restricted;
+    const bool restricted = caller_is_restricted(ctx);
+    const bool allow_sensitive = !restricted;
 
     size_t n_txes = m_core.get_pool_transactions_count(allow_sensitive);
     if (n_txes > 0)
@@ -927,9 +924,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_transaction_pool_stats);
 
-    const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
-    m_core.get_pool_transaction_stats(res.pool_stats, !request_has_rpc_origin || !restricted);
+    const bool restricted = caller_is_restricted(ctx);
+    m_core.get_pool_transaction_stats(res.pool_stats, !restricted);
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -1529,7 +1525,7 @@ namespace cryptonote
       error_resp.message = "Internal error: can't get last block.";
       return false;
     }
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     bool response_filled = fill_block_header_response(last_block, false, last_block_height, last_block_hash, res.block_header, req.fill_pow_hash && !restricted);
     if (!response_filled)
     {
@@ -1545,7 +1541,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_block_header_by_hash);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     if (restricted && req.hashes.size() > RESTRICTED_BLOCK_COUNT)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
@@ -1616,7 +1612,7 @@ namespace cryptonote
       error_resp.message = "Invalid start/end heights.";
       return false;
     }
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     if (restricted && req.end_height - req.start_height > RESTRICTED_BLOCK_HEADER_RANGE)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
@@ -1877,7 +1873,7 @@ namespace cryptonote
   {
     RPC_TRACKER(get_output_histogram);
 
-    const bool restricted = m_restricted && ctx;
+    const bool restricted = caller_is_restricted(ctx);
     size_t amounts = req.amounts.size();
     if (restricted && amounts == 0)
     {
@@ -2068,7 +2064,21 @@ namespace cryptonote
   {
     RPC_TRACKER(relay_tx);
 
-    const bool restricted = m_restricted && ctx;
+    /* No restricted gate here, deliberately. `relay_tx` is admin-only, and
+       that is decided once — in Rust, at the only transport (`RESTRICTED_METHODS`
+       in `handlers/json_rpc.rs`), which answers 403 before this function is
+       entered. Membership of that list is pinned against an independent
+       specification by `restricted_method_list_matches_the_specification`, so
+       dropping `relay_tx` from it fails a test rather than opening this path.
+
+       This handler used to compute `m_restricted && ctx` and skip the
+       `relay_category::all` arm when it held. That expression could not hold in
+       any reachable state: the restricted listener never gets here, and on the
+       admin listener `m_restricted` is false. It was not defence in depth, it
+       was residue — and residue on a security-shaped expression costs more than
+       it looks, because two reviewers and this author each read it as a live
+       path and priced an exploit from it. RK-D6: the restricted posture is
+       single-sourced in Rust. */
 
     bool failed = false;
     res.status = "";
@@ -2086,7 +2096,7 @@ namespace cryptonote
       //TODO: The get_pool_transaction could have an optional meta parameter
       bool broadcasted = false;
       cryptonote::blobdata txblob;
-      if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || (!restricted && m_core.get_pool_transaction(txid, txblob, relay_category::all)))
+      if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || m_core.get_pool_transaction(txid, txblob, relay_category::all))
       {
         // Q12-D5a residual absorption. Always passes `invalid`. Anything not
         // yet fluff/block (`local` AND `stem` — stem is outside

@@ -83,6 +83,14 @@
 
 ### Removed
 
+- **`core_rpc_ffi_is_restricted` and the accessor it was the only caller
+  of.** The export had no caller in any language — the Rust server takes its
+  posture from its own configuration, never by asking C++ — and it was the
+  sole user of `core_rpc_server::is_restricted()`, so both go (rule 15).
+  Found while fixing the restricted gate above: an export whose whole
+  purpose was to report restrictedness across the boundary, in a tree where
+  the restrictedness had never crossed it.
+
 - **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
   a route that is called; nothing called this one. The two handlers made
   the same two core reads and differed only in raw-versus-hex output, so
@@ -94,6 +102,54 @@
   `docs/DAEMON_RPC_RUST.md`.
 
 ### Fixed
+
+- **A restricted RPC listener disclosed transactions the node had not
+  broadcast.** Every C++ handler decides its caller's posture from
+  `m_restricted && ctx`, and the dispatch bridge passed `nullptr` for `ctx`
+  on every JSON and JSON-RPC route, so that expression was false however the
+  daemon was configured. On the pool paths it is not a request cap: the
+  sensitive flag selects `relay_category::all` over `::broadcasted`, and the
+  DB's iteration skips what does not match the category — so the flag decides
+  whether a transaction is enumerated at all, not which of its fields are
+  shown. A `--restricted-rpc` listener therefore answered with transactions
+  in the `stem` and `local` states: still-stemming ones, and the node's own
+  submissions before they were relayed. `/get_transactions` disclosed them by
+  hash; `/get_transaction_pool` and `/get_transaction_pool_hashes` enumerated
+  them with no argument at all, which hands over the identifiers to ask
+  about. The listener's own help text is "do not return privacy sensitive
+  data in RPC calls". The bridge now passes a shared origin context, which
+  restores the intended meaning for every bridged handler at once; the
+  unrestricted listener is unaffected, because `m_restricted` is false there
+  and the expression was false before and after. No wire shape changes, so
+  `CORE_RPC_VERSION` is untouched. (`do_not_relay` transactions are *not* in
+  the leaked set — they cannot exist in Shekyl: no RPC accepts the flag and
+  the pool's only writer of it hardcodes 0.)
+
+- **The restricted-RPC gate now has a guard that CI actually runs.** The only
+  assertion that can observe whether the C++ dispatch bridge passes a
+  connection context is a live-daemon test, and live-daemon tests are
+  `#[ignore]`d because the Rust lane builds no `shekyld`. The `build-ubuntu`
+  job compiles one with `BUILD_TESTS=ON` and installs the Rust toolchain, so
+  the gate runs there against the tree just built — no extra build, about
+  three seconds. The step asserts that exactly one test ran: `--exact` matches
+  the full test path, and `cargo test` exits 0 reporting "0 passed" when a
+  filter matches nothing, so a moved or misspelled name would otherwise turn
+  the gate into a green no-op.
+
+- **`relay_tx`'s C++ restricted gate is deleted, not repaired.** The handler
+  computed `m_restricted && ctx` and skipped the `relay_category::all` arm
+  when it held. That expression cannot hold in any reachable state: `relay_tx`
+  is admin-only, decided once in Rust at the only transport
+  (`RESTRICTED_METHODS`), which answers 403 before C++ is entered — so the
+  restricted listener never arrives, and on the admin listener `m_restricted`
+  is false. An earlier draft of this entry reported it as a live
+  unauthenticated relay, and a later one kept the check as defence in depth;
+  both were wrong. It defended nothing, and membership of the Rust list is
+  itself pinned against an independent specification by a test, so loosening
+  that gate fails in Rust rather than falling through to here. Removed under
+  rule 15, which takes the site count in the design doc from eleven to ten.
+  Of those eleven methods `relay_tx` is the only one Rust gates per-method, so
+  this is a bounded sweep rather than an open class.
 
 - **Every password rotation on Windows failed, and the crate that owns the
   defect was tested on no Windows machine anywhere.** `rotate_password`
