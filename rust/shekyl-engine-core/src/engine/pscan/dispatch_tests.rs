@@ -732,6 +732,56 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
     );
 }
 
+/// **The retire's premise, pinned at every writer that could falsify it.**
+///
+/// `remove_settled` reads "every gindex this record reserved has left the live
+/// funding set" as proof that THIS record's transaction confirmed. That
+/// inference holds only while a given gindex can be reserved by one record at a
+/// time. If two records share an input, either one confirming spends it and
+/// retires BOTH — reopening a gate whose transaction never landed, which is the
+/// one outcome the seal exists to prevent.
+///
+/// Persona dedup does not give that: `push_post` / `push_claim` / `push_drain`
+/// each refuse a second record *for the same persona and kind*, and see nothing
+/// about a cross-kind gindex collision. The pre-assembly `reserved_gindexes`
+/// snapshot does not give it either — it is stale by the time the seal runs.
+/// Only a re-check inside the same locked mutate does.
+///
+/// The drain seam had it; the claim and bond-post seams did not, and were added
+/// in the same round as this retire (review #572) precisely because this
+/// method's safety argument names all three. A source pin rather than a
+/// behavioural test because these seams are engine-wide pipelines: the thing
+/// worth catching is a fourth writer sealing without the guard, and that is a
+/// structural fact.
+#[test]
+fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
+    // Production halves only — a doc-comment mention must not satisfy the pin.
+    for (name, src) in [
+        ("drain_dispatch.rs", include_str!("../drain_dispatch.rs")),
+        ("claim_dispatch.rs", include_str!("../claim_dispatch.rs")),
+        (
+            "bond_orchestrator.rs",
+            include_str!("../bond_orchestrator.rs"),
+        ),
+    ] {
+        let production = src
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .unwrap_or(src);
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("let reserved = block.reserved_gindexes();"),
+            "{name} seals a reservation without re-reading the live union under \
+             the write lock — `remove_settled` then cannot tell which of two \
+             records sharing a gindex actually confirmed"
+        );
+    }
+}
+
 // -- gate 6: terminal rejection --------------------------------------------
 
 /// A terminal verify rejection removes the record (releasing bytes +

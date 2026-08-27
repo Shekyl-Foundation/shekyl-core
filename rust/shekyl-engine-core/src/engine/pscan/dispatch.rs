@@ -676,10 +676,15 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 tip = tip.to_raw(),
                 horizon_blocks = self.config.alarm_horizon_blocks,
                 "reservation STALL: a dispatched {} has not settled past the alarm horizon — \
-                 its inputs are still unspent, so its one-live gate stays shut and this \
-                 persona cannot start another. The record and its reservation are HELD \
-                 (funds-safety over liveness). A terminal rejection looks exactly like this \
-                 until terminal-reject prune lands. Operator action: check daemon \
+                 at least one input it reserved is still live on chain, so its one-live gate \
+                 stays shut and this persona cannot start another. NOTE the reservation may \
+                 be PARTLY spent: settlement requires every reserved input to be gone, and a \
+                 half-gone reservation is held deliberately because the confirming spend \
+                 cannot produce that state — treat it as an anomaly worth looking at, not as \
+                 a wholly unsent transaction. The record and its reservation are HELD \
+                 (funds-safety over liveness). A terminal rejection and an ambiguous submit \
+                 whose bytes never arrived both look exactly like this until terminal-reject \
+                 prune and byte-identical resubmit land. Operator action: check daemon \
                  connectivity / chain health",
                 kind.as_str()
             );

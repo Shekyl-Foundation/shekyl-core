@@ -191,6 +191,14 @@ pub(crate) enum BondAssemblyError {
     #[error("a pending bond post already exists for this persona; one live post per persona")]
     PendingPostExists,
 
+    /// A concurrent same-persona claim or drain reserved one of this post's
+    /// funding inputs between the pre-assembly snapshot and the seal. The
+    /// authoritative re-check under the write lock caught it and refused
+    /// **before** sealing, so no doomed record is left behind. Retry — the next
+    /// assembly reads the now-current reservation set and selects around it.
+    #[error("a concurrent claim or drain reserved one of this post's inputs; retry")]
+    InputRaced,
+
     /// The curve-tree / ledger anchoring procedure could not produce a
     /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
     /// (tree too far behind, ingest missing, ledger hash missing, chain too

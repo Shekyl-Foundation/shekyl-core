@@ -445,6 +445,19 @@ pub(crate) async fn anchored_reference_block(
     })
 }
 
+/// What the one locked bond-post seal pass decided — the drain and claim seams'
+/// outcome shape, so all three refuse for the same reasons under the same lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostSealOutcome {
+    /// The post record was sealed.
+    Sealed,
+    /// A live post already exists for this persona (persona dedup).
+    PersonaLive,
+    /// A concurrent claim or drain reserved one of this post's funding inputs
+    /// since the pre-assembly snapshot; nothing was sealed.
+    InputRaced,
+}
+
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -637,15 +650,49 @@ where
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let outcome = store
             .mutate(|block| {
+                // Seal-time reservation re-check under the write lock — the
+                // drain seam's guard, which this path was missing. The
+                // `reserved` snapshot read before assembly is stale: a
+                // same-persona claim or drain assembled concurrently may have
+                // reserved one of these funding inputs since, and `push_post`'s
+                // persona dedup does not see a cross-kind gindex collision.
+                //
+                // It matters beyond the doomed record it avoids.
+                // `PendingPostBlock::remove_settled` retires a claim or drain
+                // when the inputs it reserved leave the live funding set, and
+                // reads that absence as proof THAT record's transaction
+                // confirmed. The inference holds only while one record can
+                // reserve a given gindex: if a post and a drain share an input,
+                // the post confirming spends it and retires the drain too —
+                // reopening a lane whose transaction never landed. This post is
+                // not itself retired that way (its evidence is the pscan's own
+                // bond-post match), but it can falsify someone else's, so the
+                // guard belongs here as much as on the paths it protects.
+                let raced = {
+                    let reserved = block.reserved_gindexes();
+                    sealed.funding_gindexes.iter().any(|g| reserved.contains(g))
+                };
+                if raced {
+                    return (false, PostSealOutcome::InputRaced);
+                }
                 let ok = block.push_post(sealed);
-                (ok, ok)
+                (
+                    ok,
+                    if ok {
+                        PostSealOutcome::Sealed
+                    } else {
+                        PostSealOutcome::PersonaLive
+                    },
+                )
             })
             .await
             .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
-        if !pushed {
-            return Err(BondAssemblyError::PendingPostExists.into());
+        match outcome {
+            PostSealOutcome::Sealed => {}
+            PostSealOutcome::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
+            PostSealOutcome::InputRaced => return Err(BondAssemblyError::InputRaced.into()),
         }
 
         Ok(assembled)

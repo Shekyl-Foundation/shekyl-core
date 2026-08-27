@@ -131,6 +131,15 @@ pub(crate) enum EmissionClaimRequestError {
         "a pending emission claim already exists for this persona; one live claim per persona"
     )]
     ClaimPending,
+    /// A concurrent same-persona bond post or drain reserved one of this
+    /// claim's fee inputs between the pre-assembly snapshot and the seal. The
+    /// optimistic `reserved` snapshot is stale under concurrency; the
+    /// authoritative re-check under the write lock caught the collision and
+    /// refused **before** sealing, so no doomed record is left behind. Retry —
+    /// the next assembly reads the now-current reservation set and selects
+    /// around the reserved input.
+    #[error("a concurrent post reserved one of this claim's fee inputs; retry")]
+    InputRaced,
     /// The claim pipeline refused (fetch, anchor, designation, sweep, path
     /// assembly, or the actor's assembly itself).
     #[error(transparent)]
@@ -150,6 +159,20 @@ impl EmissionClaimRequestError {
             detail: detail.to_string(),
         }
     }
+}
+
+/// What the one locked seal pass decided — the drain seam's
+/// [`DrainSealOutcome`](super::drain_dispatch) shape, so the two paths refuse
+/// for the same reasons under the same lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimSealOutcome {
+    /// The claim record was sealed and transitioned to `Dispatched`.
+    Sealed,
+    /// A live claim already exists for this persona (persona dedup).
+    PersonaLive,
+    /// A concurrent post reserved one of this claim's fee inputs since the
+    /// pre-assembly snapshot; nothing was sealed.
+    InputRaced,
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as assemble_bond_post
@@ -287,18 +310,51 @@ where
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let outcome = store
             .mutate(move |block| {
+                // Seal-time reservation re-check under the write lock — the
+                // drain seam's guard, which this path was missing. The
+                // `reserved` snapshot read before proof assembly is stale: a
+                // same-persona bond post or drain assembled concurrently may
+                // have reserved one of these fee inputs since, and
+                // `push_claim`'s persona dedup does not see a cross-kind gindex
+                // collision.
+                //
+                // It matters more than the doomed record it avoids. The
+                // confirmation retire in `PendingPostBlock::remove_settled`
+                // reads absence-from-the-live-funding-set as proof that THIS
+                // record's transaction confirmed, and that inference holds only
+                // while one record can reserve a given gindex. Two records
+                // sharing one input make either's confirmation retire both —
+                // reopening a gate whose transaction never landed. So this
+                // check is part of that retire's premise, not just local
+                // hygiene.
+                let raced = {
+                    let reserved = block.reserved_gindexes();
+                    sealed.fee_gindexes.iter().any(|g| reserved.contains(g))
+                };
+                if raced {
+                    return (false, ClaimSealOutcome::InputRaced);
+                }
                 let ok = block.push_claim(sealed)
                     && block
                         .mark_claim_dispatched(&persona, dispatch_tip)
                         .is_some();
-                (ok, ok)
+                (
+                    ok,
+                    if ok {
+                        ClaimSealOutcome::Sealed
+                    } else {
+                        ClaimSealOutcome::PersonaLive
+                    },
+                )
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
-        if !pushed {
-            return Err(EmissionClaimRequestError::ClaimPending);
+        match outcome {
+            ClaimSealOutcome::Sealed => {}
+            ClaimSealOutcome::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
+            ClaimSealOutcome::InputRaced => return Err(EmissionClaimRequestError::InputRaced),
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited

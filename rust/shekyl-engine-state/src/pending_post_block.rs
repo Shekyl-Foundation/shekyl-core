@@ -572,13 +572,28 @@ impl PendingPostBlock {
     /// so once every reserved gindex has left the accrual's live funding set,
     /// the transaction that spent them confirmed.
     ///
-    /// That inference is sound only because the reservation makes the record the
-    /// *sole* possible spender inside this wallet: `push_claim` / `push_drain`
-    /// admit one live record per persona, the seam re-checks the live union for
-    /// a cross-kind gindex collision before sealing, and pin P-2 means a retry
-    /// re-sends the same bytes rather than building a competing transaction. No
-    /// path outside the wallet can spend `P`'s outputs at all. So "these inputs
-    /// are gone" and "this record's transaction confirmed" are the same fact.
+    /// That inference is sound only while the reservation makes the record the
+    /// *sole* possible spender inside this wallet. Three things together give
+    /// that, and the first draft of this doc asserted the second when it was
+    /// only two-thirds true:
+    ///
+    /// 1. `push_post` / `push_claim` / `push_drain` admit one live record per
+    ///    persona **per kind** — which says nothing about a cross-kind gindex
+    ///    collision, so it is not sufficient on its own.
+    /// 2. Every writer re-reads the live union **inside its own seal mutate**
+    ///    and refuses on overlap. The drain seam did this; the claim and
+    ///    bond-post seams did not until review #572 added it, so two records
+    ///    could reserve one gindex and either confirming would retire both.
+    ///    `every_reservation_writer_rechecks_the_union_under_the_seal_lock`
+    ///    pins all three, and names the file when a fourth writer forgets.
+    /// 3. Pin P-2: a retry re-sends the same bytes rather than building a
+    ///    competing transaction. Nothing outside the wallet can spend `P`'s
+    ///    outputs at all.
+    ///
+    /// With all three, "these inputs are gone" and "this record's transaction
+    /// confirmed" are the same fact. Without (2) they are not, which is why the
+    /// guard is part of this method's contract rather than local hygiene at the
+    /// seams.
     ///
     /// **An empty reservation is never settled.** A record holding no gindexes
     /// would satisfy "all of them are gone" vacuously and retire the instant it

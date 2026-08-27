@@ -80,5 +80,8 @@ driver resubmits bond posts only). Either way the inputs are never
 spent, so the drain never settles and the lane stays shut until
 terminal-reject prune and byte-identical resubmit land (named FOLLOWUPS
 items). A stall alarm names such a drain in the operator log rather than
-leaving it silent — so the wait is visible, not indefinite. See `docs/FOLLOWUPS.md`, and
+leaving it silent. That makes the wait **visible, not finite**: the driver
+holds the record deliberately and nothing in the wallet clears it, so an
+operator who sees this alarm should not sit waiting for a confirmation
+that is not coming. See `docs/FOLLOWUPS.md`, and
 `docs/design/WALLET_SEND_RECORD.md` for the send-journal design round.
