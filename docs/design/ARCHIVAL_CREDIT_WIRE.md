@@ -79,6 +79,28 @@ parameterisation, the fire schedule, and the path opening all go away
 (item 1 of the TJ round already ruled the read is a bulk read with no viable
 leaf parameterisation).
 
+> **This deletion surface was challenged and is CONFIRMED CORRECT as written
+> (2026-08-26).** Between 2026-08-21 and 2026-08-26, `RF-D8` ruling (i) kept
+> the sampled-leaf opening as supplementary evidence, and `path.rs` recorded
+> `challenge_leaf_index` as coming *off* this list — so a reader had two
+> documents disagreeing, with this one apparently stale. **`RF-D8` (i) is
+> retracted and this list stands**: `challenge_leaf_index`,
+> `SegmentPathOpening`, `verify_segment_path` and the leaf-chunk marshalling
+> all delete. The argument is at `ARCHIVAL_RESPONSE_FORMAT.md` (grep
+> `RF-D8` (i)); in one line, `P` cannot countersign a preimage that names the
+> challenged leaf without learning which request is the challenge, which
+> defeats §9's *"the test IS a read"*.
+>
+> Recorded here rather than only at the ruling because **this is a deletion
+> surface — an instruction to remove code — and its two failure directions are
+> not symmetric.** Acting on a deletion list that is wrongly current removes
+> live consensus code; ignoring one that is wrongly stale merely leaves dead
+> code standing. So while the conflict was open, a reader had no safe default,
+> and the status has to be unambiguous *at the list itself*, not only at the
+> ruling that governs it. §9.5.1's *"restores the per-challenge binding"*
+> refers to pinning responses to their **assignment blocks**, not to a leaf
+> index — it is not evidence that the index survives.
+
 ---
 
 ## 3. THE GATING DECISION — record format + field residence
@@ -468,6 +490,25 @@ headers double-writes the bit. So:
 2. **Confirm settlement writes bits correctly across a full epoch** — gated by
    the equivalence KAT (below).
 3. **Reject the old vin at admission and delete its validation surface** (Half B).
+
+> **PRE-GENESIS COLLAPSE (2026-08-26): steps 1 and 2 do not apply, and this
+> section is retained for the reasoning rather than the choreography.** The
+> three-step exists to keep a **running chain** from having a credit gap:
+> "strands every archiver at zero credit" and "a block carrying both"
+> presuppose live archivers and a live chain. There are none — no genesis, no
+> viable testnet, nothing released. So there is no gap to bridge and no
+> double-write window to avoid: **Half A and Half B are one PR.** The
+> suppression state in step 1 is compatibility machinery between two versions
+> of our own unreleased code, and step 2's confirm-across-an-epoch is gated on
+> `CW-4`, which is struck (below). No backport obligation exists, because
+> there is no prior behaviour anyone can hold us to.
+>
+> What does **not** dissolve with it: the wire is **genesis-frozen**, so the
+> bytes must be right the first time; and the `FOLLOWUPS` precondition
+> *"signature leg behind PoW"* must be **true when we ship** — it is a DoS
+> property of the shipped code (free asymmetric verification work with no PoW
+> spent), not a migration concern. "True at ship" and "atomic with a cutover"
+> are different obligations, and only the first is real here.
 
 **The equivalence KAT gates step 2.** It must demonstrate that for the same
 challenge outcome, old-path (vin writes the bit at add) and new-path (settlement

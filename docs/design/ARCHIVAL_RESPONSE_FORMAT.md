@@ -885,6 +885,79 @@ So:
 the rename costs nothing additional — and paying it *without* fixing the name
 would be spending the change and keeping the defect.
 
+### `RF-D8` (i) — **RETRACTED 2026-08-26: the opening is incompatible with the mechanism, and the argument is structural**
+
+`RF-D8` kept `c1_layers`/`c2_layers` (and with them `leaf_bytes`) as
+**supplementary consensus-checkable evidence** — the reasoning is stated at
+length in the `path.rs` header: every other element of a pass record depends on
+witness honesty, and the opening is *"the one element consensus verifies
+independently of the witness."* **That ruling is retracted. The opening goes.**
+
+**Why this kept flipping, recorded because the oscillation is the defect.**
+Both previous passes argued the same axis — *how much does the opening prove?* —
+and that question has a genuinely balanced answer: **a little, weakly.** It
+raises the floor from "`P` may hold nothing" to "`P` must hold one leaf and its
+path," it is cheaply outsourced, and it costs ~1,920 B. Weighing a small
+non-zero benefit against a small cost tips either way depending on the weighing,
+which is exactly why two passes reached opposite conclusions. **The axis was
+wrong, not the arithmetic.**
+
+**The decisive question is not evidential but structural: can `P` produce the
+opening without learning something it must not know?** It cannot. The
+countersignature preimage is
+
+```text
+segment_subroot_rk ‖ leaf_index_in_segment ‖ leaf_bytes ‖ encode_path(path)
+```
+
+so to sign it, `P` must be **told which leaf is challenged**. `P` therefore
+knows that *this* request is a challenge and every other request is not — the
+precise state [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9 (ruled 2026-07-29, *"the test IS a read"*) exists to prevent, because a `P`
+that can distinguish tests from reads fast-paths the tests and lets real reads
+rot. The nonce design gives indistinguishability **by construction** — `P`
+countersigns every request over an opaque 32 bytes. The opening destroys it,
+because its preimage is not opaque: it names a leaf.
+
+**The rescue branch is closed too.** Letting the *witness* compute the opening
+and carry it unsigned would keep `P` ignorant — and buys nothing, because a
+witness that received the shard proves possession **completely** by recomputing
+`R_k` over the received bytes. An opening it computes itself is a fragment of a
+check it already performed in full. So both branches collapse: `P`-signed breaks
+§9; witness-computed is redundant. There is no third position.
+
+**What the retracted reasoning got wrong, precisely.** The `path.rs` header
+concedes that sampled-leaf is insufficient as a *standalone* mechanism and then
+says that finding *"says nothing against an opening carried additively on top."*
+It does. The addition is not free: it leaks the challenge. "Additive" was true
+of the **bytes** and false of the **information**.
+
+**Consequences.** The pass record becomes pure attestation —
+`p_canonical_id`, `shard_id`, `settlement_epoch`, Ed25519 kept, ML-DSA pruned.
+`ArchivalServeCreditPruned` loses `path`; `leaf_bytes` goes; `verify_segment_path`
+and `challenge_leaf_index` go. The record drops **~5,331 B → ~3,411 B**.
+
+The cluster spans more than the one module — `challenge_leaf_index` (`challenge`),
+`challenge_leaf_chunk_bounds` / `challenged_leaf_offset_in_chunk`
+(`segment_freeze`), `challenged_leaf_bytes` (`path`), and the
+`leaf_layer_scalars` marshalling through the FFI to its `blockchain.cpp` call
+site. Verified 2026-08-26 that `leaf_layer_scalars` is confined to that path
+(no segment-freeze or curve-tree consumer shares it), so it deletes cleanly.
+**Two CI count pins move in the same change or the gate goes red:** the live
+`shekyl/archival-serve-challenge-leaf-v2` row and the test-only retired `-v1`
+row both retire, taking `MECH1` from 43 to 41 and `TEST_ONLY_EXPECTED` from 8
+to 7.
+Nothing is lost that the design claimed to have: service evidence is
+**statistical rather than forensic** by §9.4's ruled posture, and the retracted
+ruling was reaching for a forensic property the mechanism had already ruled out.
+
+**This also settles a question two rounds treated as open.**
+[`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §2's deletion surface —
+which lists `challenge_leaf_index`, `SegmentPathOpening` and `verify_segment_path`
+— is **correct as written**, not stale. §9.5.1's *"restores the per-challenge
+binding"* refers to pinning responses to their **assignment blocks**, not to a
+leaf index. The deletion itself lands with the cutover, not here.
+
 ### `RF-D9` — FOUND 2026-08-20 while building `A`: the serve-credit tx cannot be serialized by the C++ oracle
 
 **Measured, not read.** The tripwire's new serve-credit arm failed on its first
