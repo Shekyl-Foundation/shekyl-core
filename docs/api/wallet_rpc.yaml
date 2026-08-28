@@ -797,18 +797,38 @@ components:
                                           exists for this persona (one live
                                           drain per persona — the sealed
                                           record IS the in-flight input
-                                          reservation). The seal is released
-                                          by the drain lifecycle driver
-                                          (confirmation retire /
-                                          terminal-reject prune), which is
-                                          NOT yet wired (FOLLOWUPS "Drain
-                                          dispatch driver", target V3.0
-                                          pre-genesis) — until it lands this
-                                          refusal persists across sessions,
-                                          including after the first drain
-                                          confirms. Also the refusal when a
-                                          concurrent same-persona post raced
-                                          this drain's inputs — that arm is
+                                          reservation). The SUCCESS path now
+                                          releases the seal: once the drain's
+                                          reserved inputs have left the wallet's
+                                          live funding set — its own verified
+                                          scan, at the reorg depth every other
+                                          confirmation uses — the record and its
+                                          reservation are released in one seal
+                                          and this lane reopens.
+                                          Two failure routes still hold this
+                                          refusal, and neither is wired: a
+                                          TERMINAL REJECTION, and an AMBIGUOUS
+                                          SUBMIT — the drain is sealed before a
+                                          single submit and a transport error
+                                          deliberately keeps the record, because
+                                          the bytes may already have reached the
+                                          network. If they did not, nothing
+                                          resubmits them (the driver resubmits
+                                          bond posts only), so the inputs stay
+                                          live and this refusal persists exactly
+                                          as in the terminal case. Both legs are
+                                          FOLLOWUPS "Drain/claim dispatch
+                                          driver", target V3.0 pre-genesis. A
+                                          stall alarm names such a drain in the
+                                          log rather than leaving it silent.
+                                          Also the refusal when this drain's
+                                          inputs stopped being current between
+                                          snapshot and seal — either another
+                                          live record (a bond post or an
+                                          emission claim, of ANY persona) now
+                                          reserves one, or a reservation was
+                                          released mid-assembly. Nothing is
+                                          sealed either way; that arm is
                                           transient; retry. The two arms
                                           share the code but carry a
                                           structured discriminant:

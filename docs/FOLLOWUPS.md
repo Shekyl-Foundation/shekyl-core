@@ -2198,8 +2198,16 @@ sustainability is unaffected by the recalibration.
   **Target: V3.1 (decision; delete this row as "won't fix" if no consumer
   by then).**
 
-- **Drain dispatch driver — confirmation-observe / terminal-reject prune /
-  byte-identical resubmit** (added 2026-07-21; DS-PR-2 / F-D2 drain-send).
+- **Drain/claim dispatch driver — terminal-reject prune + byte-identical
+  resubmit** (added 2026-07-21 as "confirmation-observe / terminal-reject prune
+  / byte-identical resubmit"; **confirmation-observe LANDED 2026-08-27 and the
+  title is narrowed at source to what is left** — a gate that says it is open
+  when half of it closed is the same expensive direction as one that says it is
+  open when it is not. **Corrected the same day (review #572): the first
+  narrowing dropped `byte-identical resubmit` too, which is NOT closed** —
+  `select_dispatch_candidate` selects from `block.posts()` alone, so no claim or
+  drain is ever resubmitted. Over-narrowing a title is the same defect class as
+  leaving it stale, in the other direction). DS-PR-2 / F-D2 drain-send.
   DS-PR-2 landed the `submit_drain` dispatch seam with persist-`PendingDrain`-
   before-dispatch and one-live-drain-per-persona semantics
   (`engine/drain_dispatch.rs`), but the **driver** that later observes the
@@ -2228,6 +2236,78 @@ sustainability is unaffected by the recalibration.
   (plan pin: "this PR does not re-implement that driver"). The entry's
   urgency changed, not its shape. **Target: V3.0 pre-genesis (now
   user-reachable — schedule with the next WI-3 slice).**
+
+  **LANDED 2026-08-27 — the confirmation-observe half, for claims AND drains.**
+  `PendingPostBlock::remove_settled` retires a claim or drain once every funding
+  gindex it reserved has left the accrual's live funding set, called from WI-3's
+  existing `on_tick` inside the same locked mutate (R2-2/R2-4: retire and seal
+  are one write). The evidence is the accrual's own verified scan at the reorg
+  depth the bond post's confirmation already uses — deliberately **not**
+  `confirmed_join_market_personas`, which is filtered to the JoinMarket post kind
+  and would retire a live drain because that persona's *bond post* confirmed.
+  **The claim leak was the worse of the two and was found while scoping this:**
+  `remove_claim` had callers only under `cfg(test)`, so nothing released
+  `has_live_claim_for` — a persona silently stopped claiming forever, with no
+  user action to correlate the silence against. Both are closed.
+
+  **What is left is the failure path, and it has TWO entrances — not one.**
+  Both end in the same place: a record whose inputs are never spent, so it never
+  settles and holds its one-live gate shut.
+
+  1. **Terminal rejection.** The daemon rejects the transaction definitively.
+     Prune is unwired.
+  2. **Ambiguous submit.** `submit_drain` / `submit_emission_claim` seal before a
+     *single* submit and, on a transport error, deliberately leave the sealed
+     record live because the bytes may already have reached the network — both
+     seams say so in the same words, naming "the driver's byte-identical
+     resubmit / terminal-reject retire" as the owner. If the bytes did **not**
+     arrive, nothing ever resubmits them: the driver's
+     `select_dispatch_candidate` reads `block.posts()` only. This entrance was
+     missing from the first version of this note and is arguably the likelier of
+     the two.
+
+  A **stall alarm** now names such a record in the operator log past the alarm
+  horizon — the record is HELD, matching the bond post's
+  funds-safety-over-liveness posture — which turns a silent permanent seal into
+  a loud one without clearing it. Both remaining legs need the driver to hold a
+  broadcast handle (to resubmit, and to read a verdict), which is a different
+  surface from releasing a seal on observed confirmation and is why they are
+  split rather than bundled. **Target: V3.0 pre-genesis.**
+
+- **Q11 zero-fee-input emission claim: no settlement evidence** (added
+  2026-08-27, surfaced while building the confirmation-observe driver). A claim
+  retires when its reserved fee gindexes leave the live funding set. The
+  destitute-corner claim Q11 admits pays its fee out of the mint and reserves
+  **zero** gindexes, so there is nothing to observe leaving. `remove_settled`
+  excludes the empty case explicitly, because `[].all(..)` is `true`: without
+  that term such a claim would retire the instant it was sealed — before its
+  bytes reached the network — releasing the gate that stops a second claim racing
+  the first. Fail-closed is right (a held seal refuses a second claim; a wrongly
+  released one lets two race), but it leaves that claim's seal permanently held.
+  **Named blocker:** the accrual has no emission-claim match set — it accumulates
+  `bond_post_matches` and `funding_outputs` only, so there is no direct on-chain
+  observation of a claim to retire against. **Reopen when** a claim-match
+  observation exists (natural home: the pscan scan-step, which already recognizes
+  emission vins for lineage), or when the destitute corner is reached in
+  practice. **Target: V3.0 pre-genesis.**
+
+- **Enumerate the greenfield "pending set" — items whose only callers are
+  tests** (added 2026-08-27). In a ported codebase a zero-caller function is dead
+  code; in greenfield it is usually *pending* code, and no lint tells them apart.
+  `remove_claim` and `remove_drain` slipped past a dead-code sweep for a sharper
+  reason than a missing marker: they **had** callers, all inside `#[cfg(test)]`,
+  so `dead_code` never fired. The test is written in the same motion as the
+  function while the production caller is a later slice, which makes this the
+  default shape of new code rather than an edge case. The instrument is a delta:
+  a **lib-only** build (`cargo clippy -p <crate>`, no `--all-targets`) does not
+  compile `cfg(test)` modules, so an item called only by tests is dead there and
+  live under `--all-targets`. That difference *is* the pending set, enumerated by
+  the compiler instead of by reading. Two things to settle first: genuinely
+  exported `pub` API will also surface (probable rule — a crate's public surface
+  is exempt, `pub(crate)` and private are not), and it is a new gate, so it needs
+  the treatment: strip a marker, confirm it goes red. It changes the review
+  question from "does this have a caller" to "is this in the pending set, and
+  does it say why". **Target: V3.0 pre-genesis.**
 
 - **GF-7 `stake_in` change-co-presence residual — shipped with a warning,
   not closed** (added 2026-08-26; WI-RPC-5,
@@ -7964,9 +8044,15 @@ sustainability is unaffected by the recalibration.
   named claim-driver slice"; sharpened 2026-07-19 by the PR-4c A5c pop
   leg). `PendingEmissionClaim` seals persist-before-dispatch with a
   one-live-claim-per-persona rule; `remove_claim` ("confirmation
-  retire, or terminal-reject prune", `pending_post_block.rs`) exists
-  with **zero engine callers** — nothing retires a confirmed claim and
-  nothing resubmits a stranded one. The A5c leg pins the daemon-side
+  retire, or terminal-reject prune", `pending_post_block.rs`) had
+  **zero engine callers** — nothing retired a confirmed claim and
+  nothing resubmitted a stranded one. **Half corrected 2026-08-27
+  (PR #572): a CONFIRMED claim is now retired**, against its fee
+  reservation leaving the live funding set, from WI-3's `on_tick`.
+  Resubmit of a stranded claim is still absent, and so is
+  terminal-reject prune — the sentence above is left in the past tense
+  rather than deleted, because the resubmit half of its claim is still
+  true and the reopening trigger below still binds for that half. The A5c leg pins the daemon-side
   half live (deep pop through the claim's reference: the chain
   re-converges, the epoch re-closes byte-identically, the stranded
   claim never re-applies) and ends where the wallet-side gap begins:
