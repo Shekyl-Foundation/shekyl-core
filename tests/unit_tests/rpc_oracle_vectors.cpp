@@ -54,8 +54,7 @@
 //   pruned          OPT false          -> omitted unless the tx is pruned
 //   prune, split    OPT false (request)-> omitted at their defaults
 //   every sequence  empty              -> omitted, not `[]` — txs,
-//                                         missed_tx, txs_as_hex,
-//                                         txs_as_json, output_indices,
+//                                         missed_tx, output_indices,
 //                                         spent_status
 //
 // `as_hex` / `pruned_as_hex` / `prunable_as_hex` / `as_json` are plain
@@ -169,7 +168,7 @@ TEST(rpc_oracle_vectors, get_transactions_request_defaults_v1)
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::request_t&>(req)));
 }
 
-TEST(rpc_oracle_vectors, get_transactions_chain_and_pool_v1)
+TEST(rpc_oracle_vectors, get_transactions_chain_and_pool_v2)
 {
   // The vector this capture exists for: a mined transaction and a pool one
   // in the same response, so the two disjoint field sets of `entry` appear
@@ -208,13 +207,12 @@ TEST(rpc_oracle_vectors, get_transactions_chain_and_pool_v1)
   pooled.block_timestamp = 4242;    // must NOT reach the wire
   pooled.output_indices = {1, 2};   // must NOT reach the wire
 
-  res.txs_as_hex = {mined.as_hex, pooled.as_hex};
   res.status = CORE_RPC_STATUS_OK;
-  pin("get_transactions_chain_and_pool_v1.json",
+  pin("get_transactions_chain_and_pool_v2.json",
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response_t&>(res)));
 }
 
-TEST(rpc_oracle_vectors, get_transactions_split_form_v1)
+TEST(rpc_oracle_vectors, get_transactions_split_form_v2)
 {
   // What a `split` or `prune` request gets back: as_hex stays empty and the
   // two halves carry the transaction. `pruned` is OPT and set here, so this
@@ -234,13 +232,12 @@ TEST(rpc_oracle_vectors, get_transactions_split_form_v1)
   e.block_timestamp = 1750000001;
   // output_indices left empty: an empty sequence inside the !in_pool arm,
   // which is dropped like every other empty sequence.
-  res.txs_as_hex = {""};
   res.status = CORE_RPC_STATUS_OK;
-  pin("get_transactions_split_form_v1.json",
+  pin("get_transactions_split_form_v2.json",
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response_t&>(res)));
 }
 
-TEST(rpc_oracle_vectors, get_transactions_decoded_v1)
+TEST(rpc_oracle_vectors, get_transactions_decoded_v2)
 {
   // decode_as_json=true fills as_json with an epee rendering of the
   // transaction (RK-D11 keeps that rendering; see §5). The pin here is that
@@ -259,32 +256,30 @@ TEST(rpc_oracle_vectors, get_transactions_decoded_v1)
   e.confirmations = 3;
   e.block_timestamp = 1750000007;
   e.output_indices = {0};
-  res.txs_as_hex = {e.as_hex};
-  res.txs_as_json = {e.as_json};
   res.status = CORE_RPC_STATUS_OK;
-  pin("get_transactions_decoded_v1.json",
+  pin("get_transactions_decoded_v2.json",
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response_t&>(res)));
 }
 
-TEST(rpc_oracle_vectors, get_transactions_missed_v1)
+TEST(rpc_oracle_vectors, get_transactions_missed_v2)
 {
   // Nothing found: `missed_tx` carries the hashes and `txs` — an empty
   // sequence — is omitted rather than emitted as `[]`.
   cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response res{};
   res.missed_tx = {tagged_hex(51), tagged_hex(52)};
   res.status = CORE_RPC_STATUS_OK;
-  pin("get_transactions_missed_v1.json",
+  pin("get_transactions_missed_v2.json",
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response_t&>(res)));
 }
 
-TEST(rpc_oracle_vectors, get_transactions_refusal_v1)
+TEST(rpc_oracle_vectors, get_transactions_refusal_v2)
 {
   // A refusal is a 200 with `status` carrying the reason and every sequence
   // empty, so the whole body is one member. This is the shape the restricted
   // cap would have produced had it ever fired (§7, 2026-08-26).
   cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response res{};
   res.status = "Too many transactions requested in restricted mode";
-  pin("get_transactions_refusal_v1.json",
+  pin("get_transactions_refusal_v2.json",
     emit(static_cast<cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response_t&>(res)));
 }
 

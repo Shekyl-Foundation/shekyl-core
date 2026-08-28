@@ -540,11 +540,6 @@ namespace cryptonote
       e.pruned = e.in_pool ? false
           : !m_core.get_blockchain_storage().get_db().tx_has_verification_data(tx_hash);
 
-      // fill up old style responses too, in case an old wallet asks
-      res.txs_as_hex.push_back(e.as_hex);
-      if (req.decode_as_json)
-        res.txs_as_json.push_back(e.as_json);
-
       // output indices too if not in pool
       if (pool_tx_hashes.find(tx_hash) == pool_tx_hashes.end())
       {

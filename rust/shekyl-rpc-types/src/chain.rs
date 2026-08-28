@@ -25,7 +25,11 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.24: `/get_transaction_pool_hashes.bin`
+/// `CORE_RPC_VERSION_MINOR`. 3.25: `get_transactions` drops `txs_as_hex` and
+/// `txs_as_json` — the handler filled them "in case an old wallet asks" and
+/// the old wallet is `src/wallet/`, deleted, so they duplicated
+/// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
+/// A removed member is a wire change, so it bumps this. 3.24: `/get_transaction_pool_hashes.bin`
 /// retired — the `.bin` sibling of a route that is called, with no caller of
 /// its own; found by `ci/rpc-route-liveness` on its first run and disposed of
 /// on the predicate RK-4x already ruled. 3.23: `/get_blocks.bin` (+ `/getblocks.bin`) and
@@ -36,7 +40,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 24;
+pub const CORE_RPC_VERSION_MINOR: u32 = 25;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -289,9 +293,13 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 24) == 0x0003_0018 == 196632, the value the
-        // captured get_version vectors carry.
-        assert_eq!(CORE_RPC_VERSION, 196_632);
+        // MAKE_CORE_RPC_VERSION(3, 25) == 0x0003_0019 == 196633. The captured
+        // get_version vectors carry 196632 (3.24), which is what they emitted
+        // before RK-4c removed `txs_as_hex` / `txs_as_json`; a vector is not
+        // edited to follow a constant, so `assert_version_parity` compares
+        // every other field against them and this pins the constant itself.
+        assert_eq!(CORE_RPC_VERSION, 196_633);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 25);
     }
 
     #[test]

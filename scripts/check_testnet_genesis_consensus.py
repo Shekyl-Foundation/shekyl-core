@@ -32,14 +32,23 @@ def get_genesis_tuple(base_url: str):
     header = rpc_call(base_url, "get_block_header_by_height", {"height": 0})
     block_header = header.get("block_header", {})
     txs = rpc_call(base_url, "get_transactions", {"txs_hashes": [block_header.get("miner_tx_hash")]})
-    if not txs.get("txs_as_hex"):
+    entries = txs.get("txs") or []
+    if not entries:
         raise RuntimeError(f"{base_url}: could not fetch genesis miner tx hex")
+    # `txs[0].as_hex`, not the retired `txs_as_hex[0]`: the latter duplicated
+    # this for a wallet that no longer exists and was removed in RK-4c. The
+    # genesis coinbase has no prunable half, so the daemon answers in the split
+    # form and the body arrives under `pruned_as_hex`.
+    entry = entries[0]
+    tx_hex = entry.get("as_hex") or entry.get("pruned_as_hex")
+    if not tx_hex:
+        raise RuntimeError(f"{base_url}: genesis miner tx carried no body")
     return {
         "url": base_url,
         "height0_hash": block_header.get("hash"),
         "height0_miner_tx_hash": block_header.get("miner_tx_hash"),
         "height0_reward": block_header.get("reward"),
-        "height0_tx_hex": txs["txs_as_hex"][0],
+        "height0_tx_hex": tx_hex,
     }
 
 

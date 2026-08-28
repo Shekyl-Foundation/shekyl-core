@@ -265,21 +265,16 @@ impl From<TxEntry> for RawTxEntry {
 /// Every sequence here is dropped from the document when empty — epee omits
 /// an empty sequence rather than emitting `[]`, and that is true of plain
 /// `KV_SERIALIZE` members too, not only OPT ones.
+///
+/// `txs_as_hex` and `txs_as_json` are **gone** (rule 60). The C++ filled them
+/// "in case an old wallet asks", and the old wallet is `src/wallet/`, deleted
+/// — so they duplicated `txs[i].as_hex` / `.as_json` for a reader that does
+/// not exist. The `_v2` oracle vectors are the shape without them, captured
+/// from the edited C++ struct rather than written by hand, and `_v1` stays
+/// beside them so the deletion itself is checkable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTransactionsResponse {
     pub status: crate::chain::RpcStatus,
-    /// The pre-`txs` rendering: `as_hex` of every entry, in the same order.
-    ///
-    /// The C++ handler filled it "in case an old wallet asks" and the old
-    /// wallet is `src/wallet/`, deleted. It is carried here only so this
-    /// slice's parity is proved against the oracle before the shape changes;
-    /// it is deleted later in the slice, in its own commit with its own
-    /// vector (§5, rule 60).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub txs_as_hex: Vec<String>,
-    /// The same, for `as_json`, and dying with it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub txs_as_json: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub txs: Vec<TxEntry>,
     /// Hashes the daemon could find neither on the chain nor in the pool.
@@ -515,8 +510,6 @@ mod tests {
     fn empty_response_is_only_its_status() {
         let res = GetTransactionsResponse {
             status: crate::chain::RpcStatus::ok(),
-            txs_as_hex: Vec::new(),
-            txs_as_json: Vec::new(),
             txs: Vec::new(),
             missed_tx: Vec::new(),
         };

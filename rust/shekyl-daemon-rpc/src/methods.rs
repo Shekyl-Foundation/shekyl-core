@@ -497,8 +497,6 @@ where
 {
     let mut txs = Vec::new();
     let mut missed = Vec::new();
-    let mut txs_as_hex = Vec::new();
-    let mut txs_as_json = Vec::new();
 
     for (id, slot) in ids.iter().zip(slots.iter()) {
         let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
@@ -595,19 +593,11 @@ where
             }
         }
 
-        // The pre-`txs` rendering, filled from the same loop the C++ filled it
-        // from. Deleted later in this slice under rule 60.
-        txs_as_hex.push(entry.as_hex.clone());
-        if request.decode_as_json {
-            txs_as_json.push(entry.as_json.clone());
-        }
         txs.push(entry);
     }
 
     GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs_as_hex,
-        txs_as_json,
         txs,
         missed_tx: missed,
     }

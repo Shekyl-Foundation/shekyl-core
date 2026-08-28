@@ -72,6 +72,44 @@ fn parsed(json: &str) -> Value {
     serde_json::from_str(json).expect("vector / output is JSON")
 }
 
+/// Parity for `get_version`, whose `version` field is the one value a vector
+/// cannot track.
+///
+/// `CORE_RPC_VERSION` moves whenever a wire shape changes — RK-4c's removal of
+/// `txs_as_hex` / `txs_as_json` took it to 3.25 — while these vectors are
+/// epee's output from RK-1, and the emitter that produced them was deleted
+/// with `get_version`'s C++ handler. A vector is never hand-edited, so the
+/// moving field is named here instead: everything else is compared against the
+/// oracle byte-for-byte, and `version` is asserted against the constant
+/// directly. Silently normalising both sides would have hidden a wrong
+/// constant; asserting it is what keeps the bump deliberate.
+fn assert_version_parity(vector: &str, built: &GetVersionResponse) {
+    assert_eq!(
+        built.version, CORE_RPC_VERSION,
+        "the built reply must carry the current constant"
+    );
+    let mut ours = parsed(&serde_json::to_string(built).expect("serialize"));
+    let mut theirs = parsed(vector);
+    let historical = theirs
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .expect("the oracle vector carries a version");
+    assert!(
+        u64::from(CORE_RPC_VERSION) >= historical,
+        "CORE_RPC_VERSION must never go backwards: {CORE_RPC_VERSION} < {historical}"
+    );
+    ours.as_object_mut().expect("object").remove("version");
+    theirs.as_object_mut().expect("object").remove("version");
+    assert_eq!(
+        ours, theirs,
+        "every field but `version` must still match the epee oracle"
+    );
+    let back: GetVersionResponse =
+        serde_json::from_str(vector).expect("the oracle vector deserializes");
+    assert_eq!(back.hard_forks, built.hard_forks);
+    assert_eq!(back.current_height, built.current_height);
+}
+
 fn assert_parity<T>(vector: &str, built: &T)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -112,7 +150,7 @@ fn get_version_synced_matches_the_oracle() {
             height: 0,
         }],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_synced_v1.json"),
         &built,
     );
@@ -141,7 +179,7 @@ fn get_version_syncing_matches_the_oracle() {
             },
         ],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_syncing_v1.json"),
         &built,
     );
@@ -157,7 +195,7 @@ fn get_version_all_defaults_matches_the_oracle() {
         target_height: 0,
         hard_forks: vec![],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_all_defaults_v1.json"),
         &built,
     );
@@ -446,13 +484,11 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
     };
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs_as_hex: vec![mined.as_hex.clone(), pooled.as_hex.clone()],
-        txs_as_json: Vec::new(),
         txs: vec![mined, pooled],
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_chain_and_pool_v1.json"),
+        include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
         &built,
     );
 }
@@ -461,8 +497,6 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
 fn get_transactions_split_form_matches_the_oracle() {
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs_as_hex: vec![String::new()],
-        txs_as_json: Vec::new(),
         txs: vec![TxEntry {
             tx_hash: tagged_hash(31),
             as_hex: String::new(),
@@ -484,7 +518,7 @@ fn get_transactions_split_form_matches_the_oracle() {
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_split_form_v1.json"),
+        include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
         &built,
     );
 }
@@ -494,8 +528,6 @@ fn get_transactions_decoded_matches_the_oracle() {
     let as_json = "{\"version\": 2, \"unlock_time\": 0}".to_owned();
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs_as_hex: vec!["00".to_owned()],
-        txs_as_json: vec![as_json.clone()],
         txs: vec![TxEntry {
             tx_hash: tagged_hash(41),
             as_hex: "00".to_owned(),
@@ -515,7 +547,7 @@ fn get_transactions_decoded_matches_the_oracle() {
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_decoded_v1.json"),
+        include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
         &built,
     );
 }
@@ -524,13 +556,11 @@ fn get_transactions_decoded_matches_the_oracle() {
 fn get_transactions_missed_matches_the_oracle() {
     let built = GetTransactionsResponse {
         status: RpcStatus::ok(),
-        txs_as_hex: Vec::new(),
-        txs_as_json: Vec::new(),
         txs: Vec::new(),
         missed_tx: vec![tagged_hash(51), tagged_hash(52)],
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_missed_v1.json"),
+        include_str!("vectors/rpc/get_transactions_missed_v2.json"),
         &built,
     );
 }
@@ -539,13 +569,11 @@ fn get_transactions_missed_matches_the_oracle() {
 fn get_transactions_refusal_matches_the_oracle() {
     let built = GetTransactionsResponse {
         status: RpcStatus("Too many transactions requested in restricted mode".to_owned()),
-        txs_as_hex: Vec::new(),
-        txs_as_json: Vec::new(),
         txs: Vec::new(),
         missed_tx: Vec::new(),
     };
     assert_parity(
-        include_str!("vectors/rpc/get_transactions_refusal_v1.json"),
+        include_str!("vectors/rpc/get_transactions_refusal_v2.json"),
         &built,
     );
 }
@@ -586,5 +614,57 @@ fn is_key_image_spent_empty_matches_the_oracle() {
     assert_parity(
         include_str!("vectors/rpc/is_key_image_spent_empty_v1.json"),
         &built,
+    );
+}
+
+/// The `txs_as_hex` / `txs_as_json` retirement, asserted as a difference.
+///
+/// The `_v1` vectors are the shape the C++ served before rule 60 removed those
+/// two members; `_v2` is what the same emitter produced after. Keeping both and
+/// asserting the difference is what makes the deletion checkable: re-adding
+/// either member to the Rust type fails the `_v2` parity tests above, and
+/// changing anything *else* in the reply fails this one. A `_v2` file alone
+/// would only say what the shape is now, not what was removed to get there.
+///
+/// Per-vector presence is not asserted, because it is not true: epee omits an
+/// empty sequence, so `txs_as_json` appears only in the fixture that asked for
+/// `decode_as_json`. What is asserted is that across the set each retired
+/// member was actually exercised — otherwise this test could pass while
+/// silently checking the removal of only one of them.
+#[test]
+fn v2_is_v1_minus_exactly_the_two_retired_members() {
+    const RETIRED: [&str; 2] = ["txs_as_hex", "txs_as_json"];
+    let mut seen = [false; 2];
+    for (v1, v2) in [
+        (
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v1.json"),
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_decoded_v1.json"),
+            include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_split_form_v1.json"),
+            include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
+        ),
+    ] {
+        let mut before = parsed(v1);
+        let after = parsed(v2);
+        let obj = before.as_object_mut().expect("v1 vector is an object");
+        for (i, key) in RETIRED.iter().enumerate() {
+            if obj.remove(*key).is_some() {
+                seen[i] = true;
+            }
+        }
+        assert_eq!(
+            before, after,
+            "v2 must differ from v1 by exactly the retired members"
+        );
+    }
+    assert!(
+        seen.iter().all(|s| *s),
+        "each retired member must appear in at least one v1 vector, or its \
+         removal is not actually being checked: {RETIRED:?} seen = {seen:?}"
     );
 }

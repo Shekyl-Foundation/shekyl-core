@@ -191,20 +191,11 @@ namespace cryptonote
 
     struct response_t: public rpc_response_base
     {
-      // older compatibility stuff
-      std::vector<std::string> txs_as_hex;  //transactions blobs as hex (old compat)
-      std::vector<std::string> txs_as_json; //transactions decoded as json (old compat)
-
-      // in both old and new
       std::vector<std::string> missed_tx;   //not found transactions
-
-      // new style
       std::vector<entry> txs;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(txs_as_hex)
-        KV_SERIALIZE(txs_as_json)
         KV_SERIALIZE(txs)
         KV_SERIALIZE(missed_tx)
       END_KV_SERIALIZE_MAP()
