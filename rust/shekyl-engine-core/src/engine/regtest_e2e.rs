@@ -3195,14 +3195,23 @@ fn capture_block(
 /// the same chain in the same process, and the unrestricted rows are the
 /// blast-radius check: the fix must not narrow the admin listener.
 ///
-/// Coverage, stated rather than implied. The REST rows cross
-/// `core_rpc_ffi_json_endpoint` into `dispatch_json`; the JSON-RPC rows cross
-/// `core_rpc_ffi_json_rpc` into `dispatch_jsonrpc_we`, once for each of its two
-/// answer shapes (a refusal in `error_resp`, and one in `res.status`). Those
-/// are the only two dispatch templates left — the third, `dispatch_jsonrpc`,
-/// had no table rows and was deleted. What this does *not* reach is
-/// `dispatch_submitblock` and `dispatch_calcpow`, the two hand-written
-/// dispatchers, whose handlers read no `ctx` and so have nothing to assert.
+/// Coverage, stated rather than implied, and **re-derived when RK-4c migrated
+/// two of these routes out of C++**. `/get_transactions` and
+/// `/is_key_image_spent` are now served natively, so their rows guard the Rust
+/// caps and no longer say anything about the bridge — leaving them as the REST
+/// evidence would have been a claim that quietly stopped being true while the
+/// test kept passing. `/get_info` replaces them for that purpose: it is still
+/// bridged, and its `restricted` is the same site-209 expression, observable
+/// on an idle daemon because `start_time` and `free_space` are sentinel-valued
+/// under it.
+///
+/// So: the `/get_info` row crosses `core_rpc_ffi_json_endpoint` into
+/// `dispatch_json`; the JSON-RPC rows cross `core_rpc_ffi_json_rpc` into
+/// `dispatch_jsonrpc_we`, once for each of its two answer shapes (a refusal in
+/// `error_resp`, one in `res.status`). Those are the only two dispatch
+/// templates left — the third had no table rows and was deleted. Not reached:
+/// `dispatch_submitblock` and `dispatch_calcpow`, whose handlers read no `ctx`
+/// and so have nothing to assert.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
@@ -3345,6 +3354,47 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
             .and_then(|s| s.as_str()),
         Some("OK"),
         "the unrestricted listener must still serve the whole-chain histogram"
+    );
+
+    // ── the bridge's REST template ──────────────────────────────────────
+    //
+    // The two capped routes above are native as of RK-4c, so they no longer
+    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
+    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
+    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
+    // without a populated chain. If a dispatcher stops passing the origin,
+    // these two answers become the admin ones.
+    let admin_info: serde_json::Value = unrestricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("admin get_info");
+    let restricted_info: serde_json::Value = restricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("restricted get_info");
+    assert_eq!(
+        restricted_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "a restricted listener must not disclose the node's start time; if this \
+         is the real start time the handler saw a null connection context"
+    );
+    assert_eq!(
+        restricted_info
+            .get("free_space")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::MAX),
+        "a restricted listener must not disclose free space"
+    );
+    assert!(
+        admin_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            > 0,
+        "the admin listener must still report the start time — otherwise the \
+         assertions above would hold for a daemon that reports nothing to anyone"
     );
 
     // Blast radius: the same over-cap request on the admin listener is served.

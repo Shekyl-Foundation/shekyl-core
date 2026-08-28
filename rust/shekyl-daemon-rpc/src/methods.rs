@@ -12,6 +12,7 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
+use crate::core::TxSlot;
 use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
@@ -19,6 +20,7 @@ use shekyl_rpc_types::{
     GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
     CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
+use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::BlockHeight;
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault};
@@ -429,6 +431,185 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
         curve_tree_root: HashHex::from_bytes(facts.curve_tree_root),
         attestation_root: HashHex::from_bytes(facts.attestation_root),
+    }
+}
+
+// ─── RK-4c: the transaction read set ─────────────────────────────────────────
+
+/// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
+/// `/get_transactions`. It fires for the first time in this tree: the C++
+/// gated it on `m_restricted && ctx` while the bridge passed a null `ctx`
+/// (#570 fixed the bridge; this carries the constant to the native handler).
+pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
+
+/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — the same, for `/is_key_image_spent`.
+pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
+
+/// The two parse refusals the C++ handler distinguished, kept distinct because
+/// they tell the caller different things: the first says "that is not hex",
+/// the second says "that is hex, of the wrong length".
+pub const TX_PARSE_FAILED: &str = "Failed to parse hex representation of transaction hash";
+const SIZE_MISMATCH: &str = "Failed, size of data mismatch";
+pub const KI_PARSE_FAILED: &str = "Failed to parse hex representation of key image";
+
+/// Parse request hashes into 32-byte ids, or the status the caller gets.
+///
+/// `Err` is a *status string*, not an [`RpcFault`]: these routes answer a
+/// refusal as HTTP 200 with a non-OK `status`, which is the shape the refusal
+/// vector pins.
+pub fn parse_request_hashes(hex: &[String], parse_msg: &str) -> Result<Vec<[u8; 32]>, String> {
+    let mut out = Vec::with_capacity(hex.len());
+    for h in hex {
+        let Ok(bytes) = hex::decode(h) else {
+            return Err(parse_msg.to_owned());
+        };
+        // Length is checked after decoding, so hex-of-the-wrong-length gets the
+        // size message rather than the parse one — the C++ order.
+        let Ok(arr): Result<[u8; 32], _> = bytes.try_into() else {
+            return Err(SIZE_MISMATCH.to_owned());
+        };
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+/// Project gathered slots into the reply, applying the request's
+/// `(split, prune, decode_as_json)` matrix.
+///
+/// `render` is the epee JSON rendering (RK-D11), injected so this stays a pure
+/// function: the decision of *whether* and *which* rendering to ask for is
+/// here, in Rust, and only the rendering itself is C++.
+///
+/// **One deliberate divergence.** The C++ echoed the request's hash string
+/// back verbatim (`e.tx_hash = *txhi++`), so a caller sending upper-case hex
+/// got upper-case back. `HashHex` re-encodes canonically, so the reply is
+/// always lower-case. Echoing caller-controlled casing is not a property worth
+/// preserving, and pre-genesis there is no client depending on it (RK-D8).
+pub fn project_transactions<R>(
+    request: &GetTransactionsRequest,
+    ids: &[[u8; 32]],
+    slots: &[TxSlot],
+    chain_height: u64,
+    render: R,
+) -> GetTransactionsResponse
+where
+    R: Fn(&[u8], bool) -> Result<String, i32>,
+{
+    let mut txs = Vec::new();
+    let mut missed = Vec::new();
+    let mut txs_as_hex = Vec::new();
+    let mut txs_as_json = Vec::new();
+
+    for (id, slot) in ids.iter().zip(slots.iter()) {
+        let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
+            TxSlot::Missed => {
+                missed.push(HashHex::from_bytes(*id));
+                continue;
+            }
+            TxSlot::Chain {
+                pruned,
+                prunable,
+                prunable_hash,
+                block_height,
+                block_timestamp,
+                output_indices,
+                pruned_flag,
+            } => (
+                pruned,
+                prunable,
+                prunable_hash,
+                TxLocation::Mined {
+                    block_height: *block_height,
+                    // Against the tip read once for the whole gather, so two
+                    // entries cannot be counted from two different heights.
+                    confirmations: chain_height.saturating_sub(*block_height),
+                    block_timestamp: *block_timestamp,
+                    output_indices: output_indices.clone(),
+                },
+                *pruned_flag,
+            ),
+            TxSlot::Pool {
+                pruned,
+                prunable,
+                prunable_hash,
+                double_spend_seen: _,
+                relayed,
+                received_timestamp,
+            } => (
+                pruned,
+                prunable,
+                prunable_hash,
+                TxLocation::Pooled {
+                    relayed: *relayed,
+                    received_timestamp: *received_timestamp,
+                },
+                // A pooled transaction is never reported pruned: the C++ set
+                // this from the store's verification data, which a pool entry
+                // has by construction.
+                false,
+            ),
+        };
+        let double_spend_seen = matches!(
+            slot,
+            TxSlot::Pool {
+                double_spend_seen: true,
+                ..
+            }
+        );
+
+        // The matrix. `split` or `prune` asked for the halves; so does a
+        // transaction the store has no prunable half for, because there is
+        // nothing to concatenate.
+        let split_form = request.split || request.prune || prunable.is_empty();
+        let mut entry = TxEntry {
+            tx_hash: HashHex::from_bytes(*id),
+            as_hex: String::new(),
+            pruned_as_hex: String::new(),
+            prunable_as_hex: String::new(),
+            prunable_hash: HashHex::from_bytes(*prunable_hash),
+            as_json: String::new(),
+            pruned: pruned_flag,
+            double_spend_seen,
+            location,
+        };
+        if split_form {
+            entry.pruned_as_hex = hex::encode(pruned);
+            if !request.prune {
+                entry.prunable_as_hex = hex::encode(prunable);
+            }
+            if request.decode_as_json {
+                // Base-only rendering when that is all the reply carries.
+                let base_only = request.prune || prunable.is_empty();
+                let blob: Vec<u8> = if base_only {
+                    pruned.clone()
+                } else {
+                    [pruned.as_slice(), prunable.as_slice()].concat()
+                };
+                entry.as_json = render(&blob, base_only).unwrap_or_default();
+            }
+        } else {
+            let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
+            entry.as_hex = hex::encode(&full);
+            if request.decode_as_json {
+                entry.as_json = render(&full, false).unwrap_or_default();
+            }
+        }
+
+        // The pre-`txs` rendering, filled from the same loop the C++ filled it
+        // from. Deleted later in this slice under rule 60.
+        txs_as_hex.push(entry.as_hex.clone());
+        if request.decode_as_json {
+            txs_as_json.push(entry.as_json.clone());
+        }
+        txs.push(entry);
+    }
+
+    GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs_as_hex,
+        txs_as_json,
+        txs,
+        missed_tx: missed,
     }
 }
 

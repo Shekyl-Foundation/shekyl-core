@@ -45,6 +45,38 @@ pub struct CoreRpc {
 unsafe impl Send for CoreRpc {}
 unsafe impl Sync for CoreRpc {}
 
+/// One request slot's answer from `shekyl_rpc_transactions`, copied out of
+/// the C++ views before the owner is released.
+///
+/// Not a wire type: which of `pruned` / `prunable` the reply shows, and in
+/// what form, is the handler's `(split, prune, decode_as_json)` matrix. This
+/// is what the store held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxSlot {
+    /// Neither the chain nor the pool had it.
+    Missed,
+    /// Found in a block.
+    Chain {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        prunable_hash: [u8; 32],
+        block_height: u64,
+        block_timestamp: u64,
+        output_indices: Vec<u64>,
+        /// The store holds no verification data for it.
+        pruned_flag: bool,
+    },
+    /// Found in the mempool.
+    Pool {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        prunable_hash: [u8; 32],
+        double_spend_seen: bool,
+        relayed: bool,
+        received_timestamp: u64,
+    },
+}
+
 impl CoreRpc {
     /// Wrap a raw `core_rpc_server*` obtained from C++.
     ///
@@ -379,6 +411,160 @@ impl CoreRpc {
             ffi::shekyl_rpc_blocks_by_height_free(owner);
             Ok((out, (ok == 0).then_some(failed_height)))
         }
+    }
+
+    /// Transactions by hash, one answer per request slot, plus the tip the
+    /// gather was taken against.
+    ///
+    /// `include_sensitive` decides whether a transaction the node has not
+    /// broadcast is disclosed at all — not a field trim (§2.2). The caller
+    /// passes `!restricted`; this function does not decide it.
+    pub fn transactions(
+        &self,
+        txids: &[[u8; 32]],
+        include_sensitive: bool,
+    ) -> Result<(Vec<TxSlot>, u64), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let flat: Vec<u8> = txids.iter().flat_map(|h| h.iter().copied()).collect();
+        let mut rows: *const ffi::TxEntryFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut chain_height: u64 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; every out pointer is valid for the call. On OK
+        // the rows borrow memory owned by `owner`, released below before this
+        // function returns, with every copy taken first.
+        unsafe {
+            let rc = ffi::shekyl_rpc_transactions(
+                self.handle,
+                if flat.is_empty() {
+                    std::ptr::null()
+                } else {
+                    flat.as_ptr()
+                },
+                txids.len(),
+                u8::from(include_sensitive),
+                &raw mut rows,
+                &raw mut len,
+                &raw mut chain_height,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            // Past this point an owner may exist, so nothing returns until it
+            // is released.
+            let mut out = Vec::with_capacity(len);
+            if !rows.is_null() {
+                for e in std::slice::from_raw_parts(rows, len) {
+                    let bytes = |p: *const u8, n: usize| -> Vec<u8> {
+                        if p.is_null() || n == 0 {
+                            Vec::new()
+                        } else {
+                            std::slice::from_raw_parts(p, n).to_vec()
+                        }
+                    };
+                    let pruned = bytes(e.pruned, e.pruned_len);
+                    let prunable = bytes(e.prunable, e.prunable_len);
+                    out.push(match e.where_found {
+                        1 => TxSlot::Chain {
+                            pruned,
+                            prunable,
+                            prunable_hash: e.prunable_hash,
+                            block_height: e.block_height,
+                            block_timestamp: e.block_timestamp,
+                            output_indices: if e.output_indices.is_null()
+                                || e.output_indices_len == 0
+                            {
+                                Vec::new()
+                            } else {
+                                std::slice::from_raw_parts(e.output_indices, e.output_indices_len)
+                                    .to_vec()
+                            },
+                            pruned_flag: e.pruned_flag != 0,
+                        },
+                        2 => TxSlot::Pool {
+                            pruned,
+                            prunable,
+                            prunable_hash: e.prunable_hash,
+                            double_spend_seen: e.double_spend_seen != 0,
+                            relayed: e.relayed != 0,
+                            received_timestamp: e.received_timestamp,
+                        },
+                        // 0, and anything else: the shim answers only 0/1/2,
+                        // and an unknown tag is "not found" rather than a
+                        // silently half-filled entry.
+                        _ => TxSlot::Missed,
+                    });
+                }
+            }
+            ffi::shekyl_rpc_transactions_free(owner);
+            Ok((out, chain_height))
+        }
+    }
+
+    /// epee's JSON rendering of one transaction (RK-D11). `pruned` selects the
+    /// base-only rendering, which is what the wire shows for a pruned reply.
+    pub fn tx_to_json(&self, blob: &[u8], pruned: bool) -> Result<String, i32> {
+        let mut out: *const std::os::raw::c_char = std::ptr::null();
+        let mut len: usize = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: the out pointers are valid for the call; on OK the string
+        // borrows `owner`, copied and then released before returning.
+        unsafe {
+            let rc = ffi::shekyl_rpc_tx_to_json(
+                if blob.is_empty() {
+                    std::ptr::null()
+                } else {
+                    blob.as_ptr()
+                },
+                blob.len(),
+                u8::from(pruned),
+                &raw mut out,
+                &raw mut len,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let json = if out.is_null() || len == 0 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(std::slice::from_raw_parts(out.cast::<u8>(), len))
+                    .into_owned()
+            };
+            ffi::shekyl_rpc_tx_json_free(owner);
+            Ok(json)
+        }
+    }
+
+    /// Key images, one status per request slot: 0 unspent, 1 spent in the
+    /// chain, 2 spent in the pool.
+    pub fn key_images_spent(&self, key_images: &[[u8; 32]]) -> Result<Vec<u8>, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let flat: Vec<u8> = key_images.iter().flat_map(|k| k.iter().copied()).collect();
+        let mut status = vec![0u8; key_images.len()];
+        // SAFETY: live handle; `status` is exactly `key_images.len()` bytes,
+        // which is the length the export writes.
+        let rc = unsafe {
+            ffi::shekyl_rpc_key_images_spent(
+                self.handle,
+                if flat.is_empty() {
+                    std::ptr::null()
+                } else {
+                    flat.as_ptr()
+                },
+                key_images.len(),
+                status.as_mut_ptr(),
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        Ok(status)
     }
 
     /// Dispatch a JSON-RPC 2.0 method.
