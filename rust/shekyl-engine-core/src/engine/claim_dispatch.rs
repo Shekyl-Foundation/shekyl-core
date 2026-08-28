@@ -58,7 +58,9 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingEmissionClaim, PendingPostState};
+use shekyl_engine_state::pending_post_block::{
+    PendingEmissionClaim, PendingPostState, SealAdmission,
+};
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -69,7 +71,8 @@ use super::claim_orchestrator::{
 };
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
-use super::pscan::start::{load_pscan_state_for_engine, pending_post_store_for_engine};
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
+use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledEmissionClaim, PSlot, StakeEngineError};
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
@@ -131,6 +134,26 @@ pub(crate) enum EmissionClaimRequestError {
         "a pending emission claim already exists for this persona; one live claim per persona"
     )]
     ClaimPending,
+    /// This claim's fee inputs are no longer selectable, for either of the two
+    /// reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **bond post or drain** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly snapshot and
+    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
+    ///   against no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this claim still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry, and the next assembly selects against
+    /// a current snapshot. They are one variant because they are one remedy;
+    /// the message names both because naming only one sends a caller looking
+    /// for a collision that may not exist.
+    #[error(
+        "this claim's fee inputs are no longer current — another live record \
+         holds one, or a reservation was released mid-assembly; retry"
+    )]
+    InputRaced,
     /// The claim pipeline refused (fetch, anchor, designation, sweep, path
     /// assembly, or the actor's assembly itself).
     #[error(transparent)]
@@ -210,12 +233,19 @@ where
         // live gindex reservations (outputs committed to in-flight bond
         // posts OR live claims must not be swept as claim fee inputs —
         // WI-2 F-1: an independent store over the engine-held write lock).
-        let (identity, pscan_state, reserved) = tokio::join!(
+        // The seal basis is ONE ordered read — pending block, then pscan seal
+        // (see `load_seal_basis`: reading them concurrently pairs stale funding
+        // with a current generation and reopens the race the counter closes).
+        // The identity fetch stays concurrent because it touches neither store.
+        let (identity, basis) = tokio::join!(
             stake.persona_identity(p_slot),
-            load_pscan_state_for_engine(self_arc.clone()),
-            store.read(shekyl_engine_state::PendingPostBlock::reserved_gindexes),
+            load_seal_basis(self_arc.clone(), &store),
         );
         let identity = identity?;
+        let basis = basis.map_err(|e| match e {
+            SealBasisError::Pending(e) => EmissionClaimRequestError::state("reserved gindexes", e),
+            SealBasisError::PScan(e) => EmissionClaimRequestError::state("pscan state load", e),
+        })?;
         let bond_id_bytes = identity
             .bond_id
             .to_canonical_bytes()
@@ -226,19 +256,16 @@ where
         // from the loaded seal (empty sets when no P-scan seal exists yet —
         // a wallet that never scanned has nothing to claim WITH, and the
         // pipeline refuses loudly downstream).
-        let pscan_state =
-            pscan_state.map_err(|e| EmissionClaimRequestError::state("pscan state load", e))?;
-        let (funding_records, bond_posts): (&[PFundingOutputRecord], &[BondPostRecord]) =
-            pscan_state
-                .as_ref()
-                .map(|s| (s.funding_outputs(), s.bond_post_matches()))
-                .unwrap_or((&[], &[]));
-        let reserved =
-            reserved.map_err(|e| EmissionClaimRequestError::state("reserved gindexes", e))?;
+        let (funding_records, bond_posts): (&[PFundingOutputRecord], &[BondPostRecord]) = basis
+            .pscan()
+            .map(|s| (s.funding_outputs(), s.bond_post_matches()))
+            .unwrap_or((&[], &[]));
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved();
 
         // Optimistic fast-fail on a live claim (one live claim per persona —
         // the in-flight epoch dedup). The AUTHORITATIVE serialization is
-        // `push_claim` under the write lock at the seal below, which rejects
+        // `seal_claim` under the write lock at the seal below, which rejects
         // atomically even if two same-persona requests race past this gate;
         // this read only saves the wasted proof work.
         let already = store
@@ -262,7 +289,7 @@ where
                 pruning_landed,
                 funding_records,
                 bond_posts,
-                reserved: &reserved,
+                reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
             },
@@ -287,18 +314,31 @@ where
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let admission = store
             .mutate(move |block| {
-                let ok = block.push_claim(sealed)
-                    && block
-                        .mark_claim_dispatched(&persona, dispatch_tip)
-                        .is_some();
-                (ok, ok)
+                // One locked decision, shared with the bond-post and drain
+                // seams: persona dedup first (remedy: wait), then cross-kind
+                // gindex overlap (remedy: retry). Order matters because two
+                // same-persona assemblies select the same inputs and would
+                // otherwise be told to retry a race they cannot win. The
+                // overlap half is also `remove_settled`'s sole-spender premise.
+                //
+                // Deciding and inserting are one call so this seam cannot
+                // re-derive the outcome from a push bool whose refusal arm the
+                // decision above has already ruled out.
+                let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
+                (admission == SealAdmission::Admit, admission)
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
-        if !pushed {
-            return Err(EmissionClaimRequestError::ClaimPending);
+        match admission {
+            SealAdmission::Admit => {}
+            SealAdmission::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(EmissionClaimRequestError::InputRaced)
+            }
         }
 
         // Dispatch through the pre-bound ① `Local` posture (the audited
@@ -331,7 +371,7 @@ mod tests {
     /// 2. dispatch rides ONLY the audited posture→submitter choke point
     ///    (the pre-bound `BroadcastSubmitter::local` construction +
     ///    `submit_bound`) — never a bare submitter;
-    /// 3. persist-before-dispatch: the pending-claim seal (`push_claim`)
+    /// 3. persist-before-dispatch: the pending-claim seal (`seal_claim`)
     ///    textually precedes the network send — the invariant is exercised
     ///    at runtime by the store, but the ordering pin catches a refactor
     ///    that moves the seal after the submit.
@@ -374,7 +414,7 @@ mod tests {
         );
 
         // Persist-before-dispatch ordering pin.
-        let seal_call = concat!(".push_", "claim(");
+        let seal_call = concat!(".seal_", "claim(");
         let seal_at = seam
             .find(seal_call)
             .expect("the seam must seal a pending claim");

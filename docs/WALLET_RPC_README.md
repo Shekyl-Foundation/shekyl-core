@@ -67,8 +67,21 @@ a correlated burst of segment fetches an unanonymized segment server can
 count). `build_pending_tx` itself no longer stalls read RPCs — it runs
 under a read lock, serialized by that engine-owned permit.
 
-One WI-RPC-5 caveat, disclosed rather than hidden: `drain` dispatches a
-sealed drain, but the confirmation/prune driver that settles it is still
-a named FOLLOWUPS item (WI-3 sibling) — the receipt is a dispatch fact,
-not a settlement fact. See `docs/FOLLOWUPS.md`, and
+The WI-RPC-5 caveat here — `drain`'s receipt being a dispatch fact rather
+than a settlement fact — is **half retired (2026-08-27)**. A drain that
+confirms now releases its seal: the pscan driver retires the record once
+the inputs it reserved leave the wallet's live funding set, so the
+one-live-drain lane reopens on its own. What remains is the failure
+path, by two routes: a drain the network **rejects terminally**, and a
+drain whose submit was **ambiguous** (a transport error leaves the
+sealed record live on purpose, because the bytes may already have
+reached the network — and if they did not, nothing resubmits them; the
+driver resubmits bond posts only). Either way the inputs are never
+spent, so the drain never settles and the lane stays shut until
+terminal-reject prune and byte-identical resubmit land (named FOLLOWUPS
+items). A stall alarm names such a drain in the operator log rather than
+leaving it silent. That makes the wait **visible, not finite**: the driver
+holds the record deliberately and nothing in the wallet clears it, so an
+operator who sees this alarm should not sit waiting for a confirmation
+that is not coming. See `docs/FOLLOWUPS.md`, and
 `docs/design/WALLET_SEND_RECORD.md` for the send-journal design round.

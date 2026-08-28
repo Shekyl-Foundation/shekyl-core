@@ -2,7 +2,102 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A confirmed emission claim or drain now releases its seal — before this,
+  neither ever did.** Both paths seal a one-live-per-persona record before
+  dispatch (the record *is* the input reservation), and only the bond post's
+  seal was ever retired. `remove_claim` and `remove_drain` existed with callers
+  only under `#[cfg(test)]`, so nothing in production released either gate.
+
+  The drain leak was visible: drain once, and that persona's lane refused
+  `-29511 DRAIN_IN_FLIGHT` across sessions, permanently, even though the money
+  had settled normally. **The claim leak was worse because nothing surfaced it**
+  — claims are engine-automated, so the persona simply stopped claiming, with no
+  user action to correlate the silence against.
+
+  `PendingPostBlock::remove_settled` retires either kind once **every** funding
+  gindex it reserved has left the accrual's live funding set, called from the
+  existing WI-3 dispatch tick inside the same locked mutate, so the record and
+  its reservation are released in one seal (R2-4). The evidence is the wallet's
+  own verified scan at the reorg depth the bond post's confirmation already
+  uses. It is deliberately **not** the bond post's confirmation set: that set is
+  filtered to the JoinMarket post kind, and crossing the two would retire a live
+  drain because the persona's *bond post* confirmed — a different transaction.
+
+  Two edges are handled rather than assumed. A **partly** spent reservation is
+  not settlement (a drain spends all its inputs in one transaction, so a
+  half-gone reservation is a state the confirming spend cannot produce) and is
+  held. An **empty** reservation is never settled: `[].all(..)` is `true`, so
+  the Q11 zero-fee-input claim — which reserves nothing, paying its fee from the
+  mint — would otherwise retire the instant it was sealed, before its bytes
+  reached the network.
+
+- **A seal whose snapshot predates a retirement is refused, not sealed against
+  spent inputs** (`PENDING_POST_VERSION` v7 → v8). Retiring on
+  reservation-absence needs one live record per gindex, and the seal-time union
+  check alone does not give it across an assembly: A snapshots the reservation
+  set, and while its proof work runs, B seals A's chosen input, confirms, and is
+  retired. B's reservation is now gone, so A's union check sees the input free
+  and admits — sealing a transaction whose input B already spent, whose absence
+  the *next* tick then reads as A's own confirmation. A record the network
+  rejected would be booked as settled.
+
+  The block carries a monotonic count of reservation **releases**, bumped by
+  every method that drops a live record and compared at the seal against the
+  value the assembly read with its snapshot. The union check sees reservations
+  that are present; the generation makes reservations that were *released*
+  visible. Comparing the reservation sets themselves cannot: the release returns
+  the set to exactly its snapshot value, so snapshot and seal read identical
+  while the inputs behind them have been spent. Persisted rather than in-memory
+  because the pending-post store reloads the block from the seal on every read
+  and every mutation — an unpersisted counter would reset to zero on each load
+  and never refuse anything. Same remedy as the existing input race (retry
+  against a fresh snapshot), so it surfaces through the same refusal, whose
+  message now names every cause rather than only a concurrent post.
+
+  The two reads that form that snapshot are **ordered**, which the first cut of
+  the guard got wrong: all three seams read the pending block and the pscan seal
+  concurrently in one `join!`, so the pscan load could return a funding set from
+  *before* a settlement while the pending read returned the generation from
+  *after* it. Stale funding paired with a current generation passes the seal —
+  the same admission the counter was added to prevent. The pending block is now
+  read to completion first, then the pscan seal, so every release either
+  precedes both reads (and the spent input is never offered) or moves the
+  generation (and the seal refuses). The ordering lives in one place,
+  `load_seal_basis`, whose result type has private fields and no other
+  constructor, because a source pin over the seams can only prove the function
+  is called — never that a hand-rolled equivalent got the order right.
+
+  The raw inserters `push_post` / `push_claim` / `push_drain` are now
+  `#[cfg(test)]`, and the public `PendingPostBlock::new(posts)` constructor is
+  **deleted**. They admit one live record per persona per kind and nothing else
+  — no cross-kind overlap check, no generation comparison — so each was a public
+  way to break the retirement's premise, whatever the in-workspace callers
+  happened to do. Once their visibility was made honest the compiler enumerated
+  the rest: with `seal_*` inserting directly, all four had **zero** production
+  callers. `new` had none at all and is gone (rule 15); the three inserters
+  survive only as test seeding, compiled out of the library, because staging a
+  state the guards prevent is a legitimate thing for a test to need and an
+  illegitimate thing for production to reach.
+
+  Every seeding path now goes through `seal_*`, which also makes the fixtures
+  more faithful: the seal stamps `Dispatched` as it inserts, so a `Pending`
+  claim or drain is a state production can no longer persist, and fixtures that
+  constructed one were staging an unreachable shape.
+
 ### Added
+
+- **A stall alarm for pending claims and drains.** A record dispatched but not
+  settled past the alarm horizon is named in the operator log, keyed by kind
+  *and* persona so a persona holding both a stuck claim and a stuck drain gets
+  both alarms. The record is HELD, matching the bond post's
+  funds-safety-over-liveness posture — the alarm reports the stall, it does not
+  clear it. Two cases still produce a permanent stall and both remain named
+  FOLLOWUPS items: a **terminal rejection**, and an **ambiguous submit** whose
+  bytes never reached the network — the seams seal before a single submit and
+  keep the record on a transport error by design, and nothing resubmits it
+  because the driver selects bond posts only.
 
 - **The wallet can read the four `Unbond` verify operands and assemble the
   full `Unbond` exit transaction (PR-P4).** Before this it held *none* of
