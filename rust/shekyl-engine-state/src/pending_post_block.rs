@@ -378,19 +378,6 @@ impl PendingPostBlock {
         }
     }
 
-    /// A block carrying `posts` (no claims, no drains), stamped with the
-    /// current version. The caller (the assemble path) owns the
-    /// one-live-post-per-persona invariant.
-    pub fn new(posts: Vec<PendingBondPost>) -> Self {
-        Self {
-            version: PENDING_POST_VERSION,
-            generation: 0,
-            posts,
-            claims: Vec::new(),
-            drains: Vec::new(),
-        }
-    }
-
     /// The on-block schema version.
     pub fn version(&self) -> u32 {
         self.version
@@ -458,7 +445,17 @@ impl PendingPostBlock {
     /// the persona already has a live post — the caller surfaces this as its
     /// typed `PendingPostExists` error.
     #[must_use]
-    pub fn push_post(&mut self, post: PendingBondPost) -> bool {
+    /// **Test seeding only** (`#[cfg(test)]`), like its two siblings.
+    ///
+    /// These insert on persona dedup alone — no cross-kind overlap check, no
+    /// generation comparison — so they can stage states the guards exist to
+    /// prevent. That is a legitimate thing for a test to need and an
+    /// illegitimate thing for production to reach, which is why they are
+    /// compiled out of the library entirely rather than merely made private.
+    /// Production has exactly one insertion path: the `seal_*` trio, over
+    /// `classify_seal`.
+    #[cfg(test)]
+    fn push_post(&mut self, post: PendingBondPost) -> bool {
         if self.has_live_post_for(&post.persona) {
             return false;
         }
@@ -470,7 +467,8 @@ impl PendingPostBlock {
     /// unchanged) if the persona already has a live claim — the caller
     /// surfaces this as its typed claim-pending error.
     #[must_use]
-    pub fn push_claim(&mut self, claim: PendingEmissionClaim) -> bool {
+    #[cfg(test)]
+    fn push_claim(&mut self, claim: PendingEmissionClaim) -> bool {
         if self.has_live_claim_for(&claim.persona) {
             return false;
         }
@@ -519,7 +517,8 @@ impl PendingPostBlock {
     /// the persona already has a live drain — the caller surfaces this as its
     /// typed drain-pending error.
     #[must_use]
-    pub fn push_drain(&mut self, drain: PendingDrain) -> bool {
+    #[cfg(test)]
+    fn push_drain(&mut self, drain: PendingDrain) -> bool {
         if self.has_live_drain_for(&drain.persona) {
             return false;
         }
@@ -791,27 +790,39 @@ impl PendingPostBlock {
     /// the transaction that spent them confirmed.
     ///
     /// That inference is sound only while the reservation makes the record the
-    /// *sole* possible spender inside this wallet. Three things together give
-    /// that, and the first draft of this doc asserted the second when it was
-    /// only two-thirds true:
+    /// *sole* possible spender inside this wallet. Four things together give
+    /// that, and this doc has twice asserted a subset — each time the missing
+    /// piece was one that fails silently:
     ///
-    /// 1. `push_post` / `push_claim` / `push_drain` admit one live record per
-    ///    persona **per kind** — which says nothing about a cross-kind gindex
-    ///    collision, so it is not sufficient on its own.
-    /// 2. Every writer re-reads the live union **inside its own seal mutate**
-    ///    and refuses on overlap. The drain seam did this; the claim and
-    ///    bond-post seams did not until review #572 added it, so two records
-    ///    could reserve one gindex and either confirming would retire both.
+    /// 1. **One live record per persona, per kind.** True, and on its own not
+    ///    sufficient: it says nothing about a *cross-kind* gindex collision.
+    /// 2. **Every insertion goes through `classify_seal`**, which adds
+    ///    the cross-kind overlap refusal, inside the same locked mutate that
+    ///    performs the insert. The drain seam re-read the union; the claim and
+    ///    bond-post seams did not until review #572, so two records could
+    ///    reserve one gindex and either confirming would retire both. The
+    ///    `seal_*` trio is now the only way in — the raw `push_*` inserters are
+    ///    private — so a fourth writer cannot reintroduce the gap, and
     ///    `every_reservation_writer_rechecks_the_union_under_the_seal_lock`
-    ///    pins all three, and names the file when a fourth writer forgets.
-    /// 3. Pin P-2: a retry re-sends the same bytes rather than building a
+    ///    names the seam if one tries.
+    /// 3. **The generation guard**, because (2) still only compares against
+    ///    reservations that are *present*. A record that seals, confirms and
+    ///    retires inside another assembly's window frees its gindex, so that
+    ///    assembly's overlap check passes and it seals against an input the
+    ///    retired record already spent — whose absence this method would then
+    ///    read as the new record's own confirmation. Comparing reservation sets
+    ///    cannot see it (the release returns the set to its snapshot value); a
+    ///    monotonic counter can. Its two halves must also be read in order —
+    ///    pending block before pscan seal — or stale funding pairs with a
+    ///    current generation and the hole reopens (`load_seal_basis`).
+    /// 4. **Pin P-2**: a retry re-sends the same bytes rather than building a
     ///    competing transaction. Nothing outside the wallet can spend `P`'s
     ///    outputs at all.
     ///
-    /// With all three, "these inputs are gone" and "this record's transaction
-    /// confirmed" are the same fact. Without (2) they are not, which is why the
-    /// guard is part of this method's contract rather than local hygiene at the
-    /// seams.
+    /// With all four, "these inputs are gone" and "this record's transaction
+    /// confirmed" are the same fact. Without (2) or (3) they are not, which is
+    /// why both guards are part of this method's contract rather than local
+    /// hygiene at the seams.
     ///
     /// **An empty reservation is never settled.** A record holding no gindexes
     /// would satisfy "all of them are gone" vacuously and retire the instant it

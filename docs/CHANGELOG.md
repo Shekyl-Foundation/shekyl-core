@@ -69,6 +69,23 @@
   constructor, because a source pin over the seams can only prove the function
   is called — never that a hand-rolled equivalent got the order right.
 
+  The raw inserters `push_post` / `push_claim` / `push_drain` are now
+  `#[cfg(test)]`, and the public `PendingPostBlock::new(posts)` constructor is
+  **deleted**. They admit one live record per persona per kind and nothing else
+  — no cross-kind overlap check, no generation comparison — so each was a public
+  way to break the retirement's premise, whatever the in-workspace callers
+  happened to do. Once their visibility was made honest the compiler enumerated
+  the rest: with `seal_*` inserting directly, all four had **zero** production
+  callers. `new` had none at all and is gone (rule 15); the three inserters
+  survive only as test seeding, compiled out of the library, because staging a
+  state the guards prevent is a legitimate thing for a test to need and an
+  illegitimate thing for production to reach.
+
+  Every seeding path now goes through `seal_*`, which also makes the fixtures
+  more faithful: the seal stamps `Dispatched` as it inserts, so a `Pending`
+  claim or drain is a state production can no longer persist, and fixtures that
+  constructed one were staging an unreachable shape.
+
 ### Added
 
 - **A stall alarm for pending claims and drains.** A record dispatched but not

@@ -131,7 +131,10 @@ pub enum DrainToPrincipalError {
     /// bond post or emission claim reserves one, or a reservation was released
     /// mid-assembly; nothing was sealed — retry
     /// (`-29511`, retry remedy).
-    #[error("a concurrent post reserved one of this drain's inputs; retry")]
+    #[error(
+        "this drain's inputs are no longer current — another live record holds \
+         one, or a reservation was released mid-assembly; retry"
+    )]
     InputRaced,
     /// The requested payment is zero — nothing to move. Its own arm, never
     /// folded into [`Self::Refused`] (rule 82: `-29101`'s "lower the payment

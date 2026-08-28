@@ -821,9 +821,14 @@ components:
                                           driver", target V3.0 pre-genesis. A
                                           stall alarm names such a drain in the
                                           log rather than leaving it silent.
-                                          Also the refusal when a
-                                          concurrent same-persona post raced
-                                          this drain's inputs — that arm is
+                                          Also the refusal when this drain's
+                                          inputs stopped being current between
+                                          snapshot and seal — either another
+                                          live record (a bond post or an
+                                          emission claim, of ANY persona) now
+                                          reserves one, or a reservation was
+                                          released mid-assembly. Nothing is
+                                          sealed either way; that arm is
                                           transient; retry. The two arms
                                           share the code but carry a
                                           structured discriminant:

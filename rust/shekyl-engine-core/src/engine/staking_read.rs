@@ -399,6 +399,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use shekyl_engine_state::pending_post_block::SealAdmission;
     use shekyl_engine_state::pscan_cursor::PScanCursor;
     use shekyl_engine_state::pscan_state::{
         BondPostRecord, PFundingOutputRecord, RetiredPersonaRecord,
@@ -514,8 +515,9 @@ mod tests {
     #[test]
     fn pending_principal_counts_inflight_posts() {
         let mut block = PendingPostBlock::empty();
-        assert!(block.push_post(pending_post(1)));
-        assert!(block.push_post(pending_post(2)));
+        let g = block.generation();
+        assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
+        assert_eq!(block.seal_post(pending_post(2), g), SealAdmission::Admit);
         let b = staked_balance_from_records(None, Some(&block)).expect("balance");
         assert_eq!(
             b.bonded_principal_pending,
@@ -541,8 +543,9 @@ mod tests {
         // pending block: persona 1's record is still live (GC bridge) and
         // persona 2 has a genuinely unconfirmed in-flight post.
         let mut block = PendingPostBlock::empty();
-        assert!(block.push_post(pending_post(1)));
-        assert!(block.push_post(pending_post(2)));
+        let g = block.generation();
+        assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
+        assert_eq!(block.seal_post(pending_post(2), g), SealAdmission::Admit);
 
         let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
         let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
@@ -565,7 +568,8 @@ mod tests {
         unbonds.insert(persona(1), SettlementEpoch::from_raw(9));
         let s = state(vec![bond_match(1, 0)], unbonds, Vec::new(), Vec::new());
         let mut block = PendingPostBlock::empty();
-        assert!(block.push_post(pending_post(1)));
+        let g = block.generation();
+        assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
 
         let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
         assert_eq!(

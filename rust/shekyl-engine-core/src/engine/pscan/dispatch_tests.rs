@@ -151,7 +151,18 @@ fn driver_with_posts(
     std::sync::Arc<ScriptedBroadcast>,
 ) {
     let store = std::sync::Arc::new(MemStore::default());
-    *store.block.lock().expect("mem store") = Some(PendingPostBlock::new(posts));
+    // Seeded through the shared admission, like production — a fixture that
+    // could insert past it would be able to stage states production cannot.
+    let mut block = PendingPostBlock::empty();
+    for post in posts {
+        let g = block.generation();
+        assert_eq!(
+            block.seal_post(post, g),
+            shekyl_engine_state::pending_post_block::SealAdmission::Admit,
+            "fixture posts must be admissible"
+        );
+    }
+    *store.block.lock().expect("mem store") = Some(block);
     let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(outcomes));
     let driver = DispatchDriver::new(store.clone(), broadcast.clone(), test_config(), test_lock());
     (driver, store, broadcast)
@@ -436,20 +447,38 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
 /// Seed a driver whose block also carries a live claim and a live drain,
 /// each reserving one funding output.
 fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
-    use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+    use shekyl_engine_state::pending_post_block::{
+        PendingDrain, PendingEmissionClaim, SealAdmission,
+    };
     let mut block = PendingPostBlock::empty();
-    assert!(block.push_claim(PendingEmissionClaim {
-        persona: persona(1),
-        tx_bytes: vec![0xCD; 8],
-        fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
-        state: PendingPostState::Pending,
-    }));
-    assert!(block.push_drain(PendingDrain {
-        persona: persona(2),
-        tx_bytes: vec![0xEF; 8],
-        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
-        state: PendingPostState::Pending,
-    }));
+    let g = block.generation();
+    let at = BlockHeight::from_raw(1);
+    assert_eq!(
+        block.seal_claim(
+            PendingEmissionClaim {
+                persona: persona(1),
+                tx_bytes: vec![0xCD; 8],
+                fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
+    assert_eq!(
+        block.seal_drain(
+            PendingDrain {
+                persona: persona(2),
+                tx_bytes: vec![0xEF; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
     let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(vec![]));
@@ -562,24 +591,42 @@ async fn a_settled_reservation_retires_the_claim_and_the_drain() {
 /// test red.
 #[tokio::test]
 async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
-    use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+    use shekyl_engine_state::pending_post_block::{
+        PendingDrain, PendingEmissionClaim, SealAdmission,
+    };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
-    assert!(block.push_claim(PendingEmissionClaim {
-        persona: p,
-        tx_bytes: vec![0xCD; 8],
-        fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
-        state: PendingPostState::Pending,
-    }));
-    assert!(block.push_drain(PendingDrain {
-        persona: p,
-        tx_bytes: vec![0xEF; 8],
-        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
-        state: PendingPostState::Pending,
-    }));
     let at = BlockHeight::from_raw(100);
-    assert!(block.mark_claim_dispatched(&p, at).is_some());
-    assert!(block.mark_drain_dispatched(&p, at).is_some());
+    let g = block.generation();
+    // `seal_*` stamps `Dispatched { at, attempts: 1 }` as it inserts, which is
+    // the state production reaches — the old push-then-mark pair reached the
+    // same place in two steps.
+    assert_eq!(
+        block.seal_claim(
+            PendingEmissionClaim {
+                persona: p,
+                tx_bytes: vec![0xCD; 8],
+                fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
+    assert_eq!(
+        block.seal_drain(
+            PendingDrain {
+                persona: p,
+                tx_bytes: vec![0xEF; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
 
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
@@ -642,24 +689,42 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
 /// Restoring the both-keys clear turns this red.
 #[tokio::test]
 async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
-    use shekyl_engine_state::pending_post_block::{PendingDrain, PendingEmissionClaim};
+    use shekyl_engine_state::pending_post_block::{
+        PendingDrain, PendingEmissionClaim, SealAdmission,
+    };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
-    assert!(block.push_claim(PendingEmissionClaim {
-        persona: p,
-        tx_bytes: vec![0xCD; 8],
-        fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
-        state: PendingPostState::Pending,
-    }));
-    assert!(block.push_drain(PendingDrain {
-        persona: p,
-        tx_bytes: vec![0xEF; 8],
-        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
-        state: PendingPostState::Pending,
-    }));
     let at = BlockHeight::from_raw(100);
-    assert!(block.mark_claim_dispatched(&p, at).is_some());
-    assert!(block.mark_drain_dispatched(&p, at).is_some());
+    let g = block.generation();
+    // `seal_*` stamps `Dispatched { at, attempts: 1 }` as it inserts, which is
+    // the state production reaches — the old push-then-mark pair reached the
+    // same place in two steps.
+    assert_eq!(
+        block.seal_claim(
+            PendingEmissionClaim {
+                persona: p,
+                tx_bytes: vec![0xCD; 8],
+                fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
+    assert_eq!(
+        block.seal_drain(
+            PendingDrain {
+                persona: p,
+                tx_bytes: vec![0xEF; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
 
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
@@ -798,6 +863,11 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
              free to drift in this seam"
         );
         // The insert primitives bypass the classifier; only the trio may seal.
+        // They are `#[cfg(test)]` in `shekyl-engine-state`, so a seam cannot
+        // reach them today and the compiler is the primary guard. This assert
+        // is not therefore decorative: the edit it catches is someone widening
+        // their visibility again and calling one here, which compiles cleanly
+        // and would silently drop the overlap and generation checks.
         for bare in [".push_post(", ".push_claim(", ".push_drain("] {
             assert!(
                 !code.contains(bare),
