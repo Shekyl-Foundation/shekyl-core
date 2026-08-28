@@ -531,14 +531,20 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
     {
       std::vector<std::pair<crypto::hash, cryptonote::tx_memory_pool::tx_details>> found;
       pool.get_transactions_info(missed, found, include_sensitive != 0);
+      // One result per input occurrence, so a repeated txid must consume a
+      // repeated slot. Searching from zero every time would write the first
+      // matching slot twice and leave the second reported missing — a request
+      // like [H, H] answering only its first H.
+      std::vector<bool> slot_taken(missed.size(), false);
       for (const auto& entry : found)
       {
         // Back to the request slot it came from. The C++ re-sorted a merged
         // list to recover this; here the mapping never left.
         size_t slot = txids_len;
         for (size_t k = 0; k < missed.size(); ++k)
-          if (missed[k] == entry.first)
+          if (!slot_taken[k] && missed[k] == entry.first)
           {
+            slot_taken[k] = true;
             slot = missed_slots[k];
             break;
           }

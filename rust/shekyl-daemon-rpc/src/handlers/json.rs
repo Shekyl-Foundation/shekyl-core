@@ -141,6 +141,14 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
         }
     }
 }
+/// What can go wrong inside `get_transactions`' blocking section: the facts
+/// shim refused, or the daemon could not render a body it had just read out of
+/// its own store. Distinct because they are distinct answers to the caller.
+enum TxFault {
+    Facts(i32),
+    Render(crate::methods::RenderFailed),
+}
+
 /// `GET|POST /get_transactions` (alias `/gettransactions`) — served natively
 /// (RK-4c). The gather is one FFI call answering per request slot; the
 /// `(split, prune, decode_as_json)` matrix and both refusals are Rust's.
@@ -180,15 +188,20 @@ pub async fn get_transactions(
     let result = tokio::task::spawn_blocking(move || {
         // `!restricted` is the pool's sensitivity flag: false withholds a
         // transaction that is not `relay_category::broadcasted` (§2.2).
-        let (slots, chain_height) = core.transactions(&ids, !restricted)?;
-        let reply = crate::methods::project_transactions(
+        let (slots, chain_height) = core
+            .transactions(&ids, !restricted)
+            .map_err(TxFault::Facts)?;
+        // A rendering the daemon cannot produce fails the request rather than
+        // answering OK with an empty `as_json`, which is what the C++ did and
+        // is the only answer a caller can act on.
+        crate::methods::project_transactions(
             &request,
             &ids,
             &slots,
             chain_height,
             |blob, pruned| core.tx_to_json(blob, pruned),
-        );
-        Ok::<_, i32>(reply)
+        )
+        .map_err(TxFault::Render)
     })
     .await;
     match result {
@@ -199,9 +212,13 @@ pub async fn get_transactions(
                 json_error("reply could not be encoded")
             }
         },
-        Ok(Err(rc)) => {
+        Ok(Err(TxFault::Facts(rc))) => {
             tracing::warn!(rc, "get_transactions: facts unavailable");
             json_error("transaction facts unavailable")
+        }
+        Ok(Err(TxFault::Render(f))) => {
+            tracing::warn!(txid = %f.txid, code = f.code, "get_transactions: tx could not be rendered");
+            json_error("transaction could not be decoded to json")
         }
         Err(e) => {
             tracing::warn!(?e, "get_transactions: handler task did not complete");

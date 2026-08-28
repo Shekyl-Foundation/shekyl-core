@@ -377,13 +377,26 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
         key_images: vec![ki.clone()],
     };
     let reply = match src {
+        // Direct, for `fetch_transactions`'s reason: the C++ route is gone.
         Source::Live(core) => {
-            let body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+            let ids = crate::methods::parse_request_hashes(
+                &request.key_images,
+                crate::methods::KI_PARSE_FAILED,
+            )?;
             let raw = core
-                .json_endpoint("/is_key_image_spent", &body)
-                .ok_or_else(|| "is_key_image_spent: no reply".to_owned())?;
-            serde_json::from_str::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw)
-                .map_err(|e| format!("malformed is_key_image_spent reply: {e}"))?
+                .key_images_spent(&ids)
+                .map_err(|rc| format!("is_key_image_spent: facts unavailable ({rc})"))?;
+            let mut spent_status = Vec::with_capacity(raw.len());
+            for s in raw {
+                spent_status.push(
+                    shekyl_rpc_types::KeyImageStatus::try_from(s)
+                        .map_err(|e| format!("is_key_image_spent: {e}"))?,
+                );
+            }
+            shekyl_rpc_types::IsKeyImageSpentResponse {
+                status: shekyl_rpc_types::RpcStatus::ok(),
+                spent_status,
+            }
         }
         Source::Remote { address, timeout } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
@@ -396,8 +409,14 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
-    let Some(status) = reply.spent_status.first() else {
-        return Err("is_key_image_spent returned no status".to_owned());
+    // Exactly one, not "at least one": the request carries one key image, the
+    // reply is positional, and a reply of a different length is unreadable
+    // rather than partially readable — the property the type's own doc names.
+    let [status] = reply.spent_status.as_slice() else {
+        return Err(format!(
+            "is_key_image_spent: asked about 1 key image, got {} statuses",
+            reply.spent_status.len()
+        ));
     };
     Ok(format!(
         "{ki}: {}",
@@ -410,17 +429,37 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
 }
 
 /// The `get_transactions` fetch, shared by the console commands that need it.
+///
+/// The live arm calls the facts path and the projection **directly**, as
+/// `print_block` does — not `json_endpoint`, which dispatches through the C++
+/// JSON table this slice empties. Naming a route by string there would have
+/// compiled and then answered "no reply" the moment the route left C++, which
+/// is exactly what it did until Copilot caught it on this PR. Calling the
+/// Rust functions makes that class of breakage a compile error.
+///
+/// The console is the operator's own node, so the pool read is unrestricted —
+/// the same answer the C++ gave a null `ctx` (§7, 2026-08-26).
 fn fetch_transactions(
     src: &Source,
     request: &shekyl_rpc_types::GetTransactionsRequest,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
     match src {
         Source::Live(core) => {
-            let body = serde_json::to_string(request).map_err(|e| e.to_string())?;
-            let raw = core
-                .json_endpoint("/get_transactions", &body)
-                .ok_or_else(|| "get_transactions: no reply".to_owned())?;
-            serde_json::from_str(&raw).map_err(|e| format!("malformed get_transactions reply: {e}"))
+            let ids = crate::methods::parse_request_hashes(
+                &request.txs_hashes,
+                crate::methods::TX_PARSE_FAILED,
+            )?;
+            let (slots, chain_height) = core
+                .transactions(&ids, true)
+                .map_err(|rc| format!("get_transactions: facts unavailable ({rc})"))?;
+            crate::methods::project_transactions(
+                request,
+                &ids,
+                &slots,
+                chain_height,
+                |blob, pruned| core.tx_to_json(blob, pruned),
+            )
+            .map_err(|f| format!("could not decode {} to json ({})", f.txid, f.code))
         }
         Source::Remote { address, timeout } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;

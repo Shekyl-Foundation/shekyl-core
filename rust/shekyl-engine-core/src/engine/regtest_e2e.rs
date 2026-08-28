@@ -149,8 +149,15 @@ impl RegtestDaemon {
     /// The restricted listener is opt-in rather than always-on: this harness is
     /// `#[ignore]`d, so CI would not catch a regression it introduced into the
     /// spawn that every other e2e test shares.
+    /// Spawn the daemon with its interactive console live, so a test can put
+    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
+    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    pub(super) async fn start_with_console() -> RegtestDaemon {
+        Self::start_inner(None, false, true).await
+    }
+
     pub(super) async fn start_with_restricted_listener() -> RegtestDaemon {
-        Self::start_inner(None, true).await
+        Self::start_inner(None, true, false).await
     }
 
     /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
@@ -162,10 +169,14 @@ impl RegtestDaemon {
     /// arithmetic when it assembles a claim, and gates on the lever —
     /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
     pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
-        Self::start_inner(seb, false).await
+        Self::start_inner(seb, false, false).await
     }
 
-    async fn start_inner(seb: Option<u64>, restricted_listener: bool) -> RegtestDaemon {
+    async fn start_inner(
+        seb: Option<u64>,
+        restricted_listener: bool,
+        console: bool,
+    ) -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -185,7 +196,6 @@ impl RegtestDaemon {
         cmd.args([
             "--regtest",
             "--offline",
-            "--non-interactive",
             "--no-igd",
             "--fixed-difficulty",
             "1",
@@ -204,6 +214,12 @@ impl RegtestDaemon {
         // and die at startup, intermittently. (The pre-existing TOCTOU window
         // between releasing a probe and the daemon binding is unchanged; this
         // only removes the self-collision, which is the part we create.)
+        // `--non-interactive` unless the test drives the daemon's own console:
+        // the console is what reads stdin, and suppressing it is what makes
+        // the in-process arm unreachable.
+        if !console {
+            cmd.arg("--non-interactive");
+        }
         let restricted_port = restricted_listener.then(|| {
             let mut port = Self::free_port();
             for _ in 0..64 {
@@ -224,7 +240,11 @@ impl RegtestDaemon {
         }
         cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
-            .stdin(Stdio::null());
+            // Piped, not null: the daemon's *own* console is a second arm of
+            // every ported console command — the one that reaches the core
+            // in-process rather than over HTTP. RK-4c shipped that arm broken
+            // because only the remote arm was ever exercised.
+            .stdin(Stdio::piped());
         // The SEB lever rides the child env (the daemon reads it at startup,
         // arms on fakechain, refuses loudly on a bad value). `None` must
         // scrub the variable, not merely skip setting it: the child inherits
@@ -355,6 +375,42 @@ impl RegtestDaemon {
     /// TCP connection), rather than sharing this instance's `rpc` client.
     pub(super) fn rpc_port(&self) -> u16 {
         self.rpc_port
+    }
+
+    /// The harness's RPC client, for tests that drive the daemon directly.
+    pub(super) fn rpc(&self) -> &HttpRpc {
+        &self.rpc
+    }
+
+    /// Run one command in the daemon's **own** console — the in-process arm,
+    /// which reaches the core directly rather than over HTTP — and return what
+    /// it printed.
+    ///
+    /// Reads the delta of the captured log rather than a pipe, because the
+    /// console writes through the daemon's message writers into the same
+    /// stdout the harness already captures.
+    pub(super) fn console(&mut self, command: &str) -> String {
+        use std::io::Write;
+        let log_path = self.data_dir.join("daemon.log");
+        let before = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        {
+            let stdin = self.child.stdin.as_mut().expect("daemon stdin is piped");
+            writeln!(stdin, "{command}").expect("write console command");
+            stdin.flush().expect("flush console command");
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let start = usize::try_from(before).expect("log length fits usize");
+            if text.len() > start {
+                let fresh = &text[start..];
+                if fresh.contains("msgwriter") {
+                    return fresh.to_owned();
+                }
+            }
+        }
+        panic!("console command {command:?} produced no output within 20s");
     }
 
     /// Base URL of the restricted listener, for a daemon spawned by
@@ -3412,5 +3468,62 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         "OK",
         "the unrestricted listener must still serve an over-cap request; the \
          caps are the restricted posture, not a global limit"
+    );
+}
+
+/// The ported console commands answer on the daemon's **own** console.
+///
+/// `print_tx` and `is_key_image_spent` render in Rust on two arms: over HTTP
+/// when invoked as `shekyld <command>`, and in-process when typed into the
+/// running daemon's console. Only the first was ever exercised, and RK-4c
+/// shipped the second broken — the live arm reached the methods by *route
+/// name* through `json_endpoint`, and the routes had just been deleted from
+/// the C++ dispatch table, so both commands answered "no reply".
+///
+/// The live arm now calls the facts path and the projection directly, which
+/// makes that particular breakage a compile error rather than a runtime one.
+/// This test is here for the part a compile error cannot cover: that the arm
+/// actually produces the right answer against a real core.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn ported_console_commands_answer_on_the_in_process_arm() {
+    let mut daemon = RegtestDaemon::start_with_console().await;
+
+    // The genesis coinbase is the one transaction a fresh regtest chain has,
+    // and it is reachable without mining or spending.
+    let header: serde_json::Value = daemon
+        .rpc()
+        .json_rpc_call("get_block", Some(json!({ "height": 0 })))
+        .await
+        .expect("get_block");
+    let txid = header
+        .pointer("/block_header/miner_tx_hash")
+        .and_then(|v| v.as_str())
+        .expect("genesis header carries a miner_tx_hash")
+        .to_owned();
+
+    let out = daemon.console(&format!("print_tx {txid}"));
+    assert!(
+        out.contains("Found in blockchain at height 0"),
+        "the in-process print_tx must locate the genesis coinbase; got:\n{out}"
+    );
+    assert!(
+        !out.contains("no reply"),
+        "the live arm must not be reaching a deleted C++ route; got:\n{out}"
+    );
+
+    let out = daemon.console(&format!("print_tx {txid} +meta"));
+    assert!(
+        out.contains("Size:") && out.contains("Weight:"),
+        "+meta must print size and weight, which the live arm computes from \
+         the body it fetched; got:\n{out}"
+    );
+
+    let out = daemon.console(
+        "is_key_image_spent 0000000000000000000000000000000000000000000000000000000000000003",
+    );
+    assert!(
+        out.contains("unspent"),
+        "the in-process is_key_image_spent must answer; got:\n{out}"
     );
 }

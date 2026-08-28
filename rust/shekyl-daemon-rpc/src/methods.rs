@@ -485,13 +485,26 @@ pub fn parse_request_hashes(hex: &[String], parse_msg: &str) -> Result<Vec<[u8; 
 /// got upper-case back. `HashHex` re-encodes canonically, so the reply is
 /// always lower-case. Echoing caller-controlled casing is not a property worth
 /// preserving, and pre-genesis there is no client depending on it (RK-D8).
+/// A rendering the daemon could not produce.
+///
+/// The C++ failed the whole request when `parse_and_validate_tx*_from_blob`
+/// refused a body it had just read out of its own store, and that is the right
+/// answer: a caller who asked for `decode_as_json` and got a successful reply
+/// with an empty `as_json` cannot tell "no JSON" from "the daemon's store
+/// disagrees with its parser".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderFailed {
+    pub txid: String,
+    pub code: i32,
+}
+
 pub fn project_transactions<R>(
     request: &GetTransactionsRequest,
     ids: &[[u8; 32]],
     slots: &[TxSlot],
     chain_height: u64,
     render: R,
-) -> GetTransactionsResponse
+) -> Result<GetTransactionsResponse, RenderFailed>
 where
     R: Fn(&[u8], bool) -> Result<String, i32>,
 {
@@ -583,24 +596,30 @@ where
                 } else {
                     [pruned.as_slice(), prunable.as_slice()].concat()
                 };
-                entry.as_json = render(&blob, base_only).unwrap_or_default();
+                entry.as_json = render(&blob, base_only).map_err(|code| RenderFailed {
+                    txid: entry.tx_hash.to_string(),
+                    code,
+                })?;
             }
         } else {
             let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
             entry.as_hex = hex::encode(&full);
             if request.decode_as_json {
-                entry.as_json = render(&full, false).unwrap_or_default();
+                entry.as_json = render(&full, false).map_err(|code| RenderFailed {
+                    txid: entry.tx_hash.to_string(),
+                    code,
+                })?;
             }
         }
 
         txs.push(entry);
     }
 
-    GetTransactionsResponse {
+    Ok(GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs,
         missed_tx: missed,
-    }
+    })
 }
 
 #[cfg(test)]
