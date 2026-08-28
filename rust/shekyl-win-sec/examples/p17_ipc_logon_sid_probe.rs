@@ -98,10 +98,13 @@ mod probe {
     /// this is a hang ceiling for the harness, not a deadline for the OS.
     const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// How long `--serve` waits for the remote caller. Longer than
-    /// [`CLIENT_TIMEOUT`] because two machines are coordinated by hand; still
-    /// bounded, so a second box that never dials cannot hang the operator.
-    const SERVE_TIMEOUT: Duration = Duration::from_secs(120);
+    /// How long `--serve` waits for the remote caller. Far longer than
+    /// [`CLIENT_TIMEOUT`] because the two machines are coordinated by hand
+    /// across a message relay whose per-hop latency is not under our control;
+    /// racing a tight timer against that only manufactures UNRUN runs that say
+    /// nothing about WP-D6. Still bounded, so a second box that never dials
+    /// cannot hang the operator indefinitely.
+    const SERVE_TIMEOUT: Duration = Duration::from_secs(600);
 
     /// Spawn counters, so no two rows ever share a pipe name — a consumed or
     /// squatted instance must not be able to confound a neighbouring row.
