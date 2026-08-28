@@ -141,8 +141,14 @@ fn the_cap_stays_under_both_ceilings() {
     );
 }
 
-/// Axis 2's 8 KiB/s ceiling is why the window is the modal shape and the
+/// The per-node bandwidth ceiling is why the window is the modal shape and the
 /// cap carries the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
+///
+/// The figure is [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] and is not
+/// written here. Axis 2's 8 KiB/s, which this heading used to name, was
+/// superseded per-node at 16 KiB/s by the same change that derived the
+/// cadence — and a test heading quoting a retired number is how the next
+/// reader learns the wrong ceiling.
 ///
 /// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
 /// `COVER_TRAFFIC_RESTORATION.md` §1.7.

@@ -66,8 +66,16 @@ use crate::zone::RelayZone;
 ///
 /// **Not sized to hold the largest admissible transaction.** That is the
 /// fragment cap's job ([`MAX_FRAGMENTS`]); conflating the two forces a
-/// ~98 KiB window, which at any usable cadence breaches the pre-registered
-/// 8 KiB/s bandwidth ceiling (`COVER_TRAFFIC_RESTORATION.md` §1.7 axis 2).
+/// ~98 KiB window, which breaches
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 78,436 B/s at the worst posture
+/// against 16,384. `tests/carrier_window.rs` asserts that breach as the
+/// negative control, rather than leaving it as an assertion in prose.
+///
+/// *(This cited "the pre-registered 8 KiB/s ceiling" until 2026-08-28, when
+/// the denominator was ruled per node at 16 KiB/s. The conclusion is
+/// unchanged — a ~98 KiB window breaches either figure by a wide margin — but
+/// the constant is named now instead of a literal, so the next ceiling
+/// change does not leave this paragraph behind.)*
 ///
 /// The derivation is **enforced, not performed** — `tests/carrier_window.rs`
 /// builds a real `NOTIFY_NEW_TRANSACTIONS` at the predicted size and
@@ -202,8 +210,13 @@ const _: () = assert!(
 /// makes that claim false — the new zone would raise the real bandwidth while
 /// this constant, and therefore the assert, stayed put. So it is derived from
 /// [`RelayZone::ALL`] through the same predicate the carrier uses to decide
-/// noise eligibility, and `RelayZone::position`'s wildcard-free match is what
-/// stops a new variant from being added without passing through here.
+/// noise eligibility.
+///
+/// What stops `ALL` itself from going stale is that the enum and `ALL` are
+/// **emitted from one variant list** by `relay_zones!`. An earlier draft of
+/// this paragraph credited a `position()` match instead, which was wrong twice
+/// over: that function no longer exists, and while it did it caught a new
+/// *variant* without catching an `ALL` left behind after the match was fixed.
 pub const CEILING_ZONES: u32 = {
     let mut i = 0;
     let mut n = 0;
