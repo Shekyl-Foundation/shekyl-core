@@ -76,6 +76,10 @@ pub(super) struct RegtestDaemon {
     data_dir: PathBuf,
     rpc_port: u16,
     rpc: HttpRpc,
+    /// Base URL of the second, restricted listener, when one was
+    /// asked for. `None` for the ordinary spawn, so no existing test grows a
+    /// listener it did not ask for.
+    restricted_url: Option<String>,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     _serial: OwnedMutexGuard<()>,
 }
@@ -132,6 +136,23 @@ impl RegtestDaemon {
         Self::start_with_settlement_epoch_blocks(None).await
     }
 
+    /// Spawn the daemon with a second, restricted listener, so one daemon serves
+    /// both postures and a test can put the same request to each.
+    ///
+    /// The second listener comes from `--rpc-restricted-bind-port`, which binds
+    /// an additional server with `restricted = true` fixed
+    /// (`src/daemon/daemon.cpp`). That is deliberately *not* `--restricted-rpc`,
+    /// which would flip the posture of the main listener instead — and the main
+    /// listener has to stay unrestricted here, both because the harness drives
+    /// mining through it and because it is the blast-radius control.
+    ///
+    /// The restricted listener is opt-in rather than always-on: this harness is
+    /// `#[ignore]`d, so CI would not catch a regression it introduced into the
+    /// spawn that every other e2e test shares.
+    pub(super) async fn start_with_restricted_listener() -> RegtestDaemon {
+        Self::start_inner(None, true).await
+    }
+
     /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
     /// override on the child's environment (the fakechain-only regtest
     /// lever the daemon arms at startup — the SEB gate at the top of
@@ -141,6 +162,10 @@ impl RegtestDaemon {
     /// arithmetic when it assembles a claim, and gates on the lever —
     /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
     pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
+        Self::start_inner(seb, false).await
+    }
+
+    async fn start_inner(seb: Option<u64>, restricted_listener: bool) -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -172,10 +197,34 @@ impl RegtestDaemon {
             data_dir.to_str().expect("utf8 data dir"),
             "--log-level",
             "0",
-        ])
-        .stdout(Stdio::from(log.try_clone().expect("clone log")))
-        .stderr(Stdio::from(log))
-        .stdin(Stdio::null());
+        ]);
+        // Distinct from the main port. Both probes bind :0 and release
+        // immediately, so the kernel is free to hand back the same number
+        // twice — and the daemon would then try to bind both listeners to it
+        // and die at startup, intermittently. (The pre-existing TOCTOU window
+        // between releasing a probe and the daemon binding is unchanged; this
+        // only removes the self-collision, which is the part we create.)
+        let restricted_port = restricted_listener.then(|| {
+            let mut port = Self::free_port();
+            for _ in 0..64 {
+                if port != rpc_port {
+                    return port;
+                }
+                port = Self::free_port();
+            }
+            panic!("could not obtain a restricted port distinct from {rpc_port}");
+        });
+        if let Some(port) = restricted_port {
+            // A second listener on the same daemon. This flag binds an extra
+            // server with `restricted = true` fixed; the main listener keeps
+            // whatever posture it had, which here is unrestricted. Same
+            // handlers behind both — only the posture differs, which is the
+            // whole point: one process, two answers.
+            cmd.args(["--rpc-restricted-bind-port", &port.to_string()]);
+        }
+        cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
+            .stderr(Stdio::from(log))
+            .stdin(Stdio::null());
         // The SEB lever rides the child env (the daemon reads it at startup,
         // arms on fakechain, refuses loudly on a bad value). `None` must
         // scrub the variable, not merely skip setting it: the child inherits
@@ -209,6 +258,7 @@ impl RegtestDaemon {
             data_dir,
             rpc_port,
             rpc,
+            restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -305,6 +355,14 @@ impl RegtestDaemon {
     /// TCP connection), rather than sharing this instance's `rpc` client.
     pub(super) fn rpc_port(&self) -> u16 {
         self.rpc_port
+    }
+
+    /// Base URL of the restricted listener, for a daemon spawned by
+    /// [`RegtestDaemon::start_with_restricted_listener`].
+    pub(super) fn restricted_url(&self) -> &str {
+        self.restricted_url
+            .as_deref()
+            .expect("daemon was not spawned with a restricted listener")
     }
 
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
@@ -3116,4 +3174,193 @@ fn capture_block(
         "curve_tree_root": hex::encode(block.header.curve_tree_root),
         "txs": txs,
     })
+}
+
+/// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
+///
+/// This is the regression guard for the bridge's origin context. Until
+/// 2026-08-26 the dispatchers passed `nullptr` for the handler's
+/// `connection_context*`, so `m_restricted && ctx` was false at every site and
+/// a restricted listener behaved as an unrestricted one — no request
+/// caps, and, on the pool paths, disclosure of transactions the node had not
+/// broadcast.
+///
+/// It lives here rather than beside the C++ because the assertion has to cross
+/// the whole production path — Rust HTTP handler, `core_rpc_ffi_json_endpoint`,
+/// the dispatch table, the C++ handler — and only a live daemon has all of it.
+/// A C++ unit test of the origin helper cannot see the dispatchers, so
+/// reverting a call site to `nullptr` leaves it green; this one goes red.
+///
+/// One daemon serves both listeners, so the two postures are compared against
+/// the same chain in the same process, and the unrestricted rows are the
+/// blast-radius check: the fix must not narrow the admin listener.
+///
+/// Coverage, stated rather than implied. The REST rows cross
+/// `core_rpc_ffi_json_endpoint` into `dispatch_json`; the JSON-RPC rows cross
+/// `core_rpc_ffi_json_rpc` into `dispatch_jsonrpc_we`, once for each of its two
+/// answer shapes (a refusal in `error_resp`, and one in `res.status`). Those
+/// are the only two dispatch templates left — the third, `dispatch_jsonrpc`,
+/// had no table rows and was deleted. What this does *not* reach is
+/// `dispatch_submitblock` and `dispatch_calcpow`, the two hand-written
+/// dispatchers, whose handlers read no `ctx` and so have nothing to assert.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
+    /// `RESTRICTED_TRANSACTIONS_COUNT` in `core_rpc_server.cpp`.
+    const TX_CAP: usize = 100;
+    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`.
+    const KI_CAP: usize = 5000;
+    /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
+    const BLOCK_CAP: usize = 1000;
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("unrestricted rpc client");
+
+    // Hashes that resolve to nothing: the cap is a request-shape refusal and
+    // fires before any lookup, so the chain's contents are irrelevant.
+    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
+
+    let status = |v: &serde_json::Value| -> String {
+        v.get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("<missing status>")
+            .to_owned()
+    };
+
+    // Over the cap, restricted: refused. This is the REST half — it goes red if
+    // `dispatch_json` stops passing the origin. The JSON-RPC template has its
+    // own assertions further down; neither holds the other.
+    let over: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /get_transactions over cap");
+    assert_eq!(
+        status(&over),
+        "Too many transactions requested in restricted mode",
+        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
+         says OK the handler saw a null connection context and the restricted \
+         gate is inert again"
+    );
+
+    // At the cap, restricted: served. Pins the boundary rather than "refuses
+    // everything", which a broken-in-the-other-direction change would pass.
+    let at: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP) })),
+        )
+        .await
+        .expect("restricted /get_transactions at cap");
+    assert_eq!(
+        status(&at),
+        "OK",
+        "exactly {TX_CAP} hashes is within the cap"
+    );
+
+    // The key-image cap is a second, independently-numbered site.
+    let ki_over: serde_json::Value = restricted
+        .rpc_call(
+            "is_key_image_spent",
+            Some(json!({ "key_images": hashes(KI_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /is_key_image_spent over cap");
+    assert_eq!(
+        status(&ki_over),
+        "Too many key images queried in restricted mode",
+        "a restricted listener must refuse more than {KI_CAP} key images"
+    );
+
+    // ── The other template ──────────────────────────────────────────────
+    //
+    // Everything above is REST, which reaches the handlers through
+    // `dispatch_json`. JSON-RPC goes through `dispatch_jsonrpc_we`, a separate
+    // template that could regress on its own, so it needs its own assertions —
+    // and it has two answer shapes, both worth crossing:
+    //
+    //   * a refusal written into `error_resp`  -> the error envelope
+    //   * a refusal written into `res.status`  -> the result envelope
+    //
+    // `get_block_header_by_hash` takes the first path, `get_output_histogram`
+    // the second. (After this branch deleted the unused `DJRPC` macro and its
+    // template, these two are the only JSON-RPC dispatcher left.)
+    let json_rpc = |method: &str, params: serde_json::Value| json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
+
+    // Over the block cap: refused into `error_resp`, so the reply is an error
+    // envelope and `result` never appears.
+    let hdr: serde_json::Value = restricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc(
+                "get_block_header_by_hash",
+                json!({ "hashes": hashes(BLOCK_CAP + 1) }),
+            )),
+        )
+        .await
+        .expect("restricted get_block_header_by_hash over cap");
+    assert_eq!(
+        hdr.pointer("/error/message").and_then(|m| m.as_str()),
+        Some("Too many block headers requested in restricted mode"),
+        "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
+         if this succeeds the JSON-RPC template stopped passing the origin"
+    );
+
+    // The whole-chain histogram: refused into `res.status`, so the reply is a
+    // *result* envelope carrying a non-OK status. Same gate, other shape.
+    let hist: serde_json::Value = restricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+        )
+        .await
+        .expect("restricted get_output_histogram with no amounts");
+    assert_eq!(
+        hist.pointer("/result/status").and_then(|s| s.as_str()),
+        Some(
+            "Restricted RPC will not serve histograms on the whole blockchain. Use your own node."
+        ),
+        "a restricted listener must refuse the whole-chain histogram"
+    );
+
+    // And the same JSON-RPC request on the admin listener is served, so the
+    // JSON-RPC half has its blast-radius control too.
+    let admin_hist: serde_json::Value = unrestricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+        )
+        .await
+        .expect("unrestricted get_output_histogram with no amounts");
+    assert_eq!(
+        admin_hist
+            .pointer("/result/status")
+            .and_then(|s| s.as_str()),
+        Some("OK"),
+        "the unrestricted listener must still serve the whole-chain histogram"
+    );
+
+    // Blast radius: the same over-cap request on the admin listener is served.
+    // `m_restricted` is false there, so the expression was false before the fix
+    // and is false after it — nothing about the admin listener narrowed.
+    let admin: serde_json::Value = unrestricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
+        )
+        .await
+        .expect("unrestricted /get_transactions over cap");
+    assert_eq!(
+        status(&admin),
+        "OK",
+        "the unrestricted listener must still serve an over-cap request; the \
+         caps are the restricted posture, not a global limit"
+    );
 }

@@ -2564,6 +2564,41 @@ sustainability is unaffected by the recalibration.
   still carry the daemon but no wallet. WP-W5's flip now needs one green
   scouting run including the engine-file lane.
 
+  **UPDATE 2026-08-27 — rule-82 forward item: `ERROR_ACCESS_DENIED` at the
+  wallet-pipe dial is cause-collapsed, and disambiguating it is a design
+  question, not a string swap.** Surfaced by asking whether a user may RDP
+  into their own machine to use their wallet (yes, by construction — the
+  self-hosted pair is born in one logon session and shares a logon SID; the
+  probe sheet §3.1 now says so). But the *refusal* case conflates: at
+  `CreateFileW` on the pipe, at least three distinct mechanisms surface as
+  the same os error 5, all landing in the undifferentiated
+  `DialError::Open(io::Error)` arm —
+  (1) **cross-session**: the caller's token lacks the logon SID that is the
+  DACL's only ACE (the P-13/P-17 subject);
+  (2) **same-session, Low/AppContainer**: the DACL admits the caller but the
+  `(ML;;NW;;;ME)` label blocks write-up (measured — P-12);
+  (3) **remote caller**: refused by `PIPE_REJECT_REMOTE_CLIENTS` before any
+  descriptor evaluation (documented as `ACCESS_DENIED`; **not yet observed** —
+  P-17 row (c) is its first observation).
+  Windows does not tell the caller which fired, and the caller cannot read the
+  pipe's descriptor to find out: the DACL grants `GA` to the logon SID alone,
+  so a cross-session caller lacks `READ_CONTROL` too — the open that would
+  answer the question is the open that just failed. **Partial client-side
+  disambiguation exists and is the avenue for the design round:** the dial
+  path can read its *own* integrity level and logon SID; at Medium-or-above
+  the label cannot be what refused it, so the message can say "a wallet pipe
+  exists, but this logon session's identity is not admitted — is the wallet
+  running in another session (console vs. remote)? Close it there or use it
+  there", and below Medium it can name the sandbox instead. The edges stay
+  disjunctive — the platform does not license a confident sentence, and rule
+  82 wants a guiding one, not a guessing one. **Deliberately not folded into
+  the P-17 probe PR** (mechanical vs. behavioural; the probe's rows are what
+  make the observable differences known before any message claims them).
+  **Close criterion:** a ruling on the disambiguation ladder, the
+  `DialError` variant(s) it implies, and the CLI text — landing with or after
+  P-17's results, which establish what each cause actually looks like from
+  the dial side.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and
@@ -10572,8 +10607,14 @@ its wake.
   **Still not witnessed:** the arrival-to-record leg — the receiver's
   relay-method assignment, the monotone `upgrade_relay_method`, and the full
   send path through `handle_notify_new_transactions` on a non-public context.
-  **Blocker (rule 22), now confirmed at two sites:** that path needs a `t_core`
-  mock the unit suite does not have — the one protocol-handler test that stands
+  **Blocker (rule 22), now confirmed at THREE sites** — the third and fourth
+  added 2026-08-27 by the F-10 disarm (#573): the forwarding leg
+  (`notify::record_arrival -> i_core_events`, since closed from the levin side
+  by asserting `on_stem_propagated`'s output rather than the watch's), and
+  `add_tx`'s origin pin, whose two arms — a `stem`/`fluff` arrival pinned, a
+  `block` arrival not — are **both** unreachable because no unit fixture admits
+  a transaction through `tx_memory_pool::add_tx` at all. That path needs a
+  `t_core` mock the unit suite does not have — the one protocol-handler test that stands
   up real sockets is `GTEST_SKIP`ped as flaky. Q12-U2 tried to reach it from
   the other end, through `add_tx` directly, and got three fixture obstacles
   down (encoded fee, output count, reference block) before hitting one that
@@ -10590,6 +10631,18 @@ its wake.
   rather than driving an arrival, so it pinned the class and would have fired
   only when the class was deleted. See `DAEMON_RELAY_PRIVACY.md` §89.8 and
   `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+
+  **PRICE IT ONCE RATHER THAN ACCUMULATE A FOURTH CONSUMER.** *(Ruled
+  2026-08-27.)* Three items now blocked on one absent fixture is an argument for
+  building the fixture, not for noting its absence again — each new consumer
+  arrives, re-derives the same obstacle list, records the same deferral, and
+  leaves the tree exactly as unwitnessed as it found it. The next item that
+  wants this path should **cost the harness** instead of adding a fifth note:
+  the known obstacles are enumerated above (encoded fee, output count, reference
+  block, and the one that does not fall to fixture work — `add_tx` runs full
+  input verification, so an arrival needs a valid FCMP++ proof). A real
+  transaction from the Rust builder against a regtest chain is the shape to
+  price; the shim fixture is not, and that is settled rather than open.
 
 - **Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after
   origination.** *(Surfaced 2026-08-13, Q12-U3 review.)* Once-at-origin

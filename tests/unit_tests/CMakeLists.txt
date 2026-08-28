@@ -79,6 +79,7 @@ set(unit_tests_sources
   rpc_args_daemon_surface.cpp
   rpc_facts_ffi_roundtrip.cpp
   rpc_facts_shims.cpp
+  rpc_restricted_gate.cpp
   rolling_median.cpp
   scaling_2021.cpp
   seed_epoch.cpp

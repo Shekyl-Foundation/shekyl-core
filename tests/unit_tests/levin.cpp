@@ -57,8 +57,24 @@ namespace
         boost::asio::io_context& io_service_;
         std::size_t ref_count_;
 
+      public:
+        /*! When false, every `do_send` fails — the transport rejecting a write.
+
+            Process-wide because `test_endpoint` is constructed deep inside the
+            connection machinery and has no seam a fixture could thread a flag
+            through. Restored by RAII at each use; a leaked `false` would fail
+            unrelated fixtures and read as a flake. */
+        static bool& deliver()
+        {
+            static bool value = true;
+            return value;
+        }
+
+      private:
         virtual bool do_send(epee::byte_slice message) override final
         {
+            if (!deliver())
+                return false;
             send_queue_.push_back(std::move(message));
             return true;
         }
@@ -120,6 +136,10 @@ namespace
     {
         std::map<cryptonote::relay_method, std::vector<cryptonote::blobdata>> relayed_;
         std::map<cryptonote::relay_method, epee::net_utils::zone> zones_;
+        //! Propagation verdicts, in arrival order. Read by
+        //! `stem_watch_records_and_arrival_resolves`, which is what makes the
+        //! forwarding leg asserted rather than inferred from the watch.
+        std::vector<crypto::hash> stem_propagated_;
 
         virtual bool is_synchronized() const final
         {
@@ -129,6 +149,12 @@ namespace
         virtual uint64_t get_current_blockchain_height() const final
         {
             return 0;
+        }
+
+        virtual void on_stem_propagated(epee::span<const crypto::hash> txids) override final
+        {
+            for (const auto& id : txids)
+                stem_propagated_.push_back(id);
         }
 
         virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
@@ -165,6 +191,12 @@ namespace
             if (found == zones_.end())
                 throw std::logic_error{"no relay recorded for that method"};
             return found->second;
+        }
+
+        //! \return Every propagation verdict forwarded so far, in arrival order.
+        const std::vector<crypto::hash>& stem_propagated() const noexcept
+        {
+            return stem_propagated_;
         }
 
         std::vector<cryptonote::blobdata> take_relayed(cryptonote::relay_method relay)
@@ -2716,6 +2748,124 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
 
     EXPECT_EQ(0u, notifier.stem_in_flight())
         << "the same txs arriving from another peer must resolve the observations";
+
+    /* The FORWARDING leg, asserted rather than inferred. `stem_in_flight`
+       reaching zero says the watch resolved; it says nothing about the verdict
+       reaching core, and the disarm consumer lives on the far side of
+       `on_stem_propagated`. A dispatch that resolved the observations and
+       forwarded nothing passes the line above — which is this assertion's
+       negative control: drop the `core->on_stem_propagated` call in
+       `levin_notify.cpp`'s `record_arrival` and this goes red on its own. */
+    EXPECT_EQ(cryptonote::levin::stem_watch_tx_hashes(txs), events_.stem_propagated())
+        << "the propagation verdicts must cross into core, keyed by canonical "
+           "hash and in arrival order";
+}
+
+/*! A stem that never left must not be recorded as relayed.
+
+    `record_relayed` fired BEFORE `make_payload_send_txs`, so the pool was told
+    a stem had been launched on every path where one never was — `NoRoute`, or
+    both send attempts failing.
+
+    Not a cosmetic ordering. `set_relayed` writes `meta.relayed`, and
+    `local_relay_base` reads exactly that bit to choose an origin's backoff:
+    `false` keeps MIN_RELAY_TIME because "no stem was ever launched, so no
+    embargo exists anywhere to complete", `true` buys the derived interval,
+    which provisions for a stem completing. A send that never happened claiming
+    `true` is the same falsification an unsent `local` entry was fixed for, and
+    it costs the origin the long wait on the strength of an event that did not
+    occur.
+
+    THE ORACLE NEEDS A STEM EPOCH AND A FAILING TRANSPORT, and neither can be
+    established after the other alone: the loop that finds a stem epoch
+    recognises it BY the stem record, which is the thing under test. So the
+    epoch is established first with delivery working and drained, then delivery
+    is cut WITHIN that epoch — an epoch persists across sends until
+    `run_epoch`.
+
+    Negative control: restore `record_relayed(relay_method::stem)` above the
+    send in `dandelionpp_notify` and the first assertion fails. */
+TEST_F(levin_notify, a_failed_stem_is_not_recorded_as_relayed)
+{
+    static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < test_connections_count; ++count)
+        add_connection(count % 2 == 0);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> first(1);
+    std::vector<cryptonote::blobdata> second(1);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 1;
+        first[0] = cryptonote::t_serializable_object_to_blob(tx);
+        tx.unlock_time = 2;
+        second[0] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    // PHASE 1 — reach a stem epoch with the transport working, so that the
+    // failure below is known to be a stem epoch's failure and not a fluff
+    // epoch trivially recording fluff.
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls)
+            << "no stem send after " << kMaxEpochRolls << " epoch rolls";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(first, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        ASSERT_LT(0u, io_service_.poll());
+        if (events_.has_stem_txes())
+            break;
+        EXPECT_EQ(first, events_.take_relayed(cryptonote::relay_method::fluff));
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto &ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+    EXPECT_EQ(first, events_.take_relayed(cryptonote::relay_method::stem));
+    for (auto &ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+
+    // PHASE 2 — same epoch, transport now refusing every write.
+    struct deliver_guard
+    {
+        deliver_guard() { test_endpoint::deliver() = false; }
+        ~deliver_guard() { test_endpoint::deliver() = true; }
+    } no_delivery;
+
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(second, context->get_id(), cryptonote::relay_method::stem));
+    io_service_.restart();
+    io_service_.poll();
+
+    EXPECT_FALSE(events_.has_stem_txes())
+        << "a stem that failed to reach the wire was recorded as relayed — "
+           "`meta.relayed` then buys the derived origin interval on the "
+           "strength of a send that never happened";
+
+    // The fluff fallback still records, which is the half that IS true: the
+    // pool is told what actually happened rather than nothing at all. Drained
+    // so `TearDown`'s undrained-event assertion reads the subject.
+    EXPECT_EQ(second, events_.take_relayed(cryptonote::relay_method::fluff));
+    for (auto &ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
 
 /*! C++ cannot enable the noise carrier, and this is what says so.
@@ -2739,7 +2889,124 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     The phase-versus-carrier property itself now lives only in Rust
     (`a_noise_carrier_does_not_change_the_phase`), which is correct: the
     carrier is only in Rust. */
-TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
+/*! The development opt-in reaches the carrier, and CI can run it.
+
+    The point of a RUNTIME flag rather than `#ifdef`: behind a compile-time
+    gate the only configuration that runs the carrier is the one CI never
+    builds, so the code would be untestable by the repository's own gate. The
+    default is unchanged — every `has_noise == false` fixture in this file
+    still passes untouched — and this case is the one that flips it. */
+TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_zone)
+{
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    /* Restored however this test leaves, because the flag is process-wide and
+       a leaked `true` would silently arm every fixture that runs after it —
+       the failure would land in an unrelated test and read as a flake. */
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    {
+        // ENCRYPTED zone: the carrier engages.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_TRUE(notifier_ptr->get_status().has_noise)
+            << "the development opt-in must reach an encrypted zone, or the "
+               "carrier has no configuration a gate can exercise";
+    }
+    {
+        // CLEARTEXT zone: still refused, and by Rust rather than by this flag.
+        // `Zone::new` rejects a noise carrier on a cleartext link (§93.2), so
+        // the opt-in cannot force one — the carrier hides by payload
+        // indistinguishability, which needs encryption at step one.
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
+        ASSERT_LT(0u, io_service_.poll());
+        EXPECT_FALSE(notifier_ptr->get_status().has_noise)
+            << "link secrecy is the carrier's precondition; the opt-in does "
+               "not get to override the Rust gate that enforces it";
+    }
+}
+
+/*! The carrier is OFF BY DEFAULT, on both zone classes.
+
+    Renamed from `cpp_cannot_enable_the_noise_carrier`, because that property
+    stopped being true in this change: `set_carrier_development(true)` is a
+    C++ path that sets the flag. The test kept passing — it just no longer
+    tested what its name said, which is worse than failing, and the sibling
+    case above proves the opposite property deliberately.
+
+    What survives, and is worth a gate: the DEFAULT is off, and nothing in an
+    ordinary build turns it on. That is the invariant every other fixture in
+    this file leans on when it asserts `has_noise == false`. */
+/* The `res > 0` fix's regression test was blocked by the harness, and the
+   blocker turned out to BE the defect next door.
+
+   `test_endpoint::deliver()` above is the injection it needs and it works —
+   `do_send` returns false on demand. What did not work was an oracle around
+   it: `TearDown`'s `relayed_method_size() == 0` fired, because
+   `dandelionpp_notify` called `record_relayed` BEFORE
+   `make_payload_send_txs`, so a relay was recorded for a send that never
+   happened and no drain matched it.
+
+   That ordering is now fixed, and
+   `a_failed_stem_is_not_recorded_as_relayed` above is the test the injection
+   was kept for. The undrained-event assertion stopped fighting the fixture
+   the moment the record moved to the success arm — it had been reporting the
+   defect, not obstructing the test.
+
+   The `res > 0` fix itself is `net_node.inl:2503-2504`'s check applied to the
+   same call: `connections::send` returns 1/0/-1 and both sites compare `> 0`.
+
+   CORRECTION to what this note used to claim. It said the ordering mattered
+   "since F-10's tallies read that record". They do not. F-10's tallies are
+   armed by `record_stem_observation`, which was already correctly placed
+   after a successful send. The record that was falsified is `meta.relayed`,
+   read by `local_relay_base` to choose an origin's backoff — a different
+   consumer, and the one an unsent `local` entry was already fixed for. The
+   claim was written from the shape of the neighbouring bug rather than from
+   the call chain. */
+
+/*! The carrier actually EMITS through `on_noise`, and the frames are levin.
+
+    The C++ half of the boundary this change widened, and it was uncovered:
+    the opt-in test above only checks a constructed bit, and the Rust tests
+    stop at the FFI. So "the callback marshals bytes correctly" rested on
+    nothing on this side, which is where the raw-zeros dummy would have shown
+    up as dropped peers rather than a failing assertion. */
+TEST_F(levin_notify, the_carrier_emits_levin_frames_through_on_noise)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    // OUTBOUND connections: noise channels are stem slots, and an unbound slot
+    // emits nothing at all (CV-2). Incoming ones never enter the stem map.
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    const std::size_t sent =
+      drive_schedule(notifier, [](std::size_t n) { return n != 0; });
+    EXPECT_LT(0u, sent)
+      << "a carrier zone must emit on its cadence — zero means `on_noise` "
+         "never reached the transport, which is the state this PR's Rust-side "
+         "tests cannot see";
+}
+
+TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
 {
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
@@ -2755,19 +3022,20 @@ TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
         /* Read what each arm actually demonstrates, because they are NOT the
            same refusal and only one of them is this test's subject.
 
-           On i2p, `has_noise` is false because no C++ path sets the flag —
-           the property named above. On the PUBLIC zone there are two refusals
-           stacked, and the second one never runs: even with the flag forced
-           on, `Zone::new` rejects a noise carrier on a cleartext link (§93.2)
-           before the C++ question is reached. Verified by forcing the flag in
-           `make_relay_zone` — only the i2p arm reds.
+           On i2p, `has_noise` is false because the development opt-in is off
+           — the property named above, and the one the sibling test flips. On
+           the PUBLIC zone there are two refusals stacked, and the second never
+           runs: even with the opt-in ON, `Zone::new` rejects a noise carrier
+           on a cleartext link (§93.2) before the flag is consulted. The
+           sibling test asserts exactly that, so the claim is now covered
+           rather than argued.
 
            So the public arm is coverage of the Rust gate, not of this test's
-           claim, and a reader taking both arms as evidence for "C++ cannot
-           enable noise" would be over-reading it by one refusal. */
+           claim, and a reader taking both arms as evidence for "the default is
+           off" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
-            << "no C++ path sets the noise flag; the carrier is Rust-owned "
+            << "the carrier is off unless a development build turns it on "
             << "(zone is " << (is_public ? "public" : "i2p") << ")";
     }
 }

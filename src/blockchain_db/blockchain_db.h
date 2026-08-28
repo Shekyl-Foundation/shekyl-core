@@ -253,21 +253,34 @@ struct txpool_tx_meta_t
   uint8_t pruned: 1;
   uint8_t is_local: 1;
   uint8_t dandelionpp_stem : 1;
-  /* Reserved. Held `is_forwarding` until Q12-U2 deleted `relay_method::forward`
-     (see cryptonote_protocol/enums.h for why the class went).
+  /*! This transaction has been seen arriving from somewhere OTHER than the
+      peer it was stemmed to — F-10's predicate, resolved.
 
-     Kept as a reserved bit rather than removed, and the reason is layout, not
-     sentiment: the members below it are read from persisted records, so
-     deleting this bit would shift `fcmp_verified` and `origin_zone` down one
-     position and make new code misread old entries — including
-     `fcmp_verified` reading 1 where 0 was written, which is the direction that
-     skips a proof re-verification. Pre-genesis there is no deployed pool for
-     that to happen to, and the txpool is ephemeral node-local state rather
-     than chain history, so both reasons say "harmless" — but a reserved bit
-     costs one line and removes the question instead of arguing it. Zeroed by
-     `set_relay_method`, exactly where `is_forwarding` was, so every bit in
-     this byte is still written by someone. */
-  uint8_t bf_padding: 1;
+      Named for the fact rather than for what the pool does with it. The fact
+      is "observed circulating"; disarming the origin's re-broadcast is one
+      consumer's response to it (`get_relayable_transactions`' `local` arm),
+      and a second consumer wanting the same fact should not have to read a
+      field named after the first one's reaction.
+
+      Set by `tx_memory_pool::on_stem_propagated`, from the Rust stem watch's
+      verdict. NOT a timer and not a count: the watch refuses to resolve an
+      arrival charged to the successor the observation was given to, so an
+      echo from the peer that was handed the stem sets nothing (F-10, §49).
+
+      ZERO IS "NOT OBSERVED", which is why this bit and not a new one. It held
+      `is_forwarding` until Q12-U2 deleted `relay_method::forward`, then sat
+      reserved — never read, written only as an explicit zero. So every record
+      ever persisted carries zero here by construction, the layout does not
+      move (`fcmp_verified` and `origin_zone` keep their positions), and the
+      conservative reading is the one old records already give.
+
+      Still zeroed by `set_relay_method`, and that stays CORRECT rather than
+      being worked around: `upgrade_relay_method` only calls it when the
+      method strictly increases, so a pinned `local` origin — the only class
+      that uses the re-broadcast arm — keeps the bit for its whole life, while
+      an entry that genuinely leaves `local` for `fluff`/`block` has left that
+      arm and should not carry a disarm for it. */
+  uint8_t observed_circulating: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
   //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
   //
@@ -303,7 +316,8 @@ struct txpool_tx_meta_t
   // decodes to "origin unknown" -- already the correct sentinel.
   //
   // That is stronger than "the spare bits happen to be zero". The predecessor
-  // `bf_padding` was never READ anywhere, and its only writes were three
+  // `bf_padding` (now `observed_circulating`) was never READ anywhere at the
+  // time, and its only writes were three
   // explicit `= 0` assignments in tx_pool.cpp, now replaced by the setter. So
   // every record ever persisted carries zero here by construction, and the
   // fallback is a fact about the data rather than a hope about it.

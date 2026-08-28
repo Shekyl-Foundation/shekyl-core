@@ -255,15 +255,33 @@ impl StemWatch {
     ///
     /// Unknown transactions are ignored: this node either never stemmed it or
     /// already resolved it, and neither is an error.
-    pub fn seen(&mut self, tx: &TxId, from: Option<ConnectionId>) {
+    /// Returns `true` when this arrival RESOLVED the observation as
+    /// propagated — i.e. the predicate *"this came back from somewhere other
+    /// than where I sent it"* just became true for `tx`.
+    ///
+    /// **The verdict is returned from HERE, not from [`Self::resolve`], and
+    /// that placement is the point.** `resolve` folds an outcome into a
+    /// per-successor tally and drops the transaction identity on the floor;
+    /// it is the right shape for the §55 telemetry and the wrong one for a
+    /// consumer that needs to know *which transaction*. Threading the signal
+    /// through `resolve` would put it one step downstream of the same fold
+    /// and lose the hash again — so it leaves at the last point that still
+    /// holds one.
+    ///
+    /// `false` covers three different states deliberately: unknown (never
+    /// stemmed here, or already resolved), charged-successor echo (F-10), and
+    /// silence. A caller disarming on `true` therefore keeps retrying through
+    /// all three, which is the conservative direction.
+    pub fn seen(&mut self, tx: &TxId, from: Option<ConnectionId>) -> bool {
         let Some(p) = self.pending.get(tx) else {
-            return;
+            return false;
         };
         if from.is_some_and(|f| f == p.successor) {
-            return;
+            return false;
         }
         let p = self.pending.remove(tx).expect("checked present above");
         self.resolve(p, StemOutcome::Propagated);
+        true
     }
 
     /// Resolve every observation whose deadline has passed as

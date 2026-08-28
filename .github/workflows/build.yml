@@ -251,6 +251,59 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
+      # The restricted-RPC gate's only production-path guard. It spawns the
+      # shekyld just built and puts real over-cap requests to a restricted
+      # listener, which is the one assertion that can see whether the C++
+      # dispatch bridge passes a connection context — the C++ unit tests
+      # cannot, by construction, and without this the privacy regression it
+      # guards could merge green.
+      #
+      # It runs here rather than in the test job because that job installs no
+      # Rust by design, and here the binary and the toolchain already coexist:
+      # no extra build, ~3 seconds. `--ignored` because the test is opted out
+      # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
+      # it finds one.
+      - name: restricted-RPC gate (live daemon, production path)
+        if: matrix.pack_ctest
+        # `shell: bash` like the CTest-artifact step below, and for the same
+        # reason: the job's default shell in this container is dash, which
+        # rejects `set -o pipefail` outright — the script dies on line 1
+        # before running anything.
+        shell: bash
+        run: |
+          set -eu
+          # `$PWD`, not `${{ github.workspace }}`: that expression is evaluated
+          # on the runner host and yields /home/runner/work/..., while this step
+          # executes inside the container, where the same tree is /__w/... A
+          # step starts in the workspace, so the relative path is the one that
+          # is right on both sides.
+          export SHEKYLD_BIN="$PWD/build/bin/shekyld"
+          test -x "$SHEKYLD_BIN" || { echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2; exit 1; }
+          cd rust
+          # Redirected, not piped: a pipeline's status is the last command's, so
+          # `| tee` would swallow cargo's verdict. Read the log afterwards.
+          #
+          # The filter is the FULL test path — `--exact` matches
+          # `module::path::name`, so the bare function name selects nothing, and
+          # `cargo test` reports "0 passed" and exits 0 when a filter matches
+          # nothing. The count assertion is what refuses that green no-op
+          # (rule 47: a gate must assert its own subject exists).
+          set +e
+          cargo test -p shekyl-engine-core --lib \
+            engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
+            -- --ignored --exact --nocapture > gate.log 2>&1
+          status=$?
+          set -e
+          cat gate.log
+          if [ "$status" -ne 0 ]; then
+            echo "FATAL: the restricted-RPC gate's test failed" >&2
+            exit "$status"
+          fi
+          grep -qE '^test result: ok\. 1 passed' gate.log || {
+            echo "FATAL: the gate selected no test — the filter or the test name moved" >&2
+            exit 1
+          }
+
       # Pack the CTest tree for the 24.04 test job. Same shape as
       # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
       # (CMakeLists.txt), so test binaries are statically linked against
