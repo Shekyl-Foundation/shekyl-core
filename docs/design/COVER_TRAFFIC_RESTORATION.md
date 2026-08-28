@@ -936,6 +936,12 @@ every admissible shape a single fragment. Priced against axis 2's ceiling:
 | 65,536 B | ≥ 16 s | 8 s … 24 s |
 | ~98,046 B | ≥ 24 s | **12 s, flat** |
 
+> **Stale as of 2026-08-28 and kept as the record of the argument.** Every row
+> is per zone against an 8 KiB/s ceiling; §3.3 ruled the denominator **per
+> node** at **16 KiB/s**, and the cadence is now 5 s in the mean rather than
+> 12.5 s. The 20,480 B row's live figures are 4 KiB/s per channel and a modal
+> `hop` of **2.5 s**. Re-price before quoting any row here as purchasable.
+
 So flat *is* purchasable, at a 12 s floor and **exactly at** the ceiling with
 zero margin. **This is analysis, not a proposal — `WINDOW_BYTES` is not
 touched here.** It belongs to the window-sizing question, and it needs the
@@ -965,13 +971,48 @@ cadence proposal without constraining this one" — halving the cadence, the
 lever this arc has priced repeatedly, **breaches it on a dual-zone node while
 looking fine on a single-zone one**.
 
-**Owed: a ruling on the denominator.** Either the ceiling is per encrypted zone
-(and the per-node total is unbounded in the number of zones, which needs
-saying), or it is per node (and the design figure must be stated at the
-multi-zone case, at a 1.25× margin). Not settled here because it is a
-bandwidth-posture question rather than a wiring one, and it changes §3.2's
-trade table — both rows there are per zone, so a per-node reading halves every
-admissible window on a dual-zone node.
+**~~Owed: a ruling on the denominator.~~ RULED 2026-08-28 — per NODE.** The
+alternative was per encrypted zone, which leaves the per-node total unbounded
+in the number of zones; a ceiling that grows when you add a transport is not a
+ceiling. So the figure is stated at the multi-zone case, which is the posture
+that exists.
+
+| | value |
+| --- | --- |
+| ceiling | **16 KiB/s per node** |
+| window | 20,480 B |
+| channels | 2 per zone × 2 encrypted zones = **4** |
+| mean cadence | **5 000 ms** (`3 333 + U[0, 3 334]`) |
+| per channel | **4 KiB/s** |
+| worst-posture node rate | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
+
+**It holds at exact equality, and the ceiling is now a build break rather than
+a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` carries it
+with a `const` assert beside the constants it divides, so shortening the
+cadence, widening the window, or adding a third encrypted zone does not go
+quietly — it fails to compile.
+
+That is the honest answer to this section's own objection. A 1.25× margin was
+*"not constraining a future cadence proposal without constraining this one"*;
+1.0× does not pretend to be a bound with slack. What it buys instead is that
+the next change has to **move the ceiling explicitly, with a reason**, rather
+than discovering afterwards that a figure in a table went stale.
+
+**One uniform cadence, no allocation.** The ceiling is not divided among zones
+or channels, and no channel is throttled relative to another: every channel
+draws from the same law. A per-zone or per-channel budget would make emission
+timing depend on how many zones a node happens to carry — a node fact leaking
+into the cadence, which is the CV-4 shape one level up.
+
+**Rebind-on-slow-circuit is the stated handling.** A circuit that cannot
+sustain 4 KiB/s is a transport problem, answered by rebinding the channel, not
+by slowing the emitter for everyone. Slowing it is what would make the cadence
+carry information about the circuit.
+
+**§3.2's trade table is now per node** and both its rows were per zone, so the
+admissible windows there halve on a dual-zone node. The table is analysis
+rather than a proposal — `WINDOW_BYTES` is untouched — but its rows should be
+read against 16 KiB/s per node before any of them is quoted as purchasable.
 
 **Also stale, and it is a measurement spec.** Six lines under the 3.20 KiB/s
 figure, axis 2 still instructs: *"the rig spike must hold a circuit at

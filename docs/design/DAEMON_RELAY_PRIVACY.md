@@ -10056,6 +10056,69 @@ right: real code, real draws, real trials. `MatcherStrength` stays in the
 instrument as a permanent second arm so the next reader can see the result
 move with observer strength rather than trusting one number.
 
+### 56.7 Re-measured at the 5 s cadence — the channel shrinks ~7×, the ruling stands
+
+**2026-08-28.** The cover cadence moved from `10 s + U[0, 5 s]` (mean 12.5 s)
+to `3.333 s + U[0, 3.334 s]` (mean exactly 5 s). Both Unit 2 assertions went
+red, and neither was breakage — the instrument was reporting that the numbers
+§56.4 decided against had moved.
+
+**Bounded's residual channel at a 10 s blackout** (strong matcher, chance
+0.050):
+
+| | mean 12.5 s | mean 5 s |
+| --- | --- | --- |
+| match rate | 0.120 | **0.058** |
+| excess over chance | 0.070 | **0.008** |
+
+Above chance at 10 s and 13 s only; at chance from 20 s out. Confirmed
+significant before acting on it — 6 000 trials put it at **2.9 σ**, so the
+assertion now runs at 20 000 (σ ≈ 0.0015) and asserts a 3 σ band rather than
+the old `CHANCE + 0.02`, which was calibrated against a seven-times-larger
+effect and could not resolve this one.
+
+**Why, and it is the same analytic handle §56.4 used.** Elapsed over `k`
+intervals has relative spread `0.193/√k` at the new constants against
+`0.115/√k` at the old — 1.67× wider. A fixed blackout also hides more
+emissions, so `k` is both larger and harder to pin, and the residual phase
+inside it is a smaller share of the interval.
+
+**§56.5's ruling is unaffected, and the distinction is its whole basis.**
+Memorylessness removes the channel **by construction** — the wait from
+blackout-end is `Exp(µ)`, independent of everything prior — while bounded
+merely leaks *less* at these constants. A shorter cadence is a smaller number,
+not a different family. Reading "at chance" off a 600-trial sample that cannot
+resolve 0.008 would have been precisely the trap §56.5 named: a green result
+grading the observer rather than the mechanism.
+
+#### 56.7a The weak-matcher probe was measuring alignment
+
+The second red is more instructive. `the_weak_matcher_misses_what_the_strong_one_finds`
+probed a 60 s blackout — 4.8 periods at the old mean, exactly **12** at the
+new one — and the weak matcher then read the metronome at **1.000** rather
+than 0.000.
+
+| blackout | 10 s | 13 s | 27 s | 47 s | 63 s | 88 s | 150 s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| weak, metronome | **1.000** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **1.000** |
+
+Every 1.000 is an exact multiple of the 5 s mean. On-multiple, `last + mean` is
+wrong by the *same* whole number of periods for every stream, so the ordering
+it induces is still correct and the assignment is perfect; off-multiple the
+streams land at unrelated offsets and it scrambles.
+
+**That is §56.2's mechanism, and this is the third time it has had to be
+learned.** §56.2 rejected the −0.250 at `D` = 30 s because *"30 s is exactly
+two 15 s periods"*; §56.4 observed that the tell *"was already in §56.2 and I
+did not generalise it"* — applying it to one data point rather than to the
+instrument. Leaving a probe's alignment to chance is the same omission again.
+The test now **asserts its blackout is off-multiple before using it**, and 47 s
+is chosen for being coprime to the mean rather than for its result.
+
+The sweep table keeps §56.4's blackouts for comparability and gains a 13 s row,
+which is what makes the alignment effect visible in the readout rather than a
+property of whichever cadence happens to ship.
+
 ### 56.6 Review round — four real defects, one mis-severity, one wrong claim
 
 **2026-08-03.** Six findings on #390. All six were acted on; two are worth
