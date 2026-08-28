@@ -506,6 +506,29 @@ because a remote session has a *different* logon SID but because it has *none*,
 so a logon-SID-scoped descriptor is unmatchable from the network by
 construction.
 
+**Harness bite-checked (2026-08-28), because a broken gate looks like a passing
+one.** Two runner fixes on this branch were verified by making them fire, not by
+reading them:
+
+- *Rule 47 — build-error vs UNRUN.* A syntax error injected into the p12 example
+  made `cargo run` exit 101; the runner reported **FAIL, exit 1**, where the
+  prior `default => UNRUN` mapping would have printed a benign non-measurement
+  under "No probe FAILED." CI exercises only P-17's identical mapping — `-CiOnly`
+  skips P-12 — which is now noted at the skip site.
+- *`mechanism_row`'s 30 s timeout — the detach fix.* Calibrated first, because
+  the obvious test cannot discriminate: an RFC 5737 TEST-NET-1 host
+  (`192.0.2.1`) fails the SMB connect at **~26.7 s** — *before* the 30 s bound,
+  so it would never fire the timeout and a "verified" off it would be false; an
+  in-subnet ARP-hole (`10.10.12.253`) stalls to **~31.2 s** and does. Injected as
+  the first `transport_hosts()` entry, the run took the `recv_timeout` arm
+  (confirmed by its distinct "did not measure … reported nothing within 30s"
+  message, since **30.3 s** wall against **31.2 s** stall is inside timing
+  noise), and — the point of the detach — **continued** to the next host and
+  produced a verdict rather than blocking for the OS's full connect duration on
+  the stall (and, on a host that never returns, forever). A `join()` that defeats
+  its own timeout is invisible to compile, clippy and CI alike until something
+  stalls; the calibration is what made the check a check.
+
 ## 5. What a failure does *not* license
 
 Rewriting a prediction to match an observation. If a probe fails, the entry
