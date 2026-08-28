@@ -116,8 +116,18 @@ namespace
   crypto::hash tagged_hash(uint8_t tag)
   {
     crypto::hash h;
+    // Written through an unsigned view: `crypto::hash::data` is `char[]`, whose
+    // signedness is implementation-defined, and this generator produces values
+    // above 127 for most tags. Converting those to a signed `char` is
+    // implementation-defined before C++20 and this tree builds as C++17. The
+    // object representation would be the same byte on any two's-complement
+    // machine — and a platform where it was not would fail `pin()` rather than
+    // pass with different bytes — but the intent here is a byte pattern, so it
+    // is written as one. Aliasing a `char[]` through `unsigned char*` is
+    // always permitted.
+    auto* bytes = reinterpret_cast<unsigned char*>(h.data);
     for (size_t i = 0; i < sizeof(h.data); ++i)
-      h.data[i] = static_cast<char>((i * 7 + tag) & 0xff);
+      bytes[i] = static_cast<unsigned char>((i * 7 + tag) & 0xff);
     return h;
   }
 

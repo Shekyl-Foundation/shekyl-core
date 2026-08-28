@@ -129,7 +129,12 @@ namespace
   crypto::hash tagged(uint8_t tag)
   {
     crypto::hash h = crypto::null_hash;
-    h.data[0] = static_cast<char>(tag);
+    // Unsigned view, for the reason the oracle emitter's generator carries:
+    // `data` is `char[]` and the parameter admits 0..255. Today's callers pass
+    // 1..3, so the conversion is well-defined by accident of the call sites
+    // rather than by the code — which is exactly the kind of safety that
+    // stops holding when someone adds a fourth transaction.
+    *reinterpret_cast<unsigned char*>(h.data) = tag;
     return h;
   }
 

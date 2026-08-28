@@ -63,7 +63,8 @@ namespace
   {
     crypto::hash h = crypto::null_hash;
     for (size_t i = 0; i < 8; ++i)
-      h.data[i] = static_cast<char>((height >> (i * 8)) & 0xff);
+      reinterpret_cast<unsigned char*>(h.data)[i] =
+        static_cast<unsigned char>((height >> (i * 8)) & 0xff);
     h.data[8] = 0x5a; // never all-zero, so it cannot be confused with null_hash
     return h;
   }
