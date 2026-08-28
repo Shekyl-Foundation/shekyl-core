@@ -292,27 +292,52 @@ mod check_workflows {
     impl Rpc for MockRpc {
         async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
             let reply = match route {
+                // Built from the wire type for the same reason `get_height`
+                // below is — and this one is the proof the reason is real. It
+                // was a `json!` literal until RK-4c, and the moment the reader
+                // became typed the literal stopped decoding: it named four
+                // fields where the contract has nine. A double that cannot
+                // express the reply is a double that was never checked against
+                // it.
                 "get_transactions" => {
                     self.get_transactions_calls.fetch_add(1, Ordering::SeqCst);
-                    let req: Value = serde_json::from_slice(&body).expect("request body is JSON");
-                    let hashes = req["txs_hashes"]
-                        .as_array()
-                        .expect("txs_hashes is an array");
+                    let req: shekyl_rpc_types::GetTransactionsRequest =
+                        serde_json::from_slice(&body).expect("request decodes");
                     let mut txs = Vec::new();
                     let mut missed = Vec::new();
-                    for h in hashes {
-                        let h = h.as_str().expect("txid is a hex string");
-                        match self.txs.get(h) {
-                            Some(body_hex) => txs.push(json!({
-                                "tx_hash": h,
-                                "pruned_as_hex": body_hex,
-                                "in_pool": false,
-                                "block_height": TX_BLOCK_HEIGHT,
-                            })),
-                            None => missed.push(h.to_string()),
+                    for h in &req.txs_hashes {
+                        match self.txs.get(h.as_str()) {
+                            Some(body_hex) => txs.push(shekyl_rpc_types::TxEntry {
+                                tx_hash: shekyl_rpc_types::HashHex::from_hex(h)
+                                    .expect("txid is 32 bytes of hex"),
+                                as_hex: String::new(),
+                                pruned_as_hex: (*body_hex).clone(),
+                                prunable_as_hex: String::new(),
+                                prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                as_json: String::new(),
+                                pruned: false,
+                                double_spend_seen: false,
+                                location: shekyl_rpc_types::TxLocation::Mined {
+                                    block_height: TX_BLOCK_HEIGHT,
+                                    confirmations: 1,
+                                    block_timestamp: 0,
+                                    output_indices: Vec::new(),
+                                },
+                            }),
+                            None => missed.push(
+                                shekyl_rpc_types::HashHex::from_hex(h)
+                                    .expect("txid is 32 bytes of hex"),
+                            ),
                         }
                     }
-                    json!({ "txs": txs, "missed_tx": missed })
+                    serde_json::to_value(shekyl_rpc_types::GetTransactionsResponse {
+                        status: shekyl_rpc_types::RpcStatus::ok(),
+                        txs_as_hex: Vec::new(),
+                        txs_as_json: Vec::new(),
+                        txs,
+                        missed_tx: missed,
+                    })
+                    .expect("wire type serializes")
                 }
                 // Built from the daemon's own wire type, not a JSON literal:
                 // the compiler holds this double to the contract's field set
@@ -325,15 +350,22 @@ mod check_workflows {
                 })
                 .expect("wire type serializes"),
                 "is_key_image_spent" => {
-                    let req: Value = serde_json::from_slice(&body).expect("request body is JSON");
-                    let n = req["key_images"]
-                        .as_array()
-                        .expect("key_images is an array")
-                        .len();
-                    let statuses: Vec<u64> = (0..n)
-                        .map(|i| self.spent_status.get(i).copied().unwrap_or(0))
+                    let req: shekyl_rpc_types::IsKeyImageSpentRequest =
+                        serde_json::from_slice(&body).expect("request decodes");
+                    let statuses: Vec<shekyl_rpc_types::KeyImageStatus> = (0..req.key_images.len())
+                        .map(|i| {
+                            let raw = self.spent_status.get(i).copied().unwrap_or(0);
+                            shekyl_rpc_types::KeyImageStatus::try_from(
+                                u8::try_from(raw).expect("fixture status is 0..2"),
+                            )
+                            .expect("fixture status is a defined state")
+                        })
                         .collect();
-                    json!({ "spent_status": statuses })
+                    serde_json::to_value(shekyl_rpc_types::IsKeyImageSpentResponse {
+                        status: shekyl_rpc_types::RpcStatus::ok(),
+                        spent_status: statuses,
+                    })
+                    .expect("wire type serializes")
                 }
                 other => panic!("mock daemon received unexpected route {other}"),
             };

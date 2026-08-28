@@ -63,8 +63,10 @@
 //! belt-and-suspenders is a shekyl-oxide-cutover follow-up tracked in
 //! `docs/FOLLOWUPS.md`.
 
-use serde_json::{json, Value};
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_types::{
+    GetBlockRequest, GetBlockResponse, GetTransactionsRequest, GetTransactionsResponse, TxEntry,
+};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
@@ -127,14 +129,27 @@ pub(crate) async fn fetch_scannable_block_with_form<R: Rpc>(
     number: usize,
     form: TxBodyForm,
 ) -> Result<ScannableBlock, RpcError> {
-    let res: Value = rpc
-        .json_rpc_call("get_block", Some(json!({ "height": number })))
+    // The shared wire types, like the `get_transactions` fetch below. This was
+    // an RK-3b leftover: `get_block` migrated to Rust in that slice and the
+    // typed request/response landed with it, but this caller kept hand-rolling
+    // the params and walking the reply. Two definitions of one shape, and the
+    // one the daemon cannot see is the one that drifts.
+    let height = u64::try_from(number)
+        .map_err(|_| RpcError::InternalError(format!("block height {number} does not fit u64")))?;
+    let res: GetBlockResponse = rpc
+        .json_rpc_call(
+            "get_block",
+            Some(
+                serde_json::to_value(GetBlockRequest {
+                    hash: String::new(),
+                    height,
+                    fill_pow_hash: false,
+                })
+                .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+            ),
+        )
         .await?;
-    let blob = res
-        .get("blob")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::InvalidNode("get_block response missing blob".to_string()))?;
-    let block = parse_block_blob(blob, number)?;
+    let block = parse_block_blob(&res.blob, number)?;
 
     let transactions = fetch_transactions(rpc, &block.transaction_hashes, form).await?;
     let first_output_index = compute_first_output_index(rpc, &block, &transactions).await?;
@@ -299,23 +314,35 @@ async fn fetch_transactions<R: Rpc>(
     let mut transactions = Vec::with_capacity(hashes.len());
     for batch in hashes.chunks(TXS_PER_REQUEST) {
         let hashes_hex: Vec<String> = batch.iter().map(hex::encode).collect();
-        let resp: Value = rpc
+        // The request and the reply are the shared wire types (RK-4c), so the
+        // shape lives in one place. A malformed `missed_tx` entry is refused by
+        // `HashHex`'s deserializer at the boundary rather than by a walk here —
+        // same rejection, one fewer copy of what a hash looks like.
+        let resp: GetTransactionsResponse = rpc
             .rpc_call(
                 "get_transactions",
-                Some(json!({ "txs_hashes": hashes_hex, "prune": prune })),
+                Some(
+                    serde_json::to_value(GetTransactionsRequest {
+                        txs_hashes: hashes_hex,
+                        decode_as_json: false,
+                        prune,
+                        split: false,
+                    })
+                    .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+                ),
             )
             .await?;
 
-        if let Some(missed) = resp.get("missed_tx").and_then(Value::as_array) {
-            if let Some(missed_hashes) = parse_missed_tx(missed)? {
-                return Err(RpcError::TransactionsNotFound(missed_hashes));
-            }
+        if !resp.missed_tx.is_empty() {
+            return Err(RpcError::TransactionsNotFound(
+                resp.missed_tx
+                    .iter()
+                    .copied()
+                    .map(shekyl_rpc_types::HashHex::to_bytes)
+                    .collect(),
+            ));
         }
-
-        let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
-            RpcError::InvalidNode("get_transactions response missing txs".to_string())
-        })?;
-        transactions.extend(parse_tx_batch(batch, txs, form)?);
+        transactions.extend(parse_tx_batch(batch, &resp.txs, form)?);
     }
 
     Ok(transactions)
@@ -350,7 +377,7 @@ async fn fetch_transactions<R: Rpc>(
 /// prunable-stripped spend.
 pub(crate) fn parse_tx_batch(
     batch: &[[u8; 32]],
-    txs: &[Value],
+    txs: &[TxEntry],
     form: TxBodyForm,
 ) -> Result<Vec<Transaction>, RpcError> {
     if txs.len() != batch.len() {
@@ -360,68 +387,34 @@ pub(crate) fn parse_tx_batch(
     }
     let mut out = Vec::with_capacity(batch.len());
     for (expected_hash, t) in batch.iter().zip(txs) {
-        let tx_hash_hex = t.get("tx_hash").and_then(Value::as_str).unwrap_or("");
-        let claimed = hex::decode(tx_hash_hex)
-            .ok()
-            .and_then(|v| <[u8; 32]>::try_from(v).ok());
-        if claimed.as_ref() != Some(expected_hash) {
+        // `HashHex` already refused anything that is not 32 bytes of hex, so
+        // what is left to check is the association: the label must be the one
+        // this slot asked for.
+        if t.tx_hash.to_bytes() != *expected_hash {
             return Err(RpcError::InvalidNode(
                 "daemon returned a transaction whose hash did not match the request".to_string(),
             ));
         }
-        let field = |name: &str| {
-            t.get(name)
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-        };
+        let tx_hash_hex = t.tx_hash.to_string();
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
         match form {
             TxBodyForm::Pruned => {
-                let pruned_hex = field("pruned_as_hex").ok_or_else(|| {
+                let pruned_hex = non_empty(&t.pruned_as_hex).ok_or_else(|| {
                     RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
                 })?;
-                out.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
+                out.push(parse_pruned_tx(&pruned_hex, &tx_hash_hex)?);
             }
             TxBodyForm::Full => {
-                let full_hex = field("as_hex")
-                    .or_else(|| field("pruned_as_hex"))
+                let full_hex = non_empty(&t.as_hex)
+                    .or_else(|| non_empty(&t.pruned_as_hex))
                     .ok_or_else(|| {
                         RpcError::InvalidNode("transaction response missing as_hex".to_string())
                     })?;
-                out.push(parse_full_tx(full_hex, tx_hash_hex)?);
+                out.push(parse_full_tx(&full_hex, &tx_hash_hex)?);
             }
         }
     }
     Ok(out)
-}
-
-/// Strictly parse a `get_transactions` `missed_tx` array into the missing-hash
-/// set. `Ok(None)` when nothing is missing; `Ok(Some(hashes))` when one or more
-/// requested txs are absent.
-///
-/// Pure (no transport) so the strictness is unit-testable. Every entry must be
-/// a 32-byte hex hash: a `filter_map` chain would silently drop malformed
-/// entries, shrinking (or emptying) the reported set and misrepresenting which
-/// txs are missing. A malformed entry is a daemon protocol violation, not a
-/// missing tx, so it surfaces as [`RpcError::InvalidNode`] rather than a
-/// truncated [`RpcError::TransactionsNotFound`].
-pub(crate) fn parse_missed_tx(missed: &[Value]) -> Result<Option<Vec<[u8; 32]>>, RpcError> {
-    if missed.is_empty() {
-        return Ok(None);
-    }
-    let mut hashes = Vec::with_capacity(missed.len());
-    for m in missed {
-        let hash = m
-            .as_str()
-            .and_then(|s| hex::decode(s).ok())
-            .and_then(|v| <[u8; 32]>::try_from(v).ok())
-            .ok_or_else(|| {
-                RpcError::InvalidNode(
-                    "get_transactions returned a malformed missed_tx hash".to_string(),
-                )
-            })?;
-        hashes.push(hash);
-    }
-    Ok(Some(hashes))
 }
 
 /// Request the global output index of the block's first output (the coinbase's,
@@ -451,6 +444,7 @@ async fn compute_first_output_index<R: Rpc>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_rpc_types::HashHex;
 
     use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
     use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
@@ -733,8 +727,34 @@ mod tests {
         tx
     }
 
-    fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> Value {
-        json!({ "tx_hash": tx_hash_hex, "pruned_as_hex": pruned_hex })
+    /// A reply entry built from the wire type rather than a JSON literal, so
+    /// the double cannot describe a shape the daemon does not produce (RK-D1).
+    /// The mined arm, because these fixtures stand in for confirmed txs.
+    fn tx_entry_with(tx_hash: [u8; 32], as_hex: &str, pruned_as_hex: &str) -> TxEntry {
+        TxEntry {
+            tx_hash: HashHex::from_bytes(tx_hash),
+            as_hex: as_hex.to_owned(),
+            pruned_as_hex: pruned_as_hex.to_owned(),
+            prunable_as_hex: String::new(),
+            prunable_hash: HashHex::from_bytes([0u8; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 1,
+                confirmations: 1,
+                block_timestamp: 0,
+                output_indices: Vec::new(),
+            },
+        }
+    }
+
+    fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> TxEntry {
+        let bytes: [u8; 32] = hex::decode(tx_hash_hex)
+            .expect("test hash is hex")
+            .try_into()
+            .expect("test hash is 32 bytes");
+        tx_entry_with(bytes, "", pruned_hex)
     }
 
     #[test]
@@ -780,22 +800,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_tx_batch_rejects_absent_or_unparseable_hash() {
-        // No `tx_hash` field → no association handle → reject (a daemon that
-        // omits the label cannot be order-pinned).
-        let h0 = [3u8; 32];
+    fn a_reply_without_a_tx_hash_label_is_refused_at_the_boundary() {
+        // No `tx_hash` → no association handle → a daemon that omits the label
+        // cannot be order-pinned. This used to be `parse_tx_batch`'s rejection;
+        // with the shared wire type the field is required, so the refusal now
+        // happens when the reply decodes and the malformed entry never reaches
+        // the batch check. The guard moved — this test moved with it rather
+        // than being dropped as "covered elsewhere".
         let blob = pruned_tx_hex();
-        let txs = vec![json!({ "pruned_as_hex": blob })];
-        assert!(matches!(
-            parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
-            Err(RpcError::InvalidNode(_))
-        ));
+        let doc = serde_json::json!({
+            "status": "OK",
+            "txs": [{
+                "as_hex": "", "pruned_as_hex": blob, "prunable_as_hex": "",
+                "prunable_hash": "00".repeat(32), "as_json": "",
+                "in_pool": false, "double_spend_seen": false,
+                "block_height": 1, "confirmations": 1, "block_timestamp": 0
+            }]
+        })
+        .to_string();
+        assert!(
+            serde_json::from_str::<shekyl_rpc_types::GetTransactionsResponse>(&doc).is_err(),
+            "an entry with no tx_hash must not decode"
+        );
     }
 
     #[test]
     fn parse_tx_batch_rejects_missing_pruned_blob() {
         let h0 = [3u8; 32];
-        let txs = vec![json!({ "tx_hash": hex::encode(h0) })];
+        let txs = vec![tx_entry_with(h0, "", "")];
         assert!(matches!(
             parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
             Err(RpcError::InvalidNode(_))
@@ -819,8 +851,8 @@ mod tests {
         let (h0, h1) = ([3u8; 32], [4u8; 32]);
         let full_hex = hex::encode(full_spend_tx().serialize());
         let txs = vec![
-            json!({ "tx_hash": hex::encode(h0), "as_hex": full_hex }),
-            json!({ "tx_hash": hex::encode(h1), "as_hex": "", "pruned_as_hex": full_hex }),
+            tx_entry_with(h0, &full_hex, ""),
+            tx_entry_with(h1, "", &full_hex),
         ];
         let out = parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Full).expect("full batch parses");
         assert_eq!(out.len(), 2);
@@ -880,7 +912,7 @@ mod tests {
     #[test]
     fn parse_tx_batch_full_form_requires_a_body_field() {
         let h0 = [3u8; 32];
-        let txs = vec![json!({ "tx_hash": hex::encode(h0) })];
+        let txs = vec![tx_entry_with(h0, "", "")];
         assert!(matches!(
             parse_tx_batch(&[h0], &txs, TxBodyForm::Full),
             Err(RpcError::InvalidNode(_))
@@ -949,32 +981,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_missed_tx_empty_is_none() {
-        assert!(parse_missed_tx(&[]).expect("empty is ok").is_none());
-    }
-
-    #[test]
-    fn parse_missed_tx_parses_valid_hashes() {
+    fn missed_tx_hashes_survive_the_typed_reply() {
+        // `missed_tx` used to be walked entry-by-entry by `parse_missed_tx`.
+        // It is `Vec<HashHex>` on the shared reply type now, so the walk is
+        // gone — but the two properties it existed for are not, and they are
+        // asserted here against the type that replaced it: valid hashes come
+        // through in order, and a malformed entry is refused rather than
+        // silently dropped, which would shrink the reported missing set and
+        // misreport which transactions are absent.
         let (h0, h1) = ([3u8; 32], [4u8; 32]);
-        let missed = vec![json!(hex::encode(h0)), json!(hex::encode(h1))];
-        let parsed = parse_missed_tx(&missed)
-            .expect("valid hashes parse")
-            .expect("non-empty");
-        assert_eq!(parsed, vec![h0, h1]);
-    }
+        let doc = |entries: String| format!(r#"{{"status":"OK","missed_tx":[{entries}]}}"#);
+        let ok = doc(format!("\"{}\",\"{}\"", hex::encode(h0), hex::encode(h1)));
+        let parsed: shekyl_rpc_types::GetTransactionsResponse =
+            serde_json::from_str(&ok).expect("valid hashes decode");
+        assert_eq!(
+            parsed
+                .missed_tx
+                .iter()
+                .copied()
+                .map(shekyl_rpc_types::HashHex::to_bytes)
+                .collect::<Vec<_>>(),
+            vec![h0, h1]
+        );
 
-    #[test]
-    fn parse_missed_tx_rejects_malformed_entry() {
-        // Each entry must be a 32-byte hex hash. A non-hex string, a short
-        // hash, a non-string, or null is a protocol violation — not a silently
-        // dropped missing tx.
-        let h0 = [3u8; 32];
-        for bad in [json!("zz"), json!("00"), json!(7), json!(null)] {
-            let missed = vec![json!(hex::encode(h0)), bad];
-            assert!(matches!(
-                parse_missed_tx(&missed),
-                Err(RpcError::InvalidNode(_))
-            ));
+        for bad in ["\"zz\"", "\"00\"", "7", "null"] {
+            let malformed = doc(format!("\"{}\",{bad}", hex::encode(h0)));
+            assert!(
+                serde_json::from_str::<shekyl_rpc_types::GetTransactionsResponse>(&malformed)
+                    .is_err(),
+                "a malformed missed_tx entry ({bad}) must be refused, not dropped"
+            );
         }
     }
 }

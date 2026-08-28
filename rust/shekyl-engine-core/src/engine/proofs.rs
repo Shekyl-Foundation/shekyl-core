@@ -49,7 +49,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use shekyl_address::ShekylAddress;
@@ -70,7 +69,7 @@ use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
-use super::block_fetch::{parse_missed_tx, parse_tx_batch, TxBodyForm, TXS_PER_REQUEST};
+use super::block_fetch::{parse_tx_batch, TxBodyForm, TXS_PER_REQUEST};
 use super::error::KeyEngineError;
 use super::key_actor::KeyEngineHandle;
 use super::local_ledger::LocalLedger;
@@ -80,6 +79,10 @@ use super::proof_bridge::{
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::{Capability, Engine};
+use shekyl_rpc_types::{
+    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    IsKeyImageSpentResponse, KeyImageStatus, TxLocation,
+};
 
 // ── Wire-framing constants (contract "Proofs" section) ──────────────
 
@@ -835,18 +838,18 @@ pub async fn check_reserve_proof<R: Rpc>(
         .iter()
         .map(|v| hex::encode(v.key_image.as_bytes()))
         .collect();
-    let resp: Value = rpc
+    let resp: IsKeyImageSpentResponse = rpc
         .rpc_call(
             "is_key_image_spent",
-            Some(json!({ "key_images": key_images_hex })),
+            Some(
+                serde_json::to_value(IsKeyImageSpentRequest {
+                    key_images: key_images_hex,
+                })
+                .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+            ),
         )
         .await?;
-    let statuses = resp
-        .get("spent_status")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            RpcError::InvalidNode("is_key_image_spent response missing spent_status".to_string())
-        })?;
+    let statuses = &resp.spent_status;
     if statuses.len() != verified.len() {
         return Err(ProofsError::Daemon(RpcError::InvalidNode(
             "is_key_image_spent returned a different count than requested".to_string(),
@@ -860,8 +863,9 @@ pub async fn check_reserve_proof<R: Rpc>(
         total = total
             .checked_add(amount)
             .ok_or(ProofsError::AmountOverflow)?;
-        // 0 = unspent; 1 = spent in chain; 2 = spent in pool.
-        if status.as_u64().unwrap_or(0) != 0 {
+        // Typed: a fourth value is a malformed reply refused at the boundary,
+        // not an integer this comparison has to guess about.
+        if *status != KeyImageStatus::Unspent {
             spent = spent
                 .checked_add(amount)
                 .ok_or(ProofsError::AmountOverflow)?;
@@ -960,10 +964,18 @@ struct FetchedTx {
 /// `block_fetch`'s adversarial-daemon parse/association checks.
 async fn fetch_proof_tx<R: Rpc>(rpc: &R, txid: [u8; 32]) -> Result<FetchedTx, ProofsError> {
     let txid_hex = hex::encode(txid);
-    let resp: Value = rpc
+    let resp: GetTransactionsResponse = rpc
         .rpc_call(
             "get_transactions",
-            Some(json!({ "txs_hashes": [txid_hex], "prune": true })),
+            Some(
+                serde_json::to_value(GetTransactionsRequest {
+                    txs_hashes: vec![txid_hex],
+                    decode_as_json: false,
+                    prune: true,
+                    split: false,
+                })
+                .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+            ),
         )
         .await
         .map_err(|e| match e {
@@ -971,27 +983,19 @@ async fn fetch_proof_tx<R: Rpc>(rpc: &R, txid: [u8; 32]) -> Result<FetchedTx, Pr
             other => ProofsError::Daemon(other),
         })?;
 
-    if let Some(missed) = resp.get("missed_tx").and_then(Value::as_array) {
-        if parse_missed_tx(missed)
-            .map_err(ProofsError::Daemon)?
-            .is_some()
-        {
-            return Err(ProofsError::TxNotFound(hex::encode(txid)));
-        }
+    if !resp.missed_tx.is_empty() {
+        return Err(ProofsError::TxNotFound(hex::encode(txid)));
     }
 
-    let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
-        RpcError::InvalidNode("get_transactions response missing txs".to_string())
-    })?;
-    let (in_pool, block_height) = txs
-        .first()
-        .map(|t| {
-            (
-                t.get("in_pool").and_then(Value::as_bool).unwrap_or(false),
-                t.get("block_height").and_then(Value::as_u64),
-            )
-        })
-        .unwrap_or((false, None));
+    let txs = &resp.txs;
+    // Where it was found comes from the arm, not from two independently
+    // optional fields: `block_height` cannot be read off a pooled entry
+    // because a pooled entry does not carry one.
+    let (in_pool, block_height) = match txs.first().map(|t| &t.location) {
+        Some(TxLocation::Mined { block_height, .. }) => (false, Some(*block_height)),
+        Some(TxLocation::Pooled { .. }) => (true, None),
+        None => (false, None),
+    };
 
     let mut parsed =
         parse_tx_batch(&[txid], txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?;
@@ -1024,10 +1028,18 @@ async fn fetch_proof_txs<R: Rpc>(
     let mut bodies = Vec::with_capacity(txids.len());
     for batch in txids.chunks(TXS_PER_REQUEST) {
         let hashes_hex: Vec<String> = batch.iter().map(hex::encode).collect();
-        let resp: Value = rpc
+        let resp: GetTransactionsResponse = rpc
             .rpc_call(
                 "get_transactions",
-                Some(json!({ "txs_hashes": hashes_hex, "prune": true })),
+                Some(
+                    serde_json::to_value(GetTransactionsRequest {
+                        txs_hashes: hashes_hex,
+                        decode_as_json: false,
+                        prune: true,
+                        split: false,
+                    })
+                    .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
+                ),
             )
             .await
             .map_err(|e| match e {
@@ -1037,16 +1049,18 @@ async fn fetch_proof_txs<R: Rpc>(
                 other => ProofsError::Daemon(other),
             })?;
 
-        if let Some(missed) = resp.get("missed_tx").and_then(Value::as_array) {
-            if let Some(missed_hashes) = parse_missed_tx(missed).map_err(ProofsError::Daemon)? {
-                return Err(tx_not_found_in_request_order(batch, &missed_hashes));
-            }
+        if !resp.missed_tx.is_empty() {
+            let missed_hashes: Vec<[u8; 32]> = resp
+                .missed_tx
+                .iter()
+                .copied()
+                .map(shekyl_rpc_types::HashHex::to_bytes)
+                .collect();
+            return Err(tx_not_found_in_request_order(batch, &missed_hashes));
         }
-
-        let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
-            RpcError::InvalidNode("get_transactions response missing txs".to_string())
-        })?;
-        bodies.extend(parse_tx_batch(batch, txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?);
+        bodies.extend(
+            parse_tx_batch(batch, &resp.txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?,
+        );
     }
     Ok(bodies)
 }

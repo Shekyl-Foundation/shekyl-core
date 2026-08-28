@@ -89,6 +89,12 @@ shekyl-tor = { path = "../shekyl-tor" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+# The daemon's wire types, in production and not only in test doubles (RK-4c).
+# The refresh path hand-rolled `get_transactions` params and walked the reply
+# as untyped JSON — a second definition of a shape that already has one, and
+# the copy the daemon cannot see is the one that drifts. Doubles have answered
+# with these types since RK-1 (RK-D1); this is production catching up.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
