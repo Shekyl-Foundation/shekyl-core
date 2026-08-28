@@ -147,6 +147,36 @@
 
 ### Changed
 
+- **`/get_transactions` and `/is_key_image_spent` are served natively in Rust,
+  and their C++ handlers are deleted (RK-4c).** Both console commands —
+  `print_tx` and `is_key_image_spent` — render in Rust on both arms, the
+  wallet's refresh and proofs paths read through the shared wire types instead
+  of hand-rolled JSON, and `COMMAND_RPC_GET_TRANSACTIONS`,
+  `COMMAND_RPC_IS_KEY_IMAGE_SPENT`, their dispatch rows and both restricted
+  caps are gone.
+  The facts export answers **per request slot** rather than batching two
+  lookups and re-sorting them, which removes the two internal errors that
+  existed only because that sort could disagree with itself ("tx hash
+  mismatch", "internal error - txs is empty").
+  `entry`'s KV map branches on `in_pool`, so the Rust type makes the branch a
+  type: `Mined` or `Pooled`, with `in_pool` derived from the arm. A flat
+  struct of optional members round-trips every captured vector while still
+  able to emit documents the daemon cannot produce.
+  Two divergences are deliberate: the reply's `tx_hash` is canonical
+  lower-case rather than an echo of the request's casing, and a `spent_status`
+  outside 0/1/2 is a malformed reply rather than a fourth state a caller has
+  to guess about.
+
+- **`get_transactions` no longer returns `txs_as_hex` / `txs_as_json`, and
+  `CORE_RPC_VERSION` is 3.25.** The handler filled them "in case an old wallet
+  asks" and the old wallet is `src/wallet/`, deleted — so they duplicated
+  `txs[i].as_hex` and `.as_json` for a reader that does not exist (rule 60).
+  The `_v2` oracle vectors were captured from the edited C++ struct before it
+  was deleted, so the new shape has a real oracle rather than a hand-written
+  one, and the `_v1` files stay beside them so the removal itself is
+  assertable.
+
+
 - **Documentation lifecycle is now a first-class process.** `docs/README.md`
   and `.cursor/rules/95-documentation-lifecycle.mdc` classify every doc
   (living contract / open plan / closed-as-record). Work-item targets are
