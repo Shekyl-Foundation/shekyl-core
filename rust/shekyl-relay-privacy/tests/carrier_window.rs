@@ -119,7 +119,7 @@ fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
 /// window budget, or slowing the noise cadence without lowering the cap.
 #[test]
 fn the_cap_stays_under_both_ceilings() {
-    let affords = inherited::noise_windows_in_epoch(PROVISIONED_EPOCH_SECS);
+    let affords = carrier::noise_windows_in_epoch(PROVISIONED_EPOCH_SECS);
     assert!(
         carrier::MAX_FRAGMENTS <= affords,
         "a {PROVISIONED_EPOCH_SECS} s epoch affords {affords} windows at the \
@@ -144,37 +144,51 @@ fn the_cap_stays_under_both_ceilings() {
 /// cap carries the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
 ///
 /// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
-/// `COVER_TRAFFIC_RESTORATION.md` §1.7. The fastest cadence is
-/// `NOISE_MIN_DELAY_SECS`; a window that fits the structural max whole at
-/// that cadence is the size the ceiling forbade.
+/// `COVER_TRAFFIC_RESTORATION.md` §1.7.
 ///
-/// What edit reds this: enlarging `WINDOW_BYTES` past the ceiling, slowing
-/// the cadence without shrinking the window, or a structural-max shrink that
-/// would make a whole-tx window legal (at which point the two-constant split
-/// itself is owed a re-read).
+/// # The denominator was local, stale, and a third one (fixed 2026-08-28)
+///
+/// This test used to carry `const CEILING_BYTES_PER_SEC = 8 * 1024` of its
+/// own and apply it to a **per-channel** rate, while §3.3's figure was per
+/// zone and the ceiling it quoted was per node — three denominators for one
+/// quantity, which is the confusion §3.3 recorded and the per-node ruling
+/// settles. The local copy is deleted rather than updated:
+/// [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] is the only ceiling, and it is
+/// already enforced at compile time beside the constants it divides.
+///
+/// So the first assertion here is deliberately NOT a second guard on the
+/// window — that would be a duplicate of the `const` assert. It states the
+/// **worst posture** in bytes, which the compile-time form cannot report when
+/// it fails. The load-bearing half is the negative control below.
+///
+/// What edit reds this: a structural-max shrink that would make a whole-tx
+/// window legal, at which point the two-constant split itself is owed a
+/// re-read.
 #[test]
-fn the_window_at_the_fastest_cadence_stays_under_the_bandwidth_ceiling() {
-    const CEILING_BYTES_PER_SEC: u64 = 8 * 1024;
-
-    let window_rate =
-        (carrier::WINDOW_BYTES as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
+    // Every channel a node can run at once: `NOISE_CHANNELS` per zone, across
+    // the encrypted zones it may carry. The mean cadence is the denominator —
+    // a jittered emitter's sustained rate is its mean, not its fastest gap.
+    let channels = u64::from(carrier::CEILING_ZONES) * inherited::NOISE_CHANNELS as u64;
+    let node_rate =
+        (carrier::WINDOW_BYTES as u64) * channels * 1_000 / u64::from(carrier::MEAN_CADENCE_MS);
     assert!(
-        window_rate <= CEILING_BYTES_PER_SEC,
-        "WINDOW_BYTES {} at the fastest cadence ({} s) is {window_rate} B/s, \
-         over the pre-registered 8 KiB/s ceiling — that ceiling is why the \
-         window is not the structural max",
+        node_rate <= u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
+        "WINDOW_BYTES {} across {channels} channels at a {} ms mean cadence is \
+         {node_rate} B/s, over the {} B/s per-node ceiling",
         carrier::WINDOW_BYTES,
-        inherited::NOISE_MIN_DELAY_SECS,
+        carrier::MEAN_CADENCE_MS,
+        carrier::PER_NODE_CEILING_BYTES_PER_SEC,
     );
 
     let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
     let whole_tx_rate =
-        (structural_max as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+        (structural_max as u64) * channels * 1_000 / u64::from(carrier::MEAN_CADENCE_MS);
     assert!(
-        whole_tx_rate > CEILING_BYTES_PER_SEC,
-        "a window sized for the structural max ({structural_max} B) at the \
-         fastest cadence is {whole_tx_rate} B/s, which should breach the \
-         8 KiB/s ceiling — that breach is why MAX_FRAGMENTS exists"
+        whole_tx_rate > u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
+        "a window sized for the structural max ({structural_max} B) is \
+         {whole_tx_rate} B/s at the worst posture, which should breach the \
+         per-node ceiling — that breach is why MAX_FRAGMENTS exists"
     );
 }
 

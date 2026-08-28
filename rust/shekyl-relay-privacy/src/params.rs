@@ -643,54 +643,15 @@ pub mod inherited {
     /// λ for the inbound fluff draw, in quarter-seconds.
     pub const FLUFF_AVERAGE_IN_QUARTER_SECS: u32 = 20;
 
-    /// `CRYPTONOTE_NOISE_MIN_DELAY`, in seconds.
-    ///
-    /// There is no Rust noise-epoch constant. C++ used to select
-    /// `CRYPTONOTE_NOISE_MIN_EPOCH` (5 min) via `noise_zone_params`; that
-    /// selector and the `#define` are gone. The value that ships is the
-    /// Dandelion++ epoch, and it already crosses as `min_epoch_secs`.
-    /// Mirroring a runtime FFI argument is the delete-don't-synchronize
-    /// class (Q-11 Unit 0).
-    pub const NOISE_MIN_DELAY_SECS: u32 = 10;
-    /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
-    ///
-    /// **Must stay non-zero, and the reason is §56 rather than arithmetic.**
-    /// At zero the cadence has no width: `next_send` returns exactly
-    /// `NOISE_MIN_DELAY_SECS` every time, and the covert channel becomes a
-    /// **metronome** — the one shape Q-11 Unit 2 disqualified, at a 1.000
-    /// re-identification rate, because a fixed period is a permanent
-    /// per-stream identifier.
-    ///
-    /// The build fails rather than the daemon degrading, because the failure
-    /// is silent in both places it would land: the daemon would emit a
-    /// perfectly periodic carrier while still calling it jittered, and the
-    /// Unit 2 sweep would run its `BoundedUniform` and `Metronome` arms on the
-    /// *same law under two names* — a reader seeing those columns agree would
-    /// conclude the shapes are equivalent, which is the opposite of what §56
-    /// found.
-    pub const NOISE_DELAY_JITTER_SECS: u32 = 5;
-    const _: () = assert!(
-        NOISE_DELAY_JITTER_SECS > 0,
-        "covert cadence jitter must be non-zero: at zero the carrier is a \
-         metronome, which Q-11 Unit 2 (§56) disqualified at a 1.000 \
-         re-identification rate"
-    );
-
-    /// Windows an epoch of `min_epoch_secs` affords at the slowest noise
-    /// cadence (`NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`).
-    ///
-    /// Integer division: one second under `MAX_FRAGMENTS * per_send` drops a
-    /// whole window (see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS)). A full-size message that still
-    /// occupies a window when the epoch rolls is discarded by CV-1 and never
-    /// arrives.
-    ///
-    /// This is the **ceiling** the fragment cap must stay under, not the cap's
-    /// definition — see [`carrier::MAX_FRAGMENTS`](crate::params::carrier::MAX_FRAGMENTS), which the inherited value
-    /// was silently set equal to.
-    #[must_use]
-    pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
-        min_epoch_secs / (NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS)
-    }
+    // The covert cadence and its epoch-window budget MOVED to `super::carrier`
+    // on 2026-08-28, with `_SECS` becoming `_MS`.
+    //
+    // They were mirrors of `CRYPTONOTE_NOISE_MIN_DELAY` and
+    // `CRYPTONOTE_NOISE_DELAY_RANGE`; both `#define`s had zero readers and are
+    // deleted by the same change. This module is the mirror of the
+    // `cryptonote_config.h` relay block, so a value that mirrors nothing does
+    // not belong here — and the carrier module is where the ceiling those
+    // numbers now have to satisfy can be asserted against `WINDOW_BYTES`.
 
     /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
     /// for covert sending.
@@ -738,20 +699,32 @@ mod r1_tests {
     ///
     /// The historical 300 s / 20-window coincidence (`MAX_FRAGMENTS` was set
     /// equal to `noise_windows_in_epoch(300)`) is not the derivation. What
-    /// this pins is the live relationship: the inherited epoch is 600 s, it
-    /// affords 40 windows at the slowest cadence, and the derived cap of 5
-    /// sits well under that.
+    /// this pins is the live relationship: the inherited epoch is 600 s and
+    /// the derived cap of 5 sits well under what it affords.
+    ///
+    /// # The 300 s tripwire fired, on purpose, and is retired here
+    ///
+    /// The final assertion used to read `noise_windows_in_epoch(300) == 20`,
+    /// kept — in its own words — *"so a cadence change that would have moved
+    /// that coincidence reds here"*. The 2026-08-28 cadence change is that
+    /// change, and it did red here. The coincidence it was watching is now
+    /// **gone rather than moved**: 300 s affords 44 windows against a cap of
+    /// 5, so there is no longer a number for `MAX_FRAGMENTS` to be silently
+    /// equal to. Re-pinning it at 44 would keep a tripwire whose subject has
+    /// been dismantled, so what is asserted instead is the property that
+    /// actually matters — the epoch affords the cap with room, and the cap is
+    /// not the ceiling.
     #[test]
     fn the_shipped_epoch_carries_a_full_noise_message_with_named_slack() {
-        let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
+        let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
         let shipped = DandelionParams::inherited().min_epoch_secs;
         assert_eq!(shipped, 600, "CRYPTONOTE_DANDELIONPP_MIN_EPOCH");
         assert_eq!(
-            inherited::noise_windows_in_epoch(shipped),
-            shipped / per_send,
+            carrier::noise_windows_in_epoch(shipped),
+            (shipped * 1_000) / per_send_ms,
             "the epoch-window budget is integer division of the shipped epoch"
         );
-        let affords = inherited::noise_windows_in_epoch(shipped);
+        let affords = carrier::noise_windows_in_epoch(shipped);
         assert!(
             affords >= carrier::MAX_FRAGMENTS,
             "a {shipped} s epoch affords {affords} windows; the cap is {} — \
@@ -759,12 +732,11 @@ mod r1_tests {
             carrier::MAX_FRAGMENTS,
             carrier::MAX_FRAGMENTS,
         );
-        assert_eq!(
-            inherited::noise_windows_in_epoch(300),
-            20,
-            "the historical 300 s boundary still affords 20 — that is the \
-             ceiling the inherited cap was silently set equal to, kept so a \
-             cadence change that would have moved that coincidence reds here"
+        assert!(
+            affords > carrier::MAX_FRAGMENTS,
+            "the cap must sit STRICTLY under the epoch ceiling: at equality \
+             the cap would again be a restatement of the epoch rather than a \
+             bound derived from the transactions it carries"
         );
     }
 }

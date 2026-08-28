@@ -22,7 +22,7 @@ use shekyl_relay_privacy::conformance::{
     grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, sample_poisson,
     sample_uniform,
 };
-use shekyl_relay_privacy::params::inherited;
+use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_relay_privacy::{
     bernoulli, ConnectionId, DandelionParams, EpochScheduler, NoiseCadence, PoissonTable, RelayRng,
     SplitMix64, StemMap,
@@ -235,15 +235,15 @@ fn fluff_delay_draws_match_their_claimed_means() {
 /// words, say — survives rejection and skews the residues. `BiasedRng` is
 /// the wrong control here; the landed pair are the wrong-band grade and the
 /// wrong-family grade.
-/// Shared setup for the three cadence-jitter grades: the inherited cadence,
+/// Shared setup for the three cadence-jitter grades: the shipped cadence,
 /// its deterministic offset (min delay, ms), the jitter band top (ms), and the
 /// seeded RNG every cadence grade draws from — one place, so the three tests
 /// cannot drift onto different bands or seeds.
 fn cadence_jitter_setup() -> (NoiseCadence, u64, u64, SplitMix64) {
     (
-        NoiseCadence::inherited(),
-        u64::from(inherited::NOISE_MIN_DELAY_SECS) * 1_000,
-        u64::from(inherited::NOISE_DELAY_JITTER_SECS) * 1_000,
+        NoiseCadence::shipped(),
+        u64::from(carrier::NOISE_MIN_DELAY_MS),
+        u64::from(carrier::NOISE_DELAY_JITTER_MS),
         SplitMix64::new(0x0157),
     )
 }

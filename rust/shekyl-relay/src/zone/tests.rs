@@ -939,12 +939,15 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         "a channel count the schedule is not sized for is refused, not asserted"
     );
 
-    // Arithmetic is `inherited::noise_windows_in_epoch`. This pins that
+    // Arithmetic is `carrier::noise_windows_in_epoch`. This pins that
     // Zone::new consumes it for a noise zone and ignores it otherwise.
     let mut rng = SplitMix64::new(0x0820);
-    let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
+    let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
     let mut short = DandelionParams::inherited();
-    short.min_epoch_secs = carrier::MAX_FRAGMENTS * per_send - 1;
+    // One millisecond short of the epoch that would afford the full cap,
+    // floored to whole seconds because the field is seconds. The assertion
+    // below re-derives `affords` rather than trusting this arithmetic.
+    short.min_epoch_secs = (carrier::MAX_FRAGMENTS * per_send_ms - 1) / 1_000;
     match Zone::new(
         short,
         CHANNELS,

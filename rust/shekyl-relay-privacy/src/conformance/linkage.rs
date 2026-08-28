@@ -107,15 +107,15 @@ fn log_density_k(shape: CadenceShape, delta_ms: f64, k: u32, mean_ms: f64) -> f6
             -(delta_ms - kf * mean_ms).abs()
         }
         CadenceShape::BoundedUniform => {
-            let lo = f64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000.0;
-            let hi = lo + f64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000.0;
+            let lo = f64::from(crate::params::carrier::NOISE_MIN_DELAY_MS);
+            let hi = lo + f64::from(crate::params::carrier::NOISE_DELAY_JITTER_MS);
             // Outside the k-fold support the component contributes nothing —
             // that hard cutoff is most of the discriminating power at small k.
             if delta_ms < kf * lo || delta_ms > kf * hi {
                 return f64::NEG_INFINITY;
             }
             // `hi > lo` is guaranteed by the non-zero-jitter invariant asserted
-            // at `NOISE_DELAY_JITTER_SECS`, so `sd > 0` and neither the
+            // at `NOISE_DELAY_JITTER_MS`, so `sd > 0` and neither the
             // division nor `ln` below can degenerate. That invariant is
             // enforced where the constant lives rather than defended here:
             // at zero jitter this arm would not merely divide by zero, it
@@ -198,7 +198,7 @@ fn interval<R: RelayRng + ?Sized>(
         CadenceShape::Metronome => mean_ms,
         // Production path: the instrument must not re-derive the law it is
         // grading, or it measures its own copy (the shim-oracle failure).
-        CadenceShape::BoundedUniform => NoiseCadence::inherited().next_send(0, rng),
+        CadenceShape::BoundedUniform => NoiseCadence::shipped().next_send(0, rng),
         CadenceShape::Memoryless => {
             let t = table.expect("memoryless arm requires its table");
             (t.draw(rng) + 1) * MEMORYLESS_GRID_MS
@@ -313,8 +313,7 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
 ) -> LinkageSummary {
     assert!(streams >= 2, "matching needs at least two streams");
     assert!(trials > 0, "trials must be non-zero");
-    let mean_ms = u64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000
-        + u64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000 / 2;
+    let mean_ms = u64::from(crate::params::carrier::MEAN_CADENCE_MS);
 
     // How many emissions the blackout could plausibly have hidden. Generous:
     // an observer that truncated too early would be handicapped by the
