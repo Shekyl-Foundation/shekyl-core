@@ -196,6 +196,79 @@ int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
     uint64_t* out_failed_height, uint8_t* out_ok, void** out_owner);
 void shekyl_rpc_blocks_by_height_free(void* owner);
 
+// One requested transaction's answer (RK-4c). Every pointer borrows memory
+// owned by the opaque owner the export returns.
+//
+// **Indexed by request position**: entry `i` answers txid `i`, and `where`
+// says which store held it. The C++ handler instead batched a chain lookup,
+// batched a pool lookup for the misses, then re-sorted the two into request
+// order — a merge that carried its own failure modes ("tx hash mismatch",
+// "internal error - txs is empty") for a reply shape that had none. Answering
+// per request slot deletes the merge, and those errors with it.
+//
+// `pruned` / `prunable` are the consensus encoding split as the store holds
+// it; `prunable_len == 0` means the daemon has no prunable half. Which of
+// them the wire shows, and in what form, is the handler's `(split, prune,
+// decode_as_json)` matrix — the shim reads, it does not decide.
+typedef struct shekyl_rpc_tx_entry {
+    const uint8_t*  pruned;
+    size_t          pruned_len;
+    const uint8_t*  prunable;
+    size_t          prunable_len;
+    // Chain only, and empty for a transaction whose outputs are not indexed.
+    const uint64_t* output_indices;
+    size_t          output_indices_len;
+    uint64_t        block_height;        // chain only
+    uint64_t        block_timestamp;     // chain only
+    uint64_t        received_timestamp;  // pool only
+    uint8_t         prunable_hash[32];
+    uint8_t         where;               // 0 = not found, 1 = chain, 2 = pool
+    uint8_t         pruned_flag;         // chain: the store holds no verification data
+    uint8_t         double_spend_seen;   // pool only
+    uint8_t         relayed;             // pool only
+    uint8_t         reserved[4];
+} shekyl_rpc_tx_entry;
+
+// Transactions by hash, answered per request slot (RK-4c).
+//
+// `txids` is `txids_len * 32` bytes. `include_sensitive` is the pool's own
+// flag: 0 withholds a transaction that is not `relay_category::broadcasted`,
+// which is what a restricted listener must send (§2.2). It is the caller's
+// decision, not this shim's.
+//
+// `out_chain_height` is the tip, read **once** for the whole gather, so every
+// entry's confirmations are computed against one height rather than a height
+// per transaction that could move between them.
+//
+// No lock spans the chain and pool reads. The pool takes `m_transactions_lock`
+// before `m_blockchain`, so a chain lock held across a pool read would be the
+// AB half of an AB-BA deadlock; this matches the C++ handler's granularity and
+// the resulting race is the one it already had (§3.2).
+int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txids_len,
+    uint8_t include_sensitive, const shekyl_rpc_tx_entry** out, size_t* out_len,
+    uint64_t* out_chain_height, void** out_owner);
+void shekyl_rpc_transactions_free(void* owner);
+
+// epee's JSON rendering of one transaction (RK-D11), which stays in C++ for
+// the reason `get_block`'s `json` does: it duplicates the consensus encoding
+// the caller already has, and a second renderer would have to agree with this
+// one. Takes no handle and no lock — it parses a blob the caller already
+// holds — so the *decision* to render stays in the Rust handler and only the
+// rendering is here.
+int shekyl_rpc_tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
+    const char** out, size_t* out_len, void** out_owner);
+void shekyl_rpc_tx_json_free(void* owner);
+
+// Key images, answered per request slot (RK-4c). `key_images` is `count * 32`
+// bytes and `out_status` is a caller-provided array of `count` bytes: 0
+// unspent, 1 spent in the chain, 2 spent in the pool. Fixed size, so no owner.
+//
+// The pool half filters on `relay_category::broadcasted` unconditionally, so a
+// transaction that has not been broadcast never answers 2 — that path never
+// had the disclosure the pool reads did (§7, 2026-08-26).
+int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
+    size_t count, uint8_t* out_status);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);

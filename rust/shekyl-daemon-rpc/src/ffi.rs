@@ -289,6 +289,49 @@ const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, txs) == 16);
 const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_lens) == 24);
 const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_count) == 32);
 
+/// Twin of `shekyl_rpc_tx_entry`: one requested transaction's answer (RK-4c),
+/// indexed by request position. Every pointer borrows memory owned by the
+/// opaque owner the export returns, and is invalid the moment
+/// `shekyl_rpc_transactions_free` runs.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TxEntryFfi {
+    pub pruned: *const u8,
+    pub pruned_len: usize,
+    pub prunable: *const u8,
+    pub prunable_len: usize,
+    pub output_indices: *const u64,
+    pub output_indices_len: usize,
+    pub block_height: u64,
+    pub block_timestamp: u64,
+    pub received_timestamp: u64,
+    pub prunable_hash: [u8; 32],
+    /// 0 = not found, 1 = chain, 2 = pool.
+    pub where_found: u8,
+    pub pruned_flag: u8,
+    pub double_spend_seen: u8,
+    pub relayed: u8,
+    pub reserved: [u8; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<TxEntryFfi>() == 112);
+const _: () = assert!(std::mem::align_of::<TxEntryFfi>() == 8);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned) == 0);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned_len) == 8);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable) == 16);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable_len) == 24);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, output_indices) == 32);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, output_indices_len) == 40);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, block_height) == 48);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, block_timestamp) == 56);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, received_timestamp) == 64);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable_hash) == 72);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, where_found) == 104);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned_flag) == 105);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, double_spend_seen) == 106);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, relayed) == 107);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, reserved) == 108);
+
 /// Twin of `shekyl_rpc_block_payload`: the variable-length half of a
 /// block's facts. Every pointer borrows memory owned by the opaque owner the
 /// export returns, and is invalid the moment `shekyl_rpc_block_free` runs.
