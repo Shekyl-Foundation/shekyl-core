@@ -25,3 +25,15 @@ after this point cannot be re-captured and must be argued from the `_v1` /
 `_v2` pair instead (see `v2_is_v1_minus_exactly_the_two_retired_members`). **Never hand-edit a vector.** A wire change is a decision
 with a `CORE_RPC_VERSION` bump, recorded in the design doc, and gets a new
 `_v2` file beside the old one.
+
+`get_version_synced_v2.json` is a pair of the second kind. Its `_v1` is a
+faithful C++ capture; the constant it reports is not re-capturable, because
+`CORE_RPC_VERSION` **moved to Rust** (`shekyl-rpc-types::chain`) and C++ no
+longer defines it. So the bump that RK-4c's wire change earned (3.24 → 3.25)
+cannot be recorded by re-running the emitter, and hand-editing `_v1` would
+destroy the one property that makes it an oracle. The `_v2` is instead held
+honest by `get_version_v2_is_v1_with_only_the_version_bumped`, which
+substitutes the live constant into `_v1` and requires the result to equal
+`_v2` exactly — so the file may differ from the C++ capture by that constant
+and by nothing else, and it cannot silently go stale against the constant
+either.

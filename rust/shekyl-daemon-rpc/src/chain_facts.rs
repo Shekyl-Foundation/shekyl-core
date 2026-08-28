@@ -117,9 +117,18 @@ pub enum FactsFault {
     /// exception text); the shim's exception barrier turned it into a
     /// code instead of an unwind across the C ABI.
     Internal,
-    /// The store reported a height it cannot produce the block for (the C++
-    /// shim logs which height). This daemon's data is inconsistent — never
-    /// reported to the caller as a fact about their request.
+    /// The store contradicted itself, and the shim refused to paper over it
+    /// (it logs which read disagreed). This daemon's data is inconsistent —
+    /// never reported to the caller as a fact about their request.
+    ///
+    /// Three reads raise it today: a height whose block the store cannot
+    /// produce; a transaction the chain holds with no prunable hash beside it;
+    /// and a transaction whose output-index record disagrees with the
+    /// transaction found under the same lock. They share one property worth
+    /// stating, because it is what makes the variant earn its place — each has
+    /// a plausible-looking fallback (an absent block, a zero hash, an empty
+    /// index list) that would reach the caller as a fact about their request
+    /// rather than a fault of this node.
     Inconsistent,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.

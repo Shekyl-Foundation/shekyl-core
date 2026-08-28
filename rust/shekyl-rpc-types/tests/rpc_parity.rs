@@ -631,6 +631,79 @@ fn is_key_image_spent_empty_matches_the_oracle() {
 /// `decode_as_json`. What is asserted is that across the set each retired
 /// member was actually exercised — otherwise this test could pass while
 /// silently checking the removal of only one of them.
+/// **`get_version`'s v2 differs from v1 by exactly the version constant.**
+///
+/// `CORE_RPC_VERSION` moved to Rust, so this field can no longer be
+/// re-captured from C++ — which is precisely why the pair is asserted rather
+/// than the v2 file trusted. `get_transactions` dropping two members is a wire
+/// change, the constant records it (3.24 → 3.25), and this pins that the
+/// recording touched nothing else in the reply.
+/// **A request this tree sends omits its empty sequences, as epee does.**
+///
+/// The omission rule is the wire's, not the response types' — a client that
+/// emits `"txs_hashes":[]` where epee emits nothing has diverged from the
+/// captured shape just as surely as a server would. Both directions are
+/// asserted, because `skip_serializing_if` silently does nothing if the field
+/// is later given a non-`Vec` type or the attribute is dropped.
+#[test]
+fn request_sequences_are_omitted_when_empty_and_present_when_not() {
+    use shekyl_rpc_types::{GetTransactionsRequest, IsKeyImageSpentRequest};
+
+    let empty = serde_json::to_value(GetTransactionsRequest::default()).unwrap();
+    assert!(
+        empty.get("txs_hashes").is_none(),
+        "an empty txs_hashes must be omitted, not emitted as []: {empty}"
+    );
+    let filled = serde_json::to_value(GetTransactionsRequest {
+        txs_hashes: vec!["ab".repeat(32)],
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        filled.get("txs_hashes").is_some(),
+        "a non-empty txs_hashes must still be carried: {filled}"
+    );
+
+    let empty = serde_json::to_value(IsKeyImageSpentRequest::default()).unwrap();
+    assert!(
+        empty.get("key_images").is_none(),
+        "an empty key_images must be omitted, not emitted as []: {empty}"
+    );
+    let filled = serde_json::to_value(IsKeyImageSpentRequest {
+        key_images: vec!["cd".repeat(32)],
+    })
+    .unwrap();
+    assert!(
+        filled.get("key_images").is_some(),
+        "a non-empty key_images must still be carried: {filled}"
+    );
+}
+
+#[test]
+fn get_version_v2_is_v1_with_only_the_version_bumped() {
+    let mut before = parsed(include_str!("vectors/rpc/get_version_synced_v1.json"));
+    let after = parsed(include_str!("vectors/rpc/get_version_synced_v2.json"));
+
+    let old = before
+        .as_object_mut()
+        .expect("v1 vector is an object")
+        .insert(
+            "version".to_string(),
+            serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
+        )
+        .expect("v1 carries a version");
+
+    assert_ne!(
+        old,
+        serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
+        "v1 already carries the current constant — the pair has nothing to record"
+    );
+    assert_eq!(
+        before, after,
+        "v2 must differ from v1 by exactly CORE_RPC_VERSION"
+    );
+}
+
 #[test]
 fn v2_is_v1_minus_exactly_the_two_retired_members() {
     const RETIRED: [&str; 2] = ["txs_as_hex", "txs_as_json"];

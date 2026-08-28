@@ -37,7 +37,12 @@ use crate::hash::HashHex;
 /// for hex of the wrong length.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTransactionsRequest {
-    #[serde(default)]
+    /// Omitted when empty, like every other sequence on this wire: epee drops
+    /// an empty sequence rather than emitting `[]`, and that holds for plain
+    /// `KV_SERIALIZE` members as well as OPT ones (the response types below
+    /// say the same). The rule is the wire's, so it binds requests this tree
+    /// *sends* exactly as it binds replies it serves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub txs_hashes: Vec<String>,
     #[serde(default)]
     pub decode_as_json: bool,
@@ -344,7 +349,9 @@ impl From<KeyImageStatus> for u8 {
 /// handler owns the two parse refusals, so it must see what was sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IsKeyImageSpentRequest {
-    #[serde(default)]
+    /// Omitted when empty, for the reason `GetTransactionsRequest.txs_hashes`
+    /// gives: epee omits empty sequences, including plain `KV_SERIALIZE` ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub key_images: Vec<String>,
 }
 

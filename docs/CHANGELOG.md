@@ -174,7 +174,74 @@
   The `_v2` oracle vectors were captured from the edited C++ struct before it
   was deleted, so the new shape has a real oracle rather than a hand-written
   one, and the `_v1` files stay beside them so the removal itself is
-  assertable.
+  assertable. `get_version` earns a `_v2` for the same bump, by a different
+  route: its reply carries `CORE_RPC_VERSION`, and that constant moved to Rust,
+  so the new value cannot be re-captured from C++ at all. The vectors are never
+  hand-edited, so the bump gets a file beside the capture, held honest by a pair
+  test that substitutes the live constant into `_v1` and demands the result
+  equal `_v2` exactly — it may differ by that constant and nothing else, and it
+  cannot go stale against it either.
+
+- **The facts export reads the prunable hash unconditionally, and refuses a
+  store that contradicts itself.** Two defects, one root: the exporter was
+  written against what the deleted C++ handler did, and pruning is a Shekyl
+  system that Monero never had, so that handler is not authority for it.
+
+  The hash was read only when the prunable **blob** was present. But
+  `prune_worker` deletes `txs_prunable` and `txs_prunable_tip` and never
+  `txs_prunable_hash` — retaining the hash after dropping the bytes is the
+  entire reason to store it, since it is what still binds a pruned body to its
+  transaction. So on a pruned daemon every pruned transaction would have
+  reported an all-zero `prunable_hash`. Pruned-daemon mode is node-local and
+  ships post-genesis without coordination (rule 75); its absence today is not a
+  reason to encode its absence. The hash is now read for every transaction the
+  chain holds, and the blob's absence is what it actually means — pruned, a
+  fact about this node, not a fault.
+
+  A **missing** hash, and a `get_tx_outputs_gindexs` that returns false, are
+  now `SHEKYL_RPC_FACTS_ERR_INCONSISTENT` rather than an all-zero field and an
+  empty index list. Both had a plausible-looking fallback that would have
+  reached the caller as a fact about their request instead of a fault of this
+  node — which is the property `FactsFault::Inconsistent` exists to carry, and
+  its doc now names all three reads that raise it rather than only the height
+  case it was written for.
+
+- **`get_transactions` and `is_key_image_spent` requests omit their empty
+  sequences.** epee drops an empty sequence rather than emitting `[]`, for
+  plain `KV_SERIALIZE` members as well as OPT ones — the response types in this
+  module already said so, and the request types did not. The rule is the
+  wire's, so it binds requests this tree *sends* exactly as it binds replies it
+  serves. A sweep of every `Vec` field on every request type in the crate found
+  these two and no others: `GetBlocksByHeightRequest.heights` derives no
+  `Serialize` at all, so the attribute would have been decoration there.
+
+- **The `get_transactions` projection matrix is covered.** It replaced a C++
+  matrix and nothing reached it — the parity vectors build `TxEntry` directly,
+  and the live console test only ever hits the genesis transaction's
+  empty-prunable, `decode_as_json = false` corner. Table-driven now across
+  `split` / `prune` / `decode_as_json`, the chain/pool/miss slots, and a
+  renderer failure, with an injected renderer that echoes what it was handed so
+  the assertions pin *what* was rendered and under which `base_only` — the
+  `prune` case must render base-only, or the json leaks the half `prune`
+  withheld.
+
+- **The proofs workflow's daemon-facing half is its own module**
+  (`engine/proofs_chain_facts.rs`). Typing the daemon replies pushed
+  `proofs.rs` to 1204 lines, over the decomposition ratchet's 1200 cap, and the
+  gate offers two ways out — carve it, or baseline it. Neither was taken
+  literally: the split is by responsibility, not by line count. Everything in
+  the new module answers "what does the chain say about this transaction?"
+  across an **untrusted boundary**, where a daemon may lie, omit, reorder, or
+  answer with a body nobody asked for; what stays in `proofs.rs` is
+  cryptographic work over facts already established. Different job, different
+  failure mode.
+
+  The seam is five items wide — four functions plus the record two of them
+  return — and the not-found reporter stays private, since a caller needing it
+  would be doing the new module's job somewhere else. The split also surfaced
+  coupling worth removing: `proofs_tests.rs` had been reaching wire types
+  (`Ct`, `Transaction`) through `use super::*`, inheriting a workflow module's
+  third-party imports rather than naming its own.
 
 
 - **Documentation lifecycle is now a first-class process.** `docs/README.md`

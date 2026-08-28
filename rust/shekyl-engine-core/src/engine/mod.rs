@@ -339,6 +339,7 @@ pub(crate) mod principal_stake;
 /// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
 pub(crate) mod proof_bridge;
 pub mod proofs;
+pub(crate) mod proofs_chain_facts;
 pub(crate) mod pscan;
 pub mod refresh;
 /// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.

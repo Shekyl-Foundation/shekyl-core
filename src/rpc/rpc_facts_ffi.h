@@ -215,7 +215,9 @@ typedef struct shekyl_rpc_tx_entry {
     size_t          pruned_len;
     const uint8_t*  prunable;
     size_t          prunable_len;
-    // Chain only, and empty for a transaction whose outputs are not indexed.
+    // Chain only. A chain transaction always has these: one found without an
+    // index record beside it is an inconsistent store, refused rather than
+    // reported with an empty list.
     const uint64_t* output_indices;
     size_t          output_indices_len;
     uint64_t        block_height;        // chain only
@@ -298,7 +300,7 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 
 #include "crypto/hash.h"
 
-namespace cryptonote { class Blockchain; class core; }
+namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
 
@@ -319,6 +321,15 @@ int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
     uint64_t height, bool fill_pow_hash,
     shekyl_rpc_block_header_facts* out_header,
     shekyl_rpc_block_payload* out_payload, void** out_owner) noexcept;
+
+// Declared for the same reason as its five siblings above: the extern "C"
+// entry point needs a live `core_rpc_handle`, so the store-fault paths are
+// only reachable from a test through the `Blockchain&` form. Free the owner
+// with `shekyl_rpc_transactions_free`.
+int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
+    const uint8_t* txids, size_t txids_len, uint8_t include_sensitive,
+    const shekyl_rpc_tx_entry** out, size_t* out_len, uint64_t* out_chain_height,
+    void** out_owner) noexcept;
 
 } // namespace daemon_rpc_facts
 

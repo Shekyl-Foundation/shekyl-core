@@ -793,3 +793,175 @@ TEST(rpc_facts_shims, block_null_out_pointers_refuse)
   // Freeing nothing is a no-op, as the header promises.
   shekyl_rpc_block_free(nullptr);
 }
+
+// ── transactions(): the store contradicting itself ─────────────────────────
+//
+// A store that holds a transaction's body but cannot produce the facts that
+// must accompany it is inconsistent, and the caller must hear that rather than
+// a plausible-looking field. Both cases below have a tempting fallback — an
+// all-zero `prunable_hash`, an empty output-index list — and either would
+// reach the caller as a fact about *their* request instead of a fault of this
+// node.
+namespace
+{
+  // A store holding one transaction, with each accompanying fact
+  // independently withholdable. Modelled on the real reads: the prunable HASH
+  // survives pruning (`prune_worker` never deletes `txs_prunable_hash`), so
+  // its absence is a fault, while the prunable BLOB legitimately disappears.
+  class OneTxDB : public BaseTestDB
+  {
+  public:
+    OneTxDB(uint64_t height, const crypto::hash& txid) : m_height(height), m_txid(txid)
+    {
+      m_open = true;
+    }
+
+    void withhold_prunable_hash() { m_has_prunable_hash = false; }
+    void withhold_tx_index() { m_indexed = false; }
+    void withhold_prunable_blob() { m_has_prunable_blob = false; }
+
+    uint64_t height() const override { return m_height; }
+
+    bool get_pruned_tx_blob(const crypto::hash& h, cryptonote::blobdata& tx) const override
+    {
+      if (h != m_txid)
+        return false;
+      tx = cryptonote::blobdata(4, '\xAB');
+      return true;
+    }
+
+    bool get_prunable_tx_blob(const crypto::hash& h, cryptonote::blobdata& tx) const override
+    {
+      if (h != m_txid || !m_has_prunable_blob)
+        return false;
+      tx = cryptonote::blobdata(2, '\xCD');
+      return true;
+    }
+
+    bool get_prunable_tx_hash(const crypto::hash& h, crypto::hash& prunable_hash) const override
+    {
+      if (h != m_txid || !m_has_prunable_hash)
+        return false;
+      std::memset(prunable_hash.data, 0x5A, sizeof(prunable_hash.data));
+      return true;
+    }
+
+    // `Blockchain::get_tx_outputs_gindexs` fails exactly here: a body found
+    // without an index record beside it.
+    bool tx_exists(const crypto::hash& h) const override { return m_indexed && h == m_txid; }
+    bool tx_exists(const crypto::hash& h, uint64_t& tx_index) const override
+    {
+      if (!m_indexed || h != m_txid)
+        return false;
+      tx_index = 0;
+      return true;
+    }
+
+    std::vector<std::vector<uint64_t>> get_tx_amount_output_indices(
+      const uint64_t, size_t n_txes) const override
+    {
+      return std::vector<std::vector<uint64_t>>(n_txes, std::vector<uint64_t>{7});
+    }
+
+    uint64_t get_tx_block_height(const crypto::hash&) const override { return 1; }
+
+  private:
+    uint64_t m_height;
+    crypto::hash m_txid;
+    bool m_has_prunable_hash = true;
+    bool m_has_prunable_blob = true;
+    bool m_indexed = true;
+  };
+
+  crypto::hash a_txid()
+  {
+    crypto::hash h;
+    std::memset(h.data, 0x31, sizeof(h.data));
+    return h;
+  }
+
+  struct TxQuery
+  {
+    const shekyl_rpc_tx_entry* out = nullptr;
+    size_t out_len = 0;
+    uint64_t chain_height = 0;
+    void* owner = nullptr;
+    ~TxQuery() { shekyl_rpc_transactions_free(owner); }
+  };
+}
+
+// The control: with every fact present, the read succeeds and carries them —
+// so the two refusals below are the withheld fact talking, not the fixture.
+TEST(rpc_facts_shims, transactions_carries_the_prunable_hash_and_output_indices)
+{
+  BlockchainAndPool bap;
+  const crypto::hash txid = a_txid();
+  ASSERT_TRUE(init_blockchain(bap.bc, new OneTxDB(CHAIN_HEIGHT, txid)));
+
+  TxQuery q;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, (const uint8_t*)txid.data, 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  ASSERT_EQ(1u, q.out_len);
+  EXPECT_EQ(1, q.out[0].where);
+  for (size_t i = 0; i < 32; ++i)
+    EXPECT_EQ(0x5A, q.out[0].prunable_hash[i]) << "byte " << i;
+}
+
+// The prunable hash is read for every transaction the chain holds, not only
+// those whose prunable blob survived — a pruned daemon keeps the hash after
+// dropping the bytes, and that is the whole reason it is stored.
+TEST(rpc_facts_shims, transactions_reads_the_prunable_hash_even_when_the_blob_is_pruned)
+{
+  BlockchainAndPool bap;
+  const crypto::hash txid = a_txid();
+  auto* db = new OneTxDB(CHAIN_HEIGHT, txid);
+  db->withhold_prunable_blob();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  TxQuery q;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, (const uint8_t*)txid.data, 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  ASSERT_EQ(1u, q.out_len);
+  EXPECT_EQ(0u, q.out[0].prunable_len) << "the pruned blob is absent, as it should be";
+  for (size_t i = 0; i < 32; ++i)
+    EXPECT_EQ(0x5A, q.out[0].prunable_hash[i])
+      << "byte " << i << ": pruning drops the bytes and keeps the hash";
+}
+
+// A chain transaction with no prunable hash beside it is an inconsistent
+// store, not a transaction with a zero hash.
+TEST(rpc_facts_shims, transactions_without_a_prunable_hash_is_inconsistent)
+{
+  BlockchainAndPool bap;
+  const crypto::hash txid = a_txid();
+  auto* db = new OneTxDB(CHAIN_HEIGHT, txid);
+  db->withhold_prunable_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  TxQuery q;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, (const uint8_t*)txid.data, 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  EXPECT_EQ(nullptr, q.out);
+  EXPECT_EQ(0u, q.out_len);
+}
+
+// A transaction found under the same lock whose index record disagrees is the
+// same class of fault — never an empty output-index list.
+TEST(rpc_facts_shims, transactions_without_an_output_index_record_is_inconsistent)
+{
+  BlockchainAndPool bap;
+  const crypto::hash txid = a_txid();
+  auto* db = new OneTxDB(CHAIN_HEIGHT, txid);
+  db->withhold_tx_index();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  TxQuery q;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, (const uint8_t*)txid.data, 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  EXPECT_EQ(nullptr, q.out);
+  EXPECT_EQ(0u, q.out_len);
+}

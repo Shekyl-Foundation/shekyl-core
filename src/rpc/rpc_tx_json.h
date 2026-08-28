@@ -35,8 +35,16 @@
 // `on_get_transactions`. RK-4c needs it from the facts shim as well, and a
 // second copy of a serialization wrapper is the kind of duplicate that drifts
 // silently — the two would render differently and only the cross-language
-// parity test would notice. So it moved here rather than being copied, and it
-// dies with the handler it was written for.
+// parity test would notice. So it moved here rather than being copied.
+//
+// Its removal trigger is the FIELD, not that handler. RK-4c deletes
+// `on_get_transactions` and this class outlives it, because `get_transactions`
+// still answers with `as_json` and the facts shim renders it through
+// `shekyl_rpc_tx_to_json`. The §5 register of `DAEMON_RPC_KV_CUTOVER.md` files
+// `obj_to_json_str(pruned_tx)` and that field under **RK-W**, where the honest
+// question is whether `as_json` should exist at all — it duplicates `as_hex` /
+// `pruned_as_hex`, which carry the same transaction in the consensus encoding
+// every in-tree client already parses. This class dies there, with the field.
 
 #pragma once
 

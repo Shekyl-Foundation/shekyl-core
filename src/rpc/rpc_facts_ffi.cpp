@@ -500,19 +500,46 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         if (!bc.get_db().get_pruned_tx_blob(ids[i], pruned_blob))
           continue;
         owned->pruned[i] = std::move(pruned_blob);
+
+        // The prunable HASH is read unconditionally, and the prunable BLOB is
+        // optional — that asymmetry is pruning's design, not an oversight.
+        // `prune_worker` deletes `txs_prunable` and `txs_prunable_tip` and
+        // never `txs_prunable_hash`: keeping the hash after dropping the bytes
+        // is the entire point of storing it, since it is what still lets a
+        // client bind the pruned body to the transaction. Reading the hash
+        // only when the blob survived would therefore report an all-zero hash
+        // for every transaction on a pruned daemon — the node-local mode this
+        // daemon ships post-genesis without coordination (rule 75), so the
+        // absence of that mode today is not a reason to encode its absence.
+        //
+        // A missing hash is an inconsistent store rather than a fact: the
+        // write path stores it for every transaction it indexes (the
+        // `tx.version > 1` guard there is Monero-era, and Shekyl is
+        // v3-from-genesis with no v1 transactions to except — rule 60), and
+        // removal takes the hash with the transaction. Fabricating zeros here
+        // would hand the caller a valid-looking field for a store that cannot
+        // support it.
+        crypto::hash ph;
+        if (!bc.get_db().get_prunable_tx_hash(ids[i], ph))
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        std::memcpy(facts[i].prunable_hash, ph.data, 32);
+
         cryptonote::blobdata prunable_blob;
         if (bc.get_db().get_prunable_tx_blob(ids[i], prunable_blob))
-        {
           owned->prunable[i] = std::move(prunable_blob);
-          crypto::hash ph = crypto::null_hash;
-          if (bc.get_db().get_prunable_tx_hash(ids[i], ph))
-            std::memcpy(facts[i].prunable_hash, ph.data, 32);
-        }
+
         facts[i].where = 1;
         facts[i].block_height = bc.get_db().get_tx_block_height(ids[i]);
         facts[i].block_timestamp = bc.get_db().get_block_timestamp(facts[i].block_height);
         facts[i].pruned_flag = bc.get_db().tx_has_verification_data(ids[i]) ? 0 : 1;
-        bc.get_tx_outputs_gindexs(ids[i], owned->output_indices[i]);
+
+        // A transaction the chain holds has outputs — a spend with fewer than
+        // two is consensus-invalid — so a false here is the index disagreeing
+        // with the transaction it was found beside, under this same lock.
+        // Reporting that as an empty index list would turn corruption into a
+        // successful, inaccurate reply.
+        if (!bc.get_tx_outputs_gindexs(ids[i], owned->output_indices[i]))
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
       }
     }
 

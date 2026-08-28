@@ -12,6 +12,10 @@
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
 use super::*;
+// Named rather than inherited through `use super::*`: these are wire types
+// the fixtures build with, not workflow items, and the proofs module no
+// longer imports them now that the chain-facing half owns that work.
+use shekyl_wire::{Ct, Transaction};
 
 use shekyl_address::Network;
 
