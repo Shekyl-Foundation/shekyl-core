@@ -4,20 +4,40 @@
 P2B-7 `HoldingsUpdate` friction pinned (genesis, 2026-06-15).**
 join-Market seam (lag-forced); gate-4 wire lean **(b)** `txin_archival_bond_post` incl.
 `Unbond` + `HoldingsUpdate` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)).
-Supersedes [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) **§3–§5.2** (claim-era
-FSM) until those sections are rewritten against this doc.
+This is the living FSM SoT. The claim-era `design/PHASE_2B_FSM_RETOOL.md` body is
+**deleted** (2026-08-26); its live §2.4 admission shape is lifted below.
 
-**Authority:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 (rebased scope);
-[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6 (bond record, dedup, `pop_block`);
-[`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9 (`P` keys, `P_canonical_id`).
+**Authority:** this doc (admission shape + FSM); [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §6 (bond record, dedup, `pop_block`);
+[`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9 (`P` keys, `P_canonical_id`);
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md).
 
-**Why now:** §2.4 and the emission leg already describe the rebased model. §3 still runs the
-**opposite** mechanism — output-keyed instances, nullifier-derived `claimed_epochs`, tier-lock
-yield states. Retool is **two inversions + a collapse**, not a field rename.
+**Why now:** the rebased model (transfer-shaped admission + emission leg) is the only genesis form. The claim-era FSM (output-keyed instances, nullifier-derived `claimed_epochs`, tier-lock yield) is gone from the tree.
 
 ---
 
-## P2B-0 — Master diagnosis
+## Admission shape (lifted from retired PHASE_2B_STAKE_LIFECYCLE §2.4)
+
+Authoritative staking **shape** for genesis. Only **bond** and **reward emission**
+require consensus-marked state or mint authorization. Stake-in and unstake-out
+are indistinguishable from normal transfers on-chain.
+
+| Leg | Tx shape | Consensus role |
+|-----|----------|----------------|
+| Stake-in | Ordinary FCMP++ transfer (principal → `P`) | Value move; privacy = base FCMP++ CT |
+| join-Market / re-bond / unbond | `txin_archival_bond_post` (gate 4) | Join creates record; re-bond after slash; **Unbond** returns collateral after cooldown |
+| Bond slash | Gate 4 consensus mutation | Involuntary unbond; `good_standing` interval log |
+| Reward emission | **Special** — mint + membership-only backing + work payload | Paying claim only; record must exist; dedup on bond record |
+| Reward sweep / principal return | Ordinary FCMP++ transfer (`P` → principal or fresh stealth) | F-W10: the drain is not an identifiable transaction |
+| Terminal drain | Ordinary FCMP++ spend(s) draining `P`'s **non-escrowed** outputs | **bond** returns via gate-4 `Unbond`, not drain |
+
+**Soft admission:** backing is verified at settlement-epoch cadence. Between
+emissions, `P` may spend funding outputs; service may be unbacked for up to
+~one epoch. Challenge failure slashes **bond** regardless of which funding
+outputs remain. **join-Market** (`txin_archival_bond_post`) creates the on-chain
+bond record before the first paying emission. Full emission crypto bill:
+[`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md).
+
+---
 
 | Axis | Stale §3 (claim era) | Rebased model (§2.4 + emission leg) |
 |------|----------------------|-------------------------------------|
@@ -395,8 +415,8 @@ conservation law (gate-4 §4.5) extends G11 — loud bond terms cannot mask infl
 
 ### Disposition
 
-**Landed (2026-06-07):** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §7;
-claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md).
+**Landed (2026-06-07):** [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §7;
+claim-era wargame → §7.A. Draft retained as [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md).
 
 **Closed in review:**
 

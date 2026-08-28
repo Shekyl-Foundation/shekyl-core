@@ -1,5 +1,7 @@
 # Legacy-PoW Cleanup Plan
 
+
+**Status:** CLOSED-as-record.
 | | |
 |---|---|
 | **Status** | EXECUTED — **Plan A** (RPC-payment-only this PR), on `chore/rpc-payment-deletion`. Scope surfaced for review; maintainer deferred the A/B + deferral decision to the implementer, so the Rule-19-cleanest cut (Plan A) was taken. During execution an orphaned Rust `RpcPrefs` persisted-prefs bucket surfaced; per the "delete in its entirety" mandate the maintainer approved folding it in as a self-contained Commit 4 (distinct persisted-schema validation surface, `19-validation-surface-discipline.mdc`). See §6 for the as-built commit list. |

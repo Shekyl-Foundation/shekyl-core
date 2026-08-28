@@ -1,5 +1,7 @@
 # Stage 1 PR 6 — `PersistenceEngine` extraction — design
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status.** **Design closed — Round 3 complete (2026-05-27); Phase 1 C0–C7
 landed on `feat/stage-1-pr6-persistence-engine` (C7: 2026-05-27 removes
 password-taking `WalletFile::save_state`; steady-state sealing is
@@ -7,7 +9,7 @@ password-taking `WalletFile::save_state`; steady-state sealing is
 branch:
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
-[`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
+[`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) and
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Phase 1 implementation** lands on `feat/stage-1-pr6-persistence-engine`
 after §6.3 prerequisites (HKDF PR merged to `dev`).
@@ -20,7 +22,7 @@ deferred to Round 2. Steady-state: `save_state(&StateWrapKey, …)` +
 in Round 1. Lens 1 **bounded** at trait surface (§5.0).
 
 **Substrate amendment (post–Round 1, pre–Round 2 close).**
-[`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
+[`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](../design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
 ratified per-region HKDF wrap keys (`wrap_key_region_1`, `wrap_key_region_2`).
 §5.9 narrative updated below: **`StateWrapKey` = `wrap_key_region_2`** — F5(b)
 steady-state blast radius is **region-2 (ledger cache) at this rotation**,
@@ -54,10 +56,10 @@ post–Phase-0 `dev` tip per PR 2 / PR 4 / PR 5 precedent.
   §2.6 (`PersistenceEngine` trait surface; Q9.11 closed **no** for
   `load_state` on trait). Round 1 **§8.2 amendment**: three-method shape
   (§5.9) + [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §4.3 /
-  [`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
+  [`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](../design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
   (session-cached `wrap_key_region_2`; `file_kek` transient at open).
 - **Per-PR template.**
-  [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) — structural
+  [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) — structural
   skeleton for this doc; §8.3 / WALLET_REWRITE_PLAN principles 4–8 cited
   in §3 below.
 - **Prior PRs (shape precedent).**
@@ -74,7 +76,7 @@ post–Phase-0 `dev` tip per PR 2 / PR 4 / PR 5 precedent.
   **Spawn graph** (§2.8.3): Persistence Group A at Stage 4 — **do not**
   conflate with PR landing order (§3.5).
 - **Wallet rewrite (orchestrator collision).**
-  [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 1 polishes
+  [`WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md) Phase 1 polishes
   `Engine` toward a future public `Wallet` API; PR 6 wires
   `PersistenceEngine` into **`Engine` knowing `Engine::close` consumer
   code is rewrite-fodder** — trait shape is durable (§5.11).
@@ -142,7 +144,7 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
    through `F` where applicable.
 4. **§8.2 spec amendment** — three-method shape (§5.9);
    [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §4.3 +
-   [`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
+   [`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](../design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
    cross-refs in C0 (implementation + KAT regen: separate commits).
 5. **Tests** — real `WalletFile` + tempfile; **no** `MockPersistence` per
    §6.4 and PR 3 precedent.
@@ -169,7 +171,7 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 **Audit pin:** `dev` at `b9c03dc24` (2026-05-27).
 
 This section pays the **citation cost** for
-[`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §3 and
+[`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) §3 and
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §8.3.
 
 ### §3.1 Engine identification (template §3.1)
@@ -480,7 +482,7 @@ deferral wrapper), not "we might plug in alternates later." See §5.6 row
 for anti-pattern citation pairing.
 
 **Rewrite collision (F7).** PR 6 lands trait extraction on `Engine<S, …>`
-knowing [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 1 polishes
+knowing [`WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md) Phase 1 polishes
 `Engine` and eventually exposes a public `Wallet` orchestrator — **not**
 a rename-in-place. **`PersistenceEngine` and `F: PersistenceEngine` survive
 the rewrite**; `Engine::close` / `change_password` call sites are
@@ -503,7 +505,7 @@ the periodic path (hundreds of ms per block on mobile). A **session cache**
 is required; the design choice is **what** is cached.
 
 #### KEK hierarchy (amended v1 — [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §2.6,
-[`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md))
+[`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](../design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md))
 
 | Layer | Spec name | Derivation |
 |-------|-----------|------------|
@@ -673,7 +675,7 @@ Mapping `PersistenceError` → `OpenError::Io(IoError::WalletFile { … })` is
 
 ### §5.11 Engine vs `Wallet` orchestrator (F7)
 
-[`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 1: polish
+[`WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md) Phase 1: polish
 `shekyl-engine-core::Engine`, not a parallel trait re-derivation.
 **Public `Wallet` for binaries** is Phase 1+; Stage 1 already landed traits
 on `Engine`. PR 6's job is **trait + `F` on `Engine`**; rewrite later
@@ -1157,7 +1159,7 @@ table matches reviewer prioritization (**blocking PR 6** vs **FOLLOWUPS**).
 ### Cryptographer review bundle (add if not already on the four-target list)
 
 - F5(b) session-key derivation ritual (**2h**).
-- HKDF per-region correctness ([`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)).
+- HKDF per-region correctness ([`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](../design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)).
 - Argon2 implementation stack hygiene (**F3**).
 - PR 6 trait surface + WALLET_FILE_FORMAT §4.3 steady-state save model.
 
@@ -1422,6 +1424,6 @@ PR 6 must not break:
 
 ---
 
-*Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md).
+*Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md).
 *Spec:* [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.6, §2.8, §3, §6.4, §8.1–§8.3.
 *Process:* [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).

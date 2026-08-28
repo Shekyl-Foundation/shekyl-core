@@ -104,7 +104,7 @@ Drift labels:
   - `TESTNET_REHEARSAL_CHECKLIST.md` said "post-HF17 rules" for v3 tx checks.
   - Shekyl reboot policy is HF1-only.
   - Drift label: resolved (docs updated to HF1 across V3_ROLLOUT, PQC,
-    PQC_MULTISIG, and STAKER_REWARD_DISBURSEMENT)
+    PQC_MULTISIG, and REWARD_EMISSION_LEG)
 
 ## Immediate Pre-Testnet Blockers
 

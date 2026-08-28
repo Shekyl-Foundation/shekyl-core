@@ -1,5 +1,7 @@
 # WI-4 — GF-7 measurement round: the graded genesis gate
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 > ## ⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346) — read before acting on anything below
 >
 > **The M1 `K_COVER` reward gate is RETIRED and its machinery is deleted
@@ -2187,7 +2189,7 @@ rather than catching it. The synergy is voided on the OBJECT, and was
 almost certainly a category error when first asserted:*
 
 - *The hazard is over `tier × creation_height`, cleartext fields of the
-  **Tier-A confidential-staking claim** (`CONFIDENTIAL_STAKING.md`
+  **Tier-A confidential-staking claim** (`V3_STAKER_ARCHIVAL.md`
   §6.4.8). That era is RETIRED (`LEGACY_CLAIM_ERA_RETIREMENT.md`); the
   live claim object, `ArchivalRewardEmissionVin` (`emission_wire.rs`),
   carries **neither field** — verified at source.*

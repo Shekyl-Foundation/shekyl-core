@@ -1,6 +1,11 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-06-09
+> **Last updated:** 2026-08-26
+>
+> **Status:** LIVING CONTRACT (spend-path hybrid). Address v2 / SLH-DSA-192s
+> message-signing field: [`design/WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md)
+> SM-R-8 (freeze signed 2026-08-13). This doc remains SoT for spend/ownership
+> Ed25519 + ML-DSA-65.
 
 ## Purpose
 
@@ -39,8 +44,8 @@ Implications:
   required on the rebooted chain.
 - We do not need a mixed old/new transaction regime after launch.
 - The rebooted chain may require a single new transaction version from launch.
-- Legacy chain data may still be used for snapshot/accounting purposes, but not
-  as a consensus-validation obligation for the rebooted runtime.
+- There is no Monero-era UTXO snapshot to restore. Genesis is a clean Option C
+  cut ([`GENESIS_TRANSPARENCY.md`](GENESIS_TRANSPARENCY.md) §4; rule 60).
 
 ## Security Goals
 

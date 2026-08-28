@@ -1,5 +1,7 @@
 # F-D2 drain-send subsystem — pre-flight audit trail
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 Sibling audit trail for `ARCHIVAL_DRAIN_SEND_FD2.md`, per
 `26-sub-pr-design-discipline.mdc` §"Pre-flight pass" (the pass is
 labeled **Round 0**; findings carry stable **R0-D#** IDs that must not

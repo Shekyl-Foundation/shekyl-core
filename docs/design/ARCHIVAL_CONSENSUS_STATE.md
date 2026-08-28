@@ -14,7 +14,7 @@ mutations and first-emission bond-record creation per emission leg §6).
 
 **Out of scope here:** retention-proof **construction** wire (prover bytes); gate 6
 off-chain firewall; gate 4 bond post/slash **wire** (except fields this contract reads);
-wallet FSM ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§7 retool).
+wallet FSM ([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §3–§7 retool).
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service
 rebasing*, loud 8c; [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4–§6.
@@ -419,7 +419,7 @@ servo/emission-cadence need + privacy review — not F1 portfolio axis.
 | Doc | Relationship |
 |-----|----------------|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumer; owns `Σwork` arithmetic and dedup |
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet FSM; gate 2 registration shape |
+| [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | Wallet FSM; gate 2 registration shape |
 | [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | §3–§7 retool disposition (P2B-1–6) |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; two-count table; honest residual |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |

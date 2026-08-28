@@ -1,5 +1,7 @@
 # Archival Cover-Amount Draw — entropy scoping (genesis-adjacent)
 
+
+**Status:** CLOSED-as-record.
 > ## ⛔ RETIRED — the `span(C)` curve (RATIFIED 2026-07-20)
 >
 > **The count-dependent cover curve is retired: deleted, not built.** Ratified by the

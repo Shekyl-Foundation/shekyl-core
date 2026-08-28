@@ -32,7 +32,7 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 - Web: [shekyl.org](https://shekyl.org)
 - Mail: [dev@shekyl.org](mailto:dev@shekyl.org)
 - GitHub: [https://github.com/Shekyl-Foundation](https://github.com/Shekyl-Foundation)
-- Docs: [docs/](docs/)
+- Docs: [docs/README.md](docs/README.md)
 
 ## Vulnerability response
 
@@ -41,7 +41,9 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 
 ## Research
 
-Shekyl research and design notes are maintained in this repository under `docs/`, including:
+Shekyl research and design notes start at [`docs/README.md`](docs/README.md).
+That file is the reading order and document-class map. Operator and
+protocol contracts include:
 
 - `docs/DESIGN_CONCEPTS.md`
 - `docs/INSTALLATION_GUIDE.md`

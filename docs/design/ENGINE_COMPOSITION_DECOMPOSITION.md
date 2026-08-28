@@ -1,5 +1,7 @@
 # Engine composition: making it less of a monolith
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 | Field | Value |
 |-------|--------|
 | **Date** | 2026-07-19 |

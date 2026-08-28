@@ -26,6 +26,8 @@ isProject: false
 
 # LWMA-1 difficulty adjustment migration
 
+
+**Status:** CLOSED-as-record.
 ## Sequencing rationale
 
 LWMA-1 is **independent** of the RandomX v2 PoW migration described

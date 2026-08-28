@@ -1,12 +1,14 @@
 # Stage 1 PR 7 — `EconomicsEngine` extraction — design
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status.** **Round 0 closed (2026-05-27).** **Round 1 closed (2026-05-27).**
 **Round 2 closed (2026-05-28)** — close-out §6.2 + segment **2i** (G4/G5). **Round 3
 open** — §7.X commit decomposition binding; Phase 0 / implementation PRs may cut
 after §2.7 C0 co-lands on `dev`. Planning doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
-follows [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and cites
+follows [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) and cites
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 explicitly.
 
@@ -43,7 +45,7 @@ and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`. Pha
   §8.3 (lens table — `EconomicsEngine` **bounded**).
 - **Economic rationale (consumed, not re-derived).**
   [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) (CALIBRATION gate),
-  [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
+  [`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md)
   (wallet vs consensus boundary).
 - **Provenance (Round 0 substrate).**
   - **2026-05-08 — economics trait shape.** Supertrait composition
@@ -56,7 +58,7 @@ and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`. Pha
     independently. Wrong wallet-side derivation → **failed-send / wrong-display**,
     not theft. Anchors `burn_amount` threat narrowing (§3.2).
 - **Per-PR template / process.**
-  [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md),
+  [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md),
   [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 - **Prior PRs (shape precedent).**
   [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md),
@@ -118,7 +120,7 @@ release-multiplier / activity inputs) **without wiring them now**.
   calibration traceability).
 - **Docs.** CALIBRATION gate in this doc,
   [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md),
-  [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md).
+  [`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md).
 - **Milestone.** **CALIBRATION** is distinct from stressnet (Phase 7.7). Stressnet
   = load survival; calibration = coefficient correctness. Different exit criteria.
 - **KATs.** *Generation-invariant* tests (engine-vs-sim differential on shared 0h
@@ -522,7 +524,7 @@ methods carry forward-compat caveats in §2.7 rustdoc; `pool_weighted_total` was
 gap. Pinned in binding spec (not reopening `-> u128`):
 
 1. **`0` is valid** — no active stake at the mirrored height; consensus burns
-   the pool contribution ([`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
+   the pool contribution ([`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md)
    §"Empty-staker-set behavior").
 2. **Denominator guard** — `StakeEngine::projected_yield` (May-8 reason this
    method exists) must not divide blindly; `0` is live divide-by-zero.
@@ -620,7 +622,7 @@ does **not** reopen the raw-observables / no-precomputed-ratios pin.
   signature remains for C++ `compute_fee_burn` but is **not** a second formation
   site — C++ must keep passing a ratio already produced by
   `shekyl_calc_stake_ratio`, not a locally computed division.
-- **Integers only** — fixed-point math per [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
+- **Integers only** — fixed-point math per [`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md)
   (no float across FFI/trait; divergent rounding fails consensus).
 
 **Caller-trust rustdoc (field-projection lens):** all fields are wallet-actor-
@@ -1220,7 +1222,7 @@ close-out + **2i** audit **closed** — Round **3** open (§7).
 
 ### §6.2 Round 2 close-out checklist (segment 2g — closed 2026-05-28)
 
-Per [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §5.3 closure
+Per [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md) §5.3 closure
 criteria and PR 5 segment-2g precedent. **No new Round 1 dispositions** — reconcile
 what moved in Round 1 (C0, C2a′/C2c, H1–H3, §5.8 pins) against §4/§7.X and
 confirm Round 3 may open.
@@ -1601,7 +1603,7 @@ R6). GUI reads `burn_pct` from `/get_info` for display only (`shekyl-gui-wallet`
 | **Mempool / fee** | Wallet estimates burn on proposed fee; consensus uses actual included fee | Fee input is intentional user choice — not staleness; burn scales linearly in fee |
 
 **Not a theft surface:** consensus recomputes burn independently at accept
-(`STAKER_REWARD_DISBURSEMENT.md`, §5.3 R1).
+(`design/REWARD_EMISSION_LEG.md`, §5.3 R1).
 
 **Threat-model pivot (2026-05-28 design comments):** the 2026-04-08 anchor
 ("wrong daemon → failed send or wrong display") is **too strong for G4**. Stale
@@ -2045,8 +2047,8 @@ on the other's trait methods; Stage 1 closeout requires both slots on `dev`.
 
 ---
 
-*Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md).
+*Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](../design/STAGE_1_PER_PR_TEMPLATE.md).
 *Spec:* [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7+.
 *Process:* [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 *Calibration:* [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md),
-[`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md).
+[`design/REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md).

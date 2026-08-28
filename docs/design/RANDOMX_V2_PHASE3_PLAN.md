@@ -1,5 +1,7 @@
 # RandomX v2 — Track B Phase 3 plan (genesis PoW cutover: 3a/3b)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 ## Front-matter
 
 | Field | Value |

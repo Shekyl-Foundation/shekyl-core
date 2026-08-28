@@ -94,7 +94,7 @@ locked.
 
 This is the **consensus-visible-now / consensus-invisible-later** split doing
 its job: pin the correct wire at genesis; let speed improve whenever and by
-whomever. Shared scan budget with 2B stake-mirror refresh (`PHASE_2B_STAKE_LIFECYCLE.md`
+whomever. Shared scan budget with 2B stake-mirror refresh (`design/PHASE_2B_FSM_RETOOL.md`
 §8.4.1) means reduce-N benefits both wallet refresh and stake scan.
 
 **Target:** V3.1+ follow-ups in `docs/FOLLOWUPS.md` (not Round 3 blockers).

@@ -34,6 +34,12 @@ on:
       - "scripts/ci/check_doc_links.py"
       - "scripts/ci/check_doc_headings.py"
       - "scripts/ci/check_lmdb_schema_coverage.py"
+      - "scripts/ci/check_doc_status_banners.py"
+      - "scripts/ci/check_doc_fossils.py"
+      - "scripts/ci/check_followups_targets.py"
+      - "scripts/ci/check_index_prefix_uniqueness.py"
+      - "scripts/ci/check_no_claim_era_spec.py"
+      - ".cursor/rules/**"
       # The schema-coverage gate reads the table list and VERSION out of
       # db_lmdb.cpp, so a source-only table/version change must start this
       # workflow — that drift arriving with no docs edit is exactly the
@@ -51,7 +57,7 @@ permissions:
 
 jobs:
   check-doc-links:
-    name: "Docs structural gates (dead links + empty identifier headings)"
+    name: "Docs structural gates (links, banners, fossils, FOLLOWUPS, index)"
     runs-on: ubuntu-latest
     # Both checks are pure-Python over a checkout; a minute is generous.
     # Bounded per 47-gate-subject-assertion.mdc so an infrastructure stall
@@ -89,3 +95,33 @@ jobs:
         # reason as above.
         if: '!cancelled()'
         run: python3 scripts/ci/check_lmdb_schema_coverage.py
+
+      - name: Run status-banner check
+        # design/ and completed/ without a Status line in the first 40 lines
+        # after H1 read as current SoT. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_status_banners.py
+
+      - name: Run forbidden-fossil check
+        # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
+        # always-applied rules. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_fossils.py
+
+      - name: Run FOLLOWUPS Target: check
+        # Every work item must carry Target: pre-genesis|post-genesis|V4.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_targets.py
+
+      - name: Run index prefix-uniqueness check
+        # Rule 94 §2 family prefixes must not collide.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_index_prefix_uniqueness.py
+
+      - name: Run claim-era basename check
+        # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
+        # txin_stake_claim spec. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_no_claim_era_spec.py

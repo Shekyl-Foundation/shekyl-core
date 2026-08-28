@@ -117,6 +117,8 @@ cites its closing edit instead: `(decision-anchored: closed by
 
 ## Related rules
 
+- **`95-documentation-lifecycle.mdc`** — document classes, archive-or-contract,
+  FOLLOWUPS one-liners, CHANGELOG scope; the index is the map, not a ledger.
 - **`91-documentation-after-plans.mdc`** — the doc-update task that
   carries index maintenance.
 - **`05-system-thinking.mdc`** — specification first; the index row

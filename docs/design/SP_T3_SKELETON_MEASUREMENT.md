@@ -1,5 +1,7 @@
 # SP-T3 serving skeleton — the PD-F-2 dispersion measurement
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **Branch:** `spike/sp-t3-serving-skeleton` · **Base:** `dev@146c7a9`
 **Class:** measurement spike. Not TJ-B. Not consensus.
 **Opened:** 2026-08-03

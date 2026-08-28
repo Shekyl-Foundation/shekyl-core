@@ -60,6 +60,7 @@ Foundations & process
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
+- [`95-documentation-lifecycle`](.cursor/rules/95-documentation-lifecycle.mdc) — document classes, status banners, archive-or-contract, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets
 - [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — opt-in design-round process for multi-round/consensus/FFI sub-PRs
 
 Architecture & scope
@@ -143,9 +144,10 @@ Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-sca
 `shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
 crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
-Design history worth knowing: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md)
-(append-only binding decisions), [`docs/design/`](docs/design/), and
-[`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
+Documentation starts at [`docs/README.md`](docs/README.md). Binding
+history: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md).
+Identifier map: [`docs/design/IMPLEMENTATION_INDEX.md`](docs/design/IMPLEMENTATION_INDEX.md).
+Open residue: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 
 ---
 

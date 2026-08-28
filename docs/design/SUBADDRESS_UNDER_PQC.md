@@ -207,7 +207,7 @@ amount-matching underpins confidence tiers 2–3.
 | No `StakeEngine` trait or impl in `rust/` yet | Phase 2b is design-only (`V3_ENGINE_TRAIT_BOUNDARIES.md` §10.5.1). |
 | `TransferDetails` stake fields (`staked`, `stake_tier`, `stake_lock_until`) | Stake state is per-output on the same ledger row as normal receives — no `SubaddressIndex` in staking paths (`shekyl-engine-state/src/transfer.rs`). |
 | `StakerPoolState` / stake grep in `shekyl-engine-state` | No subaddress coupling. |
-| `STAKER_REWARD_DISBURSEMENT.md` | No subaddress requirement. |
+| `design/REWARD_EMISSION_LEG.md` | No subaddress requirement. |
 
 **Disposition for Phase 2b:** Design `StakeEngine` against **primary-address
 receive + account-level scan** (End-state 5). Reward disbursement credits
@@ -2029,7 +2029,7 @@ must not be confused with reopening genesis wire.
 | **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
 | **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
 | **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
-| **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
+| **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`design/PHASE_2B_FSM_RETOOL.md` §8.4.1); claim-era Decision 3C / second tree is deleted |
 
 **Round 4 definition of done:** **Met** (2026-06-09). FA-9 + FA-10 landed;
 FA-4 closed at design layer (FA-7); §11 checkbox closed; no genesis wire item
