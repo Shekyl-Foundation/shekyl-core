@@ -27,8 +27,9 @@
 //!    it reasoned from the existing `TestDaemon` harness instead of from the
 //!    [`BlockSource`](crate::engine::pscan::block_source::BlockSource)
 //!    interface, which is `tip_height` plus a single-height `block_at`. The
-//!    sweep scans `[frontier, horizon)`; with the frontier seeded at the
-//!    cursor that is ONE block, which [`WalkBlockSource`] serves.
+//!    sweep scans `[frontier, horizon)`, a range [`WalkBlockSource`] serves
+//!    synthetically — two blocks here, not ~270k, and the second is
+//!    load-bearing (see that source's `tip_height`).
 //!
 //! # Why it exists when `pscan/task_tests.rs` already covers retire
 //!
@@ -279,11 +280,16 @@ async fn a_retired_persona_is_gone_from_the_actor() {
     );
 }
 
-/// **Negative control for the wipe.** With the confirmation predicate
-/// unsatisfied there is no witness, so no retire can fire — and the walk's
-/// post-condition must be the thing that goes red, not a downstream symptom.
+/// **Negative control for the wipe: a persona still INSIDE the claim window.**
+///
+/// The confirmation path is not removed here — `from_confirmed_unbond` is still
+/// the constructor, and only `settled_epoch` moves. What the control varies is
+/// **claim-window expiry**, which is the predicate that decides eligibility:
+/// `epoch_is_claim_expired` says epoch 0 is still claimable at settled 0, so no
+/// witness exists, so no retire can fire. Naming it after "the confirmation
+/// predicate" (an earlier revision did) misstates which property is under test.
 #[tokio::test]
-async fn without_the_confirmation_predicate_the_key_material_stays_readable() {
+async fn a_persona_inside_the_claim_window_yields_no_witness_and_stays_readable() {
     let (stake, id) = spawn_walk_actor();
 
     // The predicate IS the guard: `from_confirmed_unbond` refuses to construct a
@@ -451,7 +457,15 @@ impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
     ) -> impl std::future::Future<
         Output = Result<BlockHeight, crate::engine::pscan::block_source::BlockSourceError>,
     > + Send {
-        // horizon = tip - reorg_depth must exceed the frontier by exactly one.
+        // `horizon = tip - reorg_depth`, so this yields `cursor + 2` — a
+        // **two**-block range `[cursor, cursor + 2)`, and the `+ 2` is
+        // load-bearing rather than slack. With `batch_blocks = 1` each run
+        // scans one batch: run 1 consumes the block at `cursor`, seals, and is
+        // cancelled inside that seal; run 2 resumes at `cursor + 1` and needs a
+        // block of its own to enter the loop at all — and the seal and the
+        // retire dispatch live *inside* that loop. Bite-checked: `+ 1` leaves
+        // run 2 with an empty range, the dispatch never runs, and the retire
+        // does not re-fire. Do not "simplify" this to `+ 1`.
         let tip = BlockHeight::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
         async move { Ok(tip) }
     }

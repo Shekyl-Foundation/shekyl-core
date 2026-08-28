@@ -31,10 +31,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Staking has no REACHABLE exit: Unbond assembles (PR-P4) but has no RPC/CLI; Rebond/HoldingsUpdate still refuse.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
-- **PR-P4 slice 3's engine walk asserts all three named observables (wipe, funded gate, seal-then-act); the REACHABILITY gate is still not lifted.** No RPC method, no CLI verb, `unstake` RESERVED — `IMPLEMENTATION_INDEX.md` and `api/wallet_rpc.yaml` are correct as written. Lifting it is the dispatch + submit-fact-set work, not this walk. [`retire_walk.rs`](../rust/shekyl-engine-core/src/engine/retire_walk.rs)
-  - Target: pre-genesis
-
-- **The DAEMON walk: assembled `Unbond` bytes are never submitted through the native C++ consensus path.** Narrower than "never on a wire" — `stake_engine/unbond_tests.rs` already assembles a full exit and parses `bound_tx.bytes()` back through the **Rust** transaction decoder, so our own round-trip is covered. What is unjudged is cross-language and cross-process: *the bytes we assemble are the bytes CONSENSUS accepts*. `RF-D9` is the precedent — the serve-credit wire round-tripped in Rust and had never been through the C++ oracle. Blocked: native `/submit_transaction` refuses `Unbond` as `Malformed`; the construction-leg reopen fired, the submit fact set has not. Rides that slice.
+- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); blocked on the Unbond submit fact set.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release
