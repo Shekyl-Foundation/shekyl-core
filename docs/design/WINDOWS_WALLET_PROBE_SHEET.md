@@ -467,17 +467,26 @@ dial from `DTASUS-Z970`, same AD user, no poller before it:
 
 The result is **self-attributing**, which is what makes it evidence rather than
 coincidence: the very token that lacked a logon SID *did* carry the user SID
-`…-1108`, so a user-SID ACE would have admitted this caller. The refusal is
-therefore attributable to the one thing that differs between the two
-descriptors — and PR #516's removal of the user-SID grant is exactly what
-carries the boundary. `prod`'s `5` is over-determined (both fences apply);
-`daclonly`'s `5`, carrying no flag, is the clean attribution. Both of WP-D6's
-fences are now measured, separately: `reject_remote_clients` by path form
-(§4.7), and the logon-SID-only ACE by a genuine `IPC$` caller's **absence of
-the class the ACE grants to** (here). Row (d) is answered — and answered more
-strongly than it was posed: not "your session isn't ours" (defeatable by a
-colliding value, dependent on session bookkeeping) but "you hold nothing in the
-granted class."
+`…-1108`, so a user-SID ACE would have admitted this caller. That counterfactual
+is not a bare assertion — §4.7's single-box dry-run is its **positive control**:
+the DACL-only pipe *admitted* (os 0) a caller whose token **did** hold the
+granted SID. So *admits-when-the-token-matches* (§4.7) and *this token carries
+the user SID* (here) together pin the refusal on the one thing that differs
+between the two descriptors — and PR #516's removal of the user-SID grant is
+exactly what carries the boundary. `prod`'s `5` is over-determined (both fences
+apply); `daclonly`'s `5`, carrying no flag, is the clean attribution.
+
+**Scope of what this measures — the `IPC$`/remote-reachability axis only.** The
+`reject_remote_clients` fence was measured by path form (§4.7); the
+logon-SID-only ACE is measured here, by a genuine `IPC$` caller's **absence of
+the class the ACE grants to**. WP-D6's *other* half — **terminal-services
+separation**, a same-user caller in a genuinely *different* logon session
+refused by the verdict's `Both`-arm PASS — was **not** exercised here: that arm
+has fired for nobody, and is kept live precisely for it. It remains **P-13**'s
+(interactive) and **P-18**'s (S4U) question; this run does not retire them. Row
+(d)'s `IPC$` form is answered, and answered more strongly than it was posed: not
+"your session isn't ours" (defeatable by a colliding value, dependent on session
+bookkeeping) but "you hold nothing in the granted class."
 
 **§5, explicitly.** The pre-registered prediction was a *different* logon SID;
 the observation is *no* logon SID. Per §5 that prediction stays on record as
@@ -491,7 +500,7 @@ reason that turned out to be understated."
 `sid.rs` docs that a logon SID is something "every interactive and service logon
 has" now name the network case and warn that `NoLogonSid` is the WP-D6
 *mechanism*, not a "shouldn't happen" to be papered over with a user-SID
-fallback — which would silently undo D6 a third time. `WINDOWS_WALLET_SUPPORT.md`'s
+fallback — which would silently undo D6 again. `WINDOWS_WALLET_SUPPORT.md`'s
 WP-D6 rationale gains the structural sentence: the `IPC$` boundary holds not
 because a remote session has a *different* logon SID but because it has *none*,
 so a logon-SID-scoped descriptor is unmatchable from the network by

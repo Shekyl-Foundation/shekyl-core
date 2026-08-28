@@ -84,8 +84,8 @@ pub enum SidError {
     /// So this is a **refusal, never a fallback** — and a future reader must
     /// not "recover" from it by granting the user SID instead. That same
     /// network token *does* carry the user SID, so a user-SID grant would admit
-    /// exactly the caller WP-D6 refuses, silently undoing D6 (see `sddl.rs`) a
-    /// third time. A descriptor built without the logon SID does not have the
+    /// exactly the caller WP-D6 refuses, silently undoing D6 (see `sddl.rs`)
+    /// again. A descriptor built without the logon SID does not have the
     /// property WP-D6 claims, and issuing one anyway would be worse than not
     /// starting.
     NoLogonSid,

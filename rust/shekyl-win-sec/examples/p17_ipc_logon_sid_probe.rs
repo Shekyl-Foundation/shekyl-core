@@ -38,6 +38,16 @@
 //! would be unattributed, and the honest reading is that no single-box
 //! transport can pose as a foreign session (§4, and the sheet's §3.1).
 //!
+//! **The two-machine `--serve` mode is what answered it (2026-08-28, §4.8),
+//! and it reframed row (b) a second time.** A genuine remote caller over
+//! `IPC$` does not carry a *different* logon SID — it carries **none at all**
+//! (a network logon has no `SE_GROUP_LOGON_ID` group), so row (d) holds
+//! *structurally*: a logon-SID-only ACE is unmatchable from the network, and
+//! the same token's user SID — which *is* present — is what makes the refusal
+//! attributable. The four-row table above is the pre-registration and stays as
+//! written (§5); this is the observation that came back, on a stronger footing
+//! than the prediction assumed.
+//!
 //! # Exit codes
 //!
 //! | Code | Meaning |

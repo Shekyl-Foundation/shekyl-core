@@ -390,7 +390,10 @@ therefore not merely scoped away from the remote session — it is **unmatchable
 from the network by construction**, and the open is refused with
 `ERROR_ACCESS_DENIED`. The refusal is self-attributing: the same token *does*
 carry the user SID, so the removed user-SID ACE would have admitted exactly this
-caller. That is the whole of WP-D6, observed on the surface it was written for.
+caller. That is WP-D6's **remote-reachability** claim, observed on the surface it
+was written for. The *other* half — terminal-services separation, a same-user
+caller in a genuinely *different* logon session refused — is a distinct property
+this run did not exercise; it remains P-13/P-18's question (probe sheet §4.8).
 
 **Consequence for the API:** the logon SID is a **required** argument, not an
 `Option`. There is no honest fallback — a descriptor without it grants nothing

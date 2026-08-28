@@ -11,8 +11,10 @@
     Runs on the SECOND, domain-joined machine (which need not be a developer
     box: this uses only .NET's built-in NamedPipeClientStream, no toolchain).
     It must run as the SAME AD user the server (`p17… --serve`) runs as, so the
-    SMB connection lands in a network logon with that user's SID and a distinct
-    logon SID — same user, different session, which is exactly WP-D6's case.
+    SMB connection lands in a network logon carrying that user's SID but — as
+    the probe sheet §4.8 confirmed — no logon SID at all. That absence is
+    exactly WP-D6's case: a logon-SID-only DACL is unmatchable from the network,
+    while the present user SID makes the refusal attributable.
 
     It attempts the three pipes the server stood up, in the server's stated
     order, and reports the two refusals back through the control pipe it is

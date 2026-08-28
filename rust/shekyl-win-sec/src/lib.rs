@@ -116,11 +116,13 @@ pub fn sid_for_testing(s: &str) -> SidString {
 /// probes only.
 ///
 /// Behind `test-utils` because production never needs it: the wallet reads
-/// only its own token. P-17's mechanism row must read the logon SID off an
-/// **impersonation** token — the thread token adopted from a caller that
-/// arrived over loopback SMB — to establish that the caller crossed a logon-
-/// session boundary before any refusal can be attributed to the DACL's
-/// logon-SID ACE. Safe rather than `unsafe`: a stale or wrong handle makes
+/// only its own token. P-17's server reads the logon SID off an
+/// **impersonation** token — the thread token adopted from a genuine remote
+/// caller arriving over `IPC$`. The method first assumed such a caller would
+/// carry a *different* logon SID; the run (probe sheet §4.8) found it carries
+/// **none at all** — a network logon has no logon-SID group, so this returns
+/// [`SidError::NoLogonSid`] — and that absence is what attributes the refusal
+/// to the logon-SID ACE. Safe rather than `unsafe`: a stale or wrong handle makes
 /// `GetTokenInformation` fail, it does not corrupt memory.
 #[cfg(all(windows, feature = "test-utils"))]
 pub fn logon_sid_of_token_for_testing(
@@ -131,7 +133,9 @@ pub fn logon_sid_of_token_for_testing(
 
 /// [`current_user_sid`]'s reader pointed at an **arbitrary** token, for probes
 /// only. See [`logon_sid_of_token_for_testing`]: P-17's server reads both off
-/// the caller's impersonation token to assert *same user, different session*.
+/// the caller's impersonation token — the user SID is present exactly where the
+/// logon SID is absent, and that pairing is what makes the refusal attributable
+/// (§4.8).
 #[cfg(all(windows, feature = "test-utils"))]
 pub fn user_sid_of_token_for_testing(token: *mut core::ffi::c_void) -> Result<SidString, SidError> {
     sid::user_sid_of(token)
