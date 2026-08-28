@@ -98,13 +98,27 @@ const ACTIVE_SLOT: u32 = 0;
 /// Spawn an actor holding both slots, with `ACTIVE_SLOT` active and
 /// `RETIRE_SLOT` bonded — the only shape in which the retire arms are the ones
 /// being exercised.
+///
+/// **The returned id is computed from the very bundle the actor is handed**,
+/// not from a second derivation of the same slot. Both would agree today —
+/// `derive_bundle` is deterministic and the fixture module says so — but that
+/// makes "the id names the persona the actor holds" a property held *by
+/// determinism* rather than *by construction*. Deriving once and reading the id
+/// off the same value before it moves into the map removes the dependency
+/// instead of relying on it, and halves the PQC key derivations this fixture
+/// pays on every one of its callers.
 fn spawn_walk_actor() -> (StakeEngineHandle, PCanonicalId) {
-    let bundles: BTreeMap<PSlot, ArchivalPKeys> = [ACTIVE_SLOT, RETIRE_SLOT]
-        .into_iter()
-        .map(|s| (PSlot::from_raw(s), derive_bundle(s)))
-        .collect();
+    let active_bundle = derive_bundle(ACTIVE_SLOT);
+    let retire_bundle = derive_bundle(RETIRE_SLOT);
+    let id = persona_canonical_id(&retire_bundle).expect("fixture key encodes");
+
+    let bundles: BTreeMap<PSlot, ArchivalPKeys> = [
+        (PSlot::from_raw(ACTIVE_SLOT), active_bundle),
+        (PSlot::from_raw(RETIRE_SLOT), retire_bundle),
+    ]
+    .into_iter()
+    .collect();
     let bonded: BTreeSet<PSlot> = [PSlot::from_raw(RETIRE_SLOT)].into_iter().collect();
-    let id = persona_canonical_id(&derive_bundle(RETIRE_SLOT)).expect("fixture key encodes");
     let handle = StakeEngineHandle::spawn(bundles, bonded, Some(PSlot::from_raw(ACTIVE_SLOT)));
     (handle, id)
 }
