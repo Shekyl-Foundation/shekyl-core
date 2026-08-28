@@ -332,8 +332,6 @@ mod check_workflows {
                     }
                     serde_json::to_value(shekyl_rpc_types::GetTransactionsResponse {
                         status: shekyl_rpc_types::RpcStatus::ok(),
-                        txs_as_hex: Vec::new(),
-                        txs_as_json: Vec::new(),
                         txs,
                         missed_tx: missed,
                     })
