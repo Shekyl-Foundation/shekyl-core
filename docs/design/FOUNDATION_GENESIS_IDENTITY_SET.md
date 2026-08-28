@@ -20,7 +20,7 @@ Genesis does **not** enumerate wallet payment addresses.
 
 | Identity | Role in genesis block | V3.0 wire status |
 |---|---|---|
-| **Wallet `AccountPublicAddress`** (spend / stake principal) | **Not listed.** FA-1 single static address backs stake via normal staking path; see `PHASE_2B_STAKE_LIFECYCLE.md` FA-1. | **Pinned for V3.0.** Hybrid FCMP++ PQC layout is load-bearing in `KeyEngine`; no subaddresses at V3.0 (`FOLLOWUPS.md` R2-F2 closed). |
+| **Wallet `AccountPublicAddress`** (spend / stake principal) | **Not listed.** FA-1 single static address backs stake via normal staking path; see `design/PHASE_2B_FSM_RETOOL.md` FA-1. | **Pinned for V3.0.** Hybrid FCMP++ PQC layout is load-bearing in `KeyEngine`; no subaddresses at V3.0 (`FOLLOWUPS.md` R2-F2 closed). |
 | **Archival pseudonym `P`** | **Listed** (active slots: full pubkey; reserve slots: hash commitment). | **Hybrid public key wire format must be frozen before genesis authoring** — genesis bytes commit to the encoding. Same hybrid material class as account keys (ML-KEM-768 + ML-DSA-65 public components per PQC wire spec); **`ArchivalEngine` lifecycle unbuilt** (Stage 5) but **encoding must not change** after enumeration without regenerating the genesis block. |
 
 **Answer to "are we past address-shape churn?"** **Yes for wallet payment
@@ -173,7 +173,7 @@ P_pubkey_commitment = cSHAKE256(
 )[0..32]
 ```
 
-Same cSHAKE discipline as `StakeId` (`PHASE_2B_STAKE_LIFECYCLE.md` §3.3.3).
+Same cSHAKE discipline as `StakeId` (`design/PHASE_2B_FSM_RETOOL.md` §3.3.3).
 The full pubkey is **revealed and verified against the commitment at
 activation** (registration / first serve).
 

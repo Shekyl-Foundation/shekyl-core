@@ -25,6 +25,8 @@ isProject: false
 
 # RandomX v2 — Track A Phase 2h plan
 
+
+**Status:** CLOSED-as-record.
 ## Front-matter
 
 | Field | Value |

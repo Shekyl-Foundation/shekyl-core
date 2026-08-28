@@ -414,7 +414,7 @@ rationale no longer applies)*). Implementation pins beyond the round
    sweep found **no `C_stake` code residue** — the single source hit is a
    "no `C_stake`" negation comment (`principal_stake.rs`); remaining
    mentions are design-doc theory (retained deliberately,
-   `CONFIDENTIAL_STAKING.md`). Nothing to delete: item 5 closes docs-only.
+   `V3_STAKER_ARCHIVAL.md`). Nothing to delete: item 5 closes docs-only.
 
 ---
 

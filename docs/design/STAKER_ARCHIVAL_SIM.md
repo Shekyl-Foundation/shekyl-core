@@ -243,7 +243,7 @@ This is the gate-7 instrument for the pay-for-service / firewalled-pseudonym
 rebasing. The model it simulates is canonical in
 [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing and
 the firewalled-pseudonym identity model*; the finding-side summary and gate-list are
-in [`PHASE_2B_STAKE_LIFECYCLE.md`](./PHASE_2B_STAKE_LIFECYCLE.md) §7.5.3. This doc
+in [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §7.5.3. This doc
 does **not** restate the model — it specifies how to *test* it.
 
 ## Why a sim, and why coverage first
@@ -538,13 +538,13 @@ smallest `MIN` whose trajectory differs measurably from arm A).
   — an admission lock that does no measurable macro work is pure optionality debt and the
   smaller consensus surface wins.
 
-**Severity:** same as close-condition (ii), per `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 — gate 7
+**Severity:** same as close-condition (ii), per `design/PHASE_2B_FSM_RETOOL.md` §2.4 — gate 7
 is not optional resilience; Stage 3 emission code stays gated on it.
 
 **Deliverables:** `gate7_*` scenarios in `shekyl-economics-sim` (gated; legacy scenarios
 byte-identical per the iteration-3 discipline); a §*Gate 7 iteration-5* findings section in
 this doc + a gate-7 ledger row; dispositions recorded in emission §10.2 (branch kept or
-deleted), `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
+deleted), `design/PHASE_2B_FSM_RETOOL.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
 (bond-funding obligation references the surviving arm).
 
 ### Gate 7 iteration-5 — results (2026-06-11)
@@ -619,7 +619,7 @@ drops the `admission_proof` branch (emission §10.2), `ADMISSION_MIN_ATOMIC` los
 consensus role, and gate-6 §2.5 subsequently pinned **no wallet-policy minimum either**
 (no funding minimum at any layer; shape/timing hygiene only). The
 cross-doc spec edits (emission §10.2 + `admission_proof`/§7.4 deletion,
-`PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + staking-form admission row, gate-6 §2.5
+`design/PHASE_2B_FSM_RETOOL.md` §2.4 (iii) + staking-form admission row, gate-6 §2.5
 sole-owner note, `V3_STAKER_ARCHIVAL.md` admission bullet) **landed 2026-06-11 on
 maintainer sign-off** of this disposition, per `05-system-thinking.mdc` (the criteria
 were named in advance; the structural edit got a human eye before the branch was deleted).
@@ -3378,7 +3378,7 @@ blank page. Each item names the **evidence** (sim finding), the **disposition**
 where a decision is provisional.
 
 **Genesis staking shape (2026-06).** Leading form is **transfer-shaped admission**
-([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4). Round 3–4
+([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4). Round 3–4
 ratification requires three sim/design close-conditions at **equal severity**: **(ii)**
 per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence; **(iii)**
 admission-principal decision with **gate 7** locked-supply re-pricing when bonds become

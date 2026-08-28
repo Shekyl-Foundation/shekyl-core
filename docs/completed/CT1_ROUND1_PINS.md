@@ -1,5 +1,9 @@
 # CT-1 Round 1 pins — LeafStore (redb)
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 Round-1 disposition for `shekyl-curve-tree` `LeafStore` (CT-1). Locks the
 persistence engine, leaf encoding contract, segment-freeze gate, and schema
 fields that downstream commits implement against.

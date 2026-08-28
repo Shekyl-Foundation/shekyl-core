@@ -24,7 +24,7 @@ is load-bearing here: every "built / not built" claim below was **verified again
 **What this is / is not.** This is the **principal** (human-facing) lifecycle: stake
 in, top up / partially unbond, unbond, drain rewards back to yourself. It is **not**
 the archival persona `P` bond/scan machinery — that is
-[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3 (the `P`-state FSM),
+[`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §3 (the `P`-state FSM),
 [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md), and the **built** `StakeEngine`
 actor. This doc sits one layer up, at the orchestrator.
 
@@ -33,7 +33,7 @@ actor. This doc sits one layer up, at the orchestrator.
 - **Write against the rebased §2.4/§3 model, never the claim-era body.** The
   confidential-principal design (`StakeInstance`, `stake()` / `claim()` /
   `unstake()`, tiers, entitlement, nullifiers) is a **deletion target**
-  ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.1 *Delete* table;
+  ([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.1 *Delete* table;
   §4–§6 body is stale — `SECTION_4_CLAIM_ERA`). A method carrying `claim` / `tier` /
   `StakeInstance` is wrong by construction.
 - **The principal has no consensus FSM of its own.** Its lifecycle is **ordinary
@@ -89,7 +89,7 @@ actor = secrets + bond path) and **DQ5** (the queries *are* that read-model).
 
 ## 1. The four principal↔`P` legs (all transfers except the bond post)
 
-Per [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 tx-legs table:
+Per [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4 tx-legs table:
 
 | Leg | Tx shape | Notes |
 |-----|----------|-------|
@@ -772,7 +772,7 @@ wiring + DQ4's steady-state funding sources named in the Correction.
 
 ## 6. References (authoritative — reference, do not restate)
 
-- [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 (tx-legs), §3
+- [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4 (tx-legs), §3
   (`P`-state FSM), §2.1 (retain/delete).
 - [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1..7 (FSM authority; P2B-7
   `HoldingsUpdate` genesis pin).

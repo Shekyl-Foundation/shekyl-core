@@ -1,5 +1,7 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status.** **Phase 1 landed (2026-05-27).** Commits C0–C8 on
 `feat/stage-1-pr5-pending-tx-engine` (implementation branch;
 tip `ca7622558` at C7; C8 doc commit follows). The PR opens
@@ -7910,7 +7912,7 @@ C0's scope:
   R16 (b) `FeeEstimator` trait seam; R17 (a) drop-on-close).
   Each entry cross-references the corresponding §5.4 R-residual
   section in this doc.
-- [`docs/design/WALLET_REWRITE_PLAN.md`](./WALLET_REWRITE_PLAN.md)
+- [`docs/design/WALLET_REWRITE_PLAN.md`](../design/WALLET_REWRITE_PLAN.md)
   the Stage-1-PR-table row for "PR 5 — PendingTxEngine
   extraction" gains the design-doc cross-reference and the
   "Round 3 closed; ready for Phase 1" status note. (The plan's

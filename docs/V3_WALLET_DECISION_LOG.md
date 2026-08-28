@@ -3622,7 +3622,7 @@ work. This entry only pins what Branch 2 ships now.
 
 **Decision.** The `PendingTxEngine` Stage 1 surface is pinned at
 the Round-3-closed shape per
-[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The corresponding amendment to
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 §2.4 lands in PR 5 commit C0 (doc-only). Phase 1 implementation
@@ -3976,7 +3976,7 @@ method). Phase 0c is **removed** (R12 (a) closure).
 - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.4 — the PendingTxEngine trait-surface spec; PR 5 commit
   C0 lands the §2.4 amendment.
-- [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+- [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   — the full PR 5 design doc, including §4 (Phase 0a–0m
   binding-form enumeration), §5.0.1 (state-shape and Stage 4
   substrate), §5.0.2 (diagnostic stream + enum block),

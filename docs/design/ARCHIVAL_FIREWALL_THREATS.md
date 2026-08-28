@@ -135,7 +135,7 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   A1–A5. The rotation machinery is necessary but not sufficient — forward-secrecy
   of one persona is not anonymity of the set.
 - **Disposition:** **analyzed — accepted + disclosed**
-  ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md), measured in
+  ([`ARCHIVAL_TM1_CLUSTERING.md`](../completed/ARCHIVAL_TM1_CLUSTERING.md), measured in
   `shekyl-staking-sim --clustering`). **Grounding correction:** the staking design
   rotates personas **sequentially** — `stake_engine` is explicit that *"there is never
   a window with two active personas."* So the "operator runs K *simultaneous* personas
@@ -345,7 +345,7 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
 ## 5. Exposure ranking (what I'd actually lose sleep over)
 
 1. **A0 — cross-persona clustering (`TM-1`).** The Stage-1 enabler. **Analyzed —
-   accepted + disclosed** ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md)).
+   accepted + disclosed** ([`ARCHIVAL_TM1_CLUSTERING.md`](../completed/ARCHIVAL_TM1_CLUSTERING.md)).
    The design rotates personas *sequentially* (`stake_engine`: never two active
    personas), so the simultaneous-split channel does not exist. The real correlate is
    the F1 portfolio-bound linkage across rotation; the dispersive default reduces it at a
@@ -437,7 +437,7 @@ lens for **every** future firewall round, not just `TM-1`.
 ## 8. Recommendations
 
 1. **[Done] `TM-1` — analyzed; accepted + disclosed**
-   ([`ARCHIVAL_TM1_CLUSTERING.md`](ARCHIVAL_TM1_CLUSTERING.md)). The §7 audit ran as a
+   ([`ARCHIVAL_TM1_CLUSTERING.md`](../completed/ARCHIVAL_TM1_CLUSTERING.md)). The §7 audit ran as a
    simulated operator population (`shekyl-staking-sim --clustering`). **A draft detour
    was caught and retracted:** it modelled an operator running K *simultaneous* personas,
    but the design rotates personas *sequentially* (`stake_engine`: never two active

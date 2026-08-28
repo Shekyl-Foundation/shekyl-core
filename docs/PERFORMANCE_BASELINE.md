@@ -14,7 +14,7 @@ justification; >25% requires optimization before merge).
 
 ## Per-bench frozen-baseline framing
 
-Per [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+Per [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
 §4.5 (per-bench frozen-baseline disposition):
 
 - **Each bench has its own frozen-baseline SHA**, captured at the
@@ -34,7 +34,7 @@ Per [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
 
 ## Measurement gate vs informational metric
 
-Per [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+Per [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
 §4.4 (two-anchor static check):
 
 - **Gate metric: `iai-callgrind` instructions.** Hardware-independent
@@ -188,7 +188,7 @@ Stage 1 PR 2 (`LedgerEngine` extraction; `Engine<S, D, L: LedgerEngine
 = LocalLedger>` parameterization with `LocalLedger` wrapping
 `RwLock<LedgerState>` for interior mutability per §2.2) was N=3
 invariance-verified per
-[`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.4
+[`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.4
 dynamic check: GHA `workflow_dispatch` runs `25307774464`,
 `25307777614`, and `25307781436` against PR-tip `8efae3a40` produced
 byte-identical iai-callgrind output for `synced_height`
@@ -238,7 +238,7 @@ instructions column.
 
 Stage 1 PR 1 (`DaemonEngine` extraction; `Engine<S, D: DaemonEngine
 = DaemonClient>` parameterization) was N=3 invariance-verified per
-[`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.4
+[`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.4
 dynamic check: GHA `workflow_dispatch` runs `25256332992`,
 `25256334848`, and `25256336611` against PR-tip `6c6ecbd67`
 produced byte-identical iai-callgrind output for `synced_height`
@@ -499,7 +499,7 @@ instruction count folds in nondeterministic runtime-scheduling
 machinery rather than a clean deterministic signal. The actor paths are
 **criterion-only by design** — a reasoned, reversion-claused deviation
 from the criterion+iai pairing discipline
-([`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)):
+([`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)):
 **reopen** the iai actor sibling if a deterministic async-dispatch
 measurement method lands. Only the deterministic-crypto baseline gets an
 iai sibling (`engine_trait_bench_key_dispatch_baseline_claim_mine`,
@@ -844,13 +844,13 @@ Classical B row remains *(pending)* until captured.
   §3.3.1 — Stage 1 outer-lock sequential consistency (the
   implementation surface measured against; per-bench frozen-baseline
   framing refined in Stage 0 PR-B).
-- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+- [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
   §4.4 — two-anchor static check (gate metric vs informational
   metric framing).
-- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+- [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
   §4.5 — per-bench frozen-baseline disposition (the operationalization
   this document implements).
-- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+- [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
   §4.6 — harness update discipline (per-bench deferred assignment
   for the four deferred benches).
 - [`docs/benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json)

@@ -6,7 +6,7 @@
 > described a **passive lock-tier PoS** staking model ("lock SHEKYL for a duration
 > tier, earn by `staked_amount × duration_multiplier`") that was **retired before
 > genesis** with the confidential-staking sweep
-> (`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`;
+> (`docs/completed/LEGACY_CLAIM_ERA_RETIREMENT.md`;
 > `rust/shekyl-economics/src/lib.rs`). Genesis staking is **archival
 > pay-for-service**: stakers post on-chain bonds, join the archival market, and
 > earn reward emission recomputed from **public serve-work** — there is no
@@ -36,7 +36,7 @@ answers: *are the coefficients economically right on testnet?* Stressnet answers
 *does the stack survive load?* Exit criteria differ.
 
 Implementation and tests for economics surfaces are split per
-[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
+[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](completed/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
 generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
 shared primitive) vs calibration-tagged value vectors (expected to churn each
 generation). See that doc for `CALIBRATION-PENDING` code markers and the
@@ -107,8 +107,11 @@ baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapsho
 
 In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
 
-- Current effective whole-coin supply is `2^32 / 10^12 = 0.004294967296` SHEKYL.
-- This is not economically meaningful for a production chain.
+- The **historical** 12-decimal interpretation of those constants yielded
+  `2^32 / 10^12 = 0.004294967296` SHEKYL — not economically meaningful, and
+  **not** the live genesis supply. Live denomination is 9 decimals
+  (`config/economics_params.json`: `"display_decimal_point": 9`,
+  `"coin": 1000000000`); see §3.
 
 Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
 
@@ -124,7 +127,7 @@ fee-pool share, and the archival reward-budget curve inputs) are read from the s
 JSON so wallet and node stay aligned with the economics file. The retired lock-tier
 constants (`TIERS`, `MAX_CLAIM_RANGE`, `shekyl_stake_max_claim_range`) belong to the
 superseded claim-era staking model and are being removed
-(`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`); genesis staking is archival bonds,
+(`docs/completed/LEGACY_CLAIM_ERA_RETIREMENT.md`); genesis staking is archival bonds,
 which carry no duration tier.
 
 ### Technical limit with `uint64_t`
