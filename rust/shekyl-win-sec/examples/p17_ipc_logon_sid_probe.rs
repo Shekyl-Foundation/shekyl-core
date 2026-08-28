@@ -102,9 +102,12 @@ mod probe {
     /// [`CLIENT_TIMEOUT`] because the two machines are coordinated by hand
     /// across a message relay whose per-hop latency is not under our control;
     /// racing a tight timer against that only manufactures UNRUN runs that say
-    /// nothing about WP-D6. Still bounded, so a second box that never dials
-    /// cannot hang the operator indefinitely.
-    const SERVE_TIMEOUT: Duration = Duration::from_secs(600);
+    /// nothing about WP-D6. An hour turns coordination from a race into "the
+    /// server is up, dial whenever" — the window's only real job is to stop a
+    /// sweep run from hanging, and nothing about the measurement depends on it
+    /// being tight. Still bounded, so a box that never dials cannot hang the
+    /// operator indefinitely.
+    const SERVE_TIMEOUT: Duration = Duration::from_secs(3600);
 
     /// Spawn counters, so no two rows ever share a pipe name — a consumed or
     /// squatted instance must not be able to confound a neighbouring row.
