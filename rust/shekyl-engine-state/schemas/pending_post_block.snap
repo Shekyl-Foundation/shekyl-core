@@ -10,6 +10,13 @@
         }
       },
       {
+        "name": "generation",
+        "ty": {
+          "name": "u64",
+          "ty": "U64"
+        }
+      },
+      {
         "name": "posts",
         "ty": {
           "name": "Vec<T>",

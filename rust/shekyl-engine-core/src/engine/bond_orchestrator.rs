@@ -21,7 +21,7 @@ use shekyl_curve_tree::{
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState};
+use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
@@ -37,6 +37,7 @@ use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
@@ -504,7 +505,7 @@ where
         // optimistic fast-fail only — it keys on `p_slot` (the sole identity
         // available before assembly; 1:1 with the persona canonical id, which
         // is not derivable until the tx is bound below). The *authoritative*
-        // one-post-per-persona serialization is `push_post` under the write
+        // one-post-per-persona serialization is `seal_post` under the write
         // lock (see the final seal), which rejects atomically by persona even
         // if two same-persona assembles race past this gate. Reopening
         // criterion (rule 21): if the RPC entry ever admits concurrent
@@ -527,7 +528,7 @@ where
         // preflight ran (`sweep_bond_funding`), re-run at this path's own
         // fresh reference/state so the persist→assemble window cannot ride
         // stale inputs.
-        let (selection, reference) = Self::sweep_bond_funding(
+        let (selection, reference, snapshot_generation) = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
@@ -637,15 +638,39 @@ where
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let admission = store
             .mutate(|block| {
-                let ok = block.push_post(sealed);
-                (ok, ok)
+                // Seal-time reservation re-check under the write lock — the
+                // drain seam's guard, which this path was missing. The
+                // `reserved` snapshot read before assembly is stale: a
+                // same-persona claim or drain assembled concurrently may have
+                // reserved one of these funding inputs since, and persona
+                // dedup alone does not see a cross-kind gindex collision.
+                //
+                // It matters beyond the doomed record it avoids.
+                // `PendingPostBlock::remove_settled` retires a claim or drain
+                // when the inputs it reserved leave the live funding set, and
+                // reads that absence as proof THAT record's transaction
+                // confirmed. The inference holds only while one record can
+                // reserve a given gindex: if a post and a drain share an input,
+                // the post confirming spends it and retires the drain too —
+                // reopening a lane whose transaction never landed. This post is
+                // not itself retired that way (its evidence is the pscan's own
+                // bond-post match), but it can falsify someone else's, so the
+                // guard belongs here as much as on the paths it protects.
+                let admission = block.seal_post(sealed, snapshot_generation);
+                (admission == SealAdmission::Admit, admission)
             })
             .await
             .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
-        if !pushed {
-            return Err(BondAssemblyError::PendingPostExists.into());
+        match admission {
+            SealAdmission::Admit => {}
+            SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(BondAssemblyError::InputRaced.into())
+            }
         }
 
         Ok(assembled)
@@ -671,22 +696,30 @@ where
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
-    ) -> Result<(FundingSelection, ReferenceBlock), BondAssemblyError> {
+    ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
-        // Sealed funding records (empty set if no pscan seal yet).
-        let funding_records = load_pscan_state_for_engine(self_arc)
+        // The seal basis is ONE ordered read — pending block, then pscan seal.
+        // The order is `load_seal_basis`'s guarantee: loading the pscan seal
+        // first (as this path did until review #572 round 6) can pair funding
+        // from before a settlement with a generation from after it, so the seal
+        // admits an input the settled record already spent. The generation
+        // rides out to the seal so `seal_post` can tell whether this
+        // selection's basis still holds.
+        let basis = load_seal_basis(self_arc, store)
             .await
-            .map_err(|e| BondAssemblyError::build("pscan state load", e))?
+            .map_err(|e| match e {
+                SealBasisError::Pending(e) => BondAssemblyError::build("reserved gindexes", e),
+                SealBasisError::PScan(e) => BondAssemblyError::build("pscan state load", e),
+            })?;
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved().clone();
+        let funding_records = basis
+            .into_pscan()
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
-
-        let reserved = store
-            .read(shekyl_engine_state::PendingPostBlock::reserved_gindexes)
-            .await
-            .map_err(|e| BondAssemblyError::build("reserved gindexes", e))?;
 
         let floor = AtomicUnits::from_raw(bond_floor(holdings));
         // Align with the wire builder / retention verifier: a zero floor is
@@ -708,7 +741,7 @@ where
             required,
             reference_height,
         )?;
-        Ok((selection, reference))
+        Ok((selection, reference, snapshot_generation))
     }
 }
 

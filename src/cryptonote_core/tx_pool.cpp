@@ -378,7 +378,78 @@ namespace cryptonote
         else
           meta.set_relay_method(relay_method::none);
 
-        if (meta.upgrade_relay_method(tx_relay) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
+        /* §92's third clause, FIRST HALF: the origin mark is permanent.
+           An entry this node originated and kept at `local` does not leave
+           that class because its own transaction came back.
+
+           Without this the return DEFEATS the carve-out rather than closing
+           it. `upgrade_relay_method` moves the entry to `fluff`, and the two
+           selection arms differ in both axes: `local` re-broadcasts at the
+           derived 1148 s into `private_req` (`zone::invalid`, fail-closed
+           anonymity), while `fluff` re-broadcasts at MIN_RELAY_TIME's 300 s
+           into `public_req` (`zone::public_`). So the upgrade made the origin
+           re-emit its OWN transaction sooner and on the clear internet —
+           precisely what `originated_stays_in_zone` exists to prevent, and its
+           own note says so: "one record of Stem or Fluff moves the entry out
+           of Local permanently, and the next pool re-relay puts the user's own
+           transaction on the clear internet."
+
+           NARROW, and deliberately not a general suspension of monotonicity.
+           It refuses exactly one transition — out of `local` — and `local` is
+           set only by this node originating (`is_local`), never by an arrival.
+           So no peer can acquire the origin mark by relaying: the guard
+           protects a class nothing else can enter, which is what keeps the
+           mark unforgeable while making it permanent.
+
+           The SECOND half of that clause — when the re-broadcast RESPONSIBILITY
+           ends — is `observed_circulating`, set by the stem watch's F-10
+           verdict. Provenance is permanent; liveness is conditional. This
+           guard is that bit's precondition: without it the verdict is written
+           and erased in one call chain, because §46 records arrivals before
+           admission.
+
+           THE PIN HOLDS AGAINST A PEER'S ASSERTION AND YIELDS TO PROOF OF
+           WORK. Stated as a boundary rather than as "`block` is excluded",
+           because the class name does not carry the reason and an exception
+           invites removal where a boundary tells the next reader which side a
+           new arrival class belongs on.
+
+           A peer's assertion is free to make —
+           anyone can send us our own transaction as `stem` or `fluff`, which
+           is exactly why the mark must survive it. A `block` arrival is backed
+           by PROOF OF WORK, and it is neither free nor an assertion:
+           `handle_alternative_block` rejects on
+           `!check_hash(proof_of_work, current_diff)` (`blockchain.cpp:2347`)
+           before its pool supplement is ever offered here, so the arrival is
+           not something an observer can manufacture to strip the mark — and it
+           means the transaction reached a miner.
+
+           And once it has, holding the mark INVERTS. Every other node holding
+           that transaction admits at `block`, matches
+           `relay_category::broadcasted`, and re-relays on the ordinary grid. A
+           pinned entry does none of those: it sits on `private_req` at the
+           derived 1148 s on the anonymity zone, ALONE, after the transaction is
+           already public. That is a behavioural difference keyed on exactly the
+           fact the mark is meant to conceal — the absence-oracle shape — and it
+           appears at the moment the concealment has stopped being worth
+           anything.
+
+           It is also broken in the plain sense. The supplement path gates on
+           `have_tx(txid, relay_category::broadcasted)`, which a `local` entry
+           never matches, so every alt block carrying the transaction re-offers
+           it; and the entry never earns
+           `CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME`, the longer lifetime
+           that exists so an alt-chain transaction survives to be re-mined.
+
+           The two reorg paths that also pass `block` — `pop_block` and the
+           return of taken transactions — never reach this guard at all: the
+           transaction left the pool when the block was added, so they arrive
+           with `existing_tx == false`. */
+        const bool origin_pinned =
+          existing_tx && meta.get_relay_method() == relay_method::local &&
+          tx_relay != relay_method::block;
+
+        if ((!origin_pinned && meta.upgrade_relay_method(tx_relay)) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {
           /* Q12-U2 deleted the bridge delay along with the class that used it.
              The randomized hold existed to blur the moment an anonymity
@@ -1078,6 +1149,17 @@ namespace cryptonote
           case relay_method::none:
             return true;
           case relay_method::local:
+            /* DISARMED — the stem watch saw this transaction arrive from
+               somewhere other than the peer it was stemmed to (F-10, §49), so
+               it is circulating and the origin has nothing left to rescue.
+               §92.5c item 1.
+
+               This is a PREDICATE, not a timer, and that is the whole point:
+               the re-broadcast exists because an origin cannot see its own
+               stem, and the moment it can see it, the reason is gone. */
+            if (meta.observed_circulating)
+              return true; // continue to next tx
+
             // An origin's re-broadcast is derived from the network's own
             // full-travel confidence, not the inherited 300 s grid; an entry
             // that has never been sent keeps the grid. `local_relay_base`
@@ -1130,6 +1212,41 @@ namespace cryptonote
     lock.commit();
     m_next_check = time_t(next_check);
     return true;
+  }
+  //---------------------------------------------------------------------------------
+  void tx_memory_pool::on_stem_propagated(const epee::span<const crypto::hash> hashes)
+  {
+    if (hashes.empty())
+      return;
+
+    CRITICAL_REGION_LOCAL(m_transactions_lock);
+    CRITICAL_REGION_LOCAL1(m_blockchain);
+    LockedTXN lock(m_blockchain.get_db());
+    for (const auto& hash : hashes)
+    {
+      try
+      {
+        txpool_tx_meta_t meta;
+        if (!m_blockchain.get_txpool_tx_meta(hash, meta))
+          continue;
+        /* `local` only — see the declaration. A relayed entry's propagation is
+           a real verdict about a real stem, and it is simply not this arm's
+           question. */
+        if (meta.get_relay_method() != relay_method::local)
+          continue;
+        if (meta.observed_circulating)
+          continue;
+        meta.observed_circulating = 1;
+        m_blockchain.update_txpool_tx(hash, meta);
+      }
+      catch (const std::exception &e)
+      {
+        MERROR("Failed to record stem propagation for a txpool entry: " << e.what());
+        // continue: a missed disarm costs a redundant re-broadcast, which is
+        // the direction that fails safe.
+      }
+    }
+    lock.commit();
   }
   //---------------------------------------------------------------------------------
   void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)

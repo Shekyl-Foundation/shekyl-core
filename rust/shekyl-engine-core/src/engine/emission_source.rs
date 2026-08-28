@@ -37,13 +37,15 @@
 //! the daemon derives both from one `db.height()` read, and the builder's
 //! window boundaries and the step-7 self-check split the pair downstream).
 
+use std::fmt;
+
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_types::ChainCount;
+use shekyl_types::{ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -102,6 +104,102 @@ pub struct EpochSnapshot {
     pub claimant_bond_idx: Option<usize>,
 }
 
+/// The whole-record release-cooldown anchor, as the **daemon folded it**.
+///
+/// Deliberately not an `Option<u64>` at rest, and the reason is a safety
+/// boundary rather than a style preference. Both consensus predicates that
+/// consume this operand treat an absent anchor as *permissive*:
+/// `release_cooldown_elapsed` returns `true` on `None`, and
+/// `slashes_settled_through` returns `true` on `None`. That is correct at the
+/// daemon, where absence can only mean "no shard has ever served" — nothing
+/// served, nothing whose settlement an exit could outrun.
+///
+/// On this side of the wire a bare `None` could also mean "the field never
+/// arrived", and that fact must be *fail-closed*: it would otherwise flow into
+/// the same permissive branch and report an irreversible exit as ready on a
+/// value the wallet never received. The daemon therefore reports the
+/// distinction (`has_last_served_epoch`) instead of leaving it inferred, the
+/// decoder requires the field (an absent one is
+/// [`EmissionSourceError::Malformed`], never a default), and this type has no
+/// variant for "unknown" — so the unsafe state cannot be constructed here at
+/// all, rather than being constructible and merely discouraged.
+///
+/// Epoch 0 is a real settlement epoch, so a zero-means-absent encoding would
+/// have collapsed the same two facts one layer lower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServeAnchor {
+    /// The daemon reported that no shard on this record has served.
+    NeverServed,
+    /// The daemon's folded whole-record anchor.
+    ServedAt(u64),
+}
+
+impl ServeAnchor {
+    /// The consensus predicates' operand form.
+    ///
+    /// The single place this becomes an `Option`, so every `None` reaching
+    /// `release_cooldown_elapsed` / `slashes_settled_through` provably came
+    /// from a daemon that said "never served" — not from a missing field.
+    #[must_use]
+    pub const fn as_verify_operand(self) -> Option<u64> {
+        match self {
+            Self::NeverServed => None,
+            Self::ServedAt(epoch) => Some(epoch),
+        }
+    }
+}
+
+/// Renders the distinction this type exists to keep, so a refusal that quotes
+/// the anchor cannot flatten it back to a bare integer on the way to the user.
+impl fmt::Display for ServeAnchor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NeverServed => f.write_str("never"),
+            Self::ServedAt(epoch) => write!(f, "epoch {epoch}"),
+        }
+    }
+}
+
+/// The slash scheduler's monotone watermark, as the daemon reported it.
+///
+/// The storage sentinel (`u64::MAX` = nothing settled yet) is resolved
+/// daemon-side, so it never reaches this type.
+///
+/// Note the deliberate asymmetry with [`ServeAnchor`]: absence on *this*
+/// operand is already fail-closed at consensus — `slashes_settled_through`
+/// returns `false` when the watermark is absent but an anchor exists. The two
+/// therefore cannot share one "absent" encoding without being wrong for one of
+/// them, which is why they are separate types rather than two `Option<u64>`s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashWatermark {
+    /// No settlement epoch has been slash-processed yet.
+    NothingSettled,
+    /// Every epoch up to and including this one has been processed.
+    SettledThrough(u64),
+}
+
+impl SlashWatermark {
+    /// The consensus predicate's operand form.
+    #[must_use]
+    pub const fn as_verify_operand(self) -> Option<u64> {
+        match self {
+            Self::NothingSettled => None,
+            Self::SettledThrough(epoch) => Some(epoch),
+        }
+    }
+}
+
+/// As [`ServeAnchor`]'s: the absent arm names itself rather than rendering as a
+/// missing or defaulted number.
+impl fmt::Display for SlashWatermark {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingSettled => f.write_str("nothing settled"),
+            Self::SettledThrough(epoch) => write!(f, "settled through epoch {epoch}"),
+        }
+    }
+}
+
 /// Part-A claim context: the claimant's bond record as the daemon read it.
 #[derive(Debug, Clone)]
 pub struct BondContext {
@@ -116,6 +214,25 @@ pub struct BondContext {
     /// (`claimed_epochs_contains` binary-searches it; the ordering is
     /// enforced at decode, not assumed).
     pub claimed_settlement_epochs: Vec<u64>,
+    /// The record's current bonded balance — `verify_unbond_bond_post`'s first
+    /// operand (`NothingToUnbond` at zero) and the exact value a full exit's
+    /// `bond_debit` must equal.
+    pub bonded_total_atomic: u64,
+    /// The record's interval-log length — `verify_unbond_bond_post`'s sixth
+    /// and last record operand (`record_bad_interval_count`).
+    ///
+    /// No presence flag, because the field has no absent state: an empty log
+    /// is length 0. The permissive-default hazard is the same as the anchors'
+    /// and lands here instead — `0 < MAX_BOND_BAD_INTERVALS` **passes**, so a
+    /// field that never arrived would read as "the log has room" and let an
+    /// unconnectable exit be assembled. Hence a required read, like every other
+    /// exit operand.
+    pub bad_interval_count: usize,
+    /// The release-cooldown anchor. See [`ServeAnchor`] for why this is not an
+    /// `Option<u64>`.
+    pub last_served: ServeAnchor,
+    /// The slash scheduler's watermark. See [`SlashWatermark`].
+    pub last_settled_slash: SlashWatermark,
 }
 
 impl BondContext {
@@ -359,6 +476,38 @@ impl EmissionClaimSource {
                     })?,
                 },
                 claimed_settlement_epochs,
+                bonded_total_atomic: req_u64(v, "bonded_total_atomic")?,
+                bad_interval_count: to_usize(
+                    req_u64(v, "bad_interval_count")?,
+                    "bad_interval_count",
+                )?,
+                // `req_*`, not an `unwrap_or`: an absent field must be a decode
+                // error, because the only other option — defaulting — produces
+                // exactly the permissive `None` that would report an
+                // irreversible exit as ready on a value that never arrived.
+                // This is the line that makes "unknown" unrepresentable rather
+                // than merely discouraged (see `ServeAnchor`).
+                //
+                // There are two presence encodings here and they answer
+                // different questions, so it is worth saying which wins. The
+                // **required read is authoritative about the wire**: an absent
+                // `has_last_served_epoch`, or a `true` flag with the value
+                // missing, is `Malformed` — the flag cannot vouch for a field
+                // that did not arrive. The **flag is the daemon's assertion
+                // about semantics**: "this record has never served", which is a
+                // fact only the daemon holds. So `false` legitimately means the
+                // value is absent and it is never read; every other
+                // disagreement is a decode error, not a reconciliation.
+                last_served: if req_bool(v, "has_last_served_epoch")? {
+                    ServeAnchor::ServedAt(req_u64(v, "last_served_epoch")?)
+                } else {
+                    ServeAnchor::NeverServed
+                },
+                last_settled_slash: if req_bool(v, "has_last_settled_slash_epoch")? {
+                    SlashWatermark::SettledThrough(req_u64(v, "last_settled_slash_epoch")?)
+                } else {
+                    SlashWatermark::NothingSettled
+                },
             })
         } else {
             None
@@ -431,293 +580,122 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
     EmissionClaimSource::from_json(&result)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::emission_claim::test_fixtures::source_json;
-    use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
+/// A claim-source response **paired with the `P` it was actually requested
+/// for**, by the code that sent the request.
+///
+/// The pairing exists because `(p_id, response)` as two arguments is not a
+/// binding — it is a *label*. A caller holding persona A's response and persona
+/// B's id can pair them, and every downstream equality check then agrees with
+/// the label rather than with the record the facts came from: readiness gets
+/// computed from A's cooldown and watermark while B's post is built. On a path
+/// whose confirmation is an irreversible persona-key wipe, that answer being
+/// wrong is the whole hazard.
+///
+/// So the field is private and [`fetch_claim_source_for`] is the only
+/// constructor, writing the id from the argument it just sent. There is no way
+/// to express a mismatched pair.
+///
+/// This is one of **two** checks, not a replacement for the other. This one
+/// proves the facts came back from a request that named this `P`. The
+/// `AssembleUnbond` handler separately proves that `P` is the one whose
+/// *handle* is being spent (`RecordPersonaMismatch`) — a caller can still fetch
+/// A honestly and present it with B's handle, and that is the handler's arm to
+/// refuse.
+///
+/// # What this type does NOT prove
+///
+/// **The pairing is request association, not response authentication.** It says
+/// what the wallet *asked for*; it says nothing about whether the daemon
+/// answered with that record. A stale cache, a misrouted reply, or a lying node
+/// can return B's facts to a request naming A, and this type will label them A
+/// honestly — every downstream equality check then agrees, because they are all
+/// checking the label. Do not read `p_id()` as "these facts belong to this
+/// persona".
+///
+/// **No echo — settled, not reopened here.** A responder-supplied `p_id` to
+/// check against is self-certified and would authenticate nothing while looking
+/// authoritative. That decision stands; the reasoning is pinned once in
+/// `the_fetch_binds_the_response_to_the_id_it_asked_for` rather than re-argued
+/// at every site that touches the pairing.
+///
+/// The residual is bounded. Consensus re-verifies every operand against the real
+/// record, so wrong facts produce a **rejected transaction**, not a wrong state
+/// transition, and the persona-key wipe is gated on confirmed on-chain evidence
+/// rather than anything read here. The cost of a wrong answer is a wrong
+/// *readiness verdict* on a screen that reads as irreversible — a UX failure on
+/// a serious screen, not a fund-loss one.
+///
+/// The *handle* side is not this type's problem, and it is a live hazard rather
+/// than a theoretical one — for a reason that is easy to get backwards. A wallet
+/// activates one persona at a time, but it **holds many**, and the exit path is
+/// precisely why the non-active ones stay resident: `ARCHIVAL_BOND_CONSTRUCTION.md`
+/// keeps the bonded *union* rather than a clean lookahead window because the
+/// archival model rotates *while bonded*, leaving a retired persona's bonds
+/// on-chain as dormant balances, and "unbonding a retired persona later needs
+/// that persona's `bond_spend` key" — dropping them "bricks unbonding". So the
+/// persona being exited is routinely **not** the active one, several are held at
+/// once, and a caller really can pair one persona's record with another's
+/// handle. That is the arm `AssembleUnbond` refuses.
+///
+/// It is also why the exit must **not** copy `drain_to_principal`'s shape. That
+/// façade resolves `active_persona()` and takes no slot parameter, which is
+/// right for a `P`-lane spend and wrong here: applied to the exit it would brick
+/// unbonding every retired-but-bonded persona. *One persona on the wire at a
+/// time* is the invariant (no simultaneous wire activity — the firewall permits
+/// the dormant balances); *"only the active persona can be unbonded"* is not,
+/// and the two read alike.
+#[derive(Debug, Clone)]
+pub struct ClaimSourceFor {
+    p_id: PCanonicalId,
+    source: EmissionClaimSource,
+}
 
-    /// A response as the daemon's epee KV JSON store emits it: one window
-    /// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
-    /// omits empty containers — the shared encoder reproduces that, so the
-    /// absent-decodes-empty rule stays covered). Encoded through the
-    /// crate's single test-side wire encoder
-    /// (`emission_claim::test_fixtures::source_json`); the shape's
-    /// independent pin is the C++ wire-contract test on the serializer
-    /// side (`archival_claim_source_rpc.cpp`).
-    fn fixture() -> Value {
-        source_json(&EmissionClaimSource {
-            chain_height: ChainCount::from_raw(30001),
-            current_settled_epoch: 3,
-            bond: Some(BondContext {
-                join_settlement_epoch: 1,
-                holdings: HoldingsDescriptor {
-                    kind: HoldingsKind::ShardSetCompact,
-                    shard_ids: ShardSet::new(vec![4, 9]).unwrap(),
-                },
-                claimed_settlement_epochs: vec![1],
-            }),
-            epochs: vec![
-                EpochSnapshot {
-                    settlement_epoch: 1,
-                    close_block_height: 20000,
-                    sigma_work_milli: 5000,
-                    budget_atomic: 777,
-                    has_budget_row: true,
-                    bonds: vec![BondRow {
-                        join_settlement_epoch: 0,
-                        is_foundation_complete_tree: false,
-                        bad_intervals: vec![BadInterval {
-                            start_epoch: 2,
-                            end_exclusive: 3,
-                        }],
-                    }],
-                    shards: vec![EpochCloseShard {
-                        shard_id: 4,
-                        freeze_height: 15,
-                        has_segment: true,
-                    }],
-                    credit_pairs: vec![CreditPair {
-                        bond_idx: 0,
-                        shard_idx: 0,
-                    }],
-                    claimant_bond_idx: Some(0),
-                },
-                // The empty-row epoch: bonds/shards/credit_pairs are OMITTED
-                // by the encoder (epee omit-empty), exercising the decoder's
-                // absent-decodes-empty rule.
-                EpochSnapshot {
-                    settlement_epoch: 2,
-                    close_block_height: 30000,
-                    sigma_work_milli: 0,
-                    budget_atomic: 0,
-                    has_budget_row: false,
-                    bonds: vec![],
-                    shards: vec![],
-                    credit_pairs: vec![],
-                    claimant_bond_idx: None,
-                },
-            ],
-        })
+impl ClaimSourceFor {
+    /// The `P` the request named.
+    #[must_use]
+    pub fn p_id(&self) -> PCanonicalId {
+        self.p_id
     }
 
-    /// The encoder really omits the empty containers (the premise of the
-    /// absent-decodes-empty coverage above — if it ever emitted `[]`, the
-    /// fixture would silently stop exercising the epee omission rule).
-    #[test]
-    fn fixture_omits_empty_containers() {
-        let v = fixture();
-        let e2 = &v["epochs"][1];
-        for field in ["bonds", "shards", "credit_pairs"] {
-            assert!(
-                e2.get(field).is_none(),
-                "`{field}` must be absent (epee omit-empty), not an empty array"
-            );
-        }
+    /// The decoded response.
+    #[must_use]
+    pub fn source(&self) -> &EmissionClaimSource {
+        &self.source
     }
 
-    #[test]
-    fn decodes_fixture_field_for_field() {
-        let src = EmissionClaimSource::from_json(&fixture()).unwrap();
-        assert_eq!(src.chain_height, ChainCount::from_raw(30001));
-        assert_eq!(src.current_settled_epoch, 3);
-
-        let bond = src.bond.as_ref().unwrap();
-        assert_eq!(bond.join_settlement_epoch, 1);
-        assert_eq!(bond.holdings.kind, HoldingsKind::ShardSetCompact);
-        assert_eq!(bond.holdings.shard_ids, [4, 9]);
-        assert_eq!(bond.claimed_settlement_epochs, [1]);
-        let record = bond.record();
-        assert_eq!(record.join_settlement_epoch, 1);
-        assert_eq!(record.claimed_settlement_epochs, [1]);
-
-        assert_eq!(src.epochs.len(), 2);
-        let e1 = &src.epochs[0];
-        assert_eq!(e1.settlement_epoch, 1);
-        assert_eq!(e1.close_block_height, 20000);
-        assert_eq!(e1.sigma_work_milli, 5000);
-        assert_eq!(e1.budget_atomic, 777);
-        assert!(e1.has_budget_row);
-        assert_eq!(e1.bonds.len(), 1);
-        assert_eq!(
-            e1.bonds[0].bad_intervals,
-            [BadInterval {
-                start_epoch: 2,
-                end_exclusive: 3
-            }]
-        );
-        assert_eq!(e1.shards.len(), 1);
-        assert_eq!(
-            e1.credit_pairs,
-            [CreditPair {
-                bond_idx: 0,
-                shard_idx: 0
-            }]
-        );
-        assert_eq!(e1.claimant_bond_idx, Some(0));
-
-        // Sentinel + epee omit-empty-container behavior.
-        let e2 = &src.epochs[1];
-        assert!(!e2.has_budget_row);
-        assert!(e2.bonds.is_empty());
-        assert!(e2.shards.is_empty());
-        assert!(e2.credit_pairs.is_empty());
-        assert_eq!(e2.claimant_bond_idx, None);
-    }
-
-    #[test]
-    fn view_construction_matches_verify_shape() {
-        let src = EmissionClaimSource::from_json(&fixture()).unwrap();
-        let e1 = &src.epochs[0];
-        let bonds = e1.bonds_view();
-        let source = e1.source(&bonds);
-        assert_eq!(source.inputs.settlement_epoch, 1);
-        assert_eq!(source.inputs.close_block_height, 20000);
-        assert_eq!(
-            source.inputs.settlement_epoch_blocks,
-            SETTLEMENT_EPOCH_BLOCKS
-        );
-        assert_eq!(
-            source.inputs.age_weight_milli,
-            ARCHIVAL_REWARD_AGE_WEIGHT_MILLI
-        );
-        assert_eq!(source.inputs.bonds.len(), 1);
-        assert_eq!(
-            source.inputs.bonds[0].bad_intervals,
-            [BadInterval {
-                start_epoch: 2,
-                end_exclusive: 3
-            }]
-        );
-        assert_eq!(source.persisted_sigma_work_milli, 5000);
-        assert_eq!(source.claimant_bond_idx, Some(0));
-        assert_eq!(source.budget, 777);
-    }
-
-    #[test]
-    fn no_bond_record_decodes_none_without_reading_bond_fields() {
-        // A bond-less response zeroes part-A bond fields daemon-side; the
-        // decode must not read them (has_bond_record is the gate).
-        let v = json!({
-            "status": "OK",
-            "chain_height": 5,
-            "current_settled_epoch": 0,
-            "has_bond_record": false
-        });
-        let src = EmissionClaimSource::from_json(&v).unwrap();
-        assert!(src.bond.is_none());
-        assert!(src.epochs.is_empty());
-    }
-
-    #[test]
-    fn missing_mandatory_scalar_is_loud() {
-        let mut v = fixture();
-        v.as_object_mut().unwrap().remove("current_settled_epoch");
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-    }
-
-    #[test]
-    fn non_ok_status_is_status_error_not_a_payload() {
-        // A BUSY body carries zeroed payload fields that must never decode
-        // as a valid "nothing claimable" source.
-        let mut v = fixture();
-        v["status"] = json!("BUSY");
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Status(s)) if s == "BUSY"
-        ));
-    }
-
-    #[test]
-    fn missing_status_is_loud() {
-        let mut v = fixture();
-        v.as_object_mut().unwrap().remove("status");
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-    }
-
-    #[test]
-    fn unsorted_claimed_epochs_is_loud() {
-        // The claimed set is a binary-search operand downstream; unsorted
-        // input must be rejected at decode, never searched.
-        let mut v = fixture();
-        v["claimed_settlement_epochs"] = json!([5, 1]);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-        // Duplicates violate *strictly* increasing too.
-        let mut v = fixture();
-        v["claimed_settlement_epochs"] = json!([1, 1]);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-    }
-
-    /// The settled/height pair is redundant (one `db.height()` read
-    /// daemon-side); a reply where they disagree under the frozen mapping is
-    /// malformed — refused at decode, never split across the builder's two
-    /// boundary systems (window verdicts read `current_settled_epoch`, the
-    /// step-7 self-check recomputes from `chain_height`).
-    #[test]
-    fn settled_epoch_inconsistent_with_chain_height_is_loud() {
-        // Deflated settled: the builder's window floor would lag verify's
-        // (whole-batch SelfCheckFailed on an expired admit).
-        let mut v = fixture();
-        v["current_settled_epoch"] = json!(2);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-        // Inflated settled: genuinely claimable epochs would silently skip
-        // as WindowExpired (forfeited rewards).
-        let mut v = fixture();
-        v["current_settled_epoch"] = json!(4);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-        // The fixture itself is the consistent pair (sanity).
-        assert_eq!(
-            settlement_epoch_at_height(fixture()["chain_height"].as_u64().unwrap()),
-            fixture()["current_settled_epoch"].as_u64().unwrap()
-        );
-    }
-
-    #[test]
-    fn unsorted_window_epochs_is_loud() {
-        let mut v = fixture();
-        v["epochs"][0]["settlement_epoch"] = json!(2);
-        v["epochs"][1]["settlement_epoch"] = json!(1);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-    }
-
-    #[test]
-    fn odd_bad_intervals_flat_is_loud() {
-        let mut v = fixture();
-        v["epochs"][0]["bonds"][0]["bad_intervals_flat"] = json!([2]);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
-    }
-
-    #[test]
-    fn unknown_holdings_kind_is_loud() {
-        let mut v = fixture();
-        v["holdings_kind"] = json!(7);
-        assert!(matches!(
-            EmissionClaimSource::from_json(&v),
-            Err(EmissionSourceError::Malformed(_))
-        ));
+    /// Pair a response with an id **without** having sent the request.
+    ///
+    /// Test-only, and deliberately not `cfg(any(test, feature = ...))`: the
+    /// production path has exactly one way to obtain a pairing, and this is the
+    /// escape hatch that lets a test construct the mismatched state in order to
+    /// assert it is refused.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(p_id: PCanonicalId, source: EmissionClaimSource) -> Self {
+        Self { p_id, source }
     }
 }
+
+/// Fetch the claim source for `p_id`, keeping the two bound together.
+///
+/// **Not a convenience wrapper over [`fetch_emission_claim_source`] — it is the
+/// binding.** The bare fetch returns facts with no record of whose they are, so
+/// a consumer that needs to know (anything on the `Unbond` readiness/exit path)
+/// would have to re-attach an id by hand, which is the mislabeling
+/// [`ClaimSourceFor`] exists to make impossible. Reach for this one there, and
+/// do not collapse the two: the delegation is a single line precisely so the
+/// pair cannot drift, and the bare form stays for consumers (the claim
+/// orchestrator, the serve-set pinner) that already carry `P` in their own
+/// context and read only the record's contents.
+#[allow(dead_code)] // PR-P4: retires with the `unstake` verb, which fetches the record.
+pub async fn fetch_claim_source_for<R: Rpc>(
+    rpc: &R,
+    p_id: PCanonicalId,
+) -> Result<ClaimSourceFor, EmissionSourceError> {
+    let source = fetch_emission_claim_source(rpc, p_id.as_bytes()).await?;
+    Ok(ClaimSourceFor { p_id, source })
+}
+
+#[cfg(test)]
+#[path = "emission_source_tests.rs"]
+mod tests;

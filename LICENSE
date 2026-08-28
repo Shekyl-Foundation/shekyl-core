@@ -27,6 +27,10 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+This license covers both code derived from the Monero codebase and new code
+authored for Shekyl. When redistributing this project, preserve all applicable
+license notices.
+
 Parts of the project are originally copyright (c) 2014-2022 The Monero Project.
 
 Parts of the project are originally copyright (c) 2012-2013 The Cryptonote
@@ -35,3 +39,19 @@ developers.
 Parts of the project are originally copyright (c) 2014 The Boolberry
 developers.
 
+Vendored shekyl-oxide third-party crates
+----------------------------------------
+
+Consensus-critical FCMP++ dependencies are vendored under rust/shekyl-oxide/.
+Their upstream project and snapshot metadata are tracked in:
+
+    rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT
+
+Per-crate upstream license files are preserved in the vendored tree:
+
+    rust/shekyl-oxide/crypto/divisors/LICENSE
+    rust/shekyl-oxide/crypto/helioselene/LICENSE
+    rust/shekyl-oxide/crypto/generalized-bulletproofs/LICENSE
+    rust/shekyl-oxide/crypto/fcmps/LICENSE
+    rust/shekyl-oxide/crypto/fcmps/circuit-abstraction/LICENSE
+    rust/shekyl-oxide/crypto/fcmps/ec-gadgets/LICENSE

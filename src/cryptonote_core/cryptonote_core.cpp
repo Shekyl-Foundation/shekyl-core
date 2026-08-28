@@ -1138,6 +1138,14 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
+  void core::on_stem_propagated(const epee::span<const crypto::hash> txids)
+  {
+    /* A pass-through by design. The verdict is the relay layer's, the entry
+       class is the pool's, and this seam exists only because `notify` holds no
+       pool reference — so it forwards and decides nothing. */
+    m_mempool.on_stem_propagated(txids);
+  }
+  //-----------------------------------------------------------------------------------------------
   void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const epee::net_utils::zone zone)
   {
     // lock ensures duplicate txs aren't notified twice

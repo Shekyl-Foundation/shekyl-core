@@ -48,6 +48,49 @@ using namespace cryptonote;
 
 namespace {
 
+// The origin every bridged request carries.
+//
+// A handler asks `ctx` two questions: `m_restricted && ctx` — is this a
+// restricted listener answering a remote caller — and `ctx != NULL`, does
+// this request have an RPC origin at all. Both are true of everything that
+// reaches this bridge. It is the HTTP listener's only path into the
+// handlers, and the one caller that legitimately has no RPC origin is the
+// in-process console, which calls `core_rpc_server::on_*` directly and never
+// comes through here.
+//
+// Passing `nullptr` made both expressions false on every JSON and JSON-RPC
+// route, so no restricted policy in any bridged handler could fire: not the
+// request caps, and not the pool reads' `include_sensitive`, which decides
+// whether a transaction that has not been broadcast is disclosed at all.
+// Single-sourced here so there is one place to be wrong: every dispatcher
+// names this and nothing else. The guard that it keeps answering non-null is
+// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — a live daemon, a
+// restricted listener, and real requests over the caps: REST ones through
+// `dispatch_json`, JSON-RPC ones through `dispatch_jsonrpc_we`, so both
+// templates are held separately rather than one standing in for the other.
+// It has to be there rather than beside this file: a C++ test of this helper
+// cannot see whether the dispatchers call it, so reverting one of them would
+// leave such a test green. Those go red.
+//
+// "Every" includes the two hand-written ones, `dispatch_submitblock` and
+// `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
+// change nothing — they are converted because a bridge rule with silent
+// exceptions is how this defect survived in the first place, and because a
+// `restricted` check added to either handler later would otherwise be born
+// dead exactly as the eleven were.
+//
+// The address is left default-constructed. `network_address::is_blockable()`
+// is false for one, which keeps `add_host_fail`'s per-host RPC ban scoring
+// the no-op it has always been on this path: this context asserts "an RPC
+// client asked", never "this particular peer asked", and a context shared by
+// every caller must not accumulate a ban score against one empty address.
+const core_rpc_server::connection_context* rpc_origin()
+{
+    static const core_rpc_server::connection_context ctx{};
+    return &ctx;
+}
+
 // JSON endpoint: deserialize request from JSON, call handler, serialize response to JSON.
 template<typename COMMAND>
 char* dispatch_json(core_rpc_server& rpc,
@@ -61,38 +104,11 @@ char* dispatch_json(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(body_json));
     }
 
-    (rpc.*handler)(req, res, nullptr);
+    (rpc.*handler)(req, res, rpc_origin());
 
     std::string out;
     epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), out);
     return strdup(out.c_str());
-}
-
-// JSON-RPC: handler without error_resp.
-template<typename COMMAND>
-char* dispatch_jsonrpc(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const char* params_json)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    if (params_json && params_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
-    }
-
-    bool ok = (rpc.*handler)(req, res, nullptr);
-
-    std::string result_json;
-    epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), result_json);
-
-    std::ostringstream oss;
-    if (ok) {
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        oss << R"({"ok":false,"error_code":-32603,"error_message":"Internal error"})";
-    }
-    return strdup(oss.str().c_str());
 }
 
 // JSON-RPC: handler with error_resp.
@@ -109,7 +125,7 @@ char* dispatch_jsonrpc_we(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = (rpc.*handler)(req, res, error_resp, nullptr);
+    bool ok = (rpc.*handler)(req, res, error_resp, rpc_origin());
 
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
@@ -140,11 +156,6 @@ using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 #define DJSON(uri, handler, cmd) \
     {uri, [](core_rpc_server& rpc, const char* body) -> char* { \
         return dispatch_json<cmd>(rpc, &core_rpc_server::handler, body); \
-    }}
-
-#define DJRPC(method, handler, cmd) \
-    {method, [](core_rpc_server& rpc, const char* params) -> char* { \
-        return dispatch_jsonrpc<cmd>(rpc, &core_rpc_server::handler, params); \
     }}
 
 #define DJRPC_WE(method, handler, cmd) \
@@ -209,7 +220,7 @@ char* dispatch_submitblock(core_rpc_server& rpc, const char* params_json) {
         }
     }
 
-    bool ok = rpc.on_submitblock(req, res, error_resp, nullptr);
+    bool ok = rpc.on_submitblock(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         std::string result_json;
@@ -234,7 +245,7 @@ char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json) {
         epee::serialization::load_t_from_json(static_cast<COMMAND_RPC_CALCPOW::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = rpc.on_calcpow(req, res, error_resp, nullptr);
+    bool ok = rpc.on_calcpow(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         oss << R"({"ok":true,"result":")" << res << R"("})";
@@ -318,12 +329,6 @@ core_rpc_handle* core_rpc_ffi_create(void* rpc_server_ptr)
 void core_rpc_ffi_destroy(core_rpc_handle* h)
 {
     delete h;
-}
-
-bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
-{
-    if (!h || !h->rpc) return true;
-    return h->rpc->is_restricted();
 }
 
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)

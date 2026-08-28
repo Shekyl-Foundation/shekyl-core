@@ -470,15 +470,20 @@ pub enum WalletRpcError {
          cannot start until the earlier drain's record is retired"
     )]
     DrainInFlight,
-    /// `drain` (`-29511`, retry remedy): a concurrent same-persona post
-    /// reserved one of this drain's inputs between snapshot and seal;
-    /// nothing was sealed. Same code as [`Self::DrainInFlight`] (the
+    /// `drain` (`-29511`, retry remedy): this drain's inputs stopped being
+    /// current between snapshot and seal — either another live record (a bond
+    /// post or an emission claim, of **any** persona) now reserves one, or a
+    /// reservation was released mid-assembly. Nothing was sealed either way.
+    /// Same code as [`Self::DrainInFlight`] (the
     /// one-live-drain seal is the shared cause class); the message carries
     /// the different remedy — plain retry — and `data.cause` (`"raced"`)
     /// carries it structurally, so a client that hardcodes one behavior
     /// per numeric code is not forced to spin against the seal or abandon
     /// a retryable race.
-    #[error("a concurrent staking operation raced this drain; nothing was sent — retry")]
+    #[error(
+        "a concurrent staking operation changed this drain's inputs; \
+         nothing was sent — retry"
+    )]
     DrainInputRaced,
 
     /// `verify_message` (`-29800`): the signature is well-formed and intact

@@ -1146,9 +1146,19 @@ outcomes, recorded here because each changed a §8 surface:
    fee gindexes join the shared `reserved_gindexes` union (bond sweeps
    and claim sweeps read one exclusion set) and one-live-claim-per-
    persona is the in-flight epoch dedup (`ClaimPending` refusal;
-   `push_claim` under the write lock is the authoritative
-   serialization). Retirement + byte-identical resubmit = the claim
-   dispatch driver, the WI-3-sibling slice (named, next).
+   `seal_claim` under the write lock is the authoritative
+   serialization). Retirement splits by leg as of PR #572: the
+   **confirmation** leg is LANDED — a claim whose reserved fee inputs
+   leave the wallet's live funding set releases its seal, so a persona
+   that claimed once no longer stops claiming forever. The
+   **terminal-reject prune** and **byte-identical resubmit** legs remain
+   open (`docs/FOLLOWUPS.md`); until they land, a claim the network
+   rejects terminally never spends its inputs, so it never settles and
+   holds its one-live gate shut, with a stall alarm naming it in the
+   operator log rather than failing silent. The seal additionally carries
+   a reservation-release **generation**, so an assembly whose snapshot
+   predates a retirement is refused rather than sealed against inputs the
+   retired record already spent.
 3. **The seam no longer rotates.** The claimant id derives from a
    read-only actor projection (`PersonaIdentityOf` /
    `StakeEngineHandle::persona_identity`) instead of

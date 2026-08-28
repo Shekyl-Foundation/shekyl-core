@@ -380,16 +380,14 @@ impl Zone {
     ///
     /// # Who can reach the refusals
     ///
-    /// C++ never sets the noise flag, so no production construction hits
-    /// these. Tests do. **No carrier caller exists yet**, and it is more than
-    /// one call: nothing owns or enqueues [`crate::NoiseQueues`] outside its
-    /// own tests, neither of `Driver::poll`'s noise effects reaches the queue
-    /// (`Effect::NoiseSend` to `take_for_send`, `Effect::NoiseUnbind` to
-    /// [`crate::NoiseQueues::unbind`], which is what invalidates outstanding
-    /// tokens), and `NoiseSendCb` carries no bytes out
-    /// and no status back — so the deliberately non-destructive token cannot
-    /// be resolved. An earlier draft called the join the sole missing piece;
-    /// it is one of four. When the caller is built it will hit these refusals,
+    /// C++ sets the noise flag only behind the development opt-in, which
+    /// defaults off, so no SHIPPED construction hits these. Tests and
+    /// development builds do.
+    ///
+    /// The carrier's executor, join and boundary are built; what is still
+    /// missing is the enqueue crossing's PRODUCER — nothing calls
+    /// `shekyl_relay_zone_noise_enqueue`, so a carrier zone emits dummies
+    /// only. When that producer is built it will hit these refusals,
     /// because it forms the pair in Rust and stops routing it through
     /// `make_relay_zone` — which is why the checks are here and not at the
     /// FFI edge. Building it is not the daemon cutover's to provide
@@ -565,10 +563,29 @@ impl Zone {
     ///
     /// This is the *only* input the outcome needs from outside, and it is
     /// **data, not a decision** (§38.1).
-    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) {
+    /// Returns the subset of `txs` whose observation this arrival RESOLVED as
+    /// propagated — the transactions for which *"it came back from somewhere
+    /// other than where I sent it"* just became true.
+    ///
+    /// **A decision leaving, not an input crossing.** The caller does not get
+    /// the watch, the pending map, or a query surface over them; it gets the
+    /// verdicts that fired on this call and nothing else. The alternative —
+    /// retaining a per-transaction outcome for a consumer to poll — would put
+    /// a second copy of a fact the txpool already owns beside the txpool, with
+    /// no invalidation tied to the pool entry's own lifetime. That is the
+    /// shape that produced the `transit_for` literal and the `DEGRADED_FLOOR`
+    /// pin: a duplicate nothing forces to agree, going stale in silence.
+    ///
+    /// Usually empty, and allocating only when it is not: an arrival that
+    /// resolves nothing is the common case.
+    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) -> Vec<TxId> {
+        let mut propagated = Vec::new();
         for tx in txs {
-            self.stem_watch.seen(tx, from);
+            if self.stem_watch.seen(tx, from) {
+                propagated.push(*tx);
+            }
         }
+        propagated
     }
 
     /// Every successor with resolved observations — the §55 telemetry

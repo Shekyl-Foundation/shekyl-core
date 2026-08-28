@@ -250,6 +250,9 @@ namespace cryptonote
       */
      void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) final;
 
+     //! Hand the stem watch's propagation verdicts to the pool (F-10, §49).
+     void on_stem_propagated(epee::span<const crypto::hash> txids) final;
+
 
      /**
       * @brief gets the miner instance

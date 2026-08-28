@@ -2,6 +2,149 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A confirmed emission claim or drain now releases its seal — before this,
+  neither ever did.** Both paths seal a one-live-per-persona record before
+  dispatch (the record *is* the input reservation), and only the bond post's
+  seal was ever retired. `remove_claim` and `remove_drain` existed with callers
+  only under `#[cfg(test)]`, so nothing in production released either gate.
+
+  The drain leak was visible: drain once, and that persona's lane refused
+  `-29511 DRAIN_IN_FLIGHT` across sessions, permanently, even though the money
+  had settled normally. **The claim leak was worse because nothing surfaced it**
+  — claims are engine-automated, so the persona simply stopped claiming, with no
+  user action to correlate the silence against.
+
+  `PendingPostBlock::remove_settled` retires either kind once **every** funding
+  gindex it reserved has left the accrual's live funding set, called from the
+  existing WI-3 dispatch tick inside the same locked mutate, so the record and
+  its reservation are released in one seal (R2-4). The evidence is the wallet's
+  own verified scan at the reorg depth the bond post's confirmation already
+  uses. It is deliberately **not** the bond post's confirmation set: that set is
+  filtered to the JoinMarket post kind, and crossing the two would retire a live
+  drain because the persona's *bond post* confirmed — a different transaction.
+
+  Two edges are handled rather than assumed. A **partly** spent reservation is
+  not settlement (a drain spends all its inputs in one transaction, so a
+  half-gone reservation is a state the confirming spend cannot produce) and is
+  held. An **empty** reservation is never settled: `[].all(..)` is `true`, so
+  the Q11 zero-fee-input claim — which reserves nothing, paying its fee from the
+  mint — would otherwise retire the instant it was sealed, before its bytes
+  reached the network.
+
+- **A seal whose snapshot predates a retirement is refused, not sealed against
+  spent inputs** (`PENDING_POST_VERSION` v7 → v8). Retiring on
+  reservation-absence needs one live record per gindex, and the seal-time union
+  check alone does not give it across an assembly: A snapshots the reservation
+  set, and while its proof work runs, B seals A's chosen input, confirms, and is
+  retired. B's reservation is now gone, so A's union check sees the input free
+  and admits — sealing a transaction whose input B already spent, whose absence
+  the *next* tick then reads as A's own confirmation. A record the network
+  rejected would be booked as settled.
+
+  The block carries a monotonic count of reservation **releases**, bumped by
+  every method that drops a live record and compared at the seal against the
+  value the assembly read with its snapshot. The union check sees reservations
+  that are present; the generation makes reservations that were *released*
+  visible. Comparing the reservation sets themselves cannot: the release returns
+  the set to exactly its snapshot value, so snapshot and seal read identical
+  while the inputs behind them have been spent. Persisted rather than in-memory
+  because the pending-post store reloads the block from the seal on every read
+  and every mutation — an unpersisted counter would reset to zero on each load
+  and never refuse anything. Same remedy as the existing input race (retry
+  against a fresh snapshot), so it surfaces through the same refusal, whose
+  message now names every cause rather than only a concurrent post.
+
+  The two reads that form that snapshot are **ordered**, which the first cut of
+  the guard got wrong: all three seams read the pending block and the pscan seal
+  concurrently in one `join!`, so the pscan load could return a funding set from
+  *before* a settlement while the pending read returned the generation from
+  *after* it. Stale funding paired with a current generation passes the seal —
+  the same admission the counter was added to prevent. The pending block is now
+  read to completion first, then the pscan seal, so every release either
+  precedes both reads (and the spent input is never offered) or moves the
+  generation (and the seal refuses). The ordering lives in one place,
+  `load_seal_basis`, whose result type has private fields and no other
+  constructor, because a source pin over the seams can only prove the function
+  is called — never that a hand-rolled equivalent got the order right.
+
+  The raw inserters `push_post` / `push_claim` / `push_drain` are now
+  `#[cfg(test)]`, and the public `PendingPostBlock::new(posts)` constructor is
+  **deleted**. They admit one live record per persona per kind and nothing else
+  — no cross-kind overlap check, no generation comparison — so each was a public
+  way to break the retirement's premise, whatever the in-workspace callers
+  happened to do. Once their visibility was made honest the compiler enumerated
+  the rest: with `seal_*` inserting directly, all four had **zero** production
+  callers. `new` had none at all and is gone (rule 15); the three inserters
+  survive only as test seeding, compiled out of the library, because staging a
+  state the guards prevent is a legitimate thing for a test to need and an
+  illegitimate thing for production to reach.
+
+  Every seeding path now goes through `seal_*`, which also makes the fixtures
+  more faithful: the seal stamps `Dispatched` as it inserts, so a `Pending`
+  claim or drain is a state production can no longer persist, and fixtures that
+  constructed one were staging an unreachable shape.
+
+### Added
+
+- **A stall alarm for pending claims and drains.** A record dispatched but not
+  settled past the alarm horizon is named in the operator log, keyed by kind
+  *and* persona so a persona holding both a stuck claim and a stuck drain gets
+  both alarms. The record is HELD, matching the bond post's
+  funds-safety-over-liveness posture — the alarm reports the stall, it does not
+  clear it. Two cases still produce a permanent stall and both remain named
+  FOLLOWUPS items: a **terminal rejection**, and an **ambiguous submit** whose
+  bytes never reached the network — the seams seal before a single submit and
+  keep the record on a transport error by design, and nothing resubmits it
+  because the driver selects bond posts only.
+
+- **The wallet can read the four `Unbond` verify operands and assemble the
+  full `Unbond` exit transaction (PR-P4).** Before this it held *none* of
+  `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`
+  or `last_settled_slash_epoch`, so an exit producer could only have
+  assembled blind. `/archival_claim_source` now marshals all four — the
+  interval-log count was the one missing from the original three, and it
+  is the operand with no absent state, which is exactly why it fell out
+  of a list — and the decoder makes every one a REQUIRED field: absence
+  is a decode error, never a default. The permissive reading is the
+  dangerous one here. `release_cooldown_elapsed` and
+  `slashes_settled_through` both treat an absent serve anchor as "clear",
+  and `0 < MAX_BOND_BAD_INTERVALS` passes, so a field that never arrived
+  would have told a user an irreversible exit was safe to take.
+  `ServeAnchor` and `SlashWatermark` keep "never served" / "nothing
+  settled" distinct from "never arrived" at the type level, and are the
+  single place either becomes an `Option` for consensus.
+  `build_unbond_vin` returns an `UnbondVin` witness whose sole
+  constructor establishes the genesis-frozen invariants, and
+  `UnbondRecordState::ensure_exit_ready` mirrors
+  `verify_unbond_bond_post`'s refusals **in the verifier's own order**, so
+  a wallet refusal and a consensus rejection cannot disagree about why.
+  Around that vin, `AssembleUnbond` assembles the whole persona-bound
+  transaction: funding from the typed `P`-space pool (cover + earnings —
+  a principal output is unrepresentable in the selector's input type),
+  the released collateral entering as a **source** (`sum(funding) +
+  bond_debit == sum(outputs) + fee`, and the side is genesis-frozen in
+  the type — `debit_term()` returns an `InputTerm`, so it cannot be
+  placed on the output side), payout split across two outputs to `P`'s
+  **own base address** — never the principal, because the composed
+  `unbond()` is the post **plus a decorrelated drain** and paying the
+  exit straight out would put the P↔principal edge in one transaction.
+  The surface-A `pqc_auths` slot is signed under **`bond_spend_pk`**, not
+  the identity key: that is the whole of GF-1 debit authorization, which
+  consensus pins in `archival_debit_auth_pin` and which is the only thing
+  stopping a compromised serving host — it holds `hybrid_sign_sk` — from
+  authorizing a collateral-draining exit. `wire_bond_post_input` gained
+  its `Unbond` arm here; the refusal it replaced said the kind "has no
+  wallet-side producer yet", which was true when written and is not now.
+  **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
+  no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
+  RESERVED. The producer exists; what remains is reachability (the
+  regtest walk), dispatch of the assembled bytes, and native
+  `/submit_transaction` admission — Unbond is still `Malformed` there
+  until the submit fact set lands. The walk lands as its own PR, so the
+  producer merging is not the event that lifts RESERVED.
+
 ### Changed
 
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
@@ -35,6 +178,14 @@
 
 ### Removed
 
+- **`core_rpc_ffi_is_restricted` and the accessor it was the only caller
+  of.** The export had no caller in any language — the Rust server takes its
+  posture from its own configuration, never by asking C++ — and it was the
+  sole user of `core_rpc_server::is_restricted()`, so both go (rule 15).
+  Found while fixing the restricted gate above: an export whose whole
+  purpose was to report restrictedness across the boundary, in a tree where
+  the restrictedness had never crossed it.
+
 - **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
   a route that is called; nothing called this one. The two handlers made
   the same two core reads and differed only in raw-versus-hex output, so
@@ -46,6 +197,54 @@
   `docs/DAEMON_RPC_RUST.md`.
 
 ### Fixed
+
+- **A restricted RPC listener disclosed transactions the node had not
+  broadcast.** Every C++ handler decides its caller's posture from
+  `m_restricted && ctx`, and the dispatch bridge passed `nullptr` for `ctx`
+  on every JSON and JSON-RPC route, so that expression was false however the
+  daemon was configured. On the pool paths it is not a request cap: the
+  sensitive flag selects `relay_category::all` over `::broadcasted`, and the
+  DB's iteration skips what does not match the category — so the flag decides
+  whether a transaction is enumerated at all, not which of its fields are
+  shown. A `--restricted-rpc` listener therefore answered with transactions
+  in the `stem` and `local` states: still-stemming ones, and the node's own
+  submissions before they were relayed. `/get_transactions` disclosed them by
+  hash; `/get_transaction_pool` and `/get_transaction_pool_hashes` enumerated
+  them with no argument at all, which hands over the identifiers to ask
+  about. The listener's own help text is "do not return privacy sensitive
+  data in RPC calls". The bridge now passes a shared origin context, which
+  restores the intended meaning for every bridged handler at once; the
+  unrestricted listener is unaffected, because `m_restricted` is false there
+  and the expression was false before and after. No wire shape changes, so
+  `CORE_RPC_VERSION` is untouched. (`do_not_relay` transactions are *not* in
+  the leaked set — they cannot exist in Shekyl: no RPC accepts the flag and
+  the pool's only writer of it hardcodes 0.)
+
+- **The restricted-RPC gate now has a guard that CI actually runs.** The only
+  assertion that can observe whether the C++ dispatch bridge passes a
+  connection context is a live-daemon test, and live-daemon tests are
+  `#[ignore]`d because the Rust lane builds no `shekyld`. The `build-ubuntu`
+  job compiles one with `BUILD_TESTS=ON` and installs the Rust toolchain, so
+  the gate runs there against the tree just built — no extra build, about
+  three seconds. The step asserts that exactly one test ran: `--exact` matches
+  the full test path, and `cargo test` exits 0 reporting "0 passed" when a
+  filter matches nothing, so a moved or misspelled name would otherwise turn
+  the gate into a green no-op.
+
+- **`relay_tx`'s C++ restricted gate is deleted, not repaired.** The handler
+  computed `m_restricted && ctx` and skipped the `relay_category::all` arm
+  when it held. That expression cannot hold in any reachable state: `relay_tx`
+  is admin-only, decided once in Rust at the only transport
+  (`RESTRICTED_METHODS`), which answers 403 before C++ is entered — so the
+  restricted listener never arrives, and on the admin listener `m_restricted`
+  is false. An earlier draft of this entry reported it as a live
+  unauthenticated relay, and a later one kept the check as defence in depth;
+  both were wrong. It defended nothing, and membership of the Rust list is
+  itself pinned against an independent specification by a test, so loosening
+  that gate fails in Rust rather than falling through to here. Removed under
+  rule 15, which takes the site count in the design doc from eleven to ten.
+  Of those eleven methods `relay_tx` is the only one Rust gates per-method, so
+  this is a bounded sweep rather than an open class.
 
 - **Every password rotation on Windows failed, and the crate that owns the
   defect was tested on no Windows machine anywhere.** `rotate_password`
@@ -203,7 +402,9 @@
   CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
   `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
   and `get_stakes` are REJECTED (engine-side claims; archival firewall);
-  `unstake` stays RESERVED on the Unbond producer. The drain
+  `unstake` stays RESERVED — its gate is now **reachability plus the
+  regtest walk**, not the producer, which exists (`build_unbond_vin` /
+  `AssembleUnbond`) and is deliberately unreachable. The drain
   confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
   dispatch fact, not a settlement fact, and both surfaces say so.
 

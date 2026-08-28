@@ -472,6 +472,22 @@ namespace cryptonote
      */
     void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
 
+    /*! Record that the stem watch resolved these transactions as PROPAGATED —
+        seen arriving from somewhere other than the peer they were stemmed to
+        (F-10's predicate, §49).
+
+        Disarms the origin's re-broadcast for `relay_method::local` entries and
+        NOTHING ELSE. The scoping is at this end deliberately: the watch
+        resolves observations for every stem this node placed, relayed ones
+        included, and a relayed entry sits at `stem` or `fluff` where the
+        ordinary re-relay path governs. Letting a propagation verdict for one
+        of those reach a disarm would silence a timer that never asked the
+        question — so the arm that consumes the fact is the arm that names it.
+
+        Hashes with no pool entry, or an entry outside `local`, are ignored;
+        both are ordinary rather than errors. */
+    void on_stem_propagated(epee::span<const crypto::hash> hashes);
+
     /**
      * @brief get the total number of transactions in the pool
      *

@@ -138,10 +138,16 @@ entirely:
 One C++ witness replaced them rather than none:
 `levin_notify.noise_does_not_override_the_phase`. *(Superseded 2026-08-20:
 that witness has itself been replaced. Its subject — a noise-enabled C++ zone —
-no longer exists, so it gave way to `levin_notify.cpp_cannot_enable_the_noise_carrier`,
-which pins the invariant that makes the two remaining noise effect callbacks
-unreachable. The phase-versus-carrier property now lives only in Rust, which is
-correct: the carrier is only in Rust.)* Its discriminant is the peer
+no longer exists, so it gave way to `levin_notify.the_noise_carrier_is_off_by_default` (renamed from `cpp_cannot_enable_the_noise_carrier` when the runtime opt-in made that name false),
+which pins the invariant every other `has_noise == false` fixture leans on.
+**Superseded again 2026-08-27:** "the two remaining noise effect callbacks are
+unreachable" and "the carrier is only in Rust" both stopped being true in the
+change that built the executor's caller. There is now ONE noise callback — the
+unbind sibling is deleted — it is REACHABLE, and it transports. What the
+renamed test pins is the DEFAULT being off, not unreachability; the sibling
+`the_development_opt_in_enables_the_carrier_on_an_encrypted_zone` asserts the
+other side. The phase-versus-carrier property does still live only in
+Rust.)* Its discriminant is the peer
 count — a stem reaches **one** peer, and the deleted all-channel broadcast
 reached two — which is the assertion the deleted branch would fail. It is
 driven on `relay_method::local` because RD-4 makes that arm deterministic;
@@ -286,7 +292,7 @@ from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
 statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
 **sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
 are comparable*, which nothing has tested. **The rig spike must hold a circuit
-at 2.72 KiB/s for a full session and confirm it holds**; that is the one input to
+at 3.20 KiB/s for a full session and confirm it holds** *(was 2.72 KiB/s, the pre-#546 rate this section's own update note records superseding — corrected 2026-08-26; the spike would have been run at 85 % of the real load)*; that is the one input to
 this axis we do not have.
 
 #### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**
@@ -464,6 +470,24 @@ Stage 4 is §1.1's two-line change: pass a real payload at both notifier sites.
 That ruling has exactly two components, and a reader can verify each rather than
 guess:
 
+> **Component 1 is SETTLED 2026-08-27; component 2 is not, so Stage 4 remains
+> blocked — on ONE thing now rather than two.** Recorded here in the landing
+> that cleared it, per `IMPLEMENTATION_INDEX.md`'s cleared-gate policy: a
+> blocker row that outlives its blocker is how a reader keeps treating settled
+> work as open.
+>
+> The predicate is **F-10**, and it was already built (`StemWatch::seen`
+> resolves propagated unless the arrival came from the charged successor).
+> §92.5c item 1 carries the settlement and the reason the item stayed open —
+> the sentence naming F-10 was written, repeated, and never checked, so a true
+> claim could not discharge the item it described.
+>
+> What this landing added is the CONSUMER, plus its precondition: `add_tx` no
+> longer upgrades an entry out of `local` because that entry's own transaction
+> came back. Without that, the verdict was written and erased in one call
+> chain, and the upgrade put the origin's own transaction on the clear internet
+> at MIN_RELAY_TIME — defeating §92's carve-out rather than closing it.
+
 1. **The disarm predicate is defined**, and it is not *"received once"* — which
    fails in two directions: a single arrival may be the origin's own echo, and a
    relay's first receipt is its **only** receipt in the common case, so a
@@ -545,8 +569,11 @@ no longer a C++ inventory executing the carrier at all.)*
 
 Nothing of the carrier. `NoiseQueues` holds the buffers; C++ is transport
 (asio, levin framing, `p2p->send`) until step 5. The two noise effect
-callbacks remain as loud failures so a future in-process path cannot drop
-a real send on the floor.
+callbacks were loud failures so a future in-process path could not drop a
+real send on the floor. *(Superseded 2026-08-27: that path was built. The
+send callback TRANSPORTS now, and its unbind sibling is deleted — unbind is
+consumed inside Rust by `NoiseQueues::unbind`, and C++ has held no channel
+state since #515.)*
 
 *(The table of `covert_payload` / `noise_channel` / `send_noise` that used
 to sit here was deleted with those types in #515.)*
@@ -667,6 +694,14 @@ the fix.
 > depends only on the caller being the last place that still has transactions
 > rather than bytes.
 
+> **ENFORCED 2026-08-26, structurally.** `shekyl_relay_zone_noise_enqueue`
+> takes **one transaction blob**, not a vector, and Rust does the levin
+> framing. A batch is not something a caller can express at that crossing and
+> then be refused for — it is unsayable. This section was reassigned once
+> already (below) after nearly being orphaned; a requirement that only exists
+> as prose is one reassignment away from reaching nobody, and this one now
+> holds whoever enqueues without depending on them having read it.
+
 **A requirement on the carrier's caller, recorded here because the queue cannot
 enforce it and the reason is privacy rather than sizing.** Privacy has to
 lead: it survives changes to the sizing. If the window grows, the size cap
@@ -742,12 +777,213 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
 | **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
-| **§2.9 step 2 — covert executor** | **landed (type)**; **caller now owed in Rust** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. |
+| **§2.9 step 2 — covert executor** | **THREE PIECES AND A CROSSING, 2026-08-27 — the producer is still owed (§3.1a)** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **PARTLY BUILT 2026-08-26/27, and the remainder is named at §3.1a.** Three of the four, plus the enqueue CROSSING but not its caller: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only after `cryptonote::levin::set_carrier_development(true)`, a RUNTIME opt-in defaulting off — the compile-time `SHEKYL_CARRIER_DEVELOPMENT` macro an earlier draft used is gone, because a gate CI never builds cannot test the only configuration that runs the carrier. §3.1 is why the opt-in is a ruling and not caution. |
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
 | **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; the skip's condition EXPIRED** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier: C++ cannot enable noise at all. **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, on an independent ground that did discharge**: #515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere. What the expiry actually leaves owed is the step-2 caller above — **in Rust**, per `20-rust-vs-cpp-policy`, not as the C++ shim this row skipped. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
 | §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
-| **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. |
+| **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. **Superseded 2026-08-27 on all three counts, by the change that built the executor's caller:** `make_relay_zone` sets the flag again for an ENCRYPTED zone behind `set_carrier_development` (off by default, so `has_noise` is still false in a shipped build); the send callback transports rather than failing loudly; and its unbind sibling is **deleted**, since unbind is consumed inside Rust and C++ has no channel state to clear. |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
+
+### 3.1 Why the switch is a DEVELOPMENT FLAG (2026-08-26)
+
+The carrier's executor, join and boundary are built and the enqueue crossing
+exists; its **producer does not** (§3.1a). What is built is reachable only
+after `cryptonote::levin::set_carrier_development(true)`, a runtime opt-in
+defaulting off.
+
+That opt-in is a ruling with reopening criteria, not caution, and the reason
+is that an operator switch would ship with an undefined meaning.
+
+**Vocabulary, because this section is where the collapse keeps happening.**
+The carrier's precondition is **link secrecy** — it hides by payload
+indistinguishability, which needs encryption at step one. That is
+`LinkSecrecy`, and it is a different axis from a network's anonymity property.
+Tor and I2P happen to be both encrypted *and* anonymizing, which is what lets
+"anon zone" pass for "encrypted zone" today; P2P link encryption on a cleartext
+zone would separate them, and the reopen condition for the no-cover-on-clearnet
+ruling is already on the record. Everything below says **encrypted zone**.
+
+#### The embargo cannot be per-node, and the carrier moves `hop` by ~9×
+
+`shekyl_dandelionpp_embargo_draw_seconds(zone)` takes a zone and nothing else,
+so every node on an encrypted zone draws from one distribution. An operator
+switch would put two populations on that one constant:
+
+| population | `hop` | embargo (α = 0.90, τ = 250) |
+| --- | --- | --- |
+| carrier off | ~715 ms | **298 s** (5.0 min) |
+| carrier on, modal (`n = 1`) | 6.25 s | **1387 s** (23.1 min) |
+
+**Computed, not scaled** — `derive_embargo` at those hops, because it steps
+discontinuously and a linear scaling of the 715 ms figure is not a prediction
+of it (§89.3). A ~4.65× spread in the derived embargo.
+
+Provision at the low end and carrier-on nodes run α far below the 0.90 pin.
+Provision at the high end and every carrier-off node on that zone pays it.
+
+**A carrier-adaptive embargo is not the escape — and this is the third
+application of one argument.** §18 refused a *degree*-adaptive embargo because
+embargo length is inferable from fluff timing. §94.9 applied the same argument
+to *posture*. Carrier is the third.
+
+The objection that would rescue it — *"carrier-on is already visible, G-1 says
+the channel is transparent to the peer decoder"* — **fails on audience**.
+Carrier-on is visible to a **directly connected peer**. Embargo length is
+inferable by **anyone who can time a fluff**. A carrier-adaptive embargo would
+therefore republish an adjacent-peer fact to every network observer. The
+audiences are not the same set, so the two facts are not interchangeable.
+
+#### Reopening criteria (rule 21)
+
+The flag becomes a shippable operator switch when **both** hold:
+
+1. **The encrypted zone's embargo is provisioned at its worst carrier
+   posture**, which is §94.9's established resolution shape — each zone covers
+   its worst posture, collapsing per-posture to determinate values. §44.3
+   already ruled over-provisioning privacy-safe (it *reduces* prefix-fire
+   leak) and a recovery-latency cost, so this is a liveness bill, not a
+   privacy one.
+2. **§89.6.3's ask-don't-time status query has landed**, so the long wait is
+   *honest rather than silent*. That is §94.10 shape (3) — make the mechanism
+   tolerant rather than the constant accurate — and §94.10 already names the
+   carrier as one of the two reasons that query belongs on the critical path.
+
+Until both, enabling the carrier is a privacy regression rather than a
+configuration, and a switch that reads as a preference would be a footgun.
+
+### 3.1a The producer is owed, and what it costs (2026-08-27)
+
+`shekyl_relay_zone_noise_enqueue` exists and nothing calls it. A
+development-flag zone therefore emits **dummies only**: the cadence runs, the
+frames are valid, and no real transaction ever rides the carrier.
+`dandelionpp_notify` still sends stem transactions directly through
+`make_payload_send_txs`.
+
+**Stated plainly because the first draft of this row said "built".** The
+four-piece decomposition was right and the fourth piece is half-done — the
+crossing without its caller — which is exactly the shape §92.5c item 1 was
+stuck in for weeks: a mechanism whose consumer nobody wired, recorded as
+complete because the hard part was.
+
+**The remaining work is small and its seam already exists.**
+`shekyl_relay_zone_plan_dispatch_with_refresh` returns `out_carrier` and
+`out_channel`; `dandelionpp_notify` currently calls `plan_relay`, which
+returns neither. So the producer is: swap the planning call, and on
+`SHEKYL_RELAY_CARRIER_COVERT` enqueue on the returned channel instead of
+sending directly. That is §2.9 step 4's own description — *"`send_txs`
+consumes `plan_dispatch`"* — reaching its first real use.
+
+**Why it is not in the change that built the executor.** That change shipped
+two wire-corrupting defects found in review — a dummy of raw zero bytes, and
+single-bucket framing across a fragmenting queue — both of which were
+invisible because the test recorded only emission *length*. The producer
+swaps the planning call on the **live stem path** for every zone. Landing it
+in the same change, on the strength of the same test discipline that missed
+those two, is how a third arrives.
+
+It lands once the carrier path is exercisable end to end, which the runtime
+opt-in (§3.1) now makes possible and the `#ifdef` it replaced did not: a
+compile-time gate put the only carrier-running configuration in a build CI
+never makes.
+
+**Reopening criterion:** the producer is owed by the next carrier change, and
+this row is not marked landed until a test drives a real transaction through
+the queue onto the wire.
+
+### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
+
+`hop` has no shape parameter, and the carrier gives it one by fragmentation.
+
+| shape | bytes | `n` | `hop` | embargo |
+| --- | --- | --- | --- | --- |
+| modal (1-in/2-out, **genesis** depth) | 13,042 | 1 | 6.25 s | 1387 s (23.1 min) |
+| modal (1-in/2-out, **max** depth) | 17,015 | 1 | 6.25 s | 1387 s (23.1 min) |
+| 8-input intermediate | 63,683 | 4 | 43.75 s | 8781 s (146.3 min) |
+| **structural max (8-in/16-out)** | **97,964** | **5** | **56.25 s** | **11,245 s (187.4 min)** |
+
+Carrier-off, `hop` runs ~715–990 ms across the same shapes — a 38 % spread.
+Carrier-on it is **8.1×**, and the binding number is the **structural
+maximum**, not the 8-input intermediate: `MAX_FRAGMENTS = 5` is derived as
+`ceil(S_max / WINDOW_BYTES)` against 8-in/16-out at max depth, so the worst
+admissible shape is `n = 5` and the embargo would have to cover **187 min**,
+not the ~110 min a linear scaling of the intermediate suggests.
+
+*(The modal is listed at both depths because this row previously labelled
+13,042 B as **max** depth, and that is the **genesis**-depth figure —
+17,015 B is max depth (`params/carrier.rs`, enforced by `carrier_window.rs`).
+Both are `n = 1`, so hop and embargo are identical and no conclusion in this
+section moves: the label was wrong, not the arithmetic. That they agree is not
+luck — `WINDOW_BYTES` is sized at max depth precisely so the fragment count
+cannot flip from 1 to 2 as the curve tree deepens, which is the whole reason
+the two rows can sit here with the same hop.)*
+
+**Does the spread disclose anything?** §89.3 raised the shape-discontinuity
+question and left it unruled, noting that fires are ~10 % of transactions and
+**shape is public from the transaction anyway**, so the likely answer is no.
+The carrier amplifies the magnitude without changing that argument. What it
+does change is **provisioning**: one constant with no shape parameter must
+cover the worst shape.
+
+**The flat-hop alternative, and it does not fit where it looks like it should.**
+Enlarging the window until every admissible shape is `n = 1` collapses the
+spread to the residual. A 64 KiB window does **not** achieve that — the
+structural max is 97,964 B, so it is still `n = 2`. Only a ~98 KiB window makes
+every admissible shape a single fragment. Priced against axis 2's ceiling:
+
+| window | cadence for ≤ 8 KiB/s (2 channels) | resulting `hop` |
+| --- | --- | --- |
+| 20,480 B (today) | 12.5 s → **3.20 KiB/s** | 6.25 s … 56.25 s |
+| 65,536 B | ≥ 16 s | 8 s … 24 s |
+| ~98,046 B | ≥ 24 s | **12 s, flat** |
+
+So flat *is* purchasable, at a 12 s floor and **exactly at** the ceiling with
+zero margin. **This is analysis, not a proposal — `WINDOW_BYTES` is not
+touched here.** It belongs to the window-sizing question, and it needs the
+denominator ruling in §3.3 first, because both rows above are per zone.
+
+**A recorded claim this touches.** `params/carrier.rs` says a ~98 KiB window
+"at any usable cadence **breaches**" the ceiling. At 24 s it *meets* it. The
+claim is imprecise rather than wrong if "usable" excludes a 24 s cadence — and
+there is a real argument that it should, since a ceiling whose stated job is
+"constraining a future cadence proposal without constraining this one" is not
+doing that job at zero margin. Recorded here rather than silently contradicted.
+
+### 3.3 The ceiling is per NODE; the design figure is per ZONE (2026-08-26)
+
+Axis 2 says **8 KiB/s per node**. The figure it checks — 3.20 KiB/s — is
+`WINDOW_BYTES × NOISE_CHANNELS / cadence`, and `NOISE_CHANNELS` is documented
+as *"max outbound connections **per zone**"*. The two halves of the comparison
+are on different denominators.
+
+| node | zones carrying | rate | margin |
+| --- | --- | --- | --- |
+| Tor only | 1 | 3.20 KiB/s | 2.5× |
+| Tor **and** I2P | 2 | **6.40 KiB/s** | **1.25×** |
+
+The ceiling still holds, but 1.25× is not "a ceiling that constrains a future
+cadence proposal without constraining this one" — halving the cadence, the
+lever this arc has priced repeatedly, **breaches it on a dual-zone node while
+looking fine on a single-zone one**.
+
+**Owed: a ruling on the denominator.** Either the ceiling is per encrypted zone
+(and the per-node total is unbounded in the number of zones, which needs
+saying), or it is per node (and the design figure must be stated at the
+multi-zone case, at a 1.25× margin). Not settled here because it is a
+bandwidth-posture question rather than a wiring one, and it changes §3.2's
+trade table — both rows there are per zone, so a per-node reading halves every
+admissible window on a dual-zone node.
+
+**Also stale, and it is a measurement spec.** Six lines under the 3.20 KiB/s
+figure, axis 2 still instructs: *"the rig spike must hold a circuit at
+**2.72 KiB/s** for a full session."* 2.72 is the pre-#546 rate that the same
+section's own update note records superseding. The one experiment this axis
+waits on would be run at 85 % of the real load. Corrected in place.
+
+**Not swept here, recorded so it is not lost:** the Tor-percentage figures
+(~0.06 %, ~0.27 %) were computed at 3 KiB windows and predate #546; and §42.1's
+fluff-capacity re-pricing moved the transaction side while the carrier's
+capacity side moved too, so the composed ratio wants re-checking rather than
+assuming both corrections compose.
 
 **Non-scope, tracked separately (§2.0):** Tor transit measurement — *unblocked,
 not started*; flood-suite reconciliation — *unblocked, not started*.

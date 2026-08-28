@@ -80,6 +80,7 @@ set(unit_tests_sources
   rpc_facts_ffi_roundtrip.cpp
   rpc_facts_shims.cpp
   rpc_oracle_vectors.cpp
+  rpc_restricted_gate.cpp
   rolling_median.cpp
   scaling_2021.cpp
   seed_epoch.cpp

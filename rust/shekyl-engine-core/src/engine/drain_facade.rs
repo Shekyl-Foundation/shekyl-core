@@ -109,17 +109,32 @@ pub enum DrainToPrincipalError {
         detail: String,
     },
     /// A live pending drain already exists for this persona — one live drain
-    /// per persona (`-29511`). Releasing the seal (confirmation retire or
-    /// terminal-reject prune) is the drain lifecycle driver's job, and that
-    /// driver is not yet wired (`docs/FOLLOWUPS.md` "Drain dispatch driver",
-    /// WI-3 sibling, target V3.0 pre-genesis) — until it lands this refusal
-    /// persists across sessions, including after the first drain confirms.
+    /// per persona (`-29511`). Releasing the seal is the drain lifecycle
+    /// driver's job, and that driver is **half wired** as of PR #572: a drain
+    /// that CONFIRMS now releases its seal (retired against its reserved inputs
+    /// leaving the wallet's live funding set), so this refusal no longer
+    /// outlives a successful drain. It still persists across sessions on the
+    /// failure path, by **two** routes — a drain the network rejects
+    /// **terminally**, and a drain whose submit was **ambiguous** (a transport
+    /// error leaves the sealed record live on purpose, because the bytes may
+    /// already have reached the network; if they did not, nothing resubmits
+    /// them — the driver resubmits bond posts only). Either way the inputs are
+    /// never spent, so the drain never settles and the lane stays shut until
+    /// terminal-reject prune and byte-identical resubmit land
+    /// (`docs/FOLLOWUPS.md` "Drain/claim dispatch driver — terminal-reject
+    /// prune + byte-identical resubmit", target V3.0 pre-genesis). A stall
+    /// alarm names the stuck lane in the operator log rather than leaving it
+    /// silent.
     #[error("a pending drain already exists for this persona; one live drain per persona")]
     InFlight,
-    /// A concurrent same-persona post reserved one of this drain's swept
-    /// inputs between snapshot and seal; nothing was sealed — retry
+    /// This drain's swept inputs are no longer current — either a concurrent
+    /// bond post or emission claim reserves one, or a reservation was released
+    /// mid-assembly; nothing was sealed — retry
     /// (`-29511`, retry remedy).
-    #[error("a concurrent post reserved one of this drain's inputs; retry")]
+    #[error(
+        "this drain's inputs are no longer current — another live record holds \
+         one, or a reservation was released mid-assembly; retry"
+    )]
     InputRaced,
     /// The requested payment is zero — nothing to move. Its own arm, never
     /// folded into [`Self::Refused`] (rule 82: `-29101`'s "lower the payment
@@ -285,7 +300,7 @@ where
             .ok_or(DrainToPrincipalError::NoActivePersona)?;
 
         // Advisory copy of the one-live-drain read, BEFORE the daemon fee
-        // round trip. The AUTHORITATIVE serialization stays `push_drain`
+        // round trip. The AUTHORITATIVE serialization stays `seal_drain`
         // under the write lock at the dispatch seam's seal; this read is
         // sound by that seam's own argument for its pre-assembly copy ("this
         // read only saves the wasted proof work") — here it saves the
@@ -520,12 +535,14 @@ mod tests {
     /// fix for the sealed-wallet-with-flaky-daemon misdiagnosis (the truthful
     /// refusal is the seal, not the daemon), and this is the dispatch-layer
     /// `-29511` path's first behavioral coverage — the seal is produced
-    /// through the same `push_drain` store mutation production seals with,
+    /// through the same `seal_drain` store mutation production seals with,
     /// not a hand-built error value.
     #[tokio::test(flavor = "multi_thread")]
     async fn sealed_live_drain_refuses_in_flight_before_the_fee_quote() {
         use crate::engine::pscan::start::pending_post_store_for_engine;
-        use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState};
+        use shekyl_engine_state::pending_post_block::{
+            PendingDrain, PendingPostState, SealAdmission,
+        };
         use shekyl_types::PSlot;
 
         let (_tmp, engine) = staker_engine(3, SEED_MULT);
@@ -548,13 +565,18 @@ mod tests {
         let store = pending_post_store_for_engine(engine.clone(), write_lock);
         let sealed = store
             .mutate(move |block| {
-                let ok = block.push_drain(PendingDrain {
-                    persona,
-                    tx_bytes: vec![0xd7; 32],
-                    funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
-                    state: PendingPostState::Pending,
-                });
-                (ok, ok)
+                let g = block.generation();
+                let admitted = block.seal_drain(
+                    PendingDrain {
+                        persona,
+                        tx_bytes: vec![0xd7; 32],
+                        funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
+                        state: PendingPostState::Pending,
+                    },
+                    shekyl_types::BlockHeight::from_raw(1),
+                    g,
+                ) == SealAdmission::Admit;
+                (admitted, admitted)
             })
             .await
             .expect("seal a live drain");

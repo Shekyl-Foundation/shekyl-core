@@ -166,11 +166,50 @@ pub(crate) enum BondAssemblyError {
     )]
     NoSpendableFunding,
 
+    /// The presented input set carries **no funding input at all** — a
+    /// structural shape refusal, not a shortfall. The rule belongs to
+    /// [`bond_post_funding_floor_met`](shekyl_archival_retention::bond_post::bond_post_funding_floor_met):
+    /// a bond post carries at least one real `txin_to_key` spend input, checked
+    /// before any amount rule. This arm is what the producer raises when that
+    /// predicate says no — the condition is not restated here.
+    ///
+    /// Distinct from [`Self::NoSpendableFunding`], which names what the *sweep*
+    /// found eligible at its reference height. This arm is about the set a
+    /// caller actually presented — and it is the exit path that needs it,
+    /// because there the amount rules cannot see the difference: released
+    /// collateral alone covers the fee, so both the sufficiency check and the
+    /// balance equation close with an empty funding vector.
+    #[error(
+        "the transaction carries no funding input: consensus requires at least one \
+         txin_to_key spend input on a bond post"
+    )]
+    FundingInputsRequired,
+
     /// A live pending post already exists for this persona. JoinMarket-only
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.
     #[error("a pending bond post already exists for this persona; one live post per persona")]
     PendingPostExists,
+
+    /// This post's funding inputs are no longer selectable, for either of the
+    /// two reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **claim or drain** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly snapshot and
+    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
+    ///   against no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this post still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry against a current snapshot. One variant
+    /// because one remedy; the message names both causes because naming only
+    /// one sends a caller looking for a collision that may not exist.
+    #[error(
+        "this post's funding inputs are no longer current — another live record \
+         holds one, or a reservation was released mid-assembly; retry"
+    )]
+    InputRaced,
 
     /// The curve-tree / ledger anchoring procedure could not produce a
     /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
@@ -471,36 +510,58 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
 /// canonical-length key.
 ///
-/// Refuses a non-JoinMarket vin, because this assembler only knows how to
-/// build a JoinMarket one — the `bond_spend_pk` coupling below is
-/// JoinMarket-specific.
+/// **`Unbond` was added here by PR-P4**, and the refusal it replaced is worth
+/// recording: this function used to reject every non-JoinMarket kind with "has
+/// no wallet-side producer yet". That was true when it was written and its own
+/// doc called it *drift rather than a decided posture* — the gap was the
+/// missing producer, not consensus, which has given `Unbond` a full
+/// allowed-terms row with implemented verify since #303. `build_unbond_vin` is
+/// that producer, so the premise is discharged for this one kind.
 ///
-/// It does **not** refuse because other kinds are consensus-invalid. They are
-/// not: `ARCHIVAL_BOND_GATE4.md` §3.4 gives `Unbond` a full allowed-terms row
-/// with implemented verify, and marks both `HoldingsUpdate` arms V3.0. The
-/// gap is that the wallet has no producer for them, which is drift rather
-/// than a decided posture — filed in `docs/FOLLOWUPS.md` ("Staking has no
-/// exit") with a pre-genesis deadline, since staking is default-on and
-/// genesis-frozen.
+/// `Rebond` and `HoldingsUpdate` still refuse, and now say so by name rather
+/// than by being everything-else: their producers genuinely do not exist. The
+/// `docs/FOLLOWUPS.md` entry ("Staking has no exit") stays open for them, with
+/// its pre-genesis deadline intact — staking is default-on and genesis-frozen,
+/// and half a discharge is not one.
+///
+/// The §9.11 coupling is enforced in both directions, not assumed. Only
+/// JoinMarket carries `bond_spend_pk` on the wire; a debit authorizes against
+/// the record's **committed** copy (`archival_debit_auth_pin`), and consensus
+/// rejects an `Unbond` vin that brings a key along — "vin carries a
+/// bond_spend_pk (JoinMarket-coupled field)". So the `Unbond` arm refuses a
+/// non-empty key here rather than dropping it on the floor: silently discarding
+/// it would turn a construction bug into a transaction that looks fine locally
+/// and is rejected by every node.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
-    match vin.post_kind {
-        RetentionBondPostKind::JoinMarket => {}
+    let kind = match vin.post_kind {
+        RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
+            bond_spend_pk: vin.bond_spend_pk.clone(),
+        },
+        RetentionBondPostKind::Unbond => {
+            if !vin.bond_spend_pk.is_empty() {
+                return Err(BondAssemblyError::build(
+                    "wire bond-post mapping",
+                    "Unbond vin carries a bond_spend_pk; the debit authorizer is \
+                     the record's committed key, never one the vin brings along \
+                     (§9.11 — consensus rejects this input)",
+                ));
+            }
+            WireBondPostKind::Other(RetentionBondPostKind::Unbond as u8)
+        }
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
                 format!(
                     "post kind {other:?} has no wallet-side producer yet; \
-                     only JoinMarket can be assembled"
+                     JoinMarket and Unbond can be assembled"
                 ),
             ));
         }
-    }
+    };
     Ok(Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vin.hybrid_public_key.clone(),
         p_canonical_id: vin.p_canonical_id,
-        kind: WireBondPostKind::JoinMarket {
-            bond_spend_pk: vin.bond_spend_pk.clone(),
-        },
+        kind,
         holdings: wire_holdings(&vin.holdings),
         bonded_total_atomic: vin.bonded_total_atomic,
         bond_credit: vin.bond_credit,

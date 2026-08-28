@@ -10,7 +10,7 @@ use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_compute, epoch_close_height,
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, BadInterval, CreditPair,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    HoldingsKind, LastServedScan, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
@@ -1941,5 +1941,146 @@ fn emission_vin_verify_ffi_rejects_bad_marshaling() {
             role: EmissionAuthRole::Backing
         }),
         SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
+    );
+}
+
+/// The exported fold must distinguish "nothing has served yet" from "a value
+/// arrived", because the two consensus predicates that consume the anchor treat
+/// absence as *permissive* (`release_cooldown_elapsed`, `slashes_settled_through`
+/// both return `true` on `None`). A marshaling caller that could not tell an
+/// absent anchor from an unmarshaled one would route "we don't know" into the
+/// permissive branch and report an exit as ready on a value it never received.
+#[test]
+fn whole_record_fold_reports_absence_rather_than_leaving_it_inferred() {
+    let mut present = 7u8; // pre-poisoned: OK must overwrite both outputs
+    let mut epoch = 99u64;
+
+    // Empty slice = record exists, no shard has served. Absent, not epoch 0 —
+    // and epoch 0 is a real settlement epoch, so the flag is the only thing
+    // that separates them.
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            ptr::null(),
+            0,
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 0, "never-served folds to absent");
+    assert_eq!(epoch, 0, "the epoch slot is written, never left stale");
+
+    // Served shards fold to the max, matching `whole_record_last_served`.
+    let served = [4u64, 9, 7];
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            served.as_ptr(),
+            served.len(),
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 1);
+    assert_eq!(
+        epoch, 9,
+        "the whole-record anchor is the max over served shards"
+    );
+
+    // A served shard at epoch 0 is present, not absent — the case a
+    // zero-means-absent encoding would silently turn permissive.
+    let zero = [0u64];
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            zero.as_ptr(),
+            zero.len(),
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 1, "served-at-epoch-0 is a value, not an absence");
+    assert_eq!(epoch, 0);
+}
+
+#[test]
+fn whole_record_fold_rejects_null_outputs_and_bad_spans() {
+    let mut present = 0u8;
+    let mut epoch = 0u64;
+    let served = [1u64];
+
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                served.as_ptr(),
+                served.len(),
+                ptr::null_mut(),
+                ptr::from_mut(&mut epoch),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                served.as_ptr(),
+                served.len(),
+                ptr::from_mut(&mut present),
+                ptr::null_mut(),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+    // Null input pointer with a positive len is a caller marshaling bug, not an
+    // empty fold — the shared slice helper's contract.
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                ptr::null(),
+                1,
+                ptr::from_mut(&mut present),
+                ptr::from_mut(&mut epoch),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+}
+
+#[test]
+fn last_served_scan_is_the_holdings_kind_decision() {
+    let mut scan = 7u8;
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::ShardSetCompact as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::HeldShards as u8);
+
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::CompleteTree as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::AllShards as u8);
+
+    // Unknown kind: fail closed, do not write.
+    scan = 7;
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(99, ptr::from_mut(&mut scan)) },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND
+    );
+    assert_eq!(scan, 7, "a rejected kind must not write a scan");
+
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(0, ptr::null_mut()) },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
     );
 }
