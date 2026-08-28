@@ -323,13 +323,47 @@ mod probe {
 
     /// `--serve` — the two-machine server (WP-D6's genuine remote caller).
     ///
+    /// The shared tail of the two same-user verdict arms: given the caller's
+    /// two reported codes, attribute the refusal (or its absence) to the
+    /// DACL-only ACE. Only the two SID-specific stories differ between callers,
+    /// so they are passed in — `on_admit` (the DACL-only pipe *opened*: WP-D6
+    /// did not hold) and `on_pass` (it refused with `ERROR_ACCESS_DENIED`: the
+    /// boundary held). The production-hole FAIL and the wrong-error UNRUN are
+    /// identical for both callers and live here, so a later correction to the
+    /// ladder cannot drift between the different-logon-SID and no-logon-SID
+    /// arms. Returns the process exit code.
+    fn attribute_dacl_refusal(dacl_err: u32, prod_err: u32, on_admit: &str, on_pass: &str) -> i32 {
+        if dacl_err == 0 {
+            println!("{on_admit} (prod os error {prod_err})");
+            return 1;
+        }
+        if prod_err == 0 {
+            println!(
+                "P-17 FAIL: the PRODUCTION pipe admitted a remote caller — a live IPC$ hole past \
+                 the reject-remote flag. Revisits WP-D6, urgently. (daclonly os error {dacl_err})"
+            );
+            return 1;
+        }
+        if dacl_err != ACCESS_DENIED {
+            println!(
+                "P-17 UNRUN: the DACL-only open was refused with os error {dacl_err}, not \
+                 ERROR_ACCESS_DENIED — some other mechanism refused it, so the ACE is not \
+                 attributed. (prod os error {prod_err})"
+            );
+            return 2;
+        }
+        println!("{on_pass} (production shape refused with os error {prod_err})");
+        0
+    }
+
     /// Stands up the three pipes a remote same-user caller dials, reads the
-    /// caller's identity off the impersonation token to assert *same user,
-    /// different logon session* (authoritative, not the client's self-report),
-    /// and combines that with the caller's report of which pipes refused it —
-    /// which only the caller can observe, because a refused open never reaches
-    /// the server. The wait is bounded: a machine that never dials yields
-    /// UNRUN, never a hang.
+    /// caller's identity off the impersonation token to attribute the refusal —
+    /// the caller carries either a *different* logon SID (terminal-services
+    /// form) or, over `IPC$`, *no* logon SID at all (§4.8) — authoritatively,
+    /// not from the client's self-report, and combines that with the caller's
+    /// report of which pipes refused it, which only the caller can observe
+    /// (a refused open never reaches the server). The wait is bounded: a machine
+    /// that never dials yields UNRUN, never a hang.
     fn serve(me: &shekyl_win_sec::SidString, my_logon: &shekyl_win_sec::SidString) -> i32 {
         // Control: granted to the USER SID (not the logon SID), no label, no
         // reject-remote flag — the remote same-user caller must open it (the
@@ -596,35 +630,15 @@ mod probe {
                     "P-17 SERVE: same user, different logon session — a genuine cross-session caller, \
                      observed."
                 );
-                if dacl_err == 0 {
-                    println!(
-                        "P-17 FAIL: the DACL-only pipe ADMITTED a cross-session same-user caller. The \
-                         logon-SID ACE does not carry the boundary; PR #516's user-SID removal bought \
-                         nothing. Revisits WP-D6."
-                    );
-                    return 1;
-                }
-                if prod_err == 0 {
-                    println!(
-                        "P-17 FAIL: the PRODUCTION pipe admitted a remote caller — a live IPC$ hole \
-                         past the reject-remote flag. Revisits WP-D6, urgently."
-                    );
-                    return 1;
-                }
-                if dacl_err != ACCESS_DENIED {
-                    println!(
-                        "P-17 UNRUN: the DACL-only open was refused with os error {dacl_err}, not \
-                         ERROR_ACCESS_DENIED — some other mechanism refused it, so the ACE is not \
-                         attributed."
-                    );
-                    return 2;
-                }
-                println!(
+                attribute_dacl_refusal(
+                    dacl_err,
+                    prod_err,
+                    "P-17 FAIL: the DACL-only pipe ADMITTED a cross-session same-user caller. The \
+                     logon-SID ACE does not carry the boundary; PR #516's user-SID removal bought \
+                     nothing. Revisits WP-D6.",
                     "P-17 PASS: a genuine cross-session same-user caller is refused by the logon-SID \
-                     ACE alone (ERROR_ACCESS_DENIED), and by the production shape (os error \
-                     {prod_err}). WP-D6's IPC$ claim is now an observation."
-                );
-                0
+                     ACE alone (ERROR_ACCESS_DENIED). WP-D6's IPC$ claim is now an observation.",
+                )
             }
             Ok(CallerOutcome::Reported {
                 dacl_err,
@@ -646,40 +660,19 @@ mod probe {
                     );
                     return 2;
                 }
-                if dacl_err == 0 {
-                    println!(
-                        "P-17 FAIL: the DACL-only pipe ADMITTED a same-user caller whose token carries \
-                         no logon SID — a token that cannot match the logon-SID ACE was let in anyway. \
-                         WP-D6's boundary does not hold. Revisits WP-D6. (prod os error {prod_err})"
-                    );
-                    return 1;
-                }
-                if prod_err == 0 {
-                    println!(
-                        "P-17 FAIL: the PRODUCTION pipe admitted a remote caller — a live IPC$ hole \
-                         past the reject-remote flag. Revisits WP-D6, urgently. (daclonly os error \
-                         {dacl_err})"
-                    );
-                    return 1;
-                }
-                if dacl_err != ACCESS_DENIED {
-                    println!(
-                        "P-17 UNRUN: the DACL-only open was refused with os error {dacl_err}, not \
-                         ERROR_ACCESS_DENIED — some other mechanism refused it, so the ACE is not \
-                         attributed. (prod os error {prod_err})"
-                    );
-                    return 2;
-                }
-                println!(
+                attribute_dacl_refusal(
+                    dacl_err,
+                    prod_err,
+                    "P-17 FAIL: the DACL-only pipe ADMITTED a same-user caller whose token carries no \
+                     logon SID — a token that cannot match the logon-SID ACE was let in anyway. \
+                     WP-D6's boundary does not hold. Revisits WP-D6.",
                     "P-17 PASS (structural): a genuine same-user caller arriving over IPC$ carries NO \
                      logon SID, so it cannot match the logon-SID-only ACE and is refused \
-                     (ERROR_ACCESS_DENIED), and by the production shape (os error {prod_err}). The \
-                     refusal is DIAGNOSTIC of logon-SID-only granting: the network token DOES carry \
-                     the user SID, so a user-SID ACE would have admitted it — PR #516's removal of \
-                     that ACE is exactly what carries the boundary. This is a structural answer, \
-                     stronger than the different-logon-SID form row (d) assumed."
-                );
-                0
+                     (ERROR_ACCESS_DENIED). The refusal is DIAGNOSTIC of logon-SID-only granting: the \
+                     network token DOES carry the user SID, so a user-SID ACE would have admitted it \
+                     — PR #516's removal of that ACE is exactly what carries the boundary. This is a \
+                     structural answer, stronger than the different-logon-SID form row (d) assumed.",
+                )
             }
         }
     }
@@ -951,10 +944,10 @@ mod probe {
         });
 
         // Everything that touches the server borrows it inside this closure;
-        // the client is joined exactly once afterwards. `client.join()`
-        // consumes the handle, so it cannot live in a reusable closure — the
-        // single join below is the only reap, and dropping the server closes
-        // it, which fails the client's blocking read and lets its thread exit.
+        // the client thread is detached afterwards (see the drop below), never
+        // joined, so a client wedged in a slow SMB connect cannot pull the wait
+        // past CLIENT_TIMEOUT. Dropping the server closes its end, which fails
+        // the client's blocking read and lets a connected thread exit on its own.
         let sid_result: Result<shekyl_win_sec::SidString, String> = (|| {
             let Ok(open_code) = rx.recv_timeout(CLIENT_TIMEOUT) else {
                 return Err(format!(
@@ -1023,10 +1016,16 @@ mod probe {
                     last_error()
                 ))
             } else {
-                logon_sid_of_token_for_testing(token_guard.0).map_err(|_| {
-                    "the caller's token has no logon SID — the identity arrived, but not in \
-                     a shape the DACL could ever have matched"
-                        .to_owned()
+                // Distinguish the WP-D6 mechanism from a transient read failure,
+                // for the same reason serve() does (§4.8): a bare "no logon SID"
+                // for a `QueryToken`/`Stringify` failure would be a false
+                // structural claim. Only `NoLogonSid` is the boundary working.
+                logon_sid_of_token_for_testing(token_guard.0).map_err(|e| match e {
+                    SidError::NoLogonSid => "the caller's token has no logon SID — the identity \
+                                             arrived, but not in a shape the DACL could ever have \
+                                             matched"
+                        .to_owned(),
+                    other => format!("could not read the caller's logon SID: {other:?}"),
                 })
             };
             // SAFETY: paired with the successful impersonation above.
@@ -1039,7 +1038,14 @@ mod probe {
         })();
 
         drop(server); // closes the server end, failing the client's blocked read
-        drop(client.join()); // the single reap; the thread's own result is not the verdict
+                      // Detach rather than join. On the normal paths dropping the server
+                      // unblocks the client's release-read and it exits at once — but if the
+                      // client is still stuck in a slow `CreateFileW` SMB connect (an
+                      // unreachable name, a dropped SYN), `join()` would wait out that whole
+                      // connect and defeat CLIENT_TIMEOUT, the bound this function advertises.
+                      // A probe about to exit needs no reap; the thread dies at process exit,
+                      // exactly as serve()'s accept thread is left to.
+        drop(client);
         sid_result
     }
 }

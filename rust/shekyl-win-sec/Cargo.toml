@@ -40,6 +40,21 @@ tokio = { version = "1", features = ["net"] }
 # against a value they invented.
 test-utils = []
 
+# These two examples reference `test-utils`-gated probe helpers (the SID readers
+# and `without_label_for_testing`), and their `cfg(windows)` bodies are active on
+# a Windows host — so without this guard `cargo build --examples` / `cargo test`
+# with default features fails to compile them there. `required-features` makes
+# cargo skip them unless `test-utils` is on; `windows_probe.ps1` always passes
+# it. `print_sid` is deliberately absent: it uses only `current_user_sid`, which
+# is not gated, so gating it would skip a probe that needs no feature.
+[[example]]
+name = "p12_low_il_probe"
+required-features = ["test-utils"]
+
+[[example]]
+name = "p17_ipc_logon_sid_probe"
+required-features = ["test-utils"]
+
 [target.'cfg(windows)'.dev-dependencies]
 # The probe suite drives real pipes under a runtime; the runtime features are
 # test-only, the `net` half is the transport's own dependency above.

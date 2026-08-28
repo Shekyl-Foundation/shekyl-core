@@ -147,10 +147,15 @@ if ($CiOnly) {
         $p12Exit = $LASTEXITCODE
     } finally { Pop-Location }
 
+    # 0/1/2 are the probe's OWN verdicts; anything else (101 = cargo build error
+    # or a panic) means the example never ran to a verdict and must be a harness
+    # FAIL, not a benign UNRUN — §1's `cargo test` never builds this example, so
+    # this switch is the only place a compile break surfaces (rule 47).
     switch ($p12Exit) {
         0 { Add-Result 'P-12' 'PASS' 'Low-IL open refused with ERROR_ACCESS_DENIED, as predicted' }
         1 { Add-Result 'P-12' 'FAIL' 'see output above; per the sheet this revisits WP-D4, not the probe' }
-        default { Add-Result 'P-12' 'UNRUN' "the probe could not measure the label (exit $p12Exit) — not a pass" }
+        2 { Add-Result 'P-12' 'UNRUN' 'the probe could not measure the label (exit 2) — not a pass' }
+        default { Add-Result 'P-12' 'FAIL' "the p12 example did not run to a verdict (exit $p12Exit = build error or panic, not a probe result)" }
     }
 
     # P-13 needs two CONCURRENT interactive logons, which one console session
@@ -175,10 +180,16 @@ try {
     $p17Exit = $LASTEXITCODE
 } finally { Pop-Location }
 
+# 0/1/2 are the probe's OWN verdicts; 101 (cargo build error or a panic) means
+# the example never reached a verdict. §1's `cargo test --test probes` never
+# builds this example, so a compile break — e.g. a renamed shekyl-win-sec symbol
+# — surfaces ONLY here; it must be a harness FAIL, not a benign UNRUN that reads
+# exactly like a legitimate no-second-machine result (rule 47).
 switch ($p17Exit) {
     0 { Add-Result 'P-17' 'PASS' 'the logon-SID ACE alone refused a loopback caller with ERROR_ACCESS_DENIED' }
     1 { Add-Result 'P-17' 'FAIL' 'a prediction was falsified — see output above; revisits WP-D6, not the probe' }
-    default { Add-Result 'P-17' 'UNRUN' "no transport crossed a session boundary (exit $p17Exit) — see the probe output for which host reused the token; not a pass" }
+    2 { Add-Result 'P-17' 'UNRUN' 'no transport crossed a session boundary (exit 2) — see the probe output for which host reused the token; not a pass' }
+    default { Add-Result 'P-17' 'FAIL' "the p17 example did not run to a verdict (exit $p17Exit = build error or panic, not a probe result)" }
 }
 
 # ---------------------------------------------------------------------------
