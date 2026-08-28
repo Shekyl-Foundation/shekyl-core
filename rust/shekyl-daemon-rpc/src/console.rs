@@ -255,6 +255,183 @@ fn print_height(src: &Source) -> Result<String, String> {
     Ok(reply.height.to_string())
 }
 
+/// `print_transaction <hash> [+meta] [+hex] [+json]` — RK-4c. Reads
+/// `get_transactions` and nothing else, which is why it migrates with it
+/// (§2.1).
+///
+/// The C++ rendered the JSON client-side: it parsed the hex back into a
+/// transaction and called `obj_to_json_str` locally. Here the daemon is asked
+/// for it (`decode_as_json`) and the reply's `as_json` is printed. Same
+/// string — both are epee over the same transaction — and it works on the
+/// remote arm, which has no core to render with.
+fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
+    let Some(hash) = args.first() else {
+        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
+            .to_owned());
+    };
+    let (mut meta, mut hex_out, mut json_out) = (false, false, false);
+    for flag in &args[1..] {
+        match flag.as_str() {
+            "+meta" => meta = true,
+            "+hex" => hex_out = true,
+            "+json" => json_out = true,
+            other => {
+                return Err(format!(
+                    "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
+                ))
+            }
+        }
+    }
+    let request = shekyl_rpc_types::GetTransactionsRequest {
+        txs_hashes: vec![hash.clone()],
+        decode_as_json: json_out,
+        prune: false,
+        split: false,
+    };
+    let reply = fetch_transactions(src, &request)?;
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    let Some(tx) = reply.txs.first() else {
+        return Err(format!("Transaction wasn't found: {hash}"));
+    };
+
+    let mut out = Vec::new();
+    match &tx.location {
+        shekyl_rpc_types::TxLocation::Pooled { .. } => out.push("Found in pool".to_owned()),
+        shekyl_rpc_types::TxLocation::Mined { block_height, .. } => {
+            // "(pruned)" means the daemon holds no prunable half for a
+            // transaction that has one — `prunable_hash` distinguishes that
+            // from a coinbase, which has nothing prunable to begin with and
+            // whose hash is null or the hash of the empty string.
+            let pruned = tx.prunable_as_hex.is_empty() && !is_empty_prunable(&tx.prunable_hash);
+            out.push(format!(
+                "Found in blockchain at height {block_height}{}",
+                if pruned { " (pruned)" } else { "" }
+            ));
+        }
+    }
+
+    let full_hex = if tx.as_hex.is_empty() {
+        format!("{}{}", tx.pruned_as_hex, tx.prunable_as_hex)
+    } else {
+        tx.as_hex.clone()
+    };
+
+    if meta {
+        if let shekyl_rpc_types::TxLocation::Mined {
+            block_timestamp, ..
+        } = &tx.location
+        {
+            out.push(format!(
+                "Block timestamp: {block_timestamp} ({})",
+                human_readable_timestamp(*block_timestamp)
+            ));
+        }
+        match hex::decode(&full_hex) {
+            Err(_) => out.push("Error parsing transaction from hex".to_owned()),
+            Ok(blob) => match shekyl_wire::Transaction::read(&mut blob.as_slice()) {
+                Err(_) => out.push("Error parsing transaction blob".to_owned()),
+                Ok(parsed) => {
+                    out.push(format!("Size: {}", blob.len()));
+                    out.push(format!("Weight: {}", parsed.weight()));
+                }
+            },
+        }
+    }
+    if hex_out {
+        out.push(full_hex);
+    }
+    if json_out {
+        out.push(tx.as_json.clone());
+    }
+    Ok(out.join("\n"))
+}
+
+/// A `prunable_hash` that means "there was nothing prunable" rather than "the
+/// prunable half was dropped": all-zero, or the hash of the empty string,
+/// which is what a transaction with no prunable part carries.
+///
+/// The constant is `crypto::cn_fast_hash("", 0)`, the expression the C++
+/// console computed once into a static. **Measured, not assumed** — an
+/// earlier draft of this function carried a plausible-looking wrong value,
+/// which would have printed "(pruned)" for transactions that are not:
+///
+/// ```text
+/// crypto::hash h = crypto::cn_fast_hash("", 0);   // -> c5d24601…d85a470
+/// ```
+const EMPTY_PRUNABLE_HASH: &str =
+    "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+
+fn is_empty_prunable(h: &shekyl_rpc_types::HashHex) -> bool {
+    h.is_zero() || h.to_string() == EMPTY_PRUNABLE_HASH
+}
+
+/// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.
+fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
+    let Some(ki) = args.first() else {
+        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
+            .to_owned());
+    };
+    let request = shekyl_rpc_types::IsKeyImageSpentRequest {
+        key_images: vec![ki.clone()],
+    };
+    let reply = match src {
+        Source::Live(core) => {
+            let body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+            let raw = core
+                .json_endpoint("/is_key_image_spent", &body)
+                .ok_or_else(|| "is_key_image_spent: no reply".to_owned())?;
+            serde_json::from_str::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw)
+                .map_err(|e| format!("malformed is_key_image_spent reply: {e}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+            let raw = ctl_client::post_blocking(address, "/is_key_image_spent", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            serde_json::from_slice::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw)
+                .map_err(|e| format!("malformed is_key_image_spent reply: {e}"))?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    let Some(status) = reply.spent_status.first() else {
+        return Err("is_key_image_spent returned no status".to_owned());
+    };
+    Ok(format!(
+        "{ki}: {}",
+        match status {
+            shekyl_rpc_types::KeyImageStatus::Unspent => "unspent",
+            shekyl_rpc_types::KeyImageStatus::SpentInBlockchain => "spent",
+            shekyl_rpc_types::KeyImageStatus::SpentInPool => "spent (in pool)",
+        }
+    ))
+}
+
+/// The `get_transactions` fetch, shared by the console commands that need it.
+fn fetch_transactions(
+    src: &Source,
+    request: &shekyl_rpc_types::GetTransactionsRequest,
+) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
+    match src {
+        Source::Live(core) => {
+            let body = serde_json::to_string(request).map_err(|e| e.to_string())?;
+            let raw = core
+                .json_endpoint("/get_transactions", &body)
+                .ok_or_else(|| "get_transactions: no reply".to_owned())?;
+            serde_json::from_str(&raw).map_err(|e| format!("malformed get_transactions reply: {e}"))
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+            let raw = ctl_client::post_blocking(address, "/get_transactions", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            serde_json::from_slice(&raw)
+                .map_err(|e| format!("malformed get_transactions reply: {e}"))
+        }
+    }
+}
+
 /// Run one console command and hand back its rendered output.
 ///
 /// * `argv` / `argc` — the command and its arguments; `argv[0]` selects.
@@ -328,6 +505,8 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             let include_hex = args.get(2).is_some_and(|f| f == "+hex");
             print_block(&source, by_hash, argument, include_hex)
         }
+        "print_transaction" => print_transaction(&source, &args[1..]),
+        "is_key_image_spent" => is_key_image_spent(&source, &args[1..]),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
