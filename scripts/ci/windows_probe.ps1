@@ -122,6 +122,12 @@ try {
 Write-Host ''
 Write-Host '== SECTION 3: interactive-logon probes ==' -ForegroundColor Cyan
 
+# Coverage note (bite-checked 2026-08-28): -CiOnly SKIPs P-12, so CI never
+# reaches the P-12 result switch below — only P-17's identical build-error-vs-
+# UNRUN mapping is exercised automatically. The two mappings are kept in sync by
+# hand; if the P-12 arm regresses, nothing automated will catch it. Something for
+# whoever promotes P-12 out of §3 (a Low-IL fixture that runs under -CiOnly),
+# not a fix for now — recorded so the gap is visible rather than assumed absent.
 if ($CiOnly) {
     Add-Result 'P-12' 'SKIP' 'pre-declared laptop-only (needs a genuine Low-IL process)'
     Add-Result 'P-13' 'SKIP' 'pre-declared laptop-only (needs two interactive logons)'
