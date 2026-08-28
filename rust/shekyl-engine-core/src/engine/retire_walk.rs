@@ -13,14 +13,22 @@
 //! three are engine-level by nature — actor state, outcome enums, persisted
 //! store — which is why this is not a daemon walk.
 //!
-//! **This walk asserts two of them.** The seal-then-act ordering is *not
-//! observable with the existing scaffolding*, for a reason recorded in full at
-//! section 3 below: the seal and the retire dispatch both sit inside the
-//! per-batch scan loop, so reaching them needs a served chain longer than the
-//! ~270k-block cursor the claim-window expiry requires. It is recorded as a
-//! named limit and registered in `docs/FOLLOWUPS.md` rather than asserted
-//! weakly — a walk that cannot fail on its subject is worse than an absent
-//! one, and a first draft of exactly that test passed while doing nothing.
+//! **This walk asserts all three.**
+//!
+//! Getting there took two corrections worth keeping, because both are the
+//! failure this walk exists to catch, committed while building it:
+//!
+//! 1. A draft of the seal-then-act test **passed while doing nothing** — it
+//!    pre-seeded the store and read the state back, so the read returned its
+//!    own fixture and `save()` had never been called. A save counter turned it
+//!    red. That counter is still in [`CrashAfterSealStore`].
+//! 2. The limit that replaced it — "unobservable; reaching the seal needs a
+//!    ~270k-block chain" — was **wrong**, and wrong in a specific way:
+//!    it reasoned from the existing `TestDaemon` harness instead of from the
+//!    [`BlockSource`](crate::engine::pscan::block_source::BlockSource)
+//!    interface, which is `tip_height` plus a single-height `block_at`. The
+//!    sweep scans `[frontier, horizon)`; with the frontier seeded at the
+//!    cursor that is ONE block, which [`WalkBlockSource`] serves.
 //!
 //! # Why it exists when `pscan/task_tests.rs` already covers retire
 //!
@@ -79,15 +87,12 @@
 //! exercises exactly that degradation, so the hazard is demonstrated here
 //! rather than only described.
 //!
-//! **What this walk does and does not face.** It builds its state fresh
-//! in-process ([`walk_accrual`]) and never loads a persisted scan store, so it
-//! cannot *encounter* the stale-store case; saying otherwise would overstate
-//! what is judged. [`assert_walk_precondition`] is therefore a **tripwire on
-//! the fixture builder**, not a live check: it fails if a future edit to
-//! `walk_accrual` seeds a retired-record or drops the pending trigger, either
-//! of which would make every arm below vacuous while still reporting green.
-//! The store-backed form of this hazard belongs to a walk that actually loads
-//! a store — the daemon walk, or whatever closes the seal-then-act seam.
+//! **Where that hazard is live, and where it is not.** The direct-actor tests
+//! spawn a fresh actor per test and never touch a store, so they cannot
+//! encounter it. The seal-then-act test **does** load state through
+//! [`CrashAfterSealStore`] and drive the real sweep over it — so that is the
+//! one place [`assert_walk_precondition`] guards behaviour rather than
+//! decorating it, and it is called there and nowhere else.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -149,13 +154,17 @@ fn unexpired_settled() -> SettlementEpoch {
     SettlementEpoch::from_raw(0)
 }
 
-/// **Rule 47 applied to the fixture — a tripwire on [`walk_accrual`], not a
-/// live check.** Against today's builder both assertions hold by construction
-/// and cannot fail; they exist so that an edit which seeds a retired-record or
-/// drops the pending trigger fails *here*, loudly, instead of quietly making
-/// every arm below exercise the idempotent no-op while still reporting green.
-/// Bite it by adding a `RetiredPersonaRecord` for the subject in
-/// `walk_accrual`.
+/// **Rule 47 applied to the fixture, and it guards the ONE test whose state it
+/// reaches.** [`walk_accrual`]'s state is consumed by the seal-then-act test,
+/// which drives the real sweep over it; there the pending trigger is what makes
+/// a retire fire at all and a seeded retired-record would divert it to the
+/// idempotent no-op.
+///
+/// It is deliberately **not** called from the direct-actor tests. Those hand a
+/// witness straight to the actor and never touch an accrual, so asserting on
+/// one there would be a tripwire wired to nothing — an earlier revision did
+/// exactly that, and the assertion moved while the behaviour it claimed to
+/// guard did not.
 fn assert_walk_precondition(accrual: &PScanAccrual, id: &PCanonicalId) {
     assert!(
         !accrual
@@ -189,13 +198,20 @@ async fn persona_still_held(stake: &StakeEngineHandle, slot: u32) -> bool {
     }
 }
 
+/// The cursor height at which the subject's claim window has expired, so the
+/// retire is eligible. Shared by the fixture and the synthetic block source,
+/// which must agree on it.
+fn walk_cursor_height() -> u64 {
+    (MAX_CLAIM_AGE_W + 2) * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS
+}
+
 /// Build the walk's starting accrual: one pending retire trigger for the
 /// subject, a cursor high enough that `settled_epoch()` has passed the claim
 /// window, and no retired-record.
 fn walk_accrual(id: PCanonicalId) -> PScanAccrual {
     use shekyl_engine_state::pscan_cursor::PScanCursor;
 
-    let cursor_height = (MAX_CLAIM_AGE_W + 2) * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+    let cursor_height = walk_cursor_height();
     let mut pending = BTreeMap::new();
     pending.insert(id, SettlementEpoch::from_raw(0));
     let state = PScanState::new(
@@ -227,8 +243,6 @@ fn walk_accrual(id: PCanonicalId) -> PScanAccrual {
 #[tokio::test]
 async fn a_retired_persona_is_gone_from_the_actor() {
     let (stake, id) = spawn_walk_actor();
-    let accrual = walk_accrual(id);
-    assert_walk_precondition(&accrual, &id);
 
     // Precondition, stated as an assertion rather than assumed: the key
     // material IS reachable before the retire. Without this the post-condition
@@ -305,8 +319,6 @@ async fn without_the_confirmation_predicate_the_key_material_stays_readable() {
 #[tokio::test]
 async fn the_second_retire_is_the_no_op_a_stale_fixture_would_hide() {
     let (stake, id) = spawn_walk_actor();
-    let accrual = walk_accrual(id);
-    assert_walk_precondition(&accrual, &id);
 
     let witness = || {
         RetirementWitness::from_confirmed_unbond(
@@ -365,8 +377,6 @@ async fn the_funded_gate_refuses_and_the_unfunded_case_proceeds() {
 
     // --- Arm A: funded → refused, key material survives ---
     let (stake, id) = spawn_walk_actor();
-    let accrual = walk_accrual(id);
-    assert_walk_precondition(&accrual, &id);
 
     let funded = std::sync::Arc::new(FundedSlots::from_slots([subject_slot]));
     let witness = RetirementWitness::from_confirmed_unbond(
@@ -414,46 +424,260 @@ async fn the_funded_gate_refuses_and_the_unfunded_case_proceeds() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Seal-then-act crash ordering — NOT OBSERVABLE HERE, and why
+// 3. Seal-then-act crash ordering
 // ---------------------------------------------------------------------------
 //
-// The third proposition the PR-P4 row names has **no assertion in this walk**,
-// deliberately, because the existing scaffolding cannot observe it and a test
-// that cannot fail on its subject is worse than an absent one.
-//
-// The ordering lives inside `pscan_sweep`: `store.save(..)` (sealing the
-// `pending_unbonds` trigger) and then `dispatch_retires(..)` (the irreversible
-// wipe). Both statements sit **inside the per-batch scan loop**
-// (`while accrual.next_height() < horizon`), so neither runs unless the sweep
-// has blocks to scan.
-//
-// The walk's subject must have an *expired* claim window, which means
-// `settled_epoch()` past `MAX_CLAIM_AGE_W` — a cursor around
-// `(W + 2) * SETTLEMENT_EPOCH_BLOCKS`, ~270k blocks. Reaching the seal through
-// the real loop therefore needs a served chain longer than that cursor plus the
-// reorg depth. `pscan/task_tests.rs` records the same arithmetic for the same
-// reason ("a real scan to settled = W+1 would be ~270k blocks") and calls
-// `dispatch_retires` directly instead. Lowering the cursor is not a way out:
-// the cursor is what makes the persona retirable at all.
-//
-// A first draft of this walk DID assert the ordering, by pre-seeding an
-// injectable store and reading the state back after a run. It passed. It was
-// vacuous: the read returned the walk's own fixture, because `save()` had never
-// been called. A save counter turned it red, which is how the limit above was
-// found rather than shipped. That counter is why this section is a comment
-// instead of a green test.
-//
-// What IS already covered elsewhere, so the gap is narrower than it looks: the
-// pending trigger's survival and re-fire are asserted in
-// `pscan/task_tests.rs` (`dispatch_defers_retire_while_the_slot_holds_unspent_funding`
-// keeps the trigger for a later sweep; the dedup test shows the corroborated
-// prune removing it). What no test observes is that the **seal precedes the
-// wipe**.
-//
-// Closing it needs one of two things, and both are their own slice:
-//   1. a seam that reaches the seal/dispatch pair without a 270k-block scan
-//      (e.g. lifting them out of the batch loop, which is a production change
-//      with its own reasoning), or
-//   2. the daemon walk, where a real chain exists.
-//
-// Registered rather than left implicit — see `docs/FOLLOWUPS.md`.
+// A first draft of this walk recorded the ordering as UNOBSERVABLE, reasoning
+// that `store.save` and `dispatch_retires` sit inside `pscan_sweep`'s per-batch
+// loop and the subject needs a ~270k-block cursor, so the loop could not be
+// reached without serving ~270k blocks. **That was wrong, and the error is
+// worth naming: it reasoned from the existing harness rather than from the
+// interface.** `BlockSource` is two methods — `tip_height` and a
+// single-height `block_at` — so a synthetic source serves any height on
+// demand. The loop scans `[frontier, horizon)`, and with the frontier seeded
+// at the cursor that range is ONE block.
+
+/// Serves exactly the sliver the sweep needs: a tip just past
+/// `cursor + reorg_depth`, and one synthetic block at the cursor whose parent
+/// hash matches the seeded frontier (the exhaustiveness check compares against
+/// `accrual.frontier_hash()`, so it must).
+struct WalkBlockSource {
+    cursor_height: u64,
+}
+
+impl crate::engine::pscan::block_source::BlockSource for WalkBlockSource {
+    fn tip_height(
+        &self,
+    ) -> impl std::future::Future<
+        Output = Result<BlockHeight, crate::engine::pscan::block_source::BlockSourceError>,
+    > + Send {
+        // horizon = tip - reorg_depth must exceed the frontier by exactly one.
+        let tip = BlockHeight::from_raw(self.cursor_height + WALK_REORG_DEPTH + 2);
+        async move { Ok(tip) }
+    }
+
+    fn block_at(
+        &self,
+        height: BlockHeight,
+    ) -> impl std::future::Future<
+        Output = Result<
+            Option<shekyl_scanner::ScannableBlock>,
+            crate::engine::pscan::block_source::BlockSourceError,
+        >,
+    > + Send {
+        let block = walk_block(self.cursor_height, height.to_raw());
+        async move { Ok(Some(block)) }
+    }
+}
+
+const WALK_REORG_DEPTH: u64 = 1;
+
+/// The synthetic block at `h`, chained from the seeded frontier.
+///
+/// **Chaining is load-bearing across the restart.** The exhaustiveness check
+/// compares a block's `previous` against `accrual.frontier_hash()`, and run 1's
+/// seal *advances* the cursor — so run 2 resumes one height higher and its
+/// block must chain to the hash run 1 sealed, not to the seeded `[0u8; 32]`.
+/// A first version returned `[0u8; 32]` at every height; run 2 then failed
+/// exhaustiveness, the sweep never reached the dispatch, and the retire did not
+/// re-fire.
+fn walk_block(cursor_height: u64, h: u64) -> shekyl_scanner::ScannableBlock {
+    use crate::engine::test_support::make_synthetic_block;
+    let mut block = make_synthetic_block(cursor_height, [0u8; 32]);
+    let mut at = cursor_height;
+    while at < h {
+        let prev = block.block.hash();
+        at += 1;
+        block = make_synthetic_block(at, prev);
+    }
+    block
+}
+
+/// A [`PScanStore`] that lands the seal and then simulates the crash.
+///
+/// `save()` records the state, **counts the write**, and cancels the token.
+/// `dispatch_retires` checks `cancel.is_cancelled()` at the top of its
+/// candidate loop — before it builds a witness and before it asks the actor —
+/// so the wipe cannot run. That is the "crashed between seal and act" state,
+/// reached deterministically rather than by racing a real abort.
+///
+/// The counter is not decoration: the state is pre-seeded, so reading it back
+/// would otherwise return the walk's own fixture and pass with `save()` never
+/// called. A draft of this test did exactly that.
+#[derive(Clone)]
+struct CrashAfterSealStore {
+    state: std::sync::Arc<std::sync::Mutex<Option<PScanState>>>,
+    saves: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    cancel_on_save: Option<tokio_util::sync::CancellationToken>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("walk store error")]
+struct WalkStoreErr;
+
+impl crate::engine::pscan::task::PScanStore for CrashAfterSealStore {
+    type Error = WalkStoreErr;
+
+    fn load(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<PScanState>, WalkStoreErr>> + Send {
+        let loaded = self.state.lock().unwrap().clone();
+        async move { Ok(loaded) }
+    }
+
+    fn save(
+        &self,
+        state: &PScanState,
+    ) -> impl std::future::Future<Output = Result<(), WalkStoreErr>> + Send {
+        *self.state.lock().unwrap() = Some(state.clone());
+        self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(cancel) = &self.cancel_on_save {
+            cancel.cancel();
+        }
+        async move { Ok(()) }
+    }
+}
+
+/// One tick, then cancel — so a run that is not simulating a crash still
+/// terminates after exactly one sweep.
+struct OneTickThenCancel {
+    fired: bool,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl crate::engine::pscan::cadence::ScanSchedule for OneTickThenCancel {
+    fn next_tick(&mut self) -> impl std::future::Future<Output = ()> + Send {
+        let first = !self.fired;
+        self.fired = true;
+        if !first {
+            self.cancel.cancel();
+        }
+        async move {
+            if !first {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+}
+
+/// Drive one sweep of the real loop over the seeded state.
+async fn run_one_sweep(
+    stake: StakeEngineHandle,
+    store: CrashAfterSealStore,
+    cancel: tokio_util::sync::CancellationToken,
+    cursor_height: u64,
+) {
+    use crate::engine::pscan::task::{run_pscan_task, PScanConfig, PScanSlot, PScanStore as _};
+
+    let initial = store.load().await.expect("load");
+    let schedule = OneTickThenCancel {
+        fired: false,
+        cancel: cancel.clone(),
+    };
+    let guard = PScanSlot::new().try_claim().expect("fresh slot claims");
+    run_pscan_task(
+        WalkBlockSource { cursor_height },
+        stake,
+        store,
+        schedule,
+        PScanConfig {
+            reorg_depth: WALK_REORG_DEPTH,
+            batch_blocks: 1,
+        },
+        initial,
+        (),
+        cancel,
+        guard,
+    )
+    .await;
+}
+
+/// **Seal-then-act: the trigger is durable before the wipe, and the wipe
+/// re-fires from it after the crash.**
+///
+/// Two runs over one store. The first crashes the instant the seal lands; the
+/// second resumes from exactly what that seal left behind.
+///
+/// # What this proves, and what it does not
+///
+/// It proves **the seal precedes the wipe** — run 1 sealed a durable trigger
+/// while the persona was still held — and **the trigger re-fires**: run 2 wiped
+/// from the sealed state alone.
+///
+/// It also **detects the reordering**, which an earlier draft of this comment
+/// said a walk could not do. Bite-verified: hoisting the `dispatch_retires`
+/// call above the seal in `pscan_sweep` turns this test red on the
+/// "MUST NOT have run" assertion, because the wipe then lands before the
+/// crash-at-seal can stop it.
+///
+/// What it still does not prove is that act-then-seal would *lose* the trigger
+/// under a real crash — that is an argument about durability semantics, not
+/// something a test observes. The boundary is recorded so a green run is never
+/// read as the stronger claim.
+#[tokio::test]
+async fn a_crash_after_the_seal_leaves_the_trigger_durable_and_the_retire_re_fires() {
+    let (stake, id) = spawn_walk_actor();
+    let cursor_height = walk_cursor_height();
+    let accrual = walk_accrual(id);
+    // The one place the precondition guards real behaviour: this state is
+    // driven through the sweep below, so a missing trigger or a seeded
+    // retired-record would silently divert the retire.
+    assert_walk_precondition(&accrual, &id);
+    let seeded = accrual.to_state();
+
+    // --- Run 1: crash the instant the seal lands ---
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let store = CrashAfterSealStore {
+        state: std::sync::Arc::new(std::sync::Mutex::new(Some(seeded))),
+        saves: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        cancel_on_save: Some(cancel.clone()),
+    };
+    run_one_sweep(stake.clone(), store.clone(), cancel, cursor_height).await;
+
+    assert!(
+        store.saves.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "the loop must actually have sealed — the store is pre-seeded, so reading \
+         the state back would otherwise just return the walk's own fixture"
+    );
+    assert!(
+        persona_still_held(&stake, RETIRE_SLOT).await,
+        "crashed between seal and act: the irreversible wipe MUST NOT have run"
+    );
+    let sealed = store
+        .state
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the seal landed");
+    assert!(
+        PScanAccrual::from_state(&sealed)
+            .pending_unbonds()
+            .contains_key(&id),
+        "and the trigger that justifies the wipe IS durable — that is the \
+         ordering: seal first, act second"
+    );
+
+    // --- Run 2: restart from exactly what the crash left behind ---
+    let (stake2, id2) = spawn_walk_actor();
+    assert_eq!(
+        id2, id,
+        "the persona re-derives from seed across the restart"
+    );
+    assert!(
+        persona_still_held(&stake2, RETIRE_SLOT).await,
+        "the restarted wallet holds it again (re-derived, not resurrected)"
+    );
+    let cancel2 = tokio_util::sync::CancellationToken::new();
+    let store2 = CrashAfterSealStore {
+        state: std::sync::Arc::new(std::sync::Mutex::new(Some(sealed))),
+        saves: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        cancel_on_save: None,
+    };
+    run_one_sweep(stake2.clone(), store2, cancel2, cursor_height).await;
+
+    assert!(
+        !persona_still_held(&stake2, RETIRE_SLOT).await,
+        "the durable trigger re-fired the retire after the crash, and THIS time \
+         the wipe reached the actor"
+    );
+}
