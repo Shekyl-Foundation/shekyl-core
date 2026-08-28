@@ -167,10 +167,7 @@ using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 
 const std::unordered_map<std::string, json_fn>& get_json_table() {
     static const std::unordered_map<std::string, json_fn> t = {
-        DJSON("/get_transactions",                  on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
-        DJSON("/gettransactions",                   on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
-        DJSON("/is_key_image_spent",                on_is_key_image_spent,           COMMAND_RPC_IS_KEY_IMAGE_SPENT),
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
         DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
         DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),

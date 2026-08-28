@@ -18,6 +18,10 @@ the contract (RK-D4); the bytes are kept faithful because a vector that is
 oracle's output.
 
 The emitter is deleted with the structs it captures; these files are the
-oracle's memory. **Never hand-edit a vector.** A wire change is a decision
+oracle's memory. RK-4c was the last slice to run one: with
+`COMMAND_RPC_GET_TRANSACTIONS` and `COMMAND_RPC_IS_KEY_IMAGE_SPENT` gone there
+is no C++ left to capture from for these methods, which is why a shape change
+after this point cannot be re-captured and must be argued from the `_v1` /
+`_v2` pair instead (see `v2_is_v1_minus_exactly_the_two_retired_members`). **Never hand-edit a vector.** A wire change is a decision
 with a `CORE_RPC_VERSION` bump, recorded in the design doc, and gets a new
 `_v2` file beside the old one.

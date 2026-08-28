@@ -79,7 +79,6 @@ set(unit_tests_sources
   rpc_args_daemon_surface.cpp
   rpc_facts_ffi_roundtrip.cpp
   rpc_facts_shims.cpp
-  rpc_oracle_vectors.cpp
   rpc_restricted_gate.cpp
   rolling_median.cpp
   scaling_2021.cpp
@@ -127,9 +126,6 @@ set(unit_tests_sources
   relay_category.cpp
   pending_tree_fuzz.cpp
   )
-
-SET_PROPERTY(SOURCE rpc_oracle_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  RPC_ORACLE_VECTOR_DIR="${CMAKE_SOURCE_DIR}/rust/shekyl-rpc-types/tests/vectors/rpc")
 
 set(unit_tests_headers
   unit_tests_utils.h)
