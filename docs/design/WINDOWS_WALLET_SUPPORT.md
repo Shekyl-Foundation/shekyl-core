@@ -382,12 +382,26 @@ boundary. It also subsumes the explicit `NETWORK` (S-1-5-2) deny that was this
 decision's first answer, and covers terminal-services separation, which
 S-1-5-2 does not.
 
+**Measured on a genuine remote caller (2026-08-28, P-17 §4.8).** The `IPC$`
+boundary turns out to be more structural than "different session, different
+logon SID": a caller arriving over `IPC$` impersonates onto a **network logon**,
+whose token carries **no logon SID at all**. A logon-SID-only descriptor is
+therefore not merely scoped away from the remote session — it is **unmatchable
+from the network by construction**, and the open is refused with
+`ERROR_ACCESS_DENIED`. The refusal is self-attributing: the same token *does*
+carry the user SID, so the removed user-SID ACE would have admitted exactly this
+caller. That is the whole of WP-D6, observed on the surface it was written for.
+
 **Consequence for the API:** the logon SID is a **required** argument, not an
 `Option`. There is no honest fallback — a descriptor without it grants nothing
 (useless) or falls back to the user SID (the bug above, reintroduced silently),
 so `shekyl-win-sec` refuses to build one and `SidError::NoLogonSid` says why.
-Every interactive and service logon has a logon SID, so the refusal is a
-genuine "something is very wrong" path rather than a routine one.
+Every interactive and service logon has a logon SID, so for the server's **own**
+token — the one it builds the descriptor from — that refusal is a genuine
+"something is very wrong" path rather than a routine one. (A *caller's*
+network-logon token lacking one is the opposite: expected, and the mechanism the
+boundary exploits — P-17, §4.8. The two must not be conflated into a user-SID
+fallback, which would readmit the remote caller.)
 
 **Pinned by a probe, not by this paragraph.** P-1 now asserts both halves: the
 logon-SID ACE is present, *and* the user-SID ACE is absent. A design note that

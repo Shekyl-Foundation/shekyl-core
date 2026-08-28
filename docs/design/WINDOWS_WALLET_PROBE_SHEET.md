@@ -415,7 +415,7 @@ so only the DACL-only pipe (no flag) can attribute a refusal to the ACE, and
 only a caller that truly crosses a session can be refused by it. That caller is
 the one thing a single box cannot produce (§4.5, §4.6).
 
-### 4.8 P-17 first genuine two-machine run — the cross-session caller carries *no* logon SID (2026-08-28, `ffe836cd7`)
+### 4.8 P-17 two-machine run — PASS: the cross-session caller carries *no* logon SID (2026-08-28, `ffe836cd7` → `5e459919b`)
 
 The second machine — `DTASUS-Z970`, domain-joined, logged in as the **same AD
 user** (`intranet\dawsonra`, `S-1-5-21-…-1108`) — dialled
@@ -451,26 +451,51 @@ failed and the `SidError` **variant** (`{:?}`, never Display — Display's
 `dacl_err`/`prod_err`. A new verdict case, `UserOkNoLogon`, is pre-wired for the
 outcome below so the re-run is conclusive whichever way it lands.
 
-**Amended prediction (pre-registered here, for the re-run — not yet observed).**
-The split re-run will report the caller as **user `S-1-5-21-…-1108`, logon
-`NoLogonSid`**. If so, and `daclonly` is refused with `ERROR_ACCESS_DENIED`
-(the client already reported `5`), that is **P-17 PASS (structural)**: a
-same-user network caller carries the *user* SID but **no** logon SID, so it
-cannot match a logon-SID-only ACE and is refused **by construction**. The
-attribution is cleaner than the different-logon-SID form: the network token
-*does* carry the user SID, so a user-SID ACE **would have admitted it** — the
-refusal is therefore diagnostic of logon-SID-*only* granting, which is exactly
-the ACE PR #516's user-SID removal left carrying the boundary. Stated precisely
-(the variant covers it): "the caller's token has no `SE_GROUP_LOGON_ID`-marked
-group of logon-SID shape," not the flatter "network logons have no logon SID."
+**Amended prediction (pre-registered before the re-run, at `ffe836cd7`).** The
+split re-run will report the caller as **user `S-1-5-21-…-1108`, logon
+`NoLogonSid`**; if `daclonly` is refused with `ERROR_ACCESS_DENIED`, that is
+**P-17 PASS (structural)**. Stated precisely (the variant carries it): "the
+caller's token has no `SE_GROUP_LOGON_ID`-marked group of logon-SID shape,"
+not the flatter "network logons have no logon SID."
 
-**Design consequence, owed once confirmed (not before).** If the re-run
-confirms `NoLogonSid`, the `sid.rs` doc that "every interactive and service
-logon has one" must name the network case — a measured fact one step from
-outliving its comment — and `WINDOWS_WALLET_SUPPORT.md`'s WP-D6 rationale gains
-a stronger, structural sentence: the `IPC$` boundary holds not because a remote
-session has a *different* logon SID but because it has *none*, so a
-logon-SID-scoped descriptor is unmatchable from the network by design.
+**Confirmed (2026-08-28 16:25:38 -04:00, server `5e459919b`).** One synchronous
+dial from `DTASUS-Z970`, same AD user, no poller before it:
+
+| Date | Machine / build | Result | Verdict |
+|---|---|---|---|
+| 2026-08-28 16:25:38 -04:00 | server `LP7760-W1XMP6G3` (pid 84880, `5e459919b`); caller `DTASUS-Z970`, same AD user (`…-1108`), over `IPC$` | **PASS (structural)** | `SidTriage::UserOkNoLogon` = `(Ok(user …-1108), Err(SidError::NoLogonSid))`; daclonly `5`, prod `5`. The impersonation token carried the **user** SID but **no** logon-SID-shaped `SE_GROUP_LOGON_ID` group, so the logon-SID-only ACE could not match it and refused with `ERROR_ACCESS_DENIED` |
+
+The result is **self-attributing**, which is what makes it evidence rather than
+coincidence: the very token that lacked a logon SID *did* carry the user SID
+`…-1108`, so a user-SID ACE would have admitted this caller. The refusal is
+therefore attributable to the one thing that differs between the two
+descriptors — and PR #516's removal of the user-SID grant is exactly what
+carries the boundary. `prod`'s `5` is over-determined (both fences apply);
+`daclonly`'s `5`, carrying no flag, is the clean attribution. Both of WP-D6's
+fences are now measured, separately: `reject_remote_clients` by path form
+(§4.7), and the logon-SID-only ACE by a genuine `IPC$` caller's **absence of
+the class the ACE grants to** (here). Row (d) is answered — and answered more
+strongly than it was posed: not "your session isn't ours" (defeatable by a
+colliding value, dependent on session bookkeeping) but "you hold nothing in the
+granted class."
+
+**§5, explicitly.** The pre-registered prediction was a *different* logon SID;
+the observation is *no* logon SID. Per §5 that prediction stays on record as
+wrong **in form** — the P-1 §4.1 shape once more — while the decision it
+guarded (keep the logon-SID-only ACE; PR #516's user-SID removal is
+load-bearing) is **upheld, on stronger ground** than the prediction assumed.
+The PASS is not "we called it"; it is "we predicted the right decision, for a
+reason that turned out to be understated."
+
+**Design consequence, now due (confirmed) — landed in this commit family.** The
+`sid.rs` docs that a logon SID is something "every interactive and service logon
+has" now name the network case and warn that `NoLogonSid` is the WP-D6
+*mechanism*, not a "shouldn't happen" to be papered over with a user-SID
+fallback — which would silently undo D6 a third time. `WINDOWS_WALLET_SUPPORT.md`'s
+WP-D6 rationale gains the structural sentence: the `IPC$` boundary holds not
+because a remote session has a *different* logon SID but because it has *none*,
+so a logon-SID-scoped descriptor is unmatchable from the network by
+construction.
 
 ## 5. What a failure does *not* license
 

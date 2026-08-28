@@ -70,12 +70,24 @@ pub enum SidError {
     QueryToken(u32),
     /// `ConvertSidToStringSidW` failed.
     Stringify(u32),
-    /// The token carries no `SE_GROUP_LOGON_ID` group.
+    /// The token carries no `SE_GROUP_LOGON_ID`-marked group of logon-SID
+    /// (`S-1-5-5-…`) shape.
     ///
-    /// Every interactive and service logon has one, so this is a refusal
-    /// rather than a fallback: see `sddl.rs` — a descriptor built without the
-    /// logon SID does not have the property WP-D6 claims, and issuing one
-    /// anyway would be worse than not starting.
+    /// Every *interactive* and *service* logon has one — but a **network
+    /// logon does not**, and here that is not a corner case, it is the
+    /// mechanism WP-D6 relies on. P-17 measured it (probe sheet §4.8): a
+    /// genuine same-user caller arriving over `IPC$` impersonates onto a token
+    /// that carries the user SID but **no** logon SID, so a logon-SID-only
+    /// descriptor is unmatchable from the network *by construction* and the
+    /// open is refused with `ERROR_ACCESS_DENIED`.
+    ///
+    /// So this is a **refusal, never a fallback** — and a future reader must
+    /// not "recover" from it by granting the user SID instead. That same
+    /// network token *does* carry the user SID, so a user-SID grant would admit
+    /// exactly the caller WP-D6 refuses, silently undoing D6 (see `sddl.rs`) a
+    /// third time. A descriptor built without the logon SID does not have the
+    /// property WP-D6 claims, and issuing one anyway would be worse than not
+    /// starting.
     NoLogonSid,
 }
 
@@ -174,11 +186,16 @@ const LOGON_SID_PREFIX: &str = "S-1-5-5-";
 ///
 /// It is a *group* in the token, marked with `SE_GROUP_LOGON_ID`, so this walks
 /// `TokenGroups` and returns the first group carrying that attribute. Every
-/// interactive and service logon has exactly one.
+/// interactive and service logon has exactly one; a **network** logon has
+/// **none** (P-17, §4.8), which is not a gap but WP-D6's `IPC$` boundary working
+/// by construction — [`SidError::NoLogonSid`] is the signal of it, not an error
+/// to route around.
 ///
 /// This is what the pipe DACL grants. Granting the **user** SID instead would
-/// not narrow anything — see `sddl.rs` for why that distinction is the whole
-/// point of WP-D6.
+/// not merely fail to narrow — it would *widen*: P-17 (§4.8) showed a network
+/// caller carries the user SID but no logon SID, so a user-SID grant admits the
+/// very `IPC$` caller the logon SID refuses. See `sddl.rs` for why that
+/// distinction is the whole point of WP-D6.
 pub fn current_logon_sid() -> Result<SidString, SidError> {
     // SAFETY: pseudo-handle needing no close; `token` written only on success
     // and closed by `TokenGuard` on every path out.
@@ -195,9 +212,11 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
 ///
 /// Split out of [`current_logon_sid`] so the same reader can be pointed at a
 /// token that is not this process's — specifically an impersonation token, for
-/// P-17, which has to establish that a caller arriving over `IPC$` carries a
-/// *different* logon SID before a refusal on the restrictive pipe can be
-/// attributed to the ACE rather than to the transport.
+/// P-17. P-17's original method expected a caller arriving over `IPC$` to carry
+/// a *different* logon SID; the run (§4.8) showed it carries **none at all** —
+/// this returns [`SidError::NoLogonSid`] — and that absence is itself the
+/// attribution: a token with no logon SID cannot match the logon-SID-only ACE,
+/// so the refusal is the ACE's, not the transport's.
 ///
 /// The caller owns `token` and must keep it open across the call. Nothing here
 /// closes it.
