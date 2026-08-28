@@ -3165,8 +3165,23 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 //! nothing, or a dropper clears its own record by echoing (F-10). Unknown
 //! hashes are ignored; call on EVERY zone's handle, since a stem placed on
 //! one zone can return through another.
-void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
-    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
+//!
+//! Returns how many of `hashes` this arrival resolved as PROPAGATED and writes
+//! their 32-byte ids into `out_propagated` in order — the transactions for
+//! which "it came back from somewhere other than where I sent it" just became
+//! true. The count is bounded by `n`, so size the buffer once at 32*n.
+//!
+//! Passing `out_propagated == nullptr` -- and only that argument -- makes this
+//! a count-only call: the verdicts are still resolved, nothing is written. A
+//! null `handle` or `hashes` is a different case and returns 0 having done
+//! nothing.
+//!
+//! The verdict leaves HERE rather than being retained for a later query. A
+//! per-transaction outcome store would be a second copy of a fact the txpool
+//! already owns, with no invalidation tied to the pool entry's lifetime.
+std::size_t shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from,
+    std::uint8_t* out_propagated);
 
 //! Fixed-layout stem-tally row for the §55 transit path (native endian, 40
 //! bytes). Must match `ShekylStemTallyRow` in the Rust FFI.

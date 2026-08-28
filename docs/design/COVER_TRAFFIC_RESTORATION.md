@@ -470,6 +470,24 @@ Stage 4 is §1.1's two-line change: pass a real payload at both notifier sites.
 That ruling has exactly two components, and a reader can verify each rather than
 guess:
 
+> **Component 1 is SETTLED 2026-08-27; component 2 is not, so Stage 4 remains
+> blocked — on ONE thing now rather than two.** Recorded here in the landing
+> that cleared it, per `IMPLEMENTATION_INDEX.md`'s cleared-gate policy: a
+> blocker row that outlives its blocker is how a reader keeps treating settled
+> work as open.
+>
+> The predicate is **F-10**, and it was already built (`StemWatch::seen`
+> resolves propagated unless the arrival came from the charged successor).
+> §92.5c item 1 carries the settlement and the reason the item stayed open —
+> the sentence naming F-10 was written, repeated, and never checked, so a true
+> claim could not discharge the item it described.
+>
+> What this landing added is the CONSUMER, plus its precondition: `add_tx` no
+> longer upgrades an entry out of `local` because that entry's own transaction
+> came back. Without that, the verdict was written and erased in one call
+> chain, and the upgrade put the origin's own transaction on the clear internet
+> at MIN_RELAY_TIME — defeating §92's carve-out rather than closing it.
+
 1. **The disarm predicate is defined**, and it is not *"received once"* — which
    fails in two directions: a single arrival may be the origin's own echo, and a
    relay's first receipt is its **only** receipt in the common case, so a

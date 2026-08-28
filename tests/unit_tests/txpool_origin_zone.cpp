@@ -91,9 +91,17 @@ namespace
   // padding rather than removing it, so that the members after it do not shift
   // position in a persisted record. `fcmp_verified` is the neighbour that would
   // move, and it is the one where a misread costs something: reading 1 where 0
-  // was written skips a proof re-verification. `set_relay_method` clears the
-  // reserved bit, so this also pins that it clears the RESERVED bit and not a
-  // live one next to it.
+  // was written skips a proof re-verification.
+  //
+  // The bit is LIVE again as of 2026-08-27 — `observed_circulating`, the stem
+  // watch's F-10 verdict — which makes this pin MORE load-bearing rather than
+  // less. It is SEEDED TO 1 here so that both halves of the mask are asserted:
+  // the clear lands on that bit (zero afterwards) and on nothing else (the
+  // neighbours still 1). Left at its zero default the first half asserts
+  // nothing, and a `set_relay_method` that stopped clearing the verdict
+  // altogether would pass. A reserved bit cleared into `fcmp_verified` was a
+  // latent bug; a live one is an observable wrong answer about whether a
+  // transaction is circulating.
   TEST(txpool_origin_zone, the_reclaimed_bit_does_not_disturb_its_neighbours)
   {
     for (const cryptonote::relay_method m : {
@@ -105,14 +113,52 @@ namespace
       meta.fcmp_verified = 1;
       meta.double_spend_seen = 1;
       meta.pruned = 1;
+      meta.observed_circulating = 1;
       meta.set_origin_zone(zone::tor);
       meta.set_relay_method(m);
 
+      EXPECT_EQ(0u, meta.observed_circulating)
+        << "set_relay_method must clear the F-10 verdict: an entry that has "
+           "been re-classified has left the arm the disarm belongs to";
       EXPECT_EQ(1u, meta.fcmp_verified) << "set_relay_method cleared fcmp_verified";
       EXPECT_EQ(1u, meta.double_spend_seen);
       EXPECT_EQ(1u, meta.pruned);
       EXPECT_EQ(zone::tor, meta.get_origin_zone());
       EXPECT_EQ(m, meta.get_relay_method());
+    }
+  }
+
+  // The same bit in the other direction, and the half with teeth. Bit 3 is
+  // deliberately absent from `get_relay_method`'s sum, so a SET verdict must
+  // not shift the decoded class. That is not a hypothetical tidy-up: the bit
+  // was in that sum as `is_forwarding`, and re-adding it as `<< 3` gives a
+  // disarmed `local` entry state 4+8 = 12, which matches no case and falls
+  // through to `fluff`.
+  //
+  // Which is the exact failure this change exists to prevent. A `fluff`
+  // reading sends the origin's own transaction to `zone::public_` at
+  // MIN_RELAY_TIME instead of holding it in the anonymity class -- so a
+  // decoder that silently re-classifies the disarmed entries is worse than
+  // one that never disarms at all.
+  TEST(txpool_origin_zone, a_set_verdict_does_not_shift_the_decoded_relay_method)
+  {
+    for (const cryptonote::relay_method m : {
+           cryptonote::relay_method::none, cryptonote::relay_method::local,
+           cryptonote::relay_method::stem, cryptonote::relay_method::fluff,
+           cryptonote::relay_method::block})
+    {
+      cryptonote::txpool_tx_meta_t meta{};
+      meta.set_origin_zone(zone::tor);
+      meta.set_relay_method(m);
+      // After the setter, because the setter clears it -- and because this is
+      // the order `on_stem_propagated` writes in: classify first, record the
+      // verdict second.
+      meta.observed_circulating = 1;
+
+      EXPECT_EQ(m, meta.get_relay_method())
+        << "the F-10 verdict shifted the decoded relay class";
+      EXPECT_EQ(zone::tor, meta.get_origin_zone())
+        << "the F-10 verdict landed in the origin-zone bits";
     }
   }
 

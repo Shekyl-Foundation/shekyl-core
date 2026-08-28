@@ -921,13 +921,38 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         );
 
         // First id returns: resolved as propagated.
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(9).as_ptr());
+        let mut verdicts = [0u8; 32];
+        let echoed = shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(9).as_ptr(),
+            verdicts.as_mut_ptr(),
+        );
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             2,
             "F-10: an echo from the charged successor resolves nothing"
         );
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+        assert_eq!(
+            echoed, 0,
+            "F-10 again, at the disarm seam: an echo that resolves nothing must \
+             report nothing, or the origin disarms on the dropper's own reply"
+        );
+        let resolved = shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(3).as_ptr(),
+            verdicts.as_mut_ptr(),
+        );
+        assert_eq!(resolved, 1, "a return from elsewhere IS the predicate");
+        assert_eq!(
+            &verdicts[..],
+            &hashes[..32],
+            "the verdict carries the transaction's own id — a disarm keyed on \
+             anything else would clear the wrong pool entry"
+        );
         let t = h
             .as_ref()
             .expect("live zone")
@@ -970,7 +995,13 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             std::ptr::null(),
             0,
         );
-        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1, std::ptr::null());
+        shekyl_relay_zone_record_arrival(
+            h,
+            std::ptr::null(),
+            1,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             0,
@@ -1127,7 +1158,13 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
         shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+        shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(3).as_ptr(),
+            std::ptr::null_mut(),
+        );
 
         let need = shekyl_relay_zone_stem_snapshot(h, std::ptr::null_mut(), 0);
         assert_eq!(need, 1, "a resolved observation must produce one row");

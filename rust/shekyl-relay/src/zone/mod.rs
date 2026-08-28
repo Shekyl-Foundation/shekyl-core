@@ -563,10 +563,29 @@ impl Zone {
     ///
     /// This is the *only* input the outcome needs from outside, and it is
     /// **data, not a decision** (§38.1).
-    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) {
+    /// Returns the subset of `txs` whose observation this arrival RESOLVED as
+    /// propagated — the transactions for which *"it came back from somewhere
+    /// other than where I sent it"* just became true.
+    ///
+    /// **A decision leaving, not an input crossing.** The caller does not get
+    /// the watch, the pending map, or a query surface over them; it gets the
+    /// verdicts that fired on this call and nothing else. The alternative —
+    /// retaining a per-transaction outcome for a consumer to poll — would put
+    /// a second copy of a fact the txpool already owns beside the txpool, with
+    /// no invalidation tied to the pool entry's own lifetime. That is the
+    /// shape that produced the `transit_for` literal and the `DEGRADED_FLOOR`
+    /// pin: a duplicate nothing forces to agree, going stale in silence.
+    ///
+    /// Usually empty, and allocating only when it is not: an arrival that
+    /// resolves nothing is the common case.
+    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) -> Vec<TxId> {
+        let mut propagated = Vec::new();
         for tx in txs {
-            self.stem_watch.seen(tx, from);
+            if self.stem_watch.seen(tx, from) {
+                propagated.push(*tx);
+            }
         }
+        propagated
     }
 
     /// Every successor with resolved observations — the §55 telemetry

@@ -6157,7 +6157,8 @@ is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
 a tx originated from."* Checked: `txpool_tx_meta_t`
 ([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
 has **no zone field**, so the claim is accurate *as a description*. It is
-**false as a statement of feasibility**: the struct carries `bf_padding : 2` —
+**false as a statement of feasibility**: the struct carried `bf_padding : 2`
+at the time —
 the bitfield's exact remainder, and a zone enum is two bits — plus
 `padding[44]`. It is a node-local LMDB record with no consensus role,
 pre-genesis. **The space is already reserved.** Somebody read an inherited
@@ -11425,7 +11426,7 @@ is scoped by its own `globs` to `rust/shekyl-engine-state/**` and
 And the maintainer's loop closes better than "space is available":
 
 - `txpool_tx_meta_t` carries **`uint8_t bf_padding: 2`** and
-  `uint8_t padding[44]; // till 192 bytes` (`blockchain_db.h:198`, `:206`).
+  `uint8_t padding[44]; // till 192 bytes` (`blockchain_db.h:198`, `:206`). *(The bitfield has moved twice since: Q12-U1 took two bits for `origin_zone`, and 2026-08-27 made the last one live as `observed_circulating`. The reasoning below is the record of how the width was argued, not a description of the struct today.)*
 - A zone field needs **exactly 2 bits** — `public_`, `i2p`, `tor`, and
   `invalid` are four values. `bf_padding` is the right width, not merely
   spare room.
@@ -14799,6 +14800,35 @@ responsibility, which should end when the transaction is observed circulating:
 > re-arrival of its own transaction; its re-broadcast responsibility is
 > separately disarmed when the transaction is observed circulating.**
 
+The pin's scope is a threat-model boundary, and is stated as one rather than as
+a list of excluded classes:
+
+> **The pin holds against a peer's assertion, and yields to proof of work.**
+
+Written that way deliberately. *"`Block` is excluded"* names a category without
+carrying its reason, and a reader who meets it later sees an **exception** —
+something to tidy away — rather than a **boundary** that tells them which side a
+new arrival class belongs on.
+
+**A peer's assertion is free to make.** Anyone can hand us back our own
+transaction and claim it as `Stem` or `Fluff`; that is precisely the case the
+pin exists for. **Proof of work is neither free nor an assertion.**
+`handle_alternative_block` rejects on `!check_hash(proof_of_work, current_diff)`
+(`blockchain.cpp:2347`) before its pool supplement is ever offered to `add_tx`,
+so a `Block` arrival cannot be manufactured to strip the mark — and it says the
+transaction reached a miner.
+
+**Past that point the pin's sign flips.** Every other node holding that
+transaction admits at `Block`, matches `broadcasted`, and re-relays on the
+ordinary grid. A pinned node does none of those: it sits on `private_req` at the
+derived **1148 s** on the anonymity zone, **alone**, after the transaction is
+already public. That is a behavioural difference keyed on exactly the fact the
+mark is meant to conceal — the **absence-oracle shape** again — and it appears at
+the moment the concealment has stopped being worth anything.
+
+So the mark is not weakened by yielding here. Concealment that no longer conceals
+anything, but still distinguishes the node holding it, is a cost with no
+remaining benefit.
 Discipline #17 with **presence** as the signal: `T` returning is proof it is
 circulating, which is exactly the condition under which re-broadcast has no job
 left.
@@ -14919,7 +14949,39 @@ prices them against each other rather than adopting `p` by default.
 
 ### 92.5c What the round settles, in order
 
-1. **The disarm predicate**, and it fails *"received once"* in **two**
+1. **The disarm predicate — SETTLED 2026-08-27, and it was already built.**
+   The property this item asks for is *"this came back from somewhere other
+   than where I sent it"*, and that is **F-10**, shipped: `StemWatch::seen`
+   resolves an observation as propagated **unless** the arrival came from the
+   successor the observation is charged to. The join key is the canonical hash
+   (F-9), and the successor is captured at observation time, so a rebind
+   cannot move it.
+
+   > **The instructive part is why this stayed open.** The sentence *"the
+   > stem-observation machinery already distinguishes that, and already has
+   > the join key"* was written into this item, repeated, and never opened.
+   > It was **true** — and because nobody grounded it, it stayed a claim
+   > rather than a fact, so it could not discharge the item it described.
+   >
+   > That is the inverse of this arc's usual failure. The usual one is a true
+   > statement outliving its scope. This is a true statement **never
+   > verified**, and therefore unable to do the work it was true for. Both
+   > cost the same thing: a record that disagrees with the tree.
+
+   What was actually missing was a **consumer**. `seen`'s verdict was folded
+   into a per-successor tally by `resolve`, which discards the transaction
+   identity — the right shape for §55's telemetry, the wrong one for a
+   disarm that must name an entry. So the verdict now leaves `seen` itself,
+   the last point that still holds a hash, and reaches
+   `tx_memory_pool::on_stem_propagated` through `i_core_events`. It sets
+   `observed_circulating` on `relay_method::local` entries **only**: the watch
+   resolves observations for every stem this node placed, and a relayed
+   entry's propagation is a real verdict about a question its arm never asked.
+
+   *Superseded below, kept because the reasoning is the record:* the original
+   framing, which is still why *"received once"* is the wrong predicate.
+
+   **The predicate** fails *"received once"* in **two**
    directions. A single arrival can be the origin's own echo off one peer — and,
    more dangerously, **a relay's first receipt is its only receipt in the common
    case**, so a predicate firing on it disarms every node immediately and
@@ -14966,6 +15028,20 @@ the entry's age rounded to it, capped at `MAX_RELAY_TIME`. And the emission
 and `max_age / 2` dominate the tail. So §92.5's pricing of branches (a)–(d)
 **stands**; this does not require the disarm round to re-do its arithmetic.
 
+> **A seam §89.6.3 will want, noted now because it is cheaper here
+> (2026-08-27).** `Propagated` and `Silent` both resolve through `resolve`
+> and both remove from pending, and only `Propagated` emits. So the pool
+> learns "it is circulating" and never learns "the observation expired
+> silently" — correct for the disarm, which must keep retrying through
+> silence, but it means the pool cannot distinguish **"my stem is still
+> running"** from **"my stem died and I am now retrying blind."**
+>
+> Those are the same state to a timer and different states to a *user*, which
+> is precisely §89.6.3's layered status query — in flight / delayed / failed.
+> Not this item's problem, and not built here; recorded because the seam is
+> visible from the disarm's side and would otherwise be discovered from the
+> status query's side, which is the more expensive end.
+
 **Only a transaction that was actually SENT asks this question.** `local` is
 worn by two entries. One has been dispatched and stayed `local` because
 `originated_stays_in_zone` pinned it there — that is the origin above, and its
@@ -14979,6 +15055,48 @@ latency on a *first* send, buying nothing. It keeps `MIN_RELAY_TIME`, which is
 the answer to the question it is actually asking ("did the nudge miss?").
 `local_relay_base` carries the split, and the two 400 s test cases differ in
 `relayed` alone so the discriminant cannot drift.
+
+**The split is only as good as the bit, and the bit had a lying writer.**
+*(Found and fixed 2026-08-27.)* `dandelionpp_notify` called `record_relayed`
+**before** `make_payload_send_txs`, so `set_relayed` wrote `relayed = true` on
+paths where no stem was ever launched — `NoRoute`, and both send attempts
+failing. An entry in exactly the state this section reserves `MIN_RELAY_TIME`
+for therefore read as the *other* one and took the derived interval: the 848 s
+of added latency this argument rejects, arriving through the writer instead of
+through the reader.
+
+Worth stating as a shape rather than an incident. The discriminant was
+carefully chosen, correctly read, and pinned by two test cases differing in
+`relayed` alone — and none of that constrains **who sets it**. A test that
+varies a field cannot see a producer that writes the field wrongly; it is the
+same blindness as asserting on a value the fixture itself supplied. The record
+now arms where the send is known to have happened, beside
+`record_stem_observation`, which was already placed that way, and
+`a_failed_stem_is_not_recorded_as_relayed` holds the ordering from the
+producer's end.
+
+**Its referent is now EXACT, 2026-08-27 — same number, honest reason.** Item 1
+is settled and the disarm is wired: an origin that sees its transaction
+arrive from anywhere other than the peer it stemmed to stops re-broadcasting.
+
+That changes what 1148 s is *for*, without changing the number. Before, the
+interval provisioned against everything, including transactions that were
+propagating perfectly well and whose origin was re-emitting redundantly.
+After, it provisions against exactly the class where **no signal exists**: the
+stem was swallowed at hop 1, nothing anywhere holds the transaction, and there
+is nothing to observe.
+
+**And that class is not one a better mechanism could rescue either.** A
+memoryless embargo cannot help — there is no other node's timer to fire,
+because no other node has it. So the interval is not covering for a missing
+observation; it is covering the case where observation is impossible in
+principle. *"Provisions against an unobservable"* read as a weakness while the
+predicate was owed. With the predicate built it is a **scope statement**, and
+the constant's justification is stronger for being narrower.
+
+**The paragraph below is retained as written**, because the swallow-at-hop-1
+analysis is exactly right and is now the *whole* of what the interval covers
+rather than one case among several.
 
 **It provisions against an unobservable, and that is the honest framing.** The
 case this retry rescues is a swallow at hop 1: the first stem peer drops the

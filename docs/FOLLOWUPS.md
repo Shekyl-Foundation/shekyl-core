@@ -10564,8 +10564,14 @@ its wake.
   **Still not witnessed:** the arrival-to-record leg — the receiver's
   relay-method assignment, the monotone `upgrade_relay_method`, and the full
   send path through `handle_notify_new_transactions` on a non-public context.
-  **Blocker (rule 22), now confirmed at two sites:** that path needs a `t_core`
-  mock the unit suite does not have — the one protocol-handler test that stands
+  **Blocker (rule 22), now confirmed at THREE sites** — the third and fourth
+  added 2026-08-27 by the F-10 disarm (#573): the forwarding leg
+  (`notify::record_arrival -> i_core_events`, since closed from the levin side
+  by asserting `on_stem_propagated`'s output rather than the watch's), and
+  `add_tx`'s origin pin, whose two arms — a `stem`/`fluff` arrival pinned, a
+  `block` arrival not — are **both** unreachable because no unit fixture admits
+  a transaction through `tx_memory_pool::add_tx` at all. That path needs a
+  `t_core` mock the unit suite does not have — the one protocol-handler test that stands
   up real sockets is `GTEST_SKIP`ped as flaky. Q12-U2 tried to reach it from
   the other end, through `add_tx` directly, and got three fixture obstacles
   down (encoded fee, output count, reference block) before hitting one that
@@ -10582,6 +10588,18 @@ its wake.
   rather than driving an arrival, so it pinned the class and would have fired
   only when the class was deleted. See `DAEMON_RELAY_PRIVACY.md` §89.8 and
   `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+
+  **PRICE IT ONCE RATHER THAN ACCUMULATE A FOURTH CONSUMER.** *(Ruled
+  2026-08-27.)* Three items now blocked on one absent fixture is an argument for
+  building the fixture, not for noting its absence again — each new consumer
+  arrives, re-derives the same obstacle list, records the same deferral, and
+  leaves the tree exactly as unwitnessed as it found it. The next item that
+  wants this path should **cost the harness** instead of adding a fifth note:
+  the known obstacles are enumerated above (encoded fee, output count, reference
+  block, and the one that does not fall to fixture work — `add_tx` runs full
+  input verification, so an arrival needs a valid FCMP++ proof). A real
+  transaction from the Rust builder against a regtest chain is the shape to
+  price; the shim fixture is not, and that is settled rather than open.
 
 - **Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after
   origination.** *(Surfaced 2026-08-13, Q12-U3 review.)* Once-at-origin
