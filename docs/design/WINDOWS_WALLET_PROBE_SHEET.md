@@ -124,7 +124,7 @@ for `#[ignore]`.
 | P-12 | Does the Medium mandatory label block a **Low-IL** opener? | Needs a genuinely Low-integrity process. Creating one wants an interactive token to derestrict from; a CI service account's token may not be a faithful source | Low-IL open fails with `ERROR_ACCESS_DENIED` | **WP-D4** — this is the *only* in-scope adversary per §6. If the label does not block, the server-side half of D4 is doing nothing and the client-side IL check becomes load-bearing alone |
 | P-13 | Does the logon SID separate terminal-services sessions? | Needs two concurrent interactive logons | A second session's process cannot open the pipe | **WP-D6** — if it does not separate sessions, the logon SID is not the improvement on an `S-1-5-2` deny that D6 claims, and the explicit `NETWORK` deny comes back |
 | P-18 | Does the logon-SID ACE refuse a **same-user caller in a different logon session** on a **local** open — WP-D6's load-bearing half, reached without a remote caller or a second interactive session? Registered 2026-08-27 after P-17's transport route and P-13's interactive route both proved unavailable on this hardware | A second logon session as the same user, via an **S4U scheduled task** ("run whether logged on or not / do not store password" → Service-for-User): a new logon SID, the same user SID, **no credential stored anywhere**. Local `\\.\pipe\` open, so S4U's no-outbound-network limitation does not bite. Feasibility (does S4U yield a distinct logon SID for the same user?) is itself measured — the probe asserts it before touching a pipe, the way P-12 asserts its child's integrity level | Four: (a) **control** — a pipe granting the **user SID** is opened by the task process (proves same user, admitted where the user SID is granted); (b) **mechanism** — the task process's token carries our user SID but a **different** logon SID (asserted before any pipe touch); (c) **production shape** — the real pipe (logon-SID DACL + label) refuses it; (d) **the D6 claim proper** — a pipe with the logon-SID DACL and **no label** still refuses it with `ERROR_ACCESS_DENIED`, isolating the ACE (no `reject_remote_clients` confound, because a local open is not remote) | **WP-D6** — if **(d)** admits the task process, the logon-SID ACE does not carry the session boundary and PR #516's user-SID removal bought nothing. If (b) shows the same logon SID (S4U did not cross), the probe is **UNRUN**, not a pass. This is the runnable route to the property P-17 (network) and P-13 (interactive) each reach differently — and, on this hardware, the *only* runnable one |
-| P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If no transport crosses (b), the probe is **UNRUN**, not a pass, and — per the 2026-08-27 first run, §4.5 — this revisits **P-17's method** rather than WP-D6: loopback reuses the caller's token, so the question needs a genuinely remote caller, and the `reject_remote_clients` fence stays untested until one exists |
+| P-17 | Does the logon SID **by itself** refuse a caller from a different logon session — the `IPC$` reachability WP-D6 exists for? Registered 2026-08-27, **corrected the same day before any run** (see below: production carries a second fence the design doc never recorded) | Needs a loopback SMB path (`LanmanServer` + the `IPC$` share) to produce a network logon. Whether the CI runner has one is **unverified**, and asserting either way is the defect class §5 is written against. Reports UNRUN when the precondition is absent — never a pass | Four, and the fourth is the one that attributes the result: (a) **control** — the pipe opens locally via `\\.\pipe\…`, proving it works and the DACL admits us; (b) **mechanism** — a caller arriving over loopback carries a logon SID *different* from `current_logon_sid()`; (c) **production shape** — a pipe built exactly as `create_instance` builds it (owner-only DACL **and** `reject_remote_clients(true)`) refuses the loopback open; (d) **the D6 claim proper** — a pipe with the same owner-only DACL but `reject_remote_clients(**false**)` *still* refuses it, with `ERROR_ACCESS_DENIED`. Only (d) isolates the logon SID | **WP-D6** — if **(d)** succeeds, the logon SID does not carry the `IPC$` boundary on its own, removing the user-SID ACE in PR #516 bought nothing on that axis, and the flag is load-bearing where the doc says the SID is. If **(c)** succeeds, production itself is reachable over `IPC$` and that is a live hole rather than a documentation one. If no transport crosses (b), the probe is **UNRUN**, not a pass, and — per the 2026-08-27 first run, §4.5 — this revisits **P-17's method** rather than WP-D6: loopback reuses the caller's token, so the question needs a genuinely remote caller, and the `reject_remote_clients` fence stays untested until one exists. **2026-08-28, §4.8:** the genuinely remote caller arrived — and the method needed re-working again, because a network logon carries *no* logon SID at all, so row (d) is answered structurally rather than by a different-SID comparison |
 
 **P-17's section is itself undecided, and that is why it is here.** §1 would
 claim CI-durability nobody has established; §3 pre-declares CI-*fragility*,
@@ -414,6 +414,63 @@ remote caller too, but the dry-run now proves that tells us about the *flag*,
 so only the DACL-only pipe (no flag) can attribute a refusal to the ACE, and
 only a caller that truly crosses a session can be refused by it. That caller is
 the one thing a single box cannot produce (§4.5, §4.6).
+
+### 4.8 P-17 first genuine two-machine run — the cross-session caller carries *no* logon SID (2026-08-28, `ffe836cd7`)
+
+The second machine — `DTASUS-Z970`, domain-joined, logged in as the **same AD
+user** (`intranet\dawsonra`, `S-1-5-21-…-1108`) — dialled
+`\\LP7760-W1XMP6G3\pipe\…` over `IPC$`. For the first time a genuinely remote,
+same-user caller reached the server. The result is not (c), not (d) as
+written, but a **third outcome that relocates the whole question**.
+
+| Date | Machine / build | Result | What the server logged |
+|---|---|---|---|
+| 2026-08-28 15:45:48 -04:00 | server `LP7760-W1XMP6G3` (pid 83536, `ffe836cd7`); caller `DTASUS-Z970`, same AD user, over SMB | **UNRUN — with diagnosis** | The caller **connected, its report was read, and impersonation succeeded** (each of those failures has its own distinct message; none fired). What failed is one step later and narrower: reading a SID off the impersonation token we successfully held. Client-side, the dial reported `daclonly -> 5`, `prod -> 5` (the `5 5` "PASS shape"); server-side, the token yielded no usable SID pair |
+
+**This is §4.1's shape, not a WP-D6 falsification — and it is a stronger result
+than row (d) was built to get.** What broke is the row-(d) *method's* premise:
+"a caller in a different logon session carries a **readable, different** logon
+SID," which the verdict compared against `current_logon_sid()`. A **network
+(`IPC$`) logon does not**. `logon_sid_of` walks `TokenGroups` for a
+`SE_GROUP_LOGON_ID`-marked group of `S-1-5-5-…` shape and returns
+`SidError::NoLogonSid` when none is present (`sid.rs`) — and the crate's own doc
+that "every interactive and service logon has one" is pointedly silent on
+*network*. Per §5 the row-(b)/(d) prediction stays on record as falsified in its
+method; what changes is the consequence — it revisits **P-17's method**, again,
+not WP-D6's policy.
+
+**Why the collapsed message could not yet name it, and the fix.** The verdict's
+`_ =>` arm folded *user-SID read failed* and *logon-SID read failed* into one
+string, and the channel dropped the caller's `5 5` on every non-success path —
+so the log recorded a bare "could not read … SID" with no codes, and the `5 5`
+survived only in the caller's own stdout. The same defect class this round has
+hunted repeatedly: a message naming two possibilities and distinguishing
+neither. The probe is now split (same commit): the arm reports **which** side
+failed and the `SidError` **variant** (`{:?}`, never Display — Display's
+`TokenGroups` text still says "user SID"), and every post-report path carries
+`dacl_err`/`prod_err`. A new verdict case, `UserOkNoLogon`, is pre-wired for the
+outcome below so the re-run is conclusive whichever way it lands.
+
+**Amended prediction (pre-registered here, for the re-run — not yet observed).**
+The split re-run will report the caller as **user `S-1-5-21-…-1108`, logon
+`NoLogonSid`**. If so, and `daclonly` is refused with `ERROR_ACCESS_DENIED`
+(the client already reported `5`), that is **P-17 PASS (structural)**: a
+same-user network caller carries the *user* SID but **no** logon SID, so it
+cannot match a logon-SID-only ACE and is refused **by construction**. The
+attribution is cleaner than the different-logon-SID form: the network token
+*does* carry the user SID, so a user-SID ACE **would have admitted it** — the
+refusal is therefore diagnostic of logon-SID-*only* granting, which is exactly
+the ACE PR #516's user-SID removal left carrying the boundary. Stated precisely
+(the variant covers it): "the caller's token has no `SE_GROUP_LOGON_ID`-marked
+group of logon-SID shape," not the flatter "network logons have no logon SID."
+
+**Design consequence, owed once confirmed (not before).** If the re-run
+confirms `NoLogonSid`, the `sid.rs` doc that "every interactive and service
+logon has one" must name the network case — a measured fact one step from
+outliving its comment — and `WINDOWS_WALLET_SUPPORT.md`'s WP-D6 rationale gains
+a stronger, structural sentence: the `IPC$` boundary holds not because a remote
+session has a *different* logon SID but because it has *none*, so a
+logon-SID-scoped descriptor is unmatchable from the network by design.
 
 ## 5. What a failure does *not* license
 

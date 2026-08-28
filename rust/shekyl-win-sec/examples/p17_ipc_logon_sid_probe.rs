@@ -82,7 +82,7 @@ mod probe {
 
     use shekyl_win_sec::{
         current_logon_sid, current_user_sid, logon_sid_of_token_for_testing, self_hosted_pipe_name,
-        user_sid_of_token_for_testing, OwnerOnlyDescriptor,
+        user_sid_of_token_for_testing, OwnerOnlyDescriptor, SidError,
     };
 
     /// `ERROR_ACCESS_DENIED` — the (d) prediction, and the only code that row
@@ -386,12 +386,47 @@ mod probe {
             dial(&control_name)
         );
 
+        // What the accept thread learned about the caller. Split so that no
+        // diagnostic path discards a measurement: once the caller's report has
+        // been read, its two reported codes travel with *every* downstream
+        // outcome, including the ones where reading the caller's SIDs failed —
+        // the earlier shape mapped codes only onto the success path, which is
+        // why the 15:45:48 log recorded a SID-read failure with no trace of the
+        // `5 5` the caller had actually reported.
+        enum CallerOutcome {
+            /// Connect or read failed before the report existed — no codes yet.
+            NoReport(String),
+            /// The report was read; the SID triage is what happened after.
+            Reported {
+                dacl_err: u32,
+                prod_err: u32,
+                sids: SidTriage,
+            },
+        }
+        /// The result of reading the caller's user and logon SID off the
+        /// impersonation token. `UserOkNoLogon` is broken out from the generic
+        /// failure because it is not an error at all here — it is P-17's
+        /// candidate answer: a caller whose token carries the user SID but no
+        /// logon-SID-shaped `SE_GROUP_LOGON_ID` group, which is precisely what a
+        /// network (`IPC$`) logon is expected to look like and cannot match a
+        /// logon-SID-only ACE.
+        enum SidTriage {
+            /// Both SIDs read — the original same-user / different-session path.
+            Both { user: String, logon: String },
+            /// User SID read; the token carries no logon SID
+            /// (`SidError::NoLogonSid`).
+            UserOkNoLogon { user: String },
+            /// A read failed for some other reason; the message names which side
+            /// and the `SidError` variant (or the Win32 step that failed).
+            Unreadable(String),
+        }
+
         // Accept + impersonate on a thread so the wait can be bounded. HANDLE
         // is not Send, so the raw pointer is carried across as a usize; the
         // thread reconstructs the guard and owns the close. On timeout the
         // thread is left blocked in ConnectNamedPipe and dies when the process
         // exits after the verdict.
-        let (tx, rx) = mpsc::channel::<Result<(String, String, u32, u32), String>>();
+        let (tx, rx) = mpsc::channel::<CallerOutcome>();
         let control_raw = control.0 as usize;
         std::mem::forget(control);
         std::thread::spawn(move || {
@@ -399,7 +434,7 @@ mod probe {
             // SAFETY: our own pipe instance.
             let connected = unsafe { ConnectNamedPipe(server.0, std::ptr::null_mut()) };
             if connected == 0 && last_error() != ERROR_PIPE_CONNECTED {
-                _ = tx.send(Err(format!(
+                _ = tx.send(CallerOutcome::NoReport(format!(
                     "ConnectNamedPipe failed (os error {})",
                     last_error()
                 )));
@@ -420,7 +455,7 @@ mod probe {
                 )
             };
             if read_ok == 0 || got == 0 {
-                _ = tx.send(Err(format!(
+                _ = tx.send(CallerOutcome::NoReport(format!(
                     "could not read the caller's report (os error {})",
                     last_error()
                 )));
@@ -441,10 +476,14 @@ mod probe {
             // SAFETY: read precondition satisfied above; reverted on every path.
             let imp = unsafe { ImpersonateNamedPipeClient(server.0) };
             if imp == 0 {
-                _ = tx.send(Err(format!(
-                    "ImpersonateNamedPipeClient failed (os error {})",
-                    last_error()
-                )));
+                _ = tx.send(CallerOutcome::Reported {
+                    dacl_err,
+                    prod_err,
+                    sids: SidTriage::Unreadable(format!(
+                        "ImpersonateNamedPipeClient failed (os error {})",
+                        last_error()
+                    )),
+                });
                 return;
             }
             let mut token: HANDLE = std::ptr::null_mut();
@@ -453,17 +492,33 @@ mod probe {
                 unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
             let token_guard = HandleGuard(token);
             let sids = if opened == 0 {
-                Err(format!(
+                SidTriage::Unreadable(format!(
                     "could not open the impersonation token (os error {})",
                     last_error()
                 ))
             } else {
+                // `{:?}` (Debug), never Display, for the variant: `SidError`'s
+                // Display text for a `TokenGroups` read still names "user SID"
+                // (sid.rs), which would misreport a *logon*-SID read failure as
+                // a user-SID one. The variant is what the verdict below keys on.
                 match (
                     user_sid_of_token_for_testing(token_guard.0),
                     logon_sid_of_token_for_testing(token_guard.0),
                 ) {
-                    (Ok(u), Ok(l)) => Ok((u.as_str().to_owned(), l.as_str().to_owned())),
-                    _ => Err("could not read the caller's user or logon SID".to_owned()),
+                    (Ok(u), Ok(l)) => SidTriage::Both {
+                        user: u.as_str().to_owned(),
+                        logon: l.as_str().to_owned(),
+                    },
+                    // The candidate answer: user present, no logon SID at all.
+                    (Ok(u), Err(SidError::NoLogonSid)) => SidTriage::UserOkNoLogon {
+                        user: u.as_str().to_owned(),
+                    },
+                    (Err(ue), _) => SidTriage::Unreadable(format!(
+                        "could not read the caller's USER SID: {ue:?}"
+                    )),
+                    (Ok(_), Err(le)) => SidTriage::Unreadable(format!(
+                        "could not read the caller's LOGON SID: {le:?}"
+                    )),
                 }
             };
             // SAFETY: paired with the impersonation above.
@@ -472,7 +527,11 @@ mod probe {
                 eprintln!("P-17: RevertToSelf FAILED — aborting rather than run impersonated.");
                 std::process::abort();
             }
-            _ = tx.send(sids.map(|(u, l)| (u, l, dacl_err, prod_err)));
+            _ = tx.send(CallerOutcome::Reported {
+                dacl_err,
+                prod_err,
+                sids,
+            });
         });
 
         match rx.recv_timeout(SERVE_TIMEOUT) {
@@ -484,25 +543,42 @@ mod probe {
                 );
                 2
             }
-            Ok(Err(detail)) => {
+            Ok(CallerOutcome::NoReport(detail)) => {
                 println!("P-17 UNRUN: {detail}.");
                 2
             }
-            Ok(Ok((caller_user, caller_logon, dacl_err, prod_err))) => {
-                println!("P-17 SERVE: caller user SID {caller_user}, logon SID {caller_logon}.");
-                if caller_user != me.as_str() {
+            Ok(CallerOutcome::Reported {
+                dacl_err,
+                prod_err,
+                sids: SidTriage::Unreadable(detail),
+            }) => {
+                println!(
+                    "P-17 UNRUN: {detail}. The caller DID connect and its report was read — daclonly \
+                     os error {dacl_err}, prod os error {prod_err} — so this is a token-read failure, \
+                     not a transport failure. Not a pass."
+                );
+                2
+            }
+            Ok(CallerOutcome::Reported {
+                dacl_err,
+                prod_err,
+                sids: SidTriage::Both { user, logon },
+            }) => {
+                println!("P-17 SERVE: caller user SID {user}, logon SID {logon}.");
+                if user != me.as_str() {
                     println!(
                         "P-17 UNRUN: the caller is a DIFFERENT user than the server ({}). A refusal \
                          would be over-determined (they are not in the DACL at all), not attributable \
-                         to the logon SID. Log the second machine in as the same AD user.",
+                         to the logon SID. Log the second machine in as the same AD user. (caller \
+                         reported daclonly {dacl_err}, prod {prod_err})",
                         me.as_str()
                     );
                     return 2;
                 }
-                if caller_logon == my_logon.as_str() {
+                if logon == my_logon.as_str() {
                     println!(
                         "P-17 UNRUN: the caller shares OUR logon SID — it did not cross a session \
-                         boundary. Not a pass."
+                         boundary. Not a pass. (caller reported daclonly {dacl_err}, prod {prod_err})"
                     );
                     return 2;
                 }
@@ -537,6 +613,61 @@ mod probe {
                     "P-17 PASS: a genuine cross-session same-user caller is refused by the logon-SID \
                      ACE alone (ERROR_ACCESS_DENIED), and by the production shape (os error \
                      {prod_err}). WP-D6's IPC$ claim is now an observation."
+                );
+                0
+            }
+            Ok(CallerOutcome::Reported {
+                dacl_err,
+                prod_err,
+                sids: SidTriage::UserOkNoLogon { user },
+            }) => {
+                println!(
+                    "P-17 SERVE: caller user SID {user}, and NO logon SID — the impersonation token \
+                     carries no `SE_GROUP_LOGON_ID`-marked group of logon-SID (`S-1-5-5-…`) shape. \
+                     This is the expected shape of a network (`IPC$`) logon."
+                );
+                if user != me.as_str() {
+                    println!(
+                        "P-17 UNRUN: the caller is a DIFFERENT user than the server ({}). A refusal \
+                         would be over-determined (they are not in the DACL at all), not attributable \
+                         to the logon-SID ACE. Log the second machine in as the same AD user. (caller \
+                         reported daclonly {dacl_err}, prod {prod_err})",
+                        me.as_str()
+                    );
+                    return 2;
+                }
+                if dacl_err == 0 {
+                    println!(
+                        "P-17 FAIL: the DACL-only pipe ADMITTED a same-user caller whose token carries \
+                         no logon SID — a token that cannot match the logon-SID ACE was let in anyway. \
+                         WP-D6's boundary does not hold. Revisits WP-D6. (prod os error {prod_err})"
+                    );
+                    return 1;
+                }
+                if prod_err == 0 {
+                    println!(
+                        "P-17 FAIL: the PRODUCTION pipe admitted a remote caller — a live IPC$ hole \
+                         past the reject-remote flag. Revisits WP-D6, urgently. (daclonly os error \
+                         {dacl_err})"
+                    );
+                    return 1;
+                }
+                if dacl_err != ACCESS_DENIED {
+                    println!(
+                        "P-17 UNRUN: the DACL-only open was refused with os error {dacl_err}, not \
+                         ERROR_ACCESS_DENIED — some other mechanism refused it, so the ACE is not \
+                         attributed. (prod os error {prod_err})"
+                    );
+                    return 2;
+                }
+                println!(
+                    "P-17 PASS (structural): a genuine same-user caller arriving over IPC$ carries NO \
+                     logon SID, so it cannot match the logon-SID-only ACE and is refused \
+                     (ERROR_ACCESS_DENIED), and by the production shape (os error {prod_err}). The \
+                     refusal is DIAGNOSTIC of logon-SID-only granting: the network token DOES carry \
+                     the user SID, so a user-SID ACE would have admitted it — PR #516's removal of \
+                     that ACE is exactly what carries the boundary. This is a structural answer, \
+                     stronger than the different-logon-SID form row (d) assumed."
                 );
                 0
             }
