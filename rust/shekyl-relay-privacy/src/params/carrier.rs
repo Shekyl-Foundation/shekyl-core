@@ -276,9 +276,15 @@ const _: () = assert!(
 /// has to absorb, as opposed to the sustained load it is provisioned for.
 ///
 /// Every channel emitting at [`NOISE_MIN_DELAY_MS`], the shortest interval the
-/// cadence can draw. Exactly `mean / min` = **1.5×**
-/// [`PER_NODE_CEILING_BYTES_PER_SEC`], and it is derived rather than written
-/// so it cannot drift from the cadence it comes out of.
+/// cadence can draw. Derived rather than written, so it cannot drift from the
+/// cadence it comes out of.
+///
+/// **Rounded UP, because it is advertised as an upper bound.** The exact value
+/// is 24 578.46 B/s; flooring it to 24 578 publishes a "peak" the emitter
+/// actually exceeds, which is the one direction a sizing figure must not err
+/// in. `mean / min` is likewise **1.50015×** rather than exactly 1.5× — the
+/// asymmetric jitter that makes the mean exact makes this ratio inexact, and
+/// the two cannot both be round.
 ///
 /// **Deliberately not asserted against a ceiling of its own.** No peak budget
 /// has ever been pre-registered, and inventing one here would be a constant
@@ -286,11 +292,12 @@ const _: () = assert!(
 /// because it sits next to derived ones. What it is for is disclosure: §3.3's
 /// figures are sustained, and an operator sizing a circuit needs this one.
 pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
-    let raw = (WINDOW_BYTES as u64)
+    let numerator = (WINDOW_BYTES as u64)
         * (super::inherited::NOISE_CHANNELS as u64)
         * (CEILING_ZONES as u64)
-        * 1_000
-        / (NOISE_MIN_DELAY_MS as u64);
+        * 1_000;
+    let denominator = NOISE_MIN_DELAY_MS as u64;
+    let raw = numerator.div_ceil(denominator);
     // Checked rather than assumed. Unlike `noise_windows_in_epoch`, the fit is
     // NOT provable from the shape of the expression: `peak = sustained x
     // mean/min`, and `mean/min` is unbounded as the jitter grows against the

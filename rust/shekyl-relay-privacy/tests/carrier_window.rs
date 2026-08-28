@@ -253,19 +253,29 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         "Tor and I2P — a change here is a ceiling change"
     );
 
-    // The peak is `mean / min` above the sustained figure. Asserted as the
-    // ratio rather than as a literal so it tracks the cadence, with the byte
-    // figure pinned beside it because that is the number an operator sizing a
-    // circuit actually reads.
+    // The peak is an UPPER BOUND, so it rounds up. Asserted against the
+    // rounded-up scaling rather than a re-derivation of the same division,
+    // because the defect this replaces was a floor that published a "peak"
+    // the emitter exceeds by 0.46 B/s — small, and in the one direction a
+    // sizing figure must not err.
+    let exact_num =
+        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS);
     assert_eq!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
-        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS)
-            / u64::from(carrier::NOISE_MIN_DELAY_MS),
-        "the peak must be the sustained rate scaled by mean/min"
+        exact_num.div_ceil(u64::from(carrier::NOISE_MIN_DELAY_MS)),
+        "the peak must be the sustained rate scaled by mean/min, rounded UP"
+    );
+    assert!(
+        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
+            >= (carrier::WINDOW_BYTES as u64)
+                * (inherited::NOISE_CHANNELS as u64)
+                * u64::from(carrier::CEILING_ZONES)
+                * 1_000,
+        "the advertised peak must not be below the rate the emitter can reach"
     );
     assert_eq!(
         carrier::PER_NODE_PEAK_BYTES_PER_SEC,
-        24_578,
+        24_579,
         "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
          3.3 quotes it"
     );

@@ -18,9 +18,44 @@
 /// resolve to [`Self::Invalid`], which [`crate::params::DandelionParams::adopted_for`]
 /// provisions as the **longest** embargo — a corrupt or miscast byte costs
 /// recovery latency, never the shortest (clearnet) wait.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum RelayZone {
+/// Declares [`RelayZone`] and [`RelayZone::ALL`] from ONE variant list.
+///
+/// # Why the enum is behind a macro
+///
+/// `ALL` is not a convenience — `params::carrier::CEILING_ZONES` counts the
+/// encrypted zones through it, and that count is the multiplier in the
+/// per-node cover-bandwidth ceiling. A hand-written `ALL` silently
+/// **undercounts** a newly added encrypted zone, and no assertion over the
+/// array can catch that: every check needs a total (a length, a mask, a
+/// count), every total is hand-written too, and nothing forces the second one
+/// to be updated either. An exhaustive `match` catches a new variant, but not
+/// an `ALL` that was left behind after the match was fixed.
+///
+/// Generating both from the same tokens is the only construction that cannot
+/// drift, short of `std::mem::variant_count`, which is nightly-only. The cost
+/// is one layer of indirection in this file; the alternative is a bandwidth
+/// ceiling that under-enforces without failing.
+macro_rules! relay_zones {
+    ($( $(#[$meta:meta])* $name:ident = $disc:literal ),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u8)]
+        pub enum RelayZone {
+            $( $(#[$meta])* $name = $disc, )+
+        }
+
+        impl RelayZone {
+            /// Every zone, in declaration order.
+            ///
+            /// Emitted from the same variant list as the enum, so it cannot
+            /// omit one. A slice rather than an array so no length literal
+            /// needs maintaining alongside it — that literal would be the
+            /// hand-written total this construction exists to remove.
+            pub const ALL: &'static [Self] = &[$(Self::$name),+];
+        }
+    };
+}
+
+relay_zones! {
     /// `zone::invalid` — out-of-domain FFI byte, or "origin unknown".
     Invalid = 0,
     /// `zone::public_` — clearnet.
@@ -32,34 +67,6 @@ pub enum RelayZone {
 }
 
 impl RelayZone {
-    /// Every zone, in discriminant order.
-    ///
-    /// Exists so callers can COUNT zones by predicate instead of hand-copying
-    /// the answer — `params::carrier::CEILING_ZONES` is the first, and a
-    /// hand-maintained "there are 2 encrypted zones" is exactly the duplicate
-    /// that goes stale when a third is added.
-    ///
-    /// Completeness is enforced, not assumed: see [`Self::position`].
-    pub const ALL: [Self; 4] = [Self::Invalid, Self::Public, Self::I2p, Self::Tor];
-
-    /// Index of this zone within [`Self::ALL`].
-    ///
-    /// **This is the exhaustiveness tripwire and that is its whole job.** The
-    /// match has no wildcard arm, so adding a `RelayZone` variant fails to
-    /// compile HERE — and the `const` block below then re-checks that
-    /// [`Self::ALL`] actually lists every variant, in order. Without both
-    /// halves, `ALL` could silently omit a new zone and every count derived
-    /// from it would be quietly wrong.
-    #[must_use]
-    pub const fn position(self) -> usize {
-        match self {
-            Self::Invalid => 0,
-            Self::Public => 1,
-            Self::I2p => 2,
-            Self::Tor => 3,
-        }
-    }
-
     /// Whether this zone's links are encrypted.
     ///
     /// **This is what decides noise eligibility**, and it is deliberately not
@@ -167,14 +174,14 @@ impl LinkSecrecy {
 }
 
 const _: () = {
-    // `ALL` lists every variant exactly once and in discriminant order. The
-    // `position` match above breaks first on a new variant; this catches the
-    // other half — an `ALL` that was not updated to match it.
+    // Declaration order matches discriminant order, which `CEILING_ZONES` does
+    // not need but `from_ffi_u8`'s contract does — the byte IS the
+    // discriminant. Completeness is the macro's job, not this block's.
     let mut i = 0;
     while i < RelayZone::ALL.len() {
         assert!(
-            RelayZone::ALL[i].position() == i,
-            "RelayZone::ALL is incomplete or out of discriminant order"
+            RelayZone::ALL[i] as u8 as usize == i,
+            "RelayZone declaration order no longer matches its discriminants"
         );
         i += 1;
     }

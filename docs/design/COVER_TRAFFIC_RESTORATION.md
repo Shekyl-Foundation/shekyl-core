@@ -285,8 +285,10 @@ wallet can ask rather than guess.
 >
 > **The burst is not the same number.** 16 KiB/s is the *sustained* rate; the
 > shortest interval the cadence draws puts a burst at
-> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,578 B/s**, 1.5×. A circuit is
-> sized against the peak and a month is priced against the mean.
+> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,579 B/s**, ~1.50×. A circuit is
+> sized against the peak and a month is priced against the mean. The figure
+> **rounds up**: the exact rate is 24 578.46 B/s, and a "peak" the emitter
+> exceeds is wrong in the one direction a sizing number must not be.
 
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
@@ -1006,7 +1008,7 @@ that exists.
 | mean cadence | **5 000 ms** (`3 333 + U[0, 3 334]`) |
 | per channel | **4 KiB/s** |
 | worst-posture node rate (**sustained**) | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
-| worst-posture **burst** | 20,480 × 4 ÷ 3.333 s = **24,578 B/s** (1.5×) |
+| worst-posture **burst** | ceil(20,480 × 4 ÷ 3.333 s) = **24,579 B/s** (~1.50×) |
 | sustained cost | **~42 GB/month**, ~8.9 % of the 180 KiB/s circuit floor |
 
 **It holds at exact equality, and the ceiling is now a build break rather than
