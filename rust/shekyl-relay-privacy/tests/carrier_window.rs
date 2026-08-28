@@ -26,6 +26,7 @@
 use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
+use shekyl_relay_privacy::zone::RelayZone;
 use shekyl_tx_weight::{
     predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
@@ -225,4 +226,47 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
         checked += 1;
     }
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
+}
+
+/// The zone count behind the ceiling is COUNTED, and the peak is derived.
+///
+/// `CEILING_ZONES` used to be a literal `2` — a hand-copy of an answer that
+/// lives in `RelayZone::is_encrypted`, which made the ceiling's build-break
+/// claim false: a third encrypted zone would have raised the real bandwidth
+/// while the constant, and therefore the assert, stayed put.
+///
+/// What edit reds this: making `RelayZone::Public` encrypted (the case the
+/// predicate's own docs anticipate, "encrypting ordinary internet traffic
+/// would make Public eligible for noise") takes the count to 3, and the
+/// compile-time ceiling assert fires before this test even runs.
+#[test]
+fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
+    let counted = RelayZone::ALL.iter().filter(|z| z.is_encrypted()).count();
+    assert_eq!(
+        carrier::CEILING_ZONES as usize,
+        counted,
+        "CEILING_ZONES must equal the number of encrypted zones, not a \
+         transcription of today's answer"
+    );
+    assert_eq!(
+        counted, 2,
+        "Tor and I2P — a change here is a ceiling change"
+    );
+
+    // The peak is `mean / min` above the sustained figure. Asserted as the
+    // ratio rather than as a literal so it tracks the cadence, with the byte
+    // figure pinned beside it because that is the number an operator sizing a
+    // circuit actually reads.
+    assert_eq!(
+        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
+        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS)
+            / u64::from(carrier::NOISE_MIN_DELAY_MS),
+        "the peak must be the sustained rate scaled by mean/min"
+    );
+    assert_eq!(
+        carrier::PER_NODE_PEAK_BYTES_PER_SEC,
+        24_578,
+        "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
+         3.3 quotes it"
+    );
 }

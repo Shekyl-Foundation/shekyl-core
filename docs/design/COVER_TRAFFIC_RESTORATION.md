@@ -267,6 +267,27 @@ wallet can ask rather than guess.
 
 #### Axis 2 — cover bandwidth per node: **8 KiB/s**, plus an offset commitment
 
+> **SUPERSEDED 2026-08-28 — the ceiling is now 16 KiB/s per node.** *"Exceeded
+> only by a new ruling"* was the escape clause this section wrote for itself,
+> and §3.3 is that ruling: the denominator is per **node**, the cadence is 5 s
+> in the mean, and the worst posture (dual zone, four channels) sits at
+> **16,384 B/s** — at the ceiling, not under it. The text below is kept as the
+> record of the 8 KiB/s argument, which is still the argument the new figure
+> has to answer.
+>
+> **What doubling costs, stated rather than left to be derived.** 16 KiB/s is
+> **~8.9 %** of the pessimistic 180 KiB/s circuit-throughput floor, against
+> ~4.4 % before — and sustained, it is **~42 GB per month** per node against
+> ~21 GB. That is the number a metered-uplink operator feels, and rule 76 says
+> it is provisioned at the floor device rather than at the machine that was
+> handy. The carrier is behind a development opt-in and defaults off, so
+> nothing pays this today; arming it is where the figure lands.
+>
+> **The burst is not the same number.** 16 KiB/s is the *sustained* rate; the
+> shortest interval the cadence draws puts a burst at
+> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,578 B/s**, 1.5×. A circuit is
+> sized against the peak and a month is priced against the mean.
+
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
 180 KiB/s circuit-throughput floor. The derived 20,480 B / 12.5 s design sits at
@@ -984,7 +1005,9 @@ that exists.
 | channels | 2 per zone × 2 encrypted zones = **4** |
 | mean cadence | **5 000 ms** (`3 333 + U[0, 3 334]`) |
 | per channel | **4 KiB/s** |
-| worst-posture node rate | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
+| worst-posture node rate (**sustained**) | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
+| worst-posture **burst** | 20,480 × 4 ÷ 3.333 s = **24,578 B/s** (1.5×) |
+| sustained cost | **~42 GB/month**, ~8.9 % of the 180 KiB/s circuit floor |
 
 **It holds at exact equality, and the ceiling is now a build break rather than
 a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` carries it

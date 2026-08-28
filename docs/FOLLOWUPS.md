@@ -602,7 +602,7 @@ Default. Lands before genesis if it should exist at launch.
   a predicate that could not discharge the item it described. Carries two
   priced inputs that are now stale and want re-running at the new cadence:
   §57's three exits (the ~18 % epoch-miss for a 20-fragment transaction was
-  computed at the 12.5 s mean, and the epoch now affords 90 windows rather than
+  computed at the 12.5 s mean, and the epoch now affords 89 windows rather than
   40), and §58.2's admission-control threshold `θ` — *start iff
   `P(k fragments clear in the remaining epoch) ≥ θ`* — which §58.2 explicitly
   calls "a constants-round input, not a workaround". **Blocker: none.** It is

@@ -25,6 +25,8 @@
 //! It was a number satisfying a constraint nobody had connected to its
 //! subject, so it was unattached rather than wrong.
 
+use crate::zone::RelayZone;
+
 /// Bytes in one noise emission — every send, real fragment and dummy alike.
 ///
 /// # A construction parameter, NOT a runtime reference
@@ -187,13 +189,34 @@ const _: () = assert!(
 
 /// Encrypted zones one node may carry at once — the **worst posture**.
 ///
-/// Tor and I2P. This is the multiplier that made the old per-zone figure
-/// misleading: `NOISE_CHANNELS` is documented as *"max outbound connections
-/// **per zone**"*, so a per-zone rate understates a dual-zone node by exactly
-/// this factor.
-pub const CEILING_ZONES: u32 = 2;
+/// Tor and I2P today. This is the multiplier that made the old per-zone
+/// figure misleading: `NOISE_CHANNELS` is documented as *"max outbound
+/// connections **per zone**"*, so a per-zone rate understates a dual-zone node
+/// by exactly this factor.
+///
+/// # Counted from the canonical zone set, not transcribed
+///
+/// A literal `2` here would have been a hand-maintained copy of an answer that
+/// lives in [`RelayZone::is_encrypted`], and the ceiling's whole claim is that
+/// adding a third encrypted zone is a **build break**. A transcribed count
+/// makes that claim false — the new zone would raise the real bandwidth while
+/// this constant, and therefore the assert, stayed put. So it is derived from
+/// [`RelayZone::ALL`] through the same predicate the carrier uses to decide
+/// noise eligibility, and `RelayZone::position`'s wildcard-free match is what
+/// stops a new variant from being added without passing through here.
+pub const CEILING_ZONES: u32 = {
+    let mut i = 0;
+    let mut n = 0;
+    while i < RelayZone::ALL.len() {
+        if RelayZone::ALL[i].is_encrypted() {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+};
 
-/// Cover-bandwidth ceiling, **per node**, in bytes per second.
+/// SUSTAINED cover-bandwidth ceiling, **per node**, in bytes per second.
 ///
 /// # The denominator is per NODE, ruled 2026-08-28
 ///
@@ -203,6 +226,22 @@ pub const CEILING_ZONES: u32 = 2;
 /// A dual-zone node is the posture to state, because it is the one that
 /// exists, and a per-zone ceiling leaves the per-node total unbounded in the
 /// number of zones.
+///
+/// # SUSTAINED, and the word is load-bearing
+///
+/// The denominator is [`MEAN_CADENCE_MS`], so this bounds the **long-run mean**
+/// rate — which is the quantity a link is provisioned against, and the one
+/// "cover bandwidth per node" means. It is **not** an instantaneous cap. A
+/// jittered emitter's shortest interval is [`NOISE_MIN_DELAY_MS`], so a burst
+/// runs at [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` = 1.5× this figure —
+/// and over any finite window the realised average sits either side of the
+/// mean rather than under it.
+///
+/// That is inherent to a jittered cadence rather than a defect in the budget:
+/// removing the overshoot means removing the jitter, which is the metronome
+/// §56 disqualified. Both numbers are stated so a reader provisioning a
+/// circuit uses the peak and a reader pricing a month uses the mean, instead
+/// of one number being asked to do both jobs.
 ///
 /// # It is a statement of maximum cost, not a bound with slack
 ///
@@ -232,6 +271,40 @@ const _: () = assert!(
      x NOISE_CHANNELS x CEILING_ZONES / mean cadence must stay at or under \
      PER_NODE_CEILING_BYTES_PER_SEC (COVER_TRAFFIC_RESTORATION.md sec 3.3)"
 );
+
+/// Peak cover bandwidth per node, in bytes per second — the burst a circuit
+/// has to absorb, as opposed to the sustained load it is provisioned for.
+///
+/// Every channel emitting at [`NOISE_MIN_DELAY_MS`], the shortest interval the
+/// cadence can draw. Exactly `mean / min` = **1.5×**
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`], and it is derived rather than written
+/// so it cannot drift from the cadence it comes out of.
+///
+/// **Deliberately not asserted against a ceiling of its own.** No peak budget
+/// has ever been pre-registered, and inventing one here would be a constant
+/// with no warrant — the kind of number a later reader treats as derived
+/// because it sits next to derived ones. What it is for is disclosure: §3.3's
+/// figures are sustained, and an operator sizing a circuit needs this one.
+pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
+    let raw = (WINDOW_BYTES as u64)
+        * (super::inherited::NOISE_CHANNELS as u64)
+        * (CEILING_ZONES as u64)
+        * 1_000
+        / (NOISE_MIN_DELAY_MS as u64);
+    // Checked rather than assumed. Unlike `noise_windows_in_epoch`, the fit is
+    // NOT provable from the shape of the expression: `peak = sustained x
+    // mean/min`, and `mean/min` is unbounded as the jitter grows against the
+    // base. It is 1.5x today; an assert is what keeps that from becoming a
+    // silent truncation if it ever is not.
+    assert!(
+        raw <= u32::MAX as u64,
+        "peak cover bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        raw as u32
+    }
+};
 
 /// Windows an epoch of `min_epoch_secs` affords at the **slowest** cadence
 /// (`NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS`).
