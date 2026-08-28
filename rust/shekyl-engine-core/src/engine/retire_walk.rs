@@ -59,12 +59,21 @@
 //! retired-record**: `PScanAccrual::retire_persona` returns `false` for an id
 //! already in `retired`, and the open path stops deriving a retired slot.
 //!
-//! A walk re-run against a store that already holds that record therefore gets
-//! `NotHeld`, takes a different path, and **still passes its outcome
-//! assertions** — a green run that judged nothing. Every walk here starts from
-//! a freshly built state and asserts its own precondition
-//! ([`assert_walk_precondition`]) so a stale fixture fails loudly instead of
-//! degrading quietly.
+//! A subject that is *already retired* therefore answers `NotHeld`, takes a
+//! different path, and **still satisfies an outcome-shaped assertion** — a
+//! green run that judged nothing. [`the_second_retire_is_the_no_op_a_stale_fixture_would_hide`]
+//! exercises exactly that degradation, so the hazard is demonstrated here
+//! rather than only described.
+//!
+//! **What this walk does and does not face.** It builds its state fresh
+//! in-process ([`walk_accrual`]) and never loads a persisted scan store, so it
+//! cannot *encounter* the stale-store case; saying otherwise would overstate
+//! what is judged. [`assert_walk_precondition`] is therefore a **tripwire on
+//! the fixture builder**, not a live check: it fails if a future edit to
+//! `walk_accrual` seeds a retired-record or drops the pending trigger, either
+//! of which would make every arm below vacuous while still reporting green.
+//! The store-backed form of this hazard belongs to a walk that actually loads
+//! a store — the daemon walk, or whatever closes the seal-then-act seam.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -112,11 +121,13 @@ fn unexpired_settled() -> SettlementEpoch {
     SettlementEpoch::from_raw(0)
 }
 
-/// **Rule 47 applied to the fixture.** The walk's subject is a persona that is
-/// *retirable now*; a state that already carries the durable retired-record
-/// describes a persona that has been retired *before the walk ran*, and every
-/// arm below would then exercise the idempotent no-op while still reporting
-/// green. Assert the subject exists before judging it.
+/// **Rule 47 applied to the fixture — a tripwire on [`walk_accrual`], not a
+/// live check.** Against today's builder both assertions hold by construction
+/// and cannot fail; they exist so that an edit which seeds a retired-record or
+/// drops the pending trigger fails *here*, loudly, instead of quietly making
+/// every arm below exercise the idempotent no-op while still reporting green.
+/// Bite it by adding a `RetiredPersonaRecord` for the subject in
+/// `walk_accrual`.
 fn assert_walk_precondition(accrual: &PScanAccrual, id: &PCanonicalId) {
     assert!(
         !accrual
@@ -136,10 +147,12 @@ fn assert_walk_precondition(accrual: &PScanAccrual, id: &PCanonicalId) {
 
 /// Is the persona's key material still reachable through the actor?
 ///
-/// The **independent** observable: a different handler
-/// ([`crate::engine::stake_engine::ProjectPersonaCanonicalId`]) reading the
-/// same `held` map, so the walk is not grading `retire_bonded` by the enum
-/// `retire_bonded` chose to return.
+/// The **independent** observable:
+/// [`StakeEngineHandle::persona_canonical_id`] asks the actor's
+/// `ProjectPersonaCanonicalId` handler, which reads the same `held` map that
+/// `retire_bonded` mutates — so the walk is not grading `retire_bonded` by the
+/// enum `retire_bonded` chose to return. (The message type itself is private
+/// to the actor module and is named in prose rather than linked.)
 async fn persona_still_held(stake: &StakeEngineHandle, slot: u32) -> bool {
     match stake.persona_canonical_id(PSlot::from_raw(slot)).await {
         Ok(_) => true,
@@ -242,6 +255,62 @@ async fn without_the_confirmation_predicate_the_key_material_stays_readable() {
     assert!(
         persona_still_held(&stake, RETIRE_SLOT).await,
         "no witness, no wipe: the key material stays readable"
+    );
+}
+
+/// **The degradation a stale fixture would hide, demonstrated.**
+///
+/// The retire is idempotent: re-handing a witness for a persona that is already
+/// gone answers `NotHeld`, which is correct and is what makes a crashed retire
+/// safe to re-fire. It is also what makes a *stale* fixture dangerous — a run
+/// whose subject was retired before the walk started takes this path, and an
+/// assertion shaped like "the outcome is not an error" would still pass while
+/// judging nothing.
+///
+/// Recorded as a test rather than a warning in prose because that is the
+/// difference between a hazard the reader is told about and one the suite can
+/// see. It is also why [`assert_walk_precondition`] exists.
+#[tokio::test]
+async fn the_second_retire_is_the_no_op_a_stale_fixture_would_hide() {
+    let (stake, id) = spawn_walk_actor();
+    let accrual = walk_accrual(id);
+    assert_walk_precondition(&accrual, &id);
+
+    let witness = || {
+        RetirementWitness::from_confirmed_unbond(
+            id,
+            SettlementEpoch::from_raw(0),
+            expired_settled(),
+        )
+        .expect("eligible")
+    };
+
+    let first = stake
+        .retire_bonded_persona(witness(), std::sync::Arc::new(FundedSlots::default()))
+        .await
+        .expect("actor is up");
+    assert_eq!(
+        first,
+        RetireOutcome::Retired {
+            slot: PSlot::from_raw(RETIRE_SLOT)
+        },
+        "the first retire wipes"
+    );
+
+    let second = stake
+        .retire_bonded_persona(witness(), std::sync::Arc::new(FundedSlots::default()))
+        .await
+        .expect("actor is up");
+    assert_eq!(
+        second,
+        RetireOutcome::NotHeld,
+        "the second is the idempotent no-op — SAME witness, SAME call, and the \
+         only thing distinguishing it from the first is prior state. A walk \
+         started from a stale fixture begins here."
+    );
+    assert!(
+        !persona_still_held(&stake, RETIRE_SLOT).await,
+        "and the persona stays gone across the no-op"
     );
 }
 
