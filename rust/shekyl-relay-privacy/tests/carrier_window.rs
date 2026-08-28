@@ -170,25 +170,30 @@ fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
     // the encrypted zones it may carry. The mean cadence is the denominator —
     // a jittered emitter's sustained rate is its mean, not its fastest gap.
     let channels = u64::from(carrier::CEILING_ZONES) * inherited::NOISE_CHANNELS as u64;
-    let node_rate =
-        (carrier::WINDOW_BYTES as u64) * channels * 1_000 / u64::from(carrier::MEAN_CADENCE_MS);
+    let mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
+    let ceiling = u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC);
+
+    // Cross-multiplied, not divided. `a / b <= c` floors, so a breach smaller
+    // than 1 B/s satisfies it while the true average sits over the ceiling.
+    // The B/s figures below are computed for the DIAGNOSTIC only — a reader of
+    // a failure wants bytes per second, but the decision must not round.
+    let node_bytes = (carrier::WINDOW_BYTES as u64) * channels * 1_000;
     assert!(
-        node_rate <= u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "WINDOW_BYTES {} across {channels} channels at a {} ms mean cadence is \
-         {node_rate} B/s, over the {} B/s per-node ceiling",
+        node_bytes <= ceiling * mean_ms,
+        "WINDOW_BYTES {} across {channels} channels at a {mean_ms} ms mean \
+         cadence is {} B/s, over the {ceiling} B/s per-node ceiling",
         carrier::WINDOW_BYTES,
-        carrier::MEAN_CADENCE_MS,
-        carrier::PER_NODE_CEILING_BYTES_PER_SEC,
+        node_bytes / mean_ms,
     );
 
     let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
-    let whole_tx_rate =
-        (structural_max as u64) * channels * 1_000 / u64::from(carrier::MEAN_CADENCE_MS);
+    let whole_tx_bytes = (structural_max as u64) * channels * 1_000;
     assert!(
-        whole_tx_rate > u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "a window sized for the structural max ({structural_max} B) is \
-         {whole_tx_rate} B/s at the worst posture, which should breach the \
-         per-node ceiling — that breach is why MAX_FRAGMENTS exists"
+        whole_tx_bytes > ceiling * mean_ms,
+        "a window sized for the structural max ({structural_max} B) is {} B/s \
+         at the worst posture, which should breach the per-node ceiling — that \
+         breach is why MAX_FRAGMENTS exists",
+        whole_tx_bytes / mean_ms,
     );
 }
 

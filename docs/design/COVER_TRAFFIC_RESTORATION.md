@@ -60,7 +60,7 @@ what that change would wake up.
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
 | `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
-| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,CHANNELS}` | `cryptonote_config.h` | cadence + channel count. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
+| `CRYPTONOTE_NOISE_CHANNELS` | `cryptonote_config.h` | channel count. `_MIN_DELAY` and `_DELAY_RANGE` **DELETED 2026-08-28** — zero readers, and the cadence is now `params::carrier::NOISE_MIN_DELAY_MS` / `_DELAY_JITTER_MS` in milliseconds. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
 

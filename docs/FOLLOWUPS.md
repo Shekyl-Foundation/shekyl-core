@@ -589,6 +589,26 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
+- **Relay: §56.5's memoryless cadence ruling is decided and unimplemented, and
+  nothing was tracking it.** *(Surfaced 2026-08-28, cadence round.)* §56.5
+  withdrew §56.3's null and ruled **the answer is memoryless**; the shipped law
+  is still bounded uniform. Re-measured at the new 5 s cadence (§56.7): the
+  bounded family's residual channel falls from 0.120 to **0.058** against
+  chance 0.050 — a seven-fold reduction, significant at 2.9 σ — so the ruling's
+  basis is **unchanged**, because memorylessness removes the channel by
+  construction while bounded merely leaks less at a given cadence. **This is
+  the §92.5c item 1 shape and it is filed for that reason**: a true, decided
+  sentence that stayed a claim because nobody opened it, and the cost there was
+  a predicate that could not discharge the item it described. Carries two
+  priced inputs that are now stale and want re-running at the new cadence:
+  §57's three exits (the ~18 % epoch-miss for a 20-fragment transaction was
+  computed at the 12.5 s mean, and the epoch now affords 90 windows rather than
+  40), and §58.2's admission-control threshold `θ` — *start iff
+  `P(k fragments clear in the remaining epoch) ≥ θ`* — which §58.2 explicitly
+  calls "a constants-round input, not a workaround". **Blocker: none.** It is
+  scope, not a dependency, and it belongs with the re-derivation round rather
+  than with the cadence commit that made its numbers stale.
+
 - **Relay: the `t_core` arrival harness — the witness this path has never
   - Target: pre-genesis
 

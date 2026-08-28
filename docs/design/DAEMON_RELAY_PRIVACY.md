@@ -4869,7 +4869,15 @@ replaces. Three things are needed to wire it; the band test is one.
 `bounded_uniform` inclusive-`[0, max]` off-by-one already bit this arc once, in
 the two-slot occupancy instrument, so the same primitive gets the same scrutiny:
 
-| | C++ today | Rust `NoiseCadence` | Verdict |
+> **The "C++ today" column is dated 2026-08-03 and is no longer today.** The
+> first two rows' `#define`s are **deleted** (2026-08-28, zero readers) and the
+> Rust pair is `params::carrier::NOISE_MIN_DELAY_MS` = 3 333 /
+> `NOISE_DELAY_JITTER_MS` = 3 334. This table is kept as the record of a
+> correspondence *check* — its finding was the granularity delta in the last
+> row, and that finding is what survives. The `bounded_uniform` inclusive-`[0,
+> max]` semantics it verified still hold and the new mean depends on them.
+
+| | C++ (as of 2026-08-03) | Rust `NoiseCadence` | Verdict |
 | --- | --- | --- | --- |
 | min delay | `CRYPTONOTE_NOISE_MIN_DELAY` = 10 s | `NOISE_MIN_DELAY_SECS` = 10 | ✅ |
 | jitter | `CRYPTONOTE_NOISE_DELAY_RANGE` = 5 s | `NOISE_DELAY_JITTER_SECS` = 5 | ✅ |
@@ -5201,6 +5209,16 @@ its own artifacts.
   blocked on the ambient background-failure-rate measurement (§19.3).
 
 ### 20.9 Q-11 — the covert timing constants are the arc's last unexamined numbers
+
+> **ANSWERED 2026-08-28.** The cadence is derived rather than inherited:
+> `3.333 s + U[0, 3.334 s]`, a 5 000 ms mean, against a per-node ceiling of
+> 16 KiB/s that is now a compile-time assert (§56.7 for the linkage
+> re-measurement, `COVER_TRAFFIC_RESTORATION.md` §3.3 for the denominator
+> ruling). The two `#define`s named below are deleted. What this section
+> describes — constants ported unchanged so a behavioural change stays
+> attributable — is the state it was written in, and the separation it argues
+> for is why the port and the derivation are different commits.
+
 
 `CRYPTONOTE_NOISE_MIN_DELAY`, `CRYPTONOTE_NOISE_DELAY_RANGE` and
 `CRYPTONOTE_NOISE_MIN_EPOCH` are ported unchanged by RP-3b, and the reason is
@@ -10056,12 +10074,74 @@ right: real code, real draws, real trials. `MatcherStrength` stays in the
 instrument as a permanent second arm so the next reader can see the result
 move with observer strength rather than trusting one number.
 
+### 56.6 Review round — four real defects, one mis-severity, one wrong claim
+
+**2026-08-03.** Six findings on #390. All six were acted on; two are worth
+recording because the reasoning is not obvious.
+
+**The instrument was measuring the wrong residual.** `blackout_end` was derived
+from `max(last)`, but each stream's *own* warm-up endpoint was recorded as its
+last pre-blackout emission — so for every stream but the latest, the observer
+was handed a `last` it could not have held, with real emissions in between it
+would have seen. Fixed with an explicit common `blackout_start` and a per-stream
+advance to the true last emission before it. **This is a measurement bug, not a
+style one, and it moved the numbers.**
+
+**The strong arm was not computing the strongest assignment.** Best-first greedy
+commits an early pair before seeing a later, better claim on the same emission —
+it can only *understate* matchability, which is precisely how §56.2's null
+arose. Replaced with `O(n³)` Kuhn–Munkres, **verified against a brute-force
+optimum at `n = 5`**, because an *incorrectly* optimal matcher is worse than an
+honestly greedy one: it reports a number nobody can reproduce and carries the
+authority of the word.
+
+**The memoryless arm could emit twice at one instant.** An unshifted geometric
+has a ~2 % atom at zero; the bounded (`min 10 s`) and metronome arms cannot do
+that. Left in, it is an asymmetry *between the arms* the shape comparison would
+have had to explain. Shifted by one grid step, with the table built for
+`mean − 1` so the arms stay matched in rate and differ only in shape.
+
+**One finding's severity was wrong and the defect under it was real.** It was
+reported as a hang — a zero draw stalling the emission loop. It cannot hang:
+the loop redraws each iteration, so `P(stall) = 0`. But the zero-interval atom
+beneath it was the arm asymmetry above, so the fix stands and the severity does
+not.
+
+**Two were performance and they mattered more than performance.** The geometric
+table was rebuilt per draw and the score matrix recomputed inside a sort
+comparator. **Runtime 388 s → 7.6 s.** At six minutes the sweep is something CI
+runs reluctantly and nobody re-runs while thinking; at eight seconds it is a
+thing you can ask questions of.
+
+**And the sweep asserted nothing.** It printed a table and passed unless it
+panicked — the §50.3 class in its plainest form, in the file that *records*
+that lesson. It now pins the three properties the shape decision rests on
+(metronome > 0.95, memoryless within 0.02 of chance, bounded above chance at
+10 s), plus the weak-matcher arm as a property, since the instrument's own
+failure mode is worth a regression test. The table is still printed — it is
+the readout the decision was taken against — but it is no longer the test.
+
 ### 56.7 Re-measured at the 5 s cadence — the channel shrinks ~7×, the ruling stands
 
 **2026-08-28.** The cover cadence moved from `10 s + U[0, 5 s]` (mean 12.5 s)
 to `3.333 s + U[0, 3.334 s]` (mean exactly 5 s). Both Unit 2 assertions went
 red, and neither was breakage — the instrument was reporting that the numbers
 §56.4 decided against had moved.
+
+**The jitter-to-base ratio DOUBLED, and the record said "preserved".**
+`10 s + U[0, 5 s]` is a ratio of 0.5; `3 333 + U[0, 3 334]` is **1.0**. The
+round was specified as *preserving §56's ratio* and the numbers given did not
+preserve it — a ratio-preserving 5 s mean would have been `4 000 + U[0, 2 000]`.
+Corrected here rather than in the constants: the doubling is in the safe
+direction and the table below is its warrant, since more relative jitter is
+exactly what weakens a matcher.
+
+**The invariant is not 1.0.** §56 requires the jitter to be non-zero, and the
+standing requirement is that jitter **scales with the base rather than staying
+fixed** — a fixed width against a shrinking base walks back toward the
+metronome. Neither 0.5 nor 1.0 is derived. A future cadence should re-measure,
+not copy the number, which is why this paragraph sits next to the measurement
+rather than in a constants table.
 
 **Bounded's residual channel at a 10 s blackout** (strong matcher, chance
 0.050):
@@ -10118,53 +10198,6 @@ is chosen for being coprime to the mean rather than for its result.
 The sweep table keeps §56.4's blackouts for comparability and gains a 13 s row,
 which is what makes the alignment effect visible in the readout rather than a
 property of whichever cadence happens to ship.
-
-### 56.6 Review round — four real defects, one mis-severity, one wrong claim
-
-**2026-08-03.** Six findings on #390. All six were acted on; two are worth
-recording because the reasoning is not obvious.
-
-**The instrument was measuring the wrong residual.** `blackout_end` was derived
-from `max(last)`, but each stream's *own* warm-up endpoint was recorded as its
-last pre-blackout emission — so for every stream but the latest, the observer
-was handed a `last` it could not have held, with real emissions in between it
-would have seen. Fixed with an explicit common `blackout_start` and a per-stream
-advance to the true last emission before it. **This is a measurement bug, not a
-style one, and it moved the numbers.**
-
-**The strong arm was not computing the strongest assignment.** Best-first greedy
-commits an early pair before seeing a later, better claim on the same emission —
-it can only *understate* matchability, which is precisely how §56.2's null
-arose. Replaced with `O(n³)` Kuhn–Munkres, **verified against a brute-force
-optimum at `n = 5`**, because an *incorrectly* optimal matcher is worse than an
-honestly greedy one: it reports a number nobody can reproduce and carries the
-authority of the word.
-
-**The memoryless arm could emit twice at one instant.** An unshifted geometric
-has a ~2 % atom at zero; the bounded (`min 10 s`) and metronome arms cannot do
-that. Left in, it is an asymmetry *between the arms* the shape comparison would
-have had to explain. Shifted by one grid step, with the table built for
-`mean − 1` so the arms stay matched in rate and differ only in shape.
-
-**One finding's severity was wrong and the defect under it was real.** It was
-reported as a hang — a zero draw stalling the emission loop. It cannot hang:
-the loop redraws each iteration, so `P(stall) = 0`. But the zero-interval atom
-beneath it was the arm asymmetry above, so the fix stands and the severity does
-not.
-
-**Two were performance and they mattered more than performance.** The geometric
-table was rebuilt per draw and the score matrix recomputed inside a sort
-comparator. **Runtime 388 s → 7.6 s.** At six minutes the sweep is something CI
-runs reluctantly and nobody re-runs while thinking; at eight seconds it is a
-thing you can ask questions of.
-
-**And the sweep asserted nothing.** It printed a table and passed unless it
-panicked — the §50.3 class in its plainest form, in the file that *records*
-that lesson. It now pins the three properties the shape decision rests on
-(metronome > 0.95, memoryless within 0.02 of chance, bounded above chance at
-10 s), plus the weak-matcher arm as a property, since the instrument's own
-failure mode is worth a regression test. The table is still printed — it is
-the readout the decision was taken against — but it is no longer the test.
 
 ## 57. Q11-B's exit depends on a mechanism fact — checked before touching constants
 

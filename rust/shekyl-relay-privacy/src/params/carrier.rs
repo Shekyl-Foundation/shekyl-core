@@ -139,6 +139,24 @@ pub const NOISE_MIN_DELAY_MS: u32 = 3_333;
 /// sweep would run its `BoundedUniform` and `Metronome` arms on the *same law
 /// under two names*.
 ///
+/// # The jitter-to-base ratio is DOUBLED, deliberately — not preserved
+///
+/// Shipped was `10 s + U[0, 5 s]`: a ratio of **0.5**. This is
+/// `3 333 + U[0, 3 334]`: a ratio of **1.0**. The cadence round was specified
+/// as "preserving §56's ratio" and the numbers given did not preserve it — a
+/// ratio-preserving 5 s mean would have been `4 000 + U[0, 2 000]`. Corrected
+/// in the record rather than in the constants, because the doubling is in the
+/// safe direction and is **measured**: more relative jitter is stronger
+/// against a matcher, and §56.7's bounded residual falling 0.120 → 0.058 at a
+/// 10 s blackout is that effect.
+///
+/// **Do not read 1.0 as the invariant.** §56 constrains the jitter to be
+/// non-zero, and the real standing requirement is that jitter **scales with
+/// the base rather than staying fixed** — a fixed width against a shrinking
+/// base is the path back to the metronome. Neither 0.5 nor 1.0 is a derived
+/// quantity; the warrant for this one is the linkage measurement, and a future
+/// cadence should re-measure rather than copy the number.
+///
 /// # Why 3 334 and not 3 333
 ///
 /// The odd split is what makes the mean **exactly** 5 000 ms:
@@ -198,13 +216,18 @@ pub const CEILING_ZONES: u32 = 2;
 /// than a figure quietly going stale in a table.
 pub const PER_NODE_CEILING_BYTES_PER_SEC: u32 = 16 * 1024;
 
+// Cross-multiplied rather than divided, and the reason is the claim above.
+// `PER_NODE_CEILING_BYTES_PER_SEC` says the ceiling holds *by construction*;
+// an integer division floors, so a breach smaller than 1 B/s would satisfy a
+// `rate <= ceiling` form while the true average sat over it. The rational
+// comparison has no such gap — and a check that rounds cannot support a claim
+// that the constants were chosen to avoid rounding.
 const _: () = assert!(
     (WINDOW_BYTES as u64)
         * (super::inherited::NOISE_CHANNELS as u64)
         * (CEILING_ZONES as u64)
         * 1_000
-        / (MEAN_CADENCE_MS as u64)
-        <= PER_NODE_CEILING_BYTES_PER_SEC as u64,
+        <= (PER_NODE_CEILING_BYTES_PER_SEC as u64) * (MEAN_CADENCE_MS as u64),
     "worst-posture cover bandwidth exceeds the per-node ceiling: WINDOW_BYTES \
      x NOISE_CHANNELS x CEILING_ZONES / mean cadence must stay at or under \
      PER_NODE_CEILING_BYTES_PER_SEC (COVER_TRAFFIC_RESTORATION.md sec 3.3)"
@@ -221,7 +244,19 @@ const _: () = assert!(
 /// definition — the inherited value was silently set equal to it.
 ///
 /// Moved here with the cadence it divides by, and now in milliseconds.
+///
+/// Widened to `u64` internally: `min_epoch_secs * 1_000` in `u32` caps the
+/// domain at ~49 days of epoch and panics in debug above it. The epoch is a
+/// security parameter that this arc has already discussed lengthening (§57's
+/// second exit), so a silent domain limit on the function that prices it is
+/// the wrong place to economise.
 #[must_use]
+// The `as u32` cannot truncate: `per_send` is 6 667 ms, comfortably over
+// 1 000, so the quotient is strictly LESS than `min_epoch_secs` — which is
+// already a `u32`. Widening the numerator removes the overflow without
+// widening the result.
+#[allow(clippy::cast_possible_truncation)]
 pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
-    (min_epoch_secs * 1_000) / (NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS)
+    let per_send = (NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS) as u64;
+    ((min_epoch_secs as u64 * 1_000) / per_send) as u32
 }

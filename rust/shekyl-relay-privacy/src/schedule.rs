@@ -968,7 +968,7 @@ mod tests {
     }
 
     /// The band is derived from the constants rather than transcribed, so a
-    /// cadence change retargets it instead of reding it — the literal
+    /// cadence change retargets it instead of turning it red — the literal
     /// `10_500..=15_500` here was a second copy of the pair.
     ///
     /// **Containment alone was too weak to be worth keeping.** A `next_send`
