@@ -441,11 +441,13 @@ async fn the_funded_gate_refuses_and_the_unfunded_case_proceeds() {
 // interface.** `BlockSource` is two methods — `tip_height` and a
 // single-height `block_at` — so a synthetic source serves any height on
 // demand. The loop scans `[frontier, horizon)`, and with the frontier seeded
-// at the cursor that range is ONE block.
+// at the cursor that range is a couple of blocks — not ~270k. The exact count
+// is TWO and both are load-bearing; see `tip_height` below.
 
-/// Serves exactly the sliver the sweep needs: a tip just past
-/// `cursor + reorg_depth`, and one synthetic block at the cursor whose parent
-/// hash matches the seeded frontier (the exhaustiveness check compares against
+/// Serves exactly the sliver the sweep needs: a tip past
+/// `cursor + reorg_depth` giving a **two**-block horizon (one consumed per
+/// run — see `tip_height`), each block chained so its parent hash matches the
+/// frontier the previous run sealed (the exhaustiveness check compares against
 /// `accrual.frontier_hash()`, so it must).
 struct WalkBlockSource {
     cursor_height: u64,
