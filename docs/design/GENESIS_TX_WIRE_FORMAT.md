@@ -233,8 +233,8 @@ Shed entirely (no genesis producer — removed from the tag space):
 **Staking is the `P` model, not a staking-specific arm (Q11 resolved).** Genesis
 staking is transfer-shaped admission under the firewalled pseudonym `P`. The
 cleartext claim wire is **deleted** for genesis, and cleartext `txout_to_staked_key`
-+ `txin_stake_claim` are **shed** (`PHASE_2B_SECTION7_DRAFT.md:288`,
-`PHASE_2B_FSM_RETOOL.md:94`). What the privacy model actually is:
++ `txin_stake_claim` are **shed** (`PHASE_2B_FSM_RETOOL.md:94`). What
+the privacy model actually is:
 
 - **A public bond floor *is* on the wire — necessarily.** The `bond_post` arm
   carries `bonded_total_atomic == bond_credit == bond_floor(holdings)`
@@ -242,7 +242,7 @@ cleartext claim wire is **deleted** for genesis, and cleartext `txout_to_staked_
   (`Σ pseudoOuts = Σ out_masks + fee + bond_credit`,
   `rust/shekyl-archival-bond-builder/src/lib.rs`). Consensus must verify the bond
   meets the floor, so this amount **cannot be hidden**; `==` (not `≥`) closes the
-  over-bond Sybil fingerprint (`PHASE_2B_SECTION7_DRAFT.md:84`).
+  over-bond Sybil fingerprint (`PHASE_2B_FSM_RETOOL.md admission shape`).
 - **Privacy = `P` dissociation + cover, not a hidden floor.** The floor is
   decorrelated from the staker by (a) the firewalled pseudonym `P`, and (b) the
   **cover**: the principal sends `bond_floor + cover` to `P`; `P` stakes the floor
@@ -282,7 +282,7 @@ appear on the consensus blob (confirmed: no wire usage) — not a genesis surfac
 | `0x00` | `txin_to_script` (:135,851) | **Shed** | CryptoNote placeholder, no producer. Remove from genesis tag space. |
 | `0x01` | `txin_to_scripthash` (:148,852) | **Shed** | idem. |
 | `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** (Q1 resolved) | Genesis `txin_fcmp` = `k_image[32]` **only**. `key_offsets` is consensus-**required empty** for FCMP++ inputs (`blockchain.cpp:3715`); `amount` is `0` and unused — FCMP++ membership is `shekyl_fcmp_verify` against the curve-tree root, not the legacy ring path (`scan_outputkeys_for_indexes`/`get_output_key` by amount+offsets). Both vestigial → dropped. |
-| `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`, `PHASE_2B_SECTION7_DRAFT.md:288`). No `txin_stake_claim` on the genesis wire. |
+| `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`). No `txin_stake_claim` on the genesis wire. |
 | `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (gate-2 §5.1.1; non-spending) | Full layout + sig-preimage in **§9.10** (`leaf_bytes[128]`; c1/c2 branch scalars ≤256; preimage le64/le32). |
 | `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (gate-4 §3.4.1; JoinMarket-only) | Full layout in **§9.11** — **incl. `bond_spend_pk`** (GF-1 debit authorizer, JoinMarket-only, on wire in both C++ `txin_archival_bond_post` and Rust `ArchivalBondPostVin`; authorized via the surface-A `pqc_auths` slot, SA-2b). |
 | `0x04` (dense) | `txin_archival_reward_emission` | **Deferred sub-freeze** — layout owned by `REWARD_EMISSION_VIN_PLAN.md` | Staker reward-emission vin (loud reward, Form-C `reward_P(E)`; **ML-DSA-65 auth** — single-vs-dual still open, plan §2:231; membership-only backing; per-epoch dedup on the bond record `claimed_settlement_epochs`, **not** a key image). Genesis tag **pinned `0x04` dense / `0x06` C++** (plan:118 "next free binary tag 0x06"). **Not in code yet** → a forward promise, not a freeze (**≠ Q6**, which references *existing* vendored crypto). Rule-interactions pinned §2.5/§12/§13; landing its PR may refine them. |
@@ -307,7 +307,7 @@ JoinMarket` (§13). (Q11 has no separate wire surface — staking rides these ar
 | `0x01` | `txout_to_scripthash` (:858) | **Shed** | dead. |
 | `0x02` | `txout_to_key` (:859) | **Shed (Q3 resolved)** | No genesis producer — coinbase emits tagged_key; the Rust tx-builder always sets a `view_tag` (`shekyl-tx-builder/src/wire.rs:94-98` → tagged_key); the only `txout_to_key` site is legacy `wallet2.cpp:13220` building a *synthetic local* tx prefix (retiring), not an on-chain producer. **`view_tag` becomes mandatory** — every transfer output is tagged_key. |
 | `0x03` | `txout_to_tagged_key` (:860) | **Ratify** (genesis `0x00`) | `key[32] view_tag(1)`. The **sole** genesis output type. |
-| `0x04` | `txout_to_staked_key` (:861) | **Shed (Q11 resolved)** | Retire C++ legacy — genesis staking outputs are ordinary main-tree stealth (`tagged_key` to `P`). **No principal commitment on- or off-wire:** stake-in is a plain FCMP++ transfer, its amount hidden by the output commitment like any transfer; the `C_stake` / tier / lock metadata is a deleted claim-era artifact (`PRINCIPAL_STAKE_LIFECYCLE.md` DQ1; `PHASE_2B_STAKE_LIFECYCLE.md` §2.1 *Delete*). No on-chain staked-output type. |
+| `0x04` | `txout_to_staked_key` (:861) | **Shed (Q11 resolved)** | Retire C++ legacy — genesis staking outputs are ordinary main-tree stealth (`tagged_key` to `P`). **No principal commitment on- or off-wire:** stake-in is a plain FCMP++ transfer, its amount hidden by the output commitment like any transfer; the `C_stake` / tier / lock metadata is a deleted claim-era artifact (`PRINCIPAL_STAKE_LIFECYCLE.md` DQ1; `design/PHASE_2B_FSM_RETOOL.md` §2.1 *Delete*). No on-chain staked-output type. |
 
 Each output is preceded by `VARINT(amount)` (cleartext for the coinbase output;
 `0` for confidential transfer outputs). With plain `txout_to_key` **and**
@@ -647,7 +647,7 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   floor: the principal sends `bond_floor + cover`; the `cover` is a confidential
   change-to-`P` output, so correlating a known principal spend to the public post
   requires guessing it (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §SP-2.d:471-516). `==`
-  closes the over-bond Sybil fingerprint (`PHASE_2B_SECTION7_DRAFT.md:84`). The
+  closes the over-bond Sybil fingerprint (`PHASE_2B_FSM_RETOOL.md admission shape`). The
   cover is ordinary CT (no wire field) → **no impact on the spend surface**; the
   `bond_post` floor is frozen with Q4 (single wave). *(Corrects an earlier "no
   public amount" framing.)*

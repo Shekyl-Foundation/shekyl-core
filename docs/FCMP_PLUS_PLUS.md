@@ -1032,7 +1032,7 @@ previously in the mempool) pay the full verification cost.
 ## 15. Staking and FCMP++
 
 **Genesis disposition (2026-06 — transfer-shaped admission).** The leading genesis
-staking form ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4)
+staking form ([`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) §2.4)
 does **not** ship Decision **3C** below. Admission principal lives on the **main tree**
 as ordinary FCMP++ transfers (principal ↔ HKDF-derived **`P`** sub-wallet); only
 **bond** (gate 4) and **reward emission** are consensus-special. Cleartext
@@ -1043,7 +1043,7 @@ genesis — the subtree was **docs-only**, never implemented in production Rust/
 
 Staked outputs (`txout_to_staked_key`) were designed to live in a **separate staking
 subtree** with a **160-byte / 5-scalar** leaf (Decision 3C —
-[`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3). The **main tree**
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) §2, §6.4.3). The **main tree**
 (all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged.
 
 ```text
@@ -1107,74 +1107,19 @@ Because `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) is now a reorg safety margin
 only (not a maturity enforcement mechanism), the tree is guaranteed to
 contain only matured outputs.
 
-**Claim validation:** `txin_stake_claim` inputs are validated against
-the staked output's `effective_lock_until` (computed as
-`creation_height + tier_lock_blocks`), watermark, and computed reward (using
-128-bit integer arithmetic for precision). Claims are valid both during the
-lock period and after maturity; the constraint is
-`to_height <= min(current_height, effective_lock_until)`.
-Additionally, `check_stake_claim_input` verifies the staked output is
-present in the curve tree via `get_curve_tree_leaf_by_output_index()`,
-which performs a double lookup through the `output_to_leaf` mapping table.
-If the output has no mapping (deferred insertion still pending), the
-claim is rejected. After retrieval, the stored leaf is bytewise-compared
-to a recomputed leaf from the output's `(output_key, commitment, h_pqc)`
-to bind the claim to the actual output data in the tree.
+**Lock-tier claim validation (`txin_stake_claim`) is retired.** Genesis
+staking does not use lock-tier claims. Archival reward emission is specified
+in [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (membership-only
+backing + work payload; dedup on the bond record). FCMP++ membership proofs
+for ordinary spends are unchanged.
 
-**PQC ownership cross-check:** For staked outputs and claim inputs:
+**PQC ownership cross-check** for **regular** spends: `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)`.
 
-1. Assert `h_pqc == shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`.
-2. Assert `leaf[96:128] == h_pqc` (fourth scalar unchanged under **(C_tier)**).
-3. **(C_tier):** verify opened `C~` tier leg matches public claim `tier` via `C~_amt` path
-   (upstream §6.4.1) — not raw `h_stake_bind` unless **(C1)** fallback is active.
-
-For **regular** outputs, `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)` unchanged.
-
-**Claim reward outputs must be indistinguishable from regular outputs.**
-Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not
-staked), use `CTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs to
-hide the reward amount, and go through the standard KEM derivation so
-their PQC keys are unique and unlinkable. Once a reward output matures
-into the curve tree, spending it must be indistinguishable from spending
-any other output. Specifically:
-
-- Reward outputs use confidential amounts (Pedersen commitment + BP+
-  range proof), not plaintext amounts with `CTTypeNull`.
-- Per-output PQC keys are derived via the standard hybrid KEM path
-  (unclamped Montgomery DH + ML-KEM-768 → HKDF → ML-DSA-65 keypair),
-  with the ML-KEM ciphertext embedded in `tx_extra` under tag `0x06`.
-- Claim transactions include a dummy change output (amount = 0) to
-  match the 2-output structure of regular transactions, preventing
-  structural fingerprinting.
-- The `txin_stake_claim` input type is inherently distinguishable on
-  the input side (it references a global output index). This is an
-  accepted trade-off: the *claim action* is visible, but the *reward
-  output* that results from it must blend into the anonymity set once
-  it enters the curve tree.
-
-**Phase 4 implementation (completed):**
-
-1. Consensus: `check_tx_inputs` rejects `CTTypeNull` for all non-coinbase
-   v3 transactions. Claim transactions must use `CTTypeFcmpPlusPlusPqc`.
-   Within the FCMP++ handler, a dedicated claim sub-path verifies
-   pseudo-out determinism (`zeroCommit(claim_amount)`), PQC ownership
-   cross-check, and batch pool balance — while skipping membership proof
-   verification (not applicable to `txin_stake_claim` inputs).
-2. Wallet: `wallet2::create_claim_transaction()` uses `CTTypeFcmpPlusPlusPqc`
-   with BP+ range proofs, hybrid KEM derivation for per-output PQC keys,
-   ML-KEM ciphertext in `tx_extra` (`0x06`), `H(pqc_pk)` leaf hashes in
-   `tx_extra` (`0x07`), and a 2-output structure (reward + dummy change).
-3. Consensus: BP+ range proofs on claim tx outputs go through the standard
-   `verCtSemanticsSimple` batch verification path alongside regular
-   transaction outputs.
-
-**Batch pool balance check:** The total of all claim amounts in a
-transaction is summed and checked against `staker_pool_balance` once (in
-`check_tx_inputs`), rather than checking each claim individually. This
-prevents multiple claims in the same block from overdrawing the pool.
-
-**Sorted inputs:** Stake claim key images must be sorted in ascending
-order, enforced alongside the existing `txin_to_key` sort check.
+Lock-tier staked-output / `txin_stake_claim` PQC checks, claim-reward fingerprinting
+rules, claim sub-path in `check_tx_inputs`, `create_claim_transaction`, batch pool
+balance, and stake-claim input sorting are **retired** with the claim-era model.
+Do not reintroduce them. Archival emission is a different vin
+([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)).
 
 ---
 
@@ -1412,6 +1357,14 @@ cd rust && cargo test --workspace
 
 ### Staking Tests
 
+Lock-tier `txin_stake_claim` / `txout_to_staked_key` unit and chaingen tests
+are **claim-era**. Do not treat them as a genesis gate. Archival emission and
+bond-post tests live with `REWARD_EMISSION_*` / `ARCHIVAL_*` and
+`tests/unit_tests/archival_*`.
+
+<details>
+<summary>Historical claim-era test inventory (do not implement from)</summary>
+
 #### C++ Unit Tests (`tests/unit_tests/staking.cpp`)
 
 - `txin_stake_claim` and `txout_to_staked_key` binary serialization round-trips (boundary values, all tiers)
@@ -1443,6 +1396,8 @@ cd rust && cargo test --workspace
 #### Rust Fuzz (`rust/shekyl-staking/fuzz/`)
 
 `fuzz_claim_reward`: generates random accrual records and stake parameters, verifies no overflow, reward ≤ pool, weight monotonicity, and cumulative bounds.
+
+</details>
 
 ### C++ Unit Tests
 

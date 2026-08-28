@@ -91,7 +91,7 @@ for archival — does **not** re-link to the principal across crypto, network, t
 output, and bond-funding surfaces over `P`'s whole life.
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Firewalled-pseudonym
-identity model*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4
+identity model*; [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4
 (transfer-shaped admission); [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (emission
 cadence, batching, `good_through`); [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 (public retention timeline at settlement-epoch resolution).
@@ -391,11 +391,11 @@ fires relative to principal activity is observability the firewall must address
 | HKDF derive `P` | No | Independent material; scan isolation |
 | Off-chain announce + backing presentation | Peers see | Backing before join-Market; no principal metadata |
 | **join-Market** | Yes (bond record create, `E_join`) | **Standing timing event** — defang via §2.3/§2.5; cannot hide in mint |
-| First **paying** emission | Yes (mint + dedup) | Decorrelate from principal funding |
-| Ongoing service | Yes (retention bits, holdings) | Network path; epoch-timeline fingerprint |
-| Rotation | Yes (new `P_id`, holdings transfer) | Portfolio change only — cosmetic swap insufficient (T-A1) |
+| First **paying** emission | Yes (mint + dedup) | Do not correlate with principal funding (network/timing hygiene; not a timeline-decorrelation lever — T-A1 portfolio is the public identity) |
+| Ongoing service | Yes (retention bits, holdings) | Network path; epoch-timeline fingerprint is public-attribution, not a reset-by-rotation lever |
+| Rotation | Yes (new `P_id`, holdings transfer) | **Portfolio change only** — timeline + shard-set adjacency are empty at lean eq (T-A1); cosmetic `P_id` swap insufficient |
 | Deliberate lapse > `W` | Yes (forfeiture) | Forfeiture economics — does not decorrelate without portfolio change |
-| Terminal drain | Yes (transfer) | Output decorrelation |
+| Terminal drain | Yes (transfer) | Ordinary FCMP++ spend; F-W10 — not an identifiable decorrelation beacon |
 
 **Registration fusion:** No separate *registration tx type*; **join-Market** is the
 on-chain anchor ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Off-chain backing
@@ -451,7 +451,7 @@ wallet/daemon defaults that **enforce** the invariants or loud-fail into unsafe 
 
 | Component | Gate-6 responsibilities |
 |-----------|-------------------------|
-| **`shekyl-wallet-core` / `StakeEngine`** | `P` HKDF; build emission/drain txs; rotation ceremony; bond-funding UX defaults; local jitter |
+| **`shekyl-engine-core` / `StakeEngine`** | `P` HKDF; build emission/drain txs; rotation ceremony; bond-funding UX defaults; local jitter |
 | **`StakeEngine` — `P`-scan identification context** | **Sole owner of `P.view_sk` and the `P`-scan pipeline** — a Gate-6 forward requirement on the PHASE_2B FSM retool, not inherited from claim-era §4.6 (§9.6 ownership-boundary clause). `P`-output identification descends from `P`'s `combined_ss`/decap, structurally disjoint from the principal `LedgerEngine` scan; outputs route by which decap matched, never cross-assigned |
 | **`LedgerEngine` — principal-scan context** | Owns principal `view_sk`; **must not** receive `P.view_sk` or `P` decap material; principal scan never claims a `P`-destined output |
 | **`shekyld` (daemon)** | Peer reachability to `P`; challenge routing; optional policy hooks — **must not** require principal identity for archival RPC |
@@ -459,7 +459,7 @@ wallet/daemon defaults that **enforce** the invariants or loud-fail into unsafe 
 | **GUI / mobile** | Surface rotation/lapse warnings; no principal↔`P` linking in logs or RPC |
 
 **Stage 3 blocker:** `StakeEngine` replaces `is_active_staker(entity_id)` — gate 6 **is**
-the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2).
+the staking identity surface ([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2).
 
 ---
 
@@ -554,7 +554,7 @@ artifact where one exists.
 - [ ] Land wallet disclosure §10 in UX copy. **→ R3/R4 (F1 disclosure draft §10, UX).**
 - [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
-      [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) (review → land).
+      [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
       cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
       scan contexts; §9.6). **→ R5.**
@@ -862,7 +862,7 @@ pinning that is the load-bearing requirement.
 
 **Ownership boundary (Gate-6 forward requirement on the PHASE_2B retool).** The dual-scan pipeline
 (principal + `P`) is an authoritative genesis pin
-([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.1 carry-over — "`P` HKDF
+([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.1 carry-over — "`P` HKDF
 sub-wallet … dual scan"). Assigning sole ownership of `P.view_sk` to `StakeEngine` (separate from
 the principal `LedgerEngine` scan) is a Gate-6 **requirement the FSM retool must honor**, not a
 fact inherited from current PHASE_2B text: §4.6's `StakeEngine` trait surface is **claim-era /
@@ -3046,7 +3046,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
 
 | Doc | Relationship |
 |-----|----------------|
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Parent wallet scope; §2.4 admission shape |
+| [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | Parent wallet scope; §2.4 admission shape |
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Emission timing, batching, `P` id |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | Public retention timeline |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | L16 transport; soundness pass step 3 |
@@ -3162,7 +3162,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   vouts against a public `bond_debit` source term, F-D4 T-2's
   structural-unrepresentability — and the "same decorrelated-drain discipline" tail
   retires with F-W10). §2.1's transfer-leg pin scoped: "timing/output still leak" now
-  reads entry-leg-only. `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 tx-leg rows and the
+  reads entry-leg-only. `design/PHASE_2B_FSM_RETOOL.md` §2.4 tx-leg rows and the
   §7 Unbond-refund threat row corrected at source. No new F-W tokens minted — both
   verdicts are dispositions of existing pin prose under an adopted method note, not
   blocking findings.
@@ -3192,7 +3192,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   (§1 drain row, §2 `drain()` shape constraint, §3 GF-4 bullet, DQ3 closed without a
   count rule, §7 ordered-gates item 1), `F1_TA3_TA7_LIFETIME_WINDOW.md` §9.3 T-A5
   residual/disposition, `V3_STAKER_ARCHIVAL.md` output-layer bullet,
-  `PHASE_2B_STAKE_LIFECYCLE.md` §2.1 carry-over row. With the
+  `design/PHASE_2B_FSM_RETOOL.md` §2.1 carry-over row. With the
   fourth row in, the dissolution stands strengthened and the round is closed as ratified.
 
 - **2026-07-16 (R4 decision round — §12.9: the F-D4 §15.5 hand-forward answered):**

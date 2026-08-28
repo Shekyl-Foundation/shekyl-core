@@ -1,5 +1,7 @@
 # Archival challenge mechanism — design round (2026-08-07)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **Status (landed on `dev` 2026-08-11 — this file is now the record; the
 branch snapshot and its superseded-in-place banner are retired):**
 **Design-round output. Direction ratified; the mechanism as a whole is NOT

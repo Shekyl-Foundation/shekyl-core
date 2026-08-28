@@ -1,5 +1,7 @@
 # TM-1 / A0 — Shard-portfolio linkage across sequential persona rotation
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status:** **ANALYZED — accepted + disclosed (2026-06-28).** TM-1 (are an operator's
 `P`-personas unlinkable *from each other*?) reduces, against the actual design, to
 the shard-portfolio correlate across **sequential** rotation. The dispersive-default
@@ -7,7 +9,7 @@ shard-selection built this round reduces the binding at a modest, capacity-bound
 haircut; the residual is the **temporal** intersection channel, which is T-A1 / TM-2
 (already instrumented in `fingerprint.rs`), not a new problem.
 **Scope:** the principal ↔ `P` firewall (gate-6), Attack **A0** / finding **TM-1** in
-[`ARCHIVAL_FIREWALL_THREATS.md`](ARCHIVAL_FIREWALL_THREATS.md) §4.
+[`ARCHIVAL_FIREWALL_THREATS.md`](../design/ARCHIVAL_FIREWALL_THREATS.md) §4.
 **Method:** the §7 silent-compliance audit + an endogenous-equilibrium simulation in
 `rust/shekyl-staking-sim` (`--clustering`) — the analogue of the cover's
 `--cover-targeting` (measure, do not reason).

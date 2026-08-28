@@ -1,5 +1,7 @@
 # WI-3 — Block-timed bond-post dispatch driver
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 > **Status: implemented — in review (2026-07-05, `feat/wi3-dispatch-driver`,
 > stacked on `feat/bond-assembly`).** Gates 1–11 landed: the driver + locked
 > seal path (`pscan/dispatch.rs`), schema v2 (`PENDING_POST_VERSION` 2, v1

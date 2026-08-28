@@ -5,7 +5,7 @@
 > "without this mechanism active." That framing is **superseded**: archival
 > pay-for-service is the **genesis (V3.0) staking model**. The confidential
 > claim/tier staking it would have replaced was retired pre-genesis
-> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)),
+> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md)),
 > the reward leg is specified "for genesis"
 > ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
 > archival bond/claim stack is built and exercised as genesis-live (the
@@ -638,7 +638,7 @@ strong Bayesian evidence of their tier.** This is a tier-disclosure channel
 *entirely separate from* the confidential-staking claim wire — and it is the
 channel the share feature (`docs/V3_SHARD_VISUALIZATION.md`) gamifies stakers
 into advertising. Two consequences, analyzed in
-`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding **F-ARCHIVAL**): (1)
+`docs/V3_STAKER_ARCHIVAL.md` (this file; finding **F-ARCHIVAL**): (1)
 the claim-wire tier and this archival tier-weighting are **separable levers** —
 **whole-system tier privacy requires weakening both**, so de-tiering the claim
 alone would *not* close the tier leak while this coupling exists and portfolios
@@ -677,8 +677,8 @@ foundation-only archival, because trust is distributed across stakers
 **Second-order concern — self-advertisement bridges identity to the
 claim cohort (cross-track to staking privacy).** This is separate from
 query metadata. Two archival-side surfaces compose adversarially with
-the confidential-staking claim-cohort leak analyzed in
-`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding F0): (1) the
+the retired claim-era claim-cohort leak (finding F0; living surfaces
+`docs/design/PHASE_2B_FSM_RETOOL.md` and this file): (1) the
 **on-chain holder registry** candidate for "Query routing protocol"
 (below) publishes which staker holds which shard; and (2) a staker's
 **held shard-set is distinctive** for active rare-shard hunters. Because
@@ -691,7 +691,7 @@ leak `tier` for free. The mitigation is not more query anonymization;
 it is a **privacy review of the holder-registry shape and the share
 feature against claim-cohort linkage** before `ArchivalEngine` /
 `shekyl-shard-visual` ship. Tracked in `docs/FOLLOWUPS.md` under the
-F0 V3.1 entry. The query-routing design choice (DHT/registry vs. gossip,
+F0 pre-genesis residue, if any remains. The query-routing design choice (DHT/registry vs. gossip,
 below) should weigh registry-published holder presence as a privacy cost,
 not only a routing-efficiency tradeoff.
 
@@ -701,7 +701,7 @@ ratification.** The section above (and the V3 ship default) covers only *query
 metadata*. It does not, on its own, decide how the archival *commitment* — "I
 archive shard X, I earn the reward" — binds to identity, and that gap was the
 highest-value open privacy item in the staking/archival surface
-(`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3, finding **F-ARCHIVAL**). It is
+(`docs/V3_STAKER_ARCHIVAL.md`, finding **F-ARCHIVAL**). It is
 resolved below in *Pay-for-service rebasing and the firewalled-pseudonym identity
 model* — **private**, via a membership-proof-registered pseudonym, subject to the
 gate-list there. The remainder of this subsection records the question and the
@@ -774,7 +774,7 @@ Enumerating every candidate, the others are not services staking renders:
   Sybil resistance, block production, fork choice, and difficulty. Staking has no
   block-production role, no finality gadget, no fork-choice weight, no checkpoint
   authority — which is exactly why the classic-PoS attack family was retired
-  (`PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3). Staking contributes zero to the property
+  (`design/PHASE_2B_FSM_RETOOL.md` §7.5.3). Staking contributes zero to the property
   PoS systems invoke to justify staking.
 - **Capital-at-risk "security bond" — not a service, and weaker than the label.**
   A bond secures something only if it is *slashable for the misbehavior it bonds
@@ -840,7 +840,7 @@ spend/claim/principal identity, whose unavoidable public surface leaks nothing p
 "some pseudonym holds these shards."
 
 **Transfer-shaped admission (leading genesis form — see
-[`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4).**
+[`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) §2.4).**
 Replace `StakeEngine::is_active_staker(entity_id)` with firewalled **`P`** keyed off
 the **bond record** (gate 4), not a linkable stake lookup.
 
@@ -1165,11 +1165,11 @@ not a *security* one.)
 **Scope note (relation to existing sections).** This rebasing **replaces** the
 two-stream confidential-yield subsystem rather than extending it: the
 reserve-DLEQ entitlement, bounded-remainder range proof, and amount-scaled
-`tier_num · amount` reward (`CONFIDENTIAL_STAKING.md`; `rust/shekyl-staking/`
+`tier_num · amount` reward (`V3_STAKER_ARCHIVAL.md`; `rust/shekyl-staking/`
 `entitlement.rs` / `tiers.rs` / `rewards.rs`) are the *capital-bonded-yield*
 machinery and are obsoleted by it, not adapted. Pre-genesis that is the right
 trade — the audit-surface deletion is large and is exactly the convergence's
-benefit — but it is a **replacement**, and `CONFIDENTIAL_STAKING.md` is **not**
+benefit — but it is a **replacement**, and `V3_STAKER_ARCHIVAL.md` is **not**
 edited to match until the tier decision (gate 4) and the supply normalizer
 (gate 1) are settled, since that doc is the subsystem this would replace.
 
@@ -1540,5 +1540,5 @@ the dot-version, not the existence of the mechanism.
 - `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — legal disclosure draft
 - `docs/SEED_NODE_DEPLOYMENT.md` — foundation `--no-prune` archival
   policy
-- `docs/STAKER_REWARD_DISBURSEMENT.md` — existing reward distribution
-  mechanics that the V3.x archival stream layers atop
+- `docs/design/REWARD_EMISSION_LEG.md` — archival reward emission
+  (lock-tier disbursement is deleted)

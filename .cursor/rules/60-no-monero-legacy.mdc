@@ -5,7 +5,7 @@ alwaysApply: true
 
 # No Monero legacy
 
-Shekyl begins at its own genesis with `RCTTypeFcmpPlusPlusPqc` as the
+Shekyl begins at its own genesis with `CTTypeFcmpPlusPlusPqc` as the
 minimum transaction type. There is no Monero chain to sync, no pre-genesis
 blocks to validate, and no users with legacy wallet state. Code that exists
 solely to handle pre-genesis Monero behavior is dead weight.
@@ -24,7 +24,7 @@ The following are deleted, not preserved behind version checks:
   shims
 - The wallet's `get_outs` / `get_outs.bin` ring-decoy selection path
 
-Accepted transaction types: `RCTTypeFcmpPlusPlusPqc` (and `RCTTypeNull` for
+Accepted transaction types: `CTTypeFcmpPlusPlusPqc` (and `CTTypeNull` for
 coinbase). Anything else is a consensus error, not a compatibility branch.
 
 ## Rules

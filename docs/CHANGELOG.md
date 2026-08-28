@@ -147,6 +147,14 @@
 
 ### Changed
 
+- **Documentation lifecycle is now a first-class process.** `docs/README.md`
+  and `.cursor/rules/95-documentation-lifecycle.mdc` classify every doc
+  (living contract / open plan / closed-as-record). Work-item targets are
+  only **pre-genesis**, **post-genesis** (tiny, named blocker), and **V4**
+  (NIST lattice-only, 2–5 years). Claim-era staking specs are deleted, not
+  stubbed. Closed Stage-1 / Stage-0 plans and named audits moved to
+  `docs/completed/`. `docs/FOLLOWUPS.md` is a one-liner queue again.
+
 - **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
   FFI dispatch bridge is deleted (RK-4b).** With RK-4a's `/get_o_indexes.bin`
   this was the last `.bin` route reaching C++, so `dispatch_bin`,
@@ -2623,9 +2631,9 @@ production callers.
   follow-up batches per the ledger.
 - **docs: `CONFIDENTIAL_STAKING` supersession hardening (agent-misread).**
   The retired confidential-claim / 3C / entitlement staking body moved to
-  [`docs/completed/CONFIDENTIAL_STAKING.md`](completed/CONFIDENTIAL_STAKING.md)
+  `docs/completed/CONFIDENTIAL_STAKING.md` (deleted 2026-08-26)
   with a loud non-SoT banner. A short redirect stub remains at
-  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  `docs/design/CONFIDENTIAL_STAKING.md` (deleted 2026-08-26)
   naming the living authoritative surfaces (`PHASE_2B_STAKE_LIFECYCLE`,
   `PRINCIPAL_STAKE_LIFECYCLE`, `REWARD_EMISSION_LEG`, bond/firewall docs) so
   basename greps under `docs/design/` hit the tombstone instead of ~1300
@@ -9515,7 +9523,7 @@ production callers.
   unblocked; gate-6 Round 3–4 wallet defaults remain open.
 
 - **docs: P2B-6 §7 landed + LMDB substrate verify (2026-06-07).**
-  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat
+  `PHASE_2B_STAKE_LIFECYCLE.md` (deleted 2026-08-26) §7 — archival threat
   model (T-A*, G11 extended, F1/T-A1 gate); claim-era wargame → §7.A. §7.11: LMDB on `dev`
   verified (`m_properties` scalars, `already_generated_coins`, `pop_block` revert pattern;
   bond wire greenfield). FSM retool substrate-verify row closed.
@@ -9533,7 +9541,7 @@ production callers.
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
-  [`PHASE_2B_SECTION7_DRAFT.md`](completed/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
+  `PHASE_2B_SECTION7_DRAFT.md` (deleted 2026-08-26) — F1 SEB structural
   lever + T-A1 sim gate; T-A16 (A6); G11 KAT invariants; G1 three-tier slash surfacing;
   partial slash stays Bonded (FSM). Timing doc §1.1 SEB/F1 coupling.
 
@@ -10554,7 +10562,7 @@ production callers.
   C++ ESF base subsidy to Rust landed separately (PR #93) and wires the
   consensus path to the `shekyl_base_block_reward` primitive, **not** to
   this trait — the trait remains consumer-free until its own cutover per
-  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](completed/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
   §6.2. No consensus or wire-format change.
 
 ### Security
@@ -10697,7 +10705,7 @@ production callers.
   `FaultInjecting<LocalLedger>` test wrapper and `replace_ledger`
   test helper were deleted; hybrid retry tests drive
   `ConcurrentMutation` producer-side. Shape (b) per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §8; atomicity rationale per
   [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §3.
@@ -10717,7 +10725,7 @@ production callers.
   **baseline daemon correctness — identical to the spend path's reliance
   on spent-key-image revert** when a spend is reorged-then-respent — so
   it is not a stake-specific dependency at all, and the daemon's
-  `pop_block` mechanism ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  `pop_block` mechanism (`CONFIDENTIAL_STAKING.md`, deleted 2026-08-26)
   §11; inherited-architecture consensus code) is not the wallet's to
   track. Edits: §10.1 box rewritten to "forward-rebuild only, no reversal
   work"; §5.2 closing note collapsed to the key-image-parity statement;
@@ -10837,7 +10845,7 @@ production callers.
   `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
   password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
   drops the password parameters. Design:
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **Wallet file format v1: per-region HKDF wrap keys (spec + implementation).**
   [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.6 prescribes
@@ -10850,7 +10858,7 @@ production callers.
 ### Documentation
 
 - **Stage 1 PR 6 — external lessons canvass (§5.12).**
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
   records historical wallet-disaster lessons, OS discipline for F5(b), Stage 4
   actor-model pins (bounded mailbox, save coalescing, supervisor `stop`), and
   substrate verification (KDF params in wrap AAD; HKDF `address` = 65-byte
@@ -10859,7 +10867,7 @@ production callers.
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
 
 - **Stage 0 PR-A — iai-callgrind symmetry rule** (`3d313256c`). Backfill.
-  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 codifies
+  [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2 codifies
   the symmetry rule (setup *and* fixture teardown excluded from the measured
   region; criterion amortizes `Drop` via `b.iter`, iai-callgrind does not) and
   adds Finding 5 to the §4.4 gap-check inventory. Closes the
@@ -10868,7 +10876,7 @@ production callers.
   `engine_trait_bench_*` bench.
 
 - **Stage 0 PR-A-extension — iai-callgrind boundary rule** (`2e5309ad3`).
-  Backfill. [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2
+  Backfill. [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2
   adds the boundary rule (iai-callgrind measures function-boundary value
   movement; `Engine<SoloSigner>` is 6,296 bytes, so by-value fixture passing
   cost ~600 instructions of memcpy) and the §4.4 unified
@@ -10876,7 +10884,7 @@ production callers.
   memcpy-at-boundary finding.
 
 - **Stage 0 PR-C — iai-callgrind hoisting rule** (`93d515123`). Backfill.
-  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 adds the
+  [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2 adds the
   hoisting rule (criterion-side `b.iter` iter-amortization can elide
   state-dependent compute the author meant to count) and the §4.4 two-anchor
   static check (predict criterion `median_ns` from iai instructions by workload
@@ -10894,7 +10902,7 @@ production callers.
   `shekyl-engine-file` adds `Mutex<WalletFileState>`, `rotate_password` on
   `&self`, additive `save_state_with_wrap_key_region_2`, and `base_path()`.
   `WalletFile` trait impl and `Engine<F>` wiring follow in C3–C5. Design:
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
   landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits
@@ -13339,7 +13347,7 @@ production callers.
   Lands the Round-3-closed `PendingTxEngine` trait, the (γ) lean
   three-collection reservation model, secondary-engine trait seams,
   and `Engine<S, D, L, R, P>` orchestration dispatch per
-  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §4 / §5.0 / §7.X (C0 = `4466d153e` … C7 = `ca7622558`; C8 doc
   commit follows).
   - `pub trait PendingTxEngine: Send + Sync + 'static` at
@@ -13369,7 +13377,7 @@ production callers.
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
   Lands the Phase-0a-binding `RefreshEngine` trait and the
   `ViewMaterial` adjacent type per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §4 Phase 0a + Phase 0c + Phase 0e and
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 (PR 4 C0 = `322677261`; C1 = `d3edc1abb`).
@@ -13433,7 +13441,7 @@ production callers.
   `8fc207051`; `SuppressedRateLimit` variant per Round 4
   review pass F6 = same commit). Lands the second channel of
   the two-channel error / diagnostic actor-mesh seam per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
   - `pub enum RefreshDiagnostic` at
     [`engine/diagnostics/refresh_events.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/refresh_events.rs)
@@ -13685,7 +13693,7 @@ production callers.
   *C8 — docs propagation* (this commit):
   - This CHANGELOG entry extended with the C7 sub-section
     above and the C8 sub-section here.
-  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     gains the Phase-1-landed Status-banner closure paragraph
     enumerating C0–C8 landing SHAs; §7.X gains per-`Commit
     Cn` `Landed:` lines anchoring each commit's SHA inline
@@ -13757,7 +13765,7 @@ production callers.
     candidate P1-closing shapes close P3 as a side effect;
     P3 stays catalogued separately to preserve the Copilot
     PR #37 audit trail).
-  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.5 named-home table rows P1 / P2 / P3 updated with a
     bold **Phase 1 landed without absorption** marker plus
     one-sentence cross-refs to the re-anchored FOLLOWUPS
@@ -13843,7 +13851,7 @@ production callers.
     closure and only `Scanner::scan` is measured. **F11-S
     audit-trail impact: ZERO** — the F11-S binding
     measurement (per
-    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §3.1 / §5.4.9 / §7.Y) is anchored on the cold-cache
     N=16 worst-case p99 (12.95 ms per-tx / 819 µs
     per-output), and the cold variant was already
@@ -15753,7 +15761,7 @@ production callers.
 - **Stage 1 PR 4 — `RefreshError::InternalInvariantViolation
   { context: &'static str }` variant addition** (PR 4 C3 =
   `c45894ffe`; Phase 0c amendment per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 close-out). Resolves the Round 2 R6 "(a) extend
   `ConcurrentMutation` or (b) introduce
   `InternalInvariantViolation`" cleanup pin at the design layer.
@@ -16583,7 +16591,7 @@ production callers.
   (commit decomposition + Phase 1 commit list)**
   (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit
   doc-only Round 4 close on
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   per the PR 1 / PR 2 / PR 3 / PR 5 precedent. §4 Phase 0
   candidates (0a–0e, with 0d struck) finalize as
   binding-pinned at the type-signature level; Round 4 audit
@@ -16613,16 +16621,16 @@ production callers.
   §6 Round 4 readiness gate; no further design rounds open
   unless Phase 1 commit-authoring surfaces a structural
   finding (the closure rule per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §7 governs reopening if it does).
 
 - **Stage 1 PR 4 — Round 3 confirmation
   (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
   (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
   doc-only Round 3 closure on
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md).
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md).
   PR 5 Round 1's disposition under the actor-mesh framing (per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.0 / §5.2 / §5.5) confirmed shape (1) — *snapshot-ID pinning* —
   with the reservation tracker holding monotone semantics under
   PR 4's α; PR 4 advances directly to Round 4 (commit decomposition
@@ -16665,7 +16673,7 @@ production callers.
   [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
   - **A1 commit (mechanical past-tensing sweep)**: reconciled
     17-reference enumeration across
-    [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md),
+    [`STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md),
     [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./completed/STAGE_1_PR_1_DAEMON_ENGINE.md),
     and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
     to 13 in-scope references; `PERFORMANCE_BASELINE.md`'s four
@@ -18182,7 +18190,7 @@ production callers.
   / adversarial-daemon-resistance-as-structural) are
   **independently sufficient** to defeat shapes (2) and (3) under
   the actor-mesh framing per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.5. Ground 1 is expected confirmation, not load-bearing for
   the disposition.
 
@@ -18214,7 +18222,7 @@ production callers.
   `feat/stage-1-pr5-pending-tx-engine-design` (off `dev` at
   PR-#42 merge `6de8335d5`). Closes the load-bearing open
   question
-  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5 in **one round** rather than the seed's
   three-to-four-rounds projection because the §5.0 actor-mesh
   framing exhausts the wargaming surface in this round per the
@@ -18383,12 +18391,12 @@ production callers.
   from. Doc-only.
 
   Doc-only; no Rust or C++ code touched. Cross-references:
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.0 (actor-mesh framing as Round 1 substrate), §5.1
   (three-shape comparison under the lens), §5.2 (PR 4 α
   confirmed), §5.3 (five criteria), §5.4 (residuals), §5.5
   (Round 1 disposition + scorecard);
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
   `DiagnosticSink` contracts inherited by PR 5);
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -18407,7 +18415,7 @@ production callers.
   moved to the **top** of the PR 4 cluster rather than to
   the bottom). Concrete dispositions:
   - Typo `Forecloseing` → `Foreclosing` in
-    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.4.6 (R6 reframe, concurrent-emit pin discussion).
   - Typo `dispositon` → `disposition` in
     [`REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
@@ -18422,7 +18430,7 @@ production callers.
     over alternatives**).
   - Two CHANGELOG citation links retargeted from
     self-references to
-    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     over to the actual
     [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
     source. The link **text** named the source file; the
@@ -18445,7 +18453,7 @@ production callers.
 - **Stage 1 PR 4 — §5.5 work-list hygiene: P3
   `apply_scan_result_to_state` `Vec<usize>`-discard row
   added.** Single-row addition to the
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.5 work-list against the dev-side FOLLOWUPS entry
   ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
   even for trait-impl callers that discard it") that landed
@@ -18472,7 +18480,7 @@ production callers.
   Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
   (off `dev` at `9e53c82fa`). Closes the load-bearing open
   question
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5 named in the seed; α is the disposition because it satisfies
   all four review criteria — PR 4 extraction cleanliness, PR 5
   two-phase build/submit/discard contract over reorg events,
@@ -18486,7 +18494,7 @@ production callers.
   R2 (β as V3.x FOLLOWUPS) and a hypothetical follow-up PR (γ
   if R1's PR 5 design surfaces correctness need).
 
-  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.4 (Round 1 disposition with four-criteria rationale and
     R1 / R2 / R3 residuals) and §5.5 (work-list table for every
     refresh-adjacent item with its target version and "where
@@ -18515,14 +18523,14 @@ production callers.
   Doc-only; no Rust or C++ code touched. Branch posture:
   `feat/stage-1-pr4-refresh-engine-design` stays on `dev`-rooted
   doc-only commits until M3e closes per
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
   branch policy.
 
 - **Stage 1 PR 4 — Round 1 review pass: more carefully-specified
   α (view-material flow, atomicity, error taxonomy).** Same-day
   follow-up to the Round 1 disposition above. The review pass
   corrected
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §3.1's materially-wrong "no secret-touching surface" framing
   to **master-secret isolation** routed through R4 — the existing
   producer
@@ -18881,7 +18889,7 @@ production callers.
   supersedes Round 2 first-pass R5 / R6 dispositions.** This
   bullet supersedes the immediately-following bullet's R5 and
   R6 dispositions per the
-  [Round 2 reframe section](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [Round 2 reframe section](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R5 reframe / §5.4.7 R6 reframe / §5.4.8. The
   immediately-following bullet's R1 / R2 / R3 / R4 / R7
   dispositions are unchanged and still hold.
@@ -20984,7 +20992,7 @@ production callers.
   [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) is
   rewritten from the Round 4b template stub into the per-bench
   frozen-baseline shape that
-  [`docs/design/STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md)
+  [`docs/design/STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md)
   §4.5 operationalizes (one populated section for
   `engine_trait_bench_ledger_synced_height` frozen at Stage 0
   PR-2's merge SHA; four deferred-bench placeholder sections for
@@ -21063,7 +21071,7 @@ production callers.
   three N=3 invariance-verification captures (runs `25239954863`,
   `25239956447`, `25239958016`) that produced byte-identical
   iai-callgrind output (±0% variance on the gate metric per
-  [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md) §4.4 dynamic
+  [`STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md) §4.4 dynamic
   check). The bench's "frozen at" SHA is the capture SHA
   `0276d210e` (PR-2 commit 4c, post-Q `Box<Engine<S>>` fixture);
   the in-tree
@@ -22642,7 +22650,7 @@ production callers.
   amendment (no-Mock substrate for C6).**
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
   amendment to
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   landed mid-Phase-1 between C5β (legacy producer scaffolding
   deletion) and C6 (test substrate). The Round 4 §7.X C6 plan
   ("`MockRefresh` test substrate; mirrors `MockDaemon` /

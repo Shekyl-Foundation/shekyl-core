@@ -1256,13 +1256,13 @@ loop, the inter-attempt cancellation observation, or checkpoints
 trait-and-orchestrator checkpoint split as a contract surface; the
 five-checkpoint discipline (the new checkpoint 5 = per-transaction
 inner check inside the per-block scan loop, per
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §5.4.9 F2 / F11 / F11-S) is named on the trait surface below and
 in §7 invariant 4.
 
 **Stage 1 surface (landed via PR 4 §7.X commits C0–C8 on
 `feat/stage-1-pr4-refresh-engine`; the Phase 0a binding form per
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §4 below is the as-shipped trait).** The trait is now declared at
 [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
 (commit `d3edc1abb`, PR 4 C1); the supporting
@@ -1288,7 +1288,7 @@ pub trait RefreshEngine: Send + Sync + 'static {
     /// Trait-level associated error.
     ///
     /// **Unit-variant-only at the trait surface.** Per
-    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     /// §4 Phase 0c and §5.4.7 R6 reframe, the synchronous trait
     /// return is the **structural-branch signal** — the
     /// orchestrator's response to each variant is structural
@@ -1317,7 +1317,7 @@ pub trait RefreshEngine: Send + Sync + 'static {
     /// **3** (mid-scan, between blocks), and **5**
     /// (per-transaction, inside the per-block scan loop —
     /// added per
-    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     /// §5.4.9 F2 to bound wallet-lock latency under adversarial
     /// daemon block-crafting to per-transaction scan time
     /// rather than per-block scan time). On observation at any
@@ -1346,7 +1346,7 @@ pub trait RefreshEngine: Send + Sync + 'static {
     /// firing is **forbidden** — the cancellation must not
     /// interleave with a partially-derived per-output secret
     /// whose `Drop` chain has not yet completed. Per
-    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     /// §5.4.9 F11-S, implementors **measure**
     /// `recover_outputs_in_tx`'s per-output marginal cost on
     /// reference hardware and escalate the safe-point
@@ -1361,7 +1361,7 @@ pub trait RefreshEngine: Send + Sync + 'static {
     /// Structured diagnostic events flow through `diagnostics`
     /// per the two-channel reframe
     /// (§5.4.7 R6 of
-    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)).
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)).
     /// The synchronous trait return is one channel; the
     /// `RefreshDiagnostic` event stream emitted through this
     /// parameter is the other. The two channels are **coherent**:
@@ -1463,7 +1463,7 @@ unlocked scan phase (a `&mut LedgerEngine`-equivalent
 talking-stick handoff in disguise per §1.4).
 
 **`ViewMaterial` (Phase 0a; per
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §5.4.7 R4 — a-instance-scoped).** A new public type in
 `shekyl_engine_core`, exported at the flat crate root alongside
 `RefreshError` / `RefreshOptions` / `RefreshProgress`:
@@ -1519,7 +1519,7 @@ above lands in two stages:
 
 - **Phase 0a (this section, doc-only)** — the
   Phase-0a-binding-pinned trait surface per
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §4: `Send + Sync + 'static` supertrait bound, unit-variant
   `Self::Error: Into<RefreshError>` discipline, six-arg
   `produce_scan_result` with the `diagnostics: &dyn
@@ -1552,7 +1552,7 @@ Round 1 surface stub (four-method trait; `Self::Error`-only
 return shape; opaque ownership of a `BTreeMap`-shaped reservation
 tracker) closes against the Round 2 / Round 3 design substrate
 pinned in
-[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 §4 (Phase 0a–0m binding-form enumeration), §5.0.1 (the (γ) lean
 state shape), §5.0.2 (the diagnostic-stream + enum block), and
 §5.0.3 (the seven cross-cutting `DiagnosticSink` contracts). The
@@ -1562,7 +1562,7 @@ landing plan (C0–C8) for the `feat/stage-1-pr5-pending-tx-engine`
 short-lived branch.
 
 **Ownership.** The (γ) lean state shape per
-[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 §5.0.1: three collections (`output_locks: HashMap<OutputId,
 ReservationId>` reservation-output lock map; `consumer_held:
 HashMap<ReservationId, Instant>` post-build / pre-submit
@@ -1663,7 +1663,7 @@ pub trait PendingTxEngine: Send + Sync + 'static {
     /// actor's main mailbox. The Stage 4 actor-migration PR's
     /// framework-selection pre-flight MUST confirm deferred-reply
     /// substrate support per the
-    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
     /// §5.0.1 G4 pin; if no candidate framework supports it, G4's
     /// disposition reopens at the framework-selection altitude
     /// (NOT retroactively against PR 5; PR 5's V3.0 trait surface
@@ -1713,7 +1713,7 @@ pub trait PendingTxEngine: Send + Sync + 'static {
     /// silently admit decision-class signals; the narrow shape
     /// preserves the per-method F2 adjudication grep-ability
     /// that the wider shape forecloses. See
-    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
     /// §5.6.10 G1 for the full F2 adjudication record.
     ///
     /// On success: the rid drops from `in_flight`,
@@ -1810,7 +1810,7 @@ type system now enforces the lifecycle-class distinction
 `SubmitError`; `DiscardBlockedPendingDaemonAck` vs.
 `ReservationNotFound` inside `PendingTxError`) without consumer-
 side wildcard matching. See
-[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 §5.0.2 for the enum block; §5.6.4 / §5.6.5 / §5.6.6 for the
 P-discipline and F-discipline substrate.
 
@@ -1835,7 +1835,7 @@ above lands in two stages:
 
 - **Phase 0 (this section, doc-only)** — the Phase 0a–0m
   binding-form pins per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §4: `Send + Sync + 'static` supertrait bound; concrete-typed
   return shapes (`SendError` / `SubmitError` / `PendingTxError`);
   five-method trait surface (`build` / `submit` / `discard` /
@@ -1867,7 +1867,7 @@ above lands in two stages:
   deltas (§5.6.8) and segment-2i delta-on-delta (§5.6.12) are
   reflected in the landed code, not the pre-segment-2h
   `ReservationState` / `SubmitFailed` shapes in older §7.X prose.
-  Locator: [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  Locator: [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §6 landing-SHA table.
 
 Stage 4 cutover preserves the §2.4 surface verbatim per §7's
@@ -2037,7 +2037,7 @@ bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engin
 persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs)
 uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs).
 Binding form, open ritual, and commit plan:
-[`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+[`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 **Stage 1 implementing-type note (Round 3).** `WalletFile` (the
 default Stage 1 type) holds two distinct categories of state:
@@ -2081,8 +2081,8 @@ codebase (Bugs 2, 7, 13) trace to different code paths computing
 the same conceptual derived value differently — the bug class
 produced by *canonical derivation* of economic values being
 scattered across consumer sites. Bug 2 wasn't different
-parameter sources (both code paths read the same lock-tier
-multipliers); it was different applications of those parameters
+parameter sources (both code paths read the same economics
+constants); it was different applications of those parameters
 in different sites, producing two computations of
 `total_weighted_stake` that disagreed. Centralizing the
 *canonical-derivation surface* in a trait creates a single
@@ -2107,23 +2107,24 @@ parameter inconsistency. The economic *design* that
 `EconomicsEngine` consumes — transaction-responsive release,
 adaptive burn, decaying staker emission share — is documented
 in [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) and
-[`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md);
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md);
 the trait spec implements the structural shape that makes the
 economic design enforceable and auditable inside the wallet.
 The trait spec does not re-articulate the economic design; it
 consumes it.
 
-**Ownership.** The static economics parameters (lock tier
-multipliers, base burn rate, ESF, release bounds, pool-share
-constants, emission-decay constants) and the canonical
+**Ownership.** The static economics parameters (base burn rate,
+ESF, release bounds, pool-share constants, emission-decay
+constants, archival emission schedule) and the canonical
 derivations of values from those parameters and from chain
-state (base emission at a height, burn amount for a given fee,
-per-epoch staking rate `ρ_e` for the yield schedule — see Phase
-2b §8.6; this retires the former pool-weighted-stake-total
-surface). At V3.0 these are pure functions
-over `shekyl-economics` constants; at V3.x Component 3 they
-gain internal state for adaptive-burn observation, but the
-trait surface is unchanged.
+state (base emission at a height, burn amount for a given fee).
+Lock-tier multipliers and the claim-era per-epoch yield `ρ_e`
+are **retired** — genesis staking is archival bonds + reward
+emission ([`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md),
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)).
+At genesis these are pure functions over `shekyl-economics`
+constants; a later adaptive-burn observation state (if any)
+does not change the trait surface.
 
 `EconomicsEngine` does **not** own per-stake state (that's
 Phase 2b's `StakeEngine`, a separate trait that consumes
@@ -2236,37 +2237,17 @@ pub trait EconomicsEngine {
         activity: ActivityMetric,
     ) -> Result<u64, Self::Error>;
 
-    /// Public per-epoch staking rate `ρ_e` for the settled rate-epoch
-    /// `rate_epoch` — the sole yield-schedule surface Phase 2b's `StakeEngine`
-    /// consumes (`PHASE_2B_STAKE_LIFECYCLE.md` §8.6). `rate_epoch` is a
-    /// rate-epoch *index* (not a height); the caller converts via the public
-    /// `rate_epoch_blocks` from `parameters_snapshot()`. Consensus-derived from
-    /// the on-chain `band_sum` via chain-mirror state, not from a wallet-local
-    /// `shekyl-staking::Registry` (Bug 2 class).
+    /// Claim-era per-epoch yield `ρ_e` — **retired** as a living
+    /// staking surface. Genesis staking pays via archival reward
+    /// emission ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)),
+    /// not lock-tier `ρ_e × weight`. Keep the method only while a
+    /// Stage-1 consumer still compiles against it; do not implement
+    /// new yield from this entry. Empty-staker / burn-rather-than-carry
+    /// economics live in [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md).
     ///
-    /// **`u64` fixed-point** — `ρ_e` is a rate (reward per unit weight per
-    /// block), not an amount, so it is *not* `AtomicUnits`; the yield product
-    /// `own_weight · K_S` is the crossing into `AtomicUnits`. The fixed-point
-    /// scale is consensus-defined upstream; the wallet consumes it.
-    ///
-    /// **Fallible — `Ok(0)` vs `Err` are distinct.** `Ok(0)` is a *settled*
-    /// epoch with an empty staker set (no yield that epoch — consensus burns
-    /// rather than carries; [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
-    /// §"Empty-staker-set behavior"). `Err` is "cannot determine": rate-epoch
-    /// not yet settled, mirror unsynced, or defensive overflow. Unlike the
-    /// retired `pool_weighted_total` (`-> u128`, which overloaded `0` as both
-    /// no-stake and not-synced), the `Result` signals "unknown" explicitly.
-    ///
-    /// **Retires `pool_weighted_total` (`-> u128`).** That method's sole named
-    /// consumer was `StakeEngine::projected_yield`'s pool denominator; the
-    /// confidential staking redesign eliminated the daemon-supplied denominator
-    /// (`PHASE_2B_STAKE_LIFECYCLE.md` §7, §8.6), so the pool-aggregate surface
-    /// is dead (rule 15). Reopen (rule 21) only for a future consumer needing a
-    /// pool aggregate that cannot be composed from `rate_at_epoch` + chain
-    /// state. The `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`)
-    /// is repurposed as this method's internal `ρ_e`-derivation input, not a
-    /// public surface. **(Code removal lands with Stage 3; the trait still
-    /// carries `pool_weighted_total` until then.)**
+    /// **Retires `pool_weighted_total` (`-> u128`).** Reopen (rule 21)
+    /// only for a future consumer needing a pool aggregate that cannot
+    /// be composed from chain state.
     fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, Self::Error>;
 
     /// Parameter snapshot for governance / display.
@@ -3116,7 +3097,7 @@ The gate has three pinned components:
    is frozen at Stage 0 PR-2's merge SHA (the harness PR); each
    deferred bench is frozen at the merge SHA of the per-trait PR
    that introduces it (refined in Stage 0 PR-B; see
-   [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+   [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md)
    §4.5 for the per-bench operationalization).*
    PR-specific deltas are measured against each bench's frozen
    reference, not against an earlier or later commit; a bench's
@@ -4671,7 +4652,7 @@ so Stage 4 implementors cannot argue for redesign:
       not yet been acquired.
    5. **Per-transaction, inside the per-block scan loop** —
       owned by `RefreshEngine::produce_scan_result`. Added per
-      [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+      [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
       §5.4.9 F2 to bound wallet-lock latency under adversarial
       daemon block-crafting to per-transaction scan time
       rather than per-block scan time. **Safe-point pin
@@ -4801,8 +4782,8 @@ the discipline's enforcement against the corresponding audience.
 PRs 1, 2, 3, 4, and 5 each surfaced disciplines that compound across
 subsequent per-engine PRs. The per-engine PR design rounds
 ([Stage 1 PR 3 (`KeyEngine`)](completed/STAGE_1_PR_3_KEY_ENGINE.md),
-[Stage 1 PR 4 (`RefreshEngine`)](design/STAGE_1_PR_4_REFRESH_ENGINE.md),
-[Stage 1 PR 5 (`PendingTxEngine`)](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+[Stage 1 PR 4 (`RefreshEngine`)](completed/STAGE_1_PR_4_REFRESH_ENGINE.md),
+[Stage 1 PR 5 (`PendingTxEngine`)](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
 produced disciplines whose value is **compound-by-inheritance**: each
 discipline saves rounds-budget on subsequent per-engine PRs that would
 otherwise re-derive it under adversarial review.
@@ -4829,10 +4810,10 @@ satisfy them use the synchronous framing without penalty. Per-engine
 PR pre-flights test applicability rather than presume it.
 
 **Lens 1 — Actor-mesh framing.** Surfaced in
-[PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md);
-applied in [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+[PR 4 Round 2 reframe](completed/STAGE_1_PR_4_REFRESH_ENGINE.md);
+applied in [PR 5 Round 1](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 under §5.0; named with three applicability conditions in
-[PR 5 segment 2c §5.0.4](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+[PR 5 segment 2c §5.0.4](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The trait surface is the *synchronous decision point* consumers branch
 on; the rich semantic surface lives on the *diagnostic-stream seam*
 (`DiagnosticSink` parameter; typed event enum). The two channels carry
@@ -4857,15 +4838,15 @@ Applicability conditions (all three must hold):
 |---|---|---|
 | `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](completed/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
 | `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](completed/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
-| `RefreshEngine` | yes | [PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
+| `RefreshEngine` | yes | [PR 4 Round 2 reframe](completed/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
 | `EconomicsEngine` | bounded — surface is parameter-derivation; (2) fails | synchronous framing correct; no payoff lost |
 | `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](completed/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
 | `PersistenceEngine` | bounded — single-runtime-consumer; (3) bounded payoff | synchronous framing correct |
-| `PendingTxEngine` | yes | [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
+| `PendingTxEngine` | yes | [PR 5 Round 1](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
 | `StakeEngine` (Phase 2b) | yes — (1) stake records mediate cross-actor claim/unstake; (2) reorg + adaptive-burn surfaces quiescence; (3) Stage 4 non-trivial | Phase 2b design rounds apply the lens by inheritance |
 
 **Lens 2 — State-as-collection-membership.** Surfaced in
-[PR 5 segment 2h](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.2's
+[PR 5 segment 2h](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.2's
 (γ) lean shape. When the actor-mesh lens applies, lifecycle state is
 *implicit in collection membership* rather than carried as an explicit
 `State` enum field on per-record structures. The actor's collections
@@ -4894,9 +4875,9 @@ would otherwise have grown per V3.x consumer-actor PR; subsequent
 engines with similar lifecycle shapes inherit the same reframe.
 
 **Lens 3 — Recursive trust boundary, three projection axes.** Surfaced
-in [PR 4 §5.4.8 #4](design/STAGE_1_PR_4_REFRESH_ENGINE.md) (field
+in [PR 4 §5.4.8 #4](completed/STAGE_1_PR_4_REFRESH_ENGINE.md) (field
 projection); extended in
-[PR 5 §5.0.3](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) (temporal and
+[PR 5 §5.0.3](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) (temporal and
 distributional projections). Cross-trust-boundary diagnostic consumers
 must apply all three projection axes:
 
@@ -4914,7 +4895,7 @@ must apply all three projection axes:
 V3.0 ships field projection only; temporal and distributional
 disciplines deferred to `DIAGNOSTIC_STREAM.md` (V3.x — sequenced by
 the first V3.x consumer-actor PR per
-[PR 5 segment 2g](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.0.3
+[PR 5 segment 2g](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.0.3
 introduction-PR disposition). The doc lands at first V3.x
 consumer-actor PR introduction; subsequent V3.x PRs amend rather than
 diverge.
@@ -4929,7 +4910,7 @@ discipline pin saves re-litigation cost.
 Named in
 [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
 at load-bearing-question altitude; extended in
-[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
+[PR 5 segment 2b](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
 R-residual disposition altitude. The pattern: a residual disposition
 appears to favor the incremental (a)-shape on cost-benefit grounds; the
 architectural-integrity-now reading favors the structural (b)-shape;
@@ -4951,12 +4932,12 @@ not just the load-bearing-question altitude.
 **Anti-pattern 2 — Pre-provision-for-flexibility.** Named in
 [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
 worked-example in
-[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
+[PR 5 segment 2i](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
 The pattern: a wider trait-surface or enum shape *appears* extensible
 in a way the narrow shape isn't; the wider shape silently admits
 decision-class signals or operations that an established discipline
 (e.g., F2 ownership-boundary per
-[PR 5 §5.4 R9 segment-2f](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+[PR 5 §5.4 R9 segment-2f](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
 forbids on adjudicated grounds.
 
 Worked example: PR 5 G1's narrow `signal_mempool_evicted(rid)` over
@@ -4976,7 +4957,7 @@ not convenience-anchored.
 **Anti-pattern 3 — Priority-hierarchy-rejection-as-evaluation.** Named
 in [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) priority
 ordering; worked-example in
-[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
+[PR 5 segment 2i](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
 The pattern: a feature whose privacy cost (priority 2) is bounded but
 real, and whose UX benefit (priority 3-or-below) is substantial, is
 framed as "evaluate-in-V3.x" rather than rejected at the design-rounds
@@ -5008,7 +4989,7 @@ and what subsequent per-engine PRs inherit from the closure record.
 
 **Discipline 1 — Round-N closure pins what was known at closure time.**
 Strengthened in
-[PR 5 §7 segment-2c](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Round-N
+[PR 5 §7 segment-2c](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Round-N
 closes when the wargaming surface *known at closure time* is genuinely
 exhausted; new shapes surfacing in Round-N+1 (or later) **reopen
 Round N explicitly** rather than slipping past closure as quiet
@@ -5028,7 +5009,7 @@ amendment naming the segment) rather than implicit (substrate-creep
 across segments).
 
 **Discipline 2 — Pre-Phase-1 wider-substrate audit.** Surfaced in
-[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10.
+[PR 5 segment 2i](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10.
 The audit asks "what have other coins / wallet ecosystems taught us
 that we haven't named in this PR's substrate?" The question is
 *distinct from* the R-residual sweep: residuals enumerate what the
@@ -5050,7 +5031,7 @@ architectural-integrity-now discipline forbids.
 
 **Discipline 3 — Discipline-citation matrix as audit-attention
 surface.** Pattern surfaced in
-[PR 5 §5.6.9](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Each
+[PR 5 §5.6.9](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Each
 per-engine PR produces a matrix recording **what the PR is getting
 right by construction** versus the failure modes other cryptocurrency
 wallets have absorbed. Each entry pairs the discipline with the
@@ -5072,7 +5053,7 @@ decompositions and are pinned here as inheritance-by-default.
 
 **Discipline 1 — §7.X synthesis-banner for multi-round commit
 decompositions.** Worked example surfaced from
-[PR 5 segment-2h / segment-2i deltas](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+[PR 5 segment-2h / segment-2i deltas](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 landing upstream of the Round-3 §7.X commit list. Implementer reading
 §7.X verbatim sees Round-3-original substrate; segment-2h and
 segment-2i deltas (§5.6.8 / §5.6.12) are authoritative; without a
@@ -5111,7 +5092,7 @@ type-of-change (rare in trait-extraction PRs).
 recommendations.** Named in
 [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc);
 worked-example in
-[PR 5 segment 2g Copilot-fix follow-up](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+[PR 5 segment 2g Copilot-fix follow-up](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The pattern: a dependency recommendation cites a Cargo.toml line as
 "workspace-available"; subsequent inspection reveals the line is
 dev-deps-only or feature-gated; the recommendation has to be reworked.
@@ -5138,7 +5119,7 @@ rounds, beyond the baseline established at Round-5 acceptance.
 
 **Anchor 1 — Adversary-controlled-daemon as expected deployment.**
 Strengthened in
-[PR 5 segment 2a](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[PR 5 segment 2a](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
 [`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
 deployment posture means wallets routinely connect to daemons under
 adversary control — anonymous-network exit operators, hosted-wallet
@@ -5159,7 +5140,7 @@ an optional steelman. Designs that fail it on structural grounds are
 rejected at design-rounds altitude.
 
 **Anchor 2 — HW-wallet as core, not edge.** Sharpened in
-[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[PR 5 segment 2b](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
 [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §1 (security as
 precondition, not optimization). Hardware-backed secure-storage paths
 (Trezor / Ledger / YubiKey-class) are dominant for privacy-conscious
@@ -5734,7 +5715,7 @@ strategy (restart costs).
 *Dependencies.* §10.1.2 implementation reaching stable state;
 §10.2.1 baseline numbers in hand for comparison.
 
-### 10.3 V3.1 / V3.2 expansion
+### 10.3 Expansion after the Stage-1 surface (historical labels V3.1 / V3.2)
 
 Three entries in version-sequential order. V3.1's multisig
 adds structural complexity to two traits; V3.1+ multi-engine
@@ -5743,7 +5724,7 @@ JSON-RPC cutover promotes the trait visibility per §2
 preamble. Sequential dependencies: each entry depends on the
 prior settling.
 
-#### 10.3.1 Multisig support (target: V3.1)
+#### 10.3.1 Multisig support (target: pre-genesis; protocol name V3.1)
 
 *Description.* Stage 1's surface assumes single-signer flows.
 Multisig adds round-trip signature aggregation, partial-sign
@@ -5785,7 +5766,7 @@ consumer-driven justification rule (for any new methods).
 multisig economic / consensus design (separate document; not
 in this spec).
 
-#### 10.3.2 Multi-engine server (target: V3.1+)
+#### 10.3.2 Multi-engine server (target: post-genesis)
 
 *Description.* `Engine<S>` currently assumes one wallet per
 engine instance (one process embeds one engine; one engine
@@ -5814,7 +5795,7 @@ isolation question).
 concerns are materially affected by whether each engine has
 multisig state); V3.0 ship.
 
-#### 10.3.3 JSON-RPC server cutover (target: V3.2)
+#### 10.3.3 JSON-RPC server cutover (target: pre-genesis)
 
 *Description.* The `wallet_rpc_server` Rust migration per
 `docs/FOLLOWUPS.md` V3.2 target. At cutover, the seven
@@ -5836,13 +5817,13 @@ V3.2 entry.
 *Dependencies.* §10.3.1 multisig and §10.3.2 multi-engine
 server (both feed into the public API surface); V3.0 ship.
 
-### 10.4 V3.x enhancements
+### 10.4 Later enhancements
 
 Four entries that ship at V3.x but vary in design-start
 timing. Entries with Stage 4 design hooks carry the optional
 fifth block (*Design start vs ship distinction*).
 
-#### 10.4.1 Adaptive-burn observation feeding (target: V3.x; design hook: Stage 4)
+#### 10.4.1 Adaptive-burn observation feeding (target: post-genesis; design hook: Stage 4)
 
 *Description.* Component 3's adaptive burn requires
 `EconomicsEngine` to observe network activity (transaction
@@ -5885,7 +5866,7 @@ specification.
 the Component 3 economic specification in
 `DESIGN_CONCEPTS.md`.
 
-#### 10.4.2 FCMP++ progress trigger (target: V3.x — evidence-gated)
+#### 10.4.2 FCMP++ progress trigger (target: post-genesis — evidence-gated)
 
 *Description.* If `KeyEngine::sign_transaction`'s FCMP++
 proof generation becomes user-perceptible at V3.x (current
@@ -5918,7 +5899,7 @@ observability hooks).
 implementation work); evidence that single-output proof
 time exceeds the user-perceptibility threshold.
 
-#### 10.4.3 Bounded-mailbox triggers (target: V3.x — evidence-gated)
+#### 10.4.3 Bounded-mailbox triggers (target: post-genesis — evidence-gated)
 
 *Description.* Stage 4 V3.0 ships with unbounded mailboxes
 (per Round 3 disposition). Bounded mailboxes are revisited
@@ -5951,7 +5932,7 @@ semantics).
 observation infrastructure that surfaces backpressure
 evidence).
 
-#### 10.4.4 Anonymity-network coordination (target: V3.x)
+#### 10.4.4 Anonymity-network coordination (target: post-genesis)
 
 *Description.* Onion-routing / mixnet integration for
 transaction submission and refresh queries. The integration
@@ -6002,11 +5983,9 @@ records, the stake FSM state, and (confidential redesign)
 per-stake commitment-opening secrets (`amount`, `z`) held
 **in memory only** (re-derived on hydration, never sealed).
 It owns **no** network principal-pool aggregation: the
-daemon-supplied pool denominator was eliminated, and exact
-yield derives from `EconomicsEngine::rate_at_epoch` × the
-wallet's own (secret) weight
-([`design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
-§7, §8.6). It consumes `EconomicsEngine`
+daemon-supplied pool denominator was eliminated. Yield at
+genesis is archival reward emission, not lock-tier `ρ_e`.
+It consumes `EconomicsEngine`
 via the canonical-derivation surface (§2.7); it has explicit
 cross-cutting consumers (`Engine<S>` for stake-aware
 operations, future `ArchivalEngine` for sibling-actor
@@ -6028,7 +6007,7 @@ design document (separate).
 
 *Dependencies.* V3.0 ship; §1.5 criteria settled (Round 4a);
 [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) and
-[`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
 specifying the staking economics that `StakeEngine`
 implements.
 

@@ -1,6 +1,6 @@
 ---
 name: RandomX v2 Rust port
-overview: "Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as the miner) via the Shekyl-Foundation fork (non-divergent from upstream tevador/RandomX at pin aaafe71; Monero is the parallel production deployer and v1->v2 delta audit funder per RANDOMX_V2_RUST.md \u00a71.4). No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm \u2014 lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days; above Nielsen's 100ms 'feels instant' threshold by ~50ms but well below the 1s 'continuous flow' threshold, and invisible in practical RPC-round-trip context). Phase 0 produces both the primary design doc and a pre-vetted v1 fallback. Track A (design + submodule + isolated Rust verifier crate) starts now and proceeds in parallel with Monero's audit; Phase 2 is NOT gated on external algorithm review (the algorithm-review gate is release-time, not Phase-2 time, per RANDOMX_V2_RUST.md \u00a71.4). Track B (FFI wiring + legacy deletion) is gated on wallet V3.2 cutover. Phase 3 (cutover, likely split 3a/3b/3c) replaces all C implementation files; Phase 4 deletes the C++ IPowSchema/pow_registry and the entire shekyl-consensus crate to remove speculative-scaffolding rule violations on both sides. Release gate \u2014 Monero deployment-experience window plus completed delta audit without contraindicating findings; v1 unpin-and-revert (default 102f8acf) is the late-binding fallback."
+overview: "Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as the miner) via the Shekyl-Foundation fork (non-divergent from upstream tevador/RandomX at pin aaafe71; Monero is the parallel production deployer and v1->v2 delta audit funder per RANDOMX_V2_RUST.md \u00a71.4). No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm \u2014 lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days; above Nielsen's 100ms 'feels instant' threshold by ~50ms but well below the 1s 'continuous flow' threshold, and invisible in practical RPC-round-trip context). Phase 0 produces both the primary design doc and a pre-vetted v1 fallback. Track A (design + submodule + isolated Rust verifier crate) starts now and proceeds in parallel with Monero's audit; Phase 2 is NOT gated on external algorithm review (the algorithm-review gate is release-time, not Phase-2 time, per RANDOMX_V2_RUST.md \u00a71.4). Track B (FFI wiring + legacy deletion) is **pre-genesis**: gated on a quiet 1-2 week window in `shekyl-ffi` / `shekyl_ffi.h`, not on a V3.2 wallet cutover. Phase 3 (cutover, likely split 3a/3b/3c) replaces all C implementation files; Phase 4 deletes the C++ IPowSchema/pow_registry and the entire shekyl-consensus crate to remove speculative-scaffolding rule violations on both sides. Release gate \u2014 Monero deployment-experience window plus completed delta audit without contraindicating findings; v1 unpin-and-revert (default 102f8acf) is the late-binding fallback."
 todos:
   - id: phase0-design
     content: "Track A / Phase 0: Write docs/design/RANDOMX_V2_RUST.md AND docs/design/RANDOMX_V1_FALLBACK.md. Cover: (a) permanent C-JIT-for-mining / Rust-interpreter-for-verification split; (b) derived-first design per 18-type-placement.mdc; (c) memoization inside shekyl-ffi only (no prewarm; lazy derivation with documented perception-threshold rationale); (d) 1-function FFI surface (hash), with seedheight as discretionary Phase 3 addition; (e) v2 algorithm review prerequisites and spec-as-source-of-truth doctrine; (f) interpreter performance target (≤3.0× C light-VM-JIT) + concrete initial-sync wall-time delta (~4 hours per current math) for review ratification; (g) structural isolation invariants with specific v2 C library export symbol list AND companion 'shekyl-pow-randomx never uses #[no_mangle]' invariant; (h) consensus constants become typed const, env-var overrides deleted entirely; (i) Grover-bound argument for PoW surviving lattice transition; (j) v1 fallback (depth calibrated to algorithm-review confidence; honest framing, not theater); (k) cncrypto PUBLIC link survey results; (l) what irreducibly stays state and where. Pass 4-6 review rounds before any code lands."
@@ -33,7 +33,7 @@ todos:
     content: "Track A / Phase 2h: Adversarial-corpus methodology + first-class evaluator + initial recipe corpus + canonical-output pinning + mode_adversarial_ratio measurement mode + T2/T6 reactivation + CI workflow scaffolding + M5 mechanical citation-validation script. Closes the post-2g forward-actions cluster (R7-D1/R7-D2/R7-D3/R7-D4): mode_worst_case renamed mode_adversarial_ratio (diagnostic-emitting placeholder replaced by first-class measurement mode); declarative recipe DSL lands at rust/shekyl-randomx-differential/src/adversarial/ with types.rs (BaseSeedhash, CacheRecipe, EvaluatedRecipe), interpreter.rs (first-class evaluator; takes pre-derived base_cache_bytes as input, with per-consumer `Vec<(base_bytes_key, derived_bytes)>` amortization at the four consumer sites per the `adversarial/mod.rs` Base-cache-amortization rustdoc), canonical.rs (base-cache helpers including `compute_corpus_canonicals` the canonical-array amortization exemplar), and recipes/ submodule scaffold (one file per category subdivision per R1-D8 taxonomy); initial 8-recipe corpus covers Category 1 (spec-silence anchors) + Category 3 (boundary values + dataset-item extrema); FAMILY_1_RECIPE_OUTPUTS canonical-output array pins expected Rust=C hash bytes per recipe. New PreparedCache::from_raw_for_testing accessor under rust/shekyl-pow-randomx/src/prepared_cache.rs (test-internals feature gate per R1-D2/R5-D1 carve-out) satisfies derived-cache substrate. T2 (adversarial_corpus_byte_equality) integrates per-PR; T6 (worst_case_ratio) integrates workflow_dispatch-only in new randomx-v2-adversarial-ratio.yml workflow. Both T2/T6 inherit Phase 2g compute_hash-divergence FOLLOWUP's #[ignore] gating; C7 cross-input diagnostics surfaced the divergence is *universal across inputs* (not 'at large data inputs' as Phase 2g framed) — FOLLOWUP entry amended at C10 with revised characterization. M5 citation-validation lands at scripts/ci/check_phase2h_citations.sh (catches per-category prefix mismatch, missing plan-doc references, out-of-range source-file line citations) and wires as the structural-validate job's fifth gate step. T2/T6 activation surface is mechanical (#[ignore] removal + workflow if-condition flip) when verifier-divergence FOLLOWUP closes. C1–C10 commit sequence landed on dev per RANDOMX_V2_PHASE2H_PLAN.md §11 Round 4."
     status: completed
   - id: trackb-gate-check
-    content: "Track B gate: confirm wallet V3.2 (wallet_rpc_server Rust cutover) has landed on dev per docs/FOLLOWUPS.md; verify rust/shekyl-ffi/src/lib.rs and src/shekyl/shekyl_ffi.h are in a quiet 1-2 week window before starting Phase 3."
+    content: "Track B gate: pre-genesis. Confirm rust/shekyl-ffi/src/lib.rs and src/shekyl/shekyl_ffi.h are in a quiet 1-2 week window before starting Phase 3. Not gated on a V3.2 wallet cutover (that train does not exist)."
     status: pending
   - id: phase3-cutover
     content: "Track B / Phase 3 (likely split 3a/3b/3c per 06-branching.mdc size limits): Export the 1-2 function FFI surface from rust/shekyl-ffi (with shekyl-ffi holding the internal CacheStore as a transparent memo); add matching declarations in src/shekyl/shekyl_ffi.h; rewire all 6 C++ callers; ship a versioned docs/design/RANDOMX_V2_PHASE_3B_DELETED_CALL_AUDIT.md naming each deleted lifecycle call (rx_set_main_seedhash, rx_set_miner_thread, rx_get_miner_thread, rx_slow_hash_allocate_state, rx_slow_hash_free_state) with original intent and new-flow disposition; delete src/crypto/rx-slow-hash.c AND src/crypto/pow_cryptonight.cpp AND src/crypto/slow-hash.c together (tangled implementation); drop randomx C linkage from cncrypto per Phase 0 PUBLIC-link survey; add CI symbol-isolation invariant against the specific v2 C library export list; add per-PR CI per-hash benchmark (N=1024 hashes, ≤3.0× ratio); add 600k-block initial-sync wall-time test to release-gate suite. Phase 3a's build flag exists only between 3a-merge and 3b-merge (days), not across releases. STATUS (2026-06): 3a + 3b landed — the consensus PoW cutover is complete (FFI surface = hash + set_canonical exported and all C++ callers rewired; SHEKYL_RANDOMX_V2_VERIFY flag, RX_BLOCK_VERSION guards, both longhash-202612 fossils and the dead-CN RPC branch removed; pow_cryptonight.cpp + get_cryptonight_* deleted; get_pow_for_height collapsed to RandomX-only; genesis identity verified unchanged with a frozen mining_parity gate). 3c is DEFERRED and blocked by the RPC-payment subsystem deletion + wallet2.cpp touchpoints: it carries the rx-slow-hash.c + slow-hash.c deletion, the cncrypto randomx C-linkage drop, the shekyl_pow_randomx_v2_seedheight export + shekyl-pow-randomx::consensus module, and the CI symbol-isolation invariant. The DELETED_CALL_AUDIT was folded into RANDOMX_V2_PHASE3_PLAN.md §2 rather than a separate file. See docs/design/RANDOMX_V2_PHASE3_PLAN.md and docs/FOLLOWUPS.md for the deferred 3c items."
@@ -50,6 +50,8 @@ isProject: false
 
 # RandomX v2 Rust port (Track A / Track B)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 ## Sequencing rationale
 
 Three independent gates govern when phases land.
@@ -68,7 +70,7 @@ flowchart LR
     P2[Phase 2: shekyl-pow-randomx<br/>transform-shaped Cache/Vm/Hash<br/>CacheStore utility type<br/>two crate-level invariants<br/>differential harness + adversarial corpus<br/>sub-PRs 2a-2h]
     PG{Perf targets met?}
   end
-  subgraph TrackB [Track B - gated on wallet V3.2]
+  subgraph TrackB [Track B - pre-genesis FFI quiet window]
     P3[Phase 3 (likely 3a/3b/3c)<br/>Wire 1-2 fn FFI surface<br/>rewire C++ callers<br/>delete lifecycle calls<br/>delete C implementation files<br/>CI invariants]
     P4[Phase 4: Delete abstractions<br/>IPowSchema/pow_registry<br/>shekyl-consensus crate<br/>version-gate switch]
     P5[Phase 5: Docs + CHANGELOG]
@@ -82,7 +84,7 @@ flowchart LR
   end
   P0 --> P1 --> P2 --> PG
   PG -- no --> P2
-  WG{Wallet V3.2 landed on dev?}
+  WG{FFI quiet window?}
   PG -- yes --> WG
   WG -- yes --> P3 --> P4 --> P5 --> AR
   MonAudit --> AR
@@ -266,7 +268,7 @@ Two design documents, **both** required before Phase 1.
 
 13. **Explicit non-goals** (per `60-no-monero-legacy.mdc`): no v1 compatibility, no CryptoNight fallback, no `RX_BLOCK_VERSION` gate, no version-dispatch switch in PoW selection, no env-var overrides of consensus constants, no prewarm.
 
-14. **Wallet V3.2 dependency** for Track B start.
+14. **FFI quiet-window dependency** for Track B start (pre-genesis). Not a V3.2 wallet cutover.
 
 15. **`wallet_rpc_payments.cpp` disposition — resolved to delete.** Phase 0 decision recorded in `RANDOMX_V2_RUST.md` §15: delete the RPC-payments feature in its entirety. The earlier "rewrite or delete" framing is closed; Phase 4 inherits the deletion checklist in §15.4 and does not re-litigate. This list item exists so the plan's Phase 0 contents include the resolved disposition rather than reopening the question.
 
@@ -334,9 +336,9 @@ Sub-PRs per `06-branching.mdc` (≤5 working days, ≤10 commits):
 
 **Track A end state:** `shekyl-pow-randomx` exists, passes spec-vector parity, is cross-checked against the C reference via a separate CI harness, hits Phase 0 performance budgets, and is not consumed by anything in shipping binaries. Zero behavior change in shipping binaries.
 
-## Track B — gated on wallet V3.2 cutover
+## Track B — pre-genesis FFI cutover
 
-**Gating signal:** wallet V3.2 has landed on `dev`; FFI mega-header in a quiet 1-2 week window before starting Phase 3.
+**Gating signal:** `shekyl-ffi` / `shekyl_ffi.h` in a quiet 1–2 week window before starting Phase 3. There is no V3.2 wallet train; Phase 3 is pre-genesis or it is not a thing.
 
 ### Phase 3: Cutover (likely split 3a/3b/3c)
 

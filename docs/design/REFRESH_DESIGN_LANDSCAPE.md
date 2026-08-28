@@ -2,7 +2,7 @@
 
 **Status.** Substrate doc (2026-05-12). Lands as the design-space
 reference Round 1 of [Stage 1 PR 4 (`RefreshEngine`
-extraction)](./STAGE_1_PR_4_REFRESH_ENGINE.md) evaluated the
+extraction)](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md) evaluated the
 producer-redesign question (§5 of that doc) against. This document
 is reference material; design dispositions live in their respective
 PR design docs and reference this landscape rather than restating
@@ -12,7 +12,7 @@ The doc is *substrate*, not *spec*: it does not bind any wallet
 behaviour; it surveys the design space and records the negative
 results that scope the producer-redesign axis Round 1 settled (α —
 preserved current shape, per
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §5.4). The negative results are forward-looking: they describe
 which axes V3.0 is choosing not to take and why, not assertions
 that the alternatives are wrong forever.
@@ -265,7 +265,7 @@ the on-client refresh producer communicates scan results to
 consumers within the wallet's address space.
 
 PR 4 Round 1 settled this axis:
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §5.4 dispositions α (preserved current shape). The four-criteria
 rationale (PR 4 extraction cleanliness; PR 5 two-phase
 build/submit/discard contract; reservation-tracker reorg
@@ -283,7 +283,7 @@ bandwidth tradeoff under α") names this cost as the cost-benefit
 artifact PR 4's Round 1 disposition consumed. Whether the V3.0
 RC-stabilization profile justifies a follow-up β-shape PR is the
 R2 residual question (per
-[`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 §5.4.3).
 
 ---
@@ -339,10 +339,10 @@ a different prune-shape refinement is preferable.
 ## §8 Cross-references
 
 - **PR 4 Round 1 disposition.**
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4 (α — preserved current shape).
 - **PR 4 work-list table.**
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](../completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.5 (where each refresh-adjacent item lives).
 - **Bandwidth FOLLOWUP entry.**
   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 ("Refresh bandwidth

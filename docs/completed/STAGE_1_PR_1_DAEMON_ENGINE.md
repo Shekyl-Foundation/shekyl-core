@@ -67,7 +67,7 @@ The trait spec ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDA
 
 ### Stage 0 internal phasing
 
-**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
+**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
 
 1. **Benchmark selection.** The spec lists §3.3.1's hot paths at category-level ("the hot read paths"); the harness pins the specific bench list. Boundary: spec stays at category-level pinning; harness's specific path list is a harness-document concern. If harness work surfaces "we need to bench these specific six methods, not the four §3.3.1 categorically lists," that's a harness refinement — *not* a spec refinement that requires Round 6.
 2. **Baseline statistics.** Median? Mean? p99? Distribution? Pick one or several; commit to which numbers `PERFORMANCE_BASELINE.md` carries.

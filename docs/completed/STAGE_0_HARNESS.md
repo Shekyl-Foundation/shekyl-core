@@ -1,5 +1,7 @@
 # Stage 0 measurement harness — design
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status.** Stage 0 PR-1 of the Stage 1 trait-extraction plan
 (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md` accepted at Round 5,
 `e484d5041`, merged to `dev` at `40093ac7a`). This document is the

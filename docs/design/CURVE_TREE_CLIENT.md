@@ -178,7 +178,7 @@ owns the reference-height → drain-cutoff mapping (`drained_through = H − 1`)
 and applies the §3.3 integrity gate (`verify_root`). The Tier-A KAT now also
 runs end-to-end through this production path. `assemble` (membership-path
 extraction) is **landed** (CT-4). `store` (frozen-`R_k` cache and persistence,
-CT-1) Round 1 closed on `redb` per [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md) and
+CT-1) Round 1 closed on `redb` per [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md) and
 [`CT1_ROUND1_CLOSEOUT.md`](../completed/CT1_ROUND1_CLOSEOUT.md).
 
 ### 3.3 Integrity model (load-bearing)
@@ -215,7 +215,7 @@ tip_height − segment.end_block_height ≥ SPENDABLE_AGE + SEGMENT_FREEZE_REORG
 
 (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`, same numeric value as
 `ARCHIVAL_REORG_DEPTH_BLOCKS`; height-gated, not position-gated — see
-[`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).) `frozen_segments` records
+[`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).) `frozen_segments` records
 `end_block_height` (when the segment's newest leaf entered the tree) and
 `frozen_at_height` (when the freeze was applied). The active frontier stays
 unpruned and absorbs reorg churn; freezing lags the tip. The reference block at
@@ -373,7 +373,7 @@ leaf encoding; **not** daemon `curve_tree_leaves` layout parity. heed is out of
 scope for CT-1. Operational note: prune-to-`R_k` may leave elevated on-disk
 footprint until pages are reused (cosmetic only). Reversion clause: reopen only
 on measured hot-path regression vs flat-mmap **and** a flat-mmap + sidecar
-design that preserves ACID reorg atomicity. See [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).
+design that preserves ACID reorg atomicity. See [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).
 
 ---
 
@@ -1122,8 +1122,8 @@ canonical tree under replacement at both deepen boundaries.
    claim→spend carrier (`OutputHandle`) routes to the `KeyActor`, not the client.
    No leak.
 5. **Phase 2b cross-check.** Stake/unstake proofs share the reference-block
-   horizon (§5); confirm `PHASE_2B_STAKE_LIFECYCLE.md` consumes the same client
-   contract (§3.5) rather than re-deriving selection. **`CONFIDENTIAL_STAKING.md`
+   horizon (§5); confirm `design/PHASE_2B_FSM_RETOOL.md` consumes the same client
+   contract (§3.5) rather than re-deriving selection. **`V3_STAKER_ARCHIVAL.md`
    is registered but off the Tier-A path** — the staked maturity class is the
    Tier-B KAT case (spend-dependent; `CT2_DRAIN_ORDER.md` §8.2), and the
    confidential redesign is 2b-adjacent. A proper adversarial pass on it belongs
@@ -1158,7 +1158,7 @@ canonical tree under replacement at both deepen boundaries.
     `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720` (`ARCHIVAL_REORG_DEPTH_BLOCKS`,
     block counts). Gate is **height-based:**
     `tip_height − end_block_height ≥ SPENDABLE_AGE + 720`. Not position-based.
-    Pinned in [`CT1_ROUND1_PINS.md`](./CT1_ROUND1_PINS.md).
+    Pinned in [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).
 11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
     Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
     anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than

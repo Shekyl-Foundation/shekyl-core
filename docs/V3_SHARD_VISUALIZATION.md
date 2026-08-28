@@ -527,8 +527,9 @@ chain doesn't already publish. A separate concern is that this feature
 *exists to be shared* ("Print/share rendering," Open design questions),
 so it manufactures a population of stakers who voluntarily reveal they
 stake. That voluntary disclosure composes with the confidential-staking
-**claim-cohort leak** (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3,
-finding F0): a shared portfolio bridges real-world identity → "a staker
+**claim-cohort leak** (retired claim-era finding F0; living surfaces
+`docs/design/PHASE_2B_FSM_RETOOL.md`, `docs/V3_STAKER_ARCHIVAL.md`): a
+shared portfolio bridges real-world identity → "a staker
 holding shard-set `{S}`," and — composed with F0's cleartext
 `(tier, creation)` and a candidate on-chain holder registry
 (`docs/V3_STAKER_ARCHIVAL.md`) — to that staker's claim cohort. The
@@ -538,11 +539,11 @@ anonymity set. This is **not** a parameter-derivation issue (so it does
 not change the "always safe / never derive from" lists), but it **is** a
 real deanonymization vector that the archival/visualization privacy
 review must weigh against claim-cohort linkage before ship. Tracked in
-`docs/FOLLOWUPS.md` under the F0 V3.1 entry.
+`docs/FOLLOWUPS.md` (pre-genesis residue, if any remains).
 
 Two structural sharpenings make the sharing vector worse than "reveals
-membership" (full analysis: `docs/design/PHASE_2B_STAKE_LIFECYCLE.md`
-§7.5.3, finding **F-ARCHIVAL**):
+membership" (full analysis: `docs/V3_STAKER_ARCHIVAL.md` privacy
+sections, finding **F-ARCHIVAL**):
 
 - **A shared portfolio is a tier oracle.** Archival sorts tiers onto shard
   types (`docs/V3_STAKER_ARCHIVAL.md`: tier-1 → hot/recent, tier-3 →

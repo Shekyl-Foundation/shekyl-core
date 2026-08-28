@@ -17,7 +17,13 @@ the changes.
   current behavior, APIs, or design.
 - **What to update:** fix outdated steps, names, examples, and TODOs; add
   or revise sections for new behavior; keep cross-references and checklist
-  items accurate. Update `CHANGELOG.md`.
+  items accurate. Update `docs/CHANGELOG.md` **only** for user-visible,
+  consensus, API, or security-relevant deltas (see
+  [`95-documentation-lifecycle.mdc`](95-documentation-lifecycle.mdc)).
+  Design-round archaeology stays in the plan doc. Completing a plan
+  includes archive-or-contract: living SoTs stay and flip their Status
+  banner; finished plans/preflights `git mv` to `docs/completed/` in the
+  same change per `IMPLEMENTATION_INDEX.md` §8.
 - **Scope:** prefer docs under `docs/` and the main README; update
   file-level or inline docs (Doxygen, module READMEs, Rust crate-level
   `//!` comments) when the change touches that code.
@@ -74,6 +80,8 @@ there, which is why it keeps paying.
 When a Plan has N tasks, the (N+1)th task is:
 
 > "Read and update documentation (docs/*.md, README, design/API docs) to
-> reflect the changes. Ensure CHANGELOG.md is updated."
+> reflect the changes. Archive-or-contract per rule 95. Update
+> CHANGELOG.md only if the change is user-visible, consensus, API, or
+> security-relevant."
 
 Complete that task before considering the Plan done.

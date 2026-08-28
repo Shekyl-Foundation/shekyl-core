@@ -1,5 +1,7 @@
 # Archival serve-credit — C++ decision equivalence audit (V3.0)
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status:** design rounds CLOSED (§10, round 3 + post-closure pins);
 **implementation go issued 2026-07-09** — mirrors + standing KAT + fuzz land in
 the follow-on implementation PR.

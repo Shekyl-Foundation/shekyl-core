@@ -1,0 +1,105 @@
+---
+description: Document classes, status banners, archive-or-contract on plan close, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets.
+alwaysApply: true
+---
+
+# Documentation lifecycle
+
+`docs/README.md` is the front door. This rule is how documents are
+classified, closed, and kept from regenerating the 15k-line FOLLOWUPS /
+26k-line CHANGELOG failure mode.
+
+Cite from [`91-documentation-after-plans.mdc`](91-documentation-after-plans.mdc)
+and [`94-tracking-index.mdc`](94-tracking-index.mdc). Archive eligibility
+and the `git mv` checklist live in
+[`docs/design/IMPLEMENTATION_INDEX.md`](../../docs/design/IMPLEMENTATION_INDEX.md)
+§8; this rule does not restate that checklist.
+
+## Document classes
+
+| Class | Lives in | Banner |
+| --- | --- | --- |
+| Contract of record | `docs/` or `docs/design/` forever | `Status: LIVING CONTRACT` + last-verified date |
+| Active plan | `docs/design/` | `Status: OPEN` + round |
+| Closed plan / preflight / retired concept | `docs/completed/` | `Status: CLOSED-as-record` or `RETIRED` |
+| Operator / user | `docs/` root | no round archaeology |
+| Ledger | FOLLOWUPS, CHANGELOG, decision log | not a work queue |
+| Map | `IMPLEMENTATION_INDEX.md` | identifier + owning doc + one-line status |
+
+Do **not** implement from `docs/completed/`. Git history is the archive.
+
+Claim-era staking specs (confidential / lock-tier / `txin_stake_claim*`)
+are deleted, not stubbed. Archival staking SoTs (`V3_STAKER_ARCHIVAL.md`,
+`PHASE_2B_FSM_RETOOL.md`, `PRINCIPAL_STAKE_LIFECYCLE.md`,
+`REWARD_EMISSION_*`, `ARCHIVAL_*.md`, `EMISSION_CLAIM_BUILDER.md`) are
+never deleted as a side-effect of that class.
+
+## Status banner
+
+Every file under `docs/design/` and `docs/completed/` carries a
+**Status** line in the first 40 lines after the H1. The banner is the
+first thing a grep-driven reader sees.
+
+## Completing a plan includes archive-or-contract
+
+When the work a plan doc owns is done:
+
+- If it is a living contract of record, it **stays** in `docs/design/`
+  (or `docs/`) and the banner flips to `LIVING CONTRACT` with a
+  last-verified date.
+- If it is a plan / preflight / closeout / retired concept, `git mv` it
+  to `docs/completed/` in the **same** change, following index §8.
+
+“Implementation landed” alone is not archival. Mixed docs that still
+own named open residue stay in `design/`.
+
+## FOLLOWUPS is a queue of one-liners
+
+Each item is **≤20 lines**: one sentence of what remains, a `Target:`
+from the three tokens below, and a link to the owning doc. Essays belong
+in the plan doc or the completed record, not in the queue.
+
+Allowed `Target:` values only:
+
+- **pre-genesis** — default. Lands before genesis if it should exist at
+  launch.
+- **post-genesis** — exceptional deferral with a **named blocker** why
+  it cannot land before genesis. The list stays tiny.
+- **V4** — lattice-only transition, 2–5 years, gated on NIST (or
+  successor) actually approving primitives such as lattice threshold
+  signatures. Not a parking lot.
+
+`V3.1` / `V3.2` / `V3.x` / `V5+` are not work-item targets. `V3.1` may
+remain in a historical protocol *title*.
+
+Resolved items are **removed**. Git history is the archive.
+
+## CHANGELOG scope
+
+`docs/CHANGELOG.md` records user-visible, consensus, API, or
+security-relevant deltas. Design-round archaeology stays in the plan
+doc. A plan that only rearranges documentation does not owe a
+CHANGELOG novel; a one-line Unreleased note is enough when the change
+is process-only.
+
+CI (`.github/workflows/doc-links.yml`) holds the banners, FOLLOWUPS
+`Target:` tokens, forbidden fossils in always-applied rules, index §2
+prefix uniqueness, and the claim-era basename refusal. A closed plan
+left in `docs/design/` with a DRAFT banner, or a new
+`CONFIDENTIAL_STAKING.md`, fails the run.
+
+## Who wins
+
+Code on `dev` > living contract > implementation index (map) >
+plan-doc status table > FOLLOWUPS. Fix the loser; do not
+drive-by-update every mention.
+
+## Related rules
+
+- **`00-mission.mdc`** — priority hierarchy.
+- **`15-deletion-and-debt.mdc`** — the three targets above replace the
+  V3.1 / V3.2 / V3.x ladder.
+- **`91-documentation-after-plans.mdc`** — the doc-update task; CHANGELOG
+  is no longer unconditional.
+- **`94-tracking-index.mdc`** — identifier registry; the index is a map,
+  not a status-of-record.

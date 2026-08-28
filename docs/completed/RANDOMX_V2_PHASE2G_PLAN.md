@@ -1,5 +1,7 @@
 # RandomX v2 — Track A Phase 2g plan
 
+
+**Status:** CLOSED-as-record.
 ## Front-matter
 
 | Field | Value |

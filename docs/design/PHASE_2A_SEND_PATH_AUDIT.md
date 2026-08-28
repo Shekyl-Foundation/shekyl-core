@@ -1,5 +1,7 @@
 # Phase 2a — send path: pre-flight audit trail
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 Sibling audit trail for `docs/design/PHASE_2A_SEND_PATH.md`, per
 `26-sub-pr-design-discipline.mdc` §"Pre-flight pass (Round 0 disposition
 naming)". Records, per sub-PR, the **substrate re-check** and **artifact

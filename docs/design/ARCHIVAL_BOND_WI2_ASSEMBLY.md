@@ -1,5 +1,7 @@
 # WI-2 — Production bond assembly + pending-post persistence
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 > **Status: design addendum (round 1), 2026-07-05.** The short spec-first
 > round the WI-2 implementation anchors on (rule `05-system-thinking`:
 > specification first). This is an *addendum* to

@@ -1,4 +1,4 @@
-// Copyright (c) 2026, The Shekyl Foundation
+// Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
 // BSD-3-Clause
@@ -37,8 +37,22 @@
 //! **independent observation of actor state** —
 //! [`StakeEngineHandle::persona_canonical_id`], a *different* handler reading
 //! the same `held` map, which answers `LookaheadExhausted` once the slot is
-//! gone. Nothing else in the tree asserts that a retired persona is actually
-//! gone from the actor.
+//! gone.
+//!
+//! **Measured, and narrower than a first draft of this header claimed.** Under
+//! that bite the eight `pscan/task_tests.rs` tests all stay green — but
+//! `stake_engine_tests::retire_wipes_a_terminal_persona_and_is_idempotent`
+//! goes red, because its *second* retire would answer `Retired` instead of
+//! `NotHeld`. So this walk is **not** the tree's first assertion that removal
+//! occurred. The difference is how it is observed: that test **infers**
+//! removal from a later call's outcome, while this one **reads the state
+//! directly** through a handler that does not mutate it. The genuinely new
+//! coverage is the funded arm — that a *refused* retire leaves the key
+//! material readable, which nothing else asserts at the actor.
+//!
+//! The first draft said "nothing else in the tree asserts this", from running
+//! `--lib pscan::task` and generalising to the tree. Recorded because the
+//! walk's whole subject is claims that outrun what was measured.
 //!
 //! # What "observe the wipe" can and cannot mean
 //!
@@ -204,8 +218,12 @@ fn walk_accrual(id: PCanonicalId) -> PScanAccrual {
 ///
 /// The edit that makes this red is deleting the `held.remove(&slot)` /
 /// `wipe_bonded` pair from `retire_bonded` while still returning
-/// `Retired { slot }` — which every existing retire assertion survives, because
-/// they read the dispatch bookkeeping rather than the actor.
+/// `Retired { slot }`. All eight `pscan/task_tests.rs` tests survive that edit
+/// — they read the dispatch bookkeeping, and `retired_this_session` is written
+/// on both the `Retired` and `NotHeld` arms — but
+/// `stake_engine_tests::retire_wipes_a_terminal_persona_and_is_idempotent`
+/// does not: its second retire would answer `Retired`. This assertion is the
+/// *direct* reading of the same fact that test infers from a later outcome.
 #[tokio::test]
 async fn a_retired_persona_is_gone_from_the_actor() {
     let (stake, id) = spawn_walk_actor();

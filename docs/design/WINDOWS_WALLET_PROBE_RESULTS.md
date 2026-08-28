@@ -1,5 +1,7 @@
 # WINDOWS_WALLET_PROBE_RESULTS.md
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **Raw run log for the Windows wallet round (WP).** One row per probe per
 machine, with the toolchain and OS build that produced it.
 

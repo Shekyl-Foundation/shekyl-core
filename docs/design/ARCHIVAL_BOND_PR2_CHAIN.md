@@ -1,5 +1,7 @@
 # Archival bond construction — PR 2 sub-chain arc (Bond-PR 2a → 2d)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **This is the index/arc doc** for the wallet-side archival bond-post
 construction PR-2 sub-chain. It maps every sub-PR, records the landed ones, and
 nests the full per-PR plan docs for the unstarted ones. It is the **single
@@ -19,7 +21,7 @@ Two independent schemes both used the tokens `2a / 2b / 2c / 2d`:
 
 | Scheme | Tokens | Meaning | Docs |
 | --- | --- | --- | --- |
-| **Engine layer** (`WALLET_REWRITE_PLAN.md`) | **Phase 2a–2d** | 2a send path, 2b stake lifecycle, 2c addresses/proofs, 2d cold bundles | `PHASE_2A_SEND_PATH.md`, `PHASE_2B_STAKE_LIFECYCLE.md` (+ `_AUDIT`) |
+| **Engine layer** (`WALLET_REWRITE_PLAN.md`) | **Phase 2a–2d** | 2a send path, 2b stake lifecycle, 2c addresses/proofs, 2d cold bundles | `PHASE_2A_SEND_PATH.md`, `design/PHASE_2B_FSM_RETOOL.md` (+ `_AUDIT`) |
 | **Bond construction** (this chain) | **Bond-PR 2a–2d** | 2a KAT, 2b StakeEngine actor, 2c-1/2c-2a/2c-2b, 2d transport | this arc + nested plans |
 
 **Resolution (decided 2026-06-19): the bond construction sub-chain is prefixed
@@ -56,8 +58,8 @@ new prose uses the prefix.
 | **2c-1** | `feat/archival-bond-realtree-kat` #158 | **landed** | Real-tree composition KAT (prove half; verify half now **live** — CT-5 closed #162) | §3.3 (record) |
 | **2c-2a** | `feat/archival-stake-wiring` | **landed inert** | **Model D** wiring (seed-free actor + typed contracts + `StakingBlock`) | §3.4 (record) |
 | **2c-2b** | `feat/archival-bond-request` #163 (archived) | **landed inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) + S6 follow-on §3.5.1 + GF-7 placement/seam follow-on §3.5.2 (landed #255) |
-| **2d-1** | — | **not started — prerequisite** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation | §3.6 (foundation) |
-| **2d-2** | — | **not started** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for) | §3.6 |
+| **2d-1** | WI-1 | **wired 2026-07-18** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation. SP-0…SP-7 landed via PR-A / PR-B; embedder in `shekyl-wallet-rpc` lifecycle. | §3.6 (foundation) |
+| **2d-2** | — | **partial — in progress** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for). SP-T1 / SP-T4a already landed; remaining is transport/broadcast completion. | §3.6 |
 
 ---
 

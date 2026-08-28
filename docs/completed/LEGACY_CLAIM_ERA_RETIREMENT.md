@@ -1,12 +1,14 @@
 # Legacy claim-era staking retirement — verified inventory + PR decomposition
 
+**Status:** CLOSED-as-record (archived from `docs/design/` 2026-08-26).
+
 **Status:** audit complete 2026-07-01 (4-agent whole-workspace sweep, every claim
 below verified at source). This is the **map** the deletion PRs are cut from — not a
 deletion in itself. Motivation: DQ1 retired confidential claim/tier staking in favour
 of plain-transfer `stake_in` + archival bonds; the dead machinery lingers, and one dead
 element (`StakingMeta` on `WalletOutput`) sits in the exact type where the emission
-`MintLineageOutput` provenance seam must land ([`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md)
-§8.0.3 / [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §3 GF-4b).
+`MintLineageOutput` provenance seam must land ([`REWARD_EMISSION_VIN_PLAN.md`](../design/REWARD_EMISSION_VIN_PLAN.md)
+§8.0.3 / [`PRINCIPAL_STAKE_LIFECYCLE.md`](../design/PRINCIPAL_STAKE_LIFECYCLE.md) §3 GF-4b).
 
 Retired era = **Tier-A** (confidential stake/claim/unstake + lock-tier weighting).
 Live era = **Tier-B** (archival bonds: `StakeEngine`, `ArchivalBondRecord`, work-based

@@ -29,6 +29,8 @@ isProject: false
 
 # Electrum-words removal — multi-phase plan
 
+
+**Status:** CLOSED-as-record.
 ## Sequencing rationale
 
 B-1 (Electrum-words removal) is **independent** of the Stage 1

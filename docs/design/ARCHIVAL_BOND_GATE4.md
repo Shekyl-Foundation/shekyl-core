@@ -873,7 +873,7 @@ backlog are independent value flows (§3.5).
 | Doc | Relationship |
 |-----|----------------|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Mint consumer; §6.4+ amended for join |
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | §2.4 tx legs; FSM retool target |
+| [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | §2.4 tx legs; FSM retool target |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | `Market`, `E_join`, no pre-join bits |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Timing + bond-funding around join |
 | [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) | Re-bond after slash |
