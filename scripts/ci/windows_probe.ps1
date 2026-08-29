@@ -122,9 +122,16 @@ try {
 Write-Host ''
 Write-Host '== SECTION 3: interactive-logon probes ==' -ForegroundColor Cyan
 
+# Coverage note (bite-checked 2026-08-28): -CiOnly SKIPs P-12, so CI never
+# reaches the P-12 result switch below — only P-17's identical build-error-vs-
+# UNRUN mapping is exercised automatically. The two mappings are kept in sync by
+# hand; if the P-12 arm regresses, nothing automated will catch it. Something for
+# whoever promotes P-12 out of §3 (a Low-IL fixture that runs under -CiOnly),
+# not a fix for now — recorded so the gap is visible rather than assumed absent.
 if ($CiOnly) {
     Add-Result 'P-12' 'SKIP' 'pre-declared laptop-only (needs a genuine Low-IL process)'
     Add-Result 'P-13' 'SKIP' 'pre-declared laptop-only (needs two interactive logons)'
+    Add-Result 'P-18' 'TODO' 'S4U batch-logon harness not yet built — sheet §3/§4; result goes in the sheet §4'
     Write-Host 'Skipped by -CiOnly, as pre-registered in the sheet §3.' -ForegroundColor Yellow
 } else {
     # P-12: does the Medium mandatory label block a Low-IL opener?
@@ -147,16 +154,50 @@ if ($CiOnly) {
         $p12Exit = $LASTEXITCODE
     } finally { Pop-Location }
 
+    # 0/1/2 are the probe's OWN verdicts; anything else (101 = cargo build error
+    # or a panic) means the example never ran to a verdict and must be a harness
+    # FAIL, not a benign UNRUN — §1's `cargo test` never builds this example, so
+    # this switch is the only place a compile break surfaces (rule 47).
     switch ($p12Exit) {
         0 { Add-Result 'P-12' 'PASS' 'Low-IL open refused with ERROR_ACCESS_DENIED, as predicted' }
         1 { Add-Result 'P-12' 'FAIL' 'see output above; per the sheet this revisits WP-D4, not the probe' }
-        default { Add-Result 'P-12' 'UNRUN' "the probe could not measure the label (exit $p12Exit) — not a pass" }
+        2 { Add-Result 'P-12' 'UNRUN' 'the probe could not measure the label (exit 2) — not a pass' }
+        default { Add-Result 'P-12' 'FAIL' "the p12 example did not run to a verdict (exit $p12Exit = build error or panic, not a probe result)" }
     }
 
     # P-13 needs two CONCURRENT interactive logons, which one console session
     # cannot provide. Left unrun rather than approximated: a single-session
     # stand-in would be asserting something P-13 does not ask.
     Add-Result 'P-13' 'TODO' 'needs two concurrent interactive logons — manual, result goes in the sheet §4'
+    Add-Result 'P-18' 'TODO' 'S4U batch-logon harness not yet built — the runnable local route to WP-D6, sheet §3/§4'
+}
+
+# ---------------------------------------------------------------------------
+# P-17 — the IPC$ half of WP-D6. Runs in BOTH modes: its precondition is a
+# loopback SMB path (`LanmanServer` / the `IPC$` share), not an interactive
+# logon, and whether the runner has one is the §3.1 promotion question. The
+# probe detects that precondition itself and reports UNRUN when it is absent,
+# so it is safe to run unconditionally — exit 2 is a reportable outcome, never
+# a pass, and never a hard failure of the run.
+# ---------------------------------------------------------------------------
+Write-Host ''
+Write-Host '-- P-17: does the logon SID alone refuse a cross-session (IPC$) caller? --'
+Push-Location (Join-Path $repo 'rust')
+try {
+    cargo run --locked -q -p shekyl-win-sec --features test-utils --example p17_ipc_logon_sid_probe
+    $p17Exit = $LASTEXITCODE
+} finally { Pop-Location }
+
+# 0/1/2 are the probe's OWN verdicts; 101 (cargo build error or a panic) means
+# the example never reached a verdict. §1's `cargo test --test probes` never
+# builds this example, so a compile break — e.g. a renamed shekyl-win-sec symbol
+# — surfaces ONLY here; it must be a harness FAIL, not a benign UNRUN that reads
+# exactly like a legitimate no-second-machine result (rule 47).
+switch ($p17Exit) {
+    0 { Add-Result 'P-17' 'PASS' 'the logon-SID ACE alone refused a loopback caller with ERROR_ACCESS_DENIED' }
+    1 { Add-Result 'P-17' 'FAIL' 'a prediction was falsified — see output above; revisits WP-D6, not the probe' }
+    2 { Add-Result 'P-17' 'UNRUN' 'the probe reported UNRUN (exit 2) — no crossing transport, or a setup/read failure (descriptor, bind, report, or token read); read the probe output above for the specific reason. Not a pass' }
+    default { Add-Result 'P-17' 'FAIL' "the p17 example did not run to a verdict (exit $p17Exit = build error or panic, not a probe result)" }
 }
 
 # ---------------------------------------------------------------------------
@@ -171,5 +212,11 @@ if ($failed -gt 0) {
     Write-Host "$failed probe group(s) FAILED." -ForegroundColor Red
     exit 1
 }
-Write-Host 'All run probes passed. TODO/SKIP rows are not passes.' -ForegroundColor Green
+# "All run probes passed" means no FAIL. A non-FAIL status is not a pass, and
+# the disclaimer names every one that can appear so a reader scanning only this
+# line cannot mistake an unreached question for a green: UNRUN (the probe could
+# not reach what it measures), TODO (not implemented on this host), SKIP
+# (pre-declared out of scope for this mode). None increments $failed; none is a
+# pass.
+Write-Host 'No probe FAILED. UNRUN / TODO / SKIP rows are not passes — read their detail.' -ForegroundColor Green
 exit 0

@@ -4869,7 +4869,15 @@ replaces. Three things are needed to wire it; the band test is one.
 `bounded_uniform` inclusive-`[0, max]` off-by-one already bit this arc once, in
 the two-slot occupancy instrument, so the same primitive gets the same scrutiny:
 
-| | C++ today | Rust `NoiseCadence` | Verdict |
+> **The "C++ today" column is dated 2026-08-03 and is no longer today.** The
+> first two rows' `#define`s are **deleted** (2026-08-28, zero readers) and the
+> Rust pair is `params::carrier::NOISE_MIN_DELAY_MS` = 3 333 /
+> `NOISE_DELAY_JITTER_MS` = 3 334. This table is kept as the record of a
+> correspondence *check* — its finding was the granularity delta in the last
+> row, and that finding is what survives. The `bounded_uniform` inclusive-`[0,
+> max]` semantics it verified still hold and the new mean depends on them.
+
+| | C++ (as of 2026-08-03) | Rust `NoiseCadence` | Verdict |
 | --- | --- | --- | --- |
 | min delay | `CRYPTONOTE_NOISE_MIN_DELAY` = 10 s | `NOISE_MIN_DELAY_SECS` = 10 | ✅ |
 | jitter | `CRYPTONOTE_NOISE_DELAY_RANGE` = 5 s | `NOISE_DELAY_JITTER_SECS` = 5 | ✅ |
@@ -5201,6 +5209,16 @@ its own artifacts.
   blocked on the ambient background-failure-rate measurement (§19.3).
 
 ### 20.9 Q-11 — the covert timing constants are the arc's last unexamined numbers
+
+> **ANSWERED 2026-08-28.** The cadence is derived rather than inherited:
+> `3.333 s + U[0, 3.334 s]`, a 5 000 ms mean, against a per-node ceiling of
+> 16 KiB/s that is now a compile-time assert (§56.7 for the linkage
+> re-measurement, `COVER_TRAFFIC_RESTORATION.md` §3.3 for the denominator
+> ruling). The two `#define`s named below are deleted. What this section
+> describes — constants ported unchanged so a behavioural change stays
+> attributable — is the state it was written in, and the separation it argues
+> for is why the port and the derivation are different commits.
+
 
 `CRYPTONOTE_NOISE_MIN_DELAY`, `CRYPTONOTE_NOISE_DELAY_RANGE` and
 `CRYPTONOTE_NOISE_MIN_EPOCH` are ported unchanged by RP-3b, and the reason is
@@ -5814,6 +5832,15 @@ Recorded because the read produced them and they constrain the shape question;
    further information. A near-deterministic cadence aggregated over
    `NOISE_CHANNELS = 2` is instead a near-metronome, and a metronome's
    *deviations* are informative.
+
+   > **Numbers dated 2026-08-03; the cadence is now `3.333 s + U[0, 3.334 s]`
+   > (§56.7).** The family is unchanged — still bounded uniform, still not
+   > Poisson — so this item's argument stands as written. What moved is the
+   > degree: **CV ≈ 0.192**, up from 0.115, because the jitter-to-base ratio
+   > doubled. That is measurably further from "near-deterministic" while still
+   > ~5× short of the exponential's CV = 1.0, which is the gap this item is
+   > about. §56.7 measures the privacy consequence of exactly that shift —
+   > bounded's residual channel falling 0.120 → 0.058 at a 10 s blackout.
 2. **But the mixing half of Loopix does not transfer.** Loopix has two
    exponential parameters doing different jobs — λ_P (client emission) and μ
    (per-hop mix delay, whose memorylessness is Lemma 2's subject). Shekyl has
@@ -10102,6 +10129,108 @@ that lesson. It now pins the three properties the shape decision rests on
 10 s), plus the weak-matcher arm as a property, since the instrument's own
 failure mode is worth a regression test. The table is still printed — it is
 the readout the decision was taken against — but it is no longer the test.
+
+### 56.7 Re-measured at the 5 s cadence — the channel shrinks ~7×, the ruling stands
+
+**2026-08-28.** The cover cadence moved from `10 s + U[0, 5 s]` (mean 12.5 s)
+to `3.333 s + U[0, 3.334 s]` (mean exactly 5 s). Both Unit 2 assertions went
+red, and neither was breakage — the instrument was reporting that the numbers
+§56.4 decided against had moved.
+
+**The jitter-to-base ratio DOUBLED, and the record said "preserved".**
+`10 s + U[0, 5 s]` is a ratio of 0.5; `3 333 + U[0, 3 334]` is **1.0**. The
+round was specified as *preserving §56's ratio* and the numbers given did not
+preserve it — a ratio-preserving 5 s mean would have been `4 000 + U[0, 2 000]`.
+Corrected here rather than in the constants: the doubling is in the safe
+direction and the table below is its warrant, since more relative jitter is
+exactly what weakens a matcher.
+
+**The invariant is not 1.0.** §56 requires the jitter to be non-zero, and the
+standing requirement is that jitter **scales with the base rather than staying
+fixed** — a fixed width against a shrinking base walks back toward the
+metronome. Neither 0.5 nor 1.0 is derived. A future cadence should re-measure,
+not copy the number, which is why this paragraph sits next to the measurement
+rather than in a constants table.
+
+**Bounded's residual channel at a 10 s blackout** (strong matcher, chance
+0.050):
+
+| | mean 12.5 s | mean 5 s |
+| --- | --- | --- |
+| match rate | 0.120 | **0.058** |
+| excess over chance | 0.070 | **0.008** |
+
+Above chance at 10 s and 13 s only; at chance from 20 s out. Confirmed
+significant before acting on it — 6 000 trials put it at **2.9 σ**, so the
+assertion now runs at 20 000 (σ ≈ 0.0015) and asserts a 3 σ band rather than
+the old `CHANCE + 0.02`, which was calibrated against a seven-times-larger
+effect and could not resolve this one.
+
+**Why, and it is the same analytic handle §56.4 used.** Elapsed over `k`
+intervals has relative spread `0.193/√k` at the new constants against
+`0.115/√k` at the old — 1.67× wider. A fixed blackout also hides more
+emissions, so `k` is both larger and harder to pin, and the residual phase
+inside it is a smaller share of the interval.
+
+**§56.5's ruling is unaffected, and the distinction is its whole basis.**
+Memorylessness removes the channel **by construction** — the wait from
+blackout-end is `Exp(µ)`, independent of everything prior — while bounded
+merely leaks *less* at these constants. A shorter cadence is a smaller number,
+not a different family. Reading "at chance" off a 600-trial sample that cannot
+resolve 0.008 would have been precisely the trap §56.5 named: a green result
+grading the observer rather than the mechanism.
+
+#### 56.7a The weak-matcher probe was measuring alignment
+
+The second red is more instructive. `the_weak_matcher_misses_what_the_strong_one_finds`
+probed a 60 s blackout — 4.8 periods at the old mean, exactly **12** at the
+new one — and the weak matcher then read the metronome at **1.000** rather
+than 0.000.
+
+| blackout | 10 s | 13 s | 27 s | 47 s | 63 s | 88 s | 150 s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| weak, metronome | **1.000** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **1.000** |
+
+Every 1.000 is an exact multiple of the 5 s mean. On-multiple, `last + mean` is
+wrong by the *same* whole number of periods for every stream, so the ordering
+it induces is still correct and the assignment is perfect; off-multiple the
+streams land at unrelated offsets and it scrambles.
+
+**That is §56.2's mechanism, and this is the third time it has had to be
+learned.** §56.2 rejected the −0.250 at `D` = 30 s because *"30 s is exactly
+two 15 s periods"*; §56.4 observed that the tell *"was already in §56.2 and I
+did not generalise it"* — applying it to one data point rather than to the
+instrument. Leaving a probe's alignment to chance is the same omission again.
+The test now **asserts its blackout is off-multiple before using it**, and 47 s
+is chosen for being coprime to the mean rather than for its result.
+
+The sweep table keeps §56.4's blackouts for comparability and gains a 13 s row,
+which is what makes the alignment effect visible in the readout rather than a
+property of whichever cadence happens to ship.
+
+#### 56.7b What is still owed, and why it is filed rather than done here
+
+**§56.5's ruling stands and is unimplemented, and nothing was tracking it.**
+That is the §92.5c item 1 shape exactly — a true, decided sentence that stayed
+a claim because nobody opened it — so it is now a FOLLOWUPS one-liner
+(pre-genesis) rather than a paragraph only this section knows about.
+
+It carries two priced inputs that this cadence change made stale, and both want
+re-running rather than re-reading:
+
+- **§57's three exits.** The ~18 % epoch-miss for a 20-fragment transaction was
+  computed at the 12.5 s mean. The epoch now affords **89** windows rather than
+  40, so the figure that made "shorten the mean" one of three exits has moved
+  under all three.
+- **§58.2's admission-control threshold `θ`** — *start iff
+  `P(k fragments clear in the remaining epoch) ≥ θ`* — which §58.2 calls "a
+  constants-round input, not a workaround". Its Poisson tail is drawn against
+  the cadence, so it is stale in the same way and for the same reason.
+
+**Not done in this change, deliberately.** The cadence commit was scoped to the
+cadence and the ceiling with no derived constant moving; re-deriving `θ` here
+would be the concurrent re-derivation that scoping exists to prevent. The
+re-derivation round owns it.
 
 ## 57. Q11-B's exit depends on a mechanism fact — checked before touching constants
 

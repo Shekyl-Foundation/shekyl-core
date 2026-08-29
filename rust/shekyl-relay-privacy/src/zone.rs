@@ -10,25 +10,97 @@
 //! txpool entry (§89.2): the embargo draw is told the zone at
 //! `set_relayed` time, not reminded of it later.
 
-/// The network a relay zone runs on.
+/// Declares [`RelayZone`] and [`RelayZone::ALL`] from ONE variant list.
 ///
-/// # FFI contract
+/// # Why the enum is behind a macro
 ///
-/// Callers pass `static_cast<uint8_t>(zone)`. Anything outside `0..=3` must
-/// resolve to [`Self::Invalid`], which [`crate::params::DandelionParams::adopted_for`]
-/// provisions as the **longest** embargo — a corrupt or miscast byte costs
-/// recovery latency, never the shortest (clearnet) wait.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum RelayZone {
-    /// `zone::invalid` — out-of-domain FFI byte, or "origin unknown".
-    Invalid = 0,
-    /// `zone::public_` — clearnet.
-    Public = 1,
-    /// `zone::i2p`.
-    I2p = 2,
-    /// `zone::tor`.
-    Tor = 3,
+/// `ALL` is not a convenience — `params::carrier::CEILING_ZONES` counts the
+/// encrypted zones through it, and that count is the multiplier in the
+/// per-node cover-bandwidth ceiling. A hand-written `ALL` silently
+/// **undercounts** a newly added encrypted zone, and no assertion over the
+/// array can catch that: every check needs a total (a length, a mask, a
+/// count), every total is hand-written too, and nothing forces the second one
+/// to be updated either. An exhaustive `match` catches a new variant, but not
+/// an `ALL` that was left behind after the match was fixed.
+///
+/// Generating both from the same tokens is the only construction that cannot
+/// drift, short of `std::mem::variant_count`, which is nightly-only. The cost
+/// is one layer of indirection in this file; the alternative is a bandwidth
+/// ceiling that under-enforces without failing.
+macro_rules! relay_zones {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum RelayZone {
+            $( $(#[$meta:meta])* $name:ident = $disc:literal ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u8)]
+        pub enum RelayZone {
+            $( $(#[$meta])* $name = $disc, )+
+        }
+
+        impl RelayZone {
+            /// Every zone, in declaration order.
+            ///
+            /// Emitted from the same variant list as the enum, so it cannot
+            /// omit one. A slice rather than an array so no length literal
+            /// needs maintaining alongside it — that literal would be the
+            /// hand-written total this construction exists to remove.
+            pub const ALL: &'static [Self] = &[$(Self::$name),+];
+
+            /// Decode a zone arriving across the FFI as a whole byte.
+            ///
+            /// **Generated from the same variant/discriminant list as the
+            /// enum**, so a new zone cannot be added and then silently decode
+            /// to [`Self::Invalid`] because a hand-written arm was forgotten.
+            /// A wildcard decoder is invisible to that mistake: the byte would
+            /// keep arriving, keep decoding to `Invalid`, and draw the
+            /// anonymity embargo for a zone that exists.
+            ///
+            /// **Do not mask** (`raw & 0b11`): `5 & 0b11 == 1` would decode a
+            /// corrupt byte to [`Self::Public`] and draw the shortest embargo
+            /// silently. Out-of-domain bytes resolve to [`Self::Invalid`],
+            /// which is provisioned as the longest embargo — a corrupt or
+            /// miscast byte costs latency, never privacy.
+            #[must_use]
+            pub const fn from_ffi_u8(raw: u8) -> Self {
+                match raw {
+                    $( $disc => Self::$name, )+
+                    _ => Self::Invalid,
+                }
+            }
+        }
+    };
+}
+
+relay_zones! {
+    /// The network a relay zone runs on.
+    ///
+    /// # FFI contract
+    ///
+    /// Callers pass `static_cast<uint8_t>(zone)`. Anything outside the
+    /// declared discriminants must resolve to [`Self::Invalid`], which
+    /// [`crate::params::DandelionParams::adopted_for`] provisions as the
+    /// **longest** embargo — a corrupt or miscast byte costs recovery
+    /// latency, never the shortest (clearnet) wait.
+    ///
+    /// Declared through `relay_zones!` so the variant list, [`Self::ALL`] and
+    /// [`Self::from_ffi_u8`] cannot drift apart. These docs are passed through
+    /// the macro and land on the type, which is where a reader looks for
+    /// them — an earlier draft left them attached to the macro instead, and
+    /// the type shipped with no documentation at all.
+    pub enum RelayZone {
+        /// `zone::invalid` — out-of-domain FFI byte, or "origin unknown".
+        Invalid = 0,
+        /// `zone::public_` — clearnet.
+        Public = 1,
+        /// `zone::i2p`.
+        I2p = 2,
+        /// `zone::tor`.
+        Tor = 3,
+    }
 }
 
 impl RelayZone {
@@ -68,21 +140,6 @@ impl RelayZone {
     #[must_use]
     pub const fn is_encrypted(self) -> bool {
         matches!(self, Self::I2p | Self::Tor)
-    }
-
-    /// Decode a zone arriving across the FFI as a whole byte.
-    ///
-    /// Out of `0..=3` → [`Self::Invalid`]. **Do not mask** (`raw & 0b11`):
-    /// `5 & 0b11 == 1` would decode a corrupt byte to [`Self::Public`] and
-    /// draw the shortest embargo silently.
-    #[must_use]
-    pub const fn from_ffi_u8(raw: u8) -> Self {
-        match raw {
-            1 => Self::Public,
-            2 => Self::I2p,
-            3 => Self::Tor,
-            _ => Self::Invalid,
-        }
     }
 
     /// The discriminant as a byte — array index into the per-zone embargo
@@ -138,6 +195,23 @@ impl LinkSecrecy {
     }
 }
 
+const _: () = {
+    // Declaration order matches discriminant order. That is ALL this checks —
+    // `from_ffi_u8` is generated from the same list now, so the decode
+    // contract is the macro's to keep, and an assertion here claiming to
+    // enforce it would be a check citing a guarantee it does not provide.
+    // What this catches is a variant declared out of order, which would make
+    // `ALL[i]` and the FFI byte disagree for readers who index by position.
+    let mut i = 0;
+    while i < RelayZone::ALL.len() {
+        assert!(
+            RelayZone::ALL[i] as u8 as usize == i,
+            "RelayZone declaration order no longer matches its discriminants"
+        );
+        i += 1;
+    }
+};
+
 #[cfg(test)]
 mod tests {
     use super::{LinkSecrecy, RelayZone};
@@ -145,14 +219,11 @@ mod tests {
 
     #[test]
     fn ffi_bytes_round_trip_the_domain() {
-        for zone in [
-            RelayZone::Invalid,
-            RelayZone::Public,
-            RelayZone::I2p,
-            RelayZone::Tor,
-        ] {
+        // Iterates `ALL` rather than a hand list: a hand list is the same
+        // hand-written total the macro exists to remove, and it would have
+        // gone green over a new zone it did not mention.
+        for &zone in RelayZone::ALL {
             assert_eq!(RelayZone::from_ffi_u8(zone.as_u8()), zone);
-            assert!(zone.as_u8() <= 3);
         }
     }
 

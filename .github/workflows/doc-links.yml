@@ -108,7 +108,7 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_fossils.py
 
-      - name: Run FOLLOWUPS Target: check
+      - name: "Run FOLLOWUPS Target: check"
         # Every work item must carry Target: pre-genesis|post-genesis|V4.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'

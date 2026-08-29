@@ -127,13 +127,19 @@
 // derivation live in the same place and are pinned by tests.
 // Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
 
-// Noise cadence and fragment window. The epoch pair
-// (CRYPTONOTE_NOISE_MIN_EPOCH / _EPOCH_RANGE) went with noise_zone_params:
-// C++ no longer selects a noise epoch; the Dandelion++ epoch crosses as
-// min_epoch_secs. MIN_DELAY / DELAY_RANGE are the source the Rust
-// inherited mirrors transcribe.
-#define CRYPTONOTE_NOISE_MIN_DELAY                      10     // seconds
-#define CRYPTONOTE_NOISE_DELAY_RANGE                    5      // seconds
+// Noise channel count. The epoch pair (CRYPTONOTE_NOISE_MIN_EPOCH /
+// _EPOCH_RANGE) went with noise_zone_params: C++ no longer selects a noise
+// epoch; the Dandelion++ epoch crosses as min_epoch_secs.
+//
+// CRYPTONOTE_NOISE_MIN_DELAY / _DELAY_RANGE were here and are DELETED
+// (2026-08-28). They had ZERO readers in C++ — the cadence has been drawn in
+// Rust since the carrier moved there — so the comment above calling them "the
+// source the Rust inherited mirrors transcribe" described a direction of truth
+// that no longer existed. The cadence is now shekyl-relay-privacy's
+// params::carrier::NOISE_MIN_DELAY_MS / _DELAY_JITTER_MS, in milliseconds
+// because 3.333 s is not a whole number of seconds. Keeping a second copy
+// here would have meant two privacy constants with nothing forcing them to
+// agree, and this change makes them disagree.
 #define CRYPTONOTE_NOISE_CHANNELS                       2      // Max outgoing connections per zone used for noise/covert sending
 
 /* CRYPTONOTE_FORWARD_DELAY_BASE / _AVERAGE were here, and Q12-U2 deleted them

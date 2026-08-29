@@ -120,7 +120,7 @@ pub enum ZoneNewError {
     /// The epoch cannot carry a full-size message, so the message can never
     /// arrive: CV-1 discards the in-flight remainder at every epoch roll.
     ///
-    /// Budget is [`inherited::noise_windows_in_epoch`] against
+    /// Budget is [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
     /// epoch crosses as `min_epoch_secs`.
     NoiseCannotCrossOneEpoch {
@@ -224,7 +224,7 @@ enum NoiseSchedule {
 
 impl NoiseSchedule {
     fn on<R: RelayRng + ?Sized>(channels: usize, now: Millis, rng: &mut R) -> Self {
-        let cadence = NoiseCadence::inherited();
+        let cadence = NoiseCadence::shipped();
         let deadlines = (0..channels).map(|_| cadence.next_send(now, rng)).collect();
         Self::On { cadence, deadlines }
     }
@@ -370,7 +370,7 @@ impl Zone {
     ///
     /// **A noise epoch must carry a full-size message** — otherwise CV-1
     /// discards the remainder at every roll. The budget is
-    /// [`inherited::noise_windows_in_epoch`] against
+    /// [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
     /// this is a refusal rather than a `const` assertion.
     ///
@@ -410,7 +410,7 @@ impl Zone {
             if stems != inherited::NOISE_CHANNELS {
                 return Err(ZoneNewError::NoiseChannelCount { got: stems });
             }
-            let affords = inherited::noise_windows_in_epoch(params.min_epoch_secs);
+            let affords = carrier::noise_windows_in_epoch(params.min_epoch_secs);
             if affords < carrier::MAX_FRAGMENTS {
                 return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
                     needs: carrier::MAX_FRAGMENTS,

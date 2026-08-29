@@ -130,14 +130,33 @@
 #                                                   producer: nothing on the
 #                                                   exit path is callable
 #                                                   from any RPC verb or CLI
-#                                                   command until PR-P4's
-#                                                   regtest walk has
-#                                                   exercised the retire path
-#                                                   end to end — the wipe,
+#                                                   command. PR-P4 slice 3's
+#                                                   engine walk HAS landed and
+#                                                   asserts all three named
+#                                                   observables — the wipe,
 #                                                   the funded gate, and the
 #                                                   seal-then-act crash
-#                                                   ordering. RESERVED stands
-#                                                   until that walk runs.
+#                                                   ordering — and it did NOT
+#                                                   lift this gate. RESERVED
+#                                                   is anchored to what
+#                                                   actually holds it: no RPC
+#                                                   verb, no CLI command,
+#                                                   nothing dispatching the
+#                                                   assembled bytes, and
+#                                                   native /submit_transaction
+#                                                   still refusing Unbond as
+#                                                   Malformed until the Unbond
+#                                                   submit fact set lands.
+#                                                   (Re-anchored 2026-08-28:
+#                                                   this previously read
+#                                                   "RESERVED stands until
+#                                                   that walk runs", which
+#                                                   would have read as
+#                                                   SATISFIED the moment a
+#                                                   walk landed. A gate tied
+#                                                   to an event expires when
+#                                                   the event happens; tie it
+#                                                   to the condition.)
 #                                                   The walk lands as its OWN
 #                                                   PR, separately from the
 #                                                   producer (ruled

@@ -26,6 +26,7 @@ file, never the reverse.** If they disagree, this file is the observation and
 |---|---|---|---|---|
 | `CI` | `windows-2025-vs2026` | GitHub-hosted | per workflow | service account, no interactive logon |
 | `LP-1` | `LP7760-W1XMP6G3` | Windows 11 Enterprise 23H2, `10.0.22631.7517` (`OSVersion.Version` = `10.0.22631.0`) | `rustc 1.94.0 (4a4ef493e 2026-03-02)`, `x86_64-pc-windows-msvc`, pinned by `rust-toolchain`; host default is 1.95.0 | **one** console session (ID 1), Medium integrity, **not** elevated |
+| `DT-1` | `DTASUS-Z970` | domain-joined Windows, same AD domain as `LP-1`; **exact edition/version/build not captured this run — OWED for reproducibility** (the runner ran only on `LP-1`; `DT-1` ran the .NET dial by hand, and its build was not recorded — fill from `[System.Environment]::OSVersion.Version` + edition when the box is next reachable) | none — .NET `NamedPipeClientStream` only; it is the P-17 *caller*, not a runner | interactive logon as the **same AD user** as the server |
 
 `LP-1` is the first machine with an interactive logon to run this sheet, which
 is what §3 was waiting for.
@@ -39,6 +40,7 @@ is what §3 was waiting for.
 | A | 2026-08-20 | `LP-1` | PR #523 @ `c83a2b740` | `windows_probe.ps1`, no `-CiOnly` |
 | B | 2026-08-23 | `LP-1` | PR #523 @ `3382daa2c` | `windows_probe.ps1`, no `-CiOnly` |
 | C | 2026-08-23 | `LP-1` | `dev` @ `4a76f490a` + the uncommitted P-12 work below | `windows_probe.ps1`, no `-CiOnly` |
+| D | 2026-08-28 | `LP-1` + `DT-1` | `feat/wp-p17-ipc-logon-sid-probe` @ `fa67b5097` | two-machine P-17: `LP-1` runs the probe `--serve`, `DT-1` runs `p17_remote_dial.ps1` as the same AD user |
 
 Runs A and B are the same measurement: the only diff between those two trees is
 `WINDOWS_WALLET_SUPPORT.md` (+116 lines, the WP-W2 preamble). Run B is recorded
@@ -71,10 +73,13 @@ near-pass** — it means nothing was measured, per §0.
 | P-14 truncated label ACE | PASS | PASS | PASS | absent at `9563b4e1`; restored by `c83a2b740` |
 | P-15 logon SID shape | PASS | PASS | PASS | |
 | P-16 seed file owner-only | — | — | PASS | not present on the PR #523 tree; landed on `dev` |
+| **P-17 IPC\$ logon-SID refusal** | — | — | — | not in runs A–C (registered after C). **Run D (two-machine): PASS (structural)** — a genuine remote same-user caller carries **no** logon SID, so the ACE refuses it by construction; full analysis in the sheet §4.8. Single-box §4.5 found no crossing transport |
+| P-18 batch (S4U) logon | — | — | — | registered 2026-08-27; **unrun** — the runnable local route to the same property (sheet §3) |
 
-Runner exit: A `0`, B `0`, C `0`. `check_probe_registry.py` clean on every run
-(C: *"11 CI-durable probes registered and implemented … 5 deferred/laptop-only,
-correctly unimplemented"*).
+Runner exit: A `0`, B `0`, C `0`; run D's server exited `0` (P-17 verdict
+`P-17 PASS (structural)`, sheet §4.8). `check_probe_registry.py` clean on every
+single-box run (C: *"11 CI-durable probes registered and implemented … 5
+deferred/laptop-only, correctly unimplemented"*).
 
 ---
 

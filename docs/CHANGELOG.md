@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
+  5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed
+  dual-zone node carries **~42 GB/month** of cover traffic, up from ~21 GB.
+  The per-node ceiling is ruled **per node** and raised to **16 KiB/s
+  sustained** (was 8 KiB/s per node against a per-zone figure — three
+  denominators for one quantity, now one), with a **24,579 B/s** burst at the
+  shortest interval. The ceiling is a compile-time assert in
+  `params::carrier`, so a shorter cadence, a wider window, or a third
+  encrypted zone is a build break rather than a stale table entry.
+  `CRYPTONOTE_NOISE_MIN_DELAY` / `_DELAY_RANGE` are **deleted** — zero readers,
+  and the cadence now lives in `params::carrier` in milliseconds because
+  3.333 s is not a whole number of seconds. **Nothing pays this today**: the
+  carrier is behind a development opt-in that defaults off. Privacy effect
+  re-measured (`DAEMON_RELAY_PRIVACY.md` §56.7): the bounded family's residual
+  linkage channel falls from 0.120 to 0.058 against chance 0.050 at a 10 s
+  observation gap. See `COVER_TRAFFIC_RESTORATION.md` §3.3.
+
 ### Fixed
 
 - **`--prune-blockchain` no longer deletes the hash of a pruned
@@ -1256,7 +1275,7 @@
   carrier. C++ no longer builds a noise zone: `make_relay_zone` never sets
   the flag, the channel deque and `send_noise` are gone, and the two
   remaining noise callbacks fail loudly rather than no-op. A full-size
-  message must fit in one epoch (`inherited::noise_windows_in_epoch`
+  message must fit in one epoch (`carrier::noise_windows_in_epoch`
   against `MAX_FRAGMENTS`) or `Zone::new` refuses — the C++
   `static_assert` that went with `send_noise`. The unused
   `CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE` `#define`s went with
