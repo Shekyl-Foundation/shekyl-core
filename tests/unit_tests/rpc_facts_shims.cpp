@@ -965,3 +965,21 @@ TEST(rpc_facts_shims, transactions_without_an_output_index_record_is_inconsisten
   EXPECT_EQ(nullptr, q.out);
   EXPECT_EQ(0u, q.out_len);
 }
+
+// An empty request is valid and answers empty. Pinning it because it is the
+// length at which the export has no entries to describe: the vector is empty,
+// `data()` may be null, and code that reaches for that pointer anyway — a
+// `memset` over zero bytes, say — is undefined there while looking harmless.
+// The contract is what this asserts; the pointer discipline is what it guards.
+TEST(rpc_facts_shims, transactions_with_an_empty_request_answers_empty)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new OneTxDB(CHAIN_HEIGHT, a_txid())));
+
+  TxQuery q;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, nullptr, 0, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  EXPECT_EQ(0u, q.out_len);
+  EXPECT_EQ(CHAIN_HEIGHT, q.chain_height) << "the tip is still reported";
+}

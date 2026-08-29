@@ -282,11 +282,20 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
             }
         }
     }
+    // `split` is not a display preference here, it is what makes the
+    // "(pruned)" label answerable. The label asks whether the daemon holds
+    // this transaction's prunable half, and reads `prunable_as_hex` to decide
+    // — a field only the split form fills. Ask for the whole transaction
+    // instead and the halves arrive concatenated in `as_hex` with
+    // `prunable_as_hex` empty, which is indistinguishable from "pruned" and
+    // would label every ordinary confirmed transaction as such. The C++
+    // console set `req.split = true` for the same reason; the rendering below
+    // already reassembles the halves.
     let request = shekyl_rpc_types::GetTransactionsRequest {
         txs_hashes: vec![hash.clone()],
         decode_as_json: json_out,
         prune: false,
-        split: false,
+        split: true,
     };
     let reply = fetch_transactions(src, &request)?;
     if !reply.status.is_ok() {
@@ -623,6 +632,100 @@ mod tests {
             s.write_all(reply.as_bytes()).unwrap();
         });
         address
+    }
+
+    /// A one-request acceptor that answers by running the **real projection**
+    /// over fixed facts, so the reply depends on the request the console
+    /// actually sent.
+    ///
+    /// A canned reply would be blind to the defect this exists to catch: the
+    /// "(pruned)" label reads `prunable_as_hex`, which only the split form
+    /// fills, so a fixture that always returns split-form data would pass
+    /// whatever the console asked for. Serving the projection makes the
+    /// request an input rather than a formality.
+    fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = s.read(&mut buf).expect("read request");
+            let raw = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
+            let request: shekyl_rpc_types::GetTransactionsRequest =
+                serde_json::from_str(&body).expect("the console sends a typed request");
+            let reply = crate::methods::project_transactions(
+                &request,
+                &[txid],
+                &[slot],
+                9,
+                |blob, pruned| {
+                    Ok(format!(
+                        "{{\"json\":\"{}\",\"pruned\":{pruned}}}",
+                        hex::encode(blob)
+                    ))
+                },
+            )
+            .expect("projection succeeds");
+            let out = serde_json::to_string(&reply).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        address
+    }
+
+    fn mined_slot(prunable: Vec<u8>) -> crate::core::TxSlot {
+        crate::core::TxSlot::Chain {
+            pruned: vec![0xAA, 0xBB],
+            prunable,
+            // Nonempty: this transaction HAS a prunable half, so an empty
+            // `prunable_as_hex` would mean the daemon dropped it.
+            prunable_hash: [0x5A; 32],
+            block_height: 3,
+            block_timestamp: 1_700_000_000,
+            output_indices: vec![1],
+            pruned_flag: false,
+        }
+    }
+
+    /// **An ordinary confirmed transaction is not labelled `(pruned)`.**
+    ///
+    /// It was, until this test: the console asked for the whole transaction,
+    /// so the halves came back concatenated in `as_hex` with `prunable_as_hex`
+    /// empty — which the label cannot tell apart from a daemon that pruned the
+    /// half away. Every mined transaction printed as `(pruned)`.
+    #[test]
+    fn a_retained_transaction_is_not_reported_pruned() {
+        let txid = [0x31; 32];
+        let addr = one_shot_projected(mined_slot(vec![0xCC, 0xDD]), txid);
+        let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert!(
+            out.contains("Found in blockchain at height 3"),
+            "expected the confirmed line, got: {out}"
+        );
+        assert!(
+            !out.contains("(pruned)"),
+            "a transaction whose prunable half the daemon still holds must not \
+             be labelled pruned: {out}"
+        );
+    }
+
+    /// And the label still fires when the half really is gone — so the test
+    /// above is not passing by disabling the label.
+    #[test]
+    fn a_pruned_transaction_is_reported_pruned() {
+        let txid = [0x32; 32];
+        let addr = one_shot_projected(mined_slot(Vec::new()), txid);
+        let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert!(
+            out.contains("(pruned)"),
+            "a transaction whose prunable half is absent must be labelled \
+             pruned: {out}"
+        );
     }
 
     /// The C++ printed `<unknown>` below its cutoff and UTC

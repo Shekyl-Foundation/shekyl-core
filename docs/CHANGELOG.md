@@ -206,6 +206,31 @@
   its doc now names all three reads that raise it rather than only the height
   case it was written for.
 
+  The entry vector is left to `vector(n)`'s value-initialization instead of
+  being `memset` afterwards. Value-initialization zeroes every scalar and gives
+  the pointer members real null pointers rather than an all-zero byte pattern
+  that is only null by convention, so the `memset` added nothing — while being
+  undefined at `txids_len == 0`, where `data()` may be null and passing null to
+  `memset` is undefined even for a zero count. An empty `get_transactions`
+  request is valid, so that length is reachable, and it now has a test.
+
+- **`print_transaction` stopped calling every confirmed transaction pruned.**
+  The console asks whether the daemon still holds a transaction's prunable
+  half, and reads `prunable_as_hex` to decide — a field only the **split** form
+  fills. It was requesting the whole transaction, so the halves arrived
+  concatenated in `as_hex` with `prunable_as_hex` empty, which is
+  indistinguishable from "the daemon pruned it": every ordinary mined
+  transaction printed as `(pruned)`. `split` here is not a display preference
+  but what makes the label answerable, which is why the C++ console set it too.
+
+  Covered end to end, by a fixture that answers with the **real projection**
+  over fixed facts rather than a canned reply — a canned reply is blind to this
+  defect, since it would return split-form data whatever the console asked for,
+  and the test would pass over the bug. Reverting `split` reproduces
+  `Found in blockchain at height 3 (pruned)` for a transaction whose prunable
+  half is present, while the genuinely-pruned case stays green, so the fix is
+  not the label being disabled.
+
 - **`get_transactions` and `is_key_image_spent` requests omit their empty
   sequences.** epee drops an empty sequence rather than emitting `[]`, for
   plain `KV_SERIALIZE` members as well as OPT ones — the response types in this

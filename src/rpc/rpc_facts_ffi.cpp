@@ -484,8 +484,14 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
     owned->pruned.resize(txids_len);
     owned->prunable.resize(txids_len);
     owned->output_indices.resize(txids_len);
+    // `vector(n)` value-initializes its elements, which zeroes every scalar
+    // and gives the pointer members real null pointers rather than an
+    // all-zero byte pattern that is only null by convention. The `memset`
+    // this replaces added nothing on top of that and was undefined at
+    // `txids_len == 0`, where `data()` may be null and passing null to
+    // `memset` is undefined even for a zero count — and an empty
+    // `get_transactions` request is valid.
     std::vector<shekyl_rpc_tx_entry> facts(txids_len);
-    std::memset(facts.data(), 0, facts.size() * sizeof(shekyl_rpc_tx_entry));
 
     // ── chain ──────────────────────────────────────────────────────────────
     // The tip is read once, inside the same lock as the per-transaction
