@@ -285,10 +285,13 @@ wallet can ask rather than guess.
 >
 > **The burst is not the same number.** 16 KiB/s is the *sustained* rate; the
 > shortest interval the cadence draws puts a burst at
-> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,579 B/s**, ~1.50×. A circuit is
-> sized against the peak and a month is priced against the mean. The figure
-> **rounds up**: the exact rate is 24 578.46 B/s, and a "peak" the emitter
-> exceeds is wrong in the one direction a sizing number must not be.
+> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,579 B/s**, ~1.50×. Both
+> figures are **per node** — four channels aggregated. A *circuit* carries one
+> channel and wants `PER_CIRCUIT_PEAK_BYTES_PER_SEC` = **6,145 B/s**; sizing a
+> circuit against the node aggregate over-provisions it by 4×. Both peaks
+> **round up**: the exact rates are 24 578.46 and 6 144.61 B/s, and a "peak"
+> the emitter exceeds is wrong in the one direction a sizing number must not
+> be.
 
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
@@ -315,13 +318,16 @@ from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
 statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
 **sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
 are comparable*, which nothing has tested. **The rig spike must hold a circuit
-at 4 KiB/s sustained for a full session, absorbing 6 KiB/s bursts, and confirm
-it holds** *(was 2.72 KiB/s pre-#546, then 3.20 KiB/s — corrected 2026-08-26 —
+at 4,096 B/s sustained for a full session, absorbing 6,145 B/s bursts, and
+confirm it holds** *(was 2.72 KiB/s pre-#546, then 3.20 KiB/s — corrected 2026-08-26 —
 and now 4 KiB/s after the 2026-08-28 cadence change; a circuit carries ONE
 noise channel, so the per-channel figure is the one a circuit probe needs:
-`WINDOW_BYTES / mean cadence` sustained and `WINDOW_BYTES / NOISE_MIN_DELAY_MS`
-at the shortest interval. The node-level 16 KiB/s and 24,579 B/s are four
-channels aggregated and are NOT what this probe sizes.)*; that is the one input
+`carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC` and
+`carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC`, which exist as named constants for
+exactly this reason. The node-level 16 KiB/s and 24,579 B/s are four channels
+aggregated and are NOT what this probe sizes. The burst figure is **6,145**,
+not "6 KiB/s" — the exact rate is 6 144.61 B/s, so a 6,144 cap is 0.61 B/s
+under what one channel emits, and this section requires peaks to round up.)*; that is the one input
 to this axis we do not have.
 
 > **This spec has now gone stale three times, each time silently, because it

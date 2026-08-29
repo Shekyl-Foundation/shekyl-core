@@ -246,15 +246,19 @@ pub const CEILING_ZONES: u32 = {
 /// rate — which is the quantity a link is provisioned against, and the one
 /// "cover bandwidth per node" means. It is **not** an instantaneous cap. A
 /// jittered emitter's shortest interval is [`NOISE_MIN_DELAY_MS`], so a burst
-/// runs at [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` = 1.5× this figure —
-/// and over any finite window the realised average sits either side of the
-/// mean rather than under it.
+/// runs at [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` ≈ 1.50015× this
+/// figure — and over any finite window the realised average sits either side
+/// of the mean rather than under it.
 ///
 /// That is inherent to a jittered cadence rather than a defect in the budget:
 /// removing the overshoot means removing the jitter, which is the metronome
-/// §56 disqualified. Both numbers are stated so a reader provisioning a
-/// circuit uses the peak and a reader pricing a month uses the mean, instead
-/// of one number being asked to do both jobs.
+/// §56 disqualified. Both numbers are stated so a reader pricing a month uses
+/// the mean and a reader sizing for burst uses the peak, instead of one number
+/// being asked to do both jobs.
+///
+/// **Both are NODE-level.** Sizing a single circuit needs
+/// [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`], which is a quarter of the peak — a
+/// circuit carries one channel, not four.
 ///
 /// # It is a statement of maximum cost, not a bound with slack
 ///
@@ -285,8 +289,15 @@ const _: () = assert!(
      PER_NODE_CEILING_BYTES_PER_SEC (COVER_TRAFFIC_RESTORATION.md sec 3.3)"
 );
 
-/// Peak cover bandwidth per node, in bytes per second — the burst a circuit
-/// has to absorb, as opposed to the sustained load it is provisioned for.
+/// Peak cover bandwidth **per node**, in bytes per second — the aggregate
+/// burst across every channel, as opposed to the sustained load the node is
+/// provisioned for.
+///
+/// **NOT a circuit requirement.** A Tor or I2P circuit carries **one** of the
+/// four channels, so sizing a circuit against this figure over-provisions it
+/// by 4×. [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`] is that number. The two were
+/// conflated here in an earlier draft, which is easy to do and expensive in
+/// the direction that wastes capacity.
 ///
 /// Every channel emitting at [`NOISE_MIN_DELAY_MS`], the shortest interval the
 /// cadence can draw. Derived rather than written, so it cannot drift from the
@@ -303,7 +314,8 @@ const _: () = assert!(
 /// has ever been pre-registered, and inventing one here would be a constant
 /// with no warrant — the kind of number a later reader treats as derived
 /// because it sits next to derived ones. What it is for is disclosure: §3.3's
-/// figures are sustained, and an operator sizing a circuit needs this one.
+/// figures are sustained, and an operator sizing a NODE's uplink needs this
+/// one; a circuit probe wants [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`].
 pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
     let numerator = (WINDOW_BYTES as u64)
         * (super::inherited::NOISE_CHANNELS as u64)
@@ -314,7 +326,7 @@ pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
     // Checked rather than assumed. Unlike `noise_windows_in_epoch`, the fit is
     // NOT provable from the shape of the expression: `peak = sustained x
     // mean/min`, and `mean/min` is unbounded as the jitter grows against the
-    // base. It is 1.5x today; an assert is what keeps that from becoming a
+    // base. It is ~1.50015x today; an assert is what keeps that from becoming a
     // silent truncation if it ever is not.
     assert!(
         raw <= u32::MAX as u64,
@@ -325,6 +337,61 @@ pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
         raw as u32
     }
 };
+
+/// Peak cover bandwidth **per circuit**, in bytes per second.
+///
+/// One channel at the shortest interval the cadence can draw. This is the
+/// figure a Tor or I2P **circuit** probe sizes against, because a circuit
+/// carries one channel — [`PER_NODE_PEAK_BYTES_PER_SEC`] is four of these
+/// aggregated and over-provisions a single circuit by 4×.
+///
+/// Exists as a constant rather than a division a reader performs, because the
+/// two were conflated in prose across two documents one review round apart:
+/// `COVER_TRAFFIC_RESTORATION.md`'s rig spec correctly wanted the per-channel
+/// rate while this module described the node aggregate as "the burst a circuit
+/// has to absorb". A named value cannot be picked up by the wrong reader as
+/// easily as a sentence can.
+///
+/// **Rounds UP** for the same reason as the node figure: it is advertised as
+/// an upper bound, and the exact rate is 6 144.61 B/s — a 6 KiB/s cap would be
+/// 0.61 B/s under what one channel actually emits.
+pub const PER_CIRCUIT_PEAK_BYTES_PER_SEC: u32 = {
+    let raw = (WINDOW_BYTES as u64) * 1_000;
+    let denominator = NOISE_MIN_DELAY_MS as u64;
+    let ceil = raw.div_ceil(denominator);
+    assert!(
+        ceil <= u32::MAX as u64,
+        "peak per-circuit bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        ceil as u32
+    }
+};
+
+/// Sustained cover bandwidth **per circuit**, in bytes per second — one
+/// channel at the mean cadence. The rig spec in
+/// `COVER_TRAFFIC_RESTORATION.md` axis 2 sizes against this.
+pub const PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC: u32 = {
+    let raw = (WINDOW_BYTES as u64) * 1_000 / (MEAN_CADENCE_MS as u64);
+    assert!(
+        raw <= u32::MAX as u64,
+        "sustained per-circuit bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        raw as u32
+    }
+};
+
+const _: () = assert!(
+    (PER_CIRCUIT_PEAK_BYTES_PER_SEC as u64)
+        * (super::inherited::NOISE_CHANNELS as u64)
+        * (CEILING_ZONES as u64)
+        >= PER_NODE_PEAK_BYTES_PER_SEC as u64,
+    "the per-circuit peak times the channel count must cover the node peak: \
+     if it does not, one of the two is derived from the wrong denominator"
+);
 
 /// Windows an epoch of `min_epoch_secs` affords at the **slowest** cadence
 /// (`NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS`).

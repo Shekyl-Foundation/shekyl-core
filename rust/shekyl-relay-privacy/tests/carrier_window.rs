@@ -285,4 +285,29 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
          3.3 quotes it"
     );
+
+    // The per-CIRCUIT figures, pinned because the node aggregate and the
+    // single-channel rate were conflated across two documents one review
+    // round apart — the rig spec wanted per-channel while `carrier.rs`
+    // described the node aggregate as "the burst a circuit has to absorb",
+    // which over-provisions a circuit by 4x.
+    assert_eq!(
+        carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC,
+        6_145,
+        "axis 2's rig spec quotes this as the burst one circuit absorbs"
+    );
+    assert_eq!(
+        carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC,
+        4_096,
+        "axis 2's rig spec quotes this as the sustained circuit load"
+    );
+    assert_eq!(
+        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
+            * u64::from(carrier::CEILING_ZONES)
+            * inherited::NOISE_CHANNELS as u64,
+        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
+        "the per-circuit sustained rate times the channel count IS the \
+         per-node ceiling; if these drift apart one is on the wrong \
+         denominator"
+    );
 }

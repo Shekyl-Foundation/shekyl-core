@@ -70,7 +70,8 @@ fn unit2_shape_separation_holds_under_the_strong_matcher() {
     //    (0.193/√k against 0.115/√k), so `k` is harder to identify and the
     //    residual phase inside it is a smaller share of the interval.
     //
-    //    A 0.008 excess is not resolvable at 600 trials — 1.6σ, which is why
+    //    A 0.008 excess is not resolvable at 600 trials — **0.90σ** against
+    //    that run's own σ of 0.0089, which is why
     //    the threshold is re-derived from the sample size rather than lowered
     //    until it passes. `TRIALS_DECISIVE` gives σ ≈ 0.0015, so the 3σ band
     //    below sits at 0.0046 and the measured excess clears it by ~1.7×.
