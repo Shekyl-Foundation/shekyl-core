@@ -157,6 +157,63 @@ bool construct_miner_only_block(
   return true;
 }
 
+// A structurally parseable v3 FCMP++ spend carrying **non-empty `pqc_auths`**
+// and a prunable region. Coinbase transactions cannot stand in here:
+// `has_pqc` is `version >= 3 && !vin.empty() && !holds_alternative<txin_gen>`,
+// so a miner-only chain leaves `txs_pqc_auths` empty and cannot exercise the
+// segment `prune_tx_data` was fixed to retain. No cryptographic validity is
+// needed — the store splits the blob by offset, it does not verify it.
+cryptonote::transaction make_pqc_spend()
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+
+  cryptonote::txin_to_key txin{};
+  txin.amount = 0;
+  std::memset(&txin.k_image, 0xBB, sizeof(txin.k_image));
+  tx.vin.push_back(txin); // FCMP++ carries no ring members, so key_offsets stay empty
+
+  cryptonote::tx_out txout{};
+  txout.amount = 0;
+  cryptonote::txout_to_tagged_key tagged{};
+  std::memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  tagged.view_tag.data = 0;
+  txout.target = tagged;
+  tx.vout.push_back(txout);
+
+  ct::CtSig& rv = tx.ct_signatures;
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 1000000;
+  std::memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
+  rv.outPk.resize(1);
+  // A decodable curve point: the Ed25519 basepoint's compressed encoding.
+  std::memset(rv.outPk[0].mask.bytes, 0x66, sizeof(rv.outPk[0].mask.bytes));
+  rv.outPk[0].mask.bytes[0] = 0x58;
+  rv.enc_amounts.resize(1);
+  rv.enc_amounts[0].fill(0x42);
+  rv.enc_labels.resize(1);
+  rv.enc_labels[0].fill(0x43);
+
+  ct::BulletproofPlus bpp{};
+  bpp.L.resize(6);
+  bpp.R.resize(6);
+  rv.p.bulletproofs_plus.push_back(bpp);
+  rv.p.curve_trees_tree_depth = 20;
+  rv.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  rv.p.pseudoOuts.resize(1);
+
+  cryptonote::pqc_authentication auth{};
+  auth.auth_version = 1;
+  auth.scheme_id = 0;
+  auth.flags = 0;
+  auth.hybrid_public_key.assign(64, 0x71);
+  auth.hybrid_signature.assign(96, 0x72);
+  tx.pqc_auths.push_back(auth);
+
+  return tx;
+}
+
 bool build_two_miner_only_blocks(account_base& miner, block& b0, block& b1)
 {
   std::vector<size_t> block_weights;
@@ -235,4 +292,79 @@ TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
   ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_after));
   EXPECT_EQ(hash_before, hash_after);
+}
+
+// **The retained pqc segment, exercised.** The sibling test above uses
+// miner-only blocks, and a coinbase has no `pqc_auths` — so it proves the
+// prunable-hash half of `prune_tx_data`'s contract and is silent on the other.
+// This one carries a real v3 spend and asserts the property both retained
+// items exist for: after pruning the body, the chain can still NAME what it
+// kept. `get_pruned_transaction_hash` mixes `pqc_auth_hash` and
+// `prunable_hash`, so dropping either would change the txid — which is what
+// made a pruned transaction unnameable before the fix.
+TEST(tx_data_pruning_lmdb, a_pruned_spend_keeps_its_pqc_segment_and_stays_nameable)
+{
+  account_base miner;
+  miner.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
+  block b0{}, b1{};
+  ASSERT_TRUE(build_two_miner_only_blocks(miner, b0, b1));
+
+  const transaction spend = make_pqc_spend();
+  const cryptonote::blobdata spend_blob = tx_to_blob(spend);
+  const crypto::hash spend_id = get_transaction_hash(spend);
+  b0.tx_hashes.push_back(spend_id);
+
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const size_t w0 = get_transaction_weight(b0.miner_tx) + spend_blob.size();
+  const size_t w1 = get_transaction_weight(b1.miner_tx);
+  const difficulty_type cum0 = 1;
+  const difficulty_type cum1 = 2;
+  const uint64_t coins0 = get_outs_money_amount(b0.miner_tx);
+  const uint64_t coins1 = coins0 + get_outs_money_amount(b1.miner_tx);
+
+  {
+    db_wtxn_guard w(&db);
+    // Last two arguments are the attestation witness and the block's txs, in
+    // that order — the spend rides in the txs list, not the witness.
+    db.add_block(std::make_pair(b0, block_to_blob(b0)), w0, w0, cum0, coins0, 0,
+      {}, {std::make_pair(spend, spend_blob)});
+    db.add_block(std::make_pair(b1, block_to_blob(b1)), w1, w1, cum1, coins1, 0, {}, {});
+  }
+  ASSERT_EQ(db.height(), 2u);
+
+  // The segment must be there to begin with, or the assertions below pass
+  // over an empty one and prove nothing.
+  cryptonote::blobdata pruned_before;
+  ASSERT_TRUE(db.get_pruned_tx_blob(spend_id, pruned_before));
+  cryptonote::blobdata full_before;
+  ASSERT_TRUE(db.get_tx_blob(spend_id, full_before));
+  ASSERT_GT(full_before.size(), pruned_before.size())
+    << "the spend must have a prunable half for pruning to remove";
+  crypto::hash prunable_before{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(spend_id, prunable_before));
+
+  ASSERT_TRUE(db.prune_tx_data(1));
+
+  // The body is gone; the two hash operands are not.
+  cryptonote::blobdata full_after;
+  EXPECT_FALSE(db.get_tx_blob(spend_id, full_after))
+    << "the prunable body must be dropped — that is what pruning is for";
+  cryptonote::blobdata pruned_after;
+  ASSERT_TRUE(db.get_pruned_tx_blob(spend_id, pruned_after));
+  EXPECT_EQ(pruned_before, pruned_after)
+    << "the pruned blob carries the pqc segment; a dropped segment shortens it";
+  crypto::hash prunable_after{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(spend_id, prunable_after));
+  EXPECT_EQ(prunable_before, prunable_after);
+
+  // The contract itself: what survived still names the transaction.
+  transaction reparsed;
+  ASSERT_TRUE(parse_and_validate_tx_base_from_blob(pruned_after, reparsed));
+  EXPECT_EQ(spend_id, get_pruned_transaction_hash(reparsed, prunable_after))
+    << "a pruned transaction must still compute its own txid";
 }

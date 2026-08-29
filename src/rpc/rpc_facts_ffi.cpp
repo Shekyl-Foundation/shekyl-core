@@ -458,10 +458,16 @@ struct transactions_owner
 // `tx_memory_pool` takes `m_transactions_lock` then `m_blockchain`
 // (`tx_pool.cpp`), so holding the chain lock across a pool read would be the
 // AB half of an AB-BA deadlock against every pool path that already runs BA.
-// The C++ handler had the same granularity and the same race — a transaction
-// mined between the blob read and the height read — and that race is named
-// here rather than closed by a lock that would trade a stale field for a hung
-// daemon (§3.2).
+// The blob, height and timestamp of a chain hit are read inside one
+// `CRITICAL_REGION_LOCAL(bc)` along with the tip, so they describe one chain
+// state and there is no blob-to-height race left to name.
+//
+// The window that remains is between the two passes: a transaction mined
+// *after* the chain pass missed it and *before* the pool is asked has left the
+// pool and is not in this reply's chain results, so it comes back as missed
+// though the chain now holds it. The C++ handler had the same granularity and
+// the same window; it is named here rather than closed by a lock that would
+// trade a stale answer for a hung daemon (§3.2).
 int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
   const uint8_t* txids, size_t txids_len, uint8_t include_sensitive,
   const shekyl_rpc_tx_entry** out, size_t* out_len, uint64_t* out_chain_height,

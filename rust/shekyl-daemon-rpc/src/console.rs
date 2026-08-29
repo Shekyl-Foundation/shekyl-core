@@ -304,6 +304,13 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     // Exactly one, not "at least one": this command requested a single
     // hash. Empty is "not found"; extra entries are a malformed reply,
     // same shape as `is_key_image_spent` beside it.
+    // A count is not a binding. The daemon is untrusted here, so the entry
+    // must be the one that was asked for: `parse_tx_batch` holds the wallet's
+    // consumers to the same rule, and a console that printed whatever came
+    // back would answer a question the operator did not ask.
+    if !reply.missed_tx.is_empty() {
+        return Err(format!("Transaction wasn't found: {hash}"));
+    }
     let tx = match reply.txs.as_slice() {
         [] => return Err(format!("Transaction wasn't found: {hash}")),
         [tx] => tx,
@@ -314,6 +321,12 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
             ))
         }
     };
+    if !tx.tx_hash.to_string().eq_ignore_ascii_case(hash) {
+        return Err(format!(
+            "print_transaction: asked about {hash}, got {}",
+            tx.tx_hash
+        ));
+    }
 
     let mut out = Vec::new();
     match &tx.location {
@@ -771,6 +784,84 @@ mod tests {
         assert!(
             out.contains("asked about 1 transaction, got 2"),
             "extra entries must be named, not silently truncated: {out}"
+        );
+    }
+
+    /// A one-request acceptor answering with a fixed document, for the cases
+    /// where the point is that the daemon said something the request did not
+    /// ask for — which the projection-backed fixture cannot stage, because it
+    /// only ever answers about the hash it was handed.
+    fn one_shot_raw(reply: shekyl_rpc_types::GetTransactionsResponse) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).expect("read request");
+            let out = serde_json::to_string(&reply).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        address
+    }
+
+    fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
+        shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(txid),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode([0xAAu8, 0xBB]),
+            prunable_as_hex: hex::encode([0xCCu8]),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                block_timestamp: 1_700_000_000,
+                confirmations: 1,
+                output_indices: vec![1],
+            },
+        }
+    }
+
+    /// **A reply about a different transaction is not an answer.** The count
+    /// matched, every field was well-formed, and only the identity was wrong —
+    /// so a console binding the reply to the request by arity alone would have
+    /// printed another transaction under the operator's hash.
+    #[test]
+    fn an_entry_for_a_different_hash_is_refused() {
+        let asked = [0x31u8; 32];
+        let served = [0x99u8; 32];
+        let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            txs: vec![mined_entry(served)],
+            missed_tx: Vec::new(),
+        });
+        let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+        assert!(
+            out.contains("asked about") && !out.contains("Found in blockchain"),
+            "an entry for another hash must be refused, not rendered: {out}"
+        );
+    }
+
+    /// A reply that answers AND reports the hash missed is self-contradictory;
+    /// the miss is the honest half, so it decides.
+    #[test]
+    fn an_entry_alongside_a_missed_hash_is_not_found() {
+        let asked = [0x31u8; 32];
+        let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            txs: vec![mined_entry(asked)],
+            missed_tx: vec![HashHex::from_bytes(asked)],
+        });
+        let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+        assert!(
+            out.contains("wasn't found"),
+            "a contradictory reply must not render as a hit: {out}"
         );
     }
 

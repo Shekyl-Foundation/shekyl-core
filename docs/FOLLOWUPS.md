@@ -14,7 +14,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **A pruned node keeps whole `pqc_auths` because they have no hash table.** A pruned v3 txid is `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)` and `pqc_auth_hash` is computed from the raw `txs_pqc_auths` bytes, so nameability costs the entire PQ signature slice where `txs_prunable_hash` does the same job in 32 bytes (`db_lmdb.cpp` `prune_tx_data`, PR #576). A `txs_pqc_auth_hash` table would close it. **Unmeasured — do not open on the guess:** reopen with a real `pqc_auths`-vs-retained-bytes ratio from a pruned datadir, which an LMDB schema addition and its migration should be justified by.
+- **A pruned node keeps whole `pqc_auths` because they have no hash table.** A pruned v3 txid is `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)` and `pqc_auth_hash` is computed from the raw `txs_pqc_auths` bytes, so nameability costs the entire PQ signature slice where `txs_prunable_hash` does the same job in 32 bytes (`db_lmdb.cpp` `prune_tx_data`, PR #576; owner: [`LMDB_SCHEMA.md`](LMDB_SCHEMA.md)). A `txs_pqc_auth_hash` table would close it. **Unmeasured — do not open on the guess:** reopen with a real `pqc_auths`-vs-retained-bytes ratio from a pruned datadir, which an LMDB schema addition and its migration should be justified by.
   - Target: pre-genesis
 
 - **Delete `fill_construct_tx_rct_stub`** — the remaining half of the CT-naming [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)

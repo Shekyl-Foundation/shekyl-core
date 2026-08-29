@@ -310,6 +310,28 @@
   a different case: it was **already** dead on `dev`, with no callers and no
   header declaration, so it was swept under rule 15 rather than orphaned here.
 
+- **`print_transaction` binds the reply to the request, not just its arity.**
+  It accepted whatever single entry came back, so a daemon could answer with a
+  different transaction — every field well-formed, only the identity wrong —
+  and the console printed it under the operator's hash. It could also answer
+  with an entry *and* report that hash missed, and the entry won. Now the
+  entry's `tx_hash` must equal what was asked and `missed_tx` must be empty,
+  which is the rule `parse_tx_batch` already holds the wallet's consumers to.
+
+  These two cases need a canned reply rather than the projection-backed
+  fixture: the projection only ever answers about the hash it was handed, so it
+  cannot state a reply that contradicts the request.
+
+- **The pruned-spend test carries a real spend, so the retained PQC segment is
+  actually exercised.** `has_pqc` is false for a coinbase (`txin_gen`), so a
+  miner-only chain leaves `txs_pqc_auths` empty — the sibling test proved the
+  prunable-hash half of `prune_tx_data`'s contract and was silent on the other.
+  The new case adds a v3 spend with non-empty `pqc_auths` and asserts the
+  property both retained items exist for: after the body is dropped, the chain
+  can still **name** what it kept, via
+  `get_pruned_transaction_hash(pruned, prunable_hash) == txid`. Re-deleting the
+  segment fails it on that assertion.
+
 - **`print_transaction` stopped calling every confirmed transaction pruned.**
   The console asks whether the daemon still holds a transaction's prunable
   half, and reads `prunable_as_hex` to decide — a field only the **split** form
