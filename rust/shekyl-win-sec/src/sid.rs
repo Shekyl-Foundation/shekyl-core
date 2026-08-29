@@ -70,12 +70,24 @@ pub enum SidError {
     QueryToken(u32),
     /// `ConvertSidToStringSidW` failed.
     Stringify(u32),
-    /// The token carries no `SE_GROUP_LOGON_ID` group.
+    /// The token carries no `SE_GROUP_LOGON_ID`-marked group of logon-SID
+    /// (`S-1-5-5-…`) shape.
     ///
-    /// Every interactive and service logon has one, so this is a refusal
-    /// rather than a fallback: see `sddl.rs` — a descriptor built without the
-    /// logon SID does not have the property WP-D6 claims, and issuing one
-    /// anyway would be worse than not starting.
+    /// Every *interactive* and *service* logon has one — but a **network
+    /// logon does not**, and here that is not a corner case, it is the
+    /// mechanism WP-D6 relies on. P-17 measured it (probe sheet §4.8): a
+    /// genuine same-user caller arriving over `IPC$` impersonates onto a token
+    /// that carries the user SID but **no** logon SID, so a logon-SID-only
+    /// descriptor is unmatchable from the network *by construction* and the
+    /// open is refused with `ERROR_ACCESS_DENIED`.
+    ///
+    /// So this is a **refusal, never a fallback** — and a future reader must
+    /// not "recover" from it by granting the user SID instead. That same
+    /// network token *does* carry the user SID, so a user-SID grant would admit
+    /// exactly the caller WP-D6 refuses, silently undoing D6 (see `sddl.rs`)
+    /// again. A descriptor built without the logon SID does not have the
+    /// property WP-D6 claims, and issuing one anyway would be worse than not
+    /// starting.
     NoLogonSid,
 }
 
@@ -111,14 +123,24 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
         return Err(SidError::OpenToken(last_error()));
     }
     let token = TokenGuard(token);
+    user_sid_of(token.0)
+}
 
+/// The user SID of an **arbitrary** token, by the same `TokenUser` read.
+///
+/// Split out of [`current_user_sid`] so the same reader can be pointed at an
+/// impersonation token — P-17's two-machine server reads the *caller's* user
+/// SID this way to assert same-user before believing a refusal, alongside the
+/// logon SID from [`logon_sid_of`]. The caller owns `token` and keeps it open
+/// across the call; nothing here closes it.
+pub(crate) fn user_sid_of(token: HANDLE) -> Result<SidString, SidError> {
     // Sizing call. It is EXPECTED to fail with ERROR_INSUFFICIENT_BUFFER; the
     // value we want is `needed`, so the return code is deliberately ignored
     // and only a zero `needed` is treated as failure.
     let mut needed: u32 = 0;
     // SAFETY: a null buffer with zero length is the documented sizing form.
     unsafe {
-        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &raw mut needed);
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &raw mut needed);
     }
     if needed == 0 {
         return Err(SidError::QueryToken(last_error()));
@@ -136,7 +158,7 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     // of `u64`s), is 8-byte aligned by construction, and outlives the call.
     let read = unsafe {
         GetTokenInformation(
-            token.0,
+            token,
             TokenUser,
             buf.as_mut_ptr().cast::<c_void>(),
             needed,
@@ -164,11 +186,16 @@ const LOGON_SID_PREFIX: &str = "S-1-5-5-";
 ///
 /// It is a *group* in the token, marked with `SE_GROUP_LOGON_ID`, so this walks
 /// `TokenGroups` and returns the first group carrying that attribute. Every
-/// interactive and service logon has exactly one.
+/// interactive and service logon has exactly one; a **network** logon has
+/// **none** (P-17, §4.8), which is not a gap but WP-D6's `IPC$` boundary working
+/// by construction — [`SidError::NoLogonSid`] is the signal of it, not an error
+/// to route around.
 ///
 /// This is what the pipe DACL grants. Granting the **user** SID instead would
-/// not narrow anything — see `sddl.rs` for why that distinction is the whole
-/// point of WP-D6.
+/// not merely fail to narrow — it would *widen*: P-17 (§4.8) showed a network
+/// caller carries the user SID but no logon SID, so a user-SID grant admits the
+/// very `IPC$` caller the logon SID refuses. See `sddl.rs` for why that
+/// distinction is the whole point of WP-D6.
 pub fn current_logon_sid() -> Result<SidString, SidError> {
     // SAFETY: pseudo-handle needing no close; `token` written only on success
     // and closed by `TokenGuard` on every path out.
@@ -178,17 +205,26 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
         return Err(SidError::OpenToken(last_error()));
     }
     let token = TokenGuard(token);
+    logon_sid_of(token.0)
+}
 
+/// The logon SID of an **arbitrary** token, by the same `TokenGroups` walk.
+///
+/// Split out of [`current_logon_sid`] so the same reader can be pointed at a
+/// token that is not this process's — specifically an impersonation token, for
+/// P-17. P-17's original method expected a caller arriving over `IPC$` to carry
+/// a *different* logon SID; the run (§4.8) showed it carries **none at all** —
+/// this returns [`SidError::NoLogonSid`] — and that absence is itself the
+/// attribution: a token with no logon SID cannot match the logon-SID-only ACE,
+/// so the refusal is the ACE's, not the transport's.
+///
+/// The caller owns `token` and must keep it open across the call. Nothing here
+/// closes it.
+pub(crate) fn logon_sid_of(token: HANDLE) -> Result<SidString, SidError> {
     let mut needed: u32 = 0;
     // SAFETY: the documented sizing form (null buffer, zero length).
     unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenGroups,
-            std::ptr::null_mut(),
-            0,
-            &raw mut needed,
-        );
+        GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &raw mut needed);
     }
     if needed == 0 {
         return Err(SidError::QueryToken(last_error()));
@@ -202,7 +238,7 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
     // SAFETY: `buf` is at least `needed` bytes and outlives the call.
     let read = unsafe {
         GetTokenInformation(
-            token.0,
+            token,
             TokenGroups,
             buf.as_mut_ptr().cast::<c_void>(),
             needed,
