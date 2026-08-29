@@ -350,6 +350,8 @@ pub(crate) mod refresh_slot;
 mod regtest_e2e;
 /// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
 pub(crate) mod rescan;
+#[cfg(test)]
+mod retire_walk;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;

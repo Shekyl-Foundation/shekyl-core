@@ -31,6 +31,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Staking has no REACHABLE exit: Unbond assembles (PR-P4) but has no RPC/CLI; Rebond/HoldingsUpdate still refuse.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
+- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); blocked on the Unbond submit fact set.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+  - Target: pre-genesis
+
 - **Release-asset manifest signing owed before the first non-RC release
   - Target: pre-genesis
 

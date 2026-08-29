@@ -294,10 +294,13 @@ impl StakeEngineHandle {
     /// [`AssembledUnbondPost`] now.
     ///
     /// **`pub(crate)`, and deliberately not wired to any RPC method or CLI verb.**
-    /// The gate on this lane is reachability, not existence: the producer has to
-    /// exist before slice 3's regtest walk can exercise the retire path at all,
-    /// but nothing on the exit path becomes user-callable until that walk has
-    /// observed the wipe, the funded gate, and the seal-then-act crash ordering.
+    /// The gate on this lane is reachability, not existence. Slice 3's engine
+    /// walk has landed and asserts all three named observables (the wipe, the
+    /// funded gate, the seal-then-act crash ordering) — and it did **not** make
+    /// anything user-callable. What still holds the exit closed is the set of
+    /// missing pieces, not a pending event: no RPC method, no CLI verb, nothing
+    /// dispatching the assembled bytes, and native `/submit_transaction`
+    /// refusing Unbond until the submit fact set lands.
     /// This is the engine-internal seam the walk drives — and the seam an
     /// actor-level test uses to prove the handler's persona-binding refusal is
     /// reachable, which a unit test on `UnbondRecordState` cannot do.
