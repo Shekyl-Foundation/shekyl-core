@@ -208,11 +208,31 @@ TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
   const crypto::hash miner_txh = get_transaction_hash(db.get_block_from_height(0).miner_tx);
   ASSERT_TRUE(db.tx_has_verification_data(miner_txh));
 
-  ASSERT_TRUE(db.prune_tx_data(1));
-  ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
-  ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+  crypto::hash hash_before{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_before));
+  cryptonote::blobdata pruned_before;
+  ASSERT_TRUE(db.get_pruned_tx_blob(miner_txh, pruned_before));
+  ASSERT_FALSE(pruned_before.empty());
 
   ASSERT_TRUE(db.prune_tx_data(1));
   ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+
+  cryptonote::blobdata full_after;
+  ASSERT_FALSE(db.get_tx_blob(miner_txh, full_after))
+      << "the complete body is gone locally; shard archival is what still holds it";
+  cryptonote::blobdata pruned_after;
+  ASSERT_TRUE(db.get_pruned_tx_blob(miner_txh, pruned_after));
+  EXPECT_EQ(pruned_before, pruned_after)
+      << "the unprunable prefix must survive so the chain can still name the tx";
+  crypto::hash hash_after{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_after))
+      << "dropping the hash with the body leaves a txid that cannot be rebound";
+  EXPECT_EQ(hash_before, hash_after);
+
+  ASSERT_TRUE(db.prune_tx_data(1));
+  ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
+  ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_after));
+  EXPECT_EQ(hash_before, hash_after);
 }

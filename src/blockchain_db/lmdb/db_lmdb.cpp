@@ -10218,9 +10218,15 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
       MDB_val ktx{};
       ktx.mv_data = &tx_id;
       ktx.mv_size = sizeof(tx_id);
+      // Drop the prunable *bytes* only. The hash stays: it is an operand of
+      // the txid (`get_pruned_transaction_hash`), and keeping it after
+      // dropping the body is why `txs_prunable_hash` exists. `txs_pqc_auths`
+      // is the second unprunable segment (`docs/LMDB_SCHEMA.md`); there is
+      // no pqc_auth_hash table, so deleting it would make a v3 tx fall
+      // through to the v2 3-part mix and become unnameable. Full bodies
+      // live in shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not
+      // on a pruned node.
       (void)mdb_del(wtxn, m_txs_prunable, &ktx, NULL);
-      (void)mdb_del(wtxn, m_txs_prunable_hash, &ktx, NULL);
-      (void)mdb_del(wtxn, m_txs_pqc_auths, &ktx, NULL);
     };
 
     for (; h < batch_end; ++h)

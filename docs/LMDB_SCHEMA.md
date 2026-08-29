@@ -146,7 +146,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
-| Writers | `add_transaction_data` (conditional), `remove_transaction_data` |
+| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. **Not** `prune_tx_data` — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
 
@@ -161,8 +161,8 @@ Prunable suffix of serialized transactions (`CtSigPrunable`: Bulletproof+ range 
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Bytes from `unprunable_size` to end of tx blob. Variable length. |
-| Writers | `add_transaction_data`, `remove_transaction_data` |
-| Readers | `get_prunable_tx_blob`, `get_prunable_tx_hash` |
+| Writers | `add_transaction_data`, `remove_transaction_data`, `prune_tx_data` (delete only) |
+| Readers | `get_prunable_tx_blob` |
 | Introduced | Genesis (DB v0) |
 
 ### `txs_prunable_hash`
@@ -176,7 +176,7 @@ Hash of the prunable section, kept for verification when the prunable data itsel
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value (dup) | `crypto::hash` (32 bytes) |
 | Dup sort | `compare_uint64` (first 8 bytes of hash treated as uint64) |
-| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data` |
+| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. **Not** `prune_tx_data` — the hash is what still names a pruned transaction. |
 | Introduced | Genesis (DB v0) |
 
 ### `txs_prunable_tip`

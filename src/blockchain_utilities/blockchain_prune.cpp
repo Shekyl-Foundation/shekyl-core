@@ -660,6 +660,7 @@ int main(int argc, char* argv[])
   copy_table(env0, env1, "block_heights", MDB_INTEGERKEY | MDB_DUPSORT| MDB_DUPFIXED, 0, BlockchainLMDB::compare_hash32);
   //copy_table(env0, env1, "txs", MDB_INTEGERKEY);
   copy_table(env0, env1, "txs_pruned", MDB_INTEGERKEY, MDB_APPEND);
+  copy_table(env0, env1, "txs_pqc_auths", MDB_INTEGERKEY, MDB_APPEND); // second unprunable segment
   copy_table(env0, env1, "txs_prunable_hash", MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, MDB_APPEND);
   // not copied: prunable, prunable_tip
   copy_table(env0, env1, "tx_indices", MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, 0, BlockchainLMDB::compare_hash32);

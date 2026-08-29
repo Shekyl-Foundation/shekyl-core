@@ -509,14 +509,15 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
 
         // The prunable HASH is read unconditionally, and the prunable BLOB is
         // optional — that asymmetry is pruning's design, not an oversight.
-        // `prune_worker` deletes `txs_prunable` and `txs_prunable_tip` and
-        // never `txs_prunable_hash`: keeping the hash after dropping the bytes
-        // is the entire point of storing it, since it is what still lets a
-        // client bind the pruned body to the transaction. Reading the hash
-        // only when the blob survived would therefore report an all-zero hash
-        // for every transaction on a pruned daemon — the node-local mode this
-        // daemon ships post-genesis without coordination (rule 75), so the
-        // absence of that mode today is not a reason to encode its absence.
+        // Both `prune_worker` and `prune_tx_data` delete `txs_prunable` (and
+        // the worker, `txs_prunable_tip`) and never `txs_prunable_hash`:
+        // keeping the hash after dropping the bytes is the entire point of
+        // storing it, since it is what still lets a client bind the pruned
+        // body to the transaction. Reading the hash only when the blob
+        // survived would therefore report an all-zero hash for every
+        // transaction on a pruned daemon — the node-local mode this daemon
+        // ships post-genesis without coordination (rule 75), so the absence
+        // of that mode today is not a reason to encode its absence.
         //
         // A missing hash is an inconsistent store rather than a fact: the
         // write path stores it for every transaction it indexes (the
@@ -527,7 +528,12 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         // support it.
         crypto::hash ph;
         if (!bc.get_db().get_prunable_tx_hash(ids[i], ph))
+        {
+          MERROR("shekyl_rpc_transactions: chain holds "
+            << epee::string_tools::pod_to_hex(ids[i])
+            << " with no prunable hash beside it");
           return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
         std::memcpy(facts[i].prunable_hash, ph.data, 32);
 
         cryptonote::blobdata prunable_blob;
@@ -545,7 +551,12 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         // Reporting that as an empty index list would turn corruption into a
         // successful, inaccurate reply.
         if (!bc.get_tx_outputs_gindexs(ids[i], owned->output_indices[i]))
+        {
+          MERROR("shekyl_rpc_transactions: chain holds "
+            << epee::string_tools::pod_to_hex(ids[i])
+            << " with no output-index record beside it");
           return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
       }
     }
 

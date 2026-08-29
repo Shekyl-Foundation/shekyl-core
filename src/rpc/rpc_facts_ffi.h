@@ -27,7 +27,7 @@ enum {
     SHEKYL_RPC_FACTS_ERR_NULL = -1,       // null handle or null out pointer
     SHEKYL_RPC_FACTS_ERR_NOT_READY = -2,  // core not initialized
     SHEKYL_RPC_FACTS_ERR_INTERNAL = -3,   // a core/P2P read threw; logged, never propagated across the C ABI
-    SHEKYL_RPC_FACTS_ERR_INCONSISTENT = -4, // the store reported a height it cannot produce the block for
+    SHEKYL_RPC_FACTS_ERR_INCONSISTENT = -4, // the store contradicted itself (logged which read)
 };
 
 // Chain tip + the one build fact get_version reports (RK-1).

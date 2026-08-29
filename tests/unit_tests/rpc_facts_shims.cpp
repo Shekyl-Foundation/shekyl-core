@@ -807,8 +807,9 @@ namespace
 {
   // A store holding one transaction, with each accompanying fact
   // independently withholdable. Modelled on the real reads: the prunable HASH
-  // survives pruning (`prune_worker` never deletes `txs_prunable_hash`), so
-  // its absence is a fault, while the prunable BLOB legitimately disappears.
+  // survives pruning (`prune_worker` and `prune_tx_data` never delete
+  // `txs_prunable_hash`), so its absence is a fault, while the prunable BLOB
+  // legitimately disappears.
   class OneTxDB : public BaseTestDB
   {
   public:
@@ -866,6 +867,11 @@ namespace
 
     uint64_t get_tx_block_height(const crypto::hash&) const override { return 1; }
 
+    bool tx_has_verification_data(const crypto::hash& h) const override
+    {
+      return m_has_prunable_blob && h == m_txid;
+    }
+
   private:
     uint64_t m_height;
     crypto::hash m_txid;
@@ -905,6 +911,9 @@ TEST(rpc_facts_shims, transactions_carries_the_prunable_hash_and_output_indices)
       &q.out, &q.out_len, &q.chain_height, &q.owner));
   ASSERT_EQ(1u, q.out_len);
   EXPECT_EQ(1, q.out[0].where);
+  ASSERT_EQ(1u, q.out[0].output_indices_len);
+  EXPECT_EQ(7u, q.out[0].output_indices[0]);
+  EXPECT_EQ(0, q.out[0].pruned_flag);
   for (size_t i = 0; i < 32; ++i)
     EXPECT_EQ(0x5A, q.out[0].prunable_hash[i]) << "byte " << i;
 }
@@ -926,6 +935,7 @@ TEST(rpc_facts_shims, transactions_reads_the_prunable_hash_even_when_the_blob_is
       &q.out, &q.out_len, &q.chain_height, &q.owner));
   ASSERT_EQ(1u, q.out_len);
   EXPECT_EQ(0u, q.out[0].prunable_len) << "the pruned blob is absent, as it should be";
+  EXPECT_EQ(1, q.out[0].pruned_flag) << "no verification data is what pruned_flag means";
   for (size_t i = 0; i < 32; ++i)
     EXPECT_EQ(0x5A, q.out[0].prunable_hash[i])
       << "byte " << i << ": pruning drops the bytes and keeps the hash";
@@ -938,6 +948,26 @@ TEST(rpc_facts_shims, transactions_without_a_prunable_hash_is_inconsistent)
   BlockchainAndPool bap;
   const crypto::hash txid = a_txid();
   auto* db = new OneTxDB(CHAIN_HEIGHT, txid);
+  db->withhold_prunable_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  TxQuery q;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, (const uint8_t*)txid.data, 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  EXPECT_EQ(nullptr, q.out);
+  EXPECT_EQ(0u, q.out_len);
+}
+
+// Both absent is the same fault: pruning drops the body and keeps the hash,
+// so a chain transaction with neither is the store contradicting itself, not
+// a "pruned" answer with a fabricated zero hash.
+TEST(rpc_facts_shims, transactions_pruned_without_its_hash_is_inconsistent)
+{
+  BlockchainAndPool bap;
+  const crypto::hash txid = a_txid();
+  auto* db = new OneTxDB(CHAIN_HEIGHT, txid);
+  db->withhold_prunable_blob();
   db->withhold_prunable_hash();
   ASSERT_TRUE(init_blockchain(bap.bc, db));
 

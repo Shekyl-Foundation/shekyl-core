@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **`--prune-blockchain` no longer deletes the hash of a pruned
+  transaction.** `BlockchainLMDB::prune_tx_data` dropped `txs_prunable_hash`
+  and `txs_pqc_auths` together with the prunable body. The body going is the
+  point — those bytes live in shard archival (`docs/V3_STAKER_ARCHIVAL.md`
+  set C). The hash staying is why the table exists: a pruned v3 txid is
+  `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)`, and there
+  is no `pqc_auth_hash` table, so dropping either operand left a chain that
+  could not name what it kept. Stripe pruning (`prune_worker`) already
+  retained the hash; the depth pass now matches. `/get_transactions` on a
+  pruned node can therefore still bind the prefix to its txid, and a store
+  that holds a body with no hash beside it remains `FactsFault::Inconsistent`.
+
 - **A confirmed emission claim or drain now releases its seal — before this,
   neither ever did.** Both paths seal a one-live-per-persona record before
   dispatch (the record *is* the input reservation), and only the bond post's
@@ -188,10 +200,10 @@
   system that Monero never had, so that handler is not authority for it.
 
   The hash was read only when the prunable **blob** was present. But
-  `prune_worker` deletes `txs_prunable` and `txs_prunable_tip` and never
-  `txs_prunable_hash` — retaining the hash after dropping the bytes is the
-  entire reason to store it, since it is what still binds a pruned body to its
-  transaction. So on a pruned daemon every pruned transaction would have
+  `prune_worker` and `prune_tx_data` delete `txs_prunable` (and the worker,
+  `txs_prunable_tip`) and never `txs_prunable_hash` — retaining the hash
+  after dropping the bytes is the entire reason to store it, since it is
+  what still binds a pruned body to its transaction. So on a pruned daemon every pruned transaction would have
   reported an all-zero `prunable_hash`. Pruned-daemon mode is node-local and
   ships post-genesis without coordination (rule 75); its absence today is not a
   reason to encode its absence. The hash is now read for every transaction the
