@@ -130,6 +130,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         // the max (100).
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
         bond_record_exists: None,
+        unbond: None,
         emission: None,
         emission_claim_conflict: None,
     }
@@ -1010,6 +1011,7 @@ fn non_spend_kinds_refuse_loudly() {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        unbond: None,
         emission: None,
         emission_claim_conflict: None,
     };

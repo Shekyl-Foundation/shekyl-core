@@ -180,14 +180,69 @@ const shekyl_submit_emission_facts_ffi* shekyl_submit_emission_facts_view(
 
 void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h);
 
+// ── §8.7.1.1 Unbond fact marshal (rows UB2/UB3/UB4/UB6/UB7) ─────────────────
+//
+// Which archival-bond question the probe asks. The two bond-post arms ask
+// OPPOSITE questions of the same table: JoinMarket wants the record ABSENT
+// (row BP3, one bit) and Unbond wants it PRESENT with its contents as verify
+// operands. One id plus a discriminant, mirroring the Rust `BondProbe` enum,
+// so the two sides cannot disagree about which probe ran.
+#define SHEKYL_SUBMIT_BOND_PROBE_JOIN   0
+#define SHEKYL_SUBMIT_BOND_PROBE_UNBOND 1
+
+// The debited record's verify operands. Variable-size (the committed
+// bond_spend_pk and the per-shard last-served slice), so like the emission
+// bundle it travels beside the fixed POD as a C++-owned handle.
+typedef struct shekyl_submit_unbond_record_ffi {
+    uint64_t bonded_total_atomic;
+    size_t   bad_interval_count;
+    // The record's COMMITTED debit authorizer, exactly as stored (may be
+    // empty -> the record authorizes no debit; the Rust pin fails closed).
+    const uint8_t* bond_spend_pk;
+    size_t   bond_spend_pk_len;
+    uint8_t  holdings_kind;
+    // WHICH accessor produced per_shard_last_served
+    // (SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_HELD_SHARDS / _ALL_SHARDS). Echoed
+    // rather than re-derived Rust-side because the wrong gather fails
+    // PERMISSIVELY: a complete-tree record stores no shard list, so the
+    // held-shards accessor returns an empty slice, which folds to "never
+    // served", which makes the release cooldown elapse for a record that has
+    // been serving. Rust pins this byte against the record's holdings kind.
+    uint8_t  last_served_scan;
+    const uint64_t* per_shard_last_served;
+    size_t   per_shard_last_served_len;
+} shekyl_submit_unbond_record_ffi;
+
+typedef struct shekyl_submit_unbond_facts_ffi {
+    uint8_t record_present;
+    shekyl_submit_unbond_record_ffi record; // valid iff record_present
+    // The slash scheduler's watermark AS STORED. u64::MAX ("nothing settled
+    // yet") is NOT normalised here -- Rust owns that normalisation, in one
+    // place, exactly as the block path's FFI wrapper does.
+    uint64_t last_settled_slash_epoch;
+} shekyl_submit_unbond_facts_ffi;
+
+// Opaque owner of every buffer the view above points into.
+typedef struct shekyl_submit_unbond_facts_handle shekyl_submit_unbond_facts_handle;
+
+// The handle's view (never NULL for a live handle; pointers valid until free).
+const shekyl_submit_unbond_facts_ffi* shekyl_submit_unbond_facts_view(
+    const shekyl_submit_unbond_facts_handle* h);
+
+void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
+
 // Shim 1 (§4.1): Phase-B POD fact snapshot under one short pool→blockchain
 // lock scope (§4.4 order), reads only.
 //
 // txid / reference_block: 32 bytes each. key_images: n_key_images × 32
 // bytes, flat, submission order. out_ki_conflicts: n_key_images entries.
 // bond_p_canonical_id: 32 bytes or NULL — non-NULL for a bond-post
-// submission, keying the §8.7.1 BP3 archival-bond-record probe
-// (get_archival_bond_hybrid_pubkey) into bond_record_probed/exists.
+// submission. bond_probe_kind selects the question: _JOIN keys the §8.7.1
+// BP3 record-absence probe (get_archival_bond_hybrid_pubkey) into
+// bond_record_probed/exists; _UNBOND keys the §8.7.1.1 fact bundle into
+// *out_unbond (a handle the caller must free; NULL on absent probe) and
+// leaves bond_record_probed clear, so exactly one of the two facts is ever
+// filled.
 // emission_p_canonical_id (32 bytes) + emission_epochs (n_emission_epochs
 // u64s): non-NULL for an emission submission, keying the §8.7.2 E6 claim-slot
 // probe (emission_probed/emission_claim_conflict) and, when out_emission is
@@ -200,9 +255,11 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     const uint8_t* key_images, size_t n_key_images,
     const uint8_t* reference_block,
     const uint8_t* bond_p_canonical_id,
+    uint8_t bond_probe_kind,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
+    shekyl_submit_unbond_facts_handle** out_unbond,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts);
 
@@ -275,9 +332,11 @@ int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
     const uint8_t* key_images, size_t n_key_images,
     const uint8_t* reference_block,
     const uint8_t* bond_p_canonical_id,
+    uint8_t bond_probe_kind,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
+    shekyl_submit_unbond_facts_handle** out_unbond,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts) noexcept;
 

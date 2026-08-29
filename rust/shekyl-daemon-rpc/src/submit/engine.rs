@@ -15,7 +15,9 @@ use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
-use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
+use crate::submit::facts::{
+    BondProbe, CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta,
+};
 use crate::submit::fee::fee_meets_floor;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verify::TxVerifier;
@@ -163,10 +165,22 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         };
 
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
-        // A bond-post additionally asks for the §8.7.1 BP3 record fact,
-        // keyed on the vin's claimed p_canonical_id (BP2 pins the claim to
-        // the pubkey in Phase C).
-        let bond_p_canonical_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        // A bond-post additionally asks an archival-bond question, keyed on
+        // the vin's claimed p_canonical_id (BP2 pins the claim to the pubkey
+        // in Phase C). Which question depends on the post kind, and the two
+        // are opposites: JoinMarket wants the record ABSENT (§8.7.1 BP3),
+        // Unbond wants it PRESENT with its contents as verify operands
+        // (§8.7.1.1). The other non-JoinMarket kinds have no producer and
+        // are refused in Phase C, so they ask JoinMarket's question and
+        // never reach a verdict that consumes the answer.
+        let bond_probe_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        let bond_probe = bond_probe_id.as_ref().map(|id| {
+            if parsed.bond_post_is_unbond() {
+                BondProbe::Unbond(id)
+            } else {
+                BondProbe::Join(id)
+            }
+        });
         // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the
         // vin-derived claimant id + claimed epochs (E2 pins the derivation
         // to the auth key in Phase C).
@@ -177,7 +191,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 &parsed.txid,
                 &parsed.key_images,
                 &parsed.reference_block,
-                bond_p_canonical_id.as_ref(),
+                bond_probe,
                 emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
             )
             .map_err(|_| EngineFault::SnapshotFault)?;
@@ -314,6 +328,13 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 "bond-post snapshot carries no bond_record_exists fact (BP3 probe skipped?)",
             ));
         }
+        // The §8.7.1.1 twin: the debit arm additionally needs the record's
+        // CONTENTS, so an Unbond snapshot must carry the fact bundle.
+        if parsed.bond_post_is_unbond() && facts.unbond.is_none() {
+            return Err(EngineFault::ShimContract(
+                "unbond snapshot carries no §8.7.1.1 fact bundle (probe skipped?)",
+            ));
+        }
         // The §8.7.2 E6/E7 contract twin: an emission snapshot must carry
         // the fact bundle the engine asked for.
         if parsed.kind == SubmitTxKind::Emission && facts.emission.is_none() {
@@ -407,10 +428,21 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     block for the same P landed while we verified (Phase C
         //     required the record absent). Same terminality as the
         //     key-image leg — someone else consumed the claim slot.
-        if parsed.kind == SubmitTxKind::BondPost && fresh.bond_record_exists == Some(true) {
-            return Ok(SubmitVerdict::Rejected {
-                cause: RejectCause::DoubleSpendConflict,
-            });
+        //     The debit arm reads the SAME fact in the opposite direction
+        //     (§8.7.1.1 UB2): Phase C required the record PRESENT, so a
+        //     record now gone means a competing debit connected during C.
+        //     Terminal either way — the claim slot moved.
+        if parsed.kind == SubmitTxKind::BondPost {
+            let slot_moved = if parsed.bond_post_is_unbond() {
+                fresh.bond_record_exists == Some(false)
+            } else {
+                fresh.bond_record_exists == Some(true)
+            };
+            if slot_moved {
+                return Ok(SubmitVerdict::Rejected {
+                    cause: RejectCause::DoubleSpendConflict,
+                });
+            }
         }
         // 3c. Emission claim-slot conflict, the §8.7.2 E6 re-check: the
         //     claimant record vanished (an Unbond connected) or a claimed

@@ -1384,17 +1384,74 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond).** The block path
-verifies them today (`archival_bond_post_kind` dispatch, all Rust-backed).
-Their *submit-side* fact sets — per-shard last-served cursors, the
-slash-settlement watermark, interval logs, the settlement epoch — and each
-fact's Phase-D re-check/race classification are not specified in this
-matrix. The submit battery refuses them `Malformed` (loud, logged).
-**Unbond's construction-leg reopening criterion has fired (PR-P4):**
-`build_unbond_vin` / `AssembleUnbond` exist. What remains is this matrix
-growing Unbond rows and `SubmitFacts` carrying that fact set — a daemon
-submit surface, not a wallet-producer one (rule 19). HoldingsUpdate /
-Rebond still have no producer.
+**Non-JoinMarket kinds — Unbond is now covered; HoldingsUpdate / Rebond are
+not.** The block path verifies all three today (`archival_bond_post_kind`
+dispatch, all Rust-backed). **Unbond's reopening criterion (rule 21) fired at
+PR-P4** — `build_unbond_vin` / `AssembleUnbond` are the construction leg — and
+this section's §8.7.1.1 UB rows discharge it: `SubmitFacts` carries the Unbond
+fact set and the battery dispatches `verify_unbond_bond_post`, the same
+function the block path calls. **HoldingsUpdate / Rebond have no producer**,
+so their fact sets are deliberately *not* built: a fact bundle with no
+submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
+classification would be unverifiable guesswork. The battery still refuses them
+`Malformed` (loud, logged) under their own reopening criterion — a producer.
+
+#### 8.7.1.1 Unbond rows (the debit arm; `blockchain.cpp:4886-4951`)
+
+Unbond is the **debit** bond-post: it consumes an existing record rather than
+creating one, so its fact set is the *inverse* of BP3's and its authorizer is
+the record's committed key rather than anything the vin carries. BP1 (pubkey
+length) and BP2 (`p_canonical_id` recompute) apply unchanged, as do the
+funding-arm K12/K13 legs and the bond CT balance.
+
+**BP5 does not apply, and that is the row this section exists for.** BP5 pins
+the bond slot's auth key to the vin's *identity* key — correct on the credit
+path (`blockchain.cpp`'s JoinMarket and Rebond arms), where the post proves
+control of `P_canonical_id` and no value leaves. A debit is the opposite case:
+the identity key is held by the serving host, so pinning to it would let a host
+compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `:4890-4897` | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
+| UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) | `:4901-4902` | **B fact + D re-check** — see the time-asymmetry note below; absent at B → `Malformed`, present-at-B-then-gone-at-D → `DoubleSpendConflict` |
+| UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin`, `:4906-4907` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
+| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `:4915-4924` | **B fact + D re-check** — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
+| UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C** — native fold; `Malformed`, and **contingent**: a serve landing during C advances the anchor and re-closes the window, so a later resubmission of the same bytes can pass |
+| UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `:4925` | **B fact + D re-check** — the watermark only advances, so a stale-low read fails **closed**; `Malformed`, contingent |
+| UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `:4923` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
+| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `:4926` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
+| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `:4928-4948` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
+
+**The record fact's time asymmetry (UB2), and why it is not BP3 with the sign
+flipped.** BP3 wants *absence* and treats a record appearing during Phase C as
+a claim-slot conflict. UB2 wants *presence*, and the same fact value carries
+two different verdicts depending on when it was observed: a record **never
+present** is a submitter error (`Malformed` — these bytes can never connect),
+while a record **present at B and gone at D** means a competing debit connected
+during C, which is terminal for this `P` and classifies `DoubleSpendConflict`.
+This is the `reference` field's asymmetry (`ReferenceNotFound` at C vs
+`StaleRoot` at a D re-check) applied to the record probe.
+
+**Why UB4 carries the scan discriminant instead of just the epochs.** The
+kind→scan decision is Rust's (`HoldingsKind::last_served_scan`, exhaustive on
+the enum) precisely because the two C++ gather sites once branched on
+`is_complete_tree()` independently, coupled only by comments. The submit shim
+is a *third* gather site, and the failure it can introduce is silent and
+**permissive**: a `CompleteTree` record gathered with the held-shards accessor
+yields an empty slice, which folds to "never served", which makes the release
+cooldown *elapse* for a record that has been serving. So the fact is
+self-describing — the shim reports which accessor it ran, and the engine pins
+that byte against `holdings_kind.last_served_scan()`. A mismatch is a
+[`ShimContract`] fault, never a guessed fold. The bite: a serving
+`CompleteTree` record gathered as `HeldShards` must be observed refusing.
+
+**One lock scope, whole bundle.** The record value, the UB4 slice and the UB6
+watermark are read under the *same* pool→blockchain lock scope as the rest of
+`SubmitFacts` — a record from before a block paired with a watermark from after
+it describes a state the chain never occupied. The Phase-D `Raced(fresh)` leg
+re-gathers the **entire** bundle from the reparsed blob; stale and fresh fields
+are never merged.
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):

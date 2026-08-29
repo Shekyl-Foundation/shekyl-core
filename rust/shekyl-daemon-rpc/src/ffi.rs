@@ -225,6 +225,50 @@ pub struct SubmitEmissionFactsHandle {
     _opaque: [u8; 0],
 }
 
+// ── §8.7.1.1 Unbond fact marshal (rows UB2/UB3/UB4/UB6/UB7) ────────────────
+// Mirrors of `daemon_submit_ffi.h`'s Unbond PODs.
+
+/// Which archival-bond question the Phase-B probe asks
+/// (`SHEKYL_SUBMIT_BOND_PROBE_JOIN`): the record must be **absent**.
+pub const SHEKYL_SUBMIT_BOND_PROBE_JOIN: u8 = 0;
+/// (`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`): the record must be **present**, and
+/// its contents are verify operands.
+pub const SHEKYL_SUBMIT_BOND_PROBE_UNBOND: u8 = 1;
+
+/// `shekyl_submit_unbond_record_ffi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitUnbondRecordFfi {
+    pub bonded_total_atomic: u64,
+    pub bad_interval_count: usize,
+    pub bond_spend_pk: *const u8,
+    pub bond_spend_pk_len: usize,
+    pub holdings_kind: u8,
+    /// Which accessor produced `per_shard_last_served`
+    /// (`SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_*`). Echoed by the gather and
+    /// pinned Rust-side against `holdings_kind`.
+    pub last_served_scan: u8,
+    pub per_shard_last_served: *const u64,
+    pub per_shard_last_served_len: usize,
+}
+
+/// `shekyl_submit_unbond_facts_ffi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitUnbondFactsFfi {
+    pub record_present: u8,
+    pub record: SubmitUnbondRecordFfi,
+    /// The slash watermark **as stored**; `u64::MAX` is the "nothing settled
+    /// yet" sentinel, normalised once in `ffi_shim`.
+    pub last_settled_slash_epoch: u64,
+}
+
+/// Opaque C++-owned buffer holder (`shekyl_submit_unbond_facts_handle`).
+#[repr(C)]
+pub struct SubmitUnbondFactsHandle {
+    _opaque: [u8; 0],
+}
+
 // ── RPC facts shims (src/rpc/rpc_facts_ffi.h; DAEMON_RPC_KV_CUTOVER.md §3.2) ──
 
 /// `shekyl_rpc_chain_tip` succeeded / the facts POD is filled.
@@ -501,10 +545,12 @@ extern "C" {
         n_key_images: usize,
         reference_block: *const u8,
         bond_p_canonical_id: *const u8,
+        bond_probe_kind: u8,
         emission_p_canonical_id: *const u8,
         emission_epochs: *const u64,
         n_emission_epochs: usize,
         out_emission: *mut *mut SubmitEmissionFactsHandle,
+        out_unbond: *mut *mut SubmitUnbondFactsHandle,
         out_facts: *mut SubmitFactsFfi,
         out_ki_conflicts: *mut u8,
     ) -> i32;
@@ -514,6 +560,12 @@ extern "C" {
     ) -> *const SubmitEmissionFactsFfi;
 
     pub fn shekyl_submit_emission_facts_free(h: *mut SubmitEmissionFactsHandle);
+
+    pub fn shekyl_submit_unbond_facts_view(
+        h: *const SubmitUnbondFactsHandle,
+    ) -> *const SubmitUnbondFactsFfi;
+
+    pub fn shekyl_submit_unbond_facts_free(h: *mut SubmitUnbondFactsHandle);
 
     #[allow(clippy::too_many_arguments)]
     pub fn shekyl_submit_commit_tx(

@@ -77,12 +77,13 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
 use rand_core::OsRng;
 
 use shekyl_archival_retention::{
-    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
-    p_canonical_id_from_hybrid_pubkey, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
-    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet,
+    debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
+    emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, settlement_epoch_at_height,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_unbond_bond_post,
+    whole_record_last_served, ArchivalBondPostVin, BondPostError,
+    BondPostKind as RetentionBondPostKind, BondTerm, ClaimantBondRecord, CreditPair,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, RewardCommit, ShardSet,
 };
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::multisig::verify_multisig;
@@ -240,19 +241,27 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         return Err(VerifyFailure::Malformed);
     };
 
-    // Kind dispatch: JoinMarket only — the genesis wallet-constructible
-    // kind, and the only one whose submit-side fact set §8.7.1 pins. The
-    // non-JoinMarket kinds refuse loudly under their named rule-21
-    // reopening criterion (module docs).
-    let WireBondPostKind::JoinMarket { bond_spend_pk } = &bond.kind else {
-        tracing::error!(
-            kind = ?bond.kind,
-            "bond-post submit battery covers JoinMarket only (§8.7.1 BP \
-             rows); non-JoinMarket kinds refuse until their fact set + \
-             Phase-D re-check semantics are specified (rule-21 reopening \
-             criterion in the module docs)"
-        );
-        return Err(VerifyFailure::Malformed);
+    // Kind dispatch: the credit arm (JoinMarket, §8.7.1 BP rows) and the
+    // debit arm (Unbond, §8.7.1.1 UB rows) are the two kinds whose
+    // submit-side fact sets are pinned. HoldingsUpdate and Rebond have no
+    // producer, so their fact sets are deliberately unbuilt and they refuse
+    // loudly under their named rule-21 reopening criterion (module docs).
+    let arm = match &bond.kind {
+        WireBondPostKind::JoinMarket { bond_spend_pk } => BondArm::Credit(bond_spend_pk),
+        WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Unbond as u8 => {
+            BondArm::Debit
+        }
+        kind => {
+            tracing::error!(
+                ?kind,
+                "bond-post submit battery covers JoinMarket (§8.7.1) and \
+                 Unbond (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
+                 a producer exists and their fact set + Phase-D re-check \
+                 semantics are specified (rule-21 reopening criterion in \
+                 the module docs)"
+            );
+            return Err(VerifyFailure::Malformed);
+        }
     };
 
     // ── O6: commitment mask non-triviality (blockchain.cpp:3380 runs the
@@ -307,42 +316,15 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         return Err(VerifyFailure::Malformed);
     }
 
-    // ── BP5: credit-path authorization pins the IDENTITY key ────────────
-    // (gate-4 §3.5 step 5; blockchain.cpp:5079-5085): the bond slot's PQC
-    // auth key — whose signature over the whole-tx payload the K13 leg
-    // below verifies — must be P's identity key `P_pubkey`.
+    // ── Authorization + the economic battery, per arm ───────────────────
     let Some(bond_auth) = pqc_auths.get(bond_index) else {
         return Err(VerifyFailure::Malformed);
     };
-    if bond_auth.hybrid_public_key != bond.hybrid_public_key {
-        return Err(VerifyFailure::Malformed);
-    }
-
-    // ── BP3 fact + BP4 economic battery ─────────────────────────────────
-    // `verify_join_market_bond_post` (shekyl-archival-retention) is the
-    // single verdict source both paths share: post-kind, holdings-shape
-    // consistency, credit/debit exclusivity, debit == 0, the bond-floor
-    // equality, and the record-absent claim slot. The engine pre-checked
-    // the fact's presence (ShimContract); the `None` arm here is the
-    // seam's non-panicking refusal for direct callers.
-    let Some(record_exists) = facts.bond_record_exists else {
-        tracing::error!(
-            "bond-post verifier called without the BP3 record fact \
-             (the engine's ShimContract pre-check makes this unreachable \
-             through the pipeline)"
-        );
-        return Err(VerifyFailure::Malformed);
-    };
-    let Some(vin) = retention_vin(bond, bond_spend_pk) else {
-        return Err(VerifyFailure::Malformed);
-    };
-    match verify_join_market_bond_post(&vin, record_exists) {
-        Ok(()) => {}
-        // §8.7.1 classification rule: the consumed claim slot is a state
-        // conflict — the DoubleSpendConflict claim-slot leg; every other
-        // violation is a window/shape failure → Malformed.
-        Err(BondPostError::RecordExists) => return Err(VerifyFailure::DoubleSpendConflict),
-        Err(_) => return Err(VerifyFailure::Malformed),
+    match arm {
+        BondArm::Credit(bond_spend_pk) => {
+            verify_credit_arm(bond, bond_spend_pk, bond_auth, facts)?;
+        }
+        BondArm::Debit => verify_debit_arm(bond, bond_auth, facts)?,
     }
 
     // ── N8 leg 2: Bp+ aggregate range proof over the output commitments ─
@@ -629,12 +611,155 @@ fn emission_reject(e: &EmissionVerifyError) -> VerifyFailure {
     }
 }
 
+/// Which bond-post arm a submission is on — and, with it, which key
+/// authorizes the slot.
+///
+/// The distinction is the whole reason the two arms cannot share one code
+/// path: a **credit** proves control of `P_canonical_id` and moves no bonded
+/// value out, so the identity key is the right authorizer; a **debit** takes
+/// collateral out, and the identity key is exactly the key a compromised
+/// serving host holds. See [`verify_debit_arm`].
+enum BondArm<'a> {
+    /// JoinMarket (§8.7.1) — carries the `bond_spend_pk` the record will
+    /// commit; authorized by the identity key (row BP5).
+    Credit(&'a [u8]),
+    /// Unbond (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
+    /// authorized by the record's committed key (row UB3).
+    Debit,
+}
+
+/// The credit arm: row BP5's identity-key pin, then the BP3 record fact and
+/// the BP4 economic battery.
+///
+/// `verify_join_market_bond_post` (`shekyl-archival-retention`) is the single
+/// verdict source both paths share: post-kind, holdings-shape consistency,
+/// credit/debit exclusivity, debit == 0, the bond-floor equality, and the
+/// record-absent claim slot.
+fn verify_credit_arm(
+    bond: &WireBondPost,
+    bond_spend_pk: &[u8],
+    bond_auth: &PqcAuth,
+    facts: &SubmitFacts,
+) -> Result<(), VerifyFailure> {
+    // ── BP5: credit-path authorization pins the IDENTITY key ────────────
+    // (gate-4 §3.5 step 5; `blockchain.cpp`'s JoinMarket/Rebond arms): the
+    // bond slot's PQC auth key — whose signature over the whole-tx payload
+    // the K13 leg verifies — must be P's identity key `P_pubkey`.
+    if bond_auth.hybrid_public_key != bond.hybrid_public_key {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // The engine pre-checked the fact's presence (ShimContract); the `None`
+    // arm here is the seam's non-panicking refusal for direct callers.
+    let Some(record_exists) = facts.bond_record_exists else {
+        tracing::error!(
+            "bond-post verifier called without the BP3 record fact \
+             (the engine's ShimContract pre-check makes this unreachable \
+             through the pipeline)"
+        );
+        return Err(VerifyFailure::Malformed);
+    };
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::JoinMarket, bond_spend_pk) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    match verify_join_market_bond_post(&vin, record_exists) {
+        Ok(()) => Ok(()),
+        // §8.7.1 classification rule: the consumed claim slot is a state
+        // conflict — the DoubleSpendConflict claim-slot leg; every other
+        // violation is a window/shape failure → Malformed.
+        Err(BondPostError::RecordExists) => Err(VerifyFailure::DoubleSpendConflict),
+        Err(_) => Err(VerifyFailure::Malformed),
+    }
+}
+
+/// The debit arm (§8.7.1.1 rows UB2–UB9): the record's committed authorizer,
+/// then the Unbond economic battery over the Phase-B fact bundle.
+///
+/// **UB3 replaces BP5 here, and the substitution is the point.** A debit
+/// takes bonded collateral out of the system. `P`'s identity key is held by
+/// the serving host (it produces Auth-P for every response), so authorizing a
+/// value-out against it would turn a host compromise into a collateral drain.
+/// The record's `bond_spend_pk` is cold, and `debit_auth_pin` — the same
+/// function the C++ block path calls over FFI — is what makes that coldness
+/// load-bearing. A record committing no canonical key authorizes nothing;
+/// there is no identity-key fallback.
+fn verify_debit_arm(
+    bond: &WireBondPost,
+    bond_auth: &PqcAuth,
+    facts: &SubmitFacts,
+) -> Result<(), VerifyFailure> {
+    let Some(unbond) = facts.unbond.as_ref() else {
+        tracing::error!(
+            "unbond verifier called without the §8.7.1.1 fact bundle \
+             (the engine's ShimContract pre-check makes this unreachable \
+             through the pipeline)"
+        );
+        return Err(VerifyFailure::Malformed);
+    };
+
+    // ── UB2: the record must exist ──────────────────────────────────────
+    // Absent *here*, at Phase B/C, means these bytes can never connect —
+    // a submitter error, `Malformed`. Absent at the Phase-D re-check after
+    // being present at B is a competing debit that connected during Phase
+    // C, and the engine classifies that `DoubleSpendConflict` from the
+    // fresh facts. Same fact value, different verdict by when it was
+    // observed — the `reference` field's asymmetry.
+    let Some(record) = unbond.record.as_ref() else {
+        return Err(VerifyFailure::Malformed);
+    };
+
+    // ── UB3: the record's COMMITTED authorizer, never the identity key ──
+    if debit_auth_pin(&record.bond_spend_pk, &bond_auth.hybrid_public_key).is_err() {
+        return Err(VerifyFailure::Malformed);
+    }
+
+    // ── UB4/UB5: fold the gathered slice into the cooldown anchor ───────
+    // The shim already pinned the gather's scan discriminant against the
+    // record's holdings kind (a mismatch is a ShimContract fault, not a
+    // fold), so the slice here is the one this record's kind selects.
+    let last_served_epoch = whole_record_last_served(&record.per_shard_last_served);
+
+    // ── UB8: the current settlement epoch ───────────────────────────────
+    // The consensus shape deliberately feeds the chain *count*
+    // (`m_db->height()`, "the height the next block will occupy") to an
+    // "at height" helper; mirror it rather than correcting it, or the
+    // engine and the oracle disagree at every epoch boundary. The helper
+    // reads `effective_settlement_epoch_blocks`, so a regtest chain running
+    // the shortened schedule stays consistent across both paths.
+    let current_settlement_epoch = settlement_epoch_at_height(facts.chain_height.to_raw());
+
+    // ── UB9: the economic battery, the same function the block path calls ─
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    match verify_unbond_bond_post(
+        &vin,
+        Some(record.bonded_total_atomic),
+        record.bad_interval_count,
+        last_served_epoch,
+        unbond.last_settled_slash_epoch,
+        current_settlement_epoch,
+    ) {
+        Ok(()) => Ok(()),
+        // The record went missing between the fact snapshot and here — not
+        // reachable through this arm (the `record` binding above proves
+        // presence), but the battery owns the verdict, so map it the same
+        // way the claim-slot leg is mapped rather than silently widening.
+        Err(BondPostError::RecordMissing) => Err(VerifyFailure::DoubleSpendConflict),
+        Err(_) => Err(VerifyFailure::Malformed),
+    }
+}
+
 /// Marshal the wire bond-post vin into the retention crate's verify view.
 ///
 /// Total for a `validate()`d JoinMarket vin (the wire read already enforced
 /// the shard-set bound + duplicate-freeness this re-checks); `None` only
 /// for a hand-built inconsistent value — the seam's non-panicking refusal.
-fn retention_vin(bond: &WireBondPost, bond_spend_pk: &[u8]) -> Option<ArchivalBondPostVin> {
+fn retention_vin(
+    bond: &WireBondPost,
+    post_kind: RetentionBondPostKind,
+    bond_spend_pk: &[u8],
+) -> Option<ArchivalBondPostVin> {
     let (kind, shard_ids) = match &bond.holdings {
         Holdings::ShardSetCompact(ids) => (
             HoldingsKind::ShardSetCompact,
@@ -645,7 +770,7 @@ fn retention_vin(bond: &WireBondPost, bond_spend_pk: &[u8]) -> Option<ArchivalBo
     Some(ArchivalBondPostVin {
         hybrid_public_key: bond.hybrid_public_key.clone(),
         p_canonical_id: bond.p_canonical_id,
-        post_kind: RetentionBondPostKind::JoinMarket,
+        post_kind,
         bond_spend_pk: bond_spend_pk.to_vec(),
         holdings: HoldingsDescriptor { kind, shard_ids },
         bonded_total_atomic: bond.bonded_total_atomic,

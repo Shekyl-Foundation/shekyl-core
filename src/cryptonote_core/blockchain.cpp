@@ -4788,6 +4788,10 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
     return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
       "record re-enters via JoinMarket/Rebond)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY:
+    return "bond record commits no bond_spend_pk; it authorizes no debit";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
+    return "pqc auth key is not the record's committed bond_spend_pk";
   default:
     return "unknown bond-post verify code";
   }
@@ -4805,24 +4809,45 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 // record falls through to the semantic verify's RECORD_MISSING) and run this
 // BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
 // so an unauthorized attempt is rejected before it can cost LMDB seeks.
+// Debit authorization for the value-out bond-post arms. The predicate itself
+// is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
+// logs. It used to be implemented here, which made it a second copy of the one
+// check that has no recovery -- a compromised serving host holds the identity
+// hybrid key, so an identity-authorized debit is a collateral drain. The Rust
+// submit battery calls the same function natively (DAEMON_SUBMIT_VERDICT.md
+// 8.7.1.1 row UB3), so the two verifying paths share it rather than tracking
+// each other.
 bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
-  if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+  const uint8_t rc = shekyl_archival_debit_auth_pin(
+    record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
+    record.bond_spend_pk.size(),
+    auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
+    auth_pubkey.size());
+  if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
+    return true;
+  // Two arms, deliberately distinct in the log: "this record authorizes
+  // nothing" and "wrong key against a record that does" have different
+  // operator remedies.
+  if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY)
   {
     MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
       "a debit cannot be authorized (and the identity key never authorizes "
       "a value-out)");
-    return false;
   }
-  if (auth_pubkey != record.bond_spend_pk)
+  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH)
   {
     MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
       "record's committed bond_spend_pk (identity-key or foreign-key debit "
       "authorization is forbidden)");
-    return false;
   }
-  return true;
+  else
+  {
+    MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
+      << static_cast<unsigned>(rc) << ")");
+  }
+  return false;
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms

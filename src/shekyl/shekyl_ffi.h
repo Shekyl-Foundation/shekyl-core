@@ -1971,6 +1971,25 @@ uint8_t shekyl_archival_last_served_scan(
     uint8_t holdings_kind,
     uint8_t* out_scan);
 
+// Debit authorization pin -- the single gate between a compromised serving
+// host and a collateral-draining exit. Every value-out bond-post arm
+// (Unbond, HoldingsUpdate, Rebond) authorizes against the RECORD's committed
+// bond_spend_pk, never against the persona's identity key (which a serving
+// host holds) and never against a key the vin carries (which would be a
+// forgeable self-assertion). A record committing no canonical-length key
+// authorizes NOTHING -- fail closed, no identity-key fallback.
+//
+// The Rust submit battery calls the same shekyl-archival-retention function
+// natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so block path and
+// submit path cannot drift on this predicate.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+uint8_t shekyl_archival_debit_auth_pin(
+    const uint8_t* record_bond_spend_pk_ptr,
+    size_t record_bond_spend_pk_len,
+    const uint8_t* auth_pubkey_ptr,
+    size_t auth_pubkey_len);
+
 // Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no

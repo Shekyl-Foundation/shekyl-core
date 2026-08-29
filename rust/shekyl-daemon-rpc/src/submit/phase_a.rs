@@ -25,9 +25,12 @@
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::traits::IsIdentity;
-use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin};
+use shekyl_archival_retention::{
+    p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
+    BondPostKind as RetentionBondPostKind,
+};
 use shekyl_types::{BlockHash, TxHash};
-use shekyl_wire::transaction::{BondPost, Ct, Input, Transaction, MAX_TX_SIZE};
+use shekyl_wire::transaction::{BondPost, BondPostKind, Ct, Input, Transaction, MAX_TX_SIZE};
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 
@@ -104,6 +107,20 @@ impl ParsedSubmission {
                 *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
                 vin.settlement_epochs.as_slice(),
             )
+        })
+    }
+
+    /// Whether the bond-post input (if any) is an `Unbond` — the **debit**
+    /// arm, whose submit-side fact set is §8.7.1.1's rather than §8.7.1's.
+    ///
+    /// One decision site: the engine keys the Phase-B probe and the
+    /// fact-contract check on it, and the Phase-D re-check reads the record
+    /// fact in the opposite direction for it. Deriving it independently at
+    /// each of those points is how a probe and its contract drift apart.
+    pub fn bond_post_is_unbond(&self) -> bool {
+        self.bond_post().is_some_and(|(_, bond)| {
+            matches!(&bond.kind, BondPostKind::Other(tag)
+                if *tag == RetentionBondPostKind::Unbond as u8)
         })
     }
 

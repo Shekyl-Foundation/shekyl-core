@@ -12,7 +12,7 @@
 //! mempool implements it natively. Facts are plain data — the shim fetches,
 //! the engine decides. Zero verdict logic lives behind this trait.
 
-use shekyl_archival_retention::{BadInterval, HoldingsDescriptor};
+use shekyl_archival_retention::{BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
@@ -105,21 +105,26 @@ pub struct SubmitFacts {
     /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
     pub chain_height: ChainCount,
     /// §8.7.1 row BP3: an archival bond record exists for the submitted
-    /// bond-post's `p_canonical_id` (`get_archival_bond_hybrid_pubkey`
-    /// probe, read under the same lock scope as the other facts).
+    /// **JoinMarket** bond-post's `p_canonical_id`
+    /// (`get_archival_bond_hybrid_pubkey` probe, read under the same lock
+    /// scope as the other facts). JoinMarket wants *absence*; the Unbond
+    /// arm wants presence **and** the record's contents, and carries them
+    /// in [`unbond`](Self::unbond) instead — one fact, never two copies.
     ///
-    /// `Some(exists)` iff the snapshot was asked to probe (the engine
-    /// passes the bond id for a [`SubmitTxKind::BondPost`] submission
-    /// only); `None` for every other shape. A `None` on a bond-post is a
-    /// shim contract violation, surfaced by the engine as
+    /// `Some(exists)` iff the snapshot ran [`BondProbe::Join`]; `None` for
+    /// every other shape, Unbond included. A `None` on a JoinMarket
+    /// bond-post is a shim contract violation, surfaced by the engine as
     /// [`crate::submit::EngineFault::ShimContract`] before the verifier
     /// runs — never a guessed fact. On the Phase-D `Raced(fresh)` leg the
     /// commit shim re-probes from the reparsed blob, so a bond-post block
     /// landing during Phase C classifies `DoubleSpendConflict` (the
     /// claim-slot leg) from fresh facts.
-    ///
-    /// [`SubmitTxKind::BondPost`]: crate::submit::SubmitTxKind::BondPost
     pub bond_record_exists: Option<bool>,
+    /// §8.7.1.1 rows UB2/UB3/UB4/UB6/UB7: the Unbond debit arm's fact
+    /// bundle. `Some` iff the snapshot ran [`BondProbe::Unbond`]; a `None`
+    /// on an Unbond submission is a shim contract violation, pre-checked
+    /// by the engine exactly as the emission bundle is.
+    pub unbond: Option<UnbondFacts>,
     /// §8.7.2 rows E6/E7: the emission-arm fact bundle — the claimant's
     /// pre-block bond record and one frozen as-of-`E` snapshot per claimed
     /// epoch. `Some` iff the snapshot was asked to probe (the engine passes
@@ -137,6 +142,93 @@ pub struct SubmitFacts {
     /// Phase-D lock; **Rust classifies** it (`DoubleSpendConflict`).
     /// `Some` iff an emission probe ran on this snapshot.
     pub emission_claim_conflict: Option<bool>,
+}
+
+/// Which archival-bond probe the Phase-B snapshot should run — and, by
+/// construction, which fact it fills.
+///
+/// The two bond-post arms ask *opposite* questions of the same table:
+/// JoinMarket wants the record **absent** (row BP3) and needs nothing but
+/// that bit; Unbond wants it **present** and needs its contents as verify
+/// operands (§8.7.1.1). Modelling that as one enum rather than two optional
+/// parameters makes "both probes ran" unrepresentable, so no caller can
+/// leave a stale bit beside a fresh bundle.
+///
+/// The 32-byte payload is the vin's claimed `p_canonical_id`, keyed exactly
+/// as the C++ oracle probes it (`blockchain.cpp`
+/// `check_archival_bond_post_input`); the claim is independently pinned to
+/// the pubkey by the verifier's BP2 leg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BondProbe<'a> {
+    /// JoinMarket (row BP3) — fills [`SubmitFacts::bond_record_exists`].
+    Join(&'a [u8; 32]),
+    /// Unbond (§8.7.1.1) — fills [`SubmitFacts::unbond`].
+    Unbond(&'a [u8; 32]),
+}
+
+impl BondProbe<'_> {
+    /// The `p_canonical_id` this probe is keyed on, whichever arm it is.
+    pub fn p_canonical_id(&self) -> &[u8; 32] {
+        match self {
+            Self::Join(id) | Self::Unbond(id) => id,
+        }
+    }
+}
+
+/// §8.7.1.1 Unbond-arm facts, owned POD marshaled by the snapshot shim
+/// under the **same** lock scope as every other fact — a record read before
+/// a block, paired with a watermark read after it, describes a state the
+/// chain never occupied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnbondFacts {
+    /// Row UB2: the record being debited. `None` = no record for this
+    /// `p_canonical_id`, and the *time* of that observation decides the
+    /// verdict — absent at Phase B is `Malformed` (these bytes can never
+    /// connect), absent at a Phase-D re-check after being present at B is
+    /// a competing debit that connected during Phase C, which is
+    /// `DoubleSpendConflict`.
+    pub record: Option<UnbondRecordFacts>,
+    /// Row UB6: the slash scheduler's settled-epoch watermark; `None` =
+    /// nothing settled yet.
+    ///
+    /// **This is the only place the C++ `u64::MAX` storage sentinel is
+    /// normalised** (`get_archival_last_slash_epoch`'s initial value, never
+    /// a settled epoch). The shim edge owns it so no second normalisation
+    /// can be added downstream and disagree about what "unset" means.
+    pub last_settled_slash_epoch: Option<u64>,
+}
+
+/// The debited record's verify operands (row UB2's payload).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnbondRecordFacts {
+    /// The record's current bonded total — an Unbond debit must remove all
+    /// of it (row UB9), and a zero total is `NothingToUnbond`.
+    pub bonded_total_atomic: u64,
+    /// Row UB7: entries in the record's bad-interval log. A full log makes
+    /// the transaction unconnectable, so it is unverifiable.
+    pub bad_interval_count: usize,
+    /// Row UB3: the record's **committed** debit authorizer, exactly as
+    /// stored. Any non-canonical length — empty included — means the record
+    /// authorizes no debit at all; the pin fails closed rather than falling
+    /// back to the identity key.
+    pub bond_spend_pk: Vec<u8>,
+    /// The record's holdings kind — one half of the row-UB4 scan pin.
+    pub holdings_kind: HoldingsKind,
+    /// Row UB4: **which accessor the shim actually ran** to produce
+    /// [`per_shard_last_served`](Self::per_shard_last_served).
+    ///
+    /// Carried as a fact rather than re-derived because the wrong gather
+    /// fails **permissively**: a `CompleteTree` record stores no shard
+    /// list, so gathering it with the held-shards accessor yields an empty
+    /// slice, which folds to "never served", which makes the release
+    /// cooldown *elapse* for a record that has been serving. The engine
+    /// pins this echo against `holdings_kind.last_served_scan()`; a
+    /// mismatch is a shim contract violation, never a fold.
+    pub last_served_scan: LastServedScan,
+    /// Row UB4: per-shard last-served epochs from that accessor.
+    /// Never-served shards are omitted, so an empty slice is the legitimate
+    /// "record exists, nothing served" case.
+    pub per_shard_last_served: Vec<u64>,
 }
 
 /// §8.7.2 emission-arm facts (rows E6 + E7), owned POD marshaled by the
@@ -264,12 +356,10 @@ pub enum CommitOutcome {
 pub trait SubmitStateShim {
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
     ///
-    /// `bond_p_canonical_id` is `Some` for a bond-post submission — the
-    /// vin's claimed `p_canonical_id`, keyed exactly as the C++ oracle
-    /// probes it (`blockchain.cpp` `check_archival_bond_post_input`; the
-    /// claim is independently pinned to the pubkey by the verifier's BP2
-    /// leg) — and asks the shim to fill
-    /// [`SubmitFacts::bond_record_exists`]. `None` skips the probe.
+    /// `bond_probe` is `Some` for a bond-post submission and names which
+    /// archival-bond question to ask: [`BondProbe::Join`] fills
+    /// [`SubmitFacts::bond_record_exists`], [`BondProbe::Unbond`] fills
+    /// [`SubmitFacts::unbond`]. `None` skips the probe.
     ///
     /// `Err(ShimFault)` is the shim's internal-failure arm (DB exception,
     /// marshalling fault) — never a verdict input.
@@ -278,7 +368,7 @@ pub trait SubmitStateShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-        bond_p_canonical_id: Option<&[u8; 32]>,
+        bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault>;
 
@@ -314,14 +404,14 @@ impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-        bond_p_canonical_id: Option<&[u8; 32]>,
+        bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         (**self).snapshot_facts(
             txid,
             key_images,
             reference_block,
-            bond_p_canonical_id,
+            bond_probe,
             emission_probe,
         )
     }
