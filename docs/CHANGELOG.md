@@ -214,6 +214,29 @@
   `memset` is undefined even for a zero count. An empty `get_transactions`
   request is valid, so that length is reachable, and it now has a test.
 
+- **The C++ RK-4c replaced is deleted, not left callerless.** Retiring
+  `on_get_transactions` was the last caller of
+  `Blockchain::get_split_transactions_blobs` and of the `core::` wrappers
+  `get_split_transactions_blobs`, `get_pool_transactions_info` and
+  `are_key_images_spent[_in_pool]`. The first of those carries a pruning model
+  that is **wrong for Shekyl**: it reads the prunable hash only when the
+  prunable *blob* survived, and sets the hash to null when it did not — the
+  exact inversion of what `prune_worker` does, and the same defect this slice
+  corrected in the facts export.
+
+  Leaving it callerless would be worse than never having written it.
+  Pruning-and-serving-from-archive has no Monero counterpart, so the inherited
+  C++ is a *first draft of a Shekyl system*, and a wrong first draft sitting in
+  the tree is what the next port reads as the design. Deleted with its `core::`
+  wrapper, its declaration and its explicit template instantiation.
+
+  The reads underneath stay: `have_tx_keyimges_as_spent`,
+  `check_for_key_images` and `get_transactions_info` all have live callers — the
+  facts shim calls the last two directly, which is precisely what left the
+  wrappers dead. `get_transaction_version` went with them and is disclosed as
+  a different case: it was **already** dead on `dev`, with no callers and no
+  header declaration, so it was swept under rule 15 rather than orphaned here.
+
 - **`print_transaction` stopped calling every confirmed transaction pruned.**
   The console asks whether the daemon still holds a transaction's prunable
   half, and reads `prunable_as_hex` to decide — a field only the **split** form

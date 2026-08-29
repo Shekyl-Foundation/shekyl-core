@@ -2937,60 +2937,6 @@ bool Blockchain::get_transactions_blobs(const std::vector<crypto::hash>& txs_ids
   return true;
 }
 //------------------------------------------------------------------
-size_t get_transaction_version(const cryptonote::blobdata &bd)
-{
-  size_t version;
-  const char* begin = static_cast<const char*>(bd.data());
-  const char* end = begin + bd.size();
-  int read = tools::read_varint(begin, end, version);
-  if (read <= 0)
-    throw std::runtime_error("Internal error getting transaction version");
-  return version;
-}
-//------------------------------------------------------------------
-template<class t_ids_container, class t_tx_container, class t_missed_container>
-bool Blockchain::get_split_transactions_blobs(const t_ids_container& txs_ids, t_tx_container& txs, t_missed_container& missed_txs) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  reserve_container(txs, txs_ids.size());
-  for (const auto& tx_hash : txs_ids)
-  {
-    try
-    {
-      cryptonote::blobdata tx;
-      if (m_db->get_pruned_tx_blob(tx_hash, tx))
-      {
-        txs.push_back(std::make_tuple(tx_hash, std::move(tx), crypto::null_hash, cryptonote::blobdata()));
-        const bool has_prunable = m_db->get_prunable_tx_blob(tx_hash, std::get<3>(txs.back()));
-        if (!has_prunable)
-          std::get<3>(txs.back()).clear();
-        if (!is_v1_tx(std::get<1>(txs.back())))
-        {
-          if (has_prunable)
-          {
-            if (!m_db->get_prunable_tx_hash(tx_hash, std::get<2>(txs.back())))
-            {
-              MERROR("Prunable data hash not found for " << tx_hash);
-              return false;
-            }
-          }
-          else
-            std::get<2>(txs.back()) = crypto::null_hash;
-        }
-      }
-      else
-        missed_txs.push_back(tx_hash);
-    }
-    catch (const std::exception& e)
-    {
-      return false;
-    }
-  }
-  return true;
-}
-//------------------------------------------------------------------
 template<class t_ids_container, class t_tx_container, class t_missed_container>
 bool Blockchain::get_transactions(const t_ids_container& txs_ids, t_tx_container& txs, t_missed_container& missed_txs, bool pruned) const
 {
@@ -7765,5 +7711,4 @@ void Blockchain::send_miner_notifications(uint64_t height, const crypto::hash &s
 
 namespace cryptonote {
 template bool Blockchain::get_transactions(const std::vector<crypto::hash>&, std::vector<transaction>&, std::vector<crypto::hash>&, bool) const;
-template bool Blockchain::get_split_transactions_blobs(const std::vector<crypto::hash>&, std::vector<std::tuple<crypto::hash, cryptonote::blobdata, crypto::hash, cryptonote::blobdata>>&, std::vector<crypto::hash>&) const;
 }

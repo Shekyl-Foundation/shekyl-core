@@ -394,11 +394,6 @@ namespace cryptonote
     return m_blockchain_storage.get_transactions_blobs(txs_ids, txs, missed_txs, pruned);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::get_split_transactions_blobs(const std::vector<crypto::hash>& txs_ids, std::vector<std::tuple<crypto::hash, cryptonote::blobdata, crypto::hash, cryptonote::blobdata>>& txs, std::vector<crypto::hash>& missed_txs) const
-  {
-    return m_blockchain_storage.get_split_transactions_blobs(txs_ids, txs, missed_txs);
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::get_txpool_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive_txes) const
   {
     m_mempool.get_transaction_backlog(backlog, include_sensitive_txes);
@@ -865,12 +860,6 @@ namespace cryptonote
     return m_blockchain_storage.have_tx_keyimg_as_spent(key_image);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::are_key_images_spent(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const
-  {
-    spent = m_blockchain_storage.have_tx_keyimges_as_spent(epee::to_span(key_im));
-    return true;
-  }
-  //-----------------------------------------------------------------------------------------------
   size_t core::get_block_sync_size(uint64_t height) const
   {
     size_t res = block_sync_size > 0 ? block_sync_size : BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
@@ -895,13 +884,6 @@ namespace cryptonote
       res = max_block_size;
     }
     return res;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::are_key_images_spent_in_pool(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const
-  {
-    spent.clear();
-
-    return m_mempool.check_for_key_images(key_im, spent);
   }
   //-----------------------------------------------------------------------------------------------
   std::pair<boost::multiprecision::uint128_t, boost::multiprecision::uint128_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const size_t count)
@@ -1464,11 +1446,6 @@ namespace cryptonote
   bool core::have_block(const crypto::hash& id, int *where) const
   {
     return m_blockchain_storage.have_block(id, where);
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_pool_transactions_info(const std::vector<crypto::hash>& txids, std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>>& txs, bool include_sensitive_txes) const
-  {
-    return m_mempool.get_transactions_info(txids, txs, include_sensitive_txes);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions(std::vector<transaction>& txs, bool include_sensitive_data) const

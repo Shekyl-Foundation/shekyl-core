@@ -403,13 +403,6 @@ namespace cryptonote
       *
       * @note see Blockchain::get_transactions
       */
-     bool get_split_transactions_blobs(const std::vector<crypto::hash>& txs_ids, std::vector<std::tuple<crypto::hash, cryptonote::blobdata, crypto::hash, cryptonote::blobdata>>& txs, std::vector<crypto::hash>& missed_txs) const;
-
-     /**
-      * @copydoc Blockchain::get_transactions
-      *
-      * @note see Blockchain::get_transactions
-      */
      bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<transaction>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const;
 
      /**
@@ -498,14 +491,6 @@ namespace cryptonote
       * @note see tx_memory_pool::get_transactions
       */
      bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_sensitive_txes = false) const;
-
-     /**
-      * @copydoc tx_memory_pool::get_pool_transactions_info
-      * @param include_sensitive_txes include private transactions
-      *
-      * @note see tx_memory_pool::get_pool_transactions_info
-      */
-     bool get_pool_transactions_info(const std::vector<crypto::hash>& txids, std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>>& txs, bool include_sensitive_txes = false) const;
 
 
     /**
@@ -755,28 +740,6 @@ namespace cryptonote
       * @note see Blockchain::have_tx_keyimg_as_spent
       */
      bool is_key_image_spent(const crypto::key_image& key_im) const;
-
-     /**
-      * @brief check if multiple key images are spent
-      *
-      * plural version of is_key_image_spent()
-      *
-      * @param key_im list of key images to check
-      * @param spent return-by-reference result for each image checked
-      *
-      * @return true
-      */
-     bool are_key_images_spent(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const;
-
-     /**
-      * @brief check if multiple key images are spent in the transaction pool
-      *
-      * @param key_im list of key images to check
-      * @param spent return-by-reference result for each image checked
-      *
-      * @return true
-      */
-     bool are_key_images_spent_in_pool(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const;
 
      /**
       * @brief get the number of blocks to sync in one go
