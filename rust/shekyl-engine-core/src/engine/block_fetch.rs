@@ -65,7 +65,8 @@
 
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_rpc_types::{
-    GetBlockRequest, GetBlockResponse, GetTransactionsRequest, GetTransactionsResponse, TxEntry,
+    GetBlockRequest, GetBlockResponse, GetTransactionsRequest, GetTransactionsResponse, RpcStatus,
+    TxEntry,
 };
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
@@ -149,6 +150,7 @@ pub(crate) async fn fetch_scannable_block_with_form<R: Rpc>(
             ),
         )
         .await?;
+    refuse_unless_ok(&res.status, "get_block")?;
     let block = parse_block_blob(&res.blob, number)?;
 
     let transactions = fetch_transactions(rpc, &block.transaction_hashes, form).await?;
@@ -332,6 +334,7 @@ async fn fetch_transactions<R: Rpc>(
                 ),
             )
             .await?;
+        refuse_unless_ok(&resp.status, "get_transactions")?;
 
         if !resp.missed_tx.is_empty() {
             return Err(RpcError::TransactionsNotFound(
@@ -346,6 +349,34 @@ async fn fetch_transactions<R: Rpc>(
     }
 
     Ok(transactions)
+}
+
+/// Refuse a daemon reply whose `status` is not OK, **before any other field is
+/// read**.
+///
+/// `Rpc::rpc_call` and `json_rpc_call` only deserialize: they do not enforce
+/// the wire's `status`, so a daemon is free to answer a refusal and a
+/// valid-looking body in the same document. Nothing in that document is then
+/// evidence — the entries, the missed list, the spent flags are all chosen by
+/// whoever sent it — and a consumer that reads a field before the status has
+/// already treated a refusal as data.
+///
+/// It matters most where the reply feeds a *judgement* rather than a display: a
+/// refusal carrying one plausible-length `spent_status` array changes a reserve
+/// proof's total, and one carrying a plausible entry lets a proof verify
+/// against a transaction the daemon just declined to vouch for. The own-node
+/// default narrows who can send such a document; it does not make it evidence.
+///
+/// One function rather than a check at each call site, so the refusal reads the
+/// same way everywhere and a sixth typed consumer has something to reach for.
+pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Result<(), RpcError> {
+    if status.is_ok() {
+        return Ok(());
+    }
+    Err(RpcError::InvalidNode(format!(
+        "{method} refused with status {}; its body is not evidence",
+        status.0
+    )))
 }
 
 /// Validate one `get_transactions` batch response against the `batch` of
@@ -444,10 +475,80 @@ async fn compute_first_output_index<R: Rpc>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::future::Future;
     use shekyl_rpc_types::HashHex;
 
     use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
     use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
+
+    /// A daemon that answers every route with one fixed document, so a test
+    /// can hand the consumer a reply the wire permits but the contract does
+    /// not — here, a refusal carrying a body.
+    #[derive(Clone)]
+    struct CannedDaemon(std::sync::Arc<Vec<u8>>);
+
+    impl Rpc for CannedDaemon {
+        fn post(
+            &self,
+            _route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+            let doc = self.0.clone();
+            async move { Ok(doc.as_ref().clone()) }
+        }
+    }
+
+    /// **A refusal is not evidence, even when it comes with a body.**
+    ///
+    /// `rpc_call` only deserializes, so a daemon may answer a non-OK `status`
+    /// *and* a complete, plausible entry in one document. The body here is
+    /// built to clear every check downstream of the status — the count
+    /// matches, the entry's `tx_hash` equals the requested hash (the blob is
+    /// deliberately not re-hashed, see `parse_tx_batch`), and the pruned blob
+    /// is a transaction `parse_pruned_tx` accepts. So without the status check
+    /// this call **succeeds** and hands back a transaction the daemon declined
+    /// to vouch for; that is the hazard, not a parse error arriving late.
+    #[tokio::test]
+    async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
+        let txid = [0x31u8; 32];
+        let mut body = Vec::new();
+        pruned_spend_tx(0)
+            .write(&mut body)
+            .expect("Vec write is infallible");
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
+            txs: vec![TxEntry {
+                tx_hash: HashHex::from_bytes(txid),
+                as_hex: String::new(),
+                pruned_as_hex: hex::encode(&body),
+                prunable_as_hex: String::new(),
+                prunable_hash: HashHex::from_bytes([0x5A; 32]),
+                as_json: String::new(),
+                pruned: false,
+                double_spend_seen: false,
+                location: shekyl_rpc_types::TxLocation::Mined {
+                    block_height: 3,
+                    block_timestamp: 1_700_000_000,
+                    confirmations: 1,
+                    output_indices: vec![1],
+                },
+            }],
+            missed_tx: Vec::new(),
+        };
+        let rpc = CannedDaemon(std::sync::Arc::new(
+            serde_json::to_vec(&reply).expect("wire type serializes"),
+        ));
+
+        let err = fetch_transactions(&rpc, &[txid], TxBodyForm::Pruned)
+            .await
+            .expect_err("a refusal must not be accepted as transactions");
+        let text = format!("{err}");
+        assert!(
+            text.contains("get_transactions refused") && text.contains("not evidence"),
+            "the refusal must name itself rather than surface as some later \
+             failure: {text}"
+        );
+    }
 
     /// A coinbase-only block at `number` with one tagged-key output whose
     /// `Null` ct carries a committed base (the shape the legacy parse dropped).

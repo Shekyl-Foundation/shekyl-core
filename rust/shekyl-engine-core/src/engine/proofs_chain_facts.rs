@@ -28,7 +28,7 @@ use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxLocati
 use shekyl_scanner::extra::Extra;
 use shekyl_wire::{Ct, Transaction};
 
-use super::block_fetch::{parse_tx_batch, TxBodyForm, TXS_PER_REQUEST};
+use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
 use super::proofs::ProofsError;
 
 /// A proof-relevant tx fetched from the daemon: the parsed pruned body
@@ -69,6 +69,7 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
             RpcError::TransactionsNotFound(_) => ProofsError::TxNotFound(hex::encode(txid)),
             other => ProofsError::Daemon(other),
         })?;
+    refuse_unless_ok(&resp.status, "get_transactions").map_err(ProofsError::Daemon)?;
 
     if !resp.missed_tx.is_empty() {
         return Err(ProofsError::TxNotFound(hex::encode(txid)));
@@ -135,6 +136,7 @@ pub(crate) async fn fetch_proof_txs<R: Rpc>(
                 }
                 other => ProofsError::Daemon(other),
             })?;
+        refuse_unless_ok(&resp.status, "get_transactions").map_err(ProofsError::Daemon)?;
 
         if !resp.missed_tx.is_empty() {
             let missed_hashes: Vec<[u8; 32]> = resp

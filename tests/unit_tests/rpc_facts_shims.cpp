@@ -40,6 +40,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <unordered_map>
 #include <limits>
 
 #include "blockchain_db/testdb.h"
@@ -982,4 +983,140 @@ TEST(rpc_facts_shims, transactions_with_an_empty_request_answers_empty)
       &q.out, &q.out_len, &q.chain_height, &q.owner));
   EXPECT_EQ(0u, q.out_len);
   EXPECT_EQ(CHAIN_HEIGHT, q.chain_height) << "the tip is still reported";
+}
+
+// ── key_images_spent: chain, pool, and neither, in one request ─────────────
+//
+// The status values and the slot re-association are the whole of this
+// function: unspent images are gathered with their positions, asked of the
+// pool, and the answers written back through `unspent_slots`. A request whose
+// images are all one kind cannot tell a correct re-association from an
+// off-by-one, so the fixture mixes the three and puts the pool hit last.
+namespace
+{
+  class KeyImageDB : public BaseTestDB
+  {
+  public:
+    explicit KeyImageDB(uint64_t height) : m_height(height) { m_open = true; }
+
+    void set_chain_spent(const crypto::key_image& ki) { m_chain_spent = ki; m_has_chain = true; }
+
+    uint64_t height() const override { return m_height; }
+
+    bool has_key_image(const crypto::key_image& img) const override
+    {
+      return m_has_chain && img == m_chain_spent;
+    }
+
+    // Enough of a txpool for `tx_memory_pool::init` to load `m_spent_key_images`
+    // from it, which is what makes a pool hit reachable at all.
+    void add_txpool_tx(const crypto::hash& txid, const cryptonote::blobdata_ref& blob,
+      const cryptonote::txpool_tx_meta_t& meta) override
+    {
+      m_txpool[txid] = {meta, cryptonote::blobdata(blob.data(), blob.size())};
+    }
+    uint64_t get_txpool_tx_count(relay_category = relay_category::broadcasted) const override
+    {
+      return m_txpool.size();
+    }
+    bool txpool_has_tx(const crypto::hash& txid, relay_category) const override
+    {
+      return m_txpool.count(txid) != 0;
+    }
+    bool get_txpool_tx_meta(const crypto::hash& txid, cryptonote::txpool_tx_meta_t& meta) const override
+    {
+      const auto it = m_txpool.find(txid);
+      if (it == m_txpool.end())
+        return false;
+      meta = it->second.meta;
+      return true;
+    }
+    bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata& bd, relay_category) const override
+    {
+      const auto it = m_txpool.find(txid);
+      if (it == m_txpool.end())
+        return false;
+      bd = it->second.blob;
+      return true;
+    }
+    cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid, relay_category) const override
+    {
+      return m_txpool.at(txid).blob;
+    }
+    bool for_all_txpool_txes(
+      std::function<bool(const crypto::hash&, const cryptonote::txpool_tx_meta_t&,
+        const cryptonote::blobdata_ref*)> f,
+      bool include_blob = false, relay_category = relay_category::broadcasted) const override
+    {
+      for (const auto& kv : m_txpool)
+      {
+        const cryptonote::blobdata_ref ref{kv.second.blob.data(), kv.second.blob.size()};
+        if (!f(kv.first, kv.second.meta, include_blob ? &ref : nullptr))
+          return false;
+      }
+      return true;
+    }
+
+  private:
+    struct Entry { cryptonote::txpool_tx_meta_t meta; cryptonote::blobdata blob; };
+    uint64_t m_height;
+    crypto::key_image m_chain_spent{};
+    bool m_has_chain = false;
+    std::unordered_map<crypto::hash, Entry> m_txpool;
+  };
+
+  crypto::key_image ki_of(uint8_t fill)
+  {
+    crypto::key_image ki;
+    std::memset(&ki, fill, sizeof(ki));
+    return ki;
+  }
+}
+
+TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slots)
+{
+  const crypto::key_image chain_ki = ki_of(0xC1);
+  const crypto::key_image pool_ki = ki_of(0xB2);
+  const crypto::key_image unspent_ki = ki_of(0xA3);
+
+  BlockchainAndPool bap;
+  auto* db = new KeyImageDB(CHAIN_HEIGHT);
+  db->set_chain_spent(chain_ki);
+
+  // A pool transaction spending `pool_ki`, seeded through the DB so the pool's
+  // own `init` builds `m_spent_key_images` the way production does.
+  cryptonote::transaction ptx{};
+  ptx.version = 1;
+  ptx.unlock_time = 0;
+  cryptonote::txin_to_key in{};
+  in.k_image = pool_ki;
+  ptx.vin.push_back(in);
+  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.weight = 1;
+  meta.fee = 1000;
+  meta.receive_time = 1;
+  meta.set_relay_method(cryptonote::relay_method::fluff);
+  crypto::hash ptxid;
+  std::memset(ptxid.data, 0x77, sizeof(ptxid.data));
+  db->add_txpool_tx(ptxid, {pblob.data(), pblob.size()}, meta);
+
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  ASSERT_TRUE(bap.txpool.init());
+
+  // Deliberately mixed, with the pool hit LAST: a re-association that wrote
+  // pool answers back in arrival order instead of through `unspent_slots`
+  // would land it on the wrong image.
+  uint8_t images[96];
+  std::memcpy(images + 0, &chain_ki, 32);
+  std::memcpy(images + 32, &unspent_ki, 32);
+  std::memcpy(images + 64, &pool_ki, 32);
+
+  uint8_t status[3] = {9, 9, 9};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::key_images_spent(bap.bc, bap.txpool, images, 3, status));
+
+  EXPECT_EQ(1, status[0]) << "spent in the chain";
+  EXPECT_EQ(0, status[1]) << "spent nowhere";
+  EXPECT_EQ(2, status[2]) << "spent in the pool, and written back to ITS slot";
 }

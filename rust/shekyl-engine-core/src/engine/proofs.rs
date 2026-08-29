@@ -846,6 +846,10 @@ pub async fn check_reserve_proof<R: Rpc>(
             ),
         )
         .await?;
+    // A refusal carrying one plausible-length `spent_status` array would
+    // change this proof's reported total, so the status is read first.
+    super::block_fetch::refuse_unless_ok(&resp.status, "is_key_image_spent")
+        .map_err(ProofsError::Daemon)?;
     let statuses = &resp.spent_status;
     if statuses.len() != verified.len() {
         return Err(ProofsError::Daemon(RpcError::InvalidNode(

@@ -77,6 +77,47 @@ pub enum TxSlot {
     },
 }
 
+/// Project one FFI entry onto its [`TxSlot`], or `None` when `where_found`
+/// carries a discriminator the contract does not define.
+///
+/// Split out of the `unsafe` walk because that walk cannot be driven without a
+/// live `core_rpc_server`, and this is the part with a decision in it. The
+/// pointer arithmetic stays at the call site; what crosses here is already
+/// owned data.
+///
+/// `None` rather than a silent `Missed`: the contract permits 0/1/2 and nothing
+/// more, so a fourth value is the export breaking it. Answering "not found"
+/// would report success about a transaction this daemon may well hold — an ABI
+/// violation rendered as a fact about the caller's request.
+fn slot_of(
+    e: &ffi::TxEntryFfi,
+    pruned: Vec<u8>,
+    prunable: Vec<u8>,
+    output_indices: Vec<u64>,
+) -> Option<TxSlot> {
+    match e.where_found {
+        0 => Some(TxSlot::Missed),
+        1 => Some(TxSlot::Chain {
+            pruned,
+            prunable,
+            prunable_hash: e.prunable_hash,
+            block_height: e.block_height,
+            block_timestamp: e.block_timestamp,
+            output_indices,
+            pruned_flag: e.pruned_flag != 0,
+        }),
+        2 => Some(TxSlot::Pool {
+            pruned,
+            prunable,
+            prunable_hash: e.prunable_hash,
+            double_spend_seen: e.double_spend_seen != 0,
+            relayed: e.relayed != 0,
+            received_timestamp: e.received_timestamp,
+        }),
+        _ => None,
+    }
+}
+
 impl CoreRpc {
     /// Wrap a raw `core_rpc_server*` obtained from C++.
     ///
@@ -456,6 +497,10 @@ impl CoreRpc {
             // Past this point an owner may exist, so nothing returns until it
             // is released.
             let mut out = Vec::with_capacity(len);
+            // Set by an entry carrying a discriminator the FFI contract does
+            // not define. Recorded rather than returned on the spot, because the
+            // owner is still live and nothing returns before it is freed.
+            let mut undefined_where: Option<u8> = None;
             if !rows.is_null() {
                 for e in std::slice::from_raw_parts(rows, len) {
                     let bytes = |p: *const u8, n: usize| -> Vec<u8> {
@@ -467,39 +512,25 @@ impl CoreRpc {
                     };
                     let pruned = bytes(e.pruned, e.pruned_len);
                     let prunable = bytes(e.prunable, e.prunable_len);
-                    out.push(match e.where_found {
-                        1 => TxSlot::Chain {
-                            pruned,
-                            prunable,
-                            prunable_hash: e.prunable_hash,
-                            block_height: e.block_height,
-                            block_timestamp: e.block_timestamp,
-                            output_indices: if e.output_indices.is_null()
-                                || e.output_indices_len == 0
-                            {
-                                Vec::new()
-                            } else {
-                                std::slice::from_raw_parts(e.output_indices, e.output_indices_len)
-                                    .to_vec()
-                            },
-                            pruned_flag: e.pruned_flag != 0,
-                        },
-                        2 => TxSlot::Pool {
-                            pruned,
-                            prunable,
-                            prunable_hash: e.prunable_hash,
-                            double_spend_seen: e.double_spend_seen != 0,
-                            relayed: e.relayed != 0,
-                            received_timestamp: e.received_timestamp,
-                        },
-                        // 0, and anything else: the shim answers only 0/1/2,
-                        // and an unknown tag is "not found" rather than a
-                        // silently half-filled entry.
-                        _ => TxSlot::Missed,
-                    });
+                    let output_indices = if e.output_indices.is_null() || e.output_indices_len == 0
+                    {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(e.output_indices, e.output_indices_len).to_vec()
+                    };
+                    match slot_of(e, pruned, prunable, output_indices) {
+                        Some(slot) => out.push(slot),
+                        None => {
+                            undefined_where = Some(e.where_found);
+                            out.push(TxSlot::Missed);
+                        }
+                    }
                 }
             }
             ffi::shekyl_rpc_transactions_free(owner);
+            if undefined_where.is_some() {
+                return Err(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL);
+            }
             Ok((out, chain_height))
         }
     }
@@ -611,4 +642,63 @@ unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
         .into_owned();
     unsafe { ffi::core_rpc_ffi_free_string(ptr) };
     Some(s)
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    fn entry(where_found: u8) -> ffi::TxEntryFfi {
+        ffi::TxEntryFfi {
+            pruned: std::ptr::null(),
+            pruned_len: 0,
+            prunable: std::ptr::null(),
+            prunable_len: 0,
+            output_indices: std::ptr::null(),
+            output_indices_len: 0,
+            block_height: 3,
+            block_timestamp: 1_700_000_000,
+            received_timestamp: 1_700_000_001,
+            prunable_hash: [0x5A; 32],
+            where_found,
+            pruned_flag: 0,
+            double_spend_seen: 1,
+            relayed: 1,
+            reserved: [0; 4],
+        }
+    }
+
+    /// The three values the contract defines map to their slots.
+    #[test]
+    fn defined_where_found_values_map_to_their_slots() {
+        assert!(matches!(
+            slot_of(&entry(0), Vec::new(), Vec::new(), Vec::new()),
+            Some(TxSlot::Missed)
+        ));
+        assert!(matches!(
+            slot_of(&entry(1), Vec::new(), Vec::new(), vec![7]),
+            Some(TxSlot::Chain { .. })
+        ));
+        assert!(matches!(
+            slot_of(&entry(2), Vec::new(), Vec::new(), Vec::new()),
+            Some(TxSlot::Pool { .. })
+        ));
+    }
+
+    /// **A fourth value is the export breaking its contract, not a miss.**
+    ///
+    /// Mapping it to `Missed` would answer the caller successfully — "no such
+    /// transaction" — about one this daemon may well hold: an ABI violation
+    /// rendered as a fact about their request. `None` is what makes the caller
+    /// free the owner and raise an internal facts error instead.
+    #[test]
+    fn an_undefined_where_found_is_refused_not_read_as_missed() {
+        for undefined in [3u8, 4, 255] {
+            assert!(
+                slot_of(&entry(undefined), Vec::new(), Vec::new(), Vec::new()).is_none(),
+                "where_found={undefined} is outside the contract and must not \
+                 project to a slot"
+            );
+        }
+    }
 }

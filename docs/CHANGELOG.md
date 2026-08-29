@@ -214,6 +214,48 @@
   `memset` is undefined even for a zero count. An empty `get_transactions`
   request is valid, so that length is reachable, and it now has a test.
 
+- **A daemon refusal is no longer read as data.** `Rpc::rpc_call` and
+  `json_rpc_call` only deserialize — they do not enforce the wire's `status` —
+  so a daemon could answer a non-OK status *and* a complete, plausible body in
+  one document, and five typed consumers read the body first: both
+  `block_fetch` calls, both `proofs_chain_facts` fetches, and the reserve
+  proof's `is_key_image_spent`.
+
+  It matters most where the reply feeds a judgement rather than a display: a
+  refusal carrying one plausible-length `spent_status` array changes a reserve
+  proof's total, and one carrying a plausible entry lets a proof verify against
+  a transaction the daemon just declined to vouch for. The own-node default
+  narrows who can send such a document; it does not make it evidence.
+
+  One `refuse_unless_ok` rather than five checks, so the refusal reads the same
+  way everywhere and a sixth typed consumer has something to reach for. The
+  test builds a body that clears every check *downstream* of the status — right
+  count, matching `tx_hash`, a pruned blob `parse_pruned_tx` accepts — so
+  without the check the call **succeeds** and hands back a transaction; that is
+  the hazard, not a parse error arriving late.
+
+- **An undefined `where_found` is refused, not read as "not found".** The FFI
+  contract permits 0/1/2; anything else was mapped to `Missed`, which answers
+  the caller successfully about a transaction this daemon may well hold — an
+  ABI violation rendered as a fact about their request. It now frees the owner
+  and raises an internal facts error, as the block path already did for a
+  length no allocation could have produced.
+
+  The mapping moved to `slot_of`, a pure function beside the `unsafe` walk,
+  because the walk needs a live `core_rpc_server` and this is the part with a
+  decision in it. The pointer arithmetic stays at the call site; what crosses
+  is already owned data — which is what makes the refusal testable at all.
+
+- **`key_images_spent` has the three-way test its logic needs.** The status
+  values and the slot re-association are the whole of that function: unspent
+  images are gathered with their positions, asked of the pool, and written back
+  through `unspent_slots`. A request whose images are all one kind cannot tell
+  a correct re-association from an off-by-one, so the fixture mixes chain-spent,
+  unspent and pool-spent and puts the **pool hit last** — writing pool answers
+  in arrival order then lands it on the wrong image, and does. The pool entry is
+  seeded through the DB so `tx_memory_pool::init` builds `m_spent_key_images`
+  the way production does, rather than the test asserting over a hand-set field.
+
 - **The C++ RK-4c replaced is deleted, not left callerless.** Retiring
   `on_get_transactions` was the last caller of
   `Blockchain::get_split_transactions_blobs` and of the `core::` wrappers

@@ -331,6 +331,11 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
     const shekyl_rpc_tx_entry** out, size_t* out_len, uint64_t* out_chain_height,
     void** out_owner) noexcept;
 
+// Same reason: the chain-then-pool status mapping and its slot re-association
+// are only reachable from a test through the `Blockchain&` / pool form.
+int key_images_spent(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
+    const uint8_t* key_images, size_t count, uint8_t* out_status) noexcept;
+
 } // namespace daemon_rpc_facts
 
 #endif // __cplusplus
