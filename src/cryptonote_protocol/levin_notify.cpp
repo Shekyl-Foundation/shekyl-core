@@ -969,11 +969,20 @@ namespace levin
 
         /* What still needs the ordinary wire. The carrier takes transactions
            out of this; whatever it refuses stays, and the existing stem path
-           below sends exactly those. A batch can therefore split — some
-           carried, some sent directly — which is correct rather than merely
-           tolerable: both go to the same stem slot, and refusing the whole
-           batch because one transaction is too large to fragment would put
-           the other two on the clear wire for no reason. */
+           below sends exactly those.
+
+           A BATCH THEREFORE SPLITS, and the split is not a convenience — it is
+           what keeps a SIZE refusal from becoming a PRIVACY regression. The
+           realistic refusal is a transaction too large to fragment inside
+           `MAX_FRAGMENTS` windows. Failing the whole batch on that would put
+           the other transactions on the clear wire because one of their
+           neighbours was big, which is a worse outcome reached for an
+           unrelated reason. Both halves go to the same stem slot either way,
+           so splitting costs nothing that not splitting would have saved.
+
+           A later reader simplifying this to "return an error instead of
+           partitioning" would be trading the privacy of the small
+           transactions for the tidiness of the control flow. */
         std::vector<blobdata> to_send{txs_};
 
         if (plan == SHEKYL_RELAY_PLAN_STEM && carrier == SHEKYL_RELAY_CARRIER_NOISE)

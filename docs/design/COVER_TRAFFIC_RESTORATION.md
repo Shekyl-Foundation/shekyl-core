@@ -984,6 +984,89 @@ The three candidates and why two are refused:
 this row is not marked landed until a test drives a real transaction through
 the queue onto the wire.
 
+### 3.1b Provenance is not a phase, and the type system should say so
+
+**2026-08-29, found while wiring the producer.** The resolution first recorded
+`originated_stays_in_zone(relay_method::stem, ...)`. That predicate takes the
+method the **caller asked for**, not the one the wire used: an origin asking
+for `Local` on an anonymity zone keeps `Local` however it travelled. Passing
+`Stem` would have stripped §92's pin off **every carrier-borne origination**,
+silently, on the one path where origination is the thing being protected.
+
+**Third instance of one conflation.** `Local` is *provenance* — where the
+transaction came from — and `Stem` is *phase* — where it is in the relay walk.
+They share an enum, so the compiler treats them as alternatives on one axis:
+
+| | what it was | consequence |
+| --- | --- | --- |
+| #573 | `add_tx`'s upgrade moved `Local` → `Fluff` | the origin pin stripped by its own transaction returning |
+| the covert branch | `tx_relay = local` read as a phase change | a demotion that looked like routing |
+| here | the wire's phase passed where the caller's provenance was wanted | the pin stripped off every carrier origination |
+
+**Why this one was catchable at the keyboard**, and the reason generalises: the
+predicate is *named* `originated_stays_in_zone`, so handing it something called
+`stem` reads wrong on sight. The name carried the axis the type did not.
+
+**The cutover should not rely on a name to do that.** A `RelayMethod`
+parameter accepts `Stem` happily, because on the enum's own axis that is a
+legal value. A parameter typed for *provenance* — one that only an origination
+decision can construct — would not compile here, and none of the three
+instances above would have been expressible. That is the same shape as
+`LinkSecrecy` (constructible only from a `RelayZone`, so reach and secrecy
+cannot be transposed) and as `zone_route`'s token, and it is the design note
+this finding contributes to the Rust notify cutover: **carry provenance as its
+own type rather than as a position in the phase enum.**
+
+Recorded here rather than in FOLLOWUPS because it is a design input to a round
+that has not opened, not a defect owed a fix.
+
+### 3.1c Budget versus actual — pre-registered before the traffic exists
+
+**2026-08-29.** The ~42 GB/month posture is signed off **provisionally**, on
+the condition that it be measured once a real transaction rides the carrier —
+which the producer now makes possible for the first time. This section names
+what the measurement should show **before** anyone runs it, because the first
+reading is otherwise free to be read as either confirmation or a defect.
+
+**The arithmetic is not what is in question.** `PER_NODE_CEILING_BYTES_PER_SEC`
+is a `const` assert at exact equality: `20 480 × 4 ÷ 5 s = 16 384 B/s` holds by
+construction or the build fails. Measuring it would only re-derive it.
+
+**What is in question is whether the observed rate matches, and it will not
+match exactly.** Three named reasons, all expected:
+
+| source | direction | why |
+| --- | --- | --- |
+| jitter over a finite window | **either** | the mean is 5 000 ms; any finite sample's mean sits either side of it, which is the same property §56 requires the cadence to have |
+| unbound slots | **under** | a channel with no peer emits nothing (CV-2), so a node that has not filled its stem slots carries less than the ceiling |
+| discards and rebinds | **under** | a discarded or restarted run re-sends windows it already sent; those bytes are on the wire but the *message* count they represent is lower |
+
+**So the expected finding is: at or slightly under the ceiling, never
+meaningfully over.** The ceiling is a sustained mean at the worst posture —
+every channel bound, every zone carried — and a real node is usually in a
+lesser posture.
+
+**What would be a real defect**, stated so the reading has a bar to clear
+rather than an impression to leave:
+
+- **sustained rate above 16 384 B/s** with every channel bound. The emitter has
+  no path to exceed its own mean, so this would mean the cadence is not drawing
+  what it is documented to draw.
+- **per-circuit rate above 6 145 B/s sustained.** That is
+  `PER_CIRCUIT_PEAK_BYTES_PER_SEC`, the shortest interval; a *sustained* rate
+  at the peak means the jitter is not being applied.
+- **a rate that varies with queue depth.** This is the CV-4 breach the whole
+  separation exists to prevent, and it is the one measurement worth running
+  even if the totals look right — `cv4_the_cadence_does_not_depend_on_queue_depth`
+  gates it in Rust, but the wire is where it would be observable to an
+  adversary.
+
+**Dummies count.** A window carrying cover is the same 20 480 bytes as a window
+carrying a fragment — that is the invariant, not an accounting convenience — so
+the budget is spent whether or not anyone is transacting. A measurement taken
+on an idle node is therefore a *complete* measurement of the sustained cost,
+not a floor for it.
+
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 
 `hop` has no shape parameter, and the carrier gives it one by fragmentation.

@@ -15185,6 +15185,29 @@ the answer to the question it is actually asking ("did the nudge miss?").
 `local_relay_base` carries the split, and the two 400 s test cases differ in
 `relayed` alone so the discriminant cannot drift.
 
+**A THIRD entry now wears `local` with `relayed == false`, and it arrives by a
+route neither of the other two describes.** *(2026-08-29, the carrier
+producer.)* A transaction handed to the covert carrier and then **discarded** —
+`unbind` clears a channel, so the message leaves the queue without reaching a
+peer — is recorded as nothing at all. `relayed` stays false and the entry takes
+`MIN_RELAY_TIME`.
+
+That is the right outcome and it is reached by a different argument than the
+other two, which is why it is written down rather than assumed to be covered.
+The unsent `insert_attested_tx` entry keeps the short grid because **no stem
+was ever launched**; the carrier discard keeps it because a stem was *launched
+and then abandoned*, and nothing on the network holds the transaction either
+way. Same conclusion, different premise.
+
+**So the 1148 s in this section is conditional on the send having happened, and
+the condition is new.** Item 3's derivation provisions for *"the stem was
+swallowed at hop 1"* — a stem that reached a peer and died there. A carrier
+discard never reached a peer, so it is not that class and must not draw that
+interval: waiting 1148 s for a transaction still sitting in nobody's mempool is
+the swallow case inverted, with the origin doing the waiting for an event that
+cannot occur. Wherever this document says an origin re-broadcasts at 1148 s,
+read it as *an origin whose transaction was sent*.
+
 **The split is only as good as the bit, and the bit had a lying writer.**
 *(Found and fixed 2026-08-27.)* `dandelionpp_notify` called `record_relayed`
 **before** `make_payload_send_txs`, so `set_relayed` wrote `relayed = true` on
