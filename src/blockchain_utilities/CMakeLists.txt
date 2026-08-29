@@ -68,6 +68,12 @@ monero_private_headers(blockchain_usage
 
 
 
+set(mdb_copy_sources
+  ../../external/db_drivers/liblmdb/mdb_copy.c
+  )
+
+
+
 set(blockchain_ancestry_sources
   blockchain_ancestry.cpp
   )
@@ -161,6 +167,30 @@ set_property(TARGET blockchain_usage
 	PROPERTY
 	OUTPUT_NAME "shekyl-blockchain-usage")
 install(TARGETS blockchain_usage DESTINATION bin)
+
+# Offline LMDB compaction (`shekyl-mdb-copy -c <src> <dst>`), built from the
+# vendored upstream utility. This is the schema-agnostic replacement for the
+# retired schema-aware copy tool: the daemon prunes in place, and compaction
+# needs no knowledge of the table set. Defined here (not in the vendored
+# liblmdb directory) so it rides the same executable pipeline as every other
+# operator binary: the NOT IOS gate, strip/no-relink, and the security and
+# static linker flags configured before src/ is processed.
+shekyl_add_executable(mdb_copy
+  ${mdb_copy_sources})
+
+target_include_directories(mdb_copy
+  PRIVATE
+    ../../external/db_drivers/liblmdb)
+
+target_link_libraries(mdb_copy
+  PRIVATE
+    lmdb
+    ${CMAKE_THREAD_LIBS_INIT})
+
+set_property(TARGET mdb_copy
+	PROPERTY
+	OUTPUT_NAME "shekyl-mdb-copy")
+install(TARGETS mdb_copy DESTINATION bin)
 
 shekyl_add_executable(blockchain_ancestry
   ${blockchain_ancestry_sources}

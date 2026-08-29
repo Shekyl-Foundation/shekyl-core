@@ -82,6 +82,7 @@ jobs:
           cp build/release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-blockchain-export "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-mdb-copy "${RELEASE_DIR}/" 2>/dev/null || true
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
 
       - name: Package .deb
@@ -324,7 +325,7 @@ jobs:
           mkdir -p "${RELEASE_DIR}"
           for bin in shekyld shekyl-cli shekyl-wallet-rpc \
                      shekyl-gen-trusted-multisig shekyl-blockchain-import \
-                     shekyl-blockchain-export; do
+                     shekyl-blockchain-export shekyl-mdb-copy; do
             cp "${BIN_DIR}/${bin}" "${RELEASE_DIR}/" 2>/dev/null || true
           done
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"

@@ -877,11 +877,17 @@ prune marks database pages as free without shrinking the file. To reclaim
 the disk space, stop `shekyld` and compact the database:
 
 ```bash
+mkdir /path/to/compacted
 ./shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
 ```
 
 then replace the old `lmdb` directory with the compacted copy (you
-temporarily need disk space for both).
+temporarily need disk space for both). The destination directory must
+already exist and be empty, and the tool must run as the user that owns
+the data directory — it takes a write lock on the source even for a copy,
+and a `sudo` run leaves root-owned files the daemon cannot reopen. Always
+pass both paths: with the destination omitted, the tool streams the entire
+database to standard output.
 
 Note that pruning removes only transaction proof and PQC-auth data;
 curve-tree leaf data is not prunable and grows with the chain.

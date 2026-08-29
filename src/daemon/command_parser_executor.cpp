@@ -936,7 +936,8 @@ bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>&
     std::cout << "Warning: pruning from within shekyld will not shrink the database file size." << std::endl;
     std::cout << "Instead, parts of the file will be marked as free, so the file will not grow" << std::endl;
     std::cout << "until that newly free space is used up. If you want a smaller file size now," << std::endl;
-    std::cout << "exit shekyld and compact the database with:" << std::endl;
+    std::cout << "exit shekyld, create an empty destination directory, and (as the user that" << std::endl;
+    std::cout << "owns the data directory) compact the database with:" << std::endl;
     std::cout << "  shekyl-mdb-copy -c <data-dir>/lmdb <destination-dir>" << std::endl;
     std::cout << "then replace the old lmdb directory with the copy (you will temporarily need" << std::endl;
     std::cout << "disk space for both). If you are OK with the database file keeping the same" << std::endl;
