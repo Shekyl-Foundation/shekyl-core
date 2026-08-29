@@ -24,7 +24,7 @@ file, never the reverse.** If they disagree, this file is the observation and
 |---|---|---|---|---|
 | `CI` | `windows-2025-vs2026` | GitHub-hosted | per workflow | service account, no interactive logon |
 | `LP-1` | `LP7760-W1XMP6G3` | Windows 11 Enterprise 23H2, `10.0.22631.7517` (`OSVersion.Version` = `10.0.22631.0`) | `rustc 1.94.0 (4a4ef493e 2026-03-02)`, `x86_64-pc-windows-msvc`, pinned by `rust-toolchain`; host default is 1.95.0 | **one** console session (ID 1), Medium integrity, **not** elevated |
-| `DT-1` | `DTASUS-Z970` | domain-joined Windows, same AD domain as `LP-1` | none — .NET `NamedPipeClientStream` only; it is the P-17 *caller*, not a runner | interactive logon as the **same AD user** as the server |
+| `DT-1` | `DTASUS-Z970` | domain-joined Windows, same AD domain as `LP-1`; **exact edition/version/build not captured this run — OWED for reproducibility** (the runner ran only on `LP-1`; `DT-1` ran the .NET dial by hand, and its build was not recorded — fill from `[System.Environment]::OSVersion.Version` + edition when the box is next reachable) | none — .NET `NamedPipeClientStream` only; it is the P-17 *caller*, not a runner | interactive logon as the **same AD user** as the server |
 
 `LP-1` is the first machine with an interactive logon to run this sheet, which
 is what §3 was waiting for.

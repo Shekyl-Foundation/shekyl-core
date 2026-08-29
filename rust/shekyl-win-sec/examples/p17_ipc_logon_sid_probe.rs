@@ -810,13 +810,13 @@ mod probe {
             println!(
                 "P-17 UNRUN: no single-box SMB transport crossed a logon-session boundary \
                  (localhost reuses the token by construction; the machine-name form did \
-                 not cross either, or was unavailable). WP-D6's `IPC$` claim — the \
-                 logon-SID ACE refusing a caller in a *different* session — therefore \
-                 remains UNTESTED, and needs a genuinely remote caller via `--serve` and \
-                 a second machine (§4.5–4.7). The `reject_remote_clients` fence, by \
-                 contrast, IS testable single-box and has been (§4.7): it refuses a \
-                 `\\\\HOST\\pipe\\` dial by path form. Not a pass, and NOT a falsification \
-                 of WP-D6: this method could not reach the ACE question."
+                 not cross either, or was unavailable), so THIS run did not re-measure \
+                 WP-D6's `IPC$` claim. That claim is not untested globally: §4.8 records \
+                 the structural PASS a genuine remote caller produced via `--serve` and a \
+                 second machine (§4.5–4.7). The `reject_remote_clients` fence is testable \
+                 single-box and has been (§4.7): it refuses a `\\\\HOST\\pipe\\` dial by \
+                 path form. Not a pass, and NOT a falsification: this single-box method \
+                 reaches the ACE question only when a transport actually crosses."
             );
             return 2;
         };

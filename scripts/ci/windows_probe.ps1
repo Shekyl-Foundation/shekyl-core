@@ -131,6 +131,7 @@ Write-Host '== SECTION 3: interactive-logon probes ==' -ForegroundColor Cyan
 if ($CiOnly) {
     Add-Result 'P-12' 'SKIP' 'pre-declared laptop-only (needs a genuine Low-IL process)'
     Add-Result 'P-13' 'SKIP' 'pre-declared laptop-only (needs two interactive logons)'
+    Add-Result 'P-18' 'TODO' 'S4U batch-logon harness not yet built — sheet §3/§4; result goes in the sheet §4'
     Write-Host 'Skipped by -CiOnly, as pre-registered in the sheet §3.' -ForegroundColor Yellow
 } else {
     # P-12: does the Medium mandatory label block a Low-IL opener?
@@ -168,6 +169,7 @@ if ($CiOnly) {
     # cannot provide. Left unrun rather than approximated: a single-session
     # stand-in would be asserting something P-13 does not ask.
     Add-Result 'P-13' 'TODO' 'needs two concurrent interactive logons — manual, result goes in the sheet §4'
+    Add-Result 'P-18' 'TODO' 'S4U batch-logon harness not yet built — the runnable local route to WP-D6, sheet §3/§4'
 }
 
 # ---------------------------------------------------------------------------
@@ -194,7 +196,7 @@ try {
 switch ($p17Exit) {
     0 { Add-Result 'P-17' 'PASS' 'the logon-SID ACE alone refused a loopback caller with ERROR_ACCESS_DENIED' }
     1 { Add-Result 'P-17' 'FAIL' 'a prediction was falsified — see output above; revisits WP-D6, not the probe' }
-    2 { Add-Result 'P-17' 'UNRUN' 'no transport crossed a session boundary (exit 2) — see the probe output for which host reused the token; not a pass' }
+    2 { Add-Result 'P-17' 'UNRUN' 'the probe reported UNRUN (exit 2) — no crossing transport, or a setup/read failure (descriptor, bind, report, or token read); read the probe output above for the specific reason. Not a pass' }
     default { Add-Result 'P-17' 'FAIL' "the p17 example did not run to a verdict (exit $p17Exit = build error or panic, not a probe result)" }
 }
 

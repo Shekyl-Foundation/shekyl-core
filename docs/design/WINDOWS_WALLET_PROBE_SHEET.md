@@ -16,8 +16,11 @@ two of the three routes proved unavailable on this hardware.** The property is
 WP-D6's: the logon SID is unique to its logon session and absent from every
 other, so the single logon-SID ACE PR #516 left in the DACL is the whole
 session boundary. P-1 and P-15 establish only that the DACL holds exactly that
-ACE and that the SID is well-formed; none of the three tests the *refusal* of a
-foreign-session caller, which is the claim.
+ACE and that the SID is well-formed; at registration none of the three had yet
+tested the *refusal* of a foreign-session caller, which is the claim. **P-17
+since has (§4.8): its two-machine run is a structural PASS — a network caller
+carries no logon SID, so the ACE refuses it by construction. P-13 and P-18 keep
+the terminal-services angle (a genuinely *different* logon SID), still open.**
 
 - **P-17** takes the `IPC$` reachability D6 was written for — the network
   transport. Registered prediction-first (no code in the registering commit).
