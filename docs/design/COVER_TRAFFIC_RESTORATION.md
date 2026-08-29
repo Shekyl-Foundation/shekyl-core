@@ -927,6 +927,50 @@ opt-in (§3.1) now makes possible and the `#ifdef` it replaced did not: a
 compile-time gate put the only carrier-running configuration in a build CI
 never makes.
 
+**CORRECTION 2026-08-29: "small" was wrong, and the reason is the pool
+record.** The planning swap really is two lines. What that draft did not ask is
+what happens to the two records the stem path fires — and both of them break on
+the covert path for the same reason.
+
+`record_relayed` and `record_stem_observation` currently fire **inside the
+success arm of `make_payload_send_txs`**, deliberately: #573 moved them there
+because `set_relayed` writes `meta.relayed`, `local_relay_base` reads exactly
+that bit to choose an origin's backoff, and a send that never happened claiming
+the long wait is a falsification. **An enqueue is not a send.** The queue
+accepts a message; the window goes out later, at a cadence tick, and CV-1
+discards an in-flight run when the epoch rolls. Recording at enqueue puts back
+the defect #573 removed, in a place where the gap between "accepted" and "sent"
+is not microseconds but up to a full epoch.
+
+**And the successor is not known at enqueue time either.** F-10 charges an
+observation to the peer the stem was given to. On the covert path that is the
+channel's bound peer *at send time*, and `NoiseSend::failed` clears `bound` and
+bumps the epoch, so a failed send rebinds — possibly to a different peer.
+Arming the watch at enqueue charges an observation to a peer that may never
+receive it, which is a wrong answer in F-10's tallies rather than a missing
+one.
+
+**So the producer needs a completion signal, and the queue is where it lives.**
+`NoiseSend::sent` already knows the moment a message fully drains — it is the
+`next >= message.len()` branch that pops the message. What it does not have is
+the transaction's identity, because the queue holds opaque framed bytes by
+design. Carrying the id alongside the message and reporting it on completion is
+what lets the two records fire where the send is known to have happened, which
+is the invariant #573 established and this path would otherwise be the first to
+break.
+
+**Not a CV-4 breach**, by the same argument that justified widening
+`NoiseSendCb`: this is an OUTPUT after the cadence has already chosen when and
+to whom. It tells the scheduler nothing.
+
+The three candidates and why two are refused:
+
+| | what the pool learns | verdict |
+| --- | --- | --- |
+| record at enqueue | "relayed" for a message that may never leave | **refused** — #573's defect, with an epoch-sized window |
+| record nothing | `relayed` stays false, so `local_relay_base` keeps MIN_RELAY_TIME and the origin re-broadcasts at 300 s by another path | **refused** — defeats the carrier |
+| **report completion** | the truth, at the moment it becomes true | **chosen** |
+
 **Reopening criterion:** the producer is owed by the next carrier change, and
 this row is not marked landed until a test drives a real transaction through
 the queue onto the wire.

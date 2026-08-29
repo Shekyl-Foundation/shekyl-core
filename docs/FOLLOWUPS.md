@@ -592,6 +592,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
+- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against `carrier::PER_NODE_CEILING_BYTES_PER_SEC` and the per-circuit pair [`COVER_TRAFFIC_RESTORATION.md` §3.3](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
 - **§56.5 ruled the cadence memoryless; the shipped law is still bounded uniform, and nothing tracked it.** Carries §57's three exits and §58.2's admission threshold `θ`, both priced at the retired 12.5 s mean [`DAEMON_RELAY_PRIVACY.md` §56.7](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
