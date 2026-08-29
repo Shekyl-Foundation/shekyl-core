@@ -64,8 +64,8 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, NoiseQueues,
-    RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch, FluffReach,
+    NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -654,6 +654,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
     channel: usize,
     tx: *const u8,
     tx_len: usize,
+    token: u64,
 ) -> bool {
     if handle.is_null() || tx.is_null() || tx_len == 0 {
         return false;
@@ -695,7 +696,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
     else {
         return false;
     };
-    q.enqueue(channel, framed)
+    q.enqueue(channel, framed, CarrierToken(token))
 }
 
 /// Free a zone. Null is a no-op; free exactly once.

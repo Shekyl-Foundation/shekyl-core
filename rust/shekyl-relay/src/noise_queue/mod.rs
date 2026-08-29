@@ -44,12 +44,74 @@ use std::collections::VecDeque;
 use shekyl_relay_privacy::params::carrier;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
+/// A caller-minted handle for one enqueued message.
+///
+/// # Opaque ON PURPOSE — the queue must not be able to read it
+///
+/// This is deliberately **not** a transaction hash. [`NoiseQueues`] holds
+/// framed bytes it cannot parse, and that is what keeps §2.9b enforceable and
+/// the queue format-agnostic: the size bound is the enforcement point
+/// precisely because the carrier has no way to interpret what it is handed.
+/// A queue that held a `crypto::hash` would have a reason to look inside, and
+/// the next change would give it one.
+///
+/// So the caller mints a value, the queue stores and returns it, and only the
+/// caller knows what it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CarrierToken(pub u64);
+
+/// What became of an enqueued message. Reported once, terminally.
+///
+/// # Both arms exist, and the failure arm is the load-bearing one
+///
+/// A completion signal alone is not enough. [`NoiseQueues::unbind`] clears a
+/// channel's pending messages, so a message can leave the queue having never
+/// reached the wire — and a caller waiting only for [`Self::Sent`] would wait
+/// forever on a record that will never fire. That is the unresolved-token
+/// shape [`NoiseSend`]'s non-destructive take was designed against, one layer
+/// up, and it is why discard reports too.
+///
+/// The consumer must treat [`Self::Discarded`] as **not relayed** rather than
+/// as silence: the pool's `relayed` bit drives an origin's backoff, and an
+/// origin given the long wait for a message that was discarded waits ~1148 s
+/// for a transaction that was never sent and will not be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CarrierOutcome {
+    /// Every window of the message went out.
+    Sent(CarrierToken),
+    /// The message left the queue without being fully sent.
+    Discarded(CarrierToken),
+}
+
+impl CarrierOutcome {
+    /// The token this outcome is about.
+    #[must_use]
+    pub fn token(self) -> CarrierToken {
+        match self {
+            Self::Sent(t) | Self::Discarded(t) => t,
+        }
+    }
+
+    /// Whether the message reached the wire in full.
+    #[must_use]
+    pub fn was_sent(self) -> bool {
+        matches!(self, Self::Sent(_))
+    }
+}
+
+/// A framed message and the handle its enqueuer will recognise it by.
+#[derive(Debug)]
+struct PendingMessage {
+    bytes: Vec<u8>,
+    token: CarrierToken,
+}
+
 /// One channel's pending work.
 #[derive(Debug, Default)]
 struct ChannelQueue {
     /// Framed messages waiting for this channel's due ticks. Each is a whole
     /// multiple of the window (enforced at [`NoiseQueues::enqueue`]).
-    pending: VecDeque<Vec<u8>>,
+    pending: VecDeque<PendingMessage>,
     /// How far into `pending.front()` the send has got. `None` when no message
     /// is mid-flight.
     offset: Option<usize>,
@@ -129,14 +191,22 @@ impl NoiseSend {
         let Some(message) = q.pending.front() else {
             return;
         };
+
         let next = q
             .offset
             .unwrap_or(0)
             .checked_add(window)
             .expect("noise offset + window");
-        if next >= message.len() {
+        if next >= message.bytes.len() {
             q.offset = None;
-            let _ = q.pending.pop_front();
+            // The message is fully on the wire. This is the ONLY point at
+            // which that becomes true, which is why the completion is reported
+            // from here rather than from the caller's send: the caller knows a
+            // FRAGMENT went out, not a message.
+            let done = q.pending.pop_front().map(|m| m.token);
+            if let Some(token) = done {
+                queues.resolved.push(CarrierOutcome::Sent(token));
+            }
         } else {
             q.offset = Some(next);
         }
@@ -182,6 +252,8 @@ pub struct NoiseQueues {
     /// The dummy payload. **Its length is the fragment window** — one value, so
     /// a real fragment and a dummy cannot disagree about length.
     dummy: Vec<u8>,
+    /// Terminal outcomes awaiting collection by [`NoiseQueues::take_resolved`].
+    resolved: Vec<CarrierOutcome>,
 }
 
 impl NoiseQueues {
@@ -195,6 +267,7 @@ impl NoiseQueues {
         Some(Self {
             channels: (0..channels).map(|_| ChannelQueue::default()).collect(),
             dummy,
+            resolved: Vec::new(),
         })
     }
 
@@ -224,7 +297,9 @@ impl NoiseQueues {
     /// this type's business). Refusing keeps the queue format-agnostic while
     /// leaving one owner for the number: the caller cannot pad to a window it
     /// invented, because [`Self::window`] is the only place to read one.
-    pub fn enqueue(&mut self, channel: usize, message: Vec<u8>) -> bool {
+    /// `token` is the caller's handle for this message: opaque to the queue,
+    /// returned verbatim in the [`CarrierOutcome`] that resolves it.
+    pub fn enqueue(&mut self, channel: usize, message: Vec<u8>, token: CarrierToken) -> bool {
         // Refusal travels in the return value, not a `debug_assert!` — the
         // out-of-range arm signals that way, a debug-only panic would make the
         // guard untestable, and `false` survives into release where a caller
@@ -256,7 +331,10 @@ impl NoiseQueues {
         }
         match self.channels.get_mut(channel) {
             Some(q) => {
-                q.pending.push_back(message);
+                q.pending.push_back(PendingMessage {
+                    bytes: message,
+                    token,
+                });
                 true
             }
             None => false,
@@ -305,7 +383,7 @@ impl NoiseQueues {
         // advances by one window, so this is unreachable except as a bug.
         // Panic rather than emit a distinguishable send, and rather than
         // dummy-without-pop (the empty-head wedge this type already knows).
-        let Some(bytes) = q.pending.front().and_then(|m| m.get(offset..end)) else {
+        let Some(bytes) = q.pending.front().and_then(|m| m.bytes.get(offset..end)) else {
             panic!(
                 "noise fragment [{offset}, {end}) is not a slice of a message \
                  that enqueue proved to be a whole number of windows"
@@ -320,13 +398,40 @@ impl NoiseQueues {
     }
 
     /// The channel's stem slot went unbound: drop everything it held.
+    ///
+    /// **Every dropped message reports [`CarrierOutcome::Discarded`].** This is
+    /// the failure counterpart to the completion signal, and it is not
+    /// optional: a message cleared here left the queue without reaching the
+    /// wire, and a consumer waiting only for `Sent` would wait forever on a
+    /// record that will never fire.
     pub fn unbind(&mut self, channel: usize) {
         if let Some(q) = self.channels.get_mut(channel) {
-            q.pending.clear();
+            let dropped: Vec<CarrierToken> = q.pending.drain(..).map(|m| m.token).collect();
             q.offset = None;
             q.bound = None;
             q.bump();
+            self.resolved
+                .extend(dropped.into_iter().map(CarrierOutcome::Discarded));
         }
+    }
+
+    /// Take every outcome resolved since the last call.
+    ///
+    /// # CV-4: this is an OUTPUT, not a channel back into the scheduler
+    ///
+    /// The barrier is that the cadence decides *when* to emit and *to whom*.
+    /// These outcomes report what the cadence already did, after it did it —
+    /// the same shape as [`NoiseSend::sent`] and [`NoiseSend::failed`], which
+    /// resolve a send the scheduler had already chosen. Nothing here is
+    /// readable by the schedule, and `cv4_the_cadence_does_not_depend_on_queue_depth`
+    /// remains the gate on that.
+    ///
+    /// Drains, so an outcome is delivered once. A caller that drops the result
+    /// loses it, which is the same trade as the send token and correct for the
+    /// same reason: the alternative is unbounded retention of records nobody
+    /// consumed.
+    pub fn take_resolved(&mut self) -> Vec<CarrierOutcome> {
+        std::mem::take(&mut self.resolved)
     }
 }
 

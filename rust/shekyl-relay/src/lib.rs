@@ -76,7 +76,7 @@ pub mod zone_route;
 
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
-pub use noise_queue::{NoiseQueues, NoiseSend};
+pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{

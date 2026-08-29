@@ -959,6 +959,15 @@ what lets the two records fire where the send is known to have happened, which
 is the invariant #573 established and this path would otherwise be the first to
 break.
 
+**And the estimate itself is the lesson worth keeping.** *"Small — swap the
+planning call and enqueue instead of sending directly"* was written against the
+code's **shape**: one call replaced by another, at a seam that already existed.
+It never asked what the two records *mean* once the send is deferred, which is
+a question about semantics rather than structure. The next "small — just swap
+X" will be written the same way unless the difference is stated: a swap is
+small when the thing swapped in has the same completion semantics as the thing
+swapped out, and this one does not.
+
 **Not a CV-4 breach**, by the same argument that justified widening
 `NoiseSendCb`: this is an OUTPUT after the cadence has already chosen when and
 to whom. It tells the scheduler nothing.

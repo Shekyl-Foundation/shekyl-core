@@ -51,7 +51,7 @@ fn a_real_fragment_and_a_dummy_are_indistinguishable_by_length() {
     assert_eq!(cover.bytes().len(), W, "a dummy is one window");
     cover.sent(&mut q);
 
-    assert!(q.enqueue(0, striped(3)));
+    assert!(q.enqueue(0, striped(3), CarrierToken(1)));
     for i in 0..3u8 {
         let real = q.take_for_send(0, id(1)).expect("channel 0");
         assert_eq!(
@@ -80,17 +80,26 @@ fn a_real_fragment_and_a_dummy_are_indistinguishable_by_length() {
 #[test]
 fn a_message_that_is_not_a_whole_number_of_windows_is_refused() {
     let mut q = queues(1);
-    assert!(!q.enqueue(0, vec![1u8; W - 1]), "short of a window");
-    assert!(!q.enqueue(0, vec![1u8; W + 1]), "one over a window");
-    assert!(!q.enqueue(0, Vec::new()), "empty");
-    assert!(!q.enqueue(9, vec![1u8; W]), "no such channel");
+    assert!(
+        !q.enqueue(0, vec![1u8; W - 1], CarrierToken(2)),
+        "short of a window"
+    );
+    assert!(
+        !q.enqueue(0, vec![1u8; W + 1], CarrierToken(3)),
+        "one over a window"
+    );
+    assert!(!q.enqueue(0, Vec::new(), CarrierToken(4)), "empty");
+    assert!(
+        !q.enqueue(9, vec![1u8; W], CarrierToken(5)),
+        "no such channel"
+    );
     assert!(
         q.take_for_send(9, id(1)).is_none(),
         "no such channel is the only None"
     );
 
     // And a refusal must not block the message behind it.
-    assert!(q.enqueue(0, vec![9u8; W]));
+    assert!(q.enqueue(0, vec![9u8; W], CarrierToken(6)));
     let s = q.take_for_send(0, id(1)).expect("channel 0");
     assert_eq!(s.bytes(), &[9u8; W][..]);
     s.sent(&mut q);
@@ -105,7 +114,7 @@ fn a_message_that_is_not_a_whole_number_of_windows_is_refused() {
 #[test]
 fn an_unresolved_send_restarts_rather_than_losing_or_advancing() {
     let mut q = queues(1);
-    assert!(q.enqueue(0, striped(2)));
+    assert!(q.enqueue(0, striped(2), CarrierToken(7)));
 
     let first = q.take_for_send(0, id(1)).expect("channel 0");
     let bytes = first.bytes().to_vec();
@@ -126,11 +135,11 @@ fn an_unresolved_send_restarts_rather_than_losing_or_advancing() {
 #[test]
 fn a_stale_token_cannot_advance_a_later_message() {
     let mut q = queues(1);
-    assert!(q.enqueue(0, striped(2)));
+    assert!(q.enqueue(0, striped(2), CarrierToken(8)));
     let stale = q.take_for_send(0, id(1)).expect("ch0");
 
     q.unbind(0);
-    assert!(q.enqueue(0, vec![9u8; W * 2]));
+    assert!(q.enqueue(0, vec![9u8; W * 2], CarrierToken(9)));
     stale.sent(&mut q); // must be a no-op, not a walk into the 9s
 
     let first = q.take_for_send(0, id(1)).expect("ch0");
@@ -152,7 +161,7 @@ fn a_stale_token_cannot_advance_a_later_message() {
 #[test]
 fn cv1_a_rebind_restarts_the_message_rather_than_resuming_it() {
     let mut q = queues(1);
-    assert!(q.enqueue(0, striped(3)));
+    assert!(q.enqueue(0, striped(3), CarrierToken(10)));
 
     let a = q.take_for_send(0, id(1)).expect("ch0");
     assert_eq!(a.bytes(), &[0u8; W][..]);
@@ -195,7 +204,7 @@ fn cv1_a_rebind_restarts_the_message_rather_than_resuming_it() {
 fn failure_and_rebind_converge_in_either_order() {
     // failure, then rebind
     let mut a = queues(1);
-    assert!(a.enqueue(0, vec![1u8; W * 2]));
+    assert!(a.enqueue(0, vec![1u8; W * 2], CarrierToken(11)));
     let t = a.take_for_send(0, id(1)).expect("ch0");
     t.sent(&mut a);
     let t = a.take_for_send(0, id(1)).expect("ch0");
@@ -206,7 +215,7 @@ fn failure_and_rebind_converge_in_either_order() {
 
     // rebind, then failure
     let mut b = queues(1);
-    assert!(b.enqueue(0, vec![1u8; W * 2]));
+    assert!(b.enqueue(0, vec![1u8; W * 2], CarrierToken(12)));
     let t = b.take_for_send(0, id(1)).expect("ch0");
     t.sent(&mut b);
     let t = b.take_for_send(0, id(2)).expect("ch0"); // rebind first
@@ -233,7 +242,7 @@ fn failure_and_rebind_converge_in_either_order() {
 #[test]
 fn a_failed_send_keeps_the_message_and_unbinds() {
     let mut q = queues(1);
-    assert!(q.enqueue(0, vec![4u8; W]));
+    assert!(q.enqueue(0, vec![4u8; W], CarrierToken(13)));
 
     let t = q.take_for_send(0, id(1)).expect("ch0");
     t.failed(&mut q);
@@ -250,7 +259,7 @@ fn a_failed_send_keeps_the_message_and_unbinds() {
 #[test]
 fn unbind_drops_everything_the_channel_held() {
     let mut q = queues(1);
-    assert!(q.enqueue(0, vec![6u8; W * 2]));
+    assert!(q.enqueue(0, vec![6u8; W * 2], CarrierToken(14)));
     q.unbind(0);
     let s = q.take_for_send(0, id(1)).expect("ch0");
     assert_eq!(s.bytes(), &vec![0xDD; W][..], "unbind clears pending");
@@ -333,8 +342,8 @@ fn cv4_the_cadence_does_not_depend_on_queue_depth() {
     let mut empty = queues(2);
     let mut full = queues(2);
     for i in 0..64u8 {
-        full.enqueue(0, vec![i; W * 4]);
-        full.enqueue(1, vec![i; W * 4]);
+        full.enqueue(0, vec![i; W * 4], CarrierToken(15));
+        full.enqueue(1, vec![i; W * 4], CarrierToken(16));
     }
     // The depths must genuinely differ, or the bait is an empty gesture.
     let f = full.take_for_send(0, id(1)).expect("ch0");
@@ -401,15 +410,136 @@ fn enqueue_refuses_a_message_over_the_fragment_cap() {
     let cap = carrier::MAX_FRAGMENTS as usize;
 
     assert!(
-        q.enqueue(0, vec![1u8; W * cap]),
+        q.enqueue(0, vec![1u8; W * cap], CarrierToken(17)),
         "a message of exactly MAX_FRAGMENTS windows must be accepted — the cap \
          is inclusive, and a message at the cap is what the epoch check sizes \
          for"
     );
     assert!(
-        !q.enqueue(0, vec![1u8; W * (cap + 1)]),
+        !q.enqueue(0, vec![1u8; W * (cap + 1)], CarrierToken(18)),
         "a message one window over MAX_FRAGMENTS must be refused: it would \
          enter a zone validated for {cap} windows and lose its remainder at the \
          epoch roll"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Terminal outcomes. The producer cannot record a relay until it knows the
+// message reached the wire, and cannot wait forever if it never will.
+// ---------------------------------------------------------------------------
+
+/// A message reports SENT exactly once, and only when its LAST window goes out.
+///
+/// The producer's whole reason for needing this: a caller resolving a
+/// `NoiseSend` knows a *fragment* went out, not a message. Recording a relay on
+/// the first fragment would claim a send for a transaction still half in the
+/// queue.
+#[test]
+fn a_message_reports_sent_only_when_its_last_window_goes_out() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(3), CarrierToken(7)));
+
+    for window in 0..2 {
+        let send = q.take_for_send(0, id(1)).expect("channel 0");
+        send.sent(&mut q);
+        assert!(
+            q.take_resolved().is_empty(),
+            "window {window} of 3 resolved a message that is still in the queue"
+        );
+    }
+
+    let last = q.take_for_send(0, id(1)).expect("channel 0");
+    last.sent(&mut q);
+    assert_eq!(
+        q.take_resolved(),
+        vec![CarrierOutcome::Sent(CarrierToken(7))],
+        "the last window completes the message"
+    );
+    assert!(
+        q.take_resolved().is_empty(),
+        "an outcome is delivered once; take_resolved drains"
+    );
+}
+
+/// **The failure counterpart.** `unbind` clears the channel, so a message can
+/// leave without reaching the wire — and a producer waiting only for `Sent`
+/// would wait forever on a record that will never fire.
+///
+/// What edit reds this: dropping the `Discarded` push from `unbind`.
+#[test]
+fn unbind_reports_every_message_it_discards() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(2), CarrierToken(11)));
+    assert!(q.enqueue(0, striped(2), CarrierToken(12)));
+
+    q.unbind(0);
+
+    assert_eq!(
+        q.take_resolved(),
+        vec![
+            CarrierOutcome::Discarded(CarrierToken(11)),
+            CarrierOutcome::Discarded(CarrierToken(12)),
+        ],
+        "both queued messages left without being sent, and both must say so"
+    );
+}
+
+/// A message HALF sent and then unbound reports discarded, not sent.
+///
+/// This is the case that makes the two arms different rather than redundant:
+/// fragments of it really did reach the wire, and the transaction still never
+/// arrived. A producer that treated partial delivery as a relay would give the
+/// origin the long backoff for a transaction the peer cannot reassemble.
+#[test]
+fn a_partially_sent_message_that_is_unbound_reports_discarded() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(3), CarrierToken(21)));
+
+    let first = q.take_for_send(0, id(1)).expect("channel 0");
+    first.sent(&mut q);
+    assert!(
+        q.take_resolved().is_empty(),
+        "one of three is not a message"
+    );
+
+    q.unbind(0);
+    assert_eq!(
+        q.take_resolved(),
+        vec![CarrierOutcome::Discarded(CarrierToken(21))],
+        "a run interrupted mid-message is a discard, not a delivery"
+    );
+}
+
+/// A dummy resolves nothing. There is no token to report, and a cover emission
+/// is not an event the pool has any business hearing about.
+#[test]
+fn a_dummy_send_resolves_no_outcome() {
+    let mut q = queues(1);
+    let cover = q.take_for_send(0, id(1)).expect("channel 0");
+    assert_eq!(cover.bytes().len(), W);
+    cover.sent(&mut q);
+    assert!(q.take_resolved().is_empty());
+}
+
+/// A stale token resolves nothing, so it cannot manufacture a completion for a
+/// message it does not belong to — the epoch guard reaching the new outcome
+/// path as well as the old advance path.
+#[test]
+fn a_stale_send_token_cannot_complete_a_later_message() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(1), CarrierToken(31)));
+
+    let stale = q.take_for_send(0, id(1)).expect("channel 0");
+    q.unbind(0); // bumps the epoch and discards 31
+    assert_eq!(
+        q.take_resolved(),
+        vec![CarrierOutcome::Discarded(CarrierToken(31))]
+    );
+
+    assert!(q.enqueue(0, striped(1), CarrierToken(32)));
+    stale.sent(&mut q);
+    assert!(
+        q.take_resolved().is_empty(),
+        "the stale token completed a message it was never taken for"
     );
 }

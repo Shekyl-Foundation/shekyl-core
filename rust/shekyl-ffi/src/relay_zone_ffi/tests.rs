@@ -1277,7 +1277,7 @@ fn roll_originated_zone_returns_only_the_two_contract_bytes() {
 fn the_enqueue_crossing_cannot_express_a_batch() {
     // A compile-time property, asserted by taking the function's type: the
     // signature has a single (ptr, len) pair for ONE blob, not a count.
-    let f: unsafe extern "C" fn(*mut RelayZoneHandle, usize, *const u8, usize) -> bool =
+    let f: unsafe extern "C" fn(*mut RelayZoneHandle, usize, *const u8, usize, u64) -> bool =
         shekyl_relay_zone_noise_enqueue;
     let _ = f;
 }
@@ -1294,7 +1294,7 @@ fn a_zone_without_the_carrier_refuses_to_enqueue() {
         assert!(!h.is_null());
         let tx = [7u8; 32];
         assert!(
-            !shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len()),
+            !shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len(), 1),
             "a cleartext zone has no carrier, so nothing may be enqueued on it"
         );
         shekyl_relay_zone_free(h);
@@ -1402,7 +1402,8 @@ fn a_failed_send_restarts_the_message_from_its_first_fragment() {
             h,
             0,
             real.as_ptr(),
-            real.len()
+            real.len(),
+            3
         ));
 
         // Compared PER CHANNEL: `due_noise_channel` serves whichever channel
@@ -1472,7 +1473,7 @@ fn a_carrier_zone_accepts_one_framed_transaction() {
         assert!(!h.is_null(), "an encrypted zone may carry");
         let tx = vec![9u8; 4_096];
         assert!(
-            shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len()),
+            shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len(), 2),
             "one transaction, framed by Rust, must be a whole number of windows"
         );
         shekyl_relay_zone_free(h);
