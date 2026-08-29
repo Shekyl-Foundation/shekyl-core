@@ -58,3 +58,18 @@ if (BUILD_GUI_DEPS)
         LIBRARY DESTINATION ${lib_folder})
 endif()
 set_property(TARGET lmdb PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+# Offline LMDB compaction (`shekyl-mdb-copy -c <src> <dst>`), built from the
+# vendored upstream utility. This is the schema-agnostic replacement for the
+# retired schema-aware copy tool: the daemon prunes in place, and compaction
+# needs no knowledge of the table set.
+add_executable(mdb_copy mdb_copy.c)
+target_link_libraries(mdb_copy
+  PRIVATE
+    lmdb
+    ${CMAKE_THREAD_LIBS_INIT})
+set_target_properties(mdb_copy
+  PROPERTIES
+    OUTPUT_NAME "shekyl-mdb-copy"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+install(TARGETS mdb_copy DESTINATION bin)

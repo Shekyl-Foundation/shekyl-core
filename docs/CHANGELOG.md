@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
+  the only capability they uniquely held.** `shekyl-blockchain-prune` had been
+  inert since LMDB v6: its private version guard (`MAX_SUPPORTED_DB_VERSION =
+  5`) refused every VERSION-10 database, and its copy path enumerated 16 of
+  the schema's 49 tables — bumping the guard without fixing the list would
+  have silently dropped `txs_pqc_auths`, `output_metadata`, and every
+  archival/curve-tree table. `shekyl-blockchain-prune-known-spent-data` was a
+  structural no-op on an amount-0 CT chain (its scan skips every zero-amount
+  input and output). Pruning itself is unchanged and lives in the daemon
+  (`--prune-blockchain` at startup, the 5-hour timer, the `prune_blockchain`
+  RPC/console command); file-size reclaim is now the schema-agnostic
+  `shekyl-mdb-copy -c` (upstream LMDB `mdb_copy`, newly built from the
+  vendored source), and the daemon console's prune warning — which pointed
+  operators at the binary that refused to run — now describes that flow.
+  Reversion clause in `FOLLOWUPS.md` (post-genesis): any rebuilt offline
+  prune tool derives its table set from the schema source of truth.
+
 ### Changed
 
 - **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
