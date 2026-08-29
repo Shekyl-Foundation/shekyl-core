@@ -529,6 +529,27 @@ namespace levin
       const i_core_events* core = nullptr;
       std::vector<boost::uuids::uuid> outs;
 
+      /*! What became of a transaction handed to the carrier.
+
+          UNREACHABLE UNTIL THE PRODUCER LANDS, and deliberately loud rather
+          than silent. Nothing calls `shekyl_relay_zone_noise_enqueue` yet
+          (COVER_TRAFFIC_RESTORATION.md §3.1a), so no message can be in a
+          carrier queue and no outcome can resolve. A no-op here would look
+          like a decision; this says which half is missing.
+
+          When the producer lands this becomes the ONLY place the pool learns a
+          carrier-borne transaction was relayed. `sent == false` must be read
+          as NOT relayed rather than as "not yet": an unbound channel discards
+          what it held, and an origin given the derived interval for a
+          discarded transaction waits it out for something that will never be
+          sent. */
+      static void on_carrier_resolved(void* ctx, std::uint64_t token, bool sent) noexcept
+      {
+        (void)ctx;
+        MERROR("carrier resolved token " << token << " (sent=" << sent
+               << ") with no producer wired — nothing can have been enqueued");
+      }
+
       //! Send one peer's whole batch as a single notification.
       static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
       {
@@ -743,7 +764,8 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_noise
+          relay_effects::on_fluff, relay_effects::on_noise,
+          relay_effects::on_carrier_resolved
         );
 
         arm(std::move(zone_), core_);
@@ -1067,7 +1089,8 @@ namespace levin
       shekyl_relay_zone_poll(
         z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
         std::addressof(sink), relay_effects::on_outbound,
-        relay_effects::on_fluff, relay_effects::on_noise
+        relay_effects::on_fluff, relay_effects::on_noise,
+        relay_effects::on_carrier_resolved
       );
       relay_wake::arm(z, core);
     });

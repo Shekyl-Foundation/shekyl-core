@@ -155,6 +155,34 @@ pub type NoiseSendCb = extern "C" fn(
     len: usize,
 ) -> bool;
 
+/// What became of a message handed to the carrier — reported once, terminally.
+///
+/// `token` is the value the enqueuer minted; `sent` is true only when every
+/// window of the message reached the wire.
+///
+/// # Both arms, and the false one is why this exists
+///
+/// A completion signal alone leaves the caller waiting forever on a message
+/// the carrier discarded (`NoiseQueues::unbind` clears a channel). `sent =
+/// false` is that case, and the caller must read it as **not relayed** rather
+/// than as "not yet": the pool's `relayed` bit chooses an origin's backoff,
+/// and an origin given the derived interval for a discarded transaction waits
+/// it out for something that was never sent.
+///
+/// # This is NOT a CV-4 breach, and the argument is the one that widened
+/// [`NoiseSendCb`]
+///
+/// CV-4 forbids feeding the SCHEDULER traffic-dependent input. The barrier is
+/// that the cadence decides *when* to emit and *to whom*; this reports what
+/// the cadence already did, after it did it — downstream of both decisions,
+/// exactly like `NoiseSend::sent` / `::failed`, which resolve a send the
+/// scheduler had already chosen. Nothing here is readable by the schedule.
+///
+/// Stated here rather than left to be re-derived, because "a new FFI export on
+/// the noise path" is what a future reviewer will read as a breach without the
+/// argument in front of them.
+pub type CarrierResolvedCb = extern "C" fn(ctx: *mut c_void, token: u64, sent: bool);
+
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
 /// **Named bits, deliberately, instead of a second `bool` parameter.** RP-3b
@@ -299,6 +327,7 @@ fn dispatch(
     ctx: *mut c_void,
     fluff: FluffCb,
     noise: NoiseSendCb,
+    resolved: CarrierResolvedCb,
     queues: Option<&mut NoiseQueues>,
 ) {
     let mut queues = queues;
@@ -375,6 +404,24 @@ fn dispatch(
             }
         }
     }
+
+    // Drained ONCE, after every effect, because both arms can produce an
+    // outcome: `sent` completes a message and `unbind` discards whatever a
+    // channel still held. Draining inside the send arm would report
+    // completions and miss discards.
+    if let Some(q) = queues {
+        for outcome in q.take_resolved() {
+            resolved(ctx, outcome.token().0, outcome.was_sent());
+        }
+    }
+}
+
+/// A placeholder for the exports that hold no carrier queue, and so can
+/// resolve nothing. `force_fluff` passes `None` for the queue, so `dispatch`
+/// never reaches the drain — this exists to make that unreachability explicit
+/// rather than to be called.
+extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool) {
+    debug_assert!(false, "force_fluff resolved a carrier message");
 }
 
 /// A placeholder for the exports that cannot produce a `NoiseSend`.
@@ -1511,6 +1558,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_noise: NoiseSendCb,
+    on_carrier_resolved: CarrierResolvedCb,
 ) {
     if handle.is_null() {
         return;
@@ -1528,7 +1576,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_noise, h.noise.as_mut());
+    dispatch(
+        effects,
+        ctx,
+        on_fluff,
+        on_noise,
+        on_carrier_resolved,
+        h.noise.as_mut(),
+    );
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -1548,7 +1603,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_noise, None);
+    dispatch(
+        effects,
+        ctx,
+        on_fluff,
+        noop_noise,
+        noop_carrier_resolved,
+        None,
+    );
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives. No
