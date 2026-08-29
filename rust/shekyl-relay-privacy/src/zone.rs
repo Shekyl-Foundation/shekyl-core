@@ -10,14 +10,6 @@
 //! txpool entry (§89.2): the embargo draw is told the zone at
 //! `set_relayed` time, not reminded of it later.
 
-/// The network a relay zone runs on.
-///
-/// # FFI contract
-///
-/// Callers pass `static_cast<uint8_t>(zone)`. Anything outside `0..=3` must
-/// resolve to [`Self::Invalid`], which [`crate::params::DandelionParams::adopted_for`]
-/// provisions as the **longest** embargo — a corrupt or miscast byte costs
-/// recovery latency, never the shortest (clearnet) wait.
 /// Declares [`RelayZone`] and [`RelayZone::ALL`] from ONE variant list.
 ///
 /// # Why the enum is behind a macro
@@ -36,7 +28,13 @@
 /// is one layer of indirection in this file; the alternative is a bandwidth
 /// ceiling that under-enforces without failing.
 macro_rules! relay_zones {
-    ($( $(#[$meta:meta])* $name:ident = $disc:literal ),+ $(,)?) => {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum RelayZone {
+            $( $(#[$meta:meta])* $name:ident = $disc:literal ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[repr(u8)]
         pub enum RelayZone {
@@ -78,14 +76,31 @@ macro_rules! relay_zones {
 }
 
 relay_zones! {
-    /// `zone::invalid` — out-of-domain FFI byte, or "origin unknown".
-    Invalid = 0,
-    /// `zone::public_` — clearnet.
-    Public = 1,
-    /// `zone::i2p`.
-    I2p = 2,
-    /// `zone::tor`.
-    Tor = 3,
+    /// The network a relay zone runs on.
+    ///
+    /// # FFI contract
+    ///
+    /// Callers pass `static_cast<uint8_t>(zone)`. Anything outside the
+    /// declared discriminants must resolve to [`Self::Invalid`], which
+    /// [`crate::params::DandelionParams::adopted_for`] provisions as the
+    /// **longest** embargo — a corrupt or miscast byte costs recovery
+    /// latency, never the shortest (clearnet) wait.
+    ///
+    /// Declared through `relay_zones!` so the variant list, [`Self::ALL`] and
+    /// [`Self::from_ffi_u8`] cannot drift apart. These docs are passed through
+    /// the macro and land on the type, which is where a reader looks for
+    /// them — an earlier draft left them attached to the macro instead, and
+    /// the type shipped with no documentation at all.
+    pub enum RelayZone {
+        /// `zone::invalid` — out-of-domain FFI byte, or "origin unknown".
+        Invalid = 0,
+        /// `zone::public_` — clearnet.
+        Public = 1,
+        /// `zone::i2p`.
+        I2p = 2,
+        /// `zone::tor`.
+        Tor = 3,
+    }
 }
 
 impl RelayZone {

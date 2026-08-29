@@ -1057,7 +1057,7 @@
   carrier. C++ no longer builds a noise zone: `make_relay_zone` never sets
   the flag, the channel deque and `send_noise` are gone, and the two
   remaining noise callbacks fail loudly rather than no-op. A full-size
-  message must fit in one epoch (`inherited::noise_windows_in_epoch`
+  message must fit in one epoch (`carrier::noise_windows_in_epoch`
   against `MAX_FRAGMENTS`) or `Zone::new` refuses — the C++
   `static_assert` that went with `send_noise`. The unused
   `CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE` `#define`s went with

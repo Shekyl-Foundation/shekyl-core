@@ -10208,6 +10208,30 @@ The sweep table keeps §56.4's blackouts for comparability and gains a 13 s row,
 which is what makes the alignment effect visible in the readout rather than a
 property of whichever cadence happens to ship.
 
+#### 56.7b What is still owed, and why it is filed rather than done here
+
+**§56.5's ruling stands and is unimplemented, and nothing was tracking it.**
+That is the §92.5c item 1 shape exactly — a true, decided sentence that stayed
+a claim because nobody opened it — so it is now a FOLLOWUPS one-liner
+(pre-genesis) rather than a paragraph only this section knows about.
+
+It carries two priced inputs that this cadence change made stale, and both want
+re-running rather than re-reading:
+
+- **§57's three exits.** The ~18 % epoch-miss for a 20-fragment transaction was
+  computed at the 12.5 s mean. The epoch now affords **89** windows rather than
+  40, so the figure that made "shorten the mean" one of three exits has moved
+  under all three.
+- **§58.2's admission-control threshold `θ`** — *start iff
+  `P(k fragments clear in the remaining epoch) ≥ θ`* — which §58.2 calls "a
+  constants-round input, not a workaround". Its Poisson tail is drawn against
+  the cadence, so it is stale in the same way and for the same reason.
+
+**Not done in this change, deliberately.** The cadence commit was scoped to the
+cadence and the ceiling with no derived constant moving; re-deriving `θ` here
+would be the concurrent re-derivation that scoping exists to prevent. The
+re-derivation round owns it.
+
 ## 57. Q11-B's exit depends on a mechanism fact — checked before touching constants
 
 **2026-08-03.** §56.5 reopened Q11-B: under an unbounded family
