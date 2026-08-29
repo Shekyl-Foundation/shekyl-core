@@ -263,10 +263,32 @@ dropped from the document even when its member is a plain `KV_SERIALIZE`** —
 `get_block`'s `tx_hashes` vanishes for a block with no transactions, which is
 not an OPT declaration but epee's treatment of empty arrays, so it too needs
 `skip_serializing_if` (captured, not assumed: RK-3b's `no_txes` vector);
-unknown fields are
-tolerated on deserialize (no `deny_unknown_fields` — older/newer wallets);
+unknown fields are **refused** on deserialize (`deny_unknown_fields`);
 `status` is a typed newtype so `"OK"` / `"BUSY"` / free-text errors are one
 type, not three string constants in three crates.
+
+**On unknown fields** (corrected 2026-08-29; this section previously required
+the opposite — "tolerated on deserialize, no `deny_unknown_fields` —
+older/newer wallets" — and a slice implementing that rule now would be
+implementing a retired one). The tolerance was justified by client skew across
+a network that does not exist: pre-genesis every client ships with the daemon.
+What it actually bought was a **renamed** field arriving unnoticed while the
+name we look for defaults — a wrong value in the shape of a legitimate one, on
+replies that feed proof verification. Refusing turns that into a parse error at
+the boundary, and aligns this surface with the wallet-RPC params (F-1), where
+an unknown key is `-32602` rather than a guess. Checked before changed: every
+captured vector still parses with the denial on, so the types already model
+everything the daemon emits.
+
+Two carve-outs, both narrower than the old blanket rule. `SubmitVerdict`
+(`shekyl-rpc-types::lib`) keeps its tolerance because a verdict arrives
+**mid-submit**, where a daemon and wallet from different in-tree builds must
+still agree on whether the transaction was accepted — failing that parse turns
+an informational field into an ambiguous submit, which §2.3's skew design
+exists to prevent (`skew_c` pins it). And denial does **not** close silent
+defaults: `#[serde(default)]` still lets an *omitted* field become its zero
+value, which is its own audit (FOLLOWUPS) because some absences are legitimate
+`KV_SERIALIZE_OPT` omissions the vectors depend on.
 
 ### 3.2 Facts — the C export and its twin
 

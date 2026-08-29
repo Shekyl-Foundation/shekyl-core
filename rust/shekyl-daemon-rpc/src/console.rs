@@ -434,8 +434,12 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
             let raw = ctl_client::post_blocking(address, "/is_key_image_spent", body, *timeout)
                 .map_err(|(_, reason)| reason)?;
-            serde_json::from_slice::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw)
-                .map_err(|e| format!("malformed is_key_image_spent reply: {e}"))?
+            // Through `decode_reply`, as `print_height` does: a native handler
+            // reports failure as a `RestErrorEnvelope`, and a success-only
+            // decode turns the server's stated reason into "malformed reply".
+            // Refusing unknown fields made that worse, not better — the
+            // envelope's `error` is exactly the field this type does not model.
+            decode_reply::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw, "is_key_image_spent")?
         }
     };
     if !reply.status.is_ok() {
@@ -497,8 +501,10 @@ fn fetch_transactions(
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
             let raw = ctl_client::post_blocking(address, "/get_transactions", body, *timeout)
                 .map_err(|(_, reason)| reason)?;
-            serde_json::from_slice(&raw)
-                .map_err(|e| format!("malformed get_transactions reply: {e}"))
+            // See the `is_key_image_spent` arm: a native handler's failure is a
+            // `RestErrorEnvelope`, so decoding success-only reports "malformed"
+            // over the reason the server actually gave.
+            decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
         }
     }
 }
@@ -826,6 +832,40 @@ mod tests {
                 output_indices: vec![1],
             },
         }
+    }
+
+    /// **The server's reason survives to the operator.**
+    ///
+    /// A native handler reports failure as a `RestErrorEnvelope`, which the
+    /// success type does not model — so a success-only decode reported
+    /// "malformed reply" over the reason the daemon actually gave, and refusing
+    /// unknown fields made that certain rather than incidental. `decode_reply`
+    /// tries the envelope second, which is what keeps the failure actionable.
+    #[test]
+    fn a_handler_error_envelope_reaches_the_operator() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).expect("read request");
+            let out = r#"{"error":"the store is inconsistent at height 7"}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        let (_, out) = run(
+            &["print_transaction", &hex::encode([0x31u8; 32])],
+            Some(&address),
+        );
+        assert!(
+            out.contains("the store is inconsistent at height 7"),
+            "the daemon's own reason must reach the operator, not be replaced \
+             by a decode complaint: {out}"
+        );
     }
 
     /// **A reply about a different transaction is not an answer.** The count

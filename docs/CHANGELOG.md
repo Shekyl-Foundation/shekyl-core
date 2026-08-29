@@ -310,6 +310,39 @@
   a different case: it was **already** dead on `dev`, with no callers and no
   header declaration, so it was swept under rule 15 rather than orphaned here.
 
+- **A pruned transaction body is bound to the hash that was asked for.** The
+  batch parser checked the reply's `tx_hash` **label** against the request and
+  never the body, so a daemon could serve any canonical transaction under the
+  requested label: shape validation passes, the label matches, and a proof
+  consumer then verifies outputs belonging to a transaction that may not be on
+  this chain.
+
+  The identity is now recomputed from the bytes.
+  `Transaction::hash_with_supplied_prunable` is the Rust equivalent of
+  `get_pruned_transaction_hash` — a pruned body has no prunable section, so
+  plain `hash()` substitutes the null hash and returns an identity no
+  transaction has. The reply's `prunable_hash` is the daemon's to choose too and
+  gains it nothing: choosing freely leaves it solving
+  `H(prefix ‖ base ‖ pqc ‖ X) = txid` for `X`, a keccak preimage rather than a
+  substitution. The full form is bound the same way, via `hash()` directly.
+
+  Both hashes share one construction rather than two, so the pruned and
+  unpruned paths cannot drift into hashing the same transaction two ways.
+
+  Two existing fixtures had to change, which is the finding confirming itself:
+  they paired arbitrary labels with arbitrary bodies, and one served **the same
+  body under two different requested hashes** — the substitution case, sitting
+  in the happy-path test, passing only because the label was the whole check.
+  They now derive the label from the body.
+
+- **The console stops replacing the daemon's reason with its own complaint.**
+  A native handler reports failure as a `RestErrorEnvelope`, which the success
+  types do not model, so two success-only decodes reported "malformed reply"
+  over the server's stated cause. Refusing unknown fields made that certain
+  rather than incidental — the envelope's `error` is precisely the field the
+  success type does not model. Both sites now use `decode_reply`, which tries
+  the envelope second, as `print_height` already did.
+
 - **The RPC read surface refuses unknown fields.** `shekyl-rpc-types::chain`
   and `::transactions` tolerated them because "additive daemon-side evolution
   must not break an older wallet" — not a constraint this tree has, since there

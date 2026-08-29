@@ -460,10 +460,14 @@ mod check_workflows {
             },
         };
 
-        // The pruned form is associated by the daemon's `tx_hash`
-        // label, not by re-hashing (`parse_tx_batch`'s contract), so
-        // a fixed txid keeps the fixture simple.
-        let txid = [0x77u8; 32];
+        // The txid is DERIVED from the body, not chosen. `parse_tx_batch`
+        // used to associate a pruned reply by the daemon's `tx_hash` label
+        // alone, and this fixture's previous `[0x77; 32]` was simple only
+        // because of it — a body under a label that was not its own is the
+        // substitution a hostile daemon performs, and the proofs path is
+        // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
+        // that is the digest the identity mixes.
+        let txid = tx.hash_with_supplied_prunable([0u8; 32]);
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
 
@@ -763,14 +767,27 @@ mod check_workflows {
         // resolve in chunked batched get_transactions calls, not
         // one awaited call per unique txid.
         let mut fx = make_fixture(vec![]);
-        // Serve the same pruned body under a second txid (the
-        // pruned form is associated by the daemon's tx_hash label,
-        // not by re-hashing) so the locators span two txids whose
-        // on-chain outputs still match the proof entries.
-        let txid2 = [0x78u8; 32];
-        let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+        // A SECOND, genuinely different transaction under its own hash, so
+        // the locators span two txids. Serving one body under a borrowed
+        // second label is what `parse_tx_batch` now refuses — the association
+        // is the body's identity, not the daemon's label. Only `unlock_time`
+        // differs, so the outputs the proof entries reference are unchanged
+        // and the subject of this test stays the batching.
+        let base: Transaction = {
+            let hex_body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            Transaction::read(
+                &mut hex::decode(hex_body)
+                    .expect("fixture body is hex")
+                    .as_slice(),
+            )
+            .expect("fixture body parses")
+        };
+        let mut second = base.clone();
+        second.prefix.unlock_time = 1;
+        let txid2 = second.hash_with_supplied_prunable([0u8; 32]);
+        assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
-        txs.insert(hex::encode(txid2), body);
+        txs.insert(hex::encode(txid2), hex::encode(second.serialize()));
         fx.rpc.txs = Arc::new(txs);
 
         let decoded = decode_proof_payload(&reserve_proof_string(&fx), HRP_RESERVE_PROOF)
@@ -793,15 +810,30 @@ mod check_workflows {
         // 250 unique txids must resolve in ceil(250 / 100) = 3
         // batched calls (TXS_PER_REQUEST = 100), not 250.
         let fx = make_fixture(vec![]);
-        let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+        // 250 DISTINCT bodies, each under the hash its own bytes produce.
+        // Synthesising ids against one shared body is no longer expressible:
+        // `parse_tx_batch` binds the body to the requested hash, so one body
+        // has one identity. `unlock_time` is the cheapest field to vary that
+        // the pruned validator still accepts.
+        let base: Transaction = {
+            let hex_body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            Transaction::read(
+                &mut hex::decode(hex_body)
+                    .expect("fixture body is hex")
+                    .as_slice(),
+            )
+            .expect("fixture body parses")
+        };
         let mut txs = BTreeMap::new();
         let mut ids: Vec<[u8; 32]> = Vec::with_capacity(250);
-        for i in 0..250u32 {
-            let mut id = [0u8; 32];
-            id[..4].copy_from_slice(&i.to_le_bytes());
+        for i in 0..250u64 {
+            let mut tx = base.clone();
+            tx.prefix.unlock_time = i;
+            let id = tx.hash_with_supplied_prunable([0u8; 32]);
             ids.push(id);
-            txs.insert(hex::encode(id), body.clone());
+            txs.insert(hex::encode(id), hex::encode(tx.serialize()));
         }
+        assert_eq!(ids.len(), 250, "each body must have produced its own id");
         let rpc = MockRpc {
             txs: Arc::new(txs),
             spent_status: Arc::new(vec![]),

@@ -1532,6 +1532,29 @@ impl Transaction {
     /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
     /// the version varint (the first field of the C++ `transaction_prefix`).
     pub fn hash(&self) -> [u8; 32] {
+        self.hash_with_prunable(None)
+    }
+
+    /// The consensus transaction hash of a **pruned** body, with the prunable
+    /// digest supplied instead of computed.
+    ///
+    /// The C++ equivalent is `get_pruned_transaction_hash`. It exists because a
+    /// pruned body has no prunable section to hash: [`Self::hash`] would
+    /// substitute the null hash and return an identity no transaction has.
+    ///
+    /// This is what lets a caller **bind** a pruned body served by an untrusted
+    /// daemon to the hash it asked for. The reply's `tx_hash` label proves
+    /// nothing — the daemon chooses it — and so does `prunable_hash` on its
+    /// own; what the daemon cannot choose is a body and a digest that mix to a
+    /// txid someone else named first, which is a keccak preimage.
+    pub fn hash_with_supplied_prunable(&self, prunable_hash: [u8; 32]) -> [u8; 32] {
+        self.hash_with_prunable(Some(prunable_hash))
+    }
+
+    /// Shared body of [`Self::hash`] and [`Self::hash_with_supplied_prunable`]:
+    /// one construction, so the pruned and unpruned paths cannot drift into
+    /// hashing the same transaction two ways.
+    fn hash_with_prunable(&self, supplied_prunable: Option<[u8; 32]>) -> [u8; 32] {
         let mut prefix_buf = Vec::new();
         write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
         self.prefix
@@ -1541,6 +1564,9 @@ impl Transaction {
 
         match &self.ct {
             Ct::Null(base) => {
+                // A coinbase has no prunable section at all, so its third
+                // component is the null hash whether or not a digest was
+                // supplied — pruning cannot give it one.
                 let mut base_buf = vec![CT_TYPE_NULL];
                 base.write(&mut base_buf).expect("Vec write is infallible");
                 hash_concat(&[h_prefix, keccak256(&base_buf), [0u8; 32]])
@@ -1565,15 +1591,18 @@ impl Transaction {
                 // `H(prunable)` when present, else the null hash (the fee-only /
                 // serve-credit form — its live-oracle hash parity is pending a captured
                 // blob, as for the spend KAT).
-                let h_prunable = match prunable {
-                    Some(prunable) => {
+                // A supplied digest wins: it is the pruned case, where the
+                // section is absent and its hash is the caller's operand.
+                let h_prunable = match (supplied_prunable, prunable) {
+                    (Some(h), _) => h,
+                    (None, Some(prunable)) => {
                         let mut prunable_buf = Vec::new();
                         prunable
                             .write(&mut prunable_buf)
                             .expect("Vec write is infallible");
                         keccak256(&prunable_buf)
                     }
-                    None => [0u8; 32],
+                    (None, None) => [0u8; 32],
                 };
 
                 // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
