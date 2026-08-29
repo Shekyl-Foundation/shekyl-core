@@ -226,7 +226,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   out.bond_spend_pk =
     handle.bond_spend_pk.empty() ? nullptr : handle.bond_spend_pk.data();
   out.bond_spend_pk_len = handle.bond_spend_pk.size();
-  out.holdings_kind = static_cast<uint8_t>(record.holdings_kind);
+  out.holdings_kind = record.holdings_kind;
   out.last_served_scan = scan;
   out.per_shard_last_served =
     handle.per_shard_last_served.empty() ? nullptr : handle.per_shard_last_served.data();
