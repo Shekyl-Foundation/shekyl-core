@@ -117,7 +117,7 @@ catch {
     Write-Host "P-17 dial UNRUN: could not open the control pipe (os error $code)."
     if ($code -eq 5) {
         Write-Host "  ERROR_ACCESS_DENIED on the control pipe, which is granted to the USER SID:"
-        Write-Host "  we are NOT the same AD user as the server. Log in as intranet\dawsonra."
+        Write-Host "  we are NOT the same AD user as the server. Log in as the same AD user the server runs as."
     }
     $control.Dispose()
     exit 2

@@ -22,9 +22,11 @@ foreign-session caller, which is the claim.
 - **P-17** takes the `IPC$` reachability D6 was written for — the network
   transport. Registered prediction-first (no code in the registering commit).
   Its first runs falsified the loopback premise and then found no single-box
-  transport crosses a session (§4.5); a genuine remote same-user caller needs
-  domain credentials on a second machine, which is a real wall — so P-17 is
-  **UNRUN**, transport-blocked, not a WP-D6 falsification.
+  transport crosses a session (§4.5); a genuine remote same-user caller needed
+  domain credentials on a second machine — that machine was provisioned, and
+  the two-machine run is now **PASS (structural)** (§4.8): the network-logon
+  caller carries *no* logon SID at all, so the logon-SID ACE refuses it by
+  construction. (Runs manually with a second box, per §3 — not CI-durable.)
 - **P-13** takes terminal-services separation — two concurrent interactive
   logons. **Unachievable on this client SKU** (§4.6): one session per user.
 - **P-18** takes a same-user **batch (S4U) logon** — a second logon session
