@@ -107,7 +107,9 @@ calls in the handler (`core_rpc_server.cpp`).
 | **RK-4b** — **landed** (this branch; PR #, sha stamped at merge) | The remaining live binary endpoint | `/get_blocks_by_height.bin` `/getblocks_by_height.bin` | 15 | `get_blocks_by_height` | E (the engine's timing rig) |
 | **RK-4c** — **landed** (this branch; PR #576, sha stamped at merge) | The transaction read set (the wallet's proofs path) | `/get_transactions` `/gettransactions` (+ the console's `print_transaction`) · `/is_key_image_spent` (+ the console's `is_key_image_spent`) — each console command reads **only** its own method | 31 + 8 | `get_split_transactions_blobs`, `get_pool_transactions_info`, `are_key_images_spent[_in_pool]` | W K P F R |
 | **RK-4x** — **ruled: deleted** | `/get_blocks.bin` `/getblocks.bin` · `/get_hashes.bin` · `/gethashes.bin` | wallet2's batch sync, and wallet2 is gone. Retired rather than migrated, with `get_pool_info` and the pool's departure history behind it. Reopen clause in `DAEMON_RPC_RUST.md` | — (44 fields deleted, not ported) | — | none |
-| **RK-5** | Node state — **the hub** (see the console matrix below); also `hard_fork_info`, `get_fee_estimate`, `get_last_block_header`, `get_block_header_by_hash`, `get_block_headers_range`, each moved here for a named reason | `/get_info` `/getinfo` · `get_info` · `sync_info` · `/get_net_stats` · `get_connections` · `/get_peer_list` · `hard_fork_info` · `get_fee_estimate` · the three header methods above | 48 + 24 + 11 + 7 (+ `connection_info`) + 10 + 15 + 8 + 11 + 10 + 10 | 26 distinct core/p2p reads for `get_info`; peerlist, throttle stats; hard-fork voting info; `get_dynamic_base_fee_estimate_*`; **the p2p double** this slice must build | W C G K P F |
+| **RK-5a** | The **p2p seam**, proved small | `sync_info` · `/get_net_stats` · `/get_peer_list` · `get_connections` — the methods whose facts are p2p-only | 11 + 7 + 10 + 7 (+ `connection_info`) | `get_public_*_count`, peerlist, throttle stats — **as scalars**, see §3.2; plus the `shekyl_rpc_chain_tip` retrofit | K P F |
+| **RK-5b** | The header projection's remainder | `get_last_block_header` · `get_block_header_by_hash` · `get_block_headers_range` · `hard_fork_info` · `get_fee_estimate` | 8 + 11 + 10 + 15 + 10 | `fill_block_header_response`'s three, hard-fork voting info, `get_dynamic_base_fee_estimate_*` | W C K P |
+| **RK-5c** | **`get_info`, the hub — and every console command that reads it** | `/get_info` `/getinfo` · `get_info` | 48 + 24 | 7 core reads, 5 p2p reads (scalars), ~20 bare getters | W C G K P F |
 | **RK-6** | Mempool | `/get_transaction_pool` · `/get_transaction_pool_hashes` (its `.bin` sibling is **retired**, not pending — see §5; do not re-add it) · `/get_transaction_pool_stats` · `get_txpool_backlog` · `flush_txpool` · `relay_tx` | 8 + 7 + 7 + 26 + 7 + 7 | pool reads, `flush_txes_from_pool`, `get_protocol().relay_transactions` | K P |
 | **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `add_aux_pow` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 7 + 19 + 17 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P |
 | **RK-8** | Admin + chain maintenance | `/set_log_level` `/set_log_categories` · `/get_limit` `/set_limit` · `/in_peers` `/out_peers` · `set_bans` `get_bans` `banned` · `/save_bc` · `/stop_daemon` · `/pop_blocks` · `prune_blockchain` · `flush_cache` · `get_alternate_chains` · `get_coinbase_tx_sum` · `get_output_histogram` | 7 + 30 + 8 + 10 + 9 + 9 + 13 + 12 + 8 + 6 + 6 + 8 + 9 + 7 + 17 + 14 + 18 | throttle, p2p limits/bans, `store_blockchain`, `send_stop_signal`, `pop_blocks`, pruning, alt chains, histogram | K P R |
@@ -154,8 +156,11 @@ command's read set. Enumerated from `rpc_command_executor.cpp` at `64ee608ca`:
 | `show_difficulty`, `version`, `print_transaction_pool_stats` | **`get_info`** (+ their own) |
 | every other command | exactly one method |
 
-**`get_info` is the hub**: six commands read it, and *every* console command
-that touches a header method also touches it. That is why the header methods
+**`get_info` is the hub**: **seven** commands read it — `alt_chain_info`,
+`print_blockchain_dynamic_stats`, `print_blockchain_info`,
+`print_transaction_pool_stats`, `show_difficulty`, `show_status`, `version`
+(counted at `92807134a`; this line said six, which was wrong) — and *every*
+console command that touches a header method also touches it. That is why the header methods
 split the way they do — a method whose only console reader is self-contained
 can move now; one whose reader also needs `get_info` moves when `get_info`
 does. The alternative — migrating the handler while a C++ struct stays behind
@@ -184,6 +189,45 @@ wrong shim could turn into a consensus-integrity problem (`submit_block`
 reaches `handle_block_found`), so it carries the pre-flight pass.
 
 ---
+
+### 2.1.1 The console read-graph forces a mixed arm, so §2.1 is amended
+
+§2.1 says a console command can only move once **every** method it reads has a
+Rust type. Applied to `get_info`'s seven readers, that rule cannot be satisfied
+by any slice ordering, because the connected component of the read graph spans
+four slices:
+
+| console command | reads | crosses into |
+| --- | --- | --- |
+| `show_difficulty`, `version` | `get_info` | — |
+| `print_blockchain_info` | + `get_block_headers_range` | — (RK-5b) |
+| `print_blockchain_dynamic_stats` | + `get_block_headers_range`, `hard_fork_info`, `get_fee_estimate` | — (RK-5b) |
+| `print_transaction_pool_stats` | + `get_transaction_pool_stats` | **RK-6** |
+| `show_status` | + `hard_fork_info`, `mining_status` | **RK-7** |
+| `alt_chain_info` | + `get_block_header_by_hash`, `get_alternate_chains` | **RK-8** |
+
+Landing RK-6/7/8 first does not help: their console commands then mix on
+`get_info` instead. **Mixing is unavoidable; only where it lands changes.** So
+the rule is amended rather than quietly broken:
+
+> A console command moves to Rust once every method it reads has a Rust type
+> **or is still served through the bridge**, in which case the bridged call is
+> recorded as the owing slice's §5 obligation and is replaced when that slice
+> lands.
+
+Two things make that safe rather than a promise. The bridged leg must name a
+route that **still exists in the C++ dispatch table** — RK-4c shipped a console
+arm naming a deleted route and it answered "no reply" on every invocation, so
+the obligation rows below are load-bearing, not bookkeeping. And each mixed
+command is covered by `ported_console_commands_answer_on_the_in_process_arm`,
+so a later slice deleting its route turns that gate red instead of shipping a
+dead console.
+
+Mechanically the two bridges are different entry points: `alt_chain_info`'s
+outstanding leg is JSON-RPC (`CoreRpc::json_rpc`), while
+`print_transaction_pool_stats`'s and `show_status`'s are REST
+(`CoreRpc::json_endpoint`). Reaching for the wrong one compiles and returns
+`None`.
 
 ### 2.2 The restricted gate, and the eleven sites it woke
 
@@ -378,6 +422,32 @@ is the one the C++ handler already has, named here rather than closed by a
 lock that would trade a stale field for a hung daemon. **The rule is per
 lock-domain, not per reply.**
 
+**Chain facts take an object; p2p facts take scalars.** The bodies above take
+`Blockchain&` — and RK-4c's took the pool too — because a fixture can build
+those: `BaseTestDB` under a real `Blockchain` via `BlockchainAndPool` is the
+recipe every shim test uses. There is no equivalent for p2p, and not for want
+of effort: `core_rpc_server::m_p2p` is a **concrete**
+`nodetool::node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, so a
+double cannot subclass it, and the one harness in the tree that builds a
+`node_server` (`tests/unit_tests/node_server.cpp`) instantiates it over
+`test_core` — a different type, unusable here.
+
+So the rule extends rather than bends: **a body takes what a fixture can build,
+and takes everything else as values the adapter snapshots.** The p2p reads are
+one-line getters (`get_public_connections_count`, the two peerlist sizes, the
+outgoing count, `get_payload_object().is_synchronized()`) with their own
+locking, so the thin `extern "C"` adapter reads them and passes integers and
+bools to a body a test can drive with literals. Nothing is lost: the shim reads
+and does not decide, and what it read is exactly what the body is given.
+
+This also settles a debt RK-5a must pay rather than inherit.
+`shekyl_rpc_chain_tip` predates the thin-adapter rule RK-2 established: it has
+no free-function body at all, its logic sits inline in the `extern "C"` entry
+point, and it reads `get_p2p().get_payload_object().is_synchronized()` there.
+That is why it is the one facts export with no fixture — noted in §3.2 since
+RK-1 and never fixed. RK-5a retrofits it to the standard shape, which is what
+makes that slice a deliverable rather than a bare enabler.
+
 ### 3.3 Handler — behind a trait
 
 ```rust
@@ -459,6 +529,10 @@ downstream depends on it either way.
 | `tx_memory_pool::m_added_txs_by_id` | when its last reader goes | RK-4x left it: two log lines read its `.size()` (`tx_pool.cpp:410`, `:533`), so it is not read-less. It is a per-txid record of *arrival* times, kept now only to print a count — retire it with those log lines, or replace the count with one the pool already knows |
 | `/get_transaction_pool_hashes.bin` + `COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN` | **done** (2026-08-25) | the binary spelling of a route that is called; this one had no caller. Both handlers made the same two core reads and differed only raw-vs-hex, so the surviving JSON route keeps them and nothing went callerless. Found by `ci/rpc-route-liveness`; reopen clause in `DAEMON_RPC_RUST.md` |
 | the `rpc_origin()` context (`core_rpc_ffi.cpp`) | RK-X | it exists because C++ handlers read a `connection_context*` to learn their own listener's posture. Every migrated handler takes the posture from `state.restricted` instead (RK-D6), so the last bridged handler takes this with it |
+| `print_transaction_pool_stats`' bridged `get_transaction_pool_stats` leg (REST) | **RK-6** | §2.1.1 — the console command moves in RK-5c reading a route RK-6 still serves. RK-6 must re-point it when it deletes that route, or the in-process console gate goes red |
+| `show_status`' bridged `mining_status` leg (REST) | **RK-7** | same, for the mining slice |
+| `alt_chain_info`'s bridged `get_alternate_chains` leg (**JSON-RPC**, not REST) | **RK-8** | same, for the admin slice; note the different bridge entry point |
+| `core_rpc_server::get_connections_count()` | RK-5c | `{ return 0; }` — a stub since the Axum cutover, because C++ cannot see Axum's connections. `get_info`'s `rpc_connections_count` is filled by the Rust connection tracker over the top of it, so the C++ read is residue reporting a constant zero and **must not be carried into the facts POD** |
 | ~~`txs_as_hex` / `txs_as_json`~~ | **done** (RK-4c) | rule 60 — the handler fills them "in case an old wallet asks" and the old wallet is `src/wallet/`, deleted. Both in-tree readers go with them **in the same diff**: `print_transaction`'s `res.txs_as_hex.front()` fallback (dead against our own daemon — the handler fills `txs` and `txs_as_hex` from the same loop, so `txs` is empty only when `txs_as_hex` is) and `scripts/check_testnet_genesis_consensus.py`, which reads `txs_as_hex[0]` and gets `txs[0].as_hex`. Deleted **after** byte-parity is green, as its own commit, so the divergence bisects separately |
 | `obj_to_json_str(t)` / `obj_to_json_str(pruned_tx)` and the `as_json` field of `get_transactions` | RK-W | the same call as the `get_block` row below, on the tx path (RK-D11). It duplicates `as_hex` / `pruned_as_hex`, which carry the same tx in the consensus encoding every in-tree client already parses. RK-4c keeps it epee-rendered rather than growing a second renderer that must agree with the first |
 | ~~the hand-rolled `get_transactions` params + response walk, and the `is_key_image_spent` pair~~ | **done** (RK-4c) | same trigger discipline as RK-4b's `build_get_blocks_by_height_req`: a removal scheduled for "after" a slice is a deferral with a date, not one with a trigger. Their known-good shapes are the slice's first cross-language KATs |
@@ -493,6 +567,8 @@ downstream depends on it either way.
 
 | Date | Entry |
 | --- | --- |
+| 2026-08-28 | **RK-5 re-sliced into RK-5a/5b/5c, and §2.1 amended because the console read-graph forces it.** Scoping RK-5 against the tree rather than the row turned up three things the census did not say. **(1) The "p2p double this slice must build" cannot be built.** `m_p2p` is a concrete `node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, so a double cannot subclass it, and the one harness that constructs a `node_server` does so over `test_core` — the wrong instantiation. The rule extends instead: a body takes what a fixture can build and takes everything else as **scalars the adapter snapshots** (§3.2). That dissolves the blocker and exposes the debt underneath it — `shekyl_rpc_chain_tip` never got the thin-adapter shape RK-2 established, which is why it is the one export with no fixture, and RK-5a retrofits it. **(2) `get_info` has seven console readers, not six**, and their read-graph's connected component spans RK-5, RK-6, RK-7 and RK-8 (`show_status`→`mining_status`, `print_transaction_pool_stats`→`get_transaction_pool_stats`, `alt_chain_info`→`get_alternate_chains`). No ordering satisfies §2.1 as written: land RK-6/7/8 first and *their* console commands mix on `get_info` instead. Mixing is unavoidable, so §2.1.1 amends the rule to permit a bridged leg, on two conditions that make it safe rather than a promise — the leg must name a route the C++ table still serves (RK-4c shipped one that named a deleted route and answered "no reply" every time), and each mixed command is covered by the in-process console gate, so the slice that deletes the route turns it red. Three §5 obligation rows carry the re-points. **(3) `get_info` migrates last in the family**, because the moment its route leaves C++ all seven console commands must already be in Rust; with RK-5a/5b landed, four move clean and the three crossers carry exactly one bridged call each, which is the minimum the graph permits. Also found while scoping: `get_connections_count()` is `{ return 0; }` and has been since the Axum cutover — the Rust tracker fills `rpc_connections_count` over the top of it — so it is residue and must not enter the facts POD. |
+| 2026-08-28 | **Open decision for Rick: land RK-6 before RK-5c?** RK-4c sprang a trap worth not repeating — migrating `/get_transactions` silently hollowed out #570's evidence that `dispatch_json` passes a connection context, because that row had been the REST subject. `/get_info` is now the **last** bridged REST route with a restricted difference observable on an idle daemon (`start_time` → 0, `free_space` → `u64::MAX`), so when RK-5c migrates it the origin guard loses its subject again — while `/get_transaction_pool*`, the actual disclosure surface #570 closed, is still bridged. That is an unguarded window on exactly the property #570 fixed, and no single-node test can watch it directly: the measurement says the non-broadcast window closes in about 500 ms and was already shut on one run in three. **Recommendation: land RK-6 before RK-5c**, so the guard outlives the last disclosure-sensitive route it protects and then retires with an entry rather than being re-pointed at nothing. The console graph permits either order — `print_transaction_pool_stats` mixes either way, and the bridged-call count is the same. This inverts the census order, so it is Rick's call, recorded here rather than assumed. |
 | 2026-08-28 | **RK-4c landed**: `/get_transactions` (+ `/gettransactions`) and `/is_key_image_spent` served natively, with `print_tx` and `is_key_image_spent` rendering in Rust on both arms, and the C++ handlers, structs, dispatch rows and both restricted caps deleted. The facts export is **indexed by request position** rather than batched-then-re-sorted, which deletes the C++ merge and the two internal errors that existed only because that merge could disagree with itself (`tx hash mismatch`, `internal error - txs is empty`). `entry`'s branching KV map is a **type** — `TxLocation::Mined \| Pooled`, with `in_pool` derived from the arm — so the flat six-optional-members shape, which round-trips every vector while still able to emit documents the daemon cannot produce, is unrepresentable. **The one-lock rule is per lock-domain, not per reply**: the pool takes `m_transactions_lock` before `m_blockchain`, so the chain reads take `Blockchain`'s lock once (tip included, so confirmations are computed against one height) and the pool is asked afterwards, unsynchronised — the C++ handler's granularity and its race, named rather than closed by a lock that would trade a stale field for a hung daemon. **Deliberate divergences:** the reply's `tx_hash` is canonical lower-case rather than an echo of the request's casing; `txs_as_hex` / `txs_as_json` are retired under rule 60 with `CORE_RPC_VERSION` → 3.25; a `spent_status` outside 0/1/2 is a malformed reply rather than a fourth state. **Two things the slice found rather than assumed.** The canned daemon double in `proofs_tests.rs` had drifted — a `json!` literal naming four fields where the contract has nine — and twelve tests failed the moment the reader became typed; that file already carried a comment saying `get_height` is built from the wire type because a literal had drifted once before, so it has now happened twice for the same reason. And #570's e2e used `/get_transactions` over the cap as its REST evidence that `dispatch_json` passes a connection context; migrating the route makes that row exercise the *Rust* cap instead, so it was re-pointed at `/get_info`, which is still bridged and whose restricted arm is observable on an idle daemon. A migration silently weakening another slice's guard is the failure mode to watch for whenever a route leaves C++. |
 | 2026-08-27 | **The handler→pool argument cannot be covered by a single-node e2e, and the reason is a measurement, not an opinion.** Copilot's fourth-round finding is right that the coverage stops short of the link that matters: the cap test proves the handlers *see* a context, `rpc_restricted_disclosure` proves the DB's category filter excludes pre-broadcast transactions, and nothing asserts each handler passes `!restricted` into its pool read — so changing that argument back to `true` restores the whole disclosure with every test green. The suggested fix is a live test that puts a `local` or stem transaction in the pool and asks both listeners. **Built it; it cannot be made deterministic here.** The engine submit admits as `relay_method::local` and then relays fire-and-forget (`tx_pool.cpp` §"the engine path's relay"), so `set_relayed` promotes it out of `local` within milliseconds. Measured: at t=0 the restricted listener enumerated 0 and returned 0 by hash while the admin listener saw the transaction — the property holds and was **observed end to end** — and by t=500 ms both listeners saw it, legitimately. Repeating the tight, no-delay form three times, the window was already closed on **one of three runs**. A ~33 % flake on a privacy gate is worse than no gate: it trains the next person to re-run it. So the test is not shipped, and the residual is named with the condition that would close it rather than a date: **a two-node regtest where one node stems to another that holds the transaction in `stem`** gives a state that persists as long as the embargo, which a single offline node has no way to produce (`local` is transient by design, `stem` needs a peer, `none` is unreachable). Until then the link is held structurally — all four sites derive from the one `caller_is_restricted(ctx)` predicate — and that is a weaker guarantee than a test, which is why it is written here rather than implied. |
 | 2026-08-27 | **"Defence in depth" was the wrong retraction; the arm should not exist.** Yesterday's correction established that `relay_tx`'s C++ `restricted` gate is unreachable, and kept it on the grounds that it would matter if the Rust gate were loosened. Rick's reading is better and it is rule 15's: **the check cannot hold in any reachable state**, so it is not a second line of defence, it is residue. The restricted listener never enters the function — Rust answers 403 at the only transport — and on the admin listener `m_restricted` is false, so `caller_is_restricted(ctx)` is false there too, as it is for the console's null `ctx`. A branch that is false in every posture that exists defends nothing. Nor is the loosening argument sound: `RESTRICTED_METHODS` is pinned against an independent specification list by `restricted_method_list_matches_the_specification`, so dropping `relay_tx` from it fails a Rust test — the guard is a test, which is observable, rather than a dead branch, which is not. Deleted, and the count in §2.2 goes from eleven sites to ten. **The scope of the claim is bounded by cross-referencing the two lists rather than asserted:** of the eleven methods with a C++ restricted check, `relay_tx` is the only one Rust gates per-method, so this is a one-site sweep, not a class with unknown members. The cost of leaving it is measured rather than hypothetical: this expression was read as a live exploit path by Copilot's review, by this author, and into a CHANGELOG entry and a PR description that both had to be retracted. **Residual C++ that cannot fire is not free — it is a false premise that survives review because it looks like a guard.** |
