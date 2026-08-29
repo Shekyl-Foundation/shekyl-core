@@ -32,11 +32,20 @@
 //! The residual — time from *now* until a stream's next emission — is the
 //! only quantity an observer holds at the moment a blackout ends.
 //!
-//! - Under the **bounded** family the daemon ships (`10 s + U[0, 5 s]`), the
-//!   residual is a function of elapsed-since-last: after 10 s of silence an
-//!   emission is certain within 5 s. Each stream therefore carries a *phase*,
-//!   and phase survives a short blackout. That is a per-stream feature to
-//!   match on.
+//! - Under the **bounded** family the daemon ships
+//!   (`NOISE_MIN_DELAY_MS + U[0, NOISE_DELAY_JITTER_MS]`, today
+//!   `3.333 s + U[0, 3.334 s]`), the residual is a function of
+//!   elapsed-since-last: once the minimum has passed, an emission is certain
+//!   within the jitter width. Each stream therefore carries a *phase*, and
+//!   phase survives a short blackout. That is a per-stream feature to match
+//!   on.
+//!
+//!   Written against the constants rather than their values because this
+//!   instrument grades the **shipped** law: a cadence change that left this
+//!   paragraph behind would leave the instrument describing a law it is no
+//!   longer measuring, which is the one failure a conformance harness cannot
+//!   afford. (It did, once — the 2026-08-28 cadence change, caught in
+//!   review.)
 //! - Under a **memoryless** family the residual is independent of elapsed
 //!   time by definition. There is no phase, so there is nothing that persists
 //!   across the blackout to match on.
@@ -182,7 +191,8 @@ pub struct LinkageSummary {
 ///
 /// **The memoryless arm is shifted by one grid step.** An unshifted geometric
 /// has a ~2 % atom at zero, which would let that arm emit twice at the same
-/// instant — something the bounded (`min 10 s`) and metronome arms cannot do.
+/// instant — something the bounded arm (whose gaps start at
+/// `NOISE_MIN_DELAY_MS`) and the metronome arm cannot do.
 /// That is an asymmetry *between the arms*, not a property of memorylessness,
 /// and it would show up as a difference the shape question would then have to
 /// explain. The table is built for `mean − 1` so the shift leaves the mean

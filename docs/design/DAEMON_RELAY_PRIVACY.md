@@ -5832,6 +5832,15 @@ Recorded because the read produced them and they constrain the shape question;
    further information. A near-deterministic cadence aggregated over
    `NOISE_CHANNELS = 2` is instead a near-metronome, and a metronome's
    *deviations* are informative.
+
+   > **Numbers dated 2026-08-03; the cadence is now `3.333 s + U[0, 3.334 s]`
+   > (§56.7).** The family is unchanged — still bounded uniform, still not
+   > Poisson — so this item's argument stands as written. What moved is the
+   > degree: **CV ≈ 0.192**, up from 0.115, because the jitter-to-base ratio
+   > doubled. That is measurably further from "near-deterministic" while still
+   > ~5× short of the exponential's CV = 1.0, which is the gap this item is
+   > about. §56.7 measures the privacy consequence of exactly that shift —
+   > bounded's residual channel falling 0.120 → 0.058 at a 10 s blackout.
 2. **But the mixing half of Loopix does not transfer.** Loopix has two
    exponential parameters doing different jobs — λ_P (client emission) and μ
    (per-hop mix delay, whose memorylessness is Lemma 2's subject). Shekyl has
