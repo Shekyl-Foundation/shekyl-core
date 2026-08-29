@@ -310,6 +310,31 @@
   a different case: it was **already** dead on `dev`, with no callers and no
   header declaration, so it was swept under rule 15 rather than orphaned here.
 
+- **The RPC read surface refuses unknown fields.** `shekyl-rpc-types::chain`
+  and `::transactions` tolerated them because "additive daemon-side evolution
+  must not break an older wallet" — not a constraint this tree has, since there
+  is no network and every client ships with the daemon. What the tolerance
+  bought was a **renamed** field arriving unnoticed while the name we look for
+  defaults: a wrong value wearing the shape of a legitimate one, on replies that
+  feed proof verification.
+
+  Free to remove, and checked rather than assumed: every captured epee vector
+  still parses with the denial on, so the types already modelled everything the
+  daemon emits. It also aligns the daemon surface with the wallet-RPC decision
+  (F-1), where an unknown key is `-32602` rather than a guess.
+
+  `SubmitVerdict` keeps its tolerance, on its real reason rather than the compat
+  one: a verdict arrives mid-submit, where a daemon and wallet from different
+  in-tree builds must still agree on whether the transaction was accepted, and
+  failing that parse turns an informational field into an ambiguous submit —
+  the outcome the §2.3 skew design exists to prevent. `skew_c` pins it.
+
+  **Not a fix for silent defaults**, and the docs say so: `#[serde(default)]`
+  still lets an *omitted* field become its zero value, and 27 fields across the
+  two modules do. That audit is filed separately because it needs per-field
+  judgement — some absences are legitimate `KV_SERIALIZE_OPT` omissions the
+  vectors depend on.
+
 - **`print_transaction` binds the reply to the request, not just its arity.**
   It accepted whatever single entry came back, so a daemon could answer with a
   different transaction — every field well-formed, only the identity wrong —

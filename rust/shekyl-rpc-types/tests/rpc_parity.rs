@@ -638,6 +638,43 @@ fn is_key_image_spent_empty_matches_the_oracle() {
 /// than the v2 file trusted. `get_transactions` dropping two members is a wire
 /// change, the constant records it (3.24 → 3.25), and this pins that the
 /// recording touched nothing else in the reply.
+/// **An unknown field on the read surface is refused, not ignored.**
+///
+/// The tolerance these types used to carry was justified by "additive
+/// daemon-side evolution must not break an older wallet" — a constraint this
+/// tree does not have, since there is no network and every client ships with
+/// the daemon. What it bought instead was a *renamed* field arriving unnoticed
+/// while the name we look for defaults, which is a wrong value wearing the
+/// shape of a legitimate one.
+///
+/// The second half is the one that matters and the one a future edit is most
+/// likely to undo: the same document **without** the stray field must still
+/// parse, so this pins a refusal of the unknown rather than a refusal of
+/// everything.
+#[test]
+fn an_unknown_field_is_refused_on_the_read_surface() {
+    use shekyl_rpc_types::{GetHeightResponse, GetTransactionsResponse};
+
+    let good = r#"{"status":"OK","height":7,"hash":"ab"}"#
+        .replace("\"ab\"", &format!("\"{}\"", "ab".repeat(32)));
+    serde_json::from_str::<GetHeightResponse>(&good).expect("the modelled document parses");
+
+    let with_extra = good.replace("{\"status\"", "{\"heightt\":7,\"status\"");
+    let err = serde_json::from_str::<GetHeightResponse>(&with_extra)
+        .expect_err("a field this type does not model must be refused");
+    assert!(
+        format!("{err}").contains("unknown field"),
+        "the refusal must name the unknown field: {err}"
+    );
+
+    // And on the transactions surface the wallet's proofs path reads.
+    let txs = r#"{"status":"OK","txs":[],"missed_tx":[],"surprise":1}"#;
+    assert!(
+        serde_json::from_str::<GetTransactionsResponse>(txs).is_err(),
+        "an unmodelled field must not be ignored on a reply that feeds proofs"
+    );
+}
+
 /// **A request this tree sends omits its empty sequences, as epee does.**
 ///
 /// The omission rule is the wire's, not the response types' — a client that

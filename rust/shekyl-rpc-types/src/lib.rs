@@ -41,8 +41,13 @@
 //!   arm (transport-equivalent ambiguity, TTL-resubmit). A verdict the
 //!   client cannot name is not a verdict it can act on.
 //! - Unknown *fields* within known variants are tolerated (no
-//!   `deny_unknown_fields`), so additive daemon-side evolution does not
-//!   break older wallets.
+//!   `deny_unknown_fields`) — deliberately, and unlike the read types in
+//!   [`chain`] and [`transactions`], which now refuse them. The reason is not
+//!   network compatibility (there is no network): a verdict arrives mid-submit,
+//!   where a daemon and a wallet from different in-tree builds must still
+//!   agree on whether the transaction was accepted. Failing that parse turns an
+//!   informational field into an ambiguous submit, which is the outcome §2.3's
+//!   whole skew design exists to avoid. `skew_c` pins it.
 //!
 //! ## Schema-evolution rule (§2.3, F38 — binding on authors)
 //!

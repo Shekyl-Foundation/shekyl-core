@@ -10,8 +10,11 @@
 //! `COMMAND_RPC_IS_KEY_IMAGE_SPENT` carried in C++. The conventions are
 //! [`crate::chain`]'s: wire field names, `u64` as a JSON number, hashes as
 //! lowercase hex, every `KV_SERIALIZE_OPT` mirrored by `skip_serializing_if`,
-//! and no `deny_unknown_fields`. Parity against the captured epee output is
-//! pinned by `tests/rpc_parity.rs` over `tests/vectors/rpc/` (RK-D4).
+//! and `deny_unknown_fields` (see [`crate::chain`] for why the tolerance went:
+//! its stated reason was a compatibility constraint this tree does not have,
+//! and what it actually bought was a renamed field arriving unnoticed).
+//! Parity against the captured epee output is pinned by
+//! `tests/rpc_parity.rs` over `tests/vectors/rpc/` (RK-D4).
 //!
 //! One thing here is not a straight mirror. `COMMAND_RPC_GET_TRANSACTIONS`'s
 //! `entry` has a KV map that *branches* — `if (!this_ref.in_pool)` emits the
@@ -36,6 +39,7 @@ use crate::hash::HashHex;
 /// transaction hash" for a non-hex string and "Failed, size of data mismatch"
 /// for hex of the wrong length.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetTransactionsRequest {
     /// Omitted when empty, like every other sequence on this wire: epee drops
     /// an empty sequence rather than emitting `[]`, and that holds for plain
@@ -100,6 +104,7 @@ impl TxLocation {
 /// produced in C++ and passed through untouched (RK-D11); it duplicates the
 /// hex members and retires with `get_block`'s `json` in RK-W.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(try_from = "RawTxEntry", into = "RawTxEntry")]
 pub struct TxEntry {
     pub tx_hash: HashHex,
@@ -124,6 +129,7 @@ pub struct TxEntry {
 /// the branch is decided once, in [`TryFrom`], rather than by six
 /// independently optional members that no invariant relates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawTxEntry {
     tx_hash: HashHex,
     as_hex: String,
@@ -278,6 +284,7 @@ impl From<TxEntry> for RawTxEntry {
 /// from the edited C++ struct rather than written by hand, and `_v1` stays
 /// beside them so the deletion itself is checkable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetTransactionsResponse {
     pub status: crate::chain::RpcStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -294,6 +301,7 @@ pub struct GetTransactionsResponse {
 /// the three the daemon can produce is a malformed reply, not a fourth state
 /// to be carried into a caller's `match`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[repr(u8)]
 #[serde(try_from = "u8", into = "u8")]
 pub enum KeyImageStatus {
@@ -348,6 +356,7 @@ impl From<KeyImageStatus> for u8 {
 /// `key_images` is `Vec<String>` for [`GetTransactionsRequest`]'s reason: the
 /// handler owns the two parse refusals, so it must see what was sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsKeyImageSpentRequest {
     /// Omitted when empty, for the reason `GetTransactionsRequest.txs_hashes`
     /// gives: epee omits empty sequences, including plain `KV_SERIALIZE` ones.
@@ -362,6 +371,7 @@ pub struct IsKeyImageSpentRequest {
 /// different length than the request is therefore unreadable rather than
 /// partially readable, which is why the handler refuses one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsKeyImageSpentResponse {
     pub status: crate::chain::RpcStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
