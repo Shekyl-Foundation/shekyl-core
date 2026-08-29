@@ -51,6 +51,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <chrono>
 #include <algorithm>
+#include <map>
 #include <limits>
 #include <cstdint>
 #include <cstring>
@@ -208,7 +209,7 @@ namespace levin
         return remote_heights[n-1];
     }
 
-    uint64_t get_blockchain_height(connections& p2p, const i_core_events* core)
+    uint64_t get_blockchain_height(connections& p2p, i_core_events* core)
     {
       const uint64_t local_blockchain_height = core->get_current_blockchain_height();
       if (core->is_synchronized())
@@ -238,7 +239,7 @@ namespace levin
       return outs;
     }
 
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
+    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, i_core_events* core)
     {
       return get_out_connections(p2p, get_blockchain_height(p2p, core));
     }
@@ -496,6 +497,44 @@ namespace levin
       std::uint32_t pending_wakes;
       const epee::net_utils::zone nzone;         //!< Zone is public ipv4/ipv6 connections, or i2p or tor
       const bool pad_txs;                        //!< Pad txs to the next boundary for privacy
+
+      /*! One transaction handed to the carrier, awaiting its verdict.
+
+          The carrier holds framed bytes it cannot parse, so the identity has
+          to live on this side. `blob` is kept because
+          `on_transactions_relayed` takes blobs, and `successor` because F-10
+          charges an observation to the peer a stem was given to — neither is
+          recoverable from the token, which is opaque by design. */
+      struct carrier_pending
+      {
+        blobdata blob;
+        crypto::hash txid;
+        boost::uuids::uuid successor;
+        /*! The relay method the CALLER asked for, not the one the wire used.
+
+            `originated_stays_in_zone` takes the requested method — an origin
+            asking for `local` on an anonymity zone keeps `local` however it
+            travelled. Recording `stem` here would strip that pin off every
+            carrier-borne origin, which is the §92 carve-out the pool arm
+            exists to protect. */
+        relay_method requested;
+      };
+
+      /*! Transactions in the carrier, by the token the enqueue minted.
+
+          LIVES ON THE ZONE because the gap between enqueue and verdict is a
+          cadence tick at least and a full epoch at most — far longer than the
+          notify operation that enqueued it, which is why it cannot live in
+          `dandelionpp_notify`. Strand-confined like everything else here.
+
+          Bounded by construction rather than by policy: the queue refuses more
+          than `MAX_FRAGMENTS` windows per message, and a channel holds what it
+          holds, so this cannot grow without the carrier growing with it. Every
+          entry is erased by its verdict, and `unbind` guarantees a verdict for
+          anything the carrier drops. */
+      std::map<std::uint64_t, carrier_pending> carrier_pending_by_token;
+      //! Mints the next token. Opaque to Rust; only this side reads it.
+      std::uint64_t next_carrier_token = 1;
     };
   } // detail
 
@@ -526,7 +565,15 @@ namespace levin
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
-      const i_core_events* core = nullptr;
+      /*! NON-CONST since the carrier producer landed, and the widening is
+          real rather than incidental. This was `const` while the sink only
+          READ core — `on_outbound` filters by blockchain height. It now also
+          RECORDS: `on_carrier_resolved` is the one place the pool learns a
+          carrier-borne transaction was relayed, and that mutates the pool.
+          `notify::core_` was non-const all along; the `const` was added here
+          and at `relay_wake` to say "this path only reads", which stopped
+          being true. */
+      i_core_events* core = nullptr;
       std::vector<boost::uuids::uuid> outs;
 
       /*! What became of a transaction handed to the carrier.
@@ -545,9 +592,60 @@ namespace levin
           sent. */
       static void on_carrier_resolved(void* ctx, std::uint64_t token, bool sent) noexcept
       {
-        (void)ctx;
-        MERROR("carrier resolved token " << token << " (sent=" << sent
-               << ") with no producer wired — nothing can have been enqueued");
+        assert(ctx != nullptr);
+        try
+        {
+          relay_effects& self = *static_cast<relay_effects*>(ctx);
+          detail::zone& z = *self.zone;
+
+          const auto found = z.carrier_pending_by_token.find(token);
+          if (found == z.carrier_pending_by_token.end())
+          {
+            /* A verdict for a token this zone never minted. Loud rather than
+               ignored: the carrier returns what it was given, so this means
+               the map and the queue have diverged — a real bug, and silence
+               would let it accumulate. */
+            MERROR("carrier resolved unknown token " << token);
+            return;
+          }
+          const detail::zone::carrier_pending pending = found->second;
+          z.carrier_pending_by_token.erase(found);
+
+          if (!sent)
+          {
+            /* DISCARDED: the message left the carrier without reaching a peer.
+               Nothing is recorded, and that is the whole point — `relayed`
+               stays false, so `local_relay_base` keeps MIN_RELAY_TIME and the
+               origin retries on the short grid instead of waiting out the
+               derived interval for a transaction that was never sent. */
+            MDEBUG("carrier discarded a transaction; leaving it unrelayed for retry");
+            return;
+          }
+
+          /* SENT, and only now. Both records fire here because this is where
+             the send is known to have happened AND the successor is known to
+             be the peer that received it — neither was true at enqueue. */
+          if (self.core)
+          {
+            const std::vector<blobdata> one{pending.blob};
+            self.core->on_transactions_relayed(
+              epee::to_span(one),
+              cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
+                ? relay_method::local : relay_method::stem,
+              z.nzone);
+          }
+          shekyl_relay_zone_record_stem(
+            z.relay.get(),
+            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
+            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.successor)),
+            nullptr,
+            now_ms()
+          );
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("Failed to resolve a carrier transaction: " << e.what());
+        }
       }
 
       //! Send one peer's whole batch as a single notification.
@@ -728,10 +826,12 @@ namespace levin
     struct relay_wake
     {
       std::shared_ptr<detail::zone> zone_;
-      const i_core_events* core_;
+      /*! Non-const because this is what constructs the poll sink, and the
+          sink records carrier verdicts. Arming itself still only reads. */
+      i_core_events* core_;
 
       //! \pre Called within `zone->strand`.
-      static void arm(std::shared_ptr<detail::zone> zone, const i_core_events* core)
+      static void arm(std::shared_ptr<detail::zone> zone, i_core_events* core)
       {
         assert(zone != nullptr);
         assert(zone->strand.running_in_this_thread());
@@ -781,7 +881,7 @@ namespace levin
       std::shared_ptr<detail::zone> zone_;
       std::vector<blobdata> txs_;
       boost::uuids::uuid source_;
-      const i_core_events* core_;
+      i_core_events* core_;
 
       void operator()()
       {
@@ -789,7 +889,7 @@ namespace levin
       }
 
       //! \pre Called within `zone->strand`.
-      static void run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, const i_core_events* core)
+      static void run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, i_core_events* core)
       {
         if (!zone || !zone->p2p || txs.empty())
           return;
@@ -853,11 +953,74 @@ namespace levin
           );
         };
 
-        std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
+        /* `plan_dispatch`, not `plan_relay`: phase, carrier and slot in ONE
+           crossing (rule 40). This is §2.9 step 4's own description —
+           "`send_txs` consumes `plan_dispatch`" — reaching its first real
+           use, and it is what makes the carrier reachable by a real
+           transaction rather than by dummies alone (§3.1a). */
+        std::uint8_t carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+        std::uint32_t channel = 0;
+        std::int32_t plan = shekyl_relay_zone_plan_dispatch_with_refresh(
           zone_->relay.get(), uuid_bytes(source_), local_origin,
           uuid_bytes(outs), outs.size(),
-          reinterpret_cast<std::uint8_t*>(std::addressof(destination))
+          reinterpret_cast<std::uint8_t*>(std::addressof(destination)),
+          std::addressof(carrier), std::addressof(channel)
         );
+
+        /* What still needs the ordinary wire. The carrier takes transactions
+           out of this; whatever it refuses stays, and the existing stem path
+           below sends exactly those. A batch can therefore split — some
+           carried, some sent directly — which is correct rather than merely
+           tolerable: both go to the same stem slot, and refusing the whole
+           batch because one transaction is too large to fragment would put
+           the other two on the clear wire for no reason. */
+        std::vector<blobdata> to_send{txs_};
+
+        if (plan == SHEKYL_RELAY_PLAN_STEM && carrier == SHEKYL_RELAY_CARRIER_NOISE)
+        {
+          /* ONE TRANSACTION PER ENQUEUE, which is §2.9b made structural at the
+             crossing: two transactions in one carrier message would share a
+             window, a slot and a successor — the pairwise linkage Dandelion++
+             exists to deny. The crossing cannot express a batch, so this loops
+             rather than passing `txs_`. */
+          std::vector<blobdata> refused;
+          for (blobdata& tx : to_send)
+          {
+            /* F-9's canonical hash, via the same helper the stem watch is
+               armed with. Blob bytes are not a stable identity across relay
+               hops, and the verdict this token resolves has to name the
+               transaction the pool knows. */
+            const std::vector<crypto::hash> id = stem_watch_tx_hashes({tx});
+            if (id.size() != 1)
+            {
+              refused.push_back(std::move(tx));
+              continue;
+            }
+            const std::uint64_t token = zone_->next_carrier_token++;
+            if (!shekyl_relay_zone_noise_enqueue(
+                  zone_->relay.get(), channel,
+                  reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size(), token))
+            {
+              refused.push_back(std::move(tx));
+              continue;
+            }
+            /* Recorded ONLY on acceptance, and the pool is told NOTHING yet.
+               An enqueue is not a send: the windows go out on later cadence
+               ticks, and CV-1 discards an in-flight run when the epoch rolls.
+               `record_relayed` and the stem observation fire in
+               `on_carrier_resolved`, where the send is known to have happened
+               and the successor is known to be the peer that received it. */
+            zone_->carrier_pending_by_token.emplace(
+              token, detail::zone::carrier_pending{tx, id.front(), destination, tx_relay});
+          }
+          to_send = std::move(refused);
+          if (to_send.empty())
+          {
+            MDEBUG("Handed " << txs_.size() << " transaction(s) to the carrier on channel "
+                   << channel);
+            return;
+          }
+        }
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
@@ -882,10 +1045,10 @@ namespace levin
              happened. `record_stem_observation` was already placed this way,
              and the two records now arm on the same event. */
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
-              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
             record_relayed(relay_method::stem);
-            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
+            record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
@@ -903,10 +1066,10 @@ namespace levin
             reinterpret_cast<std::uint8_t*>(std::addressof(destination))
           );
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
-              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+              make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
             record_relayed(relay_method::stem);
-            record_stem_observation(zone_->relay.get(), txs_, destination, source_);
+            record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
           }

@@ -3039,3 +3039,138 @@ TEST_F(levin_notify, the_noise_carrier_is_off_by_default)
             << "(zone is " << (is_public ? "public" : "i2p") << ")";
     }
 }
+
+/*! **A real transaction rides the carrier onto the wire, and the pool is told
+    only when it gets there.**
+
+    §3.1a's reopening criterion: *"this row is not marked landed until a test
+    drives a real transaction through the queue onto the wire."* Before the
+    producer, a development-flag zone emitted **dummies only** — the cadence
+    ran, the frames were valid, and `dandelionpp_notify` still sent every real
+    transaction straight through `make_payload_send_txs`. The Rust tests could
+    not see that: they exercise the queue and the crossing, and both were
+    correct while nothing upstream put a transaction in.
+
+    The two halves this asserts are the ones the producer had to get right:
+
+    1. **The transaction does NOT take the ordinary stem wire.** No relay is
+       recorded at send time, because an enqueue is not a send.
+    2. **A relay IS recorded once the carrier drains it** — the completion
+       verdict crossing back and firing `on_transactions_relayed`.
+
+    Assertion 1 alone would pass if the transaction vanished; assertion 2 alone
+    would pass if it had gone out the ordinary way. Together they say it went
+    by the carrier.
+
+    What edit reds this: reverting `plan_dispatch_with_refresh` to `plan_relay`
+    (the transaction takes the ordinary wire, so a relay is recorded
+    immediately and assertion 1 fails), or dropping the record from
+    `on_carrier_resolved` (nothing is ever recorded and assertion 2 fails). */
+TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    // Outbound only: a noise channel is a stem slot, and an unbound slot emits
+    // nothing at all (CV-2).
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    /* F-9: the carrier keys its pending record on the CANONICAL hash, parsed
+       from the blob, so this transaction must actually parse — unlike the
+       synthetic blobs most tests in this file use. */
+    std::vector<cryptonote::blobdata> txs(1);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 7;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    /* DRIVE UNTIL THE CARRIER TAKES IT, because the epoch roll is the
+       schedule's call and a fluff epoch sends by the ordinary path. The first
+       draft of this test asserted on the first send: it passed alone and
+       failed in the full suite, where the RNG had been advanced by earlier
+       tests and the first epoch happened to be fluff.
+
+       The exit condition is "nothing was recorded at send time", which is the
+       carrier path's own signature — an ordinary stem or a fluff records
+       immediately, and only an enqueue records nothing. That is the same
+       circularity `stem_watch_records_and_arrival_resolves` has to solve, and
+       the same answer: re-roll, and recognise the epoch by what it did. */
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls)
+            << "no carrier-borne send after " << kMaxEpochRolls
+            << " epoch rolls — the zone never entered a stem epoch with a "
+               "noise carrier";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        io_service_.poll();
+
+        if (events_.relayed_method_size() == 0)
+            break; // The carrier accepted it and told the pool nothing yet.
+
+        /* Recorded at send time, so this epoch sent by the ordinary path.
+           Drain and roll. */
+        for (const auto method : {cryptonote::relay_method::fluff,
+                                  cryptonote::relay_method::stem,
+                                  cryptonote::relay_method::local})
+        {
+            if (events_.relayed_method_size() == 0)
+                break;
+            try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+        }
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto& ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+
+    // Drive the cadence until the pool hears about it. One minimal
+    // transaction frames to a single window, so it completes on the first
+    // emission of its channel — but which channel is due is the schedule's
+    // call, so this drives rather than assuming.
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+
+    ASSERT_NE(0u, events_.relayed_method_size())
+        << "the carrier never told the pool the transaction was relayed. "
+           "Either it never reached the wire, or the completion verdict did "
+           "not cross back — and an origin left unrecorded here waits on the "
+           "short grid for a transaction that has already gone";
+
+    // Drain for TearDown, and confirm it was OUR transaction rather than
+    // something the fluff path emitted.
+    const auto method = events_.has_stem_txes()
+        ? cryptonote::relay_method::stem : cryptonote::relay_method::local;
+    EXPECT_EQ(txs, events_.take_relayed(method))
+        << "the pool was told about a different transaction than the one the "
+           "carrier carried";
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
