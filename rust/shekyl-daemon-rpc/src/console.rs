@@ -301,8 +301,18 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
-    let Some(tx) = reply.txs.first() else {
-        return Err(format!("Transaction wasn't found: {hash}"));
+    // Exactly one, not "at least one": this command requested a single
+    // hash. Empty is "not found"; extra entries are a malformed reply,
+    // same shape as `is_key_image_spent` beside it.
+    let tx = match reply.txs.as_slice() {
+        [] => return Err(format!("Transaction wasn't found: {hash}")),
+        [tx] => tx,
+        _ => {
+            return Err(format!(
+                "print_transaction: asked about 1 transaction, got {}",
+                reply.txs.len()
+            ))
+        }
     };
 
     let mut out = Vec::new();
@@ -725,6 +735,42 @@ mod tests {
             out.contains("(pruned)"),
             "a transaction whose prunable half is absent must be labelled \
              pruned: {out}"
+        );
+    }
+
+    /// A reply with extra entries is unreadable, not "use the first one".
+    /// The command requested one hash; the adjacent key-image command already
+    /// requires a one-element slice for the same reason.
+    #[test]
+    fn extra_transaction_entries_are_a_malformed_reply() {
+        let txid = [0x33; 32];
+        let entry = |n: u8| shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes([n; 32]),
+            as_hex: String::new(),
+            pruned_as_hex: "aabb".to_owned(),
+            prunable_as_hex: "ccdd".to_owned(),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry(0x33), entry(0x34)],
+            missed_tx: vec![],
+        };
+        let addr = one_shot(typed_reply(&reply));
+        let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("asked about 1 transaction, got 2"),
+            "extra entries must be named, not silently truncated: {out}"
         );
     }
 
