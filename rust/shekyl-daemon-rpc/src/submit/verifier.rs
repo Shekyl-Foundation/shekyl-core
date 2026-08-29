@@ -709,7 +709,7 @@ fn verify_debit_arm(
     };
 
     // ── UB3: the record's COMMITTED authorizer, never the identity key ──
-    if debit_auth_pin(&record.bond_spend_pk, &bond_auth.hybrid_public_key).is_err() {
+    if debit_auth_pin(record.bond_spend_pk(), &bond_auth.hybrid_public_key).is_err() {
         return Err(VerifyFailure::Malformed);
     }
 
@@ -717,7 +717,7 @@ fn verify_debit_arm(
     // The shim already pinned the gather's scan discriminant against the
     // record's holdings kind (a mismatch is a ShimContract fault, not a
     // fold), so the slice here is the one this record's kind selects.
-    let last_served_epoch = whole_record_last_served(&record.per_shard_last_served);
+    let last_served_epoch = whole_record_last_served(record.per_shard_last_served());
 
     // ── UB8: the current settlement epoch ───────────────────────────────
     // The consensus shape deliberately feeds the chain *count*
@@ -734,8 +734,8 @@ fn verify_debit_arm(
     };
     match verify_unbond_bond_post(
         &vin,
-        Some(record.bonded_total_atomic),
-        record.bad_interval_count,
+        Some(record.bonded_total_atomic()),
+        record.bad_interval_count(),
         last_served_epoch,
         unbond.last_settled_slash_epoch,
         current_settlement_epoch,

@@ -199,36 +199,105 @@ pub struct UnbondFacts {
 }
 
 /// The debited record's verify operands (row UB2's payload).
+///
+/// Fields are private and the only constructor is [`new`](Self::new),
+/// because one of the invariants cannot be re-checked later without
+/// re-deriving the thing it guards: see [`LastServedScanMismatch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnbondRecordFacts {
+    bonded_total_atomic: u64,
+    bad_interval_count: usize,
+    bond_spend_pk: Vec<u8>,
+    holdings_kind: HoldingsKind,
+    per_shard_last_served: Vec<u64>,
+}
+
+/// The gather ran the wrong last-served accessor for this record's holdings
+/// kind (row UB4).
+///
+/// A dedicated error rather than a bool because **the wrong gather fails
+/// permissively**: a `CompleteTree` record stores no shard list, so the
+/// held-shards accessor returns an empty slice, which folds to "never
+/// served", which makes the release cooldown *elapse* for a record that has
+/// been serving. A permissive failure that reaches a verdict is worse than
+/// no fact at all, so the mismatch is made unconstructable instead of
+/// checked somewhere downstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastServedScanMismatch {
+    /// The accessor the gather reported running.
+    pub gathered: LastServedScan,
+    /// The accessor this record's holdings kind selects.
+    pub expected: LastServedScan,
+}
+
+impl UnbondRecordFacts {
+    /// Build the record facts, pinning the gather's reported accessor
+    /// against the one `holdings_kind` selects.
+    ///
+    /// `gathered_scan` is what the shim says it ran; it is consumed by the
+    /// pin and deliberately **not** stored, so no later reader can consult
+    /// a scan discriminant instead of the holdings kind.
+    ///
+    /// # Errors
+    ///
+    /// [`LastServedScanMismatch`] when the two disagree — a shim contract
+    /// violation, never a fact to fold.
+    pub fn new(
+        bonded_total_atomic: u64,
+        bad_interval_count: usize,
+        bond_spend_pk: Vec<u8>,
+        holdings_kind: HoldingsKind,
+        gathered_scan: LastServedScan,
+        per_shard_last_served: Vec<u64>,
+    ) -> Result<Self, LastServedScanMismatch> {
+        let expected = holdings_kind.last_served_scan();
+        if gathered_scan != expected {
+            return Err(LastServedScanMismatch {
+                gathered: gathered_scan,
+                expected,
+            });
+        }
+        Ok(Self {
+            bonded_total_atomic,
+            bad_interval_count,
+            bond_spend_pk,
+            holdings_kind,
+            per_shard_last_served,
+        })
+    }
+
     /// The record's current bonded total — an Unbond debit must remove all
     /// of it (row UB9), and a zero total is `NothingToUnbond`.
-    pub bonded_total_atomic: u64,
+    pub fn bonded_total_atomic(&self) -> u64 {
+        self.bonded_total_atomic
+    }
+
     /// Row UB7: entries in the record's bad-interval log. A full log makes
     /// the transaction unconnectable, so it is unverifiable.
-    pub bad_interval_count: usize,
+    pub fn bad_interval_count(&self) -> usize {
+        self.bad_interval_count
+    }
+
     /// Row UB3: the record's **committed** debit authorizer, exactly as
     /// stored. Any non-canonical length — empty included — means the record
     /// authorizes no debit at all; the pin fails closed rather than falling
     /// back to the identity key.
-    pub bond_spend_pk: Vec<u8>,
-    /// The record's holdings kind — one half of the row-UB4 scan pin.
-    pub holdings_kind: HoldingsKind,
-    /// Row UB4: **which accessor the shim actually ran** to produce
-    /// [`per_shard_last_served`](Self::per_shard_last_served).
-    ///
-    /// Carried as a fact rather than re-derived because the wrong gather
-    /// fails **permissively**: a `CompleteTree` record stores no shard
-    /// list, so gathering it with the held-shards accessor yields an empty
-    /// slice, which folds to "never served", which makes the release
-    /// cooldown *elapse* for a record that has been serving. The engine
-    /// pins this echo against `holdings_kind.last_served_scan()`; a
-    /// mismatch is a shim contract violation, never a fold.
-    pub last_served_scan: LastServedScan,
-    /// Row UB4: per-shard last-served epochs from that accessor.
-    /// Never-served shards are omitted, so an empty slice is the legitimate
-    /// "record exists, nothing served" case.
-    pub per_shard_last_served: Vec<u64>,
+    pub fn bond_spend_pk(&self) -> &[u8] {
+        &self.bond_spend_pk
+    }
+
+    /// The record's holdings kind — the authority for which last-served
+    /// gather is correct.
+    pub fn holdings_kind(&self) -> HoldingsKind {
+        self.holdings_kind
+    }
+
+    /// Row UB4: per-shard last-served epochs from the accessor this
+    /// record's kind selects. Never-served shards are omitted, so an empty
+    /// slice is the legitimate "record exists, nothing served" case.
+    pub fn per_shard_last_served(&self) -> &[u64] {
+        &self.per_shard_last_served
+    }
 }
 
 /// §8.7.2 emission-arm facts (rows E6 + E7), owned POD marshaled by the

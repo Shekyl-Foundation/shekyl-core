@@ -109,16 +109,11 @@ unsafe fn unbond_facts_from_ffi(view: &ffi::SubmitUnbondFactsFfi) -> Result<Unbo
     let record = if view.record_present != 0 {
         let r = &view.record;
         let holdings_kind = HoldingsKind::from_u8(r.holdings_kind).map_err(|_| ())?;
-        let last_served_scan = match r.last_served_scan {
+        let gathered_scan = match r.last_served_scan {
             0 => LastServedScan::HeldShards,
             1 => LastServedScan::AllShards,
             _ => return Err(()),
         };
-        // The row-UB4 pin: the gather must have run the accessor this
-        // record's holdings kind selects.
-        if last_served_scan != holdings_kind.last_served_scan() {
-            return Err(());
-        }
         let bond_spend_pk = if r.bond_spend_pk_len == 0 {
             Vec::new()
         } else if r.bond_spend_pk.is_null() {
@@ -136,14 +131,20 @@ unsafe fn unbond_facts_from_ffi(view: &ffi::SubmitUnbondFactsFfi) -> Result<Unbo
             }
             .to_vec()
         };
-        Some(UnbondRecordFacts {
-            bonded_total_atomic: r.bonded_total_atomic,
-            bad_interval_count: r.bad_interval_count,
-            bond_spend_pk,
-            holdings_kind,
-            last_served_scan,
-            per_shard_last_served,
-        })
+        // The row-UB4 pin lives in the constructor: a record whose gather
+        // ran the wrong accessor is unconstructable, so nothing downstream
+        // can fold a permissively-empty slice.
+        Some(
+            UnbondRecordFacts::new(
+                r.bonded_total_atomic,
+                r.bad_interval_count,
+                bond_spend_pk,
+                holdings_kind,
+                gathered_scan,
+                per_shard_last_served,
+            )
+            .map_err(|_| ())?,
+        )
     } else {
         None
     };

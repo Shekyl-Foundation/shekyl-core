@@ -442,7 +442,9 @@ struct ShimFixture
   }
 
   int snapshot(const SubmitTx& s, shekyl_submit_facts_ffi& facts, uint8_t& ki_conflict,
-    const crypto::hash* bond_p_id = nullptr)
+    const crypto::hash* bond_p_id = nullptr,
+    uint8_t bond_probe_kind = SHEKYL_SUBMIT_BOND_PROBE_JOIN,
+    shekyl_submit_unbond_facts_handle** out_unbond = nullptr)
   {
     const crypto::key_image& ki = std::get<txin_to_key>(s.tx.vin[0]).k_image;
     return daemon_submit::snapshot_facts(bap.txpool, bap.bc,
@@ -450,8 +452,9 @@ struct ShimFixture
       reinterpret_cast<const uint8_t*>(ki.data), 1,
       reinterpret_cast<const uint8_t*>(cert_ref.data),
       bond_p_id ? reinterpret_cast<const uint8_t*>(bond_p_id->data) : nullptr,
+      bond_probe_kind,
       /*emission_p_canonical_id=*/nullptr, /*emission_epochs=*/nullptr, 0,
-      /*out_emission=*/nullptr,
+      /*out_emission=*/nullptr, out_unbond,
       &facts, &ki_conflict);
   }
 
@@ -465,10 +468,10 @@ struct ShimFixture
       reinterpret_cast<const uint8_t*>(s.txid.data),
       reinterpret_cast<const uint8_t*>(ki.data), 1,
       reinterpret_cast<const uint8_t*>(cert_ref.data),
-      /*bond_p_canonical_id=*/nullptr,
+      /*bond_p_canonical_id=*/nullptr, SHEKYL_SUBMIT_BOND_PROBE_JOIN,
       reinterpret_cast<const uint8_t*>(emission_p_id.data),
       epochs, n_epochs,
-      out_emission,
+      out_emission, /*out_unbond=*/nullptr,
       &facts, &ki_conflict);
   }
 
@@ -622,7 +625,8 @@ TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)
   shekyl_submit_facts_ffi facts;
   uint8_t ki_conflict = 0;
   EXPECT_EQ(daemon_submit::snapshot_facts(fx.bap.txpool, fx.bap.bc,
-      nullptr, nullptr, 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr,
+      nullptr, nullptr, 0, nullptr, nullptr, SHEKYL_SUBMIT_BOND_PROBE_JOIN,
+      nullptr, nullptr, 0, nullptr, nullptr,
       &facts, &ki_conflict),
     SHEKYL_SUBMIT_INTERNAL_FAULT);
 }
