@@ -325,11 +325,34 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
     assert!(trials > 0, "trials must be non-zero");
     let mean_ms = u64::from(crate::params::carrier::MEAN_CADENCE_MS);
 
-    // How many emissions the blackout could plausibly have hidden. Generous:
-    // an observer that truncated too early would be handicapped by the
-    // instrument rather than by the law.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let k_max = ((blackout_ms / mean_ms) as u32 + 8).max(4);
+    // How many emissions the blackout could plausibly have hidden.
+    //
+    // DERIVED FROM THE TAIL, NOT A CONSTANT MARGIN — and the 2026-08-28
+    // cadence change is what exposed why. The hidden count has mean
+    // `blackout / mean` and spread growing as its square root, so a fixed
+    // `+ 8` covered 2.3 sd at the 12.5 s mean and only **1.5 sd** at 5 s:
+    // ~7% of the count mass sat above the cutoff at the 150 s probe.
+    //
+    // Truncating there is not a neutral approximation. The memoryless
+    // likelihood is flat *because* every Erlang component is summed; dropping
+    // the tail leaves a delta-dependent remainder, which manufactures exactly
+    // the signal this arm exists to show is absent. A cutoff that scales with
+    // the mean but not its spread grades the instrument rather than the law —
+    // §56.5's own lesson, arriving through the observer's other side.
+    //
+    // `lambda + 8*sqrt(lambda)` is an 8 sd bound, whose tail is far below the
+    // `1/trials` resolution of any run this instrument does. The bounded and
+    // metronome arms self-truncate through their support check, so the extra
+    // components cost only time there.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    let k_max = {
+        let lambda = blackout_ms as f64 / mean_ms as f64;
+        ((lambda + 8.0 * lambda.sqrt()).ceil() as u32).max(4)
+    };
 
     // Built once, not per draw.
     let table = (shape == CadenceShape::Memoryless).then(|| {

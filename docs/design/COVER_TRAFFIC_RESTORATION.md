@@ -315,8 +315,20 @@ from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
 statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
 **sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
 are comparable*, which nothing has tested. **The rig spike must hold a circuit
-at 3.20 KiB/s for a full session and confirm it holds** *(was 2.72 KiB/s, the pre-#546 rate this section's own update note records superseding — corrected 2026-08-26; the spike would have been run at 85 % of the real load)*; that is the one input to
-this axis we do not have.
+at 4 KiB/s sustained for a full session, absorbing 6 KiB/s bursts, and confirm
+it holds** *(was 2.72 KiB/s pre-#546, then 3.20 KiB/s — corrected 2026-08-26 —
+and now 4 KiB/s after the 2026-08-28 cadence change; a circuit carries ONE
+noise channel, so the per-channel figure is the one a circuit probe needs:
+`WINDOW_BYTES / mean cadence` sustained and `WINDOW_BYTES / NOISE_MIN_DELAY_MS`
+at the shortest interval. The node-level 16 KiB/s and 24,579 B/s are four
+channels aggregated and are NOT what this probe sizes.)*; that is the one input
+to this axis we do not have.
+
+> **This spec has now gone stale three times, each time silently, because it
+> transcribes a rate the constants derive.** Every cadence or window change
+> moves it, and nothing reds. Whoever runs the rig should read
+> `carrier::WINDOW_BYTES`, `MEAN_CADENCE_MS` and `NOISE_MIN_DELAY_MS` at the
+> time of the run rather than the numbers above.
 
 #### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**
 
