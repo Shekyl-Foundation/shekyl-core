@@ -26,6 +26,7 @@
 use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
+use shekyl_relay_privacy::zone::RelayZone;
 use shekyl_tx_weight::{
     predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
@@ -119,7 +120,7 @@ fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
 /// window budget, or slowing the noise cadence without lowering the cap.
 #[test]
 fn the_cap_stays_under_both_ceilings() {
-    let affords = inherited::noise_windows_in_epoch(PROVISIONED_EPOCH_SECS);
+    let affords = carrier::noise_windows_in_epoch(PROVISIONED_EPOCH_SECS);
     assert!(
         carrier::MAX_FRAGMENTS <= affords,
         "a {PROVISIONED_EPOCH_SECS} s epoch affords {affords} windows at the \
@@ -140,41 +141,66 @@ fn the_cap_stays_under_both_ceilings() {
     );
 }
 
-/// Axis 2's 8 KiB/s ceiling is why the window is the modal shape and the
+/// The per-node bandwidth ceiling is why the window is the modal shape and the
 /// cap carries the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
 ///
-/// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
-/// `COVER_TRAFFIC_RESTORATION.md` §1.7. The fastest cadence is
-/// `NOISE_MIN_DELAY_SECS`; a window that fits the structural max whole at
-/// that cadence is the size the ceiling forbade.
+/// The figure is [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] and is not
+/// written here. Axis 2's 8 KiB/s, which this heading used to name, was
+/// superseded per-node at 16 KiB/s by the same change that derived the
+/// cadence — and a test heading quoting a retired number is how the next
+/// reader learns the wrong ceiling.
 ///
-/// What edit reds this: enlarging `WINDOW_BYTES` past the ceiling, slowing
-/// the cadence without shrinking the window, or a structural-max shrink that
-/// would make a whole-tx window legal (at which point the two-constant split
-/// itself is owed a re-read).
+/// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
+/// `COVER_TRAFFIC_RESTORATION.md` §1.7.
+///
+/// # The denominator was local, stale, and a third one (fixed 2026-08-28)
+///
+/// This test used to carry `const CEILING_BYTES_PER_SEC = 8 * 1024` of its
+/// own and apply it to a **per-channel** rate, while §3.3's figure was per
+/// zone and the ceiling it quoted was per node — three denominators for one
+/// quantity, which is the confusion §3.3 recorded and the per-node ruling
+/// settles. The local copy is deleted rather than updated:
+/// [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] is the only ceiling, and it is
+/// already enforced at compile time beside the constants it divides.
+///
+/// So the first assertion here is deliberately NOT a second guard on the
+/// window — that would be a duplicate of the `const` assert. It states the
+/// **worst posture** in bytes, which the compile-time form cannot report when
+/// it fails. The load-bearing half is the negative control below.
+///
+/// What edit reds this: a structural-max shrink that would make a whole-tx
+/// window legal, at which point the two-constant split itself is owed a
+/// re-read.
 #[test]
-fn the_window_at_the_fastest_cadence_stays_under_the_bandwidth_ceiling() {
-    const CEILING_BYTES_PER_SEC: u64 = 8 * 1024;
+fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
+    // Every channel a node can run at once: `NOISE_CHANNELS` per zone, across
+    // the encrypted zones it may carry. The mean cadence is the denominator —
+    // a jittered emitter's sustained rate is its mean, not its fastest gap.
+    let channels = u64::from(carrier::CEILING_ZONES) * inherited::NOISE_CHANNELS as u64;
+    let mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
+    let ceiling = u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC);
 
-    let window_rate =
-        (carrier::WINDOW_BYTES as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+    // Cross-multiplied, not divided. `a / b <= c` floors, so a breach smaller
+    // than 1 B/s satisfies it while the true average sits over the ceiling.
+    // The B/s figures below are computed for the DIAGNOSTIC only — a reader of
+    // a failure wants bytes per second, but the decision must not round.
+    let node_bytes = (carrier::WINDOW_BYTES as u64) * channels * 1_000;
     assert!(
-        window_rate <= CEILING_BYTES_PER_SEC,
-        "WINDOW_BYTES {} at the fastest cadence ({} s) is {window_rate} B/s, \
-         over the pre-registered 8 KiB/s ceiling — that ceiling is why the \
-         window is not the structural max",
+        node_bytes <= ceiling * mean_ms,
+        "WINDOW_BYTES {} across {channels} channels at a {mean_ms} ms mean \
+         cadence is {} B/s, over the {ceiling} B/s per-node ceiling",
         carrier::WINDOW_BYTES,
-        inherited::NOISE_MIN_DELAY_SECS,
+        node_bytes / mean_ms,
     );
 
     let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
-    let whole_tx_rate =
-        (structural_max as u64).div_ceil(u64::from(inherited::NOISE_MIN_DELAY_SECS));
+    let whole_tx_bytes = (structural_max as u64) * channels * 1_000;
     assert!(
-        whole_tx_rate > CEILING_BYTES_PER_SEC,
-        "a window sized for the structural max ({structural_max} B) at the \
-         fastest cadence is {whole_tx_rate} B/s, which should breach the \
-         8 KiB/s ceiling — that breach is why MAX_FRAGMENTS exists"
+        whole_tx_bytes > ceiling * mean_ms,
+        "a window sized for the structural max ({structural_max} B) is {} B/s \
+         at the worst posture, which should breach the per-node ceiling — that \
+         breach is why MAX_FRAGMENTS exists",
+        whole_tx_bytes / mean_ms,
     );
 }
 
@@ -206,4 +232,82 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
         checked += 1;
     }
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
+}
+
+/// The zone count behind the ceiling is COUNTED, and the peak is derived.
+///
+/// `CEILING_ZONES` used to be a literal `2` — a hand-copy of an answer that
+/// lives in `RelayZone::is_encrypted`, which made the ceiling's build-break
+/// claim false: a third encrypted zone would have raised the real bandwidth
+/// while the constant, and therefore the assert, stayed put.
+///
+/// What edit reds this: making `RelayZone::Public` encrypted (the case the
+/// predicate's own docs anticipate, "encrypting ordinary internet traffic
+/// would make Public eligible for noise") takes the count to 3, and the
+/// compile-time ceiling assert fires before this test even runs.
+#[test]
+fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
+    let counted = RelayZone::ALL.iter().filter(|z| z.is_encrypted()).count();
+    assert_eq!(
+        carrier::CEILING_ZONES as usize,
+        counted,
+        "CEILING_ZONES must equal the number of encrypted zones, not a \
+         transcription of today's answer"
+    );
+    assert_eq!(
+        counted, 2,
+        "Tor and I2P — a change here is a ceiling change"
+    );
+
+    // The peak is an UPPER BOUND, so it rounds up. Asserted against the
+    // rounded-up scaling rather than a re-derivation of the same division,
+    // because the defect this replaces was a floor that published a "peak"
+    // the emitter exceeds by 0.46 B/s — small, and in the one direction a
+    // sizing figure must not err.
+    let exact_num =
+        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS);
+    assert_eq!(
+        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
+        exact_num.div_ceil(u64::from(carrier::NOISE_MIN_DELAY_MS)),
+        "the peak must be the sustained rate scaled by mean/min, rounded UP"
+    );
+    assert!(
+        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
+            >= (carrier::WINDOW_BYTES as u64)
+                * (inherited::NOISE_CHANNELS as u64)
+                * u64::from(carrier::CEILING_ZONES)
+                * 1_000,
+        "the advertised peak must not be below the rate the emitter can reach"
+    );
+    assert_eq!(
+        carrier::PER_NODE_PEAK_BYTES_PER_SEC,
+        24_579,
+        "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
+         3.3 quotes it"
+    );
+
+    // The per-CIRCUIT figures, pinned because the node aggregate and the
+    // single-channel rate were conflated across two documents one review
+    // round apart — the rig spec wanted per-channel while `carrier.rs`
+    // described the node aggregate as "the burst a circuit has to absorb",
+    // which over-provisions a circuit by 4x.
+    assert_eq!(
+        carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC,
+        6_145,
+        "axis 2's rig spec quotes this as the burst one circuit absorbs"
+    );
+    assert_eq!(
+        carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC,
+        4_096,
+        "axis 2's rig spec quotes this as the sustained circuit load"
+    );
+    assert_eq!(
+        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
+            * u64::from(carrier::CEILING_ZONES)
+            * inherited::NOISE_CHANNELS as u64,
+        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
+        "the per-circuit sustained rate times the channel count IS the \
+         per-node ceiling; if these drift apart one is on the wrong \
+         denominator"
+    );
 }

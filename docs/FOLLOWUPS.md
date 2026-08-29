@@ -592,6 +592,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
+- **§56.5 ruled the cadence memoryless; the shipped law is still bounded uniform, and nothing tracked it.** Carries §57's three exits and §58.2's admission threshold `θ`, both priced at the retired 12.5 s mean [`DAEMON_RELAY_PRIVACY.md` §56.7](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
 - **Relay: the `t_core` arrival harness — the witness this path has never
   - Target: pre-genesis
 

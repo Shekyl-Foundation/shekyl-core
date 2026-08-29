@@ -60,7 +60,7 @@ what that change would wake up.
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
 | `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
-| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,CHANNELS}` | `cryptonote_config.h` | cadence + channel count. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
+| `CRYPTONOTE_NOISE_CHANNELS` | `cryptonote_config.h` | channel count. `_MIN_DELAY` and `_DELAY_RANGE` **DELETED 2026-08-28** — zero readers, and the cadence is now `params::carrier::NOISE_MIN_DELAY_MS` / `_DELAY_JITTER_MS` in milliseconds. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
 
@@ -267,6 +267,32 @@ wallet can ask rather than guess.
 
 #### Axis 2 — cover bandwidth per node: **8 KiB/s**, plus an offset commitment
 
+> **SUPERSEDED 2026-08-28 — the ceiling is now 16 KiB/s per node.** *"Exceeded
+> only by a new ruling"* was the escape clause this section wrote for itself,
+> and §3.3 is that ruling: the denominator is per **node**, the cadence is 5 s
+> in the mean, and the worst posture (dual zone, four channels) sits at
+> **16,384 B/s** — at the ceiling, not under it. The text below is kept as the
+> record of the 8 KiB/s argument, which is still the argument the new figure
+> has to answer.
+>
+> **What doubling costs, stated rather than left to be derived.** 16 KiB/s is
+> **~8.9 %** of the pessimistic 180 KiB/s circuit-throughput floor, against
+> ~4.4 % before — and sustained, it is **~42 GB per month** per node against
+> ~21 GB. That is the number a metered-uplink operator feels, and rule 76 says
+> it is provisioned at the floor device rather than at the machine that was
+> handy. The carrier is behind a development opt-in and defaults off, so
+> nothing pays this today; arming it is where the figure lands.
+>
+> **The burst is not the same number.** 16 KiB/s is the *sustained* rate; the
+> shortest interval the cadence draws puts a burst at
+> `carrier::PER_NODE_PEAK_BYTES_PER_SEC` = **24,579 B/s**, ~1.50×. Both
+> figures are **per node** — four channels aggregated. A *circuit* carries one
+> channel and wants `PER_CIRCUIT_PEAK_BYTES_PER_SEC` = **6,145 B/s**; sizing a
+> circuit against the node aggregate over-provisions it by 4×. Both peaks
+> **round up**: the exact rates are 24 578.46 and 6 144.61 B/s, and a "peak"
+> the emitter exceeds is wrong in the one direction a sizing number must not
+> be.
+
 **Absolute ceiling: 8 KiB/s per node**, exceeded only by a new ruling. That is
 rule 76's floor device on a consumer uplink, and ~4 % of the pessimistic
 180 KiB/s circuit-throughput floor. The derived 20,480 B / 12.5 s design sits at
@@ -292,8 +318,23 @@ from a **burst** null result — §94.5(b)'s size slope over an 8 KiB step,
 statistically indistinguishable from zero (t = 0.98–1.64). The carrier is
 **sustained**. So 4 % is an upper bound *assuming burst and sustained throughput
 are comparable*, which nothing has tested. **The rig spike must hold a circuit
-at 3.20 KiB/s for a full session and confirm it holds** *(was 2.72 KiB/s, the pre-#546 rate this section's own update note records superseding — corrected 2026-08-26; the spike would have been run at 85 % of the real load)*; that is the one input to
-this axis we do not have.
+at 4,096 B/s sustained for a full session, absorbing 6,145 B/s bursts, and
+confirm it holds** *(was 2.72 KiB/s pre-#546, then 3.20 KiB/s — corrected 2026-08-26 —
+and now 4 KiB/s after the 2026-08-28 cadence change; a circuit carries ONE
+noise channel, so the per-channel figure is the one a circuit probe needs:
+`carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC` and
+`carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC`, which exist as named constants for
+exactly this reason. The node-level 16 KiB/s and 24,579 B/s are four channels
+aggregated and are NOT what this probe sizes. The burst figure is **6,145**,
+not "6 KiB/s" — the exact rate is 6 144.61 B/s, so a 6,144 cap is 0.61 B/s
+under what one channel emits, and this section requires peaks to round up.)*; that is the one input
+to this axis we do not have.
+
+> **This spec has now gone stale three times, each time silently, because it
+> transcribes a rate the constants derive.** Every cadence or window change
+> moves it, and nothing reds. Whoever runs the rig should read
+> `carrier::WINDOW_BYTES`, `MEAN_CADENCE_MS` and `NOISE_MIN_DELAY_MS` at the
+> time of the run rather than the numbers above.
 
 #### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**
 
@@ -936,6 +977,12 @@ every admissible shape a single fragment. Priced against axis 2's ceiling:
 | 65,536 B | ≥ 16 s | 8 s … 24 s |
 | ~98,046 B | ≥ 24 s | **12 s, flat** |
 
+> **Stale as of 2026-08-28 and kept as the record of the argument.** Every row
+> is per zone against an 8 KiB/s ceiling; §3.3 ruled the denominator **per
+> node** at **16 KiB/s**, and the cadence is now 5 s in the mean rather than
+> 12.5 s. The 20,480 B row's live figures are 4 KiB/s per channel and a modal
+> `hop` of **2.5 s**. Re-price before quoting any row here as purchasable.
+
 So flat *is* purchasable, at a 12 s floor and **exactly at** the ceiling with
 zero margin. **This is analysis, not a proposal — `WINDOW_BYTES` is not
 touched here.** It belongs to the window-sizing question, and it needs the
@@ -965,13 +1012,50 @@ cadence proposal without constraining this one" — halving the cadence, the
 lever this arc has priced repeatedly, **breaches it on a dual-zone node while
 looking fine on a single-zone one**.
 
-**Owed: a ruling on the denominator.** Either the ceiling is per encrypted zone
-(and the per-node total is unbounded in the number of zones, which needs
-saying), or it is per node (and the design figure must be stated at the
-multi-zone case, at a 1.25× margin). Not settled here because it is a
-bandwidth-posture question rather than a wiring one, and it changes §3.2's
-trade table — both rows there are per zone, so a per-node reading halves every
-admissible window on a dual-zone node.
+**~~Owed: a ruling on the denominator.~~ RULED 2026-08-28 — per NODE.** The
+alternative was per encrypted zone, which leaves the per-node total unbounded
+in the number of zones; a ceiling that grows when you add a transport is not a
+ceiling. So the figure is stated at the multi-zone case, which is the posture
+that exists.
+
+| | value |
+| --- | --- |
+| ceiling | **16 KiB/s per node** |
+| window | 20,480 B |
+| channels | 2 per zone × 2 encrypted zones = **4** |
+| mean cadence | **5 000 ms** (`3 333 + U[0, 3 334]`) |
+| per channel | **4 KiB/s** |
+| worst-posture node rate (**sustained**) | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
+| worst-posture **burst** | ceil(20,480 × 4 ÷ 3.333 s) = **24,579 B/s** (~1.50×) |
+| sustained cost | **~42 GB/month**, ~8.9 % of the 180 KiB/s circuit floor |
+
+**It holds at exact equality, and the ceiling is now a build break rather than
+a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` carries it
+with a `const` assert beside the constants it divides, so shortening the
+cadence, widening the window, or adding a third encrypted zone does not go
+quietly — it fails to compile.
+
+That is the honest answer to this section's own objection. A 1.25× margin was
+*"not constraining a future cadence proposal without constraining this one"*;
+1.0× does not pretend to be a bound with slack. What it buys instead is that
+the next change has to **move the ceiling explicitly, with a reason**, rather
+than discovering afterwards that a figure in a table went stale.
+
+**One uniform cadence, no allocation.** The ceiling is not divided among zones
+or channels, and no channel is throttled relative to another: every channel
+draws from the same law. A per-zone or per-channel budget would make emission
+timing depend on how many zones a node happens to carry — a node fact leaking
+into the cadence, which is the CV-4 shape one level up.
+
+**Rebind-on-slow-circuit is the stated handling.** A circuit that cannot
+sustain 4 KiB/s is a transport problem, answered by rebinding the channel, not
+by slowing the emitter for everyone. Slowing it is what would make the cadence
+carry information about the circuit.
+
+**§3.2's trade table is now per node** and both its rows were per zone, so the
+admissible windows there halve on a dual-zone node. The table is analysis
+rather than a proposal — `WINDOW_BYTES` is untouched — but its rows should be
+read against 16 KiB/s per node before any of them is quoted as purchasable.
 
 **Also stale, and it is a measurement spec.** Six lines under the 3.20 KiB/s
 figure, axis 2 still instructs: *"the rig spike must hold a circuit at

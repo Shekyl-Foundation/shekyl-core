@@ -20,10 +20,12 @@
 //!
 //! Neither had a derivation. The 3 KiB window was a Monero cadence artifact,
 //! and **`CRYPTONOTE_MAX_FRAGMENTS` was set equal to
-//! [`super::inherited::noise_windows_in_epoch`]`(300)`** — the epoch *ceiling*
+//! [`noise_windows_in_epoch`]`(300)`** — the epoch *ceiling*
 //! on the cap rather than a cap derived from the transactions it has to carry.
 //! It was a number satisfying a constraint nobody had connected to its
 //! subject, so it was unattached rather than wrong.
+
+use crate::zone::RelayZone;
 
 /// Bytes in one noise emission — every send, real fragment and dummy alike.
 ///
@@ -64,8 +66,16 @@
 ///
 /// **Not sized to hold the largest admissible transaction.** That is the
 /// fragment cap's job ([`MAX_FRAGMENTS`]); conflating the two forces a
-/// ~98 KiB window, which at any usable cadence breaches the pre-registered
-/// 8 KiB/s bandwidth ceiling (`COVER_TRAFFIC_RESTORATION.md` §1.7 axis 2).
+/// ~98 KiB window, which breaches
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 78,436 B/s at the worst posture
+/// against 16,384. `tests/carrier_window.rs` asserts that breach as the
+/// negative control, rather than leaving it as an assertion in prose.
+///
+/// *(This cited "the pre-registered 8 KiB/s ceiling" until 2026-08-28, when
+/// the denominator was ruled per node at 16 KiB/s. The conclusion is
+/// unchanged — a ~98 KiB window breaches either figure by a wide margin — but
+/// the constant is named now instead of a literal, so the next ceiling
+/// change does not leave this paragraph behind.)*
 ///
 /// The derivation is **enforced, not performed** — `tests/carrier_window.rs`
 /// builds a real `NOTIFY_NEW_TRANSACTIONS` at the predicted size and
@@ -95,10 +105,318 @@ pub const WINDOW_BYTES: usize = 20_480;
 /// is sized for the latency of the common case.
 ///
 /// Two ceilings sit above it and neither binds: the epoch affords
-/// [`super::inherited::noise_windows_in_epoch`]`(300) = 20` windows, and the
-/// levin packet limit affords far more. Both are asserted in
+/// [`noise_windows_in_epoch`]`(300) = 44` windows — 20 before the 2026-08-28
+/// cadence change, and the coincidence that made the inherited cap equal to
+/// that number is gone rather than moved — and the levin packet limit affords
+/// far more. Both are asserted in
 /// `tests/carrier_window.rs` against the real constants. The derivation itself
 /// is `ceil(S_max / WINDOW_BYTES)`, pinned as equality there — the inherited
 /// 20 sat in `[ceil, epoch-ceiling]` and would still go green under a
 /// one-sided bound.
 pub const MAX_FRAGMENTS: u32 = 5;
+
+/// Minimum gap between covert emissions, in **milliseconds**.
+///
+/// # No longer inherited, which is why it lives here
+///
+/// This was `inherited::NOISE_MIN_DELAY_SECS`, mirroring
+/// `CRYPTONOTE_NOISE_MIN_DELAY` (10 s). That `#define` and
+/// `CRYPTONOTE_NOISE_DELAY_RANGE` are **deleted from C++ by the same change
+/// that moves the pair here** — they had zero readers, so keeping them would
+/// have left two copies of a privacy constant with nothing forcing them to
+/// agree, and this change makes them disagree. A mirror of nothing is not a
+/// mirror; [`super::inherited`]'s own rule puts it in this module.
+///
+/// # Milliseconds, and the unit change is the safety mechanism
+///
+/// The shipped cadence is 3.333 s, which is not a whole number of seconds, so
+/// seconds stopped being able to express it. Renaming `_SECS` to `_MS` is not
+/// cosmetic: every consumer multiplied by 1 000, and a consumer missed during
+/// a value-only edit would have compiled and run **1 000× wrong**. Renamed,
+/// each one fails to build until it is read.
+pub const NOISE_MIN_DELAY_MS: u32 = 3_333;
+
+/// Width of the uniform jitter added to [`NOISE_MIN_DELAY_MS`], in
+/// milliseconds. The draw is inclusive — `U[0, NOISE_DELAY_JITTER_MS]`.
+///
+/// **Must stay non-zero, and the reason is §56 rather than arithmetic.** At
+/// zero the cadence has no width, the covert channel becomes a **metronome**,
+/// and Q-11 Unit 2 disqualified that shape at a **1.000** re-identification
+/// rate under the strong matcher — a fixed period is a permanent per-stream
+/// identifier. The build fails rather than the daemon degrading, because the
+/// failure is silent in both places it would land: the daemon would emit a
+/// perfectly periodic carrier while still calling it jittered, and the Unit 2
+/// sweep would run its `BoundedUniform` and `Metronome` arms on the *same law
+/// under two names*.
+///
+/// # The jitter-to-base ratio is DOUBLED, deliberately — not preserved
+///
+/// Shipped was `10 s + U[0, 5 s]`: a ratio of **0.5**. This is
+/// `3 333 + U[0, 3 334]`: a ratio of **1.0**. The cadence round was specified
+/// as "preserving §56's ratio" and the numbers given did not preserve it — a
+/// ratio-preserving 5 s mean would have been `4 000 + U[0, 2 000]`. Corrected
+/// in the record rather than in the constants, because the doubling is in the
+/// safe direction and is **measured**: more relative jitter is stronger
+/// against a matcher, and §56.7's bounded residual falling 0.120 → 0.058 at a
+/// 10 s blackout is that effect.
+///
+/// **Do not read 1.0 as the invariant.** §56 constrains the jitter to be
+/// non-zero, and the real standing requirement is that jitter **scales with
+/// the base rather than staying fixed** — a fixed width against a shrinking
+/// base is the path back to the metronome. Neither 0.5 nor 1.0 is a derived
+/// quantity; the warrant for this one is the linkage measurement, and a future
+/// cadence should re-measure rather than copy the number.
+///
+/// # Why 3 334 and not 3 333
+///
+/// The odd split is what makes the mean **exactly** 5 000 ms:
+/// `3 333 + 3 334/2`. A symmetric `3 333 + U[0, 3 333]` means 4 999.5 ms,
+/// which puts the worst-posture node rate at 16 385.6 B/s — **1.6 B/s above**
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`], so the ceiling assert below would fail
+/// on a rounding artifact rather than on a design decision. Half a
+/// millisecond of asymmetry is not a privacy quantity; a ceiling that holds
+/// by construction is.
+pub const NOISE_DELAY_JITTER_MS: u32 = 3_334;
+
+const _: () = assert!(
+    NOISE_DELAY_JITTER_MS > 0,
+    "covert cadence jitter must be non-zero: at zero the carrier is a \
+     metronome, which Q-11 Unit 2 (§56) disqualified at a 1.000 \
+     re-identification rate"
+);
+
+/// Mean covert cadence, in milliseconds: `min + width/2`, the jitter being
+/// uniform and inclusive.
+pub const MEAN_CADENCE_MS: u32 = NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS / 2;
+
+const _: () = assert!(
+    MEAN_CADENCE_MS == 5_000,
+    "the cadence mean is the bandwidth denominator and every rate figure in \
+     COVER_TRAFFIC_RESTORATION.md sec 3.3 is stated against exactly 5 000 ms"
+);
+
+/// Encrypted zones one node may carry at once — the **worst posture**.
+///
+/// Tor and I2P today. This is the multiplier that made the old per-zone
+/// figure misleading: `NOISE_CHANNELS` is documented as *"max outbound
+/// connections **per zone**"*, so a per-zone rate understates a dual-zone node
+/// by exactly this factor.
+///
+/// # Counted from the canonical zone set, not transcribed
+///
+/// A literal `2` here would have been a hand-maintained copy of an answer that
+/// lives in [`RelayZone::is_encrypted`], and the ceiling's whole claim is that
+/// adding a third encrypted zone is a **build break**. A transcribed count
+/// makes that claim false — the new zone would raise the real bandwidth while
+/// this constant, and therefore the assert, stayed put. So it is derived from
+/// [`RelayZone::ALL`] through the same predicate the carrier uses to decide
+/// noise eligibility.
+///
+/// What stops `ALL` itself from going stale is that the enum and `ALL` are
+/// **emitted from one variant list** by `relay_zones!`. An earlier draft of
+/// this paragraph credited a `position()` match instead, which was wrong twice
+/// over: that function no longer exists, and while it did it caught a new
+/// *variant* without catching an `ALL` left behind after the match was fixed.
+pub const CEILING_ZONES: u32 = {
+    let mut i = 0;
+    let mut n = 0;
+    while i < RelayZone::ALL.len() {
+        if RelayZone::ALL[i].is_encrypted() {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+};
+
+/// SUSTAINED cover-bandwidth ceiling, **per node**, in bytes per second.
+///
+/// # The denominator is per NODE, ruled 2026-08-28
+///
+/// `COVER_TRAFFIC_RESTORATION.md` §3.3 recorded the two halves of the old
+/// comparison sitting on different denominators — an 8 KiB/s ceiling checked
+/// against a per-*zone* figure — and left the ruling owed. It is per node.
+/// A dual-zone node is the posture to state, because it is the one that
+/// exists, and a per-zone ceiling leaves the per-node total unbounded in the
+/// number of zones.
+///
+/// # SUSTAINED, and the word is load-bearing
+///
+/// The denominator is [`MEAN_CADENCE_MS`], so this bounds the **long-run mean**
+/// rate — which is the quantity a link is provisioned against, and the one
+/// "cover bandwidth per node" means. It is **not** an instantaneous cap. A
+/// jittered emitter's shortest interval is [`NOISE_MIN_DELAY_MS`], so a burst
+/// runs at [`PER_NODE_PEAK_BYTES_PER_SEC`] — `mean / min` ≈ 1.50015× this
+/// figure — and over any finite window the realised average sits either side
+/// of the mean rather than under it.
+///
+/// That is inherent to a jittered cadence rather than a defect in the budget:
+/// removing the overshoot means removing the jitter, which is the metronome
+/// §56 disqualified. Both numbers are stated so a reader pricing a month uses
+/// the mean and a reader sizing for burst uses the peak, instead of one number
+/// being asked to do both jobs.
+///
+/// **Both are NODE-level.** Sizing a single circuit needs
+/// [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`], which is a quarter of the peak — a
+/// circuit carries one channel, not four.
+///
+/// # It is a statement of maximum cost, not a bound with slack
+///
+/// The assert below holds at **exact equality** and that is deliberate:
+/// `20 480 B × 2 channels × 2 zones ÷ 5 s = 16 384 B/s`. §3.3 objected that a
+/// ceiling at 1.25× margin was "not constraining a future cadence proposal
+/// without constraining this one"; at 1.0× it does not pretend to. What it
+/// does instead is make any future change **say so** — shortening the cadence,
+/// widening the window, or adding a third encrypted zone is a build break
+/// here, and moving the ceiling becomes an explicit edit with a reason rather
+/// than a figure quietly going stale in a table.
+pub const PER_NODE_CEILING_BYTES_PER_SEC: u32 = 16 * 1024;
+
+// Cross-multiplied rather than divided, and the reason is the claim above.
+// `PER_NODE_CEILING_BYTES_PER_SEC` says the ceiling holds *by construction*;
+// an integer division floors, so a breach smaller than 1 B/s would satisfy a
+// `rate <= ceiling` form while the true average sat over it. The rational
+// comparison has no such gap — and a check that rounds cannot support a claim
+// that the constants were chosen to avoid rounding.
+const _: () = assert!(
+    (WINDOW_BYTES as u64)
+        * (super::inherited::NOISE_CHANNELS as u64)
+        * (CEILING_ZONES as u64)
+        * 1_000
+        <= (PER_NODE_CEILING_BYTES_PER_SEC as u64) * (MEAN_CADENCE_MS as u64),
+    "worst-posture cover bandwidth exceeds the per-node ceiling: WINDOW_BYTES \
+     x NOISE_CHANNELS x CEILING_ZONES / mean cadence must stay at or under \
+     PER_NODE_CEILING_BYTES_PER_SEC (COVER_TRAFFIC_RESTORATION.md sec 3.3)"
+);
+
+/// Peak cover bandwidth **per node**, in bytes per second — the aggregate
+/// burst across every channel, as opposed to the sustained load the node is
+/// provisioned for.
+///
+/// **NOT a circuit requirement.** A Tor or I2P circuit carries **one** of the
+/// four channels, so sizing a circuit against this figure over-provisions it
+/// by 4×. [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`] is that number. The two were
+/// conflated here in an earlier draft, which is easy to do and expensive in
+/// the direction that wastes capacity.
+///
+/// Every channel emitting at [`NOISE_MIN_DELAY_MS`], the shortest interval the
+/// cadence can draw. Derived rather than written, so it cannot drift from the
+/// cadence it comes out of.
+///
+/// **Rounded UP, because it is advertised as an upper bound.** The exact value
+/// is 24 578.46 B/s; flooring it to 24 578 publishes a "peak" the emitter
+/// actually exceeds, which is the one direction a sizing figure must not err
+/// in. `mean / min` is likewise **1.50015×** rather than exactly 1.5× — the
+/// asymmetric jitter that makes the mean exact makes this ratio inexact, and
+/// the two cannot both be round.
+///
+/// **Deliberately not asserted against a ceiling of its own.** No peak budget
+/// has ever been pre-registered, and inventing one here would be a constant
+/// with no warrant — the kind of number a later reader treats as derived
+/// because it sits next to derived ones. What it is for is disclosure: §3.3's
+/// figures are sustained, and an operator sizing a NODE's uplink needs this
+/// one; a circuit probe wants [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`].
+pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
+    let numerator = (WINDOW_BYTES as u64)
+        * (super::inherited::NOISE_CHANNELS as u64)
+        * (CEILING_ZONES as u64)
+        * 1_000;
+    let denominator = NOISE_MIN_DELAY_MS as u64;
+    let raw = numerator.div_ceil(denominator);
+    // Checked rather than assumed. Unlike `noise_windows_in_epoch`, the fit is
+    // NOT provable from the shape of the expression: `peak = sustained x
+    // mean/min`, and `mean/min` is unbounded as the jitter grows against the
+    // base. It is ~1.50015x today; an assert is what keeps that from becoming a
+    // silent truncation if it ever is not.
+    assert!(
+        raw <= u32::MAX as u64,
+        "peak cover bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        raw as u32
+    }
+};
+
+/// Peak cover bandwidth **per circuit**, in bytes per second.
+///
+/// One channel at the shortest interval the cadence can draw. This is the
+/// figure a Tor or I2P **circuit** probe sizes against, because a circuit
+/// carries one channel — [`PER_NODE_PEAK_BYTES_PER_SEC`] is four of these
+/// aggregated and over-provisions a single circuit by 4×.
+///
+/// Exists as a constant rather than a division a reader performs, because the
+/// two were conflated in prose across two documents one review round apart:
+/// `COVER_TRAFFIC_RESTORATION.md`'s rig spec correctly wanted the per-channel
+/// rate while this module described the node aggregate as "the burst a circuit
+/// has to absorb". A named value cannot be picked up by the wrong reader as
+/// easily as a sentence can.
+///
+/// **Rounds UP** for the same reason as the node figure: it is advertised as
+/// an upper bound, and the exact rate is 6 144.61 B/s — a 6 KiB/s cap would be
+/// 0.61 B/s under what one channel actually emits.
+pub const PER_CIRCUIT_PEAK_BYTES_PER_SEC: u32 = {
+    let raw = (WINDOW_BYTES as u64) * 1_000;
+    let denominator = NOISE_MIN_DELAY_MS as u64;
+    let ceil = raw.div_ceil(denominator);
+    assert!(
+        ceil <= u32::MAX as u64,
+        "peak per-circuit bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        ceil as u32
+    }
+};
+
+/// Sustained cover bandwidth **per circuit**, in bytes per second — one
+/// channel at the mean cadence. The rig spec in
+/// `COVER_TRAFFIC_RESTORATION.md` axis 2 sizes against this.
+pub const PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC: u32 = {
+    let raw = (WINDOW_BYTES as u64) * 1_000 / (MEAN_CADENCE_MS as u64);
+    assert!(
+        raw <= u32::MAX as u64,
+        "sustained per-circuit bandwidth no longer fits u32"
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        raw as u32
+    }
+};
+
+const _: () = assert!(
+    (PER_CIRCUIT_PEAK_BYTES_PER_SEC as u64)
+        * (super::inherited::NOISE_CHANNELS as u64)
+        * (CEILING_ZONES as u64)
+        >= PER_NODE_PEAK_BYTES_PER_SEC as u64,
+    "the per-circuit peak times the channel count must cover the node peak: \
+     if it does not, one of the two is derived from the wrong denominator"
+);
+
+/// Windows an epoch of `min_epoch_secs` affords at the **slowest** cadence
+/// (`NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS`).
+///
+/// Integer division: one window short of `MAX_FRAGMENTS * per_send` drops a
+/// whole window. A full-size message still occupying a window when the epoch
+/// rolls is discarded by CV-1 and never arrives.
+///
+/// This is the **ceiling** [`MAX_FRAGMENTS`] must stay under, not its
+/// definition — the inherited value was silently set equal to it.
+///
+/// Moved here with the cadence it divides by, and now in milliseconds.
+///
+/// Widened to `u64` internally: `min_epoch_secs * 1_000` in `u32` caps the
+/// domain at ~49 days of epoch and panics in debug above it. The epoch is a
+/// security parameter that this arc has already discussed lengthening (§57's
+/// second exit), so a silent domain limit on the function that prices it is
+/// the wrong place to economise.
+#[must_use]
+// The `as u32` cannot truncate: `per_send` is 6 667 ms, comfortably over
+// 1 000, so the quotient is strictly LESS than `min_epoch_secs` — which is
+// already a `u32`. Widening the numerator removes the overflow without
+// widening the result.
+#[allow(clippy::cast_possible_truncation)]
+pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
+    let per_send = (NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS) as u64;
+    ((min_epoch_secs as u64 * 1_000) / per_send) as u32
+}

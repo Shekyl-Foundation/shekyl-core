@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 
 use crate::geometric::GeometricTable;
-use crate::params::{inherited, DandelionParams};
+use crate::params::{carrier, inherited, DandelionParams};
 use crate::poisson::PoissonTable;
 use crate::rng::{bernoulli, bounded_uniform, RelayRng};
 use crate::stem_map::ConnectionId;
@@ -733,30 +733,35 @@ impl EmbargoTimer {
 /// conformance question, not because it is part of Dandelion++.
 #[derive(Debug, Clone, Copy)]
 pub struct NoiseCadence {
-    min_delay_secs: u32,
-    jitter_secs: u32,
+    min_delay_ms: u32,
+    jitter_ms: u32,
 }
 
 impl NoiseCadence {
-    /// The inherited cadence: 10 s + U[0, 5 s] between covert sends.
+    /// The shipped cadence: 3.333 s + U[0, 3.334 s] between covert sends, a
+    /// mean of exactly 5 000 ms.
+    ///
+    /// Named `shipped` rather than `inherited` since 2026-08-28: the pair it
+    /// reads is no longer a mirror of `cryptonote_config.h`, and those
+    /// `#define`s are deleted.
     #[must_use]
-    pub const fn inherited() -> Self {
+    pub const fn shipped() -> Self {
         Self {
-            min_delay_secs: inherited::NOISE_MIN_DELAY_SECS,
-            jitter_secs: inherited::NOISE_DELAY_JITTER_SECS,
+            min_delay_ms: carrier::NOISE_MIN_DELAY_MS,
+            jitter_ms: carrier::NOISE_DELAY_JITTER_MS,
         }
     }
 
     /// Next covert-send deadline relative to `start`.
     pub fn next_send<R: RelayRng + ?Sized>(&self, start: Millis, rng: &mut R) -> Millis {
-        let jitter_ms = u64::from(self.jitter_secs) * 1_000;
+        let jitter_ms = u64::from(self.jitter_ms);
         let offset = if jitter_ms == 0 {
             0
         } else {
             bounded_uniform(rng, jitter_ms)
         };
         start
-            .saturating_add(u64::from(self.min_delay_secs).saturating_mul(1_000))
+            .saturating_add(u64::from(self.min_delay_ms))
             .saturating_add(offset)
     }
 }
@@ -962,14 +967,46 @@ mod tests {
         );
     }
 
+    /// The band is derived from the constants rather than transcribed, so a
+    /// cadence change retargets it instead of turning it red — the literal
+    /// `10_500..=15_500` here was a second copy of the pair.
+    ///
+    /// **Containment alone was too weak to be worth keeping.** A `next_send`
+    /// that ignored the jitter and returned `min` every time satisfied the old
+    /// assertion — that is precisely the **metronome**, the one shape §56
+    /// disqualified at a 1.000 re-identification rate. So the span is asserted
+    /// too: over 2 000 draws across a 3 335 ms band, missing either 5 % tail
+    /// has probability `0.95^2000`, which is zero for practical purposes.
     #[test]
     fn noise_cadence_spans_its_band() {
-        let c = NoiseCadence::inherited();
+        const START: u64 = 500;
+        let lo = START + u64::from(carrier::NOISE_MIN_DELAY_MS);
+        let hi = lo + u64::from(carrier::NOISE_DELAY_JITTER_MS);
+        let tail = u64::from(carrier::NOISE_DELAY_JITTER_MS) / 20;
+
+        let c = NoiseCadence::shipped();
         let mut rng = SplitMix64::new(9);
+        let (mut seen_lo, mut seen_hi) = (u64::MAX, 0_u64);
         for _ in 0..2_000 {
-            let t = c.next_send(500, &mut rng);
-            assert!((10_500..=15_500).contains(&t), "noise send at {t}");
+            let t = c.next_send(START, &mut rng);
+            assert!(
+                (lo..=hi).contains(&t),
+                "noise send at {t}, band {lo}..={hi}"
+            );
+            seen_lo = seen_lo.min(t);
+            seen_hi = seen_hi.max(t);
         }
+        assert!(
+            seen_lo <= lo + tail,
+            "no draw within 5% of the band floor ({seen_lo} vs {lo}) — a \
+             cadence pinned near its maximum is not the law that was graded"
+        );
+        assert!(
+            seen_hi >= hi - tail,
+            "no draw within 5% of the band ceiling ({seen_hi} vs {hi}) — at \
+             zero effective width the carrier is a metronome, which Q-11 \
+             Unit 2 disqualified"
+        );
     }
 
     #[test]
