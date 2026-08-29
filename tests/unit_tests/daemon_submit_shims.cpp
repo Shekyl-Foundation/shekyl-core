@@ -25,6 +25,7 @@
 #include <cstring>
 #include <ctime>
 #include <future>
+#include <limits>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -138,9 +139,49 @@ public:
       return false;
     out = {};
     out.join_settlement_epoch = 3;
-    out.holdings_kind = static_cast<uint8_t>(cryptonote::archival_holdings_kind::CompleteTree);
+    // Defaults to CompleteTree (the emission probe's substrate); the Unbond
+    // gather tests flip it to exercise the kind -> accessor decision.
+    out.holdings_kind = unbond_holdings_kind;
     out.claimed_settlement_epochs = bond_claimed_epochs;
+    out.bonded_total_atomic = unbond_bonded_total;
+    out.bond_spend_pk = unbond_bond_spend_pk;
+    out.bad_intervals.resize(unbond_bad_interval_count);
     return true;
+  }
+
+  // §8.7.1.1 Unbond gather substrate. `last_served_call` is the INDEPENDENT
+  // observable: it records which DB accessor the shim actually reached, not
+  // which one the shim then claims to have run. The Rust-side pin compares
+  // the shim's echoed discriminant against the record's holdings kind, so a
+  // shim that ran the wrong accessor AND echoed the wrong byte is caught
+  // there; only this counter catches one that ran the wrong accessor and
+  // echoed the right byte.
+  enum class LastServedCall { None, HeldShards, AllShards };
+  mutable LastServedCall last_served_call = LastServedCall::None;
+  uint8_t unbond_holdings_kind =
+    static_cast<uint8_t>(cryptonote::archival_holdings_kind::CompleteTree);
+  uint64_t unbond_bonded_total = 0;
+  std::vector<uint8_t> unbond_bond_spend_pk;
+  size_t unbond_bad_interval_count = 0;
+  uint64_t last_slash_epoch = std::numeric_limits<uint64_t>::max();
+  std::vector<uint64_t> held_shard_epochs{7};
+  std::vector<uint64_t> all_shard_epochs{11};
+
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(
+    const crypto::hash&, const std::vector<uint64_t>&) const override
+  {
+    last_served_call = LastServedCall::HeldShards;
+    return held_shard_epochs;
+  }
+  virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
+    const crypto::hash&) const override
+  {
+    last_served_call = LastServedCall::AllShards;
+    return all_shard_epochs;
+  }
+  virtual uint64_t get_archival_last_slash_epoch() const override
+  {
+    return last_slash_epoch;
   }
 
   // Fault-injection hook: when set, add_txpool_tx throws, standing in for an
@@ -617,6 +658,141 @@ TEST(daemon_submit_shims, snapshot_marshals_emission_fact_bundle)
   EXPECT_EQ(view->snapshots[0].has_budget_row, 0);
   EXPECT_EQ(view->snapshots[1].has_budget_row, 0);
   shekyl_submit_emission_facts_free(handle);
+}
+
+// ── §8.7.1.1 Unbond gather ─────────────────────────────────────────────
+//
+// The kind -> accessor decision is Rust's (shekyl_archival_last_served_scan,
+// exhaustive on HoldingsKind). This site only marshals the discriminant onto
+// the matching DB accessor, and the failure it can introduce is silent and
+// PERMISSIVE: a complete-tree record gathered with the held-shards accessor
+// returns an empty slice, which folds to "never served", which lets the
+// release cooldown elapse for a record that has been serving. So these tests
+// assert on which accessor the gather REACHED, not on the byte it reported.
+TEST(daemon_submit_shims, unbond_gather_runs_the_accessor_the_holdings_kind_selects)
+{
+  struct Case
+  {
+    cryptonote::archival_holdings_kind kind;
+    SubmitTestDB::LastServedCall expected_call;
+    uint8_t expected_echo;
+    uint64_t expected_epoch;
+  };
+  const Case cases[] = {
+    {cryptonote::archival_holdings_kind::CompleteTree,
+      SubmitTestDB::LastServedCall::AllShards,
+      SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS, 11},
+    {cryptonote::archival_holdings_kind::ShardSetCompact,
+      SubmitTestDB::LastServedCall::HeldShards,
+      SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_HELD_SHARDS, 7},
+  };
+  for (const Case& c : cases)
+  {
+    ShimFixture fx;
+    fx.db->bond_record_present = true;
+    fx.db->unbond_holdings_kind = static_cast<uint8_t>(c.kind);
+    fx.db->unbond_bonded_total = 750'000'000;
+    fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+    fx.db->unbond_bad_interval_count = 2;
+    fx.db->last_slash_epoch = 4;
+
+    const SubmitTx s = fx.make_tx(1, 1);
+    shekyl_submit_facts_ffi facts;
+    uint8_t ki_conflict = 0;
+    shekyl_submit_unbond_facts_handle* handle = nullptr;
+    // The mock DB keys nothing on the id; the probe routing is the subject.
+  const crypto::hash p_id{};
+    ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+        SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle),
+      SHEKYL_SUBMIT_OK);
+    ASSERT_NE(handle, nullptr) << "the UNBOND probe must fill the bundle";
+
+    EXPECT_EQ(fx.db->last_served_call, c.expected_call)
+      << "the gather reached the wrong DB accessor for this holdings kind";
+
+    const shekyl_submit_unbond_facts_ffi* view =
+      shekyl_submit_unbond_facts_view(handle);
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->record_present, 1);
+    EXPECT_EQ(view->record.last_served_scan, c.expected_echo);
+    ASSERT_EQ(view->record.per_shard_last_served_len, 1u);
+    EXPECT_EQ(view->record.per_shard_last_served[0], c.expected_epoch);
+    EXPECT_EQ(view->record.bonded_total_atomic, 750'000'000u);
+    EXPECT_EQ(view->record.bad_interval_count, 2u);
+    ASSERT_EQ(view->record.bond_spend_pk_len, config::PQC_HYBRID_SINGLE_KEY_LEN);
+    EXPECT_EQ(view->record.bond_spend_pk[0], 0xCD);
+    // As stored: Rust owns the u64::MAX normalisation, in one place.
+    EXPECT_EQ(view->last_settled_slash_epoch, 4u);
+    shekyl_submit_unbond_facts_free(handle);
+  }
+}
+
+TEST(daemon_submit_shims, unbond_gather_reports_an_absent_record_without_touching_the_scans)
+{
+  ShimFixture fx;
+  fx.db->bond_record_present = false;
+  fx.db->last_slash_epoch = std::numeric_limits<uint64_t>::max();
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  // The mock DB keys nothing on the id; the probe routing is the subject.
+  const crypto::hash p_id{};
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle),
+    SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+
+  const shekyl_submit_unbond_facts_ffi* view =
+    shekyl_submit_unbond_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->record_present, 0);
+  // No record means no holdings kind, so there is no accessor to choose:
+  // running one anyway would be a scan against a P with no bond.
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None);
+  // The POD's kind-agnostic presence bit must agree with the bundle; the
+  // Rust shim refuses the pair if it does not.
+  EXPECT_EQ(facts.bond_record_probed, 1);
+  EXPECT_EQ(facts.bond_record_exists, 0);
+  shekyl_submit_unbond_facts_free(handle);
+}
+
+TEST(daemon_submit_shims, the_join_probe_does_not_fill_the_unbond_bundle)
+{
+  // One probe, one fact: the JoinMarket arm asks only whether a record
+  // exists, so it must not marshal the debit arm's contents.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  // The mock DB keys nothing on the id; the probe routing is the subject.
+  const crypto::hash p_id{};
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_JOIN, &handle),
+    SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(handle, nullptr) << "the JOIN probe must leave the bundle unset";
+  EXPECT_EQ(facts.bond_record_probed, 1);
+  EXPECT_EQ(facts.bond_record_exists, 1);
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None);
+}
+
+TEST(daemon_submit_shims, an_unknown_bond_probe_kind_is_a_marshalling_fault)
+{
+  ShimFixture fx;
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  // The mock DB keys nothing on the id; the probe routing is the subject.
+  const crypto::hash p_id{};
+  EXPECT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id, /*bond_probe_kind=*/9, &handle),
+    SHEKYL_SUBMIT_INTERNAL_FAULT)
+    << "an out-of-set probe discriminant must fault, never default to a probe";
+  EXPECT_EQ(handle, nullptr);
 }
 
 TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)

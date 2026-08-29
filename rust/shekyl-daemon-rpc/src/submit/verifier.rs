@@ -22,16 +22,26 @@
 //! (O6 mask non-triviality, N8 CT balance + Bp+ range proof), then
 //! `check_tx_inputs`'s (K12 FCMP++ membership, K13 PQC hybrid auth).
 //!
-//! ## The bond-post battery (§8.7.1 BP rows + the funding-arm K battery)
+//! ## The bond-post batteries (§8.7.1 BP rows, §8.7.1.1 UB rows)
 //!
-//! [`SubmitTxKind::BondPost`] runs [`verify_bond_post`]: the spend legs
-//! (O6 masks, the **bond** CT balance
-//! `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`, Bp+,
-//! K12 FCMP++ over the `ToKey` funding subset, K13 PQC over every input)
-//! plus the archival BP legs, each a native call into
-//! `shekyl-archival-retention` — the same crate the C++ oracle's own
-//! `check_archival_bond_post_input` dispatches to over FFI, so the two
-//! paths share the verifying functions and cannot diverge semantically.
+//! [`SubmitTxKind::BondPost`] runs `verify_bond_post`, which dispatches on
+//! the post kind after the legs both arms share: the spend legs (O6 masks,
+//! the **bond** CT balance
+//! `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`, Bp+, K12
+//! FCMP++ over the `ToKey` funding subset, K13 PQC over every input) and
+//! BP2's canonical-id recomputation. Every semantic leg is a native call
+//! into `shekyl-archival-retention` — the same crate the C++ oracle's own
+//! `check_archival_bond_post_input` dispatches to over FFI, so the two paths
+//! share the verifying functions and cannot diverge semantically.
+//!
+//! - **JoinMarket — the credit arm** (`verify_credit_arm`): BP5 pins the
+//!   bond slot's auth key to `P`'s **identity** key, then BP3's record-absent
+//!   fact and BP4's economic battery.
+//! - **Unbond — the debit arm** (`verify_debit_arm`): UB3 pins it to the
+//!   **record's committed `bond_spend_pk`** instead, then UB2/UB4–UB9 over
+//!   the §8.7.1.1 fact bundle. BP5's rule is *wrong* here: the identity key
+//!   is the one a serving host holds, so an identity-authorized value-out
+//!   would turn a host compromise into a collateral drain.
 //!
 //! There is **no wire contradiction**: since the §13 (F1/F3) coupling
 //! closure (2026-07-05, `GENESIS_TX_WIRE_FORMAT.md` §1.1) `shekyl-wire`
@@ -52,22 +62,15 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **Non-JoinMarket bond-posts** (`Unbond` / `HoldingsUpdate` /
-//!   `Rebond`, wire `BondPostKind::Other`): the semantic verifies exist in
-//!   `shekyl-archival-retention` (the block path runs them today), but
-//!   their submit-side fact sets — per-shard last-served cursors, the
-//!   slash-settlement watermark, interval logs, the settlement epoch —
-//!   and each fact's Phase-D re-check/race classification are not yet
-//!   specified in `DAEMON_SUBMIT_VERDICT.md` §8.7.1 (which pins the
-//!   JoinMarket BP rows only). Refused `Malformed` in [`verify_bond_post`].
-//!   **Reopening criterion (rule 21) has fired for Unbond:**
-//!   `shekyl-archival-bond-builder::build_unbond_vin` and `AssembleUnbond`
-//!   are the wallet construction leg. What remains is the *submit* surface
-//!   — extend [`SubmitFacts`] with Unbond's fact set (Phase-D re-check
-//!   semantics) and dispatch `verify_unbond_bond_post` here, the same
-//!   function the C++ block path already calls. That is a different
-//!   validation surface from the producer (rule 19) and is not guessed
-//!   into this battery. HoldingsUpdate / Rebond still have no producer.
+//! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`): the semantic
+//!   verifies exist in `shekyl-archival-retention` and the block path runs
+//!   them today, but **no wallet constructs either kind**. Building their
+//!   submit-side fact sets now would be pre-provisioned flexibility (rule
+//!   21) whose Phase-D race classification could not be verified against
+//!   any real submission, so `verify_bond_post` refuses them at the kind
+//!   dispatch. Reopening criterion: a producer. Re-evaluation shape: the
+//!   §8.7.1.1 pattern — matrix rows, a `SubmitFacts` bundle carrying the
+//!   kind's operands, a Phase-D disposition per fact.
 //!
 //! Until a criterion fires, these arms refuse loudly-but-safely
 //! (`Malformed`, the §7.6 non-panicking posture) rather than carrying an
@@ -618,7 +621,7 @@ fn emission_reject(e: &EmissionVerifyError) -> VerifyFailure {
 /// path: a **credit** proves control of `P_canonical_id` and moves no bonded
 /// value out, so the identity key is the right authorizer; a **debit** takes
 /// collateral out, and the identity key is exactly the key a compromised
-/// serving host holds. See [`verify_debit_arm`].
+/// serving host holds. See `verify_debit_arm`.
 enum BondArm<'a> {
     /// JoinMarket (§8.7.1) — carries the `bond_spend_pk` the record will
     /// commit; authorized by the identity key (row BP5).

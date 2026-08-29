@@ -1416,9 +1416,9 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `:4890-4897` | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
 | UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) | `:4901-4902` | **B fact + D re-check** — see the time-asymmetry note below; absent at B → `Malformed`, present-at-B-then-gone-at-D → `DoubleSpendConflict` |
 | UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin`, `:4906-4907` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
-| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `:4915-4924` | **B fact + D re-check** — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
-| UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C** — native fold; `Malformed`, and **contingent**: a serve landing during C advances the anchor and re-closes the window, so a later resubmission of the same bytes can pass |
-| UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `:4925` | **B fact + D re-check** — the watermark only advances, so a stale-low read fails **closed**; `Malformed`, contingent |
+| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `:4915-4924` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
+| UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
+| UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `:4925` | **B fact, no D re-check** — the watermark only advances, so a Phase-B read can only be *behind* the truth, which fails **closed**; `Malformed`, contingent |
 | UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `:4923` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
 | UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `:4926` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
 | UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `:4928-4948` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
@@ -1445,6 +1445,32 @@ self-describing — the shim reports which accessor it ran, and the engine pins
 that byte against `holdings_kind.last_served_scan()`. A mismatch is a
 [`ShimContract`] fault, never a guessed fold. The bite: a serving
 `CompleteTree` record gathered as `HeldShards` must be observed refusing.
+
+**Phase-D scope: the terminal fact only, and why the rest do not need it.**
+The commit re-check re-gathers the POD, not the bundle — so UB2 is re-checked
+(the record's presence rides `bond_record_probed`/`bond_record_exists`, which
+the commit fills from the reparsed blob) and UB4–UB7 are not. That is a
+scope decision, not an omission, and it rests on which direction each fact can
+move during Phase C:
+
+- **UB2 is terminal.** A record that disappears means a competing debit
+  connected; no resubmission of these bytes can ever succeed, so the verdict
+  has to be `DoubleSpendConflict` rather than a retry.
+- **UB6 can only fail closed.** The watermark advances monotonically, so a
+  Phase-B read is at worst *behind* the truth — it refuses an exit that had
+  become legal, never admits one that had not.
+- **UB4/UB5/UB7 are contingent, and a stale pass costs pool space, not
+  safety.** A serve landing during Phase C re-arms the cooldown; an interval
+  appended during Phase C can fill the log. Either way the block path refuses
+  the transaction at connect, so admitting it to the pool cannot put an
+  unauthorized debit on the chain. Re-marshaling the whole bundle under the
+  commit lock to reject a few seconds earlier would lengthen the write-side
+  lock scope for no consensus gain — the same pool-level scope-honesty posture
+  §8.7.2 row E13 takes.
+
+Reopening criterion (rule 21): a measured pool-occupancy problem from
+cooldown-raced Unbonds, or a commit path that already re-marshals archival
+bundles for another arm — at which point the bundle rides along for free.
 
 **One lock scope, whole bundle.** The record value, the UB4 slice and the UB6
 watermark are read under the *same* pool→blockchain lock scope as the rest of
