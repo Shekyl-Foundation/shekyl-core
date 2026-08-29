@@ -11,6 +11,27 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A pruned node retains full `pqc_auths` because there is no hash table for
+  them** (observed 2026-08-29 while reviewing the `prune_tx_data` fix in
+  PR #576; not a defect, a cost the fix makes visible). A pruned v3 txid is
+  `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)`, and
+  `pqc_auth_hash` has no table — it is computed from the raw `txs_pqc_auths`
+  bytes. So keeping a pruned transaction nameable currently means keeping the
+  **whole** post-quantum signature slice, where `txs_prunable_hash` gets the
+  same job done in 32 bytes.
+
+  A `txs_pqc_auth_hash` table would let pruning drop the signature bytes and
+  keep 32 bytes instead, which is the shape the prunable half already has.
+
+  **Do not act on this without measuring first.** The saving is unquantified
+  here: it is the ratio of `pqc_auths` to the rest of a retained pruned
+  transaction, and PQ signature sizes make it plausibly large — plausibly, not
+  measurably, and this table is not the place to guess. It is also an LMDB
+  schema addition, so it carries a migration question that a size number should
+  justify before anyone opens. Reopen with: a measured
+  `pqc_auths`-vs-retained-bytes ratio on a real pruned datadir.
+
+
 Default. Lands before genesis if it should exist at launch.
 
 - **Delete `fill_construct_tx_rct_stub`** — the remaining half of the CT-naming [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)
