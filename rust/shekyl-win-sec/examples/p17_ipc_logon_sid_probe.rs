@@ -119,12 +119,22 @@ mod probe {
     /// operator indefinitely.
     const SERVE_TIMEOUT: Duration = Duration::from_secs(3600);
 
-    /// Spawn counters, so no two rows ever share a pipe name — a consumed or
-    /// squatted instance must not be able to confound a neighbouring row.
-    const SPAWN_MECH: u64 = 1_700;
+    /// Spawn counters, so no two pipe instances ever share a name within a run —
+    /// a consumed or squatted instance must not confound a neighbouring row, and
+    /// (all `transport_hosts()` resolve to THIS box, so a reused name is a reused
+    /// *object*) a timed-out-then-detached mechanism client must not be able to
+    /// connect to a LATER instance of the same name. The single-instance rows
+    /// below take fixed counters; the mechanism survey takes a **distinct**
+    /// counter per host attempt from a disjoint range ([`SPAWN_MECH_BASE`] `+
+    /// host_index`), so a stalled client dialing one attempt's name cannot cross
+    /// into the next attempt's — nor into a single-instance row's.
     const SPAWN_CONTROL: u64 = 1_701;
     const SPAWN_PROD: u64 = 1_702;
     const SPAWN_DACL_ONLY: u64 = 1_703;
+    /// Base for the mechanism survey's per-host attempt names; the host index is
+    /// added. Disjoint from 1_701–1_703 so a late detached client can never land
+    /// on a single-instance row's pipe.
+    const SPAWN_MECH_BASE: u64 = 1_710;
 
     /// Owns a raw handle; closes exactly once, on every path out — including
     /// the early-exit paths, which is what keeps a blocked peer from hanging
@@ -321,8 +331,36 @@ mod probe {
     }
     use std::mem::size_of;
 
-    /// `--serve` — the two-machine server (WP-D6's genuine remote caller).
-    ///
+    /// The result of reading a caller's user and logon SID off its impersonation
+    /// token — shared by [`serve`] and [`mechanism_row`] so the two paths cannot
+    /// drift in how they treat a network logon. `UserOkNoLogon` is broken out
+    /// from the generic failure because it is not an error at all here — it is
+    /// P-17's candidate answer: a caller whose token carries the user SID but no
+    /// logon-SID-shaped `SE_GROUP_LOGON_ID` group, which is precisely what a
+    /// network (`IPC$`) logon is expected to look like and cannot match a
+    /// logon-SID-only ACE.
+    enum SidTriage {
+        /// Both SIDs read — the same-user / different-logon-session path.
+        Both { user: String, logon: String },
+        /// User SID read; the token carries no logon SID (`SidError::NoLogonSid`).
+        UserOkNoLogon { user: String },
+        /// A read failed for some other reason; the message names which side and
+        /// the `SidError` variant (or the Win32 step that failed).
+        Unreadable(String),
+    }
+
+    /// Which shape of session-crossing the single-box survey observed on the host
+    /// it selected. Both are genuine crossings; they differ only in how the
+    /// caller's token presents, and therefore in how the final verdict narrates
+    /// the refusal — keeping the two apart is the same message-names-the-mechanism
+    /// discipline the rest of this probe follows.
+    enum CrossingForm {
+        /// A caller carrying a *different* logon SID (terminal-services shape).
+        DifferentLogonSid,
+        /// A caller carrying *no* logon SID at all (network / `IPC$` shape).
+        NoLogonSid,
+    }
+
     /// The shared tail of the two same-user verdict arms: given the caller's
     /// two reported codes, attribute the refusal (or its absence) to the
     /// DACL-only ACE. Only the two SID-specific stories differ between callers,
@@ -437,32 +475,23 @@ mod probe {
         // the earlier shape mapped codes only onto the success path, which is
         // why the 15:45:48 log recorded a SID-read failure with no trace of the
         // `5 5` the caller had actually reported.
+        // `SidTriage` (the caller's SID read) is a module item now — shared with
+        // `mechanism_row` so the two paths treat a no-logon-SID network caller
+        // identically. `CallerOutcome` stays local: only `serve` carries the
+        // caller's two reported codes alongside that triage, so that no
+        // diagnostic path discards a measurement (the earlier shape mapped codes
+        // only onto the success path, which is why the 15:45:48 log recorded a
+        // SID-read failure with no trace of the `5 5` the caller had reported).
         enum CallerOutcome {
-            /// Connect or read failed before the report existed — no codes yet.
+            /// No usable report — connect/read failed, or the report did not
+            /// parse as exactly two integers; no trustworthy codes.
             NoReport(String),
-            /// The report was read; the SID triage is what happened after.
+            /// The report parsed; the SID triage is what happened after.
             Reported {
                 dacl_err: u32,
                 prod_err: u32,
                 sids: SidTriage,
             },
-        }
-        /// The result of reading the caller's user and logon SID off the
-        /// impersonation token. `UserOkNoLogon` is broken out from the generic
-        /// failure because it is not an error at all here — it is P-17's
-        /// candidate answer: a caller whose token carries the user SID but no
-        /// logon-SID-shaped `SE_GROUP_LOGON_ID` group, which is precisely what a
-        /// network (`IPC$`) logon is expected to look like and cannot match a
-        /// logon-SID-only ACE.
-        enum SidTriage {
-            /// Both SIDs read — the original same-user / different-session path.
-            Both { user: String, logon: String },
-            /// User SID read; the token carries no logon SID
-            /// (`SidError::NoLogonSid`).
-            UserOkNoLogon { user: String },
-            /// A read failed for some other reason; the message names which side
-            /// and the `SidError` variant (or the Win32 step that failed).
-            Unreadable(String),
         }
 
         // Accept + impersonate on a thread so the wait can be bounded. HANDLE
@@ -508,15 +537,29 @@ mod probe {
             let report = String::from_utf8_lossy(&buf[..got as usize])
                 .trim()
                 .to_owned();
+            // Strict parse: EXACTLY two integers, nothing substituted. A missing
+            // or malformed field must not become a value the verdict can pass on
+            // — a sentinel like `u32::MAX` reads as "nonzero = refused" and
+            // `attribute_dacl_refusal(5, u32::MAX, ..)` would return PASS off a
+            // report that never actually reported a prod refusal. A byte-mode
+            // pipe gives no framing guarantee, so a split read has to degrade to
+            // UNRUN, which is retryable and fail-safe, not to a false pass.
             let mut parts = report.split_whitespace();
-            let dacl_err: u32 = parts
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(u32::MAX);
-            let prod_err: u32 = parts
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(u32::MAX);
+            let parsed = match (
+                parts.next().and_then(|s| s.parse::<u32>().ok()),
+                parts.next().and_then(|s| s.parse::<u32>().ok()),
+                parts.next(),
+            ) {
+                (Some(dacl), Some(prod), None) => Some((dacl, prod)),
+                _ => None,
+            };
+            let Some((dacl_err, prod_err)) = parsed else {
+                _ = tx.send(CallerOutcome::NoReport(format!(
+                    "the caller's control report was not exactly two integers ({report:?}) — \
+                     a refusal cannot be attributed to a report that could not be parsed"
+                )));
+                return;
+            };
             // SAFETY: read precondition satisfied above; reverted on every path.
             let imp = unsafe { ImpersonateNamedPipeClient(server.0) };
             if imp == 0 {
@@ -708,34 +751,62 @@ mod probe {
         // use. A host that reuses our token is reported and skipped, not
         // failed: it is correct behaviour (that caller genuinely is us), just
         // useless for this question.
-        let mut crossing_host: Option<String> = None;
-        for host in transport_hosts() {
-            match mechanism_row(&me, &host) {
-                Ok(caller_logon) if caller_logon != my_logon => {
+        let mut crossing: Option<(String, CrossingForm)> = None;
+        for (i, host) in transport_hosts().into_iter().enumerate() {
+            match mechanism_row(&me, &host, SPAWN_MECH_BASE + i as u64) {
+                // A different USER means the DACL never granted this caller at
+                // all — a refusal would be over-determined, not the ACE's.
+                Ok(SidTriage::Both { user, .. }) if user != me.as_str() => {
+                    println!(
+                        "P-17 mechanism: `\\\\{host}\\pipe\\` carries a DIFFERENT user SID — a \
+                         refusal would be over-determined (not in the DACL at all), so this \
+                         host cannot attribute the ACE. Recorded, skipped."
+                    );
+                }
+                Ok(SidTriage::UserOkNoLogon { user }) if user != me.as_str() => {
+                    println!(
+                        "P-17 mechanism: `\\\\{host}\\pipe\\` carries a DIFFERENT user SID and no \
+                         logon SID — over-determined, cannot attribute the ACE. Recorded, skipped."
+                    );
+                }
+                // Same user, DIFFERENT logon SID — the terminal-services crossing.
+                Ok(SidTriage::Both { logon, .. }) if logon != my_logon.as_str() => {
                     println!(
                         "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries logon SID \
-                         {} — distinct from ours ({}). This transport crosses a session \
+                         {logon} — distinct from ours ({}). This transport crosses a session \
                          boundary; the attribution rows use it.",
-                        caller_logon.as_str(),
                         my_logon.as_str()
                     );
-                    crossing_host = Some(host);
+                    crossing = Some((host, CrossingForm::DifferentLogonSid));
                     break;
                 }
-                Ok(caller_logon) => {
+                // Same user, NO logon SID — the network (`IPC$`) crossing. A
+                // no-logon-SID token cannot match the ACE, so it crosses
+                // structurally; serve() reaches the same conclusion (§4.8).
+                Ok(SidTriage::UserOkNoLogon { .. }) => {
                     println!(
-                        "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries OUR logon \
-                         SID ({}) — this transport reuses the caller's token and does not \
-                         cross a session boundary. Recorded, skipped.",
-                        caller_logon.as_str()
+                        "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries our user SID \
+                         but NO logon SID — a network logon. It crosses the session boundary \
+                         structurally (a no-logon-SID token cannot match the logon-SID ACE); \
+                         the attribution rows use it."
+                    );
+                    crossing = Some((host, CrossingForm::NoLogonSid));
+                    break;
+                }
+                // Same user, OUR logon SID — reuses the token, does not cross.
+                Ok(SidTriage::Both { logon, .. }) => {
+                    println!(
+                        "P-17 mechanism: a caller via `\\\\{host}\\pipe\\` carries OUR logon SID \
+                         ({logon}) — this transport reuses the caller's token and does not cross \
+                         a session boundary. Recorded, skipped."
                     );
                 }
-                Err(detail) => {
+                Ok(SidTriage::Unreadable(detail)) | Err(detail) => {
                     println!("P-17 mechanism: `\\\\{host}\\pipe\\` did not measure — {detail}");
                 }
             }
         }
-        let Some(host) = crossing_host else {
+        let Some((host, crossing_form)) = crossing else {
             println!(
                 "P-17 UNRUN: no single-box SMB transport crossed a logon-session boundary \
                  (localhost reuses the token by construction; the machine-name form did \
@@ -830,50 +901,55 @@ mod probe {
         };
         let d_result = try_open(&d_remote);
         drop(d_pipe);
-        match d_result {
-            0 => {
-                println!(
-                    "P-17 FAIL: with the remote-client flag and the label both down, the \
-                     loopback caller was ADMITTED. The logon-SID ACE does not carry the \
-                     `IPC$` boundary on its own; removing the user-SID ACE in PR #516 \
-                     bought nothing on this axis, and the flag is load-bearing where \
-                     WP-D6 says the SID is. Revisits WP-D6."
-                );
-                1
-            }
-            ACCESS_DENIED => {
-                println!(
-                    "P-17 PASS: with every other fence down, the loopback caller is refused \
-                     with ERROR_ACCESS_DENIED (5), as predicted — the logon-SID ACE alone \
-                     carries the `IPC$` boundary. WP-D6's defence-in-depth claim is now an \
-                     observation."
-                );
-                0
-            }
-            other => {
-                println!(
-                    "P-17 UNRUN: the DACL-only loopback open failed with os error {other}, \
-                     not ERROR_ACCESS_DENIED — some mechanism this probe did not lower \
-                     refused it first, so the ACE is not attributed. Not a pass."
-                );
-                2
-            }
-        }
+        // Same verdict ladder serve() uses, so the two paths cannot drift — and
+        // narrated for the crossing form actually observed, rather than always
+        // in the different-logon-SID language. `prod_result` is known nonzero
+        // here (row (c) returned above if it was 0), so the helper's
+        // production-hole arm cannot fire; this reduces to the DACL-only ladder.
+        let (on_admit, on_pass) = match crossing_form {
+            CrossingForm::DifferentLogonSid => (
+                "P-17 FAIL: with the remote-client flag and the label both down, a genuine \
+                 cross-session (different-logon-SID) caller was ADMITTED. The logon-SID ACE does \
+                 not carry the `IPC$` boundary on its own; PR #516's user-SID removal bought \
+                 nothing on this axis. Revisits WP-D6",
+                "P-17 PASS: with every other fence down, a genuine cross-session \
+                 (different-logon-SID) caller is refused with ERROR_ACCESS_DENIED — the logon-SID \
+                 ACE alone carries the `IPC$` boundary. WP-D6 is now an observation",
+            ),
+            CrossingForm::NoLogonSid => (
+                "P-17 FAIL: with the remote-client flag and the label both down, a same-user \
+                 caller whose token carries NO logon SID was ADMITTED — a token that cannot match \
+                 the logon-SID ACE was let in anyway. WP-D6's boundary does not hold. Revisits \
+                 WP-D6",
+                "P-17 PASS (structural): with every other fence down, a same-user caller carrying \
+                 NO logon SID (a network logon) cannot match the logon-SID-only ACE and is refused \
+                 with ERROR_ACCESS_DENIED. The token DOES carry the user SID, so a user-SID ACE \
+                 would have admitted it — the refusal is diagnostic of logon-SID-only granting. \
+                 WP-D6's `IPC$` claim is now a structural observation",
+            ),
+        };
+        attribute_dacl_refusal(d_result, prod_result, on_admit, on_pass)
     }
 
     /// Row (b) for one host: a permissive pipe, a client that dials
-    /// `\\<host>\pipe\…`, and the caller's logon SID read off the
-    /// impersonation token. `Ok` is that SID (the caller comparison — crosses
-    /// or not — is the caller's job). `Err` is a one-line reason the host did
-    /// not measure, which `main` prints; it is always UNRUN, never a
-    /// falsification.
+    /// `\\<host>\pipe\…`, and the caller's identity read off the impersonation
+    /// token — returned as the SAME [`SidTriage`] `serve` produces, so a
+    /// no-logon-SID network caller is recognised as a crossing on this path too,
+    /// not swept into a generic "did not measure". `Ok(SidTriage)` is what was
+    /// read; the crossing decision — different logon SID, no logon SID, or same
+    /// session — is the caller's job. `Err` is a one-line reason the host did not
+    /// measure (a transport-level failure), which `main` prints; it is always
+    /// UNRUN, never a falsification. `spawn` names this attempt's pipe — callers
+    /// pass a **distinct** value per host (see [`SPAWN_MECH_BASE`]) so a
+    /// timed-out, detached client cannot cross into a later attempt's instance.
     fn mechanism_row(
         me: &shekyl_win_sec::SidString,
         host: &str,
-    ) -> Result<shekyl_win_sec::SidString, String> {
+        spawn: u64,
+    ) -> Result<SidTriage, String> {
         let sd = SdFromSddl::new("D:(A;;GA;;;WD)")
             .map_err(|e| format!("could not build the permissive descriptor (os error {e})"))?;
-        let mech_name = self_hosted_pipe_name(me, SPAWN_MECH);
+        let mech_name = self_hosted_pipe_name(me, spawn);
         let Some(mech_remote) = remote_form(&mech_name, host) else {
             return Err("pipe name did not carry the expected prefix".to_owned());
         };
@@ -948,7 +1024,7 @@ mod probe {
         // joined, so a client wedged in a slow SMB connect cannot pull the wait
         // past CLIENT_TIMEOUT. Dropping the server closes its end, which fails
         // the client's blocking read and lets a connected thread exit on its own.
-        let sid_result: Result<shekyl_win_sec::SidString, String> = (|| {
+        let sid_result: Result<SidTriage, String> = (|| {
             let Ok(open_code) = rx.recv_timeout(CLIENT_TIMEOUT) else {
                 return Err(format!(
                     "the client reported nothing within {}s — the SMB connect neither \
@@ -1010,23 +1086,38 @@ mod probe {
             let opened =
                 unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
             let token_guard = HandleGuard(token);
-            let sid = if opened == 0 {
+            let sids: Result<SidTriage, String> = if opened == 0 {
                 Err(format!(
                     "could not open the impersonation token (os error {})",
                     last_error()
                 ))
             } else {
-                // Distinguish the WP-D6 mechanism from a transient read failure,
-                // for the same reason serve() does (§4.8): a bare "no logon SID"
-                // for a `QueryToken`/`Stringify` failure would be a false
-                // structural claim. Only `NoLogonSid` is the boundary working.
-                logon_sid_of_token_for_testing(token_guard.0).map_err(|e| match e {
-                    SidError::NoLogonSid => "the caller's token has no logon SID — the identity \
-                                             arrived, but not in a shape the DACL could ever have \
-                                             matched"
-                        .to_owned(),
-                    other => format!("could not read the caller's logon SID: {other:?}"),
-                })
+                // Read BOTH SIDs and build the same `SidTriage` serve() does, so
+                // `UserOkNoLogon` (a network caller with no logon SID) is a
+                // first-class crossing here too, and `NoLogonSid` is not swept in
+                // with a `QueryToken`/`Stringify` failure — that would be a false
+                // structural claim. `{:?}` on the variant, never Display (its
+                // TokenGroups text still names "user SID").
+                Ok(
+                    match (
+                        user_sid_of_token_for_testing(token_guard.0),
+                        logon_sid_of_token_for_testing(token_guard.0),
+                    ) {
+                        (Ok(u), Ok(l)) => SidTriage::Both {
+                            user: u.as_str().to_owned(),
+                            logon: l.as_str().to_owned(),
+                        },
+                        (Ok(u), Err(SidError::NoLogonSid)) => SidTriage::UserOkNoLogon {
+                            user: u.as_str().to_owned(),
+                        },
+                        (Err(ue), _) => SidTriage::Unreadable(format!(
+                            "could not read the caller's USER SID: {ue:?}"
+                        )),
+                        (Ok(_), Err(le)) => SidTriage::Unreadable(format!(
+                            "could not read the caller's LOGON SID: {le:?}"
+                        )),
+                    },
+                )
             };
             // SAFETY: paired with the successful impersonation above.
             let reverted = unsafe { RevertToSelf() };
@@ -1034,7 +1125,7 @@ mod probe {
                 eprintln!("P-17: RevertToSelf FAILED — aborting rather than run impersonated.");
                 std::process::abort();
             }
-            sid
+            sids
         })();
 
         drop(server); // closes the server end, failing the client's blocked read
