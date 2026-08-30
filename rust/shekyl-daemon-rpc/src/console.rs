@@ -910,6 +910,64 @@ mod tests {
         );
     }
 
+    /// **And on the pruned arm, where the daemon also chooses the digest.**
+    /// The test above substitutes a body whose prunable half is present, so
+    /// the identity is a whole-body hash the daemon cannot steer. The pruned
+    /// arm is the interesting one: `prunable_hash` is the daemon's to pick,
+    /// and the comment on the binding claims picking it freely buys nothing
+    /// because it leaves `H(prefix ‖ base ‖ pqc ‖ X) = txid` to solve for
+    /// `X`. That claim is argued at the call site and pinned here — the
+    /// daemon serves another transaction's pruned body under this label and
+    /// supplies the very digest that makes the *requested* identity come out
+    /// right for its own body, which is the best choice available to it.
+    #[test]
+    fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
+        const CHOSEN: [u8; 32] = [0x11; 32];
+        // The pruned identity of a DIFFERENT transaction, under the digest
+        // the daemon will also supply — so only the body differs.
+        let mut other = console_spend();
+        other.prefix.unlock_time = 5;
+        let requested = other.hash_with_supplied_prunable(CHOSEN);
+        // Sanity: the two bodies really do have different pruned identities,
+        // or the refusal below would prove nothing.
+        assert_ne!(
+            requested,
+            console_spend().hash_with_supplied_prunable(CHOSEN),
+            "the fixture must substitute a genuinely different body"
+        );
+        let (pruned, _tail) = console_spend_halves();
+        let entry = shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(requested),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode(pruned),
+            // The half is gone, so the binding takes the pruned arm.
+            prunable_as_hex: String::new(),
+            prunable_hash: HashHex::from_bytes(CHOSEN),
+            as_json: String::new(),
+            pruned: true,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry],
+            missed_tx: vec![],
+        };
+        let addr = one_shot_raw(reply);
+        let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("a label is not an identity"),
+            "a substituted pruned body must be refused however the digest is \
+             chosen, not rendered: {out}"
+        );
+    }
+
     /// A reply with extra entries is unreadable, not "use the first one".
     /// The command requested one hash; the adjacent key-image command already
     /// requires a one-element slice for the same reason.
