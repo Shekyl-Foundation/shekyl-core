@@ -187,6 +187,10 @@ release/
 # Nested build trees (eg tools/genesis_builder/build)
 **/build/
 build-sync/
+# Packaging build trees (generated CMake output; were accidentally tracked
+# once, via 7a8d14b2e — never commit a configured build directory)
+build-deb/
+build-portable/
 # Phase 2g RandomX v2 Rust/C differential test harness out-of-tree
 # build directory (CMake -B build-randomx-v2-diff per
 # RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 + R6-D3).

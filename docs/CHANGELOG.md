@@ -2,11 +2,42 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
+  the only capability they uniquely held.** `shekyl-blockchain-prune` had been
+  inert since LMDB v6: its private version guard (`MAX_SUPPORTED_DB_VERSION =
+  5`) refused every VERSION-10 database, and its copy path enumerated 16 of
+  the schema's 49 tables — bumping the guard without fixing the list would
+  have silently dropped `txs_pqc_auths`, `output_metadata`, and every
+  archival/curve-tree table. `shekyl-blockchain-prune-known-spent-data` was a
+  structural no-op on an amount-0 CT chain (its scan skips every zero-amount
+  input and output). Pruning stays daemon-resident (`--prune-blockchain` at
+  startup, the 5-hour timer, the `prune_blockchain` RPC/console command —
+  see the Changed entry for the completed confirmed-prune semantics);
+  file-size reclaim is now the schema-agnostic
+  `shekyl-mdb-copy -c` (upstream LMDB `mdb_copy`, newly built from the
+  vendored source), and the daemon console's prune warning — which pointed
+  operators at the binary that refused to run — now describes that flow.
+  Reversion clause in `FOLLOWUPS.md` (post-genesis): any rebuilt offline
+  prune tool derives its table set from the schema source of truth.
+
 ### Changed
 
 - **A tx proof's `confirmations` is the daemon's gather-lock count, not a number the wallet re-derives from a later tip.** `confirmations_of` issued a second `get_height` and subtracted the `block_height` captured in the earlier `get_transactions` — two chain snapshots for one answer, so a block landing between the two requests inflated the count, and a reorg could make it describe a chain the block is no longer on. The native handler already computes `chain_height - block_height` against the tip it reads once for the whole gather (the one-lock rule RK-4c introduced); the wallet was discarding exactly that guarantee and paying an extra round trip for a worse answer. It now carries the value. Taking the daemon's number is no more trusting than the arithmetic was — both operands were always its to choose — and it is self-consistent. `FetchedTx` holds a `TxChainState` arm rather than `in_pool: bool` beside `block_height: Option<u64>`, so "pooled at 12 confirmations" is unrepresentable and `confirmations_of` is total: no RPC, no `async`, no unreachable error branch. Found by Copilot on #576.
 
 - **A doc row claiming a slice `**landed**` must now name its PR (`scripts/ci/check_landed_rows_stamped.py`).** Stamping the row is step 6 of `DAEMON_RPC_KV_CUTOVER.md`'s per-slice checklist and it was skipped for six consecutive merged slices, leaving that document's `Status:` banner reading *"design open for RK-4a"* while RK-4a, RK-4b and RK-4c had all been written. Because rule 95's banner is what a grep-driven reader uses to classify every claim below it, one stale banner misclassifies a whole file. The gate binds only the knowable half — a merge sha cannot exist pre-merge, so an in-flight row passes — and it strips code spans before matching, so a log entry *naming* the placeholder is not read as one *using* it. Developer-facing only; no runtime or wire effect.
+
+- **The confirmed `prune_blockchain` command now completes both pruning
+  phases before returning.** `Blockchain::prune_blockchain` previously ran
+  only the stripe prune; the output-metadata pass (`prune_tx_data`, which
+  deletes the `txs_pqc_auths`/`txs_prunable` rows) was reached only by the
+  five-hour `update_blockchain_pruning` tick, so an operator who pruned and
+  immediately stopped the daemon to compact reclaimed almost nothing. Both
+  phases now run in the same locked call, the startup path's duplicate
+  `prune_tx_data()` invocation is deleted, and on a tx-data failure the
+  first-prune startup branch now fails hard exactly like the
+  already-pruned branch always did.
 
 - **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
   5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed

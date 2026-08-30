@@ -6513,7 +6513,13 @@ bool Blockchain::prune_blockchain(uint32_t pruning_seed)
   epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-  return m_db->prune_blockchain(pruning_seed);
+  if (!m_db->prune_blockchain(pruning_seed))
+    return false;
+  // The confirmed prune is complete only with the output-metadata pass:
+  // stripe pruning alone leaves the txs_pqc_auths/txs_prunable rows that
+  // update_blockchain_pruning would otherwise free up to five hours later,
+  // and the console tells the operator to compact once this call returns.
+  return m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH);
 }
 //------------------------------------------------------------------
 bool Blockchain::update_blockchain_pruning()

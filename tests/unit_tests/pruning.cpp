@@ -32,6 +32,10 @@
 #include "misc_log_ex.h"
 #include "cryptonote_config.h"
 #include "common/pruning.h"
+#include "blockchain_db/testdb.h"
+#include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_core/blockchain.h"
+#include "cryptonote_core/tx_pool.h"
 
 #define ASSERT_EX(x) do { bool ex = false; try { x; } catch(...) { ex = true; }  ASSERT_TRUE(ex); } while(0)
 
@@ -243,4 +247,60 @@ TEST(pruning, next_pruned)
 TEST(tx_data_pruning, tx_prune_depth_constant)
 {
   ASSERT_EQ(CRYPTONOTE_TX_PRUNE_DEPTH, 5000u);
+}
+
+namespace
+{
+
+// Records which pruning phases Blockchain::prune_blockchain reaches. The
+// confirmed console/RPC prune must run BOTH the stripe phase and the
+// output-metadata pass: stripe pruning alone leaves the txs_pqc_auths /
+// txs_prunable rows for the five-hour update tick, so an operator who
+// prunes and then immediately stops the daemon to compact reclaims almost
+// nothing.
+class PrunePhaseDB: public cryptonote::BaseTestDB
+{
+public:
+  PrunePhaseDB() { m_open = true; }
+  virtual uint64_t height() const override { return 1; }
+  virtual bool prune_blockchain(uint32_t pruning_seed = 0) override { ++stripe_calls; return true; }
+  virtual bool prune_tx_data(uint64_t depth) override { ++tx_data_calls; last_depth = depth; return true; }
+  size_t stripe_calls = 0;
+  size_t tx_data_calls = 0;
+  uint64_t last_depth = 0;
+};
+
+struct PruneBlockchainAndPool
+{
+  cryptonote::tx_memory_pool txpool;
+  cryptonote::Blockchain bc;
+  // Circular reference: txpool and bc hold references to each other.
+  // bc is not dereferenced during txpool construction.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
+  PruneBlockchainAndPool(): txpool(bc), bc(txpool) {}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+};
+
+}
+
+TEST(tx_data_pruning, confirmed_prune_runs_both_phases)
+{
+  PruneBlockchainAndPool bap;
+  PrunePhaseDB *db = new PrunePhaseDB();
+  const std::pair<uint8_t, uint64_t> hard_forks[3] = {
+    std::make_pair((uint8_t)1, (uint64_t)0),
+    std::make_pair((uint8_t)1, (uint64_t)1),
+    std::make_pair((uint8_t)0, (uint64_t)0),
+  };
+  const cryptonote::test_options opts = { hard_forks, 0 };
+  ASSERT_TRUE(bap.bc.init(db, cryptonote::FAKECHAIN, true, &opts, 0, NULL));
+  ASSERT_TRUE(bap.bc.prune_blockchain());
+  EXPECT_EQ(1u, db->stripe_calls);
+  EXPECT_EQ(1u, db->tx_data_calls);
+  EXPECT_EQ((uint64_t)CRYPTONOTE_TX_PRUNE_DEPTH, db->last_depth);
 }
