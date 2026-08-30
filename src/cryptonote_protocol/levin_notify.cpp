@@ -1113,12 +1113,35 @@ namespace levin
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
-        record_relayed(relay_method::fluff, to_send);
-        /* `to_send`, not `txs_`: a transaction the carrier accepted is in its
-           queue and will go out on a cadence tick. Fluffing it here as well
-           would send it twice and defeat the carrier for exactly the
-           transactions the carrier took. */
-        relay_fluff::run(std::move(zone_), epee::to_span(to_send), source_, core_);
+        /* ONE BATCH, TOLD AND SENT — and they are inseparable rather than
+           separately correct.
+
+           These were two statements sharing a variable, and review found the
+           variable changed in one and not the other: the fallback recorded
+           `txs_` while sending `to_send`, so a carrier-accepted transaction
+           was claimed as relayed before any window of it went out AND fluffed
+           a second time, defeating the carrier for exactly the transaction it
+           had taken.
+
+           A test holds the RECORD half — `take_relayed` observes what the pool
+           was told. It cannot hold the SEND half: the only route into this
+           fallback from a carrier epoch is a stem send that fails, and in the
+           unit fixture a failed write tears down the peers the fluff would go
+           to, so the wire is empty and any assertion on it is vacuous.
+
+           So the two are made unrepresentable-apart instead of separately
+           asserted (rule 50: when no check can fail, encode it). One
+           parameter, used twice, in one call — an edit that changes what is
+           sent changes what is recorded with it, and the record assertion
+           therefore covers both.
+
+           Order is load-bearing: `record_relayed` reads `zone_->nzone`, and
+           `relay_fluff::run` moves `zone_`. */
+        const auto fluff_and_record = [this, &record_relayed](const std::vector<blobdata>& batch) {
+          record_relayed(relay_method::fluff, batch);
+          relay_fluff::run(std::move(zone_), epee::to_span(batch), source_, core_);
+        };
+        fluff_and_record(to_send);
       }
     };
 

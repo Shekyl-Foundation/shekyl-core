@@ -3323,22 +3323,22 @@ TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_co
                "the one it refused";
     }
 
-    /* WHY THE SEND HALF IS NOT ASSERTED, recorded so the gap is a known one
-       rather than an assumed coverage.
+    /* THE SEND HALF IS COVERED BY CONSTRUCTION, not by a second assertion.
 
-       `relay_fluff::run(..., to_send, ...)` — fluffing only what the carrier
-       refused — is correct and is NOT held by any assertion here. Observing it
-       needs the fluff to reach the wire, and the only route into this fallback
-       from a carrier epoch is a stem send that FAILS. In this fixture a failed
-       write tears the connection down inside the levin machinery, so by the
-       time the fallback runs there are no peers left to fluff to and the
-       payload is empty. A first draft asserted on that empty payload and was
-       caught by its own non-vacuity guard.
+       `relay_fluff::run` and `record_relayed` no longer take separate spans:
+       `fluff_and_record` passes ONE batch to both, so the set fluffed and the
+       set recorded cannot differ. The assertion above therefore holds the send
+       as well — an edit that fluffs the wrong batch records the wrong batch
+       and reds here.
 
-       The two routes that would close it are the same one the arrival leg
-       needs: a harness where a send can fail without killing the peer, or a
-       `t_core` that admits real transactions. Both are the FOLLOWUPS item, and
-       this is a third consumer for it. */
+       That is deliberate rather than convenient. A direct assertion on the
+       wire is not available: the only route into this fallback from a carrier
+       epoch is a stem send that FAILS, and in this fixture a failed write
+       tears the connection down, so no peers remain to fluff to and the
+       payload is empty. A first draft asserted on it and was caught by its own
+       non-vacuity guard. Rule 50's second clause — when no check can fail,
+       encode it so the mistake is unrepresentable — is the answer, and it is a
+       better one than the harness would have been. */
 
     for (auto& ctx : contexts_)
         ctx.process_send_queue();

@@ -1030,6 +1030,37 @@ own type rather than as a position in the phase enum.**
 Recorded here rather than in FOLLOWUPS because it is a design input to a round
 that has not opened, not a defect owed a fix.
 
+#### 3.1b(i) "Needs the harness" is a claim, and it should be tested first
+
+**2026-08-30.** The split-path review found two defects, and the second — the
+fluff fallback sending the batch the carrier had taken — looked unassertable.
+The record and the send were separate spans, `take_relayed` can only observe
+the record, and the one route into that fallback from a carrier epoch is a stem
+send that FAILS, which in the unit fixture tears down the very peers the fluff
+would go to. A first draft asserted on the resulting empty payload and was
+caught by its own non-vacuity guard.
+
+**So it was filed as a fourth consumer of the `t_core` arrival harness. That
+was wrong, and it was wrong in a way worth naming.** The defect had nothing to
+do with `t_core`. The record and the send were two statements sharing a
+variable, and review had just demonstrated that a variable can be changed in
+one and not the other. Passing **one batch to one call** — `fluff_and_record` —
+puts the send inside the record's assertion and closes it in place. Rule 50's
+second clause: when no check can fail, encode it so the mistake is
+unrepresentable.
+
+**The generalisable part is the order of operations.** "This needs a fixture we
+do not have" is a claim about the world, and it is cheap to make and expensive
+to hold: three consumers had already accumulated behind that one harness, each
+having re-derived the same obstacle list and moved on. Attempting the design
+change first is what distinguishes a real blocker from a reflex, and here it
+took one lambda.
+
+The harness is still owed for the consumers that genuinely need it — the
+arrival leg cannot be driven without a chain that admits real transactions.
+This is not one of them, and counting it as one would have made the queue look
+longer than the work is.
+
 ### 3.1c Budget versus actual — pre-registered before the traffic exists
 
 **2026-08-29.** The ~42 GB/month posture is signed off **provisionally**, on
