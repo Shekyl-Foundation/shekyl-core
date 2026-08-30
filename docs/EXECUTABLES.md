@@ -555,10 +555,12 @@ shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
 # Then replace the old lmdb directory with the compacted copy
 ```
 
-Run it as the user that owns the data directory (the copy still takes a
-write lock on the source; a `sudo` run leaves root-owned files the daemon
-cannot reopen), and always pass both paths — with the destination omitted
-the tool streams the entire database to standard output.
+Run it as the user that owns the data directory (the copy opens the
+database read-only but still creates and writes the reader-lock file,
+`lock.mdb`, in the source directory; a `sudo` run leaves root-owned files
+the daemon cannot reopen), and always pass both paths — with the
+destination omitted the tool streams the entire database to standard
+output.
 
 The former `shekyl-blockchain-prune` (schema-aware pruned copy) and
 `shekyl-blockchain-prune-known-spent-data` (spend-graph pruning, no substrate
