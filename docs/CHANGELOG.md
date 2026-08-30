@@ -310,6 +310,23 @@
   a different case: it was **already** dead on `dev`, with no callers and no
   header declaration, so it was swept under rule 15 rather than orphaned here.
 
+- **The docs that described the old trust boundary were swept with it.** The
+  binding below left seven statements asserting the opposite — that a pruned
+  body is "not re-hashed" and the daemon's label is "the only association
+  handle" — across `block_fetch`, its suite, and the cutover design doc. A doc
+  that contradicts an enforcement is worse than a stale one: it tells the next
+  reader the boundary is weaker than it is, and a design section tells the next
+  *slice* to build it that way. Review flagged three; a sweep for the claim
+  found five in code plus two in the contract, and all seven are corrected at
+  source.
+
+  Two of those were the canonical contract rather than commentary: RK-D8's
+  shape-preservation rule now records RK-4c's field retirement as a **narrow,
+  satisfied exception** (parity green first, removal as its own commit, so the
+  divergence still bisects — the discipline, not a waiver), and §6's
+  `CORE_RPC_VERSION` baseline says 3.25 rather than the 3.22 it froze at, since
+  a baseline that stops tracking the constant reads as a freeze.
+
 - **A pruned transaction body is bound to the hash that was asked for.** The
   batch parser checked the reply's `tx_hash` **label** against the request and
   never the body, so a daemon could serve any canonical transaction under the

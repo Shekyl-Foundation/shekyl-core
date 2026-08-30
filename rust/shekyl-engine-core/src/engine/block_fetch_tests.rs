@@ -40,9 +40,9 @@ impl Rpc for CannedDaemon {
 /// `rpc_call` only deserializes, so a daemon may answer a non-OK `status`
 /// *and* a complete, plausible entry in one document. The body here is
 /// built to clear every check downstream of the status — the count
-/// matches, the entry's `tx_hash` equals the requested hash (the blob is
-/// deliberately not re-hashed, see `parse_tx_batch`), and the pruned blob
-/// is a transaction `parse_pruned_tx` accepts. So without the status check
+/// matches, the entry's `tx_hash` equals the requested hash AND the body
+/// hashes to it (`parse_tx_batch` binds both), and the pruned blob is a
+/// transaction `parse_pruned_tx` accepts. So without the status check
 /// this call **succeeds** and hands back a transaction the daemon declined
 /// to vouch for; that is the hazard, not a parse error arriving late.
 #[tokio::test]
@@ -313,9 +313,12 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     }
 }
 
-/// Hex of a valid pruned non-miner tx that `parse_pruned_tx` accepts; its hash is
-/// irrelevant to the batch tests (the pruned form is associated by the requested
-/// `tx_hash` label, not by re-hashing).
+/// Hex of a valid pruned non-miner tx that `parse_pruned_tx` accepts.
+///
+/// Its hash is **not** irrelevant — `parse_tx_batch` binds the body to the
+/// requested txid, so a caller must label this body with [`pruned_id`]'s
+/// derivation rather than a chosen constant. A fixture that invents a hash is
+/// staging the substitution the binding exists to reject.
 fn pruned_tx_hex() -> String {
     hex::encode(pruned_spend_tx(0).serialize())
 }

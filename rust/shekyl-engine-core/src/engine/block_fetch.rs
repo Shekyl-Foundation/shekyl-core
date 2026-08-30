@@ -83,10 +83,13 @@ pub(crate) const TXS_PER_REQUEST: usize = 100;
 /// verification obligations:
 ///
 /// - [`Pruned`](Self::Pruned) — the refresh path. The prunable proof is
-///   dropped by the daemon (`prune: true`), so the body cannot be re-hashed to
-///   its committed tx hash (`GENESIS_TX_WIRE_FORMAT.md` §11 — the pruned form
-///   hashes differently); association is by the daemon-echoed `tx_hash` label,
-///   and validation is the pruned-safe context-free subset.
+///   dropped by the daemon (`prune: true`), so the body does not hash to its
+///   committed tx hash on its own (`GENESIS_TX_WIRE_FORMAT.md` §11 — the
+///   pruned form mixes a *supplied* prunable digest). Association is still by
+///   recomputed identity, not by the daemon's label:
+///   [`Transaction::hash_with_supplied_prunable`] takes the reply's
+///   `prunable_hash` as that operand. Validation is the pruned-safe
+///   context-free subset.
 /// - [`Full`](Self::Full) — the P-scan path. SP-6's exhaustiveness gate
 ///   recomputes every body's hash from received material
 ///   (`pscan::exhaustiveness`), which **requires** the prunable section: a
@@ -202,9 +205,11 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
 /// [`shekyl_wire::Transaction::from_bytes`], which rejects blobs larger than
 /// `MAX_TX_SIZE` up front (the untrusted-daemon DoS bound) and requires exact
 /// consumption (`GENESIS_TX_WIRE_FORMAT.md` §12 — trailing bytes rejected).
-/// The pruned form is not re-hashed (it hashes differently — §11); association
-/// to a block hash is pinned by [`parse_tx_batch`], which checks each returned
-/// `tx_hash` against the requested hash, in order.
+/// This parses and validates shape only. Identity is [`parse_tx_batch`]'s job:
+/// it checks each returned `tx_hash` against the requested hash in order AND
+/// recomputes the body's own hash, mixing the reply's `prunable_hash` as the
+/// operand §11 says the pruned form needs. The label alone is not an
+/// association — the daemon chooses it.
 fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
     parse_tx_blob(pruned_hex, tx_hash_hex, TxBodyForm::Pruned)
 }
@@ -387,13 +392,16 @@ pub(crate) fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Resu
 /// non-empty `missed_tx` into [`RpcError::TransactionsNotFound`] before calling
 /// here), and the daemon echoes present txs in request order — so the count
 /// must match and each entry's claimed `tx_hash` must equal the requested hash
-/// for its slot. The pruned blob is not re-hashed (it hashes differently —
-/// `GENESIS_TX_WIRE_FORMAT.md` §11), so the `tx_hash` label is the only
-/// association handle; an unchecked reorder or substitution would mis-assign
-/// the running global output index (assigned by walking txs in block order)
-/// and record wrong txids — exactly the failure the untrusted-node model must
-/// reject. (Full-form consumers additionally recompute each body's hash — the
-/// P-scan's SP-6 exhaustiveness gate — so for them the label check is the
+/// for its slot. That label check is the cheap failure, not the association:
+/// the daemon chooses the label as freely as the body, so every body is then
+/// **re-hashed and compared** — the pruned form through
+/// [`Transaction::hash_with_supplied_prunable`], which takes the reply's
+/// `prunable_hash` as the operand §11 requires, and the full form through
+/// `hash()` directly. An unchecked reorder or substitution would otherwise
+/// mis-assign the running global output index (assigned by walking txs in
+/// block order) and record wrong txids — exactly the failure the untrusted-node
+/// model must reject. (The P-scan's SP-6 exhaustiveness gate recomputes full
+/// bodies again downstream — for it the label check is the
 /// fast-fail, not the last line.) Per-batch equality also makes the caller's
 /// total length exact, so no separate cardinality check is needed after
 /// batching.
