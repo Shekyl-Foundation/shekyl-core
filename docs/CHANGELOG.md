@@ -4,6 +4,19 @@
 
 ### Changed
 
+- **The covert carrier now carries real transactions, not dummies alone**
+  (`COVER_TRAFFIC_RESTORATION.md` §3.1a). `dandelionpp_notify` consumes
+  `shekyl_relay_zone_plan_dispatch_with_refresh` and enqueues on the noise
+  carrier instead of sending directly. **API:**
+  `shekyl_relay_zone_noise_enqueue` takes a caller-minted `token`, and
+  `shekyl_relay_zone_poll` takes a `ShekylRelayCarrierResolvedCb` reporting
+  whether each enqueued message reached the wire. The pool is told a
+  carrier-borne transaction was relayed **only on completion** — an enqueue is
+  not a send, and a discarded message reads as *not relayed* so the origin
+  retries on the short grid rather than waiting out the derived interval for a
+  transaction that was never sent. **Still behind the development opt-in,
+  defaulting off.**
+
 - **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
   5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed
   dual-zone node carries **~42 GB/month** of cover traffic, up from ~21 GB.
