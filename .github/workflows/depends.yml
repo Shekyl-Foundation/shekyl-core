@@ -155,3 +155,4 @@ jobs:
         path: |
           build/${{ matrix.toolchain.host }}/release/bin/shekyl-cli*
           build/${{ matrix.toolchain.host }}/release/bin/shekyld*
+          build/${{ matrix.toolchain.host }}/release/bin/shekyl-mdb-copy*

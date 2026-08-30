@@ -1399,60 +1399,6 @@ void BlockchainLMDB::remove_output(const uint64_t amount, const uint64_t& out_in
     throw0(DB_ERROR(lmdb_error(std::string("Error deleting amount for output index ").append(boost::lexical_cast<std::string>(out_index).append(": ")).c_str(), result).c_str()));
 }
 
-void BlockchainLMDB::prune_outputs(uint64_t amount)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  mdb_txn_cursors *m_cursors = &m_wcursors;
-  CURSOR(output_amounts);
-  CURSOR(output_txs);
-
-  MINFO("Pruning outputs for amount " << amount);
-
-  MDB_val v;
-  MDB_val_set(k, amount);
-  int result = mdb_cursor_get(m_cur_output_amounts, &k, &v, MDB_SET);
-  if (result == MDB_NOTFOUND)
-    return;
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Error looking up outputs: ", result).c_str()));
-
-  // gather output ids
-  mdb_size_t num_elems;
-  mdb_cursor_count(m_cur_output_amounts, &num_elems);
-  MINFO(num_elems << " outputs found");
-  std::vector<uint64_t> output_ids;
-  output_ids.reserve(num_elems);
-  while (1)
-  {
-    const pre_rct_outkey *okp = (const pre_rct_outkey *)v.mv_data;
-    output_ids.push_back(okp->output_id);
-    MDEBUG("output id " << okp->output_id);
-    result = mdb_cursor_get(m_cur_output_amounts, &k, &v, MDB_NEXT_DUP);
-    if (result == MDB_NOTFOUND)
-      break;
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Error counting outputs: ", result).c_str()));
-  }
-  if (output_ids.size() != num_elems)
-    throw0(DB_ERROR("Unexpected number of outputs"));
-
-  result = mdb_cursor_del(m_cur_output_amounts, MDB_NODUPDATA);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Error deleting outputs: ", result).c_str()));
-
-  for (uint64_t output_id: output_ids)
-  {
-    MDB_val_set(v, output_id);
-    result = mdb_cursor_get(m_cur_output_txs, (MDB_val *)&zerokval, &v, MDB_GET_BOTH);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Error looking up output: ", result).c_str()));
-    result = mdb_cursor_del(m_cur_output_txs, 0);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Error deleting output: ", result).c_str()));
-  }
-}
-
 void BlockchainLMDB::add_spent_key(const crypto::key_image& k_image)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -1691,7 +1637,6 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
 
   // open necessary databases, and set properties as needed
   // uses macros to avoid having to change things too many places
-  // also change blockchain_prune.cpp to match
   lmdb_db_open(txn, LMDB_BLOCKS, MDB_INTEGERKEY | MDB_CREATE, m_blocks, "Failed to open db handle for m_blocks");
 
   lmdb_db_open(txn, LMDB_BLOCK_INFO, MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for m_block_info");

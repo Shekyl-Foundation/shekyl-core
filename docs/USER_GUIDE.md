@@ -72,12 +72,11 @@ Use the CLI tools when you want to:
 | `shekyl-gen-ssl-cert` | Generate self-signed SSL certificates for RPC |
 | `shekyl-blockchain-import` | Import blockchain from a file |
 | `shekyl-blockchain-export` | Export blockchain to a file |
-| `shekyl-blockchain-prune` | Prune or copy-prune a blockchain database |
+| `shekyl-mdb-copy` | Compact a stopped daemon's database |
 | `shekyl-blockchain-stats` | Print blockchain statistics |
 | `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
 | `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
-| `shekyl-blockchain-prune-known-spent-data` | Remove provably-spent prunable data |
 
 ### Getting the binaries
 
@@ -870,19 +869,30 @@ Export the blockchain to a portable file:
 ./shekyl-blockchain-export --output-file partial.raw --block-start 0 --block-stop 100000
 ```
 
-### `shekyl-blockchain-prune`
+### `shekyl-mdb-copy`
 
-Create a pruned copy of the database (keeps only ~5% of prunable data):
-
-```bash
-./shekyl-blockchain-prune --copy-pruned-database /path/to/pruned/
-```
-
-Or prune in-place (modifies the existing database):
+Pruning happens inside the daemon: start `shekyld` with `--prune-blockchain`,
+or run the `prune_blockchain` command in the daemon console. An in-place
+prune marks database pages as free without shrinking the file. To reclaim
+the disk space, stop `shekyld` and compact the database:
 
 ```bash
-./shekyl-blockchain-prune
+mkdir /path/to/compacted
+./shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
 ```
+
+then replace the old `lmdb` directory with the compacted copy (you
+temporarily need disk space for both). The destination directory must
+already exist and be empty, and the tool must run as the user that owns
+the data directory — the copy opens the database read-only but still
+needs write access to the source's reader-lock file (`lock.mdb`, created
+if missing), and a `sudo` run leaves the compacted copy root-owned, so
+the daemon cannot use it after the swap. Always pass both paths: with
+the destination omitted, the tool streams the entire database to
+standard output.
+
+Note that pruning removes only transaction proof and PQC-auth data;
+curve-tree leaf data is not prunable and grows with the chain.
 
 ### `shekyl-blockchain-stats`
 
@@ -901,18 +911,18 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 | `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
 | `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
-| `shekyl-blockchain-prune-known-spent-data` | Remove prunable data for outputs that are provably spent |
 
 All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 `--log-level` flags.
 
-> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`,
-> `shekyl-blockchain-usage`, and `shekyl-blockchain-prune-known-spent-data`
-> all analyze spend-graph relationships that FCMP++ transactions do not
-> reveal (a spend never discloses which output it consumes, and inputs carry
-> no ring-member references). They have no substrate on Shekyl chain data
-> and are scheduled for a deletion audit (see `docs/EXECUTABLES.md` and
-> `docs/FOLLOWUPS.md`).
+> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`, and
+> `shekyl-blockchain-usage` all analyze spend-graph relationships that FCMP++
+> transactions do not reveal (a spend never discloses which output it
+> consumes, and inputs carry no ring-member references). They have no
+> substrate on Shekyl chain data and are scheduled for a deletion audit (see
+> `docs/EXECUTABLES.md` and `docs/FOLLOWUPS.md`;
+> `shekyl-blockchain-prune-known-spent-data` was already deleted under that
+> audit).
 
 ---
 
