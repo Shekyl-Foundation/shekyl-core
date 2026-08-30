@@ -133,7 +133,7 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     );
     assert_eq!(hex_str(&pruned), pin["pruned_hex"].as_str().unwrap());
 
-    let tx = build_tx(kept, pruned);
+    let tx = build_tx(kept.clone(), pruned.clone());
     tx.validate().expect("validate");
     let bytes = tx.serialize();
     assert_eq!(hex_str(&bytes), pin["tx_hex"].as_str().unwrap(), "tx bytes");
@@ -146,4 +146,30 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     // And the bytes re-parse to the same transaction.
     let back = Transaction::from_bytes(&bytes).expect("parse");
     assert_eq!(back, tx);
+
+    // The PRUNED identity on the 3-part (empty-`pqc_auths`) arm: the prunable
+    // region is the full form's tail after the pruned prefix, and mixing its
+    // digest back in via `hash_with_supplied_prunable` must reproduce the
+    // pinned hash — the same recomputation the engine performs on a pruned
+    // reply, against the txid the C++ leg also asserts
+    // (`get_pruned_transaction_hash`, same fixture). The 4-part spend arm has
+    // its own pin (`pruned_tx_hash_parity_v1.json`).
+    let pruned_form = {
+        let mut t = build_tx(kept, pruned);
+        let Ct::Fcmp { prunable, .. } = &mut t.ct else {
+            unreachable!("build_tx is Fcmp by construction");
+        };
+        *prunable = None;
+        t.serialize()
+    };
+    assert!(
+        bytes.starts_with(&pruned_form),
+        "the pruned form must be a prefix of the full form"
+    );
+    let digest = shekyl_crypto_hash::keccak256(&bytes[pruned_form.len()..]);
+    assert_eq!(
+        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        pin["tx_hash_hex"].as_str().unwrap(),
+        "pruned identity (supplied digest) diverged from the pinned hash"
+    );
 }

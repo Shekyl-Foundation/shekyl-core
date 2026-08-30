@@ -1588,9 +1588,11 @@ impl Transaction {
                 // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
                 // .empty()`, where `has_pqc = version>=3 && vin[0] != gen`; otherwise
                 // **3-part** `{prefix, base, prunable}`. The prunable component is
-                // `H(prunable)` when present, else the null hash (the fee-only /
-                // serve-credit form — its live-oracle hash parity is pending a captured
-                // blob, as for the spend KAT).
+                // `H(prunable)` when present, else the null hash. Both arms carry
+                // struct-derived cross-language hash parity (`pruned_tx_hash_parity`
+                // and `serve_credit_tx_parity`, each with a C++ leg asserting the
+                // same pin); parity against a daemon-captured blob stays deferred on
+                // the live spend path (`docs/FOLLOWUPS.md`).
                 // A supplied digest wins: it is the pruned case, where the
                 // section is absent and its hash is the caller's operand.
                 let h_prunable = match (supplied_prunable, prunable) {
