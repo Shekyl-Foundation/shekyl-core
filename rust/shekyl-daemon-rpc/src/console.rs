@@ -328,27 +328,55 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         ));
     }
 
+    // The label check above says the daemon *claims* this entry answers the
+    // request; it does not make it so — every field of the reply is the
+    // daemon's to choose, and the remote arm posts wherever the operator
+    // pointed it. So the body is bound the way `parse_tx_batch` binds the
+    // wallet's: parse the bytes and recompute the identity. A reply carrying
+    // its prunable half (or a transaction with nothing prunable) rehashes
+    // whole; a storage-pruned body mixes the reply's `prunable_hash` in,
+    // which turns a substituted body into a keccak preimage instead of a
+    // free choice. `as_json` stays unverified: it is the daemon's epee
+    // rendering of the same bytes the binding just checked (RK-D11).
+    //
+    // "(pruned)" below means the daemon holds no prunable half for a
+    // transaction that has one — `prunable_hash` distinguishes that from a
+    // coinbase, which has nothing prunable to begin with and whose hash is
+    // null or the hash of the empty string.
+    let pruned = tx.prunable_as_hex.is_empty() && !is_empty_prunable(&tx.prunable_hash);
+    let full_hex = if tx.as_hex.is_empty() {
+        format!("{}{}", tx.pruned_as_hex, tx.prunable_as_hex)
+    } else {
+        tx.as_hex.clone()
+    };
+    let blob = hex::decode(&full_hex)
+        .map_err(|_| format!("print_transaction: the daemon's body for {hash} is not hex"))?;
+    let parsed = shekyl_wire::Transaction::from_bytes(&blob).map_err(|_| {
+        format!("print_transaction: the daemon's body for {hash} is not a transaction")
+    })?;
+    let derived = if pruned {
+        parsed.hash_with_supplied_prunable(tx.prunable_hash.to_bytes())
+    } else {
+        parsed.hash()
+    };
+    let derived_hex = hex::encode(derived);
+    if !derived_hex.eq_ignore_ascii_case(hash) {
+        return Err(format!(
+            "print_transaction: the entry is labeled {hash} but its body hashes \
+             to {derived_hex} — a label is not an identity"
+        ));
+    }
+
     let mut out = Vec::new();
     match &tx.location {
         shekyl_rpc_types::TxLocation::Pooled { .. } => out.push("Found in pool".to_owned()),
         shekyl_rpc_types::TxLocation::Mined { block_height, .. } => {
-            // "(pruned)" means the daemon holds no prunable half for a
-            // transaction that has one — `prunable_hash` distinguishes that
-            // from a coinbase, which has nothing prunable to begin with and
-            // whose hash is null or the hash of the empty string.
-            let pruned = tx.prunable_as_hex.is_empty() && !is_empty_prunable(&tx.prunable_hash);
             out.push(format!(
                 "Found in blockchain at height {block_height}{}",
                 if pruned { " (pruned)" } else { "" }
             ));
         }
     }
-
-    let full_hex = if tx.as_hex.is_empty() {
-        format!("{}{}", tx.pruned_as_hex, tx.prunable_as_hex)
-    } else {
-        tx.as_hex.clone()
-    };
 
     if meta {
         if let shekyl_rpc_types::TxLocation::Mined {
@@ -360,16 +388,11 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
                 human_readable_timestamp(*block_timestamp)
             ));
         }
-        match hex::decode(&full_hex) {
-            Err(_) => out.push("Error parsing transaction from hex".to_owned()),
-            Ok(blob) => match shekyl_wire::Transaction::read(&mut blob.as_slice()) {
-                Err(_) => out.push("Error parsing transaction blob".to_owned()),
-                Ok(parsed) => {
-                    out.push(format!("Size: {}", blob.len()));
-                    out.push(format!("Weight: {}", parsed.weight()));
-                }
-            },
-        }
+        // The parse is the binding's, above — a body that did not parse (or
+        // did not hash to the request) never reached this rendering, so the
+        // old "Error parsing transaction" soft lines have no input left.
+        out.push(format!("Size: {}", blob.len()));
+        out.push(format!("Weight: {}", parsed.weight()));
     }
     if hex_out {
         out.push(full_hex);
@@ -707,9 +730,90 @@ mod tests {
         address
     }
 
+    /// A structurally canonical spend for the body-binding: the console now
+    /// recomputes each entry's identity from its bytes, so a fixture can no
+    /// longer label an arbitrary blob — a fixture that invents a hash is
+    /// staging the substitution the binding exists to refuse (the engine's
+    /// doubles learned this the same way).
+    fn console_spend() -> shekyl_wire::Transaction {
+        use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
+        use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, TxPrefix};
+        shekyl_wire::Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: [0x42; 32],
+                }],
+                outputs: vec![
+                    Output {
+                        amount: 0,
+                        key: [1; 32],
+                        view_tag: 0,
+                    },
+                    Output {
+                        amount: 0,
+                        key: [3; 32],
+                        view_tag: 1,
+                    },
+                ],
+                extra: vec![],
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0; 32],
+                base: CtBase {
+                    enc_amounts: vec![[0; 9], [0; 9]],
+                    enc_labels: vec![[0; 9], [0; 9]],
+                    commitments: vec![[2; 32], [3; 32]],
+                },
+                pqc_auths: vec![PqcAuth {
+                    auth_version: 1,
+                    scheme_id: 1,
+                    flags: 0,
+                    hybrid_public_key: vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
+                    hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
+                }],
+                prunable: Some(Prunable {
+                    serve_credit_pruned: vec![],
+                    bulletproofs: vec![BpPlus {
+                        a: [0; 32],
+                        a1: [0; 32],
+                        b: [0; 32],
+                        r1: [0; 32],
+                        s1: [0; 32],
+                        d1: [0; 32],
+                        l: vec![[0; 32]; 7],
+                        r: vec![[0; 32]; 7],
+                    }],
+                    tree_depth: 1,
+                    fcmp_proof: vec![0; 8],
+                    pseudo_outs: vec![[0; 32]],
+                }),
+            },
+        }
+    }
+
+    /// [`console_spend`] split at the production boundary: (pruned form,
+    /// prunable tail) — the two halves a split `get_transactions` reply
+    /// carries, whose concatenation is the full serialization.
+    fn console_spend_halves() -> (Vec<u8>, Vec<u8>) {
+        let tx = console_spend();
+        let full = tx.serialize();
+        let mut pruned_tx = console_spend();
+        let shekyl_wire::Ct::Fcmp { prunable, .. } = &mut pruned_tx.ct else {
+            unreachable!("console_spend is Fcmp by construction");
+        };
+        *prunable = None;
+        let pruned = pruned_tx.serialize();
+        let tail = full[pruned.len()..].to_vec();
+        (pruned, tail)
+    }
+
     fn mined_slot(prunable: Vec<u8>) -> crate::core::TxSlot {
         crate::core::TxSlot::Chain {
-            pruned: vec![0xAA, 0xBB],
+            pruned: console_spend_halves().0,
             prunable,
             // Nonempty: this transaction HAS a prunable half, so an empty
             // `prunable_as_hex` would mean the daemon dropped it.
@@ -729,8 +833,10 @@ mod tests {
     /// half away. Every mined transaction printed as `(pruned)`.
     #[test]
     fn a_retained_transaction_is_not_reported_pruned() {
-        let txid = [0x31; 32];
-        let addr = one_shot_projected(mined_slot(vec![0xCC, 0xDD]), txid);
+        // The halves reassemble to the full body, so the identity is the
+        // whole-transaction hash.
+        let txid = console_spend().hash();
+        let addr = one_shot_projected(mined_slot(console_spend_halves().1), txid);
         let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
         assert!(
             out.contains("Found in blockchain at height 3"),
@@ -747,13 +853,60 @@ mod tests {
     /// above is not passing by disabling the label.
     #[test]
     fn a_pruned_transaction_is_reported_pruned() {
-        let txid = [0x32; 32];
+        // The prunable half is gone, so the identity mixes the reply's
+        // supplied digest — the same recomputation the binding performs.
+        let txid = console_spend().hash_with_supplied_prunable([0x5A; 32]);
         let addr = one_shot_projected(mined_slot(Vec::new()), txid);
         let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
         assert!(
             out.contains("(pruned)"),
             "a transaction whose prunable half is absent must be labelled \
              pruned: {out}"
+        );
+    }
+
+    /// **An echoed label over a substituted body is refused.** The label
+    /// check compares two daemon-chosen strings, so a daemon that echoes the
+    /// requested hash while serving another canonical body sails through it;
+    /// the binding recomputes the identity from the bytes and refuses. This
+    /// is `parse_tx_batch`'s rule applied to the console's remote arm, which
+    /// posts wherever the operator pointed it.
+    #[test]
+    fn an_echoed_label_over_a_substituted_body_is_refused() {
+        // The identity of a DIFFERENT transaction (unlock_time moved), which
+        // the daemon echoes while serving `console_spend`'s body.
+        let mut other = console_spend();
+        other.prefix.unlock_time = 5;
+        let requested = other.hash();
+        let (pruned, tail) = console_spend_halves();
+        let entry = shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(requested),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode(pruned),
+            prunable_as_hex: hex::encode(tail),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry],
+            missed_tx: vec![],
+        };
+        let addr = one_shot_raw(reply);
+        let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("a label is not an identity"),
+            "the substituted body must be refused by the binding, not \
+             rendered: {out}"
         );
     }
 
