@@ -32,8 +32,18 @@ DOCS = os.path.join(ROOT, "docs")
 
 # A table row (leading pipe) asserting a landing.
 LANDED_ROW = re.compile(r"^\s*\|.*\*\*landed\*\*", re.IGNORECASE)
-# "PR #" with no digits after it -- the unstamped placeholder.
-UNSTAMPED = re.compile(r"PR #(?![0-9])")
+# A landed row must CARRY "PR #<digits>". Checking only for the literal
+# placeholder "PR #" would let a row with no PR token at all pass -- absence
+# reading as presence, the inverse-direction hole a coverage gate has to close
+# explicitly (found by review, PR #576).
+#
+# Scope is per FILE, not repo-wide: requiring a PR number on every row that
+# says "landed" fires on ~50 closeout-table rows in 15 documents where a PR
+# number was never the convention and "landed" is ordinary prose. A document
+# that stamps ANY of its landed rows has adopted the convention, and there the
+# unstamped row is the defect. This binds the convention where it is used
+# instead of imposing it where it is not.
+STAMPED = re.compile(r"PR #[0-9]+")
 # A code span quotes a string rather than asserting it. A decision-log row
 # that *names* the placeholder (recording that it was once there) is not an
 # unstamped row, and a checker that cannot tell naming from using repeats the
@@ -65,13 +75,25 @@ def main() -> int:
     for path in files:
         rel = os.path.relpath(path, ROOT)
         with open(path, encoding="utf-8", errors="replace") as fh:
-            for n, line in enumerate(fh, 1):
-                if not LANDED_ROW.match(line):
-                    continue
-                landed_seen += 1
-                if UNSTAMPED.search(CODE_SPAN.sub("", line)):
-                    bad.append(f"{rel}:{n}: row claims **landed** but the PR "
-                               f"number is unstamped")
+            # Strip code spans FIRST, then decide both questions on the
+            # stripped text: a row that quotes `**landed**` while describing
+            # this gate is naming the marker, not claiming a landing. The
+            # stripping has to precede the row test as well as the stamp
+            # test -- doing only the latter left this file's own log entry
+            # reported as an unstamped row.
+            rows = []
+            for n, ln in enumerate(fh, 1):
+                bare = CODE_SPAN.sub("", ln)
+                if LANDED_ROW.match(bare):
+                    rows.append((n, bare))
+        landed_seen += len(rows)
+        # Does this document use the stamp convention at all?
+        if not any(STAMPED.search(ln) for _, ln in rows):
+            continue
+        for n, line in rows:
+                if not STAMPED.search(line):
+                    bad.append(f"{rel}:{n}: row claims **landed** but carries "
+                               f"no 'PR #<number>' stamp")
 
     if landed_seen == 0:
         print("check_landed_rows_stamped: no row claiming **landed** found "
