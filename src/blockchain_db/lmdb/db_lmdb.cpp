@@ -125,7 +125,16 @@ using namespace crypto;
 //   Within V10 (no bump): the additive `archival_settlement` table (SO-D2)
 //   rides this boundary for the same reason the witness tables rode V9 — a new
 //   empty table on an existing env asserts no incompatibility.
-#define VERSION 10
+// V11: retention semantics, not layout — `prune_tx_data` must KEEP
+// `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable body:
+// both are operands of the pruned v3 txid (`get_pruned_transaction_hash`),
+// and neither has a hash table of its own. V10 code's depth pass deleted
+// them, so a V10 datadir that ever pruned holds txs the V11 reader cannot
+// name — the facts export answers INCONSISTENT for each of them, forever,
+// with no repair path (the bytes are gone). The rows are required now, so
+// a datadir that may lack them is refused at open rather than mis-served
+// at runtime. Delete and resync.
+#define VERSION 11
 
 namespace
 {

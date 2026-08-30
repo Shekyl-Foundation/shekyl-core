@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 10 (schema v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 11 (schema v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -1181,6 +1181,20 @@ rule 42's persisted-block version, which correctly does not fire (no block
 blob byte moves). **Within v10 (no bump):** the additive
 `archival_settlement` table rides the boundary as the witness tables rode
 v9.
+
+### Schema v10 → v11 (breaking, no migration path)
+
+DB v11: retention semantics, not layout. `prune_tx_data`'s depth pass must
+**keep** `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable
+body: both are operands of the pruned v3 txid
+(`get_pruned_transaction_hash`), and neither has a hash table of its own.
+v10 code deleted them, so a v10 datadir that ever ran `--prune-blockchain`
+holds transactions the v11 reader cannot name — the RPC facts export
+answers `INCONSISTENT` for each of them, forever, with no repair path (the
+bytes are gone). The rows are required now; a datadir that may lack them is
+refused loudly at open rather than mis-served at runtime. Delete and
+resync. No table is added, no key or value moves — the bump asserts a
+retention requirement the old writer violated.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.
