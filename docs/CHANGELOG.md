@@ -36,6 +36,11 @@
   retained the hash; the depth pass now matches. `/get_transactions` on a
   pruned node can therefore still bind the prefix to its txid, and a store
   that holds a body with no hash beside it remains `FactsFault::Inconsistent`.
+  Because a datadir pruned by the old code already lost those rows — and would
+  otherwise open silently and answer `INCONSISTENT` for every previously
+  pruned transaction, forever — the LMDB schema version is bumped **v10 →
+  v11**: retention semantics, not layout, and the standing remedy (delete and
+  resync) applies at open instead of surfacing weeks later as RPC errors.
 
 - **A confirmed emission claim or drain now releases its seal — before this,
   neither ever did.** Both paths seal a one-live-per-persona record before
@@ -246,6 +251,16 @@
   undefined at `txids_len == 0`, where `data()` may be null and passing null to
   `memset` is undefined even for a zero count. An empty `get_transactions`
   request is valid, so that length is reachable, and it now has a test.
+
+- **The release checklist's testnet consensus script reaches
+  `get_transactions` again.** `scripts/check_testnet_genesis_consensus.py`
+  wrapped the call in a `/json_rpc` envelope, but `get_transactions` is a REST
+  endpoint — it has no row in either JSON-RPC dispatch table and never did on
+  this bridge, so the script died at "Method not found" before its genesis
+  comparison ever ran (RK-4c's field-name update sat on a call that could not
+  succeed). It now POSTs to `/get_transactions` directly; the JSON-RPC helper
+  stays for the methods that are dispatched there (`get_block_header_by_height`,
+  `get_info`). Release-tooling only; no runtime or wire effect.
 
 - **A daemon refusal is no longer read as data.** `Rpc::rpc_call` and
   `json_rpc_call` only deserialize — they do not enforce the wire's `status` —
