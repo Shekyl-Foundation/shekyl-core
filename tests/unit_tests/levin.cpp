@@ -3174,3 +3174,174 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
     while (receiver_.notified_size())
         receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
+
+/*! **A batch the carrier can only partly take splits, and each half is
+    accounted once.**
+
+    The split path was written and never driven: the end-to-end test above
+    enqueues a single transaction the carrier accepts whole, so `to_send` is
+    empty and the function returns before any of this runs. Review found two
+    real defects living there, both of which this test now holds:
+
+    1. `record_relayed` closed over `txs_`, so the ordinary wire recorded the
+       WHOLE batch — including the transactions the carrier had taken. Those
+       were then recorded a second time when their carrier verdict arrived, and
+       the first record was the send-time falsification this change exists to
+       remove.
+    2. The fluff fallback sent `txs_` as well, so a carrier-accepted
+       transaction went out by fluff too — a duplicate send that defeats the
+       carrier for exactly the transactions it took.
+
+    The refusal is driven by SIZE, which is the realistic one: a transaction
+    larger than `MAX_FRAGMENTS` windows (5 x 20,480 B) cannot be fragmented and
+    the queue refuses it. The small one rides the carrier, the large one does
+    not.
+
+    What edit reds this: restoring `txs_` in either `record_relayed` or the
+    fluff fallback — the first over-records the batch, the second sends the
+    carried transaction twice. */
+TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_counting)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    /* Two transactions that both parse (F-9), one of which cannot fit the
+       carrier's fragment cap. `extra` is the only field that can be grown
+       without making the blob unparseable. */
+    std::vector<cryptonote::blobdata> txs(2);
+    {
+        cryptonote::transaction small{};
+        small.unlock_time = 11;
+        txs[0] = cryptonote::t_serializable_object_to_blob(small);
+
+        cryptonote::transaction large{};
+        large.unlock_time = 12;
+        large.extra.assign(130000, 0x5A); // > MAX_FRAGMENTS * WINDOW_BYTES
+        txs[1] = cryptonote::t_serializable_object_to_blob(large);
+    }
+    ASSERT_LT(102400u, txs[1].size()) << "fixture: the large tx must exceed the fragment cap";
+
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    std::vector<cryptonote::blobdata> recorded;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls) << "no stem epoch with a noise carrier";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        io_service_.poll();
+
+        if (events_.relayed_method_size() != 0 && events_.has_stem_txes())
+        {
+            recorded = events_.take_relayed(cryptonote::relay_method::stem);
+            break; // A stem epoch: the split happened, or would have.
+        }
+        for (const auto method : {cryptonote::relay_method::fluff,
+                                  cryptonote::relay_method::local})
+        {
+            if (events_.relayed_method_size() == 0)
+                break;
+            try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+        }
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto& ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+
+    /* ONLY the refused transaction took the ordinary wire. Recording both
+       would mean the carrier-accepted one was claimed as relayed at send time
+       — before any window of it went out — which is the falsification the
+       completion verdict exists to prevent. */
+    ASSERT_EQ(1u, recorded.size())
+        << "the ordinary stem wire recorded " << recorded.size() << " transaction(s); "
+           "the carrier took one of the two, so exactly one should remain";
+    EXPECT_EQ(txs[1], recorded.front())
+        << "the transaction recorded on the ordinary wire is not the one the "
+           "carrier refused — the split kept the wrong half";
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+
+    /* THE FLUFF FALLBACK, in the SAME epoch, because defect (2) lives there
+       and the assertions above cannot see it: they break on a successful stem
+       send and never reach it.
+
+       Cutting delivery makes both stem attempts fail, so the split batch falls
+       through to fluff — and fluff must send only what the carrier refused. A
+       carrier-accepted transaction fluffed here would go out twice and defeat
+       the carrier for the one transaction it actually took. */
+    {
+        struct deliver_guard {
+            deliver_guard() { test_endpoint::deliver() = false; }
+            ~deliver_guard() { test_endpoint::deliver() = true; }
+        } no_delivery;
+
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        io_service_.poll();
+
+        /* The RECORD is the oracle here, and its reach is limited — stated
+           rather than implied.
+
+           This catches `record_relayed(fluff, txs_)`: the pool must be told
+           about the refused transaction only. It does NOT catch the sibling
+           defect in the same fallback, `relay_fluff::run(..., txs_, ...)`,
+           because `take_relayed` observes what the pool was TOLD and that
+           defect is in what the fluff path SENDS. */
+        const auto fluffed = events_.take_relayed(cryptonote::relay_method::fluff);
+        ASSERT_EQ(1u, fluffed.size())
+            << "the fluff fallback told the pool about " << fluffed.size()
+            << " transaction(s); the carrier holds one of the two, and its "
+               "verdict is what records it";
+        EXPECT_EQ(txs[1], fluffed.front())
+            << "the pool was told about the transaction the carrier took, not "
+               "the one it refused";
+    }
+
+    /* WHY THE SEND HALF IS NOT ASSERTED, recorded so the gap is a known one
+       rather than an assumed coverage.
+
+       `relay_fluff::run(..., to_send, ...)` — fluffing only what the carrier
+       refused — is correct and is NOT held by any assertion here. Observing it
+       needs the fluff to reach the wire, and the only route into this fallback
+       from a carrier epoch is a stem send that FAILS. In this fixture a failed
+       write tears the connection down inside the levin machinery, so by the
+       time the fallback runs there are no peers left to fluff to and the
+       payload is empty. A first draft asserted on that empty payload and was
+       caught by its own non-vacuity guard.
+
+       The two routes that would close it are the same one the arrival leg
+       needs: a harness where a send can fail without killing the peer, or a
+       `t_core` that admits real transactions. Both are the FOLLOWUPS item, and
+       this is a third consumer for it. */
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}

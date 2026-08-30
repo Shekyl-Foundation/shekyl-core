@@ -575,6 +575,18 @@ namespace levin
           being true. */
       i_core_events* core = nullptr;
       std::vector<boost::uuids::uuid> outs;
+      /*! The instant this poll was driven at, for records made inside it.
+
+          `poll` is driven with `shekyl_relay_zone_next_wake()` on the
+          scheduled path — a deadline the zone chose, not the wall clock — so a
+          record stamped with `now_ms()` from inside a callback sits on a
+          different timeline from the schedule that produced it. The stem
+          watch's deadline is computed from its stamp, so the two must agree or
+          an observation expires against a clock nothing else reads.
+
+          Zero means "no poll drove this", which is the `force_fluff` sink;
+          nothing there records. */
+      std::uint64_t poll_now_ms = 0;
 
       /*! What became of a transaction handed to the carrier.
 
@@ -608,7 +620,9 @@ namespace levin
             MERROR("carrier resolved unknown token " << token);
             return;
           }
-          const detail::zone::carrier_pending pending = found->second;
+          /* Moved, not copied: the entry is erased on the next line and its
+             blob is a whole transaction. */
+          const detail::zone::carrier_pending pending = std::move(found->second);
           z.carrier_pending_by_token.erase(found);
 
           if (!sent)
@@ -639,7 +653,9 @@ namespace levin
             reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
             reinterpret_cast<const std::uint8_t*>(std::addressof(pending.successor)),
             nullptr,
-            now_ms()
+            /* The POLL's clock, not the wall clock: this record shares a
+               timeline with the schedule that produced the send. */
+            self.poll_now_ms
           );
         }
         catch (const std::exception& e)
@@ -860,9 +876,11 @@ namespace levin
            side answers "give me the set", never "is it time", so no copy of the
            deadline lives here. `sink` carries `core_` because `on_outbound`
            needs it to filter by blockchain height. */
+        const std::uint64_t at = now_ms();
         relay_effects sink{zone_, core_};
+        sink.poll_now_ms = at;
         shekyl_relay_zone_poll(
-          zone_->relay.get(), now_ms(),
+          zone_->relay.get(), at,
           std::addressof(sink), relay_effects::on_outbound,
           relay_effects::on_fluff, relay_effects::on_noise,
           relay_effects::on_carrier_resolved
@@ -945,9 +963,18 @@ namespace levin
            the *backstop* in-zone, and §30.5 forbids that backstop reaching
            clearnet. So an originated transaction keeps its `local` record
            whatever the transport did — it still stems on the wire below. */
-        const auto record_relayed = [this](const relay_method method) {
+        /* Takes WHAT WAS SENT rather than closing over `txs_`, because after
+           the carrier the two differ. A batch can split — the carrier accepts
+           some transactions and refuses others — and recording `txs_` would
+           record the accepted ones as relayed AT SEND TIME, which is the
+           precise falsification this change exists to remove, and then record
+           them a second time when their carrier verdict arrives. */
+        const auto record_relayed = [this](const relay_method method,
+                                           const std::vector<blobdata>& sent) {
+          if (sent.empty())
+            return;
           core_->on_transactions_relayed(
-            epee::to_span(txs_),
+            epee::to_span(sent),
             cryptonote::originated_stays_in_zone(tx_relay, zone_->nzone) ? relay_method::local : method,
             zone_->nzone
           );
@@ -983,7 +1010,7 @@ namespace levin
            A later reader simplifying this to "return an error instead of
            partitioning" would be trading the privacy of the small
            transactions for the tidiness of the control flow. */
-        std::vector<blobdata> to_send{txs_};
+        std::vector<blobdata> to_send = txs_;
 
         if (plan == SHEKYL_RELAY_PLAN_STEM && carrier == SHEKYL_RELAY_CARRIER_NOISE)
         {
@@ -1056,11 +1083,11 @@ namespace levin
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem);
+            record_relayed(relay_method::stem, to_send);
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
-            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            MDEBUG("Sent " << to_send.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
           }
 
@@ -1077,17 +1104,21 @@ namespace levin
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem);
+            record_relayed(relay_method::stem, to_send);
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
-            MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
+            MDEBUG("Sent " << to_send.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;
           }
 
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
-        record_relayed(relay_method::fluff);
-        relay_fluff::run(std::move(zone_), epee::to_span(txs_), source_, core_);
+        record_relayed(relay_method::fluff, to_send);
+        /* `to_send`, not `txs_`: a transaction the carrier accepted is in its
+           queue and will go out on a cadence tick. Fluffing it here as well
+           would send it twice and defeat the carrier for exactly the
+           transactions the carrier took. */
+        relay_fluff::run(std::move(zone_), epee::to_span(to_send), source_, core_);
       }
     };
 
@@ -1257,9 +1288,11 @@ namespace levin
        skipping past it to reach covert would be the test-only channel this
        shape exists to avoid. */
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
       relay_effects sink{z, core};
+      sink.poll_now_ms = at;
       shekyl_relay_zone_poll(
-        z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
+        z->relay.get(), at,
         std::addressof(sink), relay_effects::on_outbound,
         relay_effects::on_fluff, relay_effects::on_noise,
         relay_effects::on_carrier_resolved
