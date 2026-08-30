@@ -1378,14 +1378,17 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 /// ordinary carrier rather than left untouched, so a caller cannot read a stale
 /// slot from a previous call.
 ///
-/// # This entry point deliberately has NO production caller yet
+/// # Its production caller landed 2026-08-29
 ///
-/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split lands the decision half
-/// first; the C++ covert branch is restructured to consume it in a following
-/// change (`COVER_TRAFFIC_RESTORATION.md` §2.1 stages 2–3). **Do not delete
-/// this as unused** — it is the seam that restructure lands against, and the
-/// audit at `COVER_TRAFFIC_RESTORATION.md` §1.6 states the conditions under
-/// which the cover mechanism may be removed, none of which is a caller grep.
+/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split landed the decision half
+/// first, and this entry point stood without a caller until then — kept
+/// deliberately, because the audit at `COVER_TRAFFIC_RESTORATION.md` §1.6
+/// states the conditions under which the cover mechanism may be removed and
+/// none of them is a caller grep.
+///
+/// `dandelionpp_notify` is that caller now: it consumes this plan and enqueues
+/// on `SHEKYL_RELAY_CARRIER_NOISE` instead of sending directly
+/// (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
@@ -1572,6 +1575,19 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 /// call. `gather_outbound` must honour the [`OutboundCb`] contract: on return,
 /// its pointer covers `*out_n * 16` readable bytes (or is null with `*out_n`
 /// zero), valid until this call returns, and it must not unwind.
+///
+/// **NO CALLBACK MAY RE-ENTER THIS HANDLE.** This function holds
+/// `&mut RelayZoneHandle` for its whole body — and a mutable borrow of the
+/// carrier queue across `dispatch` — while it invokes every callback. Calling
+/// any `shekyl_relay_zone_*` function on the same handle from inside one
+/// constructs a second `&mut` aliasing those live borrows, which is undefined
+/// behaviour. It applies to **all four**, not only the newest: buffer whatever
+/// the callback learns and act on it after this returns.
+///
+/// Stated here because the C header carried it on one callback's typedef and
+/// a Rust caller reads this section instead — and because the C++ producer
+/// did exactly this, recording a stem observation from the resolution
+/// callback, until review caught it.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,

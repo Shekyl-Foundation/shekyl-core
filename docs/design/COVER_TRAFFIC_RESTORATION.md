@@ -895,10 +895,14 @@ configuration, and a switch that reads as a preference would be a footgun.
 
 ### 3.1a ~~The producer is owed~~ — **LANDED 2026-08-29**, and what it cost
 
-`shekyl_relay_zone_noise_enqueue` exists and nothing calls it. A
-development-flag zone therefore emits **dummies only**: the cadence runs, the
-frames are valid, and no real transaction ever rides the carrier.
-`dandelionpp_notify` still sends stem transactions directly through
+> **This section is the record of the gap and how it was closed. Everything
+> below describes the state BEFORE 2026-08-29 unless it says otherwise; the
+> producer is built, and `dandelionpp_notify` enqueues on the carrier.**
+
+`shekyl_relay_zone_noise_enqueue` existed and nothing called it. A
+development-flag zone therefore emitted **dummies only**: the cadence ran, the
+frames were valid, and no real transaction ever rode the carrier.
+`dandelionpp_notify` still sent stem transactions directly through
 `make_payload_send_txs`.
 
 **Stated plainly because the first draft of this row said "built".** The
@@ -907,7 +911,7 @@ crossing without its caller — which is exactly the shape §92.5c item 1 was
 stuck in for weeks: a mechanism whose consumer nobody wired, recorded as
 complete because the hard part was.
 
-**The remaining work is small and its seam already exists.**
+**The remaining work looked small and its seam already existed.**
 `shekyl_relay_zone_plan_dispatch_with_refresh` returns `out_carrier` and
 `out_channel`; `dandelionpp_notify` currently calls `plan_relay`, which
 returns neither. So the producer is: swap the planning call, and on

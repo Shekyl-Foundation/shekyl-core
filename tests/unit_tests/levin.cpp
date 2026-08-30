@@ -3452,3 +3452,198 @@ TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
     while (receiver_.notified_size())
         receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
+
+/*! **The discard matrix: the two relay classes retry by different mechanisms,
+    so a discard must do different things for them.**
+
+    This is the case no test drove, and its absence let a real regression land:
+    a first fix for the forwarded-stem stranding applied the fluff fallback to
+    EVERY discard, which recorded originated transactions as relayed and bought
+    them the derived 1148 s for a send that never happened.
+
+    | class | retries by | a discard must |
+    | --- | --- | --- |
+    | `local` (originated) | `relayed == false` → `MIN_RELAY_TIME` | record NOTHING |
+    | forwarded stem | `last_relayed_time`, moved only by `on_transactions_relayed` | fluff, or it is stranded until it expires |
+
+    Two tests rather than one loop: the discard is driven by destroying every
+    peer so the slots unbind, and that desynchronises the fixture's own
+    connection bookkeeping — so each case needs a fresh fixture rather than a
+    second pass over a spent one.
+
+    Two tests rather than one loop, for that reason. */
+
+/*! An ORIGINATED transaction the carrier discards stays unrelayed.
+
+    `set_relayed` sets `meta.relayed` unconditionally, so recording a discard
+    would buy the origin the derived 1148 s for a send that never happened —
+    the falsification §92.5c reserves the short grid for.
+
+    What edit reds this: removing the `originated_here` early return, which is
+    exactly the regression this case exists to hold. */
+TEST_F(levin_notify, a_discarded_origin_is_left_unrelayed_for_the_short_grid)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(1);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 31;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    // Originated: `local`, with a NIL source.
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls) << "no carrier-borne send";
+        EXPECT_TRUE(notifier.send_txs(txs, boost::uuids::uuid{}, cryptonote::relay_method::local));
+        io_service_.restart();
+        io_service_.poll();
+        if (events_.relayed_method_size() == 0)
+            break;
+        for (const auto m : {cryptonote::relay_method::fluff,
+                             cryptonote::relay_method::stem,
+                             cryptonote::relay_method::local})
+        {
+            if (events_.relayed_method_size() == 0)
+                break;
+            try { events_.take_relayed(m); } catch (const std::logic_error&) {}
+        }
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto& ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+
+    /* Every peer gone, THEN an epoch roll. Destroying the connections is not
+       enough on its own: the stem map keeps its bindings, so the channel goes
+       on sending to a dead peer and the message restarts forever without ever
+       being discarded. Measured — 24 `NoiseSend` effects and zero
+       `NoiseUnbind`. The map is rebuilt at an epoch boundary, and only then
+       does a slot with no peer produce the unbind that clears the queue. */
+    contexts_.clear();
+    io_service_.restart();
+    io_service_.poll();
+    notifier.run_epoch();
+    io_service_.restart();
+    io_service_.poll();
+    drive_schedule(notifier, [](std::size_t) { return false; }, 24);
+
+    EXPECT_EQ(0u, events_.relayed_method_size())
+        << "an originated transaction discarded by the carrier was recorded as "
+           "relayed. `set_relayed` sets `meta.relayed` unconditionally, so the "
+           "origin now waits the derived interval for a send that never "
+           "happened, and the short-grid retry is gone";
+
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
+
+/*! A FORWARDED stem the carrier discards is fluffed, not stranded.
+
+    Admission stamps `last_relayed_time` with `time_t::max()` and
+    `get_relayable_transactions`' stem arm skips while that stamp is in the
+    future, so only `on_transactions_relayed` can make it eligible again.
+
+    What edit reds this: dropping the fluff fallback, which strands the
+    transaction until it expires out of the pool. */
+TEST_F(levin_notify, a_discarded_forwarded_stem_falls_back_to_fluff)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(1);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 32;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    const boost::uuids::uuid source = contexts_.begin()->get_id();
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls) << "no carrier-borne send";
+        EXPECT_TRUE(notifier.send_txs(txs, source, cryptonote::relay_method::stem));
+        io_service_.restart();
+        io_service_.poll();
+        if (events_.relayed_method_size() == 0)
+            break;
+        for (const auto m : {cryptonote::relay_method::fluff,
+                             cryptonote::relay_method::stem,
+                             cryptonote::relay_method::local})
+        {
+            if (events_.relayed_method_size() == 0)
+                break;
+            try { events_.take_relayed(m); } catch (const std::logic_error&) {}
+        }
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto& ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+
+    // See the sibling test: the map must be rebuilt before a slot can unbind.
+    contexts_.clear();
+    io_service_.restart();
+    io_service_.poll();
+    notifier.run_epoch();
+    io_service_.restart();
+    io_service_.poll();
+    drive_schedule(notifier, [](std::size_t) { return false; }, 24);
+
+    ASSERT_NE(0u, events_.relayed_method_size())
+        << "a forwarded stem discarded by the carrier was recorded as nothing. "
+           "Admission stamped `last_relayed_time` with time_t::max() and only "
+           "`on_transactions_relayed` moves it, so this transaction is "
+           "ineligible for forwarding until it expires out of the pool";
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff))
+        << "the fallback recorded something other than the discarded stem";
+
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}

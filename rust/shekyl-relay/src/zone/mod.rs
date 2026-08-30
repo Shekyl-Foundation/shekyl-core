@@ -384,12 +384,11 @@ impl Zone {
     /// defaults off, so no SHIPPED construction hits these. Tests and
     /// development builds do.
     ///
-    /// The carrier's executor, join and boundary are built; what is still
-    /// missing is the enqueue crossing's PRODUCER — nothing calls
-    /// `shekyl_relay_zone_noise_enqueue`, so a carrier zone emits dummies
-    /// only. When that producer is built it will hit these refusals,
-    /// because it forms the pair in Rust and stops routing it through
-    /// `make_relay_zone` — which is why the checks are here and not at the
+    /// The carrier is complete as of 2026-08-29 — executor, join, boundary,
+    /// enqueue crossing and its producer — so a development-flag zone carries
+    /// real transactions rather than dummies alone. The producer hits these
+    /// refusals, because it forms the pair in Rust and does not route it
+    /// through `make_relay_zone` — which is why the checks are here and not at
     /// FFI edge. Building it is not the daemon cutover's to provide
     /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
     /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps

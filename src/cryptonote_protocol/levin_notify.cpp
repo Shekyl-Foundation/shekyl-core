@@ -283,9 +283,15 @@ namespace levin
         That caller does not wait on the daemon cutover, and C++ stays the
         transport for the carrier as it is for stem and fluff.
 
+        CLOSED 2026-08-29 — all four pieces below are built, and
+        `dandelionpp_notify` is the enqueue path. Kept as the record of what
+        the gap was, because the decomposition is what made it tractable: the
+        line before it said the gap was "a Rust-internal join, not a language
+        boundary move", and both halves were wrong.
+
         CORRECTED AGAIN 2026-08-26. The line here previously said the gap was
         "a Rust-internal join, not a language boundary move". The first half
-        understates the work and the second half is FALSE. Four pieces are
+        understates the work and the second half is FALSE. Four pieces were
         missing, and one of them is this boundary:
 
           1. an owner — nothing constructs or holds `NoiseQueues` outside its
@@ -971,22 +977,39 @@ namespace levin
                forwarding until it expires out of the pool. Permanently
                stranded, silently, on the class that is not this node's own.
 
-               So the discard takes the same fallback a failed stem send takes
-               a few lines below: fluff it. That is already the established
-               answer to "this could not be stemmed", it makes the entry
-               eligible again by recording it, and it gets the transaction out
-               rather than holding it hostage to a carrier that dropped it. */
-            MDEBUG("carrier discarded a transaction; falling back to fluff");
+               So a forwarded stem takes the same fallback a failed stem send
+               takes a few lines below: fluff it. That is already the
+               established answer to "this could not be stemmed", it moves the
+               stamp by recording, and it gets the transaction out rather than
+               holding it hostage to a carrier that dropped it.
+
+               AND IT IS SCOPED TO THAT CLASS, because the two retry by
+               different mechanisms and the fallback is wrong for the other
+               one. A `local` entry retries on `relayed == false` at
+               MIN_RELAY_TIME; recording it as relayed sets that bit
+               unconditionally in `set_relayed` and buys the derived 1148 s
+               for a transaction that never left — which is the falsification
+               §92.5c reserves the short grid for, and the very thing this
+               branch was written to avoid.
+
+               An earlier draft applied the fluff fallback to every discard. It
+               fixed the stranding by re-introducing the defect one class over:
+               a class-scoped argument applied too widely, which is exactly
+               what the stranding itself was. */
+            const bool originated_here = (pending.requested == relay_method::local);
+            if (originated_here)
+            {
+              MDEBUG("carrier discarded an originated transaction; leaving it "
+                     "unrelayed so the origin retries on the short grid");
+              continue;
+            }
+            MDEBUG("carrier discarded a forwarded stem; falling back to fluff");
+            const std::vector<blobdata> one{pending.blob};
             if (core)
             {
-              const std::vector<blobdata> one{pending.blob};
               core->on_transactions_relayed(
-                epee::to_span(one),
-                cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
-                  ? relay_method::local : relay_method::fluff,
-                z.nzone);
+                epee::to_span(one), relay_method::fluff, z.nzone);
             }
-            const std::vector<blobdata> one{pending.blob};
             relay_fluff::run(zone, epee::to_span(one), pending.source, core);
             continue;
           }
