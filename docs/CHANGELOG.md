@@ -12,9 +12,10 @@
   have silently dropped `txs_pqc_auths`, `output_metadata`, and every
   archival/curve-tree table. `shekyl-blockchain-prune-known-spent-data` was a
   structural no-op on an amount-0 CT chain (its scan skips every zero-amount
-  input and output). Pruning itself is unchanged and lives in the daemon
-  (`--prune-blockchain` at startup, the 5-hour timer, the `prune_blockchain`
-  RPC/console command); file-size reclaim is now the schema-agnostic
+  input and output). Pruning stays daemon-resident (`--prune-blockchain` at
+  startup, the 5-hour timer, the `prune_blockchain` RPC/console command —
+  see the Changed entry for the completed confirmed-prune semantics);
+  file-size reclaim is now the schema-agnostic
   `shekyl-mdb-copy -c` (upstream LMDB `mdb_copy`, newly built from the
   vendored source), and the daemon console's prune warning — which pointed
   operators at the binary that refused to run — now describes that flow.
@@ -22,6 +23,17 @@
   prune tool derives its table set from the schema source of truth.
 
 ### Changed
+
+- **The confirmed `prune_blockchain` command now completes both pruning
+  phases before returning.** `Blockchain::prune_blockchain` previously ran
+  only the stripe prune; the output-metadata pass (`prune_tx_data`, which
+  deletes the `txs_pqc_auths`/`txs_prunable` rows) was reached only by the
+  five-hour `update_blockchain_pruning` tick, so an operator who pruned and
+  immediately stopped the daemon to compact reclaimed almost nothing. Both
+  phases now run in the same locked call, the startup path's duplicate
+  `prune_tx_data()` invocation is deleted, and on a tx-data failure the
+  first-prune startup branch now fails hard exactly like the
+  already-pruned branch always did.
 
 - **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
   5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed
