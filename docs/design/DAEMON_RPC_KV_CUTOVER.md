@@ -3,9 +3,10 @@
 **Status:** **RK-1 through RK-4b landed** (the pattern slice, PR #534; count
 + hash-by-height, PR #540; the block-header projection, PR #541; whole blocks,
 PR #548; the `.bin` mechanism, PR #555; the last binary endpoint and the FFI
-bridge's deletion, PR #562) — per-slice shas in the §2 slice table. **RK-4c** (the
-transaction read set) is **in flight on this branch**, PR #576; design **open
-for RK-5**. Census and binding
+bridge's deletion, PR #562) — per-slice shas in the §2 slice table. **RK-4c** (the transaction read set) is
+**landed on this branch**, PR #576, sha stamped at merge — the tense the §2
+rows use, which is written as of the merge this document lands with. Design
+**open for RK-5**. Census and binding
 decisions verified at source against `dev` **`077d97c4e`** (PR #528 merge);
 every `file:line` below was read at that commit. RK-2's own census rows and
 consumer set were re-verified at **`c5ca208e9`** (PR #534 merge), the commit
