@@ -181,7 +181,8 @@ pub type NoiseSendCb = extern "C" fn(
 /// Stated here rather than left to be re-derived, because "a new FFI export on
 /// the noise path" is what a future reviewer will read as a breach without the
 /// argument in front of them.
-pub type CarrierResolvedCb = extern "C" fn(ctx: *mut c_void, token: u64, sent: bool);
+pub type CarrierResolvedCb =
+    extern "C" fn(ctx: *mut c_void, token: u64, sent: bool, peer: *const u8);
 
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
@@ -411,7 +412,23 @@ fn dispatch(
     // completions and miss discards.
     if let Some(q) = queues {
         for outcome in q.take_resolved() {
-            resolved(ctx, outcome.token().0, outcome.was_sent());
+            // The peer travels with the verdict because the enqueuer cannot
+            // know it: a channel binds to whatever its slot holds at send
+            // time. Null on a discard — there is no successor to charge.
+            match outcome.peer() {
+                Some(peer) => resolved(
+                    ctx,
+                    outcome.token().0,
+                    outcome.was_sent(),
+                    peer.as_bytes().as_ptr(),
+                ),
+                None => resolved(
+                    ctx,
+                    outcome.token().0,
+                    outcome.was_sent(),
+                    core::ptr::null(),
+                ),
+            }
         }
     }
 }
@@ -420,7 +437,7 @@ fn dispatch(
 /// resolve nothing. `force_fluff` passes `None` for the queue, so `dispatch`
 /// never reaches the drain — this exists to make that unreachability explicit
 /// rather than to be called.
-extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool) {
+extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool, _peer: *const u8) {
     debug_assert!(false, "force_fluff resolved a carrier message");
 }
 
@@ -637,7 +654,12 @@ pub extern "C" fn shekyl_relay_zone_new(
         let Ok(dummy) = shekyl_levin::noise_notify(carrier::WINDOW_BYTES) else {
             return core::ptr::null_mut();
         };
-        let Some(q) = NoiseQueues::new(stems, dummy) else {
+        // The budget is what ONE EPOCH can deliver on a channel. Accepting
+        // more guarantees CV-1 discards the surplus at the roll, so the excess
+        // was never going to arrive — and an unbounded queue would grow with
+        // the caller's identity map behind it.
+        let budget = carrier::noise_windows_in_epoch(min_epoch_secs) as usize;
+        let Some(q) = NoiseQueues::new(stems, dummy, budget) else {
             // Same refusal channel as `Zone::new` above: a null handle.
             return core::ptr::null_mut();
         };

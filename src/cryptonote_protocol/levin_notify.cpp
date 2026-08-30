@@ -509,7 +509,21 @@ namespace levin
       {
         blobdata blob;
         crypto::hash txid;
-        boost::uuids::uuid successor;
+        /* NO `successor` FIELD, deliberately. An earlier draft stored the
+           destination chosen at enqueue and recorded it as the peer that
+           received the message. It is not: the channel binds to whatever its
+           slot holds at each send, so a rebind or epoch rebuild delivers to a
+           different node while F-10 charges the old one. The carrier reports
+           the real successor with the verdict, which is the only point at
+           which it is known. */
+        /*! The peer this transaction arrived FROM, nil when this node
+            originated it.
+
+            Kept because the stem watch's source mapping needs it: passing nil
+            for everything would mark every carrier observation as locally
+            originated and collapse every forwarded stem into the local bucket
+            of `distinct_sources`. */
+        boost::uuids::uuid source;
         /*! The relay method the CALLER asked for, not the one the wire used.
 
             `originated_stays_in_zone` takes the requested method — an origin
@@ -588,79 +602,107 @@ namespace levin
           nothing there records. */
       std::uint64_t poll_now_ms = 0;
 
+      /*! One carrier verdict, buffered for after the poll returns.
+
+          NOT APPLIED IN THE CALLBACK, and this struct exists to make that
+          impossible to forget. This handler runs while Rust holds `&mut` on
+          the zone — the precondition at the top of `relay_effects` says so —
+          so calling `shekyl_relay_zone_record_stem` from here would construct
+          a second `&mut RelayZoneHandle` aliasing the live one. That is
+          undefined behaviour, not a style question, and an earlier draft of
+          this file did exactly it. */
+      struct carrier_verdict
+      {
+        std::uint64_t token;
+        bool sent;
+        boost::uuids::uuid peer;
+      };
+
+      //! Verdicts collected during a poll; drained by `apply_carrier_verdicts`.
+      std::vector<carrier_verdict> verdicts;
+
       /*! What became of a transaction handed to the carrier.
 
-          UNREACHABLE UNTIL THE PRODUCER LANDS, and deliberately loud rather
-          than silent. Nothing calls `shekyl_relay_zone_noise_enqueue` yet
-          (COVER_TRAFFIC_RESTORATION.md §3.1a), so no message can be in a
-          carrier queue and no outcome can resolve. A no-op here would look
-          like a decision; this says which half is missing.
+          COLLECTS ONLY. See `carrier_verdict` for why nothing is applied here.
 
-          When the producer lands this becomes the ONLY place the pool learns a
-          carrier-borne transaction was relayed. `sent == false` must be read
-          as NOT relayed rather than as "not yet": an unbound channel discards
-          what it held, and an origin given the derived interval for a
-          discarded transaction waits it out for something that will never be
-          sent. */
-      static void on_carrier_resolved(void* ctx, std::uint64_t token, bool sent) noexcept
+          `peer` is the successor the message actually went to, reported by the
+          carrier rather than remembered from enqueue: a channel binds to
+          whatever its slot holds at send time, so the destination chosen when
+          the transaction was accepted may not be the node that received it.
+          Null on a discard. */
+      static void on_carrier_resolved(void* ctx, std::uint64_t token, bool sent,
+                                      const std::uint8_t* peer) noexcept
       {
         assert(ctx != nullptr);
         try
         {
           relay_effects& self = *static_cast<relay_effects*>(ctx);
-          detail::zone& z = *self.zone;
+          boost::uuids::uuid successor{};
+          if (peer != nullptr)
+            std::memcpy(std::addressof(successor), peer, sizeof(successor));
+          self.verdicts.push_back(carrier_verdict{token, sent, successor});
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("Failed to buffer a carrier verdict: " << e.what());
+        }
+      }
 
-          const auto found = z.carrier_pending_by_token.find(token);
+      /*! Apply what the poll collected. **Called after `poll` RETURNS**, so
+          re-entering the zone is safe: Rust no longer holds a borrow.
+
+          This is the only place the pool learns a carrier-borne transaction
+          was relayed. A verdict of `sent == false` records NOTHING — the
+          message left the carrier without reaching a peer, so `relayed` stays
+          false and the origin retries on the short grid rather than waiting
+          out the derived interval for a transaction that was never sent. */
+      static void apply_carrier_verdicts(detail::zone& z, i_core_events* core,
+                                         const std::vector<carrier_verdict>& verdicts,
+                                         const std::uint64_t at_ms)
+      {
+        for (const carrier_verdict& v : verdicts)
+        {
+          const auto found = z.carrier_pending_by_token.find(v.token);
           if (found == z.carrier_pending_by_token.end())
           {
-            /* A verdict for a token this zone never minted. Loud rather than
-               ignored: the carrier returns what it was given, so this means
-               the map and the queue have diverged — a real bug, and silence
-               would let it accumulate. */
-            MERROR("carrier resolved unknown token " << token);
-            return;
+            MERROR("carrier resolved unknown token " << v.token);
+            continue;
           }
-          /* Moved, not copied: the entry is erased on the next line and its
-             blob is a whole transaction. */
           const detail::zone::carrier_pending pending = std::move(found->second);
           z.carrier_pending_by_token.erase(found);
 
-          if (!sent)
+          if (!v.sent)
           {
-            /* DISCARDED: the message left the carrier without reaching a peer.
-               Nothing is recorded, and that is the whole point — `relayed`
-               stays false, so `local_relay_base` keeps MIN_RELAY_TIME and the
-               origin retries on the short grid instead of waiting out the
-               derived interval for a transaction that was never sent. */
             MDEBUG("carrier discarded a transaction; leaving it unrelayed for retry");
-            return;
+            continue;
           }
 
-          /* SENT, and only now. Both records fire here because this is where
-             the send is known to have happened AND the successor is known to
-             be the peer that received it — neither was true at enqueue. */
-          if (self.core)
+          if (core)
           {
             const std::vector<blobdata> one{pending.blob};
-            self.core->on_transactions_relayed(
+            core->on_transactions_relayed(
               epee::to_span(one),
               cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
                 ? relay_method::local : relay_method::stem,
               z.nzone);
           }
+          /* The successor is the peer the carrier DELIVERED to, not the one
+             chosen at enqueue. And the source is the transaction's own, not
+             nil: `nullptr` here would mark every carrier observation as
+             locally originated and collapse every forwarded stem into the
+             local bucket of the watch's source mapping. */
+          const bool local = pending.source.is_nil();
           shekyl_relay_zone_record_stem(
             z.relay.get(),
             reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
-            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.successor)),
-            nullptr,
-            /* The POLL's clock, not the wall clock: this record shares a
-               timeline with the schedule that produced the send. */
-            self.poll_now_ms
+            reinterpret_cast<const std::uint8_t*>(std::addressof(v.peer)),
+            local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(pending.source)),
+            /* The POLL's clock, not the wall clock. `run_next_wake` drives
+               `poll` with a deadline the zone chose; the watch computes an
+               observation's expiry from its stamp, so the two must share a
+               timeline or it expires against a clock nothing else reads. */
+            at_ms
           );
-        }
-        catch (const std::exception& e)
-        {
-          MERROR("Failed to resolve a carrier transaction: " << e.what());
         }
       }
 
@@ -885,6 +927,9 @@ namespace levin
           relay_effects::on_fluff, relay_effects::on_noise,
           relay_effects::on_carrier_resolved
         );
+        /* AFTER the call returns: `apply_carrier_verdicts` re-enters the zone,
+           which is only safe once Rust has released its borrow. */
+        relay_effects::apply_carrier_verdicts(*zone_, core_, sink.verdicts, at);
 
         arm(std::move(zone_), core_);
       }
@@ -1047,7 +1092,7 @@ namespace levin
                `on_carrier_resolved`, where the send is known to have happened
                and the successor is known to be the peer that received it. */
             zone_->carrier_pending_by_token.emplace(
-              token, detail::zone::carrier_pending{tx, id.front(), destination, tx_relay});
+              token, detail::zone::carrier_pending{tx, id.front(), source_, tx_relay});
           }
           to_send = std::move(refused);
           if (to_send.empty())
@@ -1320,6 +1365,8 @@ namespace levin
         relay_effects::on_fluff, relay_effects::on_noise,
         relay_effects::on_carrier_resolved
       );
+      // AFTER the call returns; see the sibling site.
+      relay_effects::apply_carrier_verdicts(*z, core, sink.verdicts, at);
       relay_wake::arm(z, core);
     });
   }

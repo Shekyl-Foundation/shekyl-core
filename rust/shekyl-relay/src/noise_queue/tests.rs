@@ -10,6 +10,9 @@ use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::RelayZone;
 
 const W: usize = 64; // the window, via the dummy's length
+/// Windows one channel may hold. Generous for the tests that do not care, and
+/// pinned by name so the one that DOES care reads as deliberate.
+const BUDGET: usize = 32;
 
 fn id(byte: u8) -> ConnectionId {
     let mut b = [0u8; 16];
@@ -18,7 +21,7 @@ fn id(byte: u8) -> ConnectionId {
 }
 
 fn queues(channels: usize) -> NoiseQueues {
-    NoiseQueues::new(channels, vec![0xDD; W]).expect("non-empty dummy")
+    NoiseQueues::new(channels, vec![0xDD; W], BUDGET).expect("non-empty dummy")
 }
 
 /// `n` windows, window `i` filled with byte `i`. Continuation and restart
@@ -29,7 +32,7 @@ fn striped(n: u8) -> Vec<u8> {
 
 #[test]
 fn a_zero_length_dummy_is_refused_because_it_is_not_cover() {
-    assert!(NoiseQueues::new(2, Vec::new()).is_none());
+    assert!(NoiseQueues::new(2, Vec::new(), BUDGET).is_none());
 }
 
 #[test]
@@ -406,7 +409,7 @@ fn enqueue_refuses_a_message_over_the_fragment_cap() {
     use shekyl_relay_privacy::params::carrier;
 
     const W: usize = 64;
-    let mut q = NoiseQueues::new(1, vec![0u8; W]).expect("queues");
+    let mut q = NoiseQueues::new(1, vec![0u8; W], BUDGET).expect("queues");
     let cap = carrier::MAX_FRAGMENTS as usize;
 
     assert!(
@@ -452,7 +455,10 @@ fn a_message_reports_sent_only_when_its_last_window_goes_out() {
     last.sent(&mut q);
     assert_eq!(
         q.take_resolved(),
-        vec![CarrierOutcome::Sent(CarrierToken(7))],
+        vec![CarrierOutcome::Sent {
+            token: CarrierToken(7),
+            peer: id(1)
+        }],
         "the last window completes the message"
     );
     assert!(
@@ -541,5 +547,94 @@ fn a_stale_send_token_cannot_complete_a_later_message() {
     assert!(
         q.take_resolved().is_empty(),
         "the stale token completed a message it was never taken for"
+    );
+}
+
+/// **The channel has a budget, and the drain rate is why.**
+///
+/// A channel emits ONE window per due tick whether or not anything is queued,
+/// so input faster than the cadence grows `pending` — and the caller's identity
+/// map behind it — without bound. The per-message `MAX_FRAGMENTS` check bounds
+/// one transaction; nothing bounded how many.
+///
+/// Refusing at the door sends the overflow by the ordinary wire, which is where
+/// it would have gone anyway. Accepting it instead would queue work CV-1
+/// discards at the next epoch roll.
+///
+/// What edit reds this: dropping the budget arm from `enqueue`.
+#[test]
+fn a_channel_refuses_more_than_its_window_budget() {
+    const SMALL: usize = 4;
+    let mut q = NoiseQueues::new(1, vec![0xDD; W], SMALL).expect("queues");
+    assert_eq!(q.window_budget(), SMALL);
+
+    assert!(
+        q.enqueue(0, striped(3), CarrierToken(1)),
+        "3 of 4 windows fits"
+    );
+    assert!(
+        q.enqueue(0, striped(1), CarrierToken(2)),
+        "the 4th window fits"
+    );
+    assert!(
+        !q.enqueue(0, striped(1), CarrierToken(3)),
+        "the 5th window is over budget and must be refused, not queued for a \
+         tick that will never come"
+    );
+
+    // And the budget is per CHANNEL, not global: a sibling channel is
+    // unaffected, because each drains on its own ticks.
+    let mut wide = NoiseQueues::new(2, vec![0xDD; W], SMALL).expect("queues");
+    assert!(wide.enqueue(0, striped(4), CarrierToken(4)));
+    assert!(
+        wide.enqueue(1, striped(4), CarrierToken(5)),
+        "channel 1 has its own budget and its own ticks"
+    );
+}
+
+/// A budget of zero is refused at construction, for the same reason an empty
+/// dummy is: a queue that can accept nothing is not a carrier.
+#[test]
+fn a_zero_window_budget_is_refused() {
+    assert!(NoiseQueues::new(2, vec![0xDD; W], 0).is_none());
+}
+
+/// **The completion names the peer that RECEIVED it, not the one bound when it
+/// was enqueued.**
+///
+/// The enqueuer cannot know the successor: a channel binds to whatever its slot
+/// holds at each send. Recording the enqueue-time peer would charge an F-10
+/// observation to a node that never saw the transaction — a wrong entry in the
+/// tallies rather than a missing one.
+///
+/// Unambiguous only because of CV-1: a rebind restarts the run, so a message
+/// that completed went entirely to one peer. This drives a rebind mid-message
+/// to prove the reported peer follows the delivery rather than the enqueue.
+#[test]
+fn a_completion_names_the_peer_that_received_it() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(2), CarrierToken(99)));
+
+    // One window to the first peer, then rebind: CV-1 discards the partial run
+    // and restarts against the new peer.
+    let first = q.take_for_send(0, id(1)).expect("channel 0");
+    first.sent(&mut q);
+    assert!(
+        q.take_resolved().is_empty(),
+        "one window of two completes nothing"
+    );
+
+    for _ in 0..2 {
+        let send = q.take_for_send(0, id(2)).expect("channel 0");
+        send.sent(&mut q);
+    }
+    assert_eq!(
+        q.take_resolved(),
+        vec![CarrierOutcome::Sent {
+            token: CarrierToken(99),
+            peer: id(2)
+        }],
+        "the completion must name the peer the message was RESTARTED against \
+         and delivered to, not the one it first went out to"
     );
 }

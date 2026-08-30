@@ -77,15 +77,27 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
 
 thread_local! {
     /// `(token, sent)` in resolution order — the producer's own oracle.
-    static RESOLVED: std::cell::RefCell<Vec<(u64, bool)>> =
+    static RESOLVED: std::cell::RefCell<Vec<(u64, bool, [u8; 16])>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-extern "C" fn rec_resolved(_: *mut c_void, token: u64, sent: bool) {
-    RESOLVED.with(|r| r.borrow_mut().push((token, sent)));
+extern "C" fn rec_resolved(_: *mut c_void, token: u64, sent: bool, peer: *const u8) {
+    // The peer is recorded, not ignored: it is the whole point of the
+    // parameter, and a recorder that dropped it could not tell a verdict
+    // charged to the right successor from one charged to the wrong one.
+    // Through the crate's FFI-read seam, not a raw `from_raw_parts`: SA-R-7's
+    // ratchet counts test sites, and it is right to — a recorder reading a
+    // boundary pointer has the same null and `isize::MAX` obligations as the
+    // production reader beside it. `rec_noise` says the same thing two
+    // functions up, which is where this should have been copied from.
+    let mut p = [0u8; 16];
+    if let Some(bytes) = unsafe { crate::legacy_util::slice_from_ptr(peer, 16) } {
+        p.copy_from_slice(bytes);
+    }
+    RESOLVED.with(|r| r.borrow_mut().push((token, sent, p)));
 }
 
-fn take_resolved() -> Vec<(u64, bool)> {
+fn take_resolved() -> Vec<(u64, bool, [u8; 16])> {
     RESOLVED.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }
 
@@ -1546,9 +1558,11 @@ fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
         while on_zero() < 2 {
             drive_one_noise_send(h);
         }
+        let done = take_resolved();
+        assert_eq!(done.len(), 1, "exactly one message completed");
         assert_eq!(
-            take_resolved(),
-            vec![(0xABCD, true)],
+            (done[0].0, done[0].1),
+            (0xABCD, true),
             "the last window must resolve the message, with the enqueuer's own \
              token and sent = true"
         );
@@ -1603,7 +1617,7 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
             }
         }
         assert_eq!(
-            fired,
+            fired.iter().map(|(t, s, _)| (*t, *s)).collect::<Vec<_>>(),
             vec![(0x1234, false)],
             "an unbound channel discards what it held, and the discard must \
              cross as sent = false — silence here is the record that never fires"

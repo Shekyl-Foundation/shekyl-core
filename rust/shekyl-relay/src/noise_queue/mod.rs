@@ -77,10 +77,36 @@ pub struct CarrierToken(pub u64);
 /// for a transaction that was never sent and will not be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarrierOutcome {
-    /// Every window of the message went out.
-    Sent(CarrierToken),
-    /// The message left the queue without being fully sent.
+    /// Every window of the message went out, to `peer`.
+    ///
+    /// **The peer is reported because the enqueuer cannot know it.** A channel
+    /// binds to whatever its stem slot holds at each send, and an epoch
+    /// rebuild or a mid-epoch rebind moves that. Recording the peer chosen at
+    /// enqueue time would charge an F-10 observation to a node that never
+    /// received the transaction — a wrong entry in the tallies, not a missing
+    /// one.
+    ///
+    /// It is unambiguous for a COMPLETED message precisely because of CV-1: a
+    /// rebind restarts the run rather than resuming it, so every window of a
+    /// message that finished went to one peer, and this is that peer.
+    Sent {
+        token: CarrierToken,
+        peer: ConnectionId,
+    },
+    /// The message left the queue without being fully sent. No peer: a
+    /// discarded message has no successor to charge.
     Discarded(CarrierToken),
+}
+
+impl CarrierOutcome {
+    /// The peer that received the whole message, or `None` for a discard.
+    #[must_use]
+    pub fn peer(self) -> Option<ConnectionId> {
+        match self {
+            Self::Sent { peer, .. } => Some(peer),
+            Self::Discarded(_) => None,
+        }
+    }
 }
 
 impl CarrierOutcome {
@@ -88,14 +114,14 @@ impl CarrierOutcome {
     #[must_use]
     pub fn token(self) -> CarrierToken {
         match self {
-            Self::Sent(t) | Self::Discarded(t) => t,
+            Self::Sent { token, .. } | Self::Discarded(token) => token,
         }
     }
 
     /// Whether the message reached the wire in full.
     #[must_use]
     pub fn was_sent(self) -> bool {
-        matches!(self, Self::Sent(_))
+        matches!(self, Self::Sent { .. })
     }
 }
 
@@ -203,9 +229,11 @@ impl NoiseSend {
             // which that becomes true, which is why the completion is reported
             // from here rather than from the caller's send: the caller knows a
             // FRAGMENT went out, not a message.
-            let done = q.pending.pop_front().map(|m| m.token);
-            if let Some(token) = done {
-                queues.resolved.push(CarrierOutcome::Sent(token));
+            // The peer this run was bound to IS the successor: CV-1 restarts
+            // on rebind, so a message that completed went entirely to it.
+            let done = q.pending.pop_front().map(|m| m.token).zip(q.bound);
+            if let Some((token, peer)) = done {
+                queues.resolved.push(CarrierOutcome::Sent { token, peer });
             }
         } else {
             q.offset = Some(next);
@@ -252,6 +280,21 @@ pub struct NoiseQueues {
     /// The dummy payload. **Its length is the fragment window** — one value, so
     /// a real fragment and a dummy cannot disagree about length.
     dummy: Vec<u8>,
+    /// Windows one channel may hold pending, in total.
+    ///
+    /// **The drain rate is fixed and the input rate is not**, which is the
+    /// whole reason this exists. A channel emits ONE window per due tick
+    /// whether or not anything is queued, so a node stemming faster than the
+    /// cadence would grow `pending` — and C++'s token map with it — without
+    /// bound. Refusing at the door instead sends the overflow by the ordinary
+    /// wire, which is where it would have gone anyway.
+    ///
+    /// Set to what an epoch can actually deliver. Accepting more than that
+    /// guarantees CV-1 discards the remainder at the roll, so the excess was
+    /// never going to arrive: this makes the accepted work match the delivery
+    /// the schedule can promise, exactly as the per-message `MAX_FRAGMENTS`
+    /// check makes it match the invariant `Zone::new` validates.
+    window_budget: usize,
     /// Terminal outcomes awaiting collection by [`NoiseQueues::take_resolved`].
     resolved: Vec<CarrierOutcome>,
 }
@@ -260,15 +303,25 @@ impl NoiseQueues {
     /// `None` when `dummy` is empty: a zero window would make every emission
     /// zero-length, which is not cover.
     #[must_use]
-    pub fn new(channels: usize, dummy: Vec<u8>) -> Option<Self> {
-        if dummy.is_empty() {
+    /// `window_budget` is how many windows ONE channel may hold pending; see
+    /// the field. `None` when it is zero, for the same reason an empty dummy
+    /// is refused: a queue that can accept nothing is not a carrier.
+    pub fn new(channels: usize, dummy: Vec<u8>, window_budget: usize) -> Option<Self> {
+        if dummy.is_empty() || window_budget == 0 {
             return None;
         }
         Some(Self {
             channels: (0..channels).map(|_| ChannelQueue::default()).collect(),
             dummy,
             resolved: Vec::new(),
+            window_budget,
         })
+    }
+
+    /// Windows one channel may hold pending, in total.
+    #[must_use]
+    pub fn window_budget(&self) -> usize {
+        self.window_budget
     }
 
     /// The fragment window, in bytes — **the only definition**.
@@ -329,7 +382,21 @@ impl NoiseQueues {
         if message.len() / self.window() > carrier::MAX_FRAGMENTS as usize {
             return false;
         }
+        // The CHANNEL's budget, not just this message's size. A per-message cap
+        // bounds one transaction; nothing bounded how many. The drain is one
+        // window per due tick, so without this a node stemming faster than the
+        // cadence grows the queue — and the caller's identity map with it —
+        // until memory runs out, while CV-1 quietly discards the surplus at
+        // every epoch roll.
+        let window = self.window();
         match self.channels.get_mut(channel) {
+            Some(q)
+                if (q.pending.iter().map(|m| m.bytes.len()).sum::<usize>() + message.len())
+                    / window
+                    > self.window_budget =>
+            {
+                false
+            }
             Some(q) => {
                 q.pending.push_back(PendingMessage {
                     bytes: message,

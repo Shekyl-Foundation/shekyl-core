@@ -1080,7 +1080,7 @@ match exactly.** Three named reasons, all expected:
 | --- | --- | --- |
 | jitter over a finite window | **either** | the mean is 5 000 ms; any finite sample's mean sits either side of it, which is the same property §56 requires the cadence to have |
 | unbound slots | **under** | a channel with no peer emits nothing (CV-2), so a node that has not filled its stem slots carries less than the ceiling |
-| discards and rebinds | **under** | a discarded or restarted run re-sends windows it already sent; those bytes are on the wire but the *message* count they represent is lower |
+| discards and rebinds | **neither** | a restart re-sends windows, so later ticks carry retries instead of dummies — the BYTE rate is unchanged and only the useful throughput falls. Listed because it is the intuitive miscount: it belongs to a throughput reading, not a bandwidth one |
 
 **So the expected finding is: at or slightly under the ceiling, never
 meaningfully over.** The ceiling is a sustained mean at the worst posture —

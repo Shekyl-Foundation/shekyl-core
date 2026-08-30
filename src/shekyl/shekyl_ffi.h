@@ -3067,7 +3067,22 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! what a reviewer will otherwise read as a breach.
 //!
 //! Must not throw across the FFI boundary.
-typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent);
+//! `peer` is the 16-byte connection id the message was DELIVERED to, or null
+//! on a discard. Reported rather than remembered: a channel binds to whatever
+//! its stem slot holds at send time, so the destination chosen when the
+//! transaction was accepted may not be the node that received it. Recording
+//! the enqueue-time peer would charge an F-10 observation to a node that never
+//! saw the transaction -- a wrong entry in the tallies, not a missing one.
+//!
+//! Unambiguous for a completed message because of CV-1: a rebind RESTARTS the
+//! run rather than resuming it, so every window of a message that finished
+//! went to one peer.
+//!
+//! \pre MUST NOT re-enter the zone. This fires while Rust holds a mutable
+//! borrow of the handle, so calling any `shekyl_relay_zone_*` function from
+//! here aliases that borrow. Buffer and apply after `poll` returns.
+typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
+                                             const std::uint8_t* peer);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
