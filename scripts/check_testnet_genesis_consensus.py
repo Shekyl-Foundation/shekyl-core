@@ -28,10 +28,30 @@ def rpc_call(base_url: str, method: str, params: dict):
     return body.get("result", {})
 
 
+def rest_call(base_url: str, path: str, params: dict):
+    # `get_transactions` is a REST endpoint (`/get_transactions`), not a
+    # JSON-RPC method — it has no row in either dispatch table, so wrapping it
+    # in a `/json_rpc` envelope answers "Method not found". REST replies carry
+    # their error channel in `status`, not an `error` member.
+    data = json.dumps(params).encode("utf-8")
+    req = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    status = body.get("status")
+    if status is not None and status != "OK":
+        raise RuntimeError(f"REST error from {base_url}{path}: {status}")
+    return body
+
+
 def get_genesis_tuple(base_url: str):
     header = rpc_call(base_url, "get_block_header_by_height", {"height": 0})
     block_header = header.get("block_header", {})
-    txs = rpc_call(base_url, "get_transactions", {"txs_hashes": [block_header.get("miner_tx_hash")]})
+    txs = rest_call(base_url, "/get_transactions", {"txs_hashes": [block_header.get("miner_tx_hash")]})
     entries = txs.get("txs") or []
     if not entries:
         raise RuntimeError(f"{base_url}: could not fetch genesis miner tx hex")
