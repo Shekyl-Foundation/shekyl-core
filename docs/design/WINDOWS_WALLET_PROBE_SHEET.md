@@ -398,13 +398,15 @@ not need a second interactive session. P-13 reopens only on a machine (a
 Windows Server SKU, or a client with multi-session explicitly and legitimately
 enabled) where concurrent interactive logons are a supported configuration.
 
-**Now confirmed across two client generations (2026-08-29).** The P-17
+**A second client SKU, two generations newer (2026-08-29).** The P-17
 two-machine run's caller, `DTASUS-Z970`, is **Windows 11 Enterprise 25H2**
 (`10.0.26200`), `InstallationType = Client` — two releases newer than `LP-1`'s
-23H2 (`10.0.22631`). Both are client SKUs, so P-13's "unachievable on a client
-SKU" is not a quirk of one build: the single-session-per-user constraint holds
-across the two generations we have measured, which is a stronger statement than
-either box could make alone. It reopens on a Server SKU or an explicitly
+23H2 (`10.0.22631`). This does **not** re-run P-13: its `fSingleSessionPerUser`
+was measured only on `LP-1`, and `DT-1` ran only the P-17 caller dial. What it
+does establish, measured, is that the client-SKU **class** P-13's ruling turns on
+is present two generations apart — so the constraint we face is not an artifact
+of one 23H2 build, even though the session semantics themselves were not
+re-probed on `DT-1`. P-13 still reopens only on a Server SKU or an explicitly
 multi-session client, as above — not on a newer client release.
 
 ### 4.7 P-17 two-machine harness, local dry-run (2026-08-27, `edd471767`)
@@ -476,9 +478,11 @@ not the flatter "network logons have no logon SID."
 dial from `DTASUS-Z970` — machine `DT-1`, **Windows 11 Enterprise 25H2**
 (`10.0.26200`), a client SKU **two releases newer** than `LP-1`'s 23H2
 (`10.0.22631`) — same AD user, no poller before it. That the two machines are
-two generations apart makes the structural PASS **independent confirmation** on a
-newer client SKU rather than a re-run of the box that produced P-1…P-16, and it
-is why the P-13 client-SKU ruling now holds across both (§4.6):
+two generations apart makes this structural PASS **independent confirmation** of
+the network-logon behaviour on a newer client SKU — the caller was a different,
+newer box, not the one that produced P-1…P-16 — and it establishes that the
+client-SKU class P-13's ruling turns on is present on both generations, not just
+23H2 (§4.6, which P-13 itself was not re-run to confirm):
 
 | Date | Machine / build | Result | Verdict |
 |---|---|---|---|

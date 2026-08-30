@@ -32,11 +32,15 @@ file, never the reverse.** If they disagree, this file is the observation and
 is what §3 was waiting for.
 
 **OS identified by `Caption` + build (`CurrentBuild`.`UBR` / `OSVersion.Version`),
-never `ProductName`.** On `DT-1` the registry `ProductName` reads *"Windows 10
-Enterprise"* — that key froze when Windows 11 shipped and lies here; the box is
-Windows 11 25H2. `Caption` and the build number are the trustworthy pair. If
-anything downstream ever identifies the OS by `ProductName`, that is a defect of
-its own, not a quirk of this row.
+never `ProductName`.** The registry `ProductName` reads *"Windows 10 Enterprise"*
+on **both** boxes — measured on `LP-1` (`Caption: Microsoft Windows 11 Enterprise`,
+`CurrentBuild 22631` / `UBR 7517`) at the start of run A, and on `DT-1` (Windows 11
+25H2, `26200`) — so it is a **systematic Windows-11 registry artifact, confirmed
+two SKU generations apart, not a per-machine quirk**: that key froze when Windows
+11 shipped and has lied ever since. `Caption` + the build number are the
+trustworthy pair; any downstream that identifies the OS by `ProductName` is a
+defect of its own. (Same defect class as the stale/plausible values this round
+kept catching — a field that reads authoritative and is wrong.)
 
 ---
 
