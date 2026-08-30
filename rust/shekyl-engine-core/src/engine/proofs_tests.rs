@@ -323,7 +323,14 @@ mod check_workflows {
                                 double_spend_seen: false,
                                 location: shekyl_rpc_types::TxLocation::Mined {
                                     block_height: TX_BLOCK_HEIGHT,
-                                    confirmations: 1,
+                                    // Derived, not invented: the daemon
+                                    // computes this against the tip it read
+                                    // for the whole gather, so a double that
+                                    // hard-codes it disagrees with its own
+                                    // heights and only passed while the
+                                    // wallet recomputed the value instead of
+                                    // reading it.
+                                    confirmations: CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT,
                                     block_timestamp: 0,
                                     output_indices: Vec::new(),
                                 },
@@ -924,5 +931,40 @@ mod check_workflows {
         )
         .expect("with-secrets proof verifies");
         assert_eq!(verified.len(), 2);
+    }
+}
+
+/// **`confirmations` is carried, not recomputed.**
+///
+/// The round-trip test above cannot tell the two apart: its mock is
+/// self-consistent, so reading the daemon's number and re-deriving it from
+/// a second `get_height` both yield 8. This pins the contract directly —
+/// the value the daemon computed under its gather lock is the value the
+/// caller sees, unaltered — by handing the reader a number that no height
+/// subtraction available to the wallet would produce.
+///
+/// The regression it guards is a silent one: re-deriving would still look
+/// right on a quiet chain and drift only when a block lands between the two
+/// requests, which is exactly when a confirmations count is being watched.
+mod confirmations_are_read_not_recomputed {
+    use crate::engine::proofs_chain_facts::{confirmations_of, TxChainState};
+
+    #[test]
+    fn a_mined_tx_reports_the_daemons_own_count() {
+        let (in_pool, confirmations) = confirmations_of(&TxChainState::Mined {
+            confirmations: 4_242,
+        });
+        assert!(!in_pool);
+        assert_eq!(
+            confirmations, 4_242,
+            "the daemon's gather-lock count must reach the caller unaltered"
+        );
+    }
+
+    #[test]
+    fn a_pooled_tx_reports_zero_and_no_depth() {
+        let (in_pool, confirmations) = confirmations_of(&TxChainState::Pooled);
+        assert!(in_pool);
+        assert_eq!(confirmations, 0, "a pooled tx has no depth");
     }
 }

@@ -739,7 +739,7 @@ pub async fn check_tx_proof<R: Rpc>(
         });
     }
 
-    let (in_pool, confirmations) = confirmations_of(rpc, &fetched).await?;
+    let (in_pool, confirmations) = confirmations_of(&fetched.state);
 
     Ok(CheckedTxProof::Valid {
         direction,

@@ -31,14 +31,27 @@ use shekyl_wire::{Ct, Transaction};
 use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
 use super::proofs::ProofsError;
 
+/// Where the daemon found a transaction, and the depth that goes with
+/// it. An arm rather than a `bool` beside an `Option`, for the reason
+/// stated at the read below: a pooled entry has no depth, so a shape
+/// that can express "pooled at 12 confirmations" is a shape a caller
+/// has to remember not to build.
+pub(crate) enum TxChainState {
+    Pooled,
+    /// `confirmations` as the daemon computed it, against the same
+    /// locked chain snapshot as the rest of the entry -- not
+    /// recomputed here from a later tip, which would pair a height
+    /// from one request with a block from another.
+    Mined {
+        confirmations: u64,
+    },
+}
+
 /// A proof-relevant tx fetched from the daemon: the parsed pruned body
-/// plus the daemon-reported inclusion metadata.
+/// plus where the daemon found it.
 pub(crate) struct FetchedTx {
     pub(crate) tx: Transaction,
-    pub(crate) in_pool: bool,
-    /// The daemon's 0-based block height for the tx; meaningless while
-    /// `in_pool`.
-    pub(crate) block_height: Option<u64>,
+    pub(crate) state: TxChainState,
 }
 
 /// Fetch one tx by hash in the **pruned** body form (everything the
@@ -79,10 +92,14 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     // Where it was found comes from the arm, not from two independently
     // optional fields: `block_height` cannot be read off a pooled entry
     // because a pooled entry does not carry one.
-    let (in_pool, block_height) = match txs.first().map(|t| &t.location) {
-        Some(TxLocation::Mined { block_height, .. }) => (false, Some(*block_height)),
-        Some(TxLocation::Pooled { .. }) => (true, None),
-        None => (false, None),
+    let state = match txs.first().map(|t| &t.location) {
+        Some(TxLocation::Mined { confirmations, .. }) => TxChainState::Mined {
+            confirmations: *confirmations,
+        },
+        // No entry is not "pooled", but `parse_tx_batch` below refuses an
+        // empty batch for a requested hash, so this arm never reaches a
+        // caller; it is written as the pooled shape rather than a panic.
+        Some(TxLocation::Pooled { .. }) | None => TxChainState::Pooled,
     };
 
     let mut parsed =
@@ -91,11 +108,7 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
         .pop()
         .expect("parse_tx_batch returns exactly one tx per requested hash");
 
-    Ok(FetchedTx {
-        tx,
-        in_pool,
-        block_height,
-    })
+    Ok(FetchedTx { tx, state })
 }
 
 /// Fetch the pruned bodies of `txids` (unique, in first-seen order) in
@@ -169,18 +182,27 @@ fn tx_not_found_in_request_order(batch: &[[u8; 32]], missed: &[[u8; 32]]) -> Pro
 /// The contract's confirmations pin: daemon chain height (block COUNT)
 /// minus the tx's block height (0-based index) — tip block reports 1;
 /// 0 only while pool-only.
-pub(crate) async fn confirmations_of<R: Rpc>(
-    rpc: &R,
-    fetched: &FetchedTx,
-) -> Result<(bool, u64), ProofsError> {
-    if fetched.in_pool {
-        return Ok((true, 0));
+///
+/// **Read, not recomputed.** The daemon already answers this: the native
+/// handler derives `confirmations` as `chain_height - block_height`
+/// against the tip it read once for the whole gather, which is the same
+/// arithmetic this function used to perform. Doing it again here meant a
+/// second `get_height`, and subtracting a block height captured in the
+/// *earlier* `get_transactions` from a tip read *later* — two snapshots
+/// for one answer, so a block arriving between them inflated the count
+/// and a reorg could make it describe a chain the block is no longer on.
+/// The one-lock gather exists precisely so that pairing cannot happen;
+/// carrying its number forward is what makes the guarantee reach the
+/// caller instead of stopping at the daemon.
+///
+/// Taking the daemon's value is no more trusting than the arithmetic was:
+/// both operands were always its to choose. It is strictly better only in
+/// being self-consistent, and one round trip cheaper.
+pub(crate) fn confirmations_of(state: &TxChainState) -> (bool, u64) {
+    match state {
+        TxChainState::Pooled => (true, 0),
+        TxChainState::Mined { confirmations } => (false, *confirmations),
     }
-    let block_height = fetched.block_height.ok_or_else(|| {
-        RpcError::InvalidNode("confirmed tx response missing block_height".to_string())
-    })?;
-    let chain_height = rpc.get_height().await? as u64;
-    Ok((false, chain_height.saturating_sub(block_height)))
 }
 
 /// Project a parsed transaction into the per-output on-chain data the
