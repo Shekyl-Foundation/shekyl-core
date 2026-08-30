@@ -1864,13 +1864,6 @@ public:
   bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
 
   /**
-   * @brief prune output data for the given amount
-   *
-   * @param amount the amount for which to prune data
-   */
-  virtual void prune_outputs(uint64_t amount) = 0;
-
-  /**
    * @brief get the blockchain pruning seed
    * @return the blockchain pruning seed
    */

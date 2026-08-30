@@ -673,7 +673,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper**
   - Target: pre-genesis
 
-- **Legacy spend-graph analysis utilities: audit against FCMP++, then delete
+- **Legacy spend-graph analysis utilities (`ancestry`/`depth`/`usage`): audit against FCMP++, then delete** (`prune-known-spent-data` audited and deleted — its eligible set is empty on an amount-0 CT chain) [`EXECUTABLES.md`](EXECUTABLES.md)
   - Target: pre-genesis
 
 - **P-scan pruned-fetch bandwidth option over Tor (rejected at ).** The
@@ -943,6 +943,9 @@ Exceptional deferral with a named blocker. This list stays tiny.
   - Target: post-genesis
 
 - **`monero-oxide` un-pin / 40-commit upstream merge.** Named blocker: the vendored pin is intentional at genesis; Operation B is not a launch dependency (`MONERO_OXIDE_VENDOR_STATUS.md`).
+  - Target: post-genesis
+
+- **Offline schema-aware prune/copy tooling (rule-21 reversion clause).** `shekyl-blockchain-prune` retired (inert since LMDB v6: version guard pinned at 5; copy list held 16 of 49 tables). Reopen on post-genesis operator demand that in-place `--prune-blockchain` + `shekyl-mdb-copy -c` cannot serve, or when S-PRUNE reaches execution in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) — then rebuild in Rust with the table set derived from the schema source of truth, never hand-maintained (precedent: the `SHEKYL_LMDB_TABLES` X-macro, rule 47).
   - Target: post-genesis
 
 - **Horizontal scaling via stateless actor pools / signed actor-patch over staker P2P.** Named blocker: no production load or staker P2P distribution surface at genesis; not a lattice/V4 item.

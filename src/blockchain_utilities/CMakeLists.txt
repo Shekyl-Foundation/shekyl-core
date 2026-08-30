@@ -68,25 +68,9 @@ monero_private_headers(blockchain_usage
 
 
 
-set(blockchain_prune_known_spent_data_sources
-  blockchain_prune_known_spent_data.cpp
+set(mdb_copy_sources
+  ../../external/db_drivers/liblmdb/mdb_copy.c
   )
-
-set(blockchain_prune_known_spent_data_private_headers)
-
-monero_private_headers(blockchain_prune_known_spent_data
-	  ${blockchain_prune_known_spent_data_private_headers})
-
-
-
-set(blockchain_prune_sources
-  blockchain_prune.cpp
-  )
-
-set(blockchain_prune_private_headers)
-
-monero_private_headers(blockchain_prune
-	  ${blockchain_prune_private_headers})
 
 
 
@@ -184,6 +168,30 @@ set_property(TARGET blockchain_usage
 	OUTPUT_NAME "shekyl-blockchain-usage")
 install(TARGETS blockchain_usage DESTINATION bin)
 
+# Offline LMDB compaction (`shekyl-mdb-copy -c <src> <dst>`), built from the
+# vendored upstream utility. This is the schema-agnostic replacement for the
+# retired schema-aware copy tool: the daemon prunes in place, and compaction
+# needs no knowledge of the table set. Defined here (not in the vendored
+# liblmdb directory) so it rides the same executable pipeline as every other
+# operator binary: the NOT IOS gate, strip/no-relink, and the security and
+# static linker flags configured before src/ is processed.
+shekyl_add_executable(mdb_copy
+  ${mdb_copy_sources})
+
+target_include_directories(mdb_copy
+  PRIVATE
+    ../../external/db_drivers/liblmdb)
+
+target_link_libraries(mdb_copy
+  PRIVATE
+    lmdb
+    ${CMAKE_THREAD_LIBS_INIT})
+
+set_property(TARGET mdb_copy
+	PROPERTY
+	OUTPUT_NAME "shekyl-mdb-copy")
+install(TARGETS mdb_copy DESTINATION bin)
+
 shekyl_add_executable(blockchain_ancestry
   ${blockchain_ancestry_sources}
   ${blockchain_ancestry_private_headers})
@@ -247,46 +255,3 @@ set_property(TARGET blockchain_stats
 	OUTPUT_NAME "shekyl-blockchain-stats")
 install(TARGETS blockchain_stats DESTINATION bin)
 
-shekyl_add_executable(blockchain_prune_known_spent_data
-  ${blockchain_prune_known_spent_data_sources}
-  ${blockchain_prune_known_spent_data_private_headers})
-
-target_link_libraries(blockchain_prune_known_spent_data
-  PRIVATE
-    cryptonote_core
-    blockchain_db
-    p2p
-    version
-    epee
-    ${Boost_FILESYSTEM_LIBRARY}
-    ${Boost_SYSTEM_LIBRARY}
-    ${Boost_THREAD_LIBRARY}
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES})
-
-set_property(TARGET blockchain_prune_known_spent_data
-	PROPERTY
-	OUTPUT_NAME "shekyl-blockchain-prune-known-spent-data")
-install(TARGETS blockchain_prune_known_spent_data DESTINATION bin)
-
-shekyl_add_executable(blockchain_prune
-  ${blockchain_prune_sources}
-  ${blockchain_prune_private_headers})
-
-set_property(TARGET blockchain_prune
-	PROPERTY
-	OUTPUT_NAME "shekyl-blockchain-prune")
-install(TARGETS blockchain_prune DESTINATION bin)
-
-target_link_libraries(blockchain_prune
-  PRIVATE
-    cryptonote_core
-    blockchain_db
-    p2p
-    version
-    epee
-    ${Boost_FILESYSTEM_LIBRARY}
-    ${Boost_SYSTEM_LIBRARY}
-    ${Boost_THREAD_LIBRARY}
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES})

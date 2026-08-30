@@ -18,8 +18,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-blockchain-ancestry` | Trace output ancestry graphs |
 | `shekyl-blockchain-depth` | Measure transaction depth to coinbase (historical/analytical) |
 | `shekyl-blockchain-stats` | Time-series chain statistics |
-| `shekyl-blockchain-prune` | Prune blockchain LMDB in place |
-| `shekyl-blockchain-prune-known-spent-data` | Prune known-spent output buckets |
+| `shekyl-mdb-copy` | Compact a stopped daemon's LMDB database |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
 | `shekyl-utils-object-sizes` | Print sizeof for core data structures |
 
@@ -539,38 +538,34 @@ Key options: `--data-dir`, `--block-start`, `--block-stop`, `--with-inputs`,
 `--with-diff`. Note: `--with-ringsize` has been removed (not applicable to
 FCMP++ transactions).
 
-### `shekyl-blockchain-prune`
+### `shekyl-mdb-copy`
 
-Creates a pruned copy of the LMDB database, removing most historical
-transaction data while preserving headers and recent blocks.
-
-```bash
-# Prune the blockchain (swaps original with pruned copy)
-shekyl-blockchain-prune
-
-# Prune with fast sync mode
-shekyl-blockchain-prune --db-sync-mode fastest
-```
-
-Key options: `--data-dir`, `--db-sync-mode`, `--copy-pruned-database`.
-
-### `shekyl-blockchain-prune-known-spent-data`
-
-Removes output data for amounts where all outputs are provably spent. Under
-FCMP++ no output is ever provably spent (spends do not reveal which output
-they consume), so this tool has no substrate on post-genesis data; it is a
-deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
+Compacts a stopped daemon's LMDB database by copying it without its free
+pages (upstream LMDB's `mdb_copy`, built from the vendored source). Pruning
+itself happens inside the daemon (`--prune-blockchain`, or the
+`prune_blockchain` command); an in-place prune marks pages free without
+shrinking the file, and this tool reclaims that space. You temporarily need
+disk space for both copies.
 
 ```bash
-# Dry run to see what would be pruned
-shekyl-blockchain-prune-known-spent-data --dry-run --verbose
+# Stop shekyld first; the destination directory must exist and be empty
+mkdir /path/to/compacted
+shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
 
-# Prune using a known-spent list file
-shekyl-blockchain-prune-known-spent-data --input spent-outputs.txt
+# Then replace the old lmdb directory with the compacted copy
 ```
 
-Key options: `--data-dir`, `--input`, `--dry-run`, `--verbose`.
+Run it as the user that owns the data directory (the copy opens the
+database read-only but still needs write access to the source's
+reader-lock file, `lock.mdb`; a `sudo` run leaves the compacted copy
+root-owned, so the daemon cannot use it after the swap), and always pass
+both paths — with the destination omitted the tool streams the entire
+database to standard output.
+
+The former `shekyl-blockchain-prune` (schema-aware pruned copy) and
+`shekyl-blockchain-prune-known-spent-data` (spend-graph pruning, no substrate
+under FCMP++) were retired; the daemon's in-place prune plus this
+schema-agnostic compaction replace them.
 
 ---
 

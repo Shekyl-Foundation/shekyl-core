@@ -620,7 +620,10 @@ jobs:
       - name: build daemon
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon --parallel 2
+          # mdb_copy rides along (one vendored C file): the daemon's prune
+          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
+          # here rather than discovered by the first Windows operator.
+          cmake --build build --config Release --target daemon mdb_copy --parallel 2
       - name: smoke-test daemonizer removal
         shell: pwsh
         # After the V3.1 daemonizer removal, shekyld.exe must (a) link
