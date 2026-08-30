@@ -507,10 +507,16 @@ namespace levin
       /*! One transaction handed to the carrier, awaiting its verdict.
 
           The carrier holds framed bytes it cannot parse, so the identity has
-          to live on this side. `blob` is kept because
-          `on_transactions_relayed` takes blobs, and `successor` because F-10
-          charges an observation to the peer a stem was given to — neither is
-          recoverable from the token, which is opaque by design. */
+          to live on this side, and none of it is recoverable from the token —
+          which is opaque by design. `blob` because `on_transactions_relayed`
+          takes blobs; `txid` because that is what the stem watch is keyed on;
+          `source` because F-10's source mapping needs the peer this arrived
+          FROM; `requested` because `originated_stays_in_zone` takes the method
+          the caller asked for, not the one the wire used.
+
+          NOT the successor. The peer a stem was given to is not knowable when
+          it is accepted — the channel binds at send time — so it arrives with
+          the verdict instead. */
       struct carrier_pending
       {
         blobdata blob;
@@ -595,18 +601,6 @@ namespace levin
           being true. */
       i_core_events* core = nullptr;
       std::vector<boost::uuids::uuid> outs;
-      /*! The instant this poll was driven at, for records made inside it.
-
-          `poll` is driven with `shekyl_relay_zone_next_wake()` on the
-          scheduled path — a deadline the zone chose, not the wall clock — so a
-          record stamped with `now_ms()` from inside a callback sits on a
-          different timeline from the schedule that produced it. The stem
-          watch's deadline is computed from its stamp, so the two must agree or
-          an observation expires against a clock nothing else reads.
-
-          Zero means "no poll drove this", which is the `force_fluff` sink;
-          nothing there records. */
-      std::uint64_t poll_now_ms = 0;
 
       /*! One carrier verdict, buffered for after the poll returns.
 
@@ -886,7 +880,6 @@ namespace levin
            needs it to filter by blockchain height. */
         const std::uint64_t at = now_ms();
         relay_effects sink{zone_, core_};
-        sink.poll_now_ms = at;
         shekyl_relay_zone_poll(
           zone_->relay.get(), at,
           std::addressof(sink), relay_effects::on_outbound,
@@ -1452,7 +1445,6 @@ namespace levin
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
       const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
       relay_effects sink{z, core};
-      sink.poll_now_ms = at;
       shekyl_relay_zone_poll(
         z->relay.get(), at,
         std::addressof(sink), relay_effects::on_outbound,

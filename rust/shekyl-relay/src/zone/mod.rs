@@ -359,8 +359,9 @@ impl Zone {
     /// that transport is a parameter, not a topology, and handing the
     /// scheduler the overlay identity would recouple the axes this type exists
     /// to keep apart. The FFI derives params, reach, and secrecy from one
-    /// discriminant at the adapter; a carrier caller, once one is built, would
-    /// do the same. None exists today — see `Self::new`'s refusal notes.
+    /// discriminant at the adapter; the carrier caller does the same — it
+    /// exists as of 2026-08-29, and hits `Self::new`'s refusal notes because
+    /// it forms the pair in Rust.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count

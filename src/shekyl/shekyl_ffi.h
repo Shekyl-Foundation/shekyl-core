@@ -3345,7 +3345,16 @@ void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void*
 //! defaults off), a framing failure, an unknown channel, or the queue's own
 //! rule (a whole number of windows, at most `carrier::MAX_FRAGMENTS` — the
 //! Rust-owned cap in `shekyl-relay-privacy`, which has no C macro mirror and
-//! deliberately so: one owner, not a constant to synchronise).
+//! deliberately so: one owner, not a constant to synchronise), or THE CHANNEL
+//! BEING FULL.
+//!
+//! That last one is the only refusal a caller can hit by doing nothing wrong,
+//! and it is the reason this list claims to be exhaustive rather than
+//! illustrative. A channel holds at most one epoch's worth of windows, because
+//! the drain is one window per due tick and anything beyond that is discarded
+//! at the roll rather than delivered. A full channel means the carrier is
+//! saturated, not that the transaction is malformed -- send it by the ordinary
+//! wire, which is what the producer does.
 //! `token` is the caller's handle for this message, opaque to the carrier and
 //! returned verbatim through `ShekylRelayCarrierResolvedCb`. It is deliberately
 //! NOT a transaction hash: the queue holds framed bytes it cannot parse, which
