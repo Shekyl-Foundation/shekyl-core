@@ -656,55 +656,15 @@ namespace levin
           message left the carrier without reaching a peer, so `relayed` stays
           false and the origin retries on the short grid rather than waiting
           out the derived interval for a transaction that was never sent. */
-      static void apply_carrier_verdicts(detail::zone& z, i_core_events* core,
+      /*! Apply what the poll collected. **Called after `poll` RETURNS**, so
+          re-entering the zone is safe: Rust no longer holds a borrow.
+
+          Defined out of line, below `relay_fluff` — a discarded transaction
+          falls back to fluffing, and that type is declared after this one. */
+      static void apply_carrier_verdicts(const std::shared_ptr<detail::zone>& zone,
+                                         i_core_events* core,
                                          const std::vector<carrier_verdict>& verdicts,
-                                         const std::uint64_t at_ms)
-      {
-        for (const carrier_verdict& v : verdicts)
-        {
-          const auto found = z.carrier_pending_by_token.find(v.token);
-          if (found == z.carrier_pending_by_token.end())
-          {
-            MERROR("carrier resolved unknown token " << v.token);
-            continue;
-          }
-          const detail::zone::carrier_pending pending = std::move(found->second);
-          z.carrier_pending_by_token.erase(found);
-
-          if (!v.sent)
-          {
-            MDEBUG("carrier discarded a transaction; leaving it unrelayed for retry");
-            continue;
-          }
-
-          if (core)
-          {
-            const std::vector<blobdata> one{pending.blob};
-            core->on_transactions_relayed(
-              epee::to_span(one),
-              cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
-                ? relay_method::local : relay_method::stem,
-              z.nzone);
-          }
-          /* The successor is the peer the carrier DELIVERED to, not the one
-             chosen at enqueue. And the source is the transaction's own, not
-             nil: `nullptr` here would mark every carrier observation as
-             locally originated and collapse every forwarded stem into the
-             local bucket of the watch's source mapping. */
-          const bool local = pending.source.is_nil();
-          shekyl_relay_zone_record_stem(
-            z.relay.get(),
-            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
-            reinterpret_cast<const std::uint8_t*>(std::addressof(v.peer)),
-            local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(pending.source)),
-            /* The POLL's clock, not the wall clock. `run_next_wake` drives
-               `poll` with a deadline the zone chose; the watch computes an
-               observation's expiry from its stamp, so the two must share a
-               timeline or it expires against a clock nothing else reads. */
-            at_ms
-          );
-        }
-      }
+                                         std::uint64_t at_ms);
 
       //! Send one peer's whole batch as a single notification.
       static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
@@ -929,7 +889,7 @@ namespace levin
         );
         /* AFTER the call returns: `apply_carrier_verdicts` re-enters the zone,
            which is only safe once Rust has released its borrow. */
-        relay_effects::apply_carrier_verdicts(*zone_, core_, sink.verdicts, at);
+        relay_effects::apply_carrier_verdicts(zone_, core_, sink.verdicts, at);
 
         arm(std::move(zone_), core_);
       }
@@ -975,6 +935,90 @@ namespace levin
         relay_wake::arm(std::move(zone), core);
       }
     };
+
+    void relay_effects::apply_carrier_verdicts(const std::shared_ptr<detail::zone>& zone,
+                                               i_core_events* core,
+                                               const std::vector<carrier_verdict>& verdicts,
+                                               const std::uint64_t at_ms)
+      {
+        if (!zone)
+          return;
+        detail::zone& z = *zone;
+        for (const carrier_verdict& v : verdicts)
+        {
+          const auto found = z.carrier_pending_by_token.find(v.token);
+          if (found == z.carrier_pending_by_token.end())
+          {
+            MERROR("carrier resolved unknown token " << v.token);
+            continue;
+          }
+          const detail::zone::carrier_pending pending = std::move(found->second);
+          z.carrier_pending_by_token.erase(found);
+
+          if (!v.sent)
+          {
+            /* A DISCARD MUST PUT THE TRANSACTION BACK ON A PATH, and "record
+               nothing" is not that.
+
+               An earlier draft reasoned about the `local` arm only, where
+               `relayed == false` keeps MIN_RELAY_TIME and the origin retries
+               on the short grid. A FORWARDED stem does not retry by that
+               mechanism at all: admission stamps `last_relayed_time` with
+               `time_t::max()` (`tx_pool.cpp`), and `get_relayable_transactions`
+               SKIPS a stem whose stamp is in the future, expecting
+               `on_transactions_relayed` to replace it. Record nothing and that
+               stamp never moves — the transaction is ineligible for
+               forwarding until it expires out of the pool. Permanently
+               stranded, silently, on the class that is not this node's own.
+
+               So the discard takes the same fallback a failed stem send takes
+               a few lines below: fluff it. That is already the established
+               answer to "this could not be stemmed", it makes the entry
+               eligible again by recording it, and it gets the transaction out
+               rather than holding it hostage to a carrier that dropped it. */
+            MDEBUG("carrier discarded a transaction; falling back to fluff");
+            if (core)
+            {
+              const std::vector<blobdata> one{pending.blob};
+              core->on_transactions_relayed(
+                epee::to_span(one),
+                cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
+                  ? relay_method::local : relay_method::fluff,
+                z.nzone);
+            }
+            const std::vector<blobdata> one{pending.blob};
+            relay_fluff::run(zone, epee::to_span(one), pending.source, core);
+            continue;
+          }
+
+          if (core)
+          {
+            const std::vector<blobdata> one{pending.blob};
+            core->on_transactions_relayed(
+              epee::to_span(one),
+              cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
+                ? relay_method::local : relay_method::stem,
+              z.nzone);
+          }
+          /* The successor is the peer the carrier DELIVERED to, not the one
+             chosen at enqueue. And the source is the transaction's own, not
+             nil: `nullptr` here would mark every carrier observation as
+             locally originated and collapse every forwarded stem into the
+             local bucket of the watch's source mapping. */
+          const bool local = pending.source.is_nil();
+          shekyl_relay_zone_record_stem(
+            z.relay.get(),
+            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
+            reinterpret_cast<const std::uint8_t*>(std::addressof(v.peer)),
+            local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(pending.source)),
+            /* The POLL's clock, not the wall clock. `run_next_wake` drives
+               `poll` with a deadline the zone chose; the watch computes an
+               observation's expiry from its stamp, so the two must share a
+               timeline or it expires against a clock nothing else reads. */
+            at_ms
+          );
+        }
+      }
 
     //! Checks fluff status for this node, and then does stem or fluff for txes
     struct dandelionpp_notify
@@ -1076,6 +1120,33 @@ namespace levin
             {
               refused.push_back(std::move(tx));
               continue;
+            }
+            /* ALREADY IN THE CARRIER? Then it is still owned by the carrier
+               and must not be handed over twice.
+
+               The pool re-offers on its own schedule, and that schedule is
+               SHORTER than the carrier can hold: a `local` entry stays
+               `relayed == false` while queued and becomes retryable again at
+               MIN_RELAY_TIME (300 s), while the channel budget permits up to
+               a full epoch (600 s) of windows. So `relay_txpool_transactions`
+               can offer the same transaction again before its first token
+               resolves — and a token-keyed map accepts both copies happily,
+               because the tokens differ. The result is the same transaction
+               occupying two runs of windows and producing two stem
+               observations, which double-counts it in F-10's tallies and
+               charges a second successor for a delivery that happened once.
+
+               Scanned rather than tracked in a second container: the map is
+               bounded by the channel budget and a parallel index is a
+               duplicate that can disagree with it. */
+            const auto already =
+              std::find_if(zone_->carrier_pending_by_token.begin(),
+                           zone_->carrier_pending_by_token.end(),
+                           [&id](const auto& entry) { return entry.second.txid == id.front(); });
+            if (already != zone_->carrier_pending_by_token.end())
+            {
+              MDEBUG("transaction already in the carrier; not enqueueing a second copy");
+              continue; // Owned by the carrier; its verdict will resolve it.
             }
             const std::uint64_t token = zone_->next_carrier_token++;
             if (!shekyl_relay_zone_noise_enqueue(
@@ -1366,7 +1437,7 @@ namespace levin
         relay_effects::on_carrier_resolved
       );
       // AFTER the call returns; see the sibling site.
-      relay_effects::apply_carrier_verdicts(*z, core, sink.verdicts, at);
+      relay_effects::apply_carrier_verdicts(z, core, sink.verdicts, at);
       relay_wake::arm(z, core);
     });
   }
@@ -1540,18 +1611,16 @@ namespace levin
        Dandelion++ defends against an **internal** adversarial peer. Enabling
        one is not a reason to disable the other. The Rust executor
        (`NoiseQueues`) owns the carrier and attaches it *below* the phase
-       (`plan_dispatch`). Three of the four pieces that were owed are BUILT:
+       (`plan_dispatch`). All of it is BUILT as of 2026-08-29:
        `RelayZoneHandle` owns the queue, `dispatch` joins BOTH of
-       `Driver::poll`'s noise effects, and `NoiseSendCb` carries bytes out and
-       a send status back. The enqueue CROSSING exists too.
+       `Driver::poll`'s noise effects, `NoiseSendCb` carries bytes out and a
+       send status back, the enqueue crossing exists — and this function is now
+       its producer, consuming `plan_dispatch_with_refresh` and enqueueing on
+       `SHEKYL_RELAY_CARRIER_NOISE` instead of sending directly.
 
-       WHAT IS STILL OWED is its producer: nothing calls
-       `shekyl_relay_zone_noise_enqueue`, so a carrier zone emits dummies only
-       and real transactions stay on the ordinary path below.
-       `COVER_TRAFFIC_RESTORATION.md` §3.1a names the remaining work —
-       swapping this function's `plan_relay` for
-       `plan_dispatch_with_refresh`, which already returns the carrier and
-       channel it needs.
+       So a carrier zone carries REAL transactions rather than dummies alone,
+       and the pool learns of one only when its verdict says every window
+       reached the wire (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 
        In a shipped build no zone here enables noise at all — the opt-in
        defaults off — so the deleted branch was unreachable in production

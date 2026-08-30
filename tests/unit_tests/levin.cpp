@@ -3345,3 +3345,110 @@ TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_co
     while (receiver_.notified_size())
         receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
+
+/*! **A transaction already in the carrier is not handed over twice.**
+
+    The pool re-offers on its own schedule and that schedule is SHORTER than
+    the carrier can hold: a `local` entry stays `relayed == false` while queued
+    and becomes retryable at `MIN_RELAY_TIME` (300 s), while the channel budget
+    permits up to a full epoch (600 s) of windows. So `relay_txpool_transactions`
+    can offer the same transaction again before its first token resolves.
+
+    A token-keyed map accepts both copies happily, because the tokens differ.
+    The result is the same transaction occupying two runs of windows and
+    producing two stem observations — double-counted in F-10's tallies, with a
+    second successor charged for a delivery that happened once.
+
+    `stem_in_flight` is the oracle: it counts armed observations, so a second
+    enqueue that produced a second delivery would show as two.
+
+    What edit reds this: dropping the `carrier_pending_by_token` scan from the
+    producer. */
+TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(1);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 23;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls) << "no carrier-borne send";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        io_service_.poll();
+        if (events_.relayed_method_size() == 0)
+            break; // The carrier took it.
+        for (const auto method : {cryptonote::relay_method::fluff,
+                                  cryptonote::relay_method::stem,
+                                  cryptonote::relay_method::local})
+        {
+            if (events_.relayed_method_size() == 0)
+                break;
+            try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+        }
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto& ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+
+    /* Offer the SAME transaction again, in the same epoch, exactly as the pool
+       would at MIN_RELAY_TIME. The carrier still holds the first copy. */
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+    io_service_.restart();
+    io_service_.poll();
+    EXPECT_EQ(0u, events_.relayed_method_size())
+        << "the second offer took the ordinary wire — the producer did not "
+           "recognise that the carrier already owns this transaction";
+
+    /* Drain the carrier COMPLETELY before counting. Stopping at the first
+       completion is what a first draft did, and it passed with the dedup
+       removed: a second copy sits BEHIND the first in the channel, so at that
+       moment only one had been delivered and the oracle saw one either way.
+       The stop condition returns false so the drive runs to its bound. */
+    drive_schedule(notifier, [](std::size_t) { return false; }, 24);
+
+    ASSERT_NE(0u, events_.relayed_method_size()) << "the carrier never delivered";
+    const auto method = events_.has_stem_txes()
+        ? cryptonote::relay_method::stem : cryptonote::relay_method::local;
+    const auto told = events_.take_relayed(method);
+    EXPECT_EQ(1u, told.size())
+        << "the pool was told about the transaction " << told.size()
+        << " times: a second copy rode the carrier, which double-counts it in "
+           "F-10's tallies and charges a second successor for a delivery that "
+           "happened once";
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
