@@ -885,10 +885,11 @@ then replace the old `lmdb` directory with the compacted copy (you
 temporarily need disk space for both). The destination directory must
 already exist and be empty, and the tool must run as the user that owns
 the data directory — the copy opens the database read-only but still
-creates and writes the reader-lock file (`lock.mdb`) in the source
-directory, and a `sudo` run leaves root-owned files the daemon cannot
-reopen. Always pass both paths: with the destination omitted, the tool
-streams the entire database to standard output.
+needs write access to the source's reader-lock file (`lock.mdb`, created
+if missing), and a `sudo` run leaves the compacted copy root-owned, so
+the daemon cannot use it after the swap. Always pass both paths: with
+the destination omitted, the tool streams the entire database to
+standard output.
 
 Note that pruning removes only transaction proof and PQC-auth data;
 curve-tree leaf data is not prunable and grows with the chain.
