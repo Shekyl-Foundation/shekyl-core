@@ -47,11 +47,15 @@ impl Rpc for CannedDaemon {
 /// to vouch for; that is the hazard, not a parse error arriving late.
 #[tokio::test]
 async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
-    let txid = [0x31u8; 32];
+    // Derived, not invented: with a chosen constant the body-identity check
+    // at `parse_tx_batch` would refuse this entry anyway, and deleting
+    // `refuse_unless_ok` would leave the test red for the wrong reason —
+    // pinning the binding while claiming to pin the status guard.
+    let tx = pruned_spend_tx(0);
+    let prunable_digest = [0x5Au8; 32];
+    let txid = tx.hash_with_supplied_prunable(prunable_digest);
     let mut body = Vec::new();
-    pruned_spend_tx(0)
-        .write(&mut body)
-        .expect("Vec write is infallible");
+    tx.write(&mut body).expect("Vec write is infallible");
     let reply = shekyl_rpc_types::GetTransactionsResponse {
         status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
         txs: vec![TxEntry {
@@ -59,7 +63,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             as_hex: String::new(),
             pruned_as_hex: hex::encode(&body),
             prunable_as_hex: String::new(),
-            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            prunable_hash: HashHex::from_bytes(prunable_digest),
             as_json: String::new(),
             pruned: false,
             double_spend_seen: false,
