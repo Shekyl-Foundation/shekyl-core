@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **A doc row claiming a slice `**landed**` must now name its PR (`scripts/ci/check_landed_rows_stamped.py`).** Stamping the row is step 6 of `DAEMON_RPC_KV_CUTOVER.md`'s per-slice checklist and it was skipped for six consecutive merged slices, leaving that document's `Status:` banner reading *"design open for RK-4a"* while RK-4a, RK-4b and RK-4c had all been written. Because rule 95's banner is what a grep-driven reader uses to classify every claim below it, one stale banner misclassifies a whole file. The gate binds only the knowable half — a merge sha cannot exist pre-merge, so an in-flight row passes — and it strips code spans before matching, so a log entry *naming* the placeholder is not read as one *using* it. Developer-facing only; no runtime or wire effect.
+
 - **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
   5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed
   dual-zone node carries **~42 GB/month** of cover traffic, up from ~21 GB.

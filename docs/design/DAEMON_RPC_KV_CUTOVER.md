@@ -3,7 +3,7 @@
 **Status:** **RK-1 through RK-4b landed** (the pattern slice, PR #534; count
 + hash-by-height, PR #540; the block-header projection, PR #541; whole blocks,
 PR #548; the `.bin` mechanism, PR #555; the last binary endpoint and the FFI
-bridge's deletion, PR #562) — per-slice shas in the §4 roadmap. **RK-4c** (the
+bridge's deletion, PR #562) — per-slice shas in the §2 slice table. **RK-4c** (the
 transaction read set) is **in flight on this branch**, PR #576; design **open
 for RK-5**. Census and binding
 decisions verified at source against `dev` **`077d97c4e`** (PR #528 merge);
