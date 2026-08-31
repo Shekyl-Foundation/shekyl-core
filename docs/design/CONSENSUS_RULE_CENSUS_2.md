@@ -7,13 +7,15 @@ instrument, not a ruling: bucket 4 records the question, never the
 answer. No code is specified to change here.
 **Identifier family:** `RC-` (rule census, pass 2), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit
-that lands this document (rule 94). `CEN-` is left for the sibling first
-census (`CONSENSUS_RULE_CENSUS.md`) so the two enumerations cannot mint
-colliding tokens. Prefix `RC-` is unique against `RF-` / `RK-` / `RP-` /
-`RT-`.
-**Sibling:** this is a second, independent walk of the same surface the
-first census enumerates. Disagreement between the two documents is
-census material, not a defect to reconcile in this PR.
+that lands this document (rule 94). `CEN-` is the sibling census family
+([`CONSENSUS_RULE_CENSUS_3.md`](CONSENSUS_RULE_CENSUS_3.md), PR #584)
+so the two enumerations cannot mint colliding tokens. Prefix `RC-` is
+unique against `RF-` / `RK-` / `RP-` / `RT-` / `CEN-`.
+**Sibling:** this is a second, independent walk of the same surface
+[`CONSENSUS_RULE_CENSUS_3.md`](CONSENSUS_RULE_CENSUS_3.md) enumerates
+(and Survey A in [`CONSENSUS_RULE_CENSUS_1.md`](CONSENSUS_RULE_CENSUS_1.md)).
+Disagreement between the documents is census material, not a defect to
+reconcile in this PR.
 **Process:** docs-only. Enumeration by call graph from the named
 acceptance entry points (RK-census convention:
 [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §2).

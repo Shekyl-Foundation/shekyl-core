@@ -1,8 +1,10 @@
 # Consensus surface census — Survey A
 
+**Status:** OPEN — Survey A of the consensus-validation surface.
+Last-verified 2026-08-30 against `dev` `0e6d340e`. This is a survey, not
+a set of rulings: it classifies and flags; it does not decide.
 **Method:** fresh clone, `dev` @ `0e6d340e` (2026-08-30). Every claim below is
-a `file:line` observation, not a doc reading. This is a *survey*, not a set of
-rulings — it classifies and flags; it does not decide.
+a `file:line` observation, not a doc reading.
 
 **Classification buckets** (per `16-architectural-inheritance.mdc` §"When to
 migrate vs. when to keep", which already requires a recorded "why" for every
