@@ -610,8 +610,14 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         // RK-5a. `now` is read once here rather than inside each renderer, so
         // a command's whole output describes one instant.
         "print_peer_list" => {
-            let white = args.get(1).is_none_or(|a| a == "white" || a == "both");
-            let gray = args.get(1).is_none_or(|a| a == "gray" || a == "both");
+            // The selector, if any. Anything that is not `white` or `gray` —
+            // including its absence — means both, which is what the C++
+            // parser resolves an unqualified `print_pl` to. Defaulting to
+            // *neither* would make a mis-sent argument print an empty list
+            // that looks like an empty peerlist.
+            let selector = args.get(1).map(String::as_str);
+            let white = selector != Some("gray");
+            let gray = selector != Some("white");
             let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
             let pruned_only = args.iter().any(|a| a == "pruned");
             print_peer_list(&source, white, gray, limit, pruned_only, unix_now())
@@ -846,15 +852,17 @@ fn print_connections(src: &Source) -> Result<String, String> {
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
-    // Wide enough for the widest address actually present — the computation
-    // the C++ did and then ignored.
+    // Wide enough for the widest address actually present, plus the four
+    // characters of the `INC `/`OUT ` prefix and a two-column gutter — the
+    // computation the C++ did and then ignored in favour of a fixed `setw(30)`
+    // that its own prefix could overrun.
     let width = reply
         .connections
         .iter()
-        .map(|c| c.address.len() + 4)
+        .map(|c| c.address.len() + 6)
         .max()
-        .unwrap_or(15)
-        .max(15);
+        .unwrap_or(0)
+        .max(21);
     let mut out = vec![format!(
         "{:<width$}{:<8}{:<20}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
         "Remote Host",
