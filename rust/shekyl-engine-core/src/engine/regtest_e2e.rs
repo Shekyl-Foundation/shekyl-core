@@ -3539,3 +3539,71 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
         "the in-process is_key_image_spent must answer; got:\n{out}"
     );
 }
+
+/// The five p2p console commands answer on the daemon's **own** console.
+///
+/// RK-5a's half of the gate above. Four of them read only this slice's
+/// methods and now render entirely in Rust; the fifth, `print_net_stats`,
+/// also reads `/get_limit`, which is RK-8's and is still served from the C++
+/// dispatch table.
+///
+/// **That bridged leg is why this test exists in this shape.** §2.1.1 permits
+/// a mixed command on two conditions: the leg names a route the C++ table
+/// really serves, and the command is covered here — so the slice that deletes
+/// the route turns this red instead of leaving `print_net_stats` answering a
+/// failure forever. RK-4c shipped exactly that failure, silently, because
+/// nothing exercised the in-process arm.
+///
+/// An idle regtest node has no peers, no connections and no download queue,
+/// so what these assertions pin is the part that is *not* the data: that each
+/// command reaches a live core, renders, and produces its own headings rather
+/// than a transport failure.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
+    let mut daemon = RegtestDaemon::start_with_console().await;
+
+    let out = daemon.console("sync_info");
+    assert!(
+        out.contains("Height: 1") && out.contains("0 peers") && out.contains("0 spans"),
+        "sync_info must render against the live core; got:\n{out}"
+    );
+
+    let out = daemon.console("print_cn");
+    assert!(
+        out.contains("Remote Host") && out.contains("Livetime(sec)"),
+        "print_connections must render its header; got:\n{out}"
+    );
+
+    let out = daemon.console("print_pl");
+    assert!(
+        !out.contains("no reply") && !out.contains("failed"),
+        "print_peer_list must answer, even with an empty peerlist; got:\n{out}"
+    );
+
+    let out = daemon.console("print_pl_stats");
+    assert!(
+        out.contains("White list size: 0/") && out.contains("Gray list size: 0/"),
+        "print_pl_stats must report both capacities, which come from the C++ \
+         p2p constants over the FFI; got:\n{out}"
+    );
+    assert!(
+        !out.contains("size: 0/0"),
+        "a zero capacity means the constants export answered with nothing; \
+         got:\n{out}"
+    );
+
+    // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
+    // is the assertion that notices if the leg is left naming a dead route.
+    let out = daemon.console("print_net_stats");
+    assert!(
+        out.contains("Received") && out.contains("bytes") && out.contains("of the limit of"),
+        "print_net_stats must render both lines, which needs /get_limit as \
+         well as /get_net_stats; got:\n{out}"
+    );
+    assert!(
+        !out.contains("no reply from /get_limit"),
+        "the bridged /get_limit leg must name a route the C++ table serves; \
+         got:\n{out}"
+    );
+}

@@ -607,6 +607,19 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         }
         "print_transaction" => print_transaction(&source, &args[1..]),
         "is_key_image_spent" => is_key_image_spent(&source, &args[1..]),
+        // RK-5a. `now` is read once here rather than inside each renderer, so
+        // a command's whole output describes one instant.
+        "print_peer_list" => {
+            let white = args.get(1).is_none_or(|a| a == "white" || a == "both");
+            let gray = args.get(1).is_none_or(|a| a == "gray" || a == "both");
+            let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
+            let pruned_only = args.iter().any(|a| a == "pruned");
+            print_peer_list(&source, white, gray, limit, pruned_only, unix_now())
+        }
+        "print_peer_list_stats" => print_peer_list_stats(&source),
+        "print_connections" => print_connections(&source),
+        "print_net_stats" => print_net_stats(&source, unix_now()),
+        "sync_info" => sync_info(&source),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -619,6 +632,472 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             SHEKYL_DAEMON_CONSOLE_ERR_REQUEST
         }
     }
+}
+
+/// Unix seconds, read once per console command so a whole rendering
+/// describes one instant.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+// ── RK-5a: the p2p console commands ─────────────────────────────────────────
+//
+// Five commands, four methods. Console output is not a wire contract, so the
+// layouts below are rationalized rather than transcribed — but every *value*
+// is the value the C++ printed, and the pinned tests are on values.
+//
+// Two things the C++ layout got wrong that are not reproduced.
+// `print_connections` computed a `host_field_width` from the widest address
+// and then wrote `setw(30)` anyway, so the computation had no effect; and it
+// composed the address column as `ip + ":" + port`, which for a tor peer —
+// where both are empty by construction — printed `OUT :`. The address column
+// here uses `address`, which is populated for every arm.
+
+/// `d<days>.h<hours>.m<minutes>.s<seconds>`, as
+/// `epee::misc_utils::get_time_interval_string` formats it.
+fn time_interval(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let rest = seconds % 86400;
+    let hours = rest / 3600;
+    let rest = rest % 3600;
+    format!("d{days}.h{hours}.m{}.s{}", rest / 60, rest % 60)
+}
+
+/// `tools::get_human_readable_bytes`: base-2 units, `B` with no decimals and
+/// every larger unit with two.
+fn human_readable_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a display string; the C++ casts to double here too"
+    )]
+    let value = bytes as f64;
+    if bytes < 1024 {
+        return format!("{value:.0} B");
+    }
+    for (limit, unit, divisor) in [
+        (1024u64 * 1024, "kB", KIB),
+        (1024 * 1024 * 1024, "MB", KIB * KIB),
+        (1024 * 1024 * 1024 * 1024, "GB", KIB * KIB * KIB),
+    ] {
+        if bytes < limit {
+            return format!("{:.2} {unit}", value / divisor);
+        }
+    }
+    format!("{:.2} TB", value / (KIB * KIB * KIB * KIB))
+}
+
+/// `tools::get_human_readable_timespan`: seconds below a minute, otherwise
+/// one decimal place in the largest unit that fits.
+fn human_readable_timespan(seconds: u64) -> String {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a display string; the C++ casts to float here too"
+    )]
+    let s = seconds as f64;
+    const MINUTE: f64 = 60.0;
+    const HOUR: f64 = 3600.0;
+    const DAY: f64 = 3600.0 * 24.0;
+    // The C++ uses 30.5 days for a month and 365.25 for a year, and the
+    // boundaries are the same expressions — so the unit a value falls into is
+    // decided by the same arithmetic that then divides it.
+    const MONTH: f64 = DAY * 30.5;
+    const YEAR: f64 = DAY * 365.25;
+    if s < MINUTE {
+        return format!("{seconds} seconds");
+    }
+    for (limit, divisor, unit) in [
+        (HOUR, MINUTE, "minutes"),
+        (DAY, HOUR, "hours"),
+        (MONTH, DAY, "days"),
+        (YEAR, MONTH, "months"),
+        (YEAR * 100.0, YEAR, "years"),
+    ] {
+        if s < limit {
+            return format!("{:.1} {unit}", s / divisor);
+        }
+    }
+    "a long time".to_owned()
+}
+
+/// The peerlist as the console asks for it: blocked peers included, because
+/// the operator asking for the peer list is the one person who wants to see
+/// them.
+fn fetch_peer_list(
+    src: &Source,
+    public_only: bool,
+) -> Result<shekyl_rpc_types::GetPeerListResponse, String> {
+    let request = shekyl_rpc_types::GetPeerListRequest {
+        public_only,
+        include_blocked: true,
+    };
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
+            crate::methods::get_peer_list(&request, &facts).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+            let raw = ctl_client::post_blocking(address, "/get_peer_list", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            decode_reply::<shekyl_rpc_types::GetPeerListResponse>(&raw, "get_peer_list")?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    Ok(reply)
+}
+
+fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String {
+    let elapsed = if peer.last_seen == 0 {
+        // Not "d19000.h..." — a peer never seen has no interval, and the C++
+        // says so too.
+        "never".to_owned()
+    } else {
+        time_interval(now.saturating_sub(peer.last_seen))
+    };
+    let addr = format!("{}:{}", peer.host, peer.port);
+    format!(
+        "{prefix:<10} {:016x} {addr:<25} {:<4x} {elapsed}",
+        peer.id, peer.pruning_seed
+    )
+}
+
+/// `print_peer_list [white|gray] [limit] [pruned]`.
+///
+/// `limit` applies **per list**, not to the pair, and `pruned` filters
+/// unpruned peers out client-side — both as the C++ did.
+fn print_peer_list(
+    src: &Source,
+    white: bool,
+    gray: bool,
+    limit: usize,
+    pruned_only: bool,
+    now: u64,
+) -> Result<String, String> {
+    let reply = fetch_peer_list(src, true)?;
+    let mut out = Vec::new();
+    let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
+        for peer in peers
+            .iter()
+            .filter(|p| !pruned_only || p.pruning_seed != 0)
+            .take(if limit == 0 { usize::MAX } else { limit })
+        {
+            out.push(render_peer(prefix, peer, now));
+        }
+    };
+    if white {
+        take("white", &reply.white_list);
+    }
+    if gray {
+        take("gray", &reply.gray_list);
+    }
+    Ok(out.join("\n"))
+}
+
+/// `print_pl_stats`: how full each list is.
+fn print_peer_list_stats(src: &Source) -> Result<String, String> {
+    // `public_only = false`: the stats are about the whole list, not the
+    // publicly shareable part of it.
+    let reply = fetch_peer_list(src, false)?;
+    let (white_limit, gray_limit) = CoreRpc::peerlist_limits();
+    let line = |name: &str, size: usize, limit: u32| -> String {
+        let percent = if limit == 0 {
+            0.0
+        } else {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a percentage for a human, from two small counts"
+            )]
+            let fraction = size as f64 / f64::from(limit);
+            fraction * 100.0
+        };
+        format!("{name} list size: {size}/{limit} ({percent}%)")
+    };
+    Ok(format!(
+        "{}\n{}",
+        line("White", reply.white_list.len(), white_limit),
+        line("Gray", reply.gray_list.len(), gray_limit)
+    ))
+}
+
+/// `print_connections`.
+fn print_connections(src: &Source) -> Result<String, String> {
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
+            crate::methods::get_connections(&facts).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_connections",
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::GetConnectionsResponse>(&raw, "get_connections")?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    // Wide enough for the widest address actually present — the computation
+    // the C++ did and then ignored.
+    let width = reply
+        .connections
+        .iter()
+        .map(|c| c.address.len() + 4)
+        .max()
+        .unwrap_or(15)
+        .max(15);
+    let mut out = vec![format!(
+        "{:<width$}{:<8}{:<20}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
+        "Remote Host",
+        "Type",
+        "Peer id",
+        "Support Flags",
+        "Recv/Sent (inactive,sec)",
+        "State",
+        "Livetime(sec)",
+        "Down (kB/s)",
+        "Down(now)",
+        "Up (kB/s)",
+        "Up(now)"
+    )];
+    for c in &reply.connections {
+        let direction = if c.incoming { "INC " } else { "OUT " };
+        let tail = format!(
+            "{}{}",
+            if c.localhost { "[LOCALHOST]" } else { "" },
+            if c.local_ip { "[LAN]" } else { "" }
+        );
+        out.push(format!(
+            "{:<width$}{:<8}{:<20}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
+            format!("{direction}{}", c.address),
+            address_type_name(c.address_type),
+            c.peer_id,
+            c.support_flags,
+            format!(
+                "{}({})/{}({})",
+                c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
+            ),
+            format!("{:?}", c.state).to_lowercase(),
+            c.live_time,
+            c.avg_download,
+            c.current_download,
+            c.avg_upload,
+            c.current_upload,
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
+/// `get_address_type_name`'s mapping, as the console prints it.
+fn address_type_name(address_type: u8) -> &'static str {
+    match address_type {
+        1 => "IPv4",
+        2 => "IPv6",
+        3 => "I2P",
+        4 => "Tor",
+        _ => "Invalid",
+    }
+}
+
+/// The `/get_limit` reply, as much of it as `print_net_stats` reads.
+///
+/// **A bridged leg, on purpose** (§2.1.1): `/get_limit` is RK-8's, and until
+/// that slice lands it is still served from the C++ dispatch table. The
+/// condition that makes this safe is that the leg names a route the table
+/// really serves *and* that the console gate covers this command — so the
+/// slice that deletes the route turns this red rather than leaving it
+/// answering "no reply" forever. Both are in place; when RK-8 moves the
+/// route, this struct is replaced by the shared type.
+#[derive(serde::Deserialize)]
+struct GetLimitReplyProvisional {
+    #[serde(default)]
+    limit_up: u64,
+    #[serde(default)]
+    limit_down: u64,
+}
+
+/// `print_net_stats`.
+fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
+    let (stats, limits) = match src {
+        Source::Live(core) => {
+            let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
+            let stats = crate::methods::get_net_stats(&facts).map_err(|e| format!("{e:?}"))?;
+            let raw = core
+                .json_endpoint("/get_limit", "{}")
+                .ok_or_else(|| "no reply from /get_limit".to_owned())?;
+            let limits: GetLimitReplyProvisional = serde_json::from_str(&raw)
+                .map_err(|e| format!("malformed get_limit reply: {e}"))?;
+            (stats, limits)
+        }
+        Source::Remote { address, timeout } => {
+            let raw =
+                ctl_client::post_blocking(address, "/get_net_stats", b"{}".to_vec(), *timeout)
+                    .map_err(|(_, reason)| reason)?;
+            let stats =
+                decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
+            let raw = ctl_client::post_blocking(address, "/get_limit", b"{}".to_vec(), *timeout)
+                .map_err(|(_, reason)| reason)?;
+            let limits: GetLimitReplyProvisional = serde_json::from_slice(&raw)
+                .map_err(|e| format!("malformed get_limit reply: {e}"))?;
+            (stats, limits)
+        }
+    };
+    if !stats.status.is_ok() {
+        return Err(stats.status.0);
+    }
+    let seconds = now.saturating_sub(stats.start_time);
+    let line = |verb: &str, bytes: u64, packets: u64, limit_kb: u64| -> String {
+        let average = if seconds == 0 { 0 } else { bytes / seconds };
+        let limit = limit_kb * 1024;
+        let percent = if limit == 0 {
+            0.0
+        } else {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a percentage for a human, from byte counts"
+            )]
+            let fraction = average as f64 / limit as f64;
+            fraction * 100.0
+        };
+        format!(
+            "{verb} {bytes} bytes ({}) in {packets} packets in {}, average {}/s = {percent:.2}% of the limit of {}/s",
+            human_readable_bytes(bytes),
+            human_readable_timespan(seconds),
+            human_readable_bytes(average),
+            human_readable_bytes(limit)
+        )
+    };
+    Ok(format!(
+        "{}\n{}",
+        line(
+            "Received",
+            stats.total_bytes_in,
+            stats.total_packets_in,
+            limits.limit_down
+        ),
+        line(
+            "Sent",
+            stats.total_bytes_out,
+            stats.total_packets_out,
+            limits.limit_up
+        )
+    ))
+}
+
+/// `sync_info`.
+fn sync_info(src: &Source) -> Result<String, String> {
+    let reply = match src {
+        Source::Live(core) => {
+            let chain = FfiChainFacts::new(core.clone());
+            let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
+            crate::methods::sync_info(&chain, &p2p).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "sync_info",
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::SyncInfoResponse>(&raw, "sync_info")?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    // A target below our own height means we are ahead of what we were told
+    // to reach; the progress line uses our height so the percentage cannot
+    // exceed 100 or divide by zero.
+    let target = reply.target_height.max(reply.height).max(1);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a percentage for a human, from two heights"
+    )]
+    let progress = (reply.height as f64 / target as f64) * 100.0;
+    let mut out = vec![format!(
+        "Height: {}, target: {target} ({progress}%)",
+        reply.height
+    )];
+    let current_download: u64 = reply.peers.iter().map(|p| p.info.current_download).sum();
+    out.push(format!("Downloading at {current_download} kB/s"));
+    if reply.next_needed_pruning_seed != 0 {
+        out.push(format!(
+            "Next needed pruning seed: {}",
+            reply.next_needed_pruning_seed
+        ));
+    }
+    out.push(format!("{} peers", reply.peers.len()));
+    out.push(
+        "Remote Host                        Peer_ID   State   Prune_Seed          Height  DL kB/s, Queued Blocks / MB"
+            .to_owned(),
+    );
+    for p in &reply.peers {
+        let (nblocks, size) = reply
+            .spans
+            .iter()
+            .filter(|s| s.connection_id == p.info.connection_id)
+            .fold((0u64, 0u64), |(n, b), s| (n + s.nblocks, b + s.size));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a size for a human, in megabytes"
+        )]
+        let megabytes = size as f64 / 1e6;
+        out.push(format!(
+            "{:<24}  {}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {megabytes} MB queued",
+            p.info.address,
+            p.info.peer_id,
+            format!("{:?}", p.info.state).to_lowercase(),
+            p.info.pruning_seed,
+            p.info.height,
+            p.info.current_download,
+        ));
+    }
+    let total: u64 = reply.spans.iter().map(|s| s.size).sum();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a size for a human, in megabytes"
+    )]
+    let total_mb = total as f64 / 1e6;
+    out.push(format!("{} spans, {total_mb} MB", reply.spans.len()));
+    out.push(reply.overview.clone());
+    for s in &reply.spans {
+        // `nblocks == 0` would make `start + nblocks - 1` wrap; the C++ had
+        // the same expression and no such span, but the subtraction is
+        // written so it cannot.
+        let last = s.start_block_height + s.nblocks.saturating_sub(1);
+        let range = format!("{} - {last}", s.start_block_height);
+        // Computed, not carried: the wire `span` has never had this field,
+        // and the C++ console derived it the same way from the same height.
+        let seed = CoreRpc::span_pruning_seed(s.start_block_height);
+        if s.size == 0 {
+            out.push(format!(
+                "{:<24}  {}/{:x} ({range})  -",
+                s.remote_address, s.nblocks, seed
+            ));
+        } else {
+            let speed = f64::from(s.speed) / 100.0;
+            out.push(format!(
+                "{:<24}  {}/{:x} ({range}, {} kB)  {} kB/s ({speed})",
+                s.remote_address,
+                s.nblocks,
+                seed,
+                s.size / 1000,
+                s.rate / 1000
+            ));
+        }
+    }
+    Ok(out.join("\n"))
 }
 
 #[cfg(test)]
@@ -1312,5 +1791,117 @@ mod tests {
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN);
         let (code, _) = run(&["print_height"], None);
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR);
+    }
+
+    // ── RK-5a: the ported format helpers ───────────────────────────────────
+    //
+    // Every expected string below was **printed by the C++ it replaces**, by
+    // linking `get_human_readable_timespan`, `get_human_readable_bytes` and
+    // `get_time_interval_string` into the unit-test binary and dumping them
+    // for these inputs. They are transcriptions of an oracle's output, not a
+    // reading of its source — which is the difference between a test that
+    // pins the format and one that repeats whatever the port got wrong.
+
+    #[test]
+    fn a_timespan_reads_the_way_the_daemon_has_always_printed_it() {
+        for (seconds, expected) in [
+            (0u64, "0 seconds"),
+            (1, "1 seconds"),
+            (59, "59 seconds"),
+            (60, "1.0 minutes"),
+            (90, "1.5 minutes"),
+            // The boundary is `< 3600`, so one second short of an hour is
+            // sixty minutes rather than an hour.
+            (3599, "60.0 minutes"),
+            (3600, "1.0 hours"),
+            (5400, "1.5 hours"),
+            (86399, "24.0 hours"),
+            (86400, "1.0 days"),
+            (200_000, "2.3 days"),
+            // A "month" is 30.5 days and a "year" 365.25, and the boundary
+            // uses the same expression as the divisor.
+            (2_635_200, "1.0 months"),
+            (31_557_600, "1.0 years"),
+            // Exactly a century is not "100.0 years".
+            (3_155_760_000, "a long time"),
+            (4_000_000_000, "a long time"),
+        ] {
+            assert_eq!(human_readable_timespan(seconds), expected, "{seconds}s");
+        }
+    }
+
+    #[test]
+    fn bytes_read_in_base_two_units() {
+        for (bytes, expected) in [
+            (0u64, "0 B"),
+            (1, "1 B"),
+            (1023, "1023 B"),
+            (1024, "1.00 kB"),
+            (1500, "1.46 kB"),
+            // One byte short of a mebibyte rounds *up* to "1024.00 kB"
+            // rather than crossing into MB.
+            (1_048_575, "1024.00 kB"),
+            (1_048_576, "1.00 MB"),
+            (1_073_741_824, "1.00 GB"),
+            (1_099_511_627_776, "1.00 TB"),
+            (5_000_000_000_000, "4.55 TB"),
+        ] {
+            assert_eq!(human_readable_bytes(bytes), expected, "{bytes} bytes");
+        }
+    }
+
+    #[test]
+    fn a_time_interval_is_the_dotted_dhms_form() {
+        for (seconds, expected) in [
+            (0u64, "d0.h0.m0.s0"),
+            (1, "d0.h0.m0.s1"),
+            (59, "d0.h0.m0.s59"),
+            (61, "d0.h0.m1.s1"),
+            (3661, "d0.h1.m1.s1"),
+            (90061, "d1.h1.m1.s1"),
+            (1_000_000, "d11.h13.m46.s40"),
+        ] {
+            assert_eq!(time_interval(seconds), expected, "{seconds}s");
+        }
+    }
+
+    /// A peer never seen reads "never", not an interval measured from 1970.
+    #[test]
+    fn a_peer_never_seen_has_no_interval() {
+        let peer = shekyl_rpc_types::Peer {
+            id: 0x1122_3344_5566_7788,
+            host: "10.32.0.7".to_owned(),
+            ip: 0x0700_200a,
+            port: 18080,
+            last_seen: 0,
+            pruning_seed: 0,
+        };
+        let line = render_peer("white", &peer, 1_750_000_000);
+        assert!(line.contains("never"), "{line}");
+        // The id is zero-padded to 16 hex characters, as `peerid_to_string`
+        // padded it.
+        assert!(line.contains("1122334455667788"), "{line}");
+        assert!(line.contains("10.32.0.7:18080"), "{line}");
+
+        let seen = shekyl_rpc_types::Peer {
+            last_seen: 1_750_000_000 - 90061,
+            ..peer
+        };
+        assert!(
+            render_peer("gray", &seen, 1_750_000_000).contains("d1.h1.m1.s1"),
+            "a seen peer carries its interval"
+        );
+    }
+
+    /// The address type names the console prints, including the arm the C++
+    /// `default:` produced.
+    #[test]
+    fn address_types_have_their_own_names() {
+        assert_eq!(address_type_name(1), "IPv4");
+        assert_eq!(address_type_name(2), "IPv6");
+        assert_eq!(address_type_name(3), "I2P");
+        assert_eq!(address_type_name(4), "Tor");
+        assert_eq!(address_type_name(0), "Invalid");
+        assert_eq!(address_type_name(200), "Invalid");
     }
 }

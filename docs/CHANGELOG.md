@@ -24,6 +24,28 @@
 
 ### Changed
 
+- **The four p2p read methods are served from Rust, and four things the C++ was
+  doing are not reproduced.** `sync_info`, `get_connections`,
+  `/get_net_stats` and `/get_peer_list` answer natively (RK-5a of the daemon
+  RPC cutover), along with the five console commands that read them —
+  `sync_info`, `print_cn`, `print_pl`, `print_pl_stats`, `print_net_stats`.
+  Their handlers, wire structs, dispatch rows and console bodies are deleted,
+  and so is the C++ nothing else reached: `connection_info`, the protocol
+  handler's `get_connections()`, and the `json_object` (de)serializer pair
+  that was its last reader. **Reply shapes are unchanged** — every field set
+  was compared before and after on two connected regtest nodes — so
+  `CORE_RPC_VERSION` does not move. What changed are four value edge-cases
+  the port would not carry: `get_connections` read the clock **twice** per
+  connection, so a connection's reported `live_time` could disagree with the
+  divisor behind its own `avg_download`; elapsed times now saturate instead
+  of wrapping into centuries when a clock moves backwards; the download
+  `rate` is rounded totally rather than through a cast that is undefined for a
+  negative or out-of-range float; and `sync_info`'s queue overview no longer
+  sizes its gap run from peer-advertised heights without a ceiling. Also
+  removed: `print_cn`'s **SSL column**, which had no wire field behind it and
+  therefore always printed `no` — p2p SSL is disabled by construction, so it
+  could not have said anything else.
+
 - **`engine_trait_bench_key_dispatch_baseline_iai` collects via Callgrind client requests** (the `ledger_iai` pattern) instead of gungraun's wrapper toggle, which reported `instructions=0` deterministically on CI once rustc folded the wrapper — retries and fresh runners reproduced the build and so reproduced the zero. Count moves by 38 instructions in ~14.6M; the post-merge `update-baseline` run absorbs it. The facts shim's pool remap is also linear now — one forward cursor over `missed`, valid because `get_transactions_info` returns hits in request order — instead of a rescan that was quadratic on the uncapped unrestricted listener; a cursor/contract violation refuses as `ERR_INTERNAL` rather than reporting a pooled transaction missing, and a `[H, H]` duplicate-slot test pins the remap (shared v3 spend fixture, `pqc_spend_fixture.h`). Developer-facing and daemon-internal; no wire change.
 
 - **A tx proof's `confirmations` is the daemon's gather-lock count, not a number the wallet re-derives from a later tip.** `confirmations_of` issued a second `get_height` and subtracted the `block_height` captured in the earlier `get_transactions` — two chain snapshots for one answer, so a block landing between the two requests inflated the count, and a reorg could make it describe a chain the block is no longer on. The native handler already computes `chain_height - block_height` against the tip it reads once for the whole gather (the one-lock rule RK-4c introduced); the wallet was discarding exactly that guarantee and paying an extra round trip for a worse answer. It now carries the value. Taking the daemon's number is no more trusting than the arithmetic was — both operands were always its to choose — and it is self-consistent. `FetchedTx` holds a `TxChainState` arm rather than `in_pool: bool` beside `block_height: Option<u64>`, so "pooled at 12 confirmations" is unrepresentable and `confirmations_of` is total: no RPC, no `async`, no unreachable error branch. Found by Copilot on #576.

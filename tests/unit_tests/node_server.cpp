@@ -1045,7 +1045,6 @@ TEST(node_server, race_condition)
     using string_t = std::string;
     using span_t = epee::span<const uint8_t>;
     using blobs_t = epee::span<const cryptonote::blobdata>;
-    using connections_t = std::list<cryptonote::connection_info>;
     using block_queue_t = cryptonote::block_queue;
     using stripes_t = std::pair<uint32_t, uint32_t>;
     using byte_stream_t = epee::byte_stream;
@@ -1126,7 +1125,6 @@ TEST(node_server, race_condition)
     bool on_callback(context_t &context) { return {}; }
     core_events_t &get_core(){ static core_events_t core_events; return core_events;}
     void log_connections() {}
-    connections_t get_connections() { return {}; }
     const block_queue_t &get_block_queue() const {
       static block_queue_t block_queue;
       return block_queue;

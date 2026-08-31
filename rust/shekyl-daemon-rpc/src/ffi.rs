@@ -636,6 +636,12 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_peer_list_free(owner: *mut std::ffi::c_void);
+    /// The two compile-time p2p peerlist capacities. Takes no handle and
+    /// cannot fail.
+    pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
+    /// The stripe label for a span's start height. Takes no handle, so the
+    /// console can call it on the remote arm too.
+    pub fn shekyl_rpc_span_pruning_seed(start_block_height: u64) -> u32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// Fills a C++-owned view of the hard-fork schedule; release the owner
     /// with `shekyl_rpc_hardforks_free`.
@@ -824,6 +830,82 @@ extern "C" {
 mod unit_test_link_stubs {
     use super::*;
 
+    #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_json_endpoint(
+        _h: *mut CoreRpcHandle,
+        _uri: *const std::os::raw::c_char,
+        _body: *const std::os::raw::c_char,
+    ) -> *mut std::os::raw::c_char {
+        std::ptr::null_mut()
+    }
+    #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_net_stats(
+        _h: *mut CoreRpcHandle,
+        _out: *mut NetStatsFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_connections(
+        _h: *mut CoreRpcHandle,
+        _out_now: *mut u64,
+        _out: *mut *const ConnectionFactsFfi,
+        _out_len: *mut usize,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_connections_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_sync_spans(
+        _h: *mut CoreRpcHandle,
+        _out_stripe: *mut u32,
+        _out: *mut *const SyncSpanFactsFfi,
+        _out_len: *mut usize,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_sync_spans_free(_owner: *mut std::ffi::c_void) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_peer_list(
+        _h: *mut CoreRpcHandle,
+        _public_only: u8,
+        _out: *mut *const PeerFactsFfi,
+        _out_len: *mut usize,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_peer_list_free(_owner: *mut std::ffi::c_void) {}
+    // The two constant exports have no "no core here" answer to give, and no
+    // unit test may take an answer from them: they exist to carry C++
+    // configuration, so a stub returning zero would let a renderer's test
+    // silently agree with a value the daemon does not hold. Zero is written
+    // anyway — `print_pl_stats` divides by the limit and guards zero — but no
+    // unit test calls these paths, and the console e2e exercises the real
+    // ones.
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32) {
+        // SAFETY: the caller passes two writable u32 slots or nulls.
+        unsafe {
+            if !out_white.is_null() {
+                out_white.write(0);
+            }
+            if !out_gray.is_null() {
+                out_gray.write(0);
+            }
+        }
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_span_pruning_seed(_start_block_height: u64) -> u32 {
+        0
+    }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {
         std::ptr::null_mut()

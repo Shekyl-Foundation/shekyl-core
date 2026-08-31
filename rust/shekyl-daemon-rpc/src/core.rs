@@ -513,6 +513,31 @@ impl CoreRpc {
         }
     }
 
+    /// The two compile-time peerlist capacities
+    /// (`shekyl_rpc_peerlist_limits`), as `(white, gray)`.
+    ///
+    /// Not restated in Rust: a duplicated constant is drift waiting to
+    /// happen, and these are p2p configuration the C++ owns.
+    pub fn peerlist_limits() -> (u32, u32) {
+        let mut white: u32 = 0;
+        let mut gray: u32 = 0;
+        // SAFETY: two valid out pointers; the export takes no handle and
+        // writes two compile-time constants.
+        unsafe { ffi::shekyl_rpc_peerlist_limits(&raw mut white, &raw mut gray) };
+        (white, gray)
+    }
+
+    /// The stripe label `sync_info` prints beside a span
+    /// (`shekyl_rpc_span_pruning_seed`).
+    ///
+    /// Handle-free, like [`Self::peerlist_limits`], and for the same reason:
+    /// `shekyld sync_info` renders against a *remote* daemon with no core to
+    /// ask, so a renderer's C++ constants must be reachable without one.
+    pub fn span_pruning_seed(start_block_height: u64) -> u32 {
+        // SAFETY: a pure function of its argument; no handle, no allocation.
+        unsafe { ffi::shekyl_rpc_span_pruning_seed(start_block_height) }
+    }
+
     /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
     /// C++-owned view before it is released.
     pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {

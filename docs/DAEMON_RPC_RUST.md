@@ -58,9 +58,16 @@ port — it is not part of this Phase 1 transport deletion.
   - The legacy `/send_raw_transaction` + `/sendrawtransaction` pair was
     deleted (`design/DAEMON_SUBMIT_VERDICT.md` §9.3); transaction submit
     is the native `/submit_transaction` route below, not an FFI proxy
-- **1 native Rust** endpoint: `POST /submit_transaction` — served
-  directly by the Rust admission engine (`src/submit/`), never crossing
-  the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
+- **Natively served** routes answer from Rust without crossing the C++
+  dispatch tables. `POST /submit_transaction` was the first, served by the
+  Rust admission engine (`src/submit/`,
+  `design/DAEMON_SUBMIT_VERDICT.md` §2–§3); the KV cutover
+  (`design/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
+  since, and the table under **RPC surface reachability** below is the list.
+  This bullet used to say "1 native Rust endpoint", which stopped being true
+  at RK-1 and stayed on the page for six slices — a count is a claim that
+  goes stale silently, so the table is the authority and this is a pointer
+  to it
 - **Binary** endpoints (`/get_o_indexes.bin`, `/get_blocks_by_height.bin`)
   - POST-only; return **400 Bad Request** on parse failure
 - **JSON-RPC 2.0** methods via `POST /json_rpc` (includes curve-tree and
@@ -294,6 +301,9 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_block_count` (+ `getblockcount`), `on_get_block_hash` (+ `on_getblockhash`) | `/json_rpc` | **native Rust** (RK-2: over `shekyl_rpc_chain_tip` / `shekyl_rpc_block_hash_at`) | python-rpc, stressnet | migrated 2026-08-22 |
 | `get_block_header_by_height` (+ `getblockheaderbyheight`) | `/json_rpc` | **native Rust** (RK-3: over `shekyl_rpc_block_header_at`) | wallet (`shekyl-rpc-client`), python-rpc, stressnet | migrated 2026-08-23 |
 | `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
+| `/get_transactions` (+ `/gettransactions`), `/is_key_image_spent` | yes | **native Rust** (RK-4c: over `shekyl_rpc_transactions` / `shekyl_rpc_key_images_spent`) | wallet, console (`print_tx`, `is_key_image_spent`, both migrated with it), python-rpc | migrated 2026-08-28 |
+| `sync_info`, `get_connections` | `/json_rpc` | **native Rust** (RK-5a: over `shekyl_rpc_sync_spans` / `shekyl_rpc_connections`) — **admin-only**, refused on the restricted listener | console (`sync_info`, `print_cn`), python-rpc | migrated 2026-08-31 |
+| `/get_net_stats`, `/get_peer_list` | yes | **native Rust** (RK-5a: over `shekyl_rpc_net_stats` / `shekyl_rpc_peer_list`) — **admin-only**, not registered on the restricted listener | console (`print_net_stats`, `print_pl`, `print_pl_stats`), fleet scripts | migrated 2026-08-31 |
 | JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
 | `/get_o_indexes.bin` | yes | **native Rust** (RK-4a: over `shekyl_rpc_tx_output_indices`, typed `.bin` map in `shekyl-rpc-types::bin_commands`) | wallet (`shekyl-rpc-client`) | migrated 2026-08-24 |
 | `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | **native Rust** (RK-4b: over `shekyl_rpc_blocks_by_height`) | the engine's timing rig (`daemon_observability.rs`) | migrated 2026-08-25 |

@@ -11,6 +11,7 @@
 #include <variant>
 #include <mutex>
 #include <vector>
+#include <limits>
 
 #include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
@@ -19,6 +20,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
+#include "common/pruning.h"
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
 #include "p2p/net_node.h"
@@ -1249,6 +1251,20 @@ int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
 void shekyl_rpc_peer_list_free(void* owner)
 {
   delete static_cast<daemon_rpc_facts::peer_list_owner*>(owner);
+}
+
+void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
+{
+  if (out_white)
+    *out_white = P2P_LOCAL_WHITE_PEERLIST_LIMIT;
+  if (out_gray)
+    *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
+}
+
+uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height)
+{
+  return tools::get_pruning_seed(start_block_height,
+    std::numeric_limits<uint64_t>::max(), CRYPTONOTE_PRUNING_LOG_STRIPES);
 }
 
 int shekyl_rpc_hardforks(core_rpc_handle* h,

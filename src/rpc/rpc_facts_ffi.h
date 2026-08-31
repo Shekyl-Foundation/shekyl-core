@@ -403,6 +403,26 @@ int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
     const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_peer_list_free(void* owner);
 
+// ── Constants the console renders with ──────────────────────────────────────
+//
+// Neither takes a handle, and that is what makes them usable: `shekyld
+// <command>` runs this same binary against a *remote* daemon, with no core to
+// ask, so anything the renderer needs from C++ configuration has to be
+// reachable without one. They cross rather than being restated in Rust
+// because a duplicated constant is the drift this cutover deletes rather than
+// synchronizes.
+
+// The two peerlist capacities `print_peer_list_stats` reports a fraction of.
+void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
+
+// The stripe label `sync_info` prints beside a span:
+// `tools::get_pruning_seed(start_block_height, UINT64_MAX, LOG_STRIPES)`.
+// `UINT64_MAX` is the sentinel the console has always passed — it means "not
+// in the tip window", so the answer is a pure function of the height. Behind
+// it are `make_pruning_seed`'s bit layout and three `cryptonote_config.h`
+// constants, none of which gets a second definition.
+uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);

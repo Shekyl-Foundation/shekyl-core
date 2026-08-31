@@ -60,23 +60,7 @@ namespace {
   }
 
 
-  void print_peer(std::string const & prefix, cryptonote::peer const & peer, bool pruned_only)
-  {
-    if (pruned_only && peer.pruning_seed == 0)
-      return;
 
-    time_t now;
-    time(&now);
-    time_t last_seen = static_cast<time_t>(peer.last_seen);
-
-    std::string elapsed = peer.last_seen == 0 ? "never" : epee::misc_utils::get_time_interval_string(now - last_seen);
-    std::string id_str = epee::string_tools::pad_string(epee::string_tools::to_string_hex(peer.id), 16, '0', true);
-    std::string port_str;
-    epee::string_tools::xtype_to_string(peer.port, port_str);
-    std::string addr_str = peer.host + ":" + port_str;
-    std::string pruning_seed = epee::string_tools::to_string_hex(peer.pruning_seed);
-    tools::msg_writer() << boost::format("%-10s %-25s %-25s %-4s %s") % prefix % id_str % addr_str % pruning_seed % elapsed;
-  }
 
   void print_block_header(cryptonote::block_header_response const & header)
   {
@@ -202,82 +186,15 @@ t_rpc_command_executor::~t_rpc_command_executor()
 }
 
 bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
-  cryptonote::COMMAND_RPC_GET_PEER_LIST::request req;
-  cryptonote::COMMAND_RPC_GET_PEER_LIST::response res;
-
-  std::string failure_message = "Couldn't retrieve peer list";
-
-  req.include_blocked = true;
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_peer_list", failure_message.c_str()))
-    {
-      return false;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_peer_list(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << failure_message;
-      return false;
-    }
-  }
-
-  if (white)
-  {
-    auto peer = res.white_list.cbegin();
-    const auto end = limit ? peer + std::min(limit, res.white_list.size()) : res.white_list.cend();
-    for (; peer != end; ++peer)
-    {
-      print_peer("white", *peer, pruned_only);
-    }
-  }
-
-  if (gray)
-  {
-    auto peer = res.gray_list.cbegin();
-    const auto end = limit ? peer + std::min(limit, res.gray_list.size()) : res.gray_list.cend();
-    for (; peer != end; ++peer)
-    {
-      print_peer("gray", *peer, pruned_only);
-    }
-  }
-
-  return true;
+  std::vector<std::string> argv{"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
+    std::to_string(limit)};
+  if (pruned_only)
+    argv.emplace_back("pruned");
+  return run_rust_console(argv);
 }
 
 bool t_rpc_command_executor::print_peer_list_stats() {
-  cryptonote::COMMAND_RPC_GET_PEER_LIST::request req;
-  cryptonote::COMMAND_RPC_GET_PEER_LIST::response res;
-
-  std::string failure_message = "Couldn't retrieve peer list";
-
-  req.public_only = false;
-  req.include_blocked = true;
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_peer_list", failure_message.c_str()))
-    {
-      return false;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_peer_list(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << failure_message;
-      return false;
-    }
-  }
-
-  tools::msg_writer()
-    << "White list size: " << res.white_list.size() << "/" << P2P_LOCAL_WHITE_PEERLIST_LIMIT << " (" << res.white_list.size() *  100.0 / P2P_LOCAL_WHITE_PEERLIST_LIMIT << "%)" << std::endl
-    << "Gray list size: " << res.gray_list.size() << "/" << P2P_LOCAL_GRAY_PEERLIST_LIMIT << " (" << res.gray_list.size() *  100.0 / P2P_LOCAL_GRAY_PEERLIST_LIMIT << "%)";
-
-  return true;
+  return run_rust_console({"print_peer_list_stats"});
 }
 
 bool t_rpc_command_executor::save_blockchain() {
@@ -623,135 +540,12 @@ bool t_rpc_command_executor::mining_status() {
 }
 
 bool t_rpc_command_executor::print_connections() {
-  cryptonote::COMMAND_RPC_GET_CONNECTIONS::request req;
-  cryptonote::COMMAND_RPC_GET_CONNECTIONS::response res;
-  epee::json_rpc::error error_resp;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "get_connections", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_connections(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  int host_field_width = 15;
-  for (const auto &conn : res.connections)
-    host_field_width = std::max(host_field_width, 8 + (int) conn.address.length());
-
-  tools::msg_writer() << std::setw(host_field_width) << std::left << "Remote Host"
-      << std::setw(8) << "Type"
-      << std::setw(6) << "SSL"
-      << std::setw(20) << "Peer id"
-      << std::setw(20) << "Support Flags"      
-      << std::setw(30) << "Recv/Sent (inactive,sec)"
-      << std::setw(25) << "State"
-      << std::setw(20) << "Livetime(sec)"
-      << std::setw(12) << "Down (kB/s)"
-      << std::setw(14) << "Down(now)"
-      << std::setw(10) << "Up (kB/s)" 
-      << std::setw(13) << "Up(now)"
-      << std::endl;
-
-  for (auto & info : res.connections)
-  {
-    std::string address = info.incoming ? "INC " : "OUT ";
-    address += info.ip + ":" + info.port;
-    //std::string in_out = info.incoming ? "INC " : "OUT ";
-    tools::msg_writer() 
-     //<< std::setw(30) << std::left << in_out
-     << std::setw(30) << std::left << address
-     << std::setw(8) << (get_address_type_name((epee::net_utils::address_type)info.address_type))
-     << std::setw(6) << (info.ssl ? "yes" : "no")
-     << std::setw(20) << info.peer_id
-     << std::setw(20) << info.support_flags
-     << std::setw(30) << std::to_string(info.recv_count) + "("  + std::to_string(info.recv_idle_time) + ")/" + std::to_string(info.send_count) + "(" + std::to_string(info.send_idle_time) + ")"
-     << std::setw(25) << info.state
-     << std::setw(20) << info.live_time
-     << std::setw(12) << info.avg_download
-     << std::setw(14) << info.current_download
-     << std::setw(10) << info.avg_upload
-     << std::setw(13) << info.current_upload
-     
-     << std::left << (info.localhost ? "[LOCALHOST]" : "")
-     << std::left << (info.local_ip ? "[LAN]" : "");
-    //tools::msg_writer() << boost::format("%-25s peer_id: %-25s %s") % address % info.peer_id % in_out;
-    
-  }
-
-  return true;
+  return run_rust_console({"print_connections"});
 }
 
 bool t_rpc_command_executor::print_net_stats()
 {
-  cryptonote::COMMAND_RPC_GET_NET_STATS::request net_stats_req;
-  cryptonote::COMMAND_RPC_GET_NET_STATS::response net_stats_res;
-  cryptonote::COMMAND_RPC_GET_LIMIT::request limit_req;
-  cryptonote::COMMAND_RPC_GET_LIMIT::response limit_res;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(net_stats_req, net_stats_res, "/get_net_stats", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->rpc_request(limit_req, limit_res, "/get_limit", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_net_stats(net_stats_req, net_stats_res) || net_stats_res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, net_stats_res.status);
-      return true;
-    }
-    if (!m_rpc_server->on_get_limit(limit_req, limit_res) || limit_res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, limit_res.status);
-      return true;
-    }
-  }
-
-  uint64_t seconds = (uint64_t)time(NULL) - net_stats_res.start_time;
-  uint64_t average = seconds > 0 ? net_stats_res.total_bytes_in / seconds : 0;
-  uint64_t limit = limit_res.limit_down * 1024;   // convert to bytes, as limits are always kB/s
-  double percent = (double)average / (double)limit * 100.0;
-  tools::success_msg_writer() << boost::format("Received %u bytes (%s) in %u packets in %s, average %s/s = %.2f%% of the limit of %s/s")
-    % net_stats_res.total_bytes_in
-    % tools::get_human_readable_bytes(net_stats_res.total_bytes_in)
-    % net_stats_res.total_packets_in
-    % tools::get_human_readable_timespan(seconds)
-    % tools::get_human_readable_bytes(average)
-    % percent
-    % tools::get_human_readable_bytes(limit);
-
-  average = seconds > 0 ? net_stats_res.total_bytes_out / seconds : 0;
-  limit = limit_res.limit_up * 1024;
-  percent = (double)average / (double)limit * 100.0;
-  tools::success_msg_writer() << boost::format("Sent %u bytes (%s) in %u packets in %s, average %s/s = %.2f%% of the limit of %s/s")
-    % net_stats_res.total_bytes_out
-    % tools::get_human_readable_bytes(net_stats_res.total_bytes_out)
-    % net_stats_res.total_packets_out
-    % tools::get_human_readable_timespan(seconds)
-    % tools::get_human_readable_bytes(average)
-    % percent
-    % tools::get_human_readable_bytes(limit);
-
-  return true;
+  return run_rust_console({"print_net_stats"});
 }
 
 bool t_rpc_command_executor::print_blockchain_info(int64_t start_block_index, uint64_t end_block_index) {
@@ -1988,71 +1782,7 @@ bool t_rpc_command_executor::relay_tx(const std::string &txid)
 
 bool t_rpc_command_executor::sync_info()
 {
-    cryptonote::COMMAND_RPC_SYNC_INFO::request req;
-    cryptonote::COMMAND_RPC_SYNC_INFO::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "sync_info", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_sync_info(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    uint64_t target = res.target_height < res.height ? res.height : res.target_height;
-    tools::success_msg_writer() << "Height: " << res.height << ", target: " << target << " (" << (100.0 * res.height / target) << "%)";
-    uint64_t current_download = 0;
-    for (const auto &p: res.peers)
-      current_download += p.info.current_download;
-    tools::success_msg_writer() << "Downloading at " << current_download << " kB/s";
-    if (res.next_needed_pruning_seed)
-      tools::success_msg_writer() << "Next needed pruning seed: " << res.next_needed_pruning_seed;
-
-    tools::success_msg_writer() << std::to_string(res.peers.size()) << " peers";
-    tools::success_msg_writer() << "Remote Host                        Peer_ID   State   Prune_Seed          Height  DL kB/s, Queued Blocks / MB";
-    for (const auto &p: res.peers)
-    {
-      std::string address = epee::string_tools::pad_string(p.info.address, 24);
-      uint64_t nblocks = 0, size = 0;
-      for (const auto &s: res.spans)
-        if (s.connection_id == p.info.connection_id)
-          nblocks += s.nblocks, size += s.size;
-      tools::success_msg_writer() << address << "  " << p.info.peer_id << "  " <<
-          epee::string_tools::pad_string(p.info.state, 16) << "  " <<
-          epee::string_tools::pad_string(epee::string_tools::to_string_hex(p.info.pruning_seed), 8) << "  " << p.info.height << "  "  <<
-          p.info.current_download << " kB/s, " << nblocks << " blocks / " << size/1e6 << " MB queued";
-    }
-
-    uint64_t total_size = 0;
-    for (const auto &s: res.spans)
-      total_size += s.size;
-    tools::success_msg_writer() << std::to_string(res.spans.size()) << " spans, " << total_size/1e6 << " MB";
-    tools::success_msg_writer() << res.overview;
-    for (const auto &s: res.spans)
-    {
-      std::string address = epee::string_tools::pad_string(s.remote_address, 24);
-      std::string pruning_seed = epee::string_tools::to_string_hex(tools::get_pruning_seed(s.start_block_height, std::numeric_limits<uint64_t>::max(), CRYPTONOTE_PRUNING_LOG_STRIPES));
-      if (s.size == 0)
-      {
-        tools::success_msg_writer() << address << "  " << s.nblocks << "/" << pruning_seed << " (" << s.start_block_height << " - " << (s.start_block_height + s.nblocks - 1) << ")  -";
-      }
-      else
-      {
-        tools::success_msg_writer() << address << "  " << s.nblocks << "/" << pruning_seed << " (" << s.start_block_height << " - " << (s.start_block_height + s.nblocks - 1) << ", " << (uint64_t)(s.size/1e3) << " kB)  " << (unsigned)(s.rate/1e3) << " kB/s (" << s.speed/100.0f << ")";
-      }
-    }
-
-    return true;
+  return run_rust_console({"sync_info"});
 }
 
 bool t_rpc_command_executor::pop_blocks(uint64_t num_blocks)
