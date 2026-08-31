@@ -32,15 +32,15 @@ privacy.
 | Quantity | Count |
 | --- | ---: |
 | Validation sites walked (functions that can reject a block or a tx-as-included-in-a-block) | 48 |
-| Independently ratifiable rules (rows RC-1…RC-155, RC-157…RC-168) | **167** |
-| Consensus | 157 |
+| Independently ratifiable rules (rows RC-1…RC-155, RC-157…RC-172; RC-156 unused) | **171** |
+| Consensus | 161 |
 | Policy (relay/mempool only; `kept_by_block` discriminator) | 10 |
-| Bucket 1 — Shekyl-specific, written spec | 93 |
+| Bucket 1 — Shekyl-specific, written spec | 97 |
 | Bucket 2 — inherited and ratified, locatable pointer | 6 |
 | Bucket 3 — inherited, examined, marked for deletion | 15 |
 | Bucket 4 — inherited, never examined | 53 |
 
-Sum check: `93 + 6 + 15 + 53 = 167`. Consensus + policy: `157 + 10 = 167`.
+Sum check: `97 + 6 + 15 + 53 = 171`. Consensus + policy: `161 + 10 = 171`.
 The rows exhaust the denominator. An unlisted rule would be ratified by
 silence — the failure mode this census exists to close. RC-156 is unused
 (a draft duplicate of RC-53; same bound, already cited on both sites).
@@ -52,7 +52,7 @@ silence — the failure mode this census exists to close. RC-156 is unused
 | Block header / identity | RC-1…RC-18 (18) | 4 | 0 | 2 | 12 | 0 |
 | PoW / DAA | RC-19…RC-28 (10) | 8 | 1 | 0 | 1 | 0 |
 | Timestamp | RC-29…RC-32 (4) | 1 | 1 | 0 | 2 | 0 |
-| Miner-tx / emission | RC-33…RC-52 (20) | 13 | 0 | 1 | 6 | 0 |
+| Miner-tx / emission | RC-33…RC-52, RC-169…RC-172 (24) | 17 | 0 | 1 | 6 | 0 |
 | Tx parse / semantic | RC-53…RC-72 (20) | 6 | 2 | 2 | 10 | 0 |
 | Tx outputs | RC-73…RC-80 (8) | 7 | 0 | 1 | 0 | 0 |
 | Tx inputs / FCMP++ | RC-81…RC-99 (19) | 15 | 1 | 3 | 0 | 0 |
@@ -255,14 +255,18 @@ Flag: **C** = consensus (block-acceptance or tx-as-included-in-a-block).
 | RC-42 | Coinbase output public keys must be canonical prime-order non-identity (same gate as pool txs). | `blockchain.cpp:1694–1697`; `cryptonote_format_utils.cpp:837–866` | C | 1 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.3 | Miner tx never goes through `check_tx_semantic`; this is the only site. |
 | RC-43 | Coinbase commitment masks: canonical prime-order, not identity/G, and `C ≠ zeroCommit(public_amount)`. | `blockchain.cpp:1699–1703`, `:3271–3341` | C | 1 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.3 | Sole mask gate for `CTTypeNull`. |
 | RC-44 | Genesis (`block_height == 0`): skip the live reward function; accept configured `GENESIS_TX` amounts. | `blockchain.cpp:1754–1760` | C | 1 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md); [`GENESIS_ALLOCATIONS.md`](../GENESIS_ALLOCATIONS.md) | |
-| RC-45 | If `version == 3`, each coinbase output amount must be a "decomposed" amount. | `blockchain.cpp:1763–1769` | C | 3 | rule 60 (dead version dispatch: v3-from-genesis, version already ≥ 3 by RC-35) | Always-on for mined blocks today. Whether decomposed amounts are right-for-Shekyl is unasked. The **dispatch** is bucket 3; the amount constraint itself is the unexamined residue — see RC-46. |
+| RC-45 | If **hardfork** `version == 3`, each coinbase output amount must be a decomposed amount. The `version` argument is `m_hardfork->get_current_version()` (`:6272`), not `miner_tx.version`. All nets ship HF 1, so this arm **never runs**. | `blockchain.cpp:1763–1769` | C | 3 | rule 60 (dead HF-version dispatch). First-draft note that this was “always-on” was wrong: it keys off the fork table, not tx v3. | Residue if a future HF 3 is added without a design round. RC-46 is the amount table behind the dead arm. |
 | RC-46 | Coinbase output amounts, when RC-45 fires, must appear in `valid_decomposed_outputs`. | `cryptonote_format_utils.cpp:1528–1532` | C | 4 | — | CryptoNote denomination set. |
 | RC-47 | `money_in_use` (sum of coinbase vouts) must equal `miner_emission + miner_fee_income` exactly. Overpay rejects; underpay logs and still rejects (`!=`). | `blockchain.cpp:1746–1805` | C | 1 | `shekyl-economics`; [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md); Stage-1 PR 7 | Inverse-spot-check subject. Weight too large fails `get_block_reward` first. |
-| RC-48 | Base subsidy is `shekyl_block_reward` (Rust): median clamp, 2×median reject, weight penalty. C++ is a marshaling shim. | `cryptonote_basic_impl.cpp:93–99`; called at `:1776` | C | 1 | Stage-1 PR 7; `config/economics_params.json` | |
+| RC-48 | Base subsidy is `shekyl_block_reward` (Rust): `(MONEY_SUPPLY - already_generated) >> ESF`, floor tail subsidy, median clamp, weight penalty. C++ is a marshaling shim. 2×median bound and release/cap legs are RC-169–RC-171. | `cryptonote_basic_impl.cpp:93–146`; `shekyl-economics/src/emission.rs`; called at `:1776` | C | 1 | Stage-1 PR 7; `config/economics_params.json` | |
 | RC-49 | Emission split: `compute_emission_split(base_reward, height, genesis_ng_height)` partitions miner vs staker legs. | `blockchain.cpp:1782–1785`, `:6347–6348` | C | 1 | [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) §2.2 | |
 | RC-50 | Fee burn: `compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count)` partitions miner fee / staker pool / destroyed. | `blockchain.cpp:1791–1792`, `:6350–6355` | C | 1 | economics; [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) | `frozen_segment_count` is parent-state (RC-52). |
 | RC-51 | `already_generated_coins` advances by `base_reward` through `shekyl_advance_already_generated` (supply clamp in Rust). | `blockchain.cpp:6374`; alt `:2303` | C | 1 | `consensus_constants.json` division-one-site note at `:6369–6373` | Alt advances by coinbase paid, not `base_reward` (FOLLOWUPS; RC-141). |
 | RC-52 | `parent_frozen_segment_count(block_height)` requires `m_db->height() == block_height` (tree not yet grown for this block). | `blockchain.cpp:1732–1742`, `:6271` | C | 1 | [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §6.2 | |
+| RC-169 | A block whose cumulative weight is **exactly** `2 * effective_median` is accepted and earns zero subsidy; only weight **above** that limit rejects (`SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG`). The bound is inclusive. | `cryptonote_basic_impl.cpp:122–135` | C | 1 | Stage-1 PR 7 81-vector KAT; comment at `:128–133` | Independently ratifiable from the penalty *curve*. |
+| RC-170 | After the base curve, subsidy is scaled by `shekyl_calc_release_multiplier(tx_volume_avg, BASELINE, RELEASE_MIN, RELEASE_MAX)` when `SHEKYL_TX_VOLUME_BASELINE > 0`. | `cryptonote_basic_impl.cpp:148–157` | C | 1 | `config/economics_params.json`; [`STAGE_1_PR_7_ECONOMICS_ENGINE.md`](../completed/STAGE_1_PR_7_ECONOMICS_ENGINE.md) | |
+| RC-171 | Scaled subsidy is then `shekyl_cap_reward_to_remaining_supply` (saturating; defends uint64 underflow past the cap). | `cryptonote_basic_impl.cpp:159–168` | C | 1 | same; comment at `:159–167` | |
+| RC-172 | `tx_volume_avg` is the integer mean of `tx_hashes.size()` over the prior `SHEKYL_TX_VOLUME_WINDOW` (720) blocks; height 0 → 0. | `blockchain.cpp:2111–2128`; used at `:1773` | C | 1 | `shekyl-economics/src/activity.rs`; window 720 is a consensus-visible constant not in `config/` | |
 
 ### 3.5 Tx parse / semantic
 
@@ -439,7 +443,7 @@ Included in the denominator; **P** = does not fork the chain.
 
 ## 4. Sum check
 
-IDs RC-1…RC-155 and RC-157…RC-168 = **167** rows. RC-156 was never
+IDs RC-1…RC-155 and RC-157…RC-172 = **171** rows. RC-156 was never
 issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 
 | Section | IDs | Count | B1 | B2 | B3 | B4 |
@@ -447,7 +451,7 @@ issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 | 3.1 header | 1–18 | 18 | 4 | 0 | 2 | 12 |
 | 3.2 PoW | 19–28 | 10 | 8 | 1 | 0 | 1 |
 | 3.3 timestamp | 29–32 | 4 | 1 | 1 | 0 | 2 |
-| 3.4 miner-tx | 33–52 | 20 | 13 | 0 | 1 | 6 |
+| 3.4 miner-tx | 33–52, 169–172 | 24 | 17 | 0 | 1 | 6 |
 | 3.5 parse/semantic | 53–72 | 20 | 6 | 2 | 2 | 10 |
 | 3.6 outputs | 73–80 | 8 | 7 | 0 | 1 | 0 |
 | 3.7 inputs/FCMP | 81–99 | 19 | 15 | 1 | 3 | 0 |
@@ -457,9 +461,9 @@ issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 | 3.11 storage | 143–150 | 8 | 2 | 0 | 0 | 6 |
 | 3.12 mempool | 151–155, 157–161 | 10 | 1 | 1 | 1 | 7 |
 | 3.13 hardfork | 162–168 | 7 | 1 | 0 | 5 | 1 |
-| **Total** | | **167** | **93** | **6** | **15** | **53** |
+| **Total** | | **171** | **97** | **6** | **15** | **53** |
 
-`93+6+15+53 = 167`. Flags: 157 consensus + 10 policy = 167.
+`97+6+15+53 = 171`. Flags: 161 consensus + 10 policy = 171.
 
 Policy rows: RC-151, 152, 153, 154, 155, 157, 158, 159, 160, 161.
 RC-159 is flagged P even though the origin-pin has a Shekyl spec — it
@@ -621,6 +625,15 @@ actually contained at `8ba1aae3d`.
     walk; registering `CEN-` here would collide with the sibling
     first census. `RC-` (rule census) is free under rule 94's
     alphabetic-prefix-until-digit test.
+
+16. **`validate_miner_transaction`'s `version` is the hardfork
+    version, not `miner_tx.version`.** RC-45's first draft treated
+    `if (version == 3)` as always-on because coinbase txs are v3.
+    The caller passes `m_hardfork->get_current_version()` (`:6272`),
+    which is 1. The decomposed-amount arm never runs. Four economics
+    legs that were folded into RC-48 (inclusive 2×median bound,
+    release multiplier, remaining-supply cap, 720-block volume
+    window) are now RC-169–RC-172.
 
 ---
 

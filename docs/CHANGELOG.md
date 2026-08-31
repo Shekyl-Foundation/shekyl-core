@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Independent second consensus-rule census (`RC-`).** 167 independently
+- **Independent second consensus-rule census (`RC-`).** 171 independently
   ratifiable rules, walked from the block and transaction acceptance
   entry points at `8ba1aae3d` and classified into four buckets. The
   census is the instrument for the consensus rewrite; no chain
