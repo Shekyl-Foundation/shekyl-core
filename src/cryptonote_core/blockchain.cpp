@@ -6251,7 +6251,8 @@ leave:
           // sub-increment swapped the arm's pre-GF-1 blanket rejection to the
           // real authorization: re-pin the vin's pqc auth key against the
           // record's COMMITTED bond_spend_pk (fail closed on a missing
-          // record, a keyless pre-GF-1 record, or a missing auth slot). Only
+          // record, a keyless pre-GF-1 record, or a missing auth slot) --
+          // through the SHARED pin, never a local re-spelling of it. Only
           // the theft-shaped check is re-run here; the debit's semantic legs
           // (cooldown, watermark, floor) stay checkpoint-trusted under the
           // fast path like every other skipped per-tx check.
@@ -6265,17 +6266,28 @@ leave:
           // Credits stay checkpoint-trusted here exactly as JoinMarket does.
           if (fast_check && bond.bond_debit > 0)
           {
+            // The predicate is `archival_debit_auth_pin` -- the SAME function
+            // the per-tx path and the Rust submit battery reach, not a
+            // re-spelling of it. It WAS spelled inline here until 2026-08-29,
+            // which made this arm a third copy of the one check whose entire
+            // purpose is that fast-syncing and fully-verifying nodes agree:
+            // a drift between the copies produces exactly the consensus split
+            // the comment above says this arm exists to prevent.
             shekyl::db::ArchivalBondValue record{};
-            const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
-            const bool auth_ok = have_record
-              && record.bond_spend_pk.size() == config::PQC_HYBRID_SINGLE_KEY_LEN
-              && vin_idx < btx.pqc_auths.size()
-              && btx.pqc_auths[vin_idx].hybrid_public_key == record.bond_spend_pk;
-            if (!auth_ok)
+            // A missing record leaves `record` default-constructed, so its
+            // empty bond_spend_pk drives the pin's "commits no key" arm --
+            // the same fail-closed answer the inline `have_record &&` gave.
+            (void)m_db->get_archival_bond_value(bond.p_canonical_id, record);
+            const bool slot_present = vin_idx < btx.pqc_auths.size();
+            if (!slot_present
+                || !archival_debit_auth_pin(record,
+                     btx.pqc_auths[vin_idx].hybrid_public_key,
+                     "block fast-check debit"))
             {
-              MERROR_VER("Block " << id << " has a debit-side archival bond post whose "
-                "pqc auth key does not match the record's committed bond_spend_pk (kind "
-                << static_cast<unsigned>(bond.post_kind) << ")");
+              MERROR_VER("Block " << id << " rejected: debit-side archival bond post at "
+                "vin " << vin_idx << " (kind " << static_cast<unsigned>(bond.post_kind)
+                << ") failed the debit-auth pin"
+                << (slot_present ? "" : " (no pqc auth slot for the vin)"));
               bvc.m_verifivation_failed = true;
               return_txs_to_pool();
               return false;
