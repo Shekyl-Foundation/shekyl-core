@@ -161,11 +161,12 @@
   wallet-side producer yet", which was true when written and is not now.
   **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
   no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
-  RESERVED. The producer exists; what remains is reachability (the
-  regtest walk), dispatch of the assembled bytes, and native
-  `/submit_transaction` admission — Unbond is still `Malformed` there
-  until the submit fact set lands. The walk lands as its own PR, so the
-  producer merging is not the event that lifts RESERVED.
+  RESERVED. The producer exists; what remains is reachability and dispatch
+  of the assembled bytes. Native `/submit_transaction` admission was a
+  third item on that list when this entry was written and is not one now
+  — the Unbond fact set landed in this same release (see the submit entry
+  above), so the two must be read together. The walk lands as its own PR,
+  so the producer merging is not the event that lifts RESERVED.
 
 ### Changed
 
