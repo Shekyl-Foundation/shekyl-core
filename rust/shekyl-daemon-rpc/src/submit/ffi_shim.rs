@@ -48,7 +48,22 @@ impl FfiSubmitShim {
 /// Convert the POD snapshot + conflict array into the engine's fact type.
 /// `Err(())` on a descriptor byte outside the documented set (contract
 /// violation; callers map to their internal-fault arm).
-fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, ()> {
+/// `unbond_probe` says whether the call this POD answers asked the debit
+/// arm's question. It gates `bond_record_bonded_total`, and it is a
+/// parameter rather than something derived from the POD because C++ only
+/// *gathers* the balance for an `_UNBOND` probe — for a JoinMarket probe the
+/// field is a zero that was never read, and `Some(0)` there would be a
+/// fabricated fact.
+///
+/// **Both call sites must pass it.** The Phase-D leg returns these facts
+/// directly, so a `None` here is not "the snapshot path restores it later" —
+/// it is the balance the race classifier needs going missing at exactly the
+/// moment it is needed.
+fn facts_from_ffi(
+    pod: &ffi::SubmitFactsFfi,
+    ki: &[u8],
+    unbond_probe: bool,
+) -> Result<SubmitFacts, ()> {
     let key_image_conflicts = ki
         .iter()
         .map(|&b| match b {
@@ -80,10 +95,13 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
         // same validity-gate shape as in_chain_height.
         bond_record_exists: (pod.bond_record_probed != 0).then_some(pod.bond_record_exists != 0),
-        // Valid only for an Unbond probe against a present record; the
-        // caller gates it, since a bare 0 is a legitimate value here (the
-        // exited state) and must not be confused with "not probed".
-        bond_record_bonded_total: None,
+        // Valid only for an Unbond probe against a present record: a bare 0
+        // is a legitimate value here (the exited state) and must not be
+        // confused with "not probed".
+        bond_record_bonded_total: (unbond_probe
+            && pod.bond_record_probed != 0
+            && pod.bond_record_exists != 0)
+            .then_some(pod.bond_record_bonded_total),
         // Filled by the caller from the §8.7.1.1 handle (variable-size, so
         // it travels beside the POD) — the same shape as `emission`.
         unbond: None,
@@ -458,17 +476,12 @@ impl SubmitStateShim for FfiSubmitShim {
             tracing::error!("submit snapshot shim skipped the requested emission probe");
             return Err(ShimFault);
         }
-        let mut facts = facts_from_ffi(&pod, &ki_conflicts).map_err(|()| {
+        let unbond_probe = matches!(bond_probe, Some(BondProbe::Unbond(_)));
+        let mut facts = facts_from_ffi(&pod, &ki_conflicts, unbond_probe).map_err(|()| {
             tracing::error!("submit snapshot shim returned unknown key-image descriptor");
             ShimFault
         })?;
         facts.emission = emission;
-        // Gate on the probe *and* on presence: `bond_record_bonded_total` is
-        // 0 both for "no record" and for "record with nothing bonded", and
-        // only the second is a value the engine may compare against.
-        facts.bond_record_bonded_total = (matches!(bond_probe, Some(BondProbe::Unbond(_)))
-            && pod.bond_record_exists != 0)
-            .then_some(pod.bond_record_bonded_total);
         facts.unbond = unbond;
         Ok(facts)
     }
@@ -510,13 +523,19 @@ impl SubmitStateShim for FfiSubmitShim {
         match rc {
             ffi::SHEKYL_SUBMIT_OK => CommitOutcome::Committed,
             ffi::SHEKYL_SUBMIT_PRUNED_ON_INSERT => CommitOutcome::PrunedOnInsert,
-            ffi::SHEKYL_SUBMIT_RACED => match facts_from_ffi(&fresh_pod, &fresh_ki) {
-                Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
-                Err(()) => {
-                    tracing::error!("submit commit shim returned unknown key-image descriptor");
-                    CommitOutcome::InternalFault
+            // `expected.unbond.is_some()` iff Phase B ran the debit probe —
+            // the same discriminant, carried by facts the caller already
+            // holds, so the commit conversion cannot silently drop the fact
+            // its own race classification depends on.
+            ffi::SHEKYL_SUBMIT_RACED => {
+                match facts_from_ffi(&fresh_pod, &fresh_ki, expected.unbond.is_some()) {
+                    Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
+                    Err(()) => {
+                        tracing::error!("submit commit shim returned unknown key-image descriptor");
+                        CommitOutcome::InternalFault
+                    }
                 }
-            },
+            }
             _ => {
                 tracing::error!(rc, "submit commit shim returned fault");
                 CommitOutcome::InternalFault
@@ -575,6 +594,7 @@ mod tests {
                 ffi::SHEKYL_SUBMIT_KI_OWN_TX,
                 ffi::SHEKYL_SUBMIT_KI_OTHER,
             ],
+            false,
         )
         .expect("documented arms convert");
         assert_eq!(
@@ -593,14 +613,14 @@ mod tests {
         let mut chain_pod = pod_with(1);
         chain_pod.in_chain = 1;
         chain_pod.in_chain_height = 180;
-        let chain_facts = facts_from_ffi(&chain_pod, &[]).expect("converts");
+        let chain_facts = facts_from_ffi(&chain_pod, &[], false).expect("converts");
         assert_eq!(chain_facts.in_chain, Some(BlockHeight::from_raw(180)));
 
         // in_pool_broadcast converts independently of in_pool (the foreign-
         // disclosure fact).
         let mut broadcast_pod = pod_with(1);
         broadcast_pod.in_pool_broadcast = 1;
-        let broadcast_facts = facts_from_ffi(&broadcast_pod, &[]).expect("converts");
+        let broadcast_facts = facts_from_ffi(&broadcast_pod, &[], false).expect("converts");
         assert!(broadcast_facts.in_pool_broadcast);
         let reference = facts.reference.expect("ref_block_found = 1");
         assert_eq!(reference.height, BlockHeight::from_raw(150));
@@ -610,7 +630,7 @@ mod tests {
 
         // A byte outside the documented set is a contract violation, not a
         // guessed fact.
-        assert!(facts_from_ffi(&pod_with(1), &[3]).is_err());
+        assert!(facts_from_ffi(&pod_with(1), &[3], false).is_err());
 
         // The BP3 probe pair converts under the same validity-gate shape
         // as in_chain_height: unset probe → None (exists byte ignored),
@@ -619,14 +639,14 @@ mod tests {
         let mut probed_pod = pod_with(1);
         probed_pod.bond_record_probed = 1;
         assert_eq!(
-            facts_from_ffi(&probed_pod, &[])
+            facts_from_ffi(&probed_pod, &[], false)
                 .expect("converts")
                 .bond_record_exists,
             Some(false)
         );
         probed_pod.bond_record_exists = 1;
         assert_eq!(
-            facts_from_ffi(&probed_pod, &[])
+            facts_from_ffi(&probed_pod, &[], false)
                 .expect("converts")
                 .bond_record_exists,
             Some(true)
@@ -635,9 +655,56 @@ mod tests {
 
     #[test]
     fn unknown_reference_maps_to_none() {
-        let facts = facts_from_ffi(&pod_with(0), &[]).expect("converts");
+        let facts = facts_from_ffi(&pod_with(0), &[], false).expect("converts");
         assert_eq!(facts.reference, None);
         assert!(facts.key_image_conflicts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod balance_conversion_tests {
+    use super::*;
+
+    fn unbond_pod(exists: u8, total: u64) -> ffi::SubmitFactsFfi {
+        let mut pod = ffi::SubmitFactsFfi::zeroed();
+        pod.bond_record_probed = 1;
+        pod.bond_record_exists = exists;
+        pod.bond_record_bonded_total = total;
+        pod
+    }
+
+    #[test]
+    fn the_commit_conversion_carries_the_balance_for_an_unbond() {
+        // The Phase-D leg returns `facts_from_ffi`'s output DIRECTLY — there
+        // is no later step to restore a dropped field, unlike the snapshot
+        // path. This is the conversion the mock-shim race tests bypass
+        // entirely, so without this the balance re-check is inert in
+        // production while those tests stay green.
+        let facts = facts_from_ffi(&unbond_pod(1, 0), &[], true).expect("converts");
+        assert_eq!(
+            facts.bond_record_bonded_total,
+            Some(0),
+            "a zero balance is the EXITED state, not a missing fact"
+        );
+    }
+
+    #[test]
+    fn a_joinmarket_probe_fabricates_no_balance() {
+        // C++ only gathers the balance for an `_UNBOND` probe, so the field
+        // is an unread zero on the credit arm. Reporting `Some(0)` would be
+        // a fact nobody measured.
+        let facts = facts_from_ffi(&unbond_pod(1, 0), &[], false).expect("converts");
+        assert_eq!(facts.bond_record_bonded_total, None);
+    }
+
+    #[test]
+    fn an_absent_record_yields_no_balance_to_compare() {
+        // Absence is carried by the presence bit; the balance stays `None`
+        // because there is no record to read one from. The engine treats
+        // that pair as a moved slot rather than as an unknown.
+        let facts = facts_from_ffi(&unbond_pod(0, 0), &[], true).expect("converts");
+        assert_eq!(facts.bond_record_bonded_total, None);
+        assert_eq!(facts.bond_record_exists, Some(false));
     }
 }
 

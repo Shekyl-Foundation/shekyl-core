@@ -1414,7 +1414,7 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `:4890-4897` | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
-| UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) | `:4901-4902` | **B fact + D re-check** — see the time-asymmetry note below; absent at B → `Malformed`, present-at-B-then-gone-at-D → `DoubleSpendConflict` |
+| UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `:4901-4902` | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
 | UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin`, `:4906-4907` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
 | UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `:4915-4924` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
 | UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
@@ -1465,14 +1465,20 @@ that byte against `holdings_kind.last_served_scan()`. A mismatch is a
 
 **Phase-D scope: the terminal fact only, and why the rest do not need it.**
 The commit re-check re-gathers the POD, not the bundle — so UB2 is re-checked
-(the record's presence rides `bond_record_probed`/`bond_record_exists`, which
-the commit fills from the reparsed blob) and UB4–UB7 are not. That is a
+(its two facts both ride the POD: presence in
+`bond_record_probed`/`bond_record_exists`, and the balance in the appended
+`bond_record_bonded_total`, both filled from the reparsed blob) and UB4–UB7
+are not. The balance is the predicate; presence only distinguishes "no row"
+from "row with nothing bonded". That is a
 scope decision, not an omission, and it rests on which direction each fact can
 move during Phase C:
 
-- **UB2 is terminal.** A record that disappears means a competing debit
-  connected; no resubmission of these bytes can ever succeed, so the verdict
-  has to be `DoubleSpendConflict` rather than a retry.
+- **UB2 is terminal.** A balance that no longer equals this vin's `bond_debit`
+  means the slot moved under it — a competing exit zeroed it, or a credit
+  raised it. The debit is fixed at build time, so no resubmission of *these
+  bytes* can succeed either way, and the verdict is `DoubleSpendConflict`
+  rather than a retry. The row's continued presence is not evidence against
+  this; the exit preserves it.
 - **UB6 can only fail closed.** The watermark advances monotonically, so a
   Phase-B read is at worst *behind* the truth — it refuses an exit that had
   become legal, never admits one that had not.

@@ -120,9 +120,12 @@ pub struct SubmitFacts {
     /// contract violation, surfaced by the engine as
     /// [`crate::submit::EngineFault::ShimContract`] before the verifier
     /// runs — never a guessed fact. On the Phase-D `Raced(fresh)` leg the
-    /// commit shim re-probes from the reparsed blob, so a record appearing
-    /// (JoinMarket) or vanishing (Unbond) during Phase C classifies
-    /// `DoubleSpendConflict` from fresh facts.
+    /// commit shim re-probes from the reparsed blob, so a record **appearing**
+    /// during Phase C classifies `DoubleSpendConflict` for JoinMarket. The
+    /// debit arm does **not** use this bit as its race predicate: an exit
+    /// preserves the row, so presence never changes for it — see
+    /// [`bond_record_bonded_total`](Self::bond_record_bonded_total), which is
+    /// the fact that does move.
     ///
     /// For an Unbond the same presence also rides
     /// [`unbond`](Self::unbond)`.record`, from a second DB read under the

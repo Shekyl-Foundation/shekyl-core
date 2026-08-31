@@ -440,10 +440,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             let slot_moved = if parsed.bond_post_is_unbond() {
                 let debit = parsed.bond_post().map(|(_, bond)| bond.bond_debit);
                 match (fresh.bond_record_bonded_total, debit) {
+                    // The balance moved under a fixed debit: an exit zeroed
+                    // it, or a credit raised it. Either way unconnectable.
                     (Some(total), Some(debit)) => total != debit,
-                    // No balance fact on an Unbond re-check is a shim
-                    // contract violation, not a silent pass; fall through to
-                    // the fault arm at the end rather than guessing.
+                    // No balance, but the record is explicitly ABSENT. That
+                    // is a moved slot the shim already knows about — C++
+                    // raises `Raced` for it — and it is not an unknown to
+                    // fall through on. The balance is `None` here precisely
+                    // *because* there is no record to read one from.
+                    (None, _) if fresh.bond_record_exists == Some(false) => true,
+                    // Anything else — present but no balance, or no probe at
+                    // all — is a shim contract violation. Fall through to the
+                    // fault arm rather than guess a verdict.
                     _ => false,
                 }
             } else {

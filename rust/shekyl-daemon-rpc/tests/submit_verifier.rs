@@ -1981,3 +1981,30 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
         "a debit that no longer matches the record's total is unconnectable"
     );
 }
+
+#[test]
+fn an_unbond_against_a_vanished_record_is_terminal_not_a_fault() {
+    // The other half of UB2's Phase-D arm. C++ raises `Raced` when the record
+    // is absent, and absence carries no balance to compare — so a classifier
+    // that only compares balances reports "no premise moved" and the engine
+    // returns a ShimContract FAULT instead of a verdict. Absence is a known
+    // moved slot, not an unknown.
+    let fx = unbond_fixture();
+    let mut fresh = unbond_admitting_facts();
+    fresh.bond_record_exists = Some(false);
+    fresh.bond_record_bonded_total = None;
+    let shim = MockShim::new(
+        unbond_admitting_facts(),
+        CommitOutcome::Raced(Box::new(fresh)),
+    );
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&fx.hex, SubmitCaller::Owner)
+            .expect("absence must classify, not fault"),
+        SubmitVerdict::Rejected {
+            cause: RejectCause::DoubleSpendConflict
+        },
+        "a vanished record is a moved slot"
+    );
+}

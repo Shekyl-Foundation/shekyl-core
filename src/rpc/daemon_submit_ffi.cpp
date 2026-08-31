@@ -583,10 +583,12 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     std::vector<crypto::key_image> kis;
     kis.reserve(tx.vin.size());
     const crypto::hash* bond_p_id = nullptr;
-    // The debit arm re-checks the record fact in the OPPOSITE direction from
-    // JoinMarket's (§8.7.1.1 UB2): JoinMarket races when a record APPEARS
-    // during Phase C, Unbond races when the one it debits DISAPPEARS. Derived
-    // from the reparsed blob, exactly as the probe key is.
+    // The two arms race on DIFFERENT FACTS, not on one fact in two
+    // directions (§8.7.1.1 UB2): JoinMarket races when a record APPEARS
+    // during Phase C, while an exit PRESERVES the debited row -- so the debit
+    // arm races on the record's BALANCE no longer matching the debit this
+    // transaction was verified against. Both discriminants are derived from
+    // the reparsed blob, exactly as the probe key is.
     //
     // INVARIANT this loop depends on, enforced two layers away: a submission
     // carries AT MOST ONE bond-post vin. The loop below assigns on every
@@ -696,10 +698,11 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       // Bond-record re-check, direction chosen by the post kind. §8.7.1 BP3:
       // Phase C verified the record ABSENT for a JoinMarket bond-post, so a
       // record now present means a competing bond-post block landed during C.
-      // §8.7.1.1 UB2: Phase C verified the record PRESENT for an Unbond, so a
-      // record now gone means a competing debit connected during C. Either
-      // way the claim slot moved — Rust classifies DoubleSpendConflict from
-      // these fresh facts; C++ chooses no verdict.
+      // §8.7.1.1 UB2: an exit does NOT remove the row, so the debit arm
+      // cannot mirror that -- it re-checks the balance against the debit
+      // Phase C verified, which a competing exit zeroes and a competing
+      // credit raises. Either arm means the slot moved — Rust classifies
+      // DoubleSpendConflict from these fresh facts; C++ chooses no verdict.
       // §8.7.1 BP3 (credit): a record APPEARING during C consumed the claim
       // slot. §8.7.1.1 UB2 (debit): the record does not disappear on exit --
       // apply_archival_unbond rewrites the row with a zero bonded total -- so
