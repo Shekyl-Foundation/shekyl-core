@@ -163,6 +163,12 @@
 
 ### Added
 
+- **Consensus-rule census (CEN-1).** `docs/design/CONSENSUS_RULE_CENSUS_3.md`
+  enumerates every rule on the block/tx acceptance path at dev `8ba1aae3d`
+  (161 rows; 84 Shekyl-spec'd / 23 inherited-ratified / 54 never examined)
+  as the specification substrate for the consensus Rust rewrite (2026-08-30
+  ruling: census precedes rewrite). Docs only; no behavior change.
+
 - **A stall alarm for pending claims and drains.** A record dispatched but not
   settled past the alarm horizon is named in the operator log, keyed by kind
   *and* persona so a persona holding both a stuck claim and a stuck drain gets
