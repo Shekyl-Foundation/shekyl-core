@@ -44,9 +44,9 @@ use shekyl_curve_tree::{
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_daemon_rpc::submit::{
-    parse_submission, CommitOutcome, DaemonTxVerifier, KeyImageConflict, LastServedScanMismatch,
-    ParsedSubmission, ReferenceFacts, SubmitCaller, SubmitEngine, SubmitFacts, SubmitTxKind,
-    TxVerifier, UnbondFacts, UnbondRecordFacts, VerifyFailure,
+    parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
+    LastServedScanMismatch, ParsedSubmission, ReferenceFacts, SubmitCaller, SubmitEngine,
+    SubmitFacts, SubmitTxKind, TxVerifier, UnbondFacts, UnbondRecordFacts, VerifyFailure,
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
@@ -1061,6 +1061,11 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
         Some(bond.p_canonical_id),
         "the snapshot request must carry the bond-post probe key"
     );
+    assert!(
+        !snapshots[0].bond_probe_is_unbond,
+        "a JoinMarket post must ask the credit arm's question (BP3 absence), \
+         not the debit arm's"
+    );
 }
 
 #[test]
@@ -1334,6 +1339,7 @@ fn producerless_bond_post_kinds_refuse_loudly() {
 /// slot signed by **`bond_spend_sk`** — the cold debit authorizer, not the
 /// identity key. `AssembleUnbond` assembles it the same way.
 struct UnbondFixture {
+    hex: String,
     parsed: ParsedSubmission,
     /// The record's committed authorizer, i.e. what a correct record holds.
     bond_spend_pk: Vec<u8>,
@@ -1578,7 +1584,8 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     wire_input.pqc_auths = pqc_auths;
 
     let bytes = encode_final_tx(&wire_input).expect("encode the final unbond");
-    let parsed = parse_submission(&hex::encode(&bytes)).expect("the built unbond clears Phase A");
+    let hex_blob = hex::encode(&bytes);
+    let parsed = parse_submission(&hex_blob).expect("the built unbond clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
@@ -1590,6 +1597,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     );
 
     UnbondFixture {
+        hex: hex_blob,
         parsed,
         bond_spend_pk,
         identity_pk,
@@ -1860,4 +1868,56 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
         .is_err(),
         "a compact record gathered with the all-shards scan must also refuse"
     );
+}
+
+#[test]
+fn the_engine_asks_the_debit_arms_question_for_an_unbond() {
+    // The §3.1 pipeline end to end over the debit arm — and specifically the
+    // routing, which no other test in this file can see. The verifier tests
+    // above hand `verify()` a fact set built by hand, so they would all stay
+    // green if `SubmitEngine` asked for `BondProbe::Join` here: production
+    // would then get a snapshot with no §8.7.1.1 bundle and reject every
+    // valid Unbond as a `ShimContract` fault, with a fully green suite.
+    let fx = unbond_fixture();
+    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&fx.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(shim.commit_count(), 1, "exactly one commit");
+    assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
+
+    let (_, bond) = fx.parsed.bond_post().expect("fixture carries the bond vin");
+    let snapshots = shim.snapshots.lock().unwrap();
+    assert_eq!(
+        snapshots[0].bond_p_canonical_id,
+        Some(bond.p_canonical_id),
+        "the snapshot request must carry the bond-post probe key"
+    );
+    assert!(
+        snapshots[0].bond_probe_is_unbond,
+        "an Unbond must ask the debit arm's question (§8.7.1.1 contents), \
+         not JoinMarket's presence bit"
+    );
+}
+
+#[test]
+fn a_missing_unbond_bundle_faults_the_engine_rather_than_rejecting() {
+    // The contract's other half: if the shim answers an Unbond probe without
+    // the bundle, that is a daemon defect and must surface as a transport
+    // fault, never as a verdict the wallet would act on by rebuilding.
+    let fx = unbond_fixture();
+    let mut facts = unbond_admitting_facts();
+    facts.unbond = None;
+    let shim = MockShim::new(facts, CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let err = engine
+        .submit(&fx.hex, SubmitCaller::Owner)
+        .expect_err("a skipped probe is an engine fault");
+    assert!(
+        matches!(err, EngineFault::ShimContract(_)),
+        "expected a ShimContract fault, got {err:?}"
+    );
+    assert_eq!(shim.commit_count(), 0, "a faulted submission never commits");
 }
