@@ -36,11 +36,11 @@ privacy.
 | Consensus | 157 |
 | Policy (relay/mempool only; `kept_by_block` discriminator) | 10 |
 | Bucket 1 — Shekyl-specific, written spec | 93 |
-| Bucket 2 — inherited and ratified, locatable pointer | 3 |
+| Bucket 2 — inherited and ratified, locatable pointer | 6 |
 | Bucket 3 — inherited, examined, marked for deletion | 15 |
-| Bucket 4 — inherited, never examined | 56 |
+| Bucket 4 — inherited, never examined | 53 |
 
-Sum check: `93 + 3 + 15 + 56 = 167`. Consensus + policy: `157 + 10 = 167`.
+Sum check: `93 + 6 + 15 + 53 = 167`. Consensus + policy: `157 + 10 = 167`.
 The rows exhaust the denominator. An unlisted rule would be ratified by
 silence — the failure mode this census exists to close. RC-156 is unused
 (a draft duplicate of RC-53; same bound, already cited on both sites).
@@ -51,11 +51,11 @@ silence — the failure mode this census exists to close. RC-156 is unused
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Block header / identity | RC-1…RC-18 (18) | 4 | 0 | 2 | 12 | 0 |
 | PoW / DAA | RC-19…RC-28 (10) | 8 | 1 | 0 | 1 | 0 |
-| Timestamp | RC-29…RC-32 (4) | 1 | 0 | 0 | 3 | 0 |
+| Timestamp | RC-29…RC-32 (4) | 1 | 1 | 0 | 2 | 0 |
 | Miner-tx / emission | RC-33…RC-52 (20) | 13 | 0 | 1 | 6 | 0 |
-| Tx parse / semantic | RC-53…RC-72 (20) | 6 | 1 | 2 | 11 | 0 |
+| Tx parse / semantic | RC-53…RC-72 (20) | 6 | 2 | 2 | 10 | 0 |
 | Tx outputs | RC-73…RC-80 (8) | 7 | 0 | 1 | 0 | 0 |
-| Tx inputs / FCMP++ | RC-81…RC-99 (19) | 15 | 0 | 3 | 1 | 0 |
+| Tx inputs / FCMP++ | RC-81…RC-99 (19) | 15 | 1 | 3 | 0 | 0 |
 | PQC auth | RC-100…RC-108 (9) | 9 | 0 | 0 | 0 | 0 |
 | Archival (serve-credit / bond-post / emission) | RC-109…RC-133 (25) | 24 | 0 | 0 | 1 | 0 |
 | Reorg / alt-chain | RC-134…RC-142 (9) | 2 | 0 | 0 | 7 | 0 |
@@ -236,7 +236,7 @@ Flag: **C** = consensus (block-acceptance or tx-as-included-in-a-block).
 | --- | --- | --- | --- | --- | --- | --- |
 | RC-29 | Future-time limit: `b.timestamp > now + SHEKYL_DAA_FTL_SECONDS` (540) rejects. | `blockchain.cpp:5535–5541` | C | 1 | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md); `config/` `daa_ftl_seconds` | **Main path only.** Alt admission uses the vector overload and does not call this. |
 | RC-30 | If chain height < `SHEKYL_DAA_MTP_WINDOW` (11), the median check is skipped (timestamp accepted aside from FTL). | `blockchain.cpp:5546–5549` | C | 4 | window length is `config/` (bucket 1 for the constant); the skip-when-short behavior is unexamined | |
-| RC-31 | Timestamp must be **not less than** the median of the last `SHEKYL_DAA_MTP_WINDOW` (11) block timestamps. `b.timestamp < median` rejects. | `blockchain.cpp:5514–5525`; main `:5535`; alt `:2307` | C | 4 | window from `config/` / DAA; **comparison operator and inclusive-median semantics have no ratification record** | Inverse-spot-check subject. Median via `epee::misc_utils::median`. |
+| RC-31 | Timestamp must be **not less than** the median of the last `SHEKYL_DAA_MTP_WINDOW` (11) block timestamps. `b.timestamp < median` rejects. | `blockchain.cpp:5514–5525`; main `:5535`; alt `:2307` | C | 2 | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.5: “Already implemented in the inherited block-header validator; **preserved unchanged**.” Window 60→11 is bucket 1 (constant); this row is the predicate. | Inverse-spot-check subject. Median via `epee::misc_utils::median`. Odd-window sort / inclusive-vs-exclusive details of `epee::median` were **not** independently specified — implementation assumed. |
 | RC-32 | `get_adjusted_time` (unlock-time path) projects median `+(WINDOW+1)*T/2` and takes min with `last_ts + T`. Not used by RC-29/31. | `blockchain.cpp:5480–5510` | C | 4 | — | Distinct from block-acceptance timestamp. See also RC-80. |
 
 ### 3.4 Miner-tx / emission
@@ -290,7 +290,7 @@ and from `core::check_tx_semantic`. Sites listed together.
 | RC-69 | Tx weight ≤ `get_transaction_weight_limit(hf)` when `hf >= HF_VERSION_PER_BYTE_FEE` (always): `min_block_weight/2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`. | `tx_verification_utils.cpp:80–87`, `:203–209` | C | 4 | pre-`PER_BYTE_FEE` arm is dead (macro = 1) | Limit formula is inherited scaling. |
 | RC-70 | Batch CT semantics: `CTTypeNull` in the batch is an error; unknown types reject; FCMP++/PQC must have canonical BP+ layout; then `verCtSemanticsSimple`. | `tx_verification_utils.cpp:212–256` | C | 1 | FCMP++ / CT semantics | Serve-credit / bond-post / emission excluded from this batch (RC-109, RC-119, RC-127). |
 | RC-71 | `nic_verified_hf_version` cache: a pool supplement already verified at this hf is not re-checked. | `tx_verification_utils.cpp:265–284` | C | 4 | — | Correctness depends on hf not changing under the cache. |
-| RC-72 | Spend txs (`version >= 2`, not serve-credit-only) must have `vout.size() >= 2`. | `blockchain.cpp:3466–3473` | C | 4 | — | 2-out minimum (change + dest). Unexamined as a Shekyl rule. |
+| RC-72 | Spend txs (`version >= 2`, not serve-credit-only) must have `vout.size() >= 2`. | `blockchain.cpp:3466–3473` | C | 2 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §1.1 validate pass (2026-06-21): examined against the C++ oracle as a live spend bound | Keep-rationale is oracle fidelity, not an alternatives round. Weak 2. |
 
 ### 3.6 Tx outputs
 
@@ -311,7 +311,7 @@ and from `core::check_tx_semantic`. Sites listed together.
 | --- | --- | --- | --- | --- | --- | --- |
 | RC-81 | `vin.size() ≤ FCMP_MAX_INPUTS_PER_TX` (8). | `blockchain.cpp:3485–3491`; `cryptonote_config.h:311` | C | 1 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md); [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md); also embargo coupling in [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) | Hardcoded, not `config/`. |
 | RC-82 | Tx version min and max are both 3 (hardcoded in `check_tx_inputs`). | `blockchain.cpp:3493–3506` | C | 1 | v3-from-genesis | **Drift** vs RC-68's hf table. FAKECHAIN skips this block. |
-| RC-83 | `txin_to_key` key images must be strictly decreasing in `memcmp` order (unsorted / equal rejects). Non-KI vins ignored in the order. | `blockchain.cpp:3509–3530` | C | 4 | — | Canonical encoding / uniqueness-adjacent. |
+| RC-83 | `txin_to_key` key images must be strictly decreasing in `memcmp` order (unsorted / equal rejects). Non-KI vins ignored in the order. | `blockchain.cpp:3509–3530` | C | 2 | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §12: earlier drafts said “ascending” — a prose error; C++ descending was examined and kept | |
 | RC-84 | FCMP++ `txin_to_key.key_offsets` must be empty. Same for bond-post and emission fee inputs. | `blockchain.cpp:3599–3605`, `:3552–3557`, `:3576–3581` | C | 1 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) (no rings) | |
 | RC-85 | A `txin_to_key` key image already in the spent-key table rejects (`m_double_spend`). | `blockchain.cpp:3607–3612`, `:3558–3563`, `:3582–3587`; `have_tx_keyimg_as_spent` | C | 1 | FCMP++ nullifier; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Inverse-spot-check subject. Chain-wide. Pool twin is policy RC-157. |
 | RC-86 | Non-FCMP++ / non-archival classified txs reject ("ring-based inputs are not supported from genesis"). | `blockchain.cpp:3615–3619` | C | 1 | rule 60 | |
@@ -446,20 +446,20 @@ issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | 3.1 header | 1–18 | 18 | 4 | 0 | 2 | 12 |
 | 3.2 PoW | 19–28 | 10 | 8 | 1 | 0 | 1 |
-| 3.3 timestamp | 29–32 | 4 | 1 | 0 | 0 | 3 |
+| 3.3 timestamp | 29–32 | 4 | 1 | 1 | 0 | 2 |
 | 3.4 miner-tx | 33–52 | 20 | 13 | 0 | 1 | 6 |
-| 3.5 parse/semantic | 53–72 | 20 | 6 | 1 | 2 | 11 |
+| 3.5 parse/semantic | 53–72 | 20 | 6 | 2 | 2 | 10 |
 | 3.6 outputs | 73–80 | 8 | 7 | 0 | 1 | 0 |
-| 3.7 inputs/FCMP | 81–99 | 19 | 15 | 0 | 3 | 1 |
+| 3.7 inputs/FCMP | 81–99 | 19 | 15 | 1 | 3 | 0 |
 | 3.8 PQC | 100–108 | 9 | 9 | 0 | 0 | 0 |
 | 3.9 archival | 109–133 | 25 | 24 | 0 | 0 | 1 |
 | 3.10 reorg | 134–142 | 9 | 2 | 0 | 0 | 7 |
 | 3.11 storage | 143–150 | 8 | 2 | 0 | 0 | 6 |
 | 3.12 mempool | 151–155, 157–161 | 10 | 1 | 1 | 1 | 7 |
 | 3.13 hardfork | 162–168 | 7 | 1 | 0 | 5 | 1 |
-| **Total** | | **167** | **93** | **3** | **15** | **56** |
+| **Total** | | **167** | **93** | **6** | **15** | **53** |
 
-`93+3+15+56 = 167`. Flags: 157 consensus + 10 policy = 167.
+`93+6+15+53 = 167`. Flags: 157 consensus + 10 policy = 167.
 
 Policy rows: RC-151, 152, 153, 154, 155, 157, 158, 159, 160, 161.
 RC-159 is flagged P even though the origin-pin has a Shekyl spec — it
@@ -594,21 +594,27 @@ actually contained at `8ba1aae3d`.
 12. **`is_tx_spendtime_unlocked` still has a unix-time arm** after
     RC-77 forbade timestamp encoding on new txs. Bucket 3.
 
-13. **No ratification record found** (searched `docs/V3_WALLET_DECISION_LOG.md`,
-    `docs/completed/`, `docs/design/`) for: prev_id linkage, orphan
-    policy, merkle-in-hashing-blob, majority-difficulty reorg,
-    checkpoint-forced reorg, 2-output minimum, key-image sort order,
-    key-image torsion check, coinbase unlock window 60, decomposed
-    coinbase amounts, 1 MB tx size, 100-byte block-blob leeway,
-    ArticMine long-term weight clamp, 2% fee buffer. Those are
-    bucket 4. A remembered "of course we keep that" without a
-    locatable pointer stays 4.
+13. **First-draft bucket 4 over-counted three rows that had locatable
+    keep-records.** A second pass over `docs/completed/DAA_LWMA1.md` §5.5
+    and `GENESIS_TX_WIRE_FORMAT.md` §1.1 / §12 moved RC-31 (MTP
+    predicate “preserved unchanged”), RC-72 (≥2 outputs, oracle
+    validate pass), and RC-83 (key-image descending, prose-error
+    correction) to bucket 2. Still bucket 4 after that search:
+    prev_id linkage, orphan policy, merkle-tree padding, majority-
+    difficulty reorg, checkpoint-forced reorg, key-image torsion
+    check, coinbase unlock window 60, decomposed coinbase amounts,
+    1 MB tx size, 100-byte block-blob leeway, ArticMine long-term
+    weight clamp, 2% fee buffer, 2021-scaling `check_fee` as a
+    *consensus* min-fee. A remembered “of course we keep that”
+    without a locatable pointer stays 4.
 
-14. **Bucket 2 is small on purpose.** Only rows whose *inherited
-    comparison* was examined and kept (PoW `check_hash` port,
-    BP+ expand-time layout, `kept_by_block` as the project's
-    discriminator) sit there. Shekyl-designed machinery is bucket 1
-    even when it reuses an inherited type.
+14. **Bucket 2 is still small on purpose.** Shekyl-designed machinery
+    is bucket 1 even when it reuses an inherited type. Weak-2 rows
+    (oracle-fidelity keeps without an alternatives round) are
+    labelled as such in the notes column. `docs/V3_WALLET_DECISION_LOG.md`
+    is almost entirely wallet-stack; consensus-rule records live in
+    `docs/completed/`, `GENESIS_TX_WIRE_FORMAT.md`, and CHANGELOG
+    Decisions 13–15.
 
 15. **This document's family is `RC-`, not `CEN-`.** The brief minted
     `CEN-` for the census program. This is the second independent
