@@ -51,6 +51,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
+#include "pqc_spend_fixture.h"
 #include "rpc/rpc_facts_ffi.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -1149,4 +1150,51 @@ TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slot
   EXPECT_EQ(1, status[0]) << "spent in the chain";
   EXPECT_EQ(0, status[1]) << "spent nowhere";
   EXPECT_EQ(2, status[2]) << "spent in the pool, and written back to ITS slot";
+}
+
+// ── transactions: a repeated pool txid consumes a repeated slot ────────────
+//
+// The pool remap walks `missed` with one forward cursor, on the strength of
+// `get_transactions_info` returning hits in request order (it walks its input
+// and pushes the successes — tx_pool.cpp). A request of [H, H] is the input
+// that tells a correct cursor from one that answers only the first occurrence:
+// the pool returns two hits for the two occurrences, and each must land in
+// its own slot. Before the cursor this held via a rescan from zero, which was
+// quadratic on a listener that deliberately has no request cap.
+TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
+{
+  BlockchainAndPool bap;
+  auto* db = new KeyImageDB(CHAIN_HEIGHT);
+
+  // The shared v3 PQC spend, keyed by its REAL hash — the pool parses the
+  // blob back out, so an invented txid would not survive the lookup, and a
+  // v1 stand-in would not survive `get_transaction_prunable_hash` (observed:
+  // the shim refuses it). v3 is also the only shape a Shekyl pool can hold.
+  const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
+  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
+  const crypto::hash ptxid = cryptonote::get_transaction_hash(ptx);
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.weight = 1;
+  meta.fee = 1000;
+  meta.receive_time = 1;
+  meta.set_relay_method(cryptonote::relay_method::fluff);
+  db->add_txpool_tx(ptxid, {pblob.data(), pblob.size()}, meta);
+
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  ASSERT_TRUE(bap.txpool.init());
+
+  uint8_t ids[64];
+  std::memcpy(ids, ptxid.data, 32);
+  std::memcpy(ids + 32, ptxid.data, 32);
+
+  TxQuery q;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool, ids, 2, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  ASSERT_EQ(2u, q.out_len);
+  EXPECT_EQ(2, q.out[0].where) << "first occurrence answered from the pool";
+  EXPECT_EQ(2, q.out[1].where)
+    << "second occurrence must consume its own slot, not read as missing";
+  EXPECT_EQ(q.out[0].pruned_len, q.out[1].pruned_len)
+    << "both slots carry the same transaction";
 }

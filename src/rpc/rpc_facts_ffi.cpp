@@ -582,24 +582,32 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
       std::vector<std::pair<crypto::hash, cryptonote::tx_memory_pool::tx_details>> found;
       pool.get_transactions_info(missed, found, include_sensitive != 0);
       // One result per input occurrence, so a repeated txid must consume a
-      // repeated slot. Searching from zero every time would write the first
-      // matching slot twice and leave the second reported missing — a request
-      // like [H, H] answering only its first H.
-      std::vector<bool> slot_taken(missed.size(), false);
+      // repeated slot: a request like [H, H] must answer both, not write the
+      // first slot twice and report the second missing.
+      //
+      // `get_transactions_info` walks `missed` in order and pushes only the
+      // hits (`tx_pool.cpp`), so `found` is an in-order SUBSEQUENCE of
+      // `missed`. One forward cursor therefore consumes each occurrence
+      // exactly once and never revisits a slot. The previous form searched
+      // from zero for every hit, which is O(hits x missed) hash comparisons
+      // on a listener that deliberately has no request cap -- a caller could
+      // pay for the quadratic term with a single large unrestricted request.
+      size_t k = 0;
       for (const auto& entry : found)
       {
         // Back to the request slot it came from. The C++ re-sorted a merged
         // list to recover this; here the mapping never left.
-        size_t slot = txids_len;
-        for (size_t k = 0; k < missed.size(); ++k)
-          if (!slot_taken[k] && missed[k] == entry.first)
-          {
-            slot_taken[k] = true;
-            slot = missed_slots[k];
-            break;
-          }
-        if (slot == txids_len)
-          continue;
+        while (k < missed.size() && missed[k] != entry.first)
+          ++k;
+        if (k == missed.size())
+          // The subsequence contract above failed, so this hit belongs to no
+          // remaining slot. Silently skipping it would report a transaction
+          // the pool holds as missing -- a wrong answer in the shape of a
+          // legitimate one. Refuse instead, as this shim does for every other
+          // state the daemon should not be able to produce.
+          return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+        const size_t slot = missed_slots[k];
+        ++k;
         const cryptonote::tx_memory_pool::tx_details& td = entry.second;
         std::stringstream ss;
         binary_archive<true> ba(ss);
