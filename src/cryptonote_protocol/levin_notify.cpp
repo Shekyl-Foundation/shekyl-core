@@ -1718,10 +1718,9 @@ namespace levin
        reached the wire (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 
        In a shipped build no zone here enables noise at all — the opt-in
-       defaults off — so the deleted branch was unreachable in production
-       either way; both notifier constructions pass a null noise payload. See
-       `COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
-       "§2.9 step 2 — covert executor".
+       defaults off — so the deleted branch would have been unreachable in
+       production even had it survived. See `COVER_TRAFFIC_RESTORATION.md`
+       §3's status table, the row headed "§2.9 step 2 — covert executor".
 
        Recording parity was checked before the deletion. `fluff` makes the
        identical `on_transactions_relayed` call below. `stem`/`local` are

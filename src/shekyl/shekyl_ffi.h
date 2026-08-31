@@ -2975,6 +2975,7 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! sorted and de-duplicated by the zone (receive order is an observable). It
 //! becomes a single levin notification — delivered blob-by-blob it would become
 //! N notifications, leaking the batch size as a per-peer message count.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
 // ShekylRelayNoiseUnbindCb is DELETED, not kept as a souvenir (rule 15).
@@ -2991,6 +2992,7 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
 //! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
 //! connection scan. Must not throw across the FFI boundary.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
 //! Noise channel `channel` is due to send.
@@ -3031,6 +3033,7 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! never nil, since an unbound slot emits nothing (CV-2). The binding travels
 //! with the send (§20.3's inversion) rather than as a pushed slot array.
 //! `bytes` covers `len` readable bytes and is valid only for the call.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer,
                                        const std::uint8_t* bytes, std::size_t len);
 
@@ -3078,9 +3081,8 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! run rather than resuming it, so every window of a message that finished
 //! went to one peer.
 //!
-//! \pre MUST NOT re-enter the zone. This fires while Rust holds a mutable
-//! borrow of the handle, so calling any `shekyl_relay_zone_*` function from
-//! here aliases that borrow. Buffer and apply after `poll` returns.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll, which states
+//! the precondition once, for all four of its callbacks.
 typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
                                              const std::uint8_t* peer);
 
@@ -3323,6 +3325,17 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! outbound set is not passed in: `gather_outbound` is called back only when a
 //! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
 //! release never triggers the connection scan.
+//!
+//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all four of them, not only the
+//! newest. This function holds a mutable borrow of the zone for its whole
+//! body, and a second one of the carrier queue across the dispatch that
+//! delivers the effects. Calling any shekyl_relay_zone_*
+//! function on the same handle from inside gather_outbound, on_fluff,
+//! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
+//! which is undefined behaviour. Buffer whatever the callback learns and
+//! apply it after poll returns — the C++ producer did exactly this, recording
+//! a stem observation from the resolution callback, until review caught it.
+//! No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
                             ShekylRelayFluffCb on_fluff,

@@ -1592,10 +1592,12 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 /// behaviour. It applies to **all four**, not only the newest: buffer whatever
 /// the callback learns and act on it after this returns.
 ///
-/// Stated here because the C header carried it on one callback's typedef and
-/// a Rust caller reads this section instead — and because the C++ producer
-/// did exactly this, recording a stem observation from the resolution
-/// callback, until review caught it.
+/// Stated on both sides of the boundary deliberately: a Rust caller reads this
+/// section, a C caller reads `shekyl_relay_zone_poll` in `shekyl_ffi.h`, and
+/// neither doc system can reference the other — the FFI boundary is the
+/// uncrossable one that earns a second copy. Both must name all four
+/// callbacks. The C++ producer did exactly this, recording a stem observation
+/// from the resolution callback, until review caught it.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,

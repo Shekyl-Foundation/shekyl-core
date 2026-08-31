@@ -2568,63 +2568,6 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
     expect_fluff_totals(txs);
 }
 
-/*! **TRIPWIRE — this test PINS INHERITED BEHAVIOUR THAT §89 CONTRADICTS.**
-
-    Read this before "fixing" it. Both assertions below are deliberate records
-    of a **known-wrong** state (`DAEMON_RELAY_PRIVACY.md` §42.5a), not a
-    specification:
-
-      1. `take_relayed(relay_method::local)` — the covert branch DOWNGRADES a
-         stem to `local` with `MWARNING("Dandelion++ stem not supported over
-         noise networks")`. That is Monero's posture, in which noise mode
-         *replaces* Dandelion++. §89 ruled the anonymity zone **stems**.
-      2. `notified_size() == 2` — the covert send loops over EVERY channel
-         (`for channel < zone_->channels.size()`), not the bound stem slot.
-         The Rust substrate already models the target: `CovertSchedule` binds
-         channel `i` to stem slot `i` (§20.3) and pins the deadline vector's
-         length to `NOISE_CHANNELS`. **The two sides disagree today, and this
-         test is where the disagreement is visible.**
-
-    **When §42.3's restoration lands, this test MUST go red, and greening it
-    means changing the expectations, not the code:** `take_relayed` becomes
-    `relay_method::stem`, and `notified_size()` becomes **1** — the bound slot
-    alone. A change that keeps this test green as written has not implemented
-    §42.3; it has preserved the bypass.
-
-    This annotation exists because the failure mode is specific and cheap: an
-    implementer hits a failing regression test and silences the oracle. The
-    edit that reds this test is the edit that matters. */
-/*! CV-1 (§20.5): repointing a covert channel discards any in-flight message
-    remainder — the message is restarted from its first fragment or dropped,
-    never resumed. The inherited rule lived in `update_channel` as an
-    imperative comment ("DO NOT try to send the remainder of the fragments,
-    this additional send time can leak that this node was sending out a real
-    notify (tx) instead of dummy noise") and had no test anywhere — §20.5's
-    named finding, verified by grep over this whole file. After the §20.3
-    inversion the discard lives at exactly ONE site, `send_noise`'s
-    rebind-at-send, which is what makes this witness meaningful now and not
-    before part B: while the old repoint path was alive there were two
-    discard sites, and a resume injected into one could pass behind the
-    other's discard.
-
-    Fixture: ONE outbound peer, so the stem map holds one slot and channel 0
-    is the only sender. A 3000-byte tx against a 2048-byte covert payload
-    takes two sends per complete notification, so stopping after one send
-    leaves a genuine remainder in flight — asserted via
-    `notified_size() == 0`, without which this is the RP-3a seal's no-input
-    vacuity in covert costume. The peer is then closed, a successor added,
-    and the map refreshed: the churned slot rebinds (bound→bound crosses
-    with the next send, not as an unbind), and the next send must restart.
-
-    The property is asserted where the defect is observable: the SUCCESSOR
-    reassembles the complete, intact notification. A resumed remainder
-    cannot satisfy this — the successor receives a fragment stream with no
-    start fragment, and the message is popped from the queue once the
-    remainder drains, so no notification ever arrives.
-
-    Negative control (run and observed to fail): removing the rebind's
-    `channel.active = nullptr;` in `send_noise` fails this test — the final
-    drive exhausts its advances with zero notifications. */
 TEST_F(levin_notify, command_max_bytes)
 {
     static constexpr int ping_command = nodetool::COMMAND_PING::ID;

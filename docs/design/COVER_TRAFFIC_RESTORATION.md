@@ -467,6 +467,13 @@ one page. Each carries its own `IMPLEMENTATION_INDEX` row.
 
 ### 2.1 The unblocked slice — and it needs NO covert enablement anywhere
 
+*(Superseded 2026-08-20 (#515) and again 2026-08-27: `make_notifier` no longer
+takes a payload size, and the notifier constructor has no noise argument at all
+— it is `notify(service, p2p, zone, pad_txs, core)`, so there is no `nullptr`
+for a production site to pass. See §1.2. What follows is the state this slice
+was planned against; its CONCLUSION held — the slice landed without enabling
+the carrier anywhere, and enablement is now the default-off runtime opt-in.)*
+
 **This is the key structural fact, and §1.5 implies it without stating it.**
 `make_notifier(noise_size, …)` takes the payload size **as a parameter**, so
 the covert gtests construct notifiers with an explicit payload and bypass the
@@ -488,9 +495,20 @@ Stages 1–3 also carry §42.5b's ownership move: phase, carrier, slot and the
 dummy payload become Rust, in **one** crossing per rule 40; strand dispatch,
 levin fragmenting and the socket write stay C++ as epee-bound.
 
-**The `noise_stem` annotation is the acceptance test.** Greening it means
+~~**The `noise_stem` annotation is the acceptance test.** Greening it means
 changing the expectations to `stem` and `1` — *not* the code. A change that
-leaves it green as written has preserved the bypass.
+leaves it green as written has preserved the bypass.~~
+
+**Superseded 2026-08-31 — the annotation is gone, and the property it named is
+met.** `noise_stem` went with the covert branch (stage 1's row), but its
+annotation OUTLIVED it: the block sat stranded above
+`levin_notify.command_max_bytes`, an unrelated test, still telling a future
+implementer that *that* test must go red when §42.3 lands. It is deleted. What
+it asked for holds — the carrier preserves the planned phase rather than
+downgrading to `local` (`originated_stays_in_zone` at the record sites), and
+one channel binds to one stem slot rather than broadcasting to all. Both are
+Rust-side now: `a_noise_carrier_does_not_change_the_phase` and the
+`noise_queue` CV-1 tests.
 
 ### 2.2 The intermediate state is a REAL done-condition, not partial completion
 
