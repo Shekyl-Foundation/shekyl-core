@@ -610,14 +610,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         // RK-5a. `now` is read once here rather than inside each renderer, so
         // a command's whole output describes one instant.
         "print_peer_list" => {
-            // The selector, if any. Anything that is not `white` or `gray` —
-            // including its absence — means both, which is what the C++
-            // parser resolves an unqualified `print_pl` to. Defaulting to
-            // *neither* would make a mis-sent argument print an empty list
-            // that looks like an empty peerlist.
-            let selector = args.get(1).map(String::as_str);
-            let white = selector != Some("gray");
-            let gray = selector != Some("white");
+            let (white, gray) = peer_list_selection(args.get(1).map(String::as_str));
             let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
             let pruned_only = args.iter().any(|a| a == "pruned");
             print_peer_list(&source, white, gray, limit, pruned_only, unix_now())
@@ -770,6 +763,22 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
         "{prefix:<10} {:016x} {addr:<25} {:<4x} {elapsed}",
         peer.id, peer.pruning_seed
     )
+}
+
+/// Which lists `print_peer_list` prints, from the selector argument.
+///
+/// Only `white` and `gray` narrow. Anything else — including no selector at
+/// all — means both, which is what the C++ parser resolves an unqualified
+/// `print_pl` to. Defaulting to *neither* is the failure worth naming: a
+/// mis-sent argument would print an empty result that reads exactly like an
+/// empty peerlist, so the command would lie rather than complain.
+///
+/// A function rather than two expressions at the call site because the call
+/// site needs a live daemon and a populated peerlist to observe, and a
+/// loopback node never populates one — local addresses are not appended to
+/// the peerlist, so the arms are indistinguishable on any single-host rig.
+fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
+    (selector != Some("gray"), selector != Some("white"))
 }
 
 /// `print_peer_list [white|gray] [limit] [pruned]`.
@@ -1911,5 +1920,21 @@ mod tests {
         assert_eq!(address_type_name(4), "Tor");
         assert_eq!(address_type_name(0), "Invalid");
         assert_eq!(address_type_name(200), "Invalid");
+    }
+
+    /// Every selector the C++ parser can forward, plus the ones it cannot.
+    ///
+    /// The parser resolves an unqualified `print_pl` to both lists and sends
+    /// `both`; `white` and `gray` narrow. The last two rows are the reason
+    /// this is a function: an argument in that position that is neither
+    /// keyword must not silently select nothing.
+    #[test]
+    fn the_peer_list_selector_narrows_only_on_its_two_keywords() {
+        assert_eq!(peer_list_selection(Some("both")), (true, true));
+        assert_eq!(peer_list_selection(None), (true, true));
+        assert_eq!(peer_list_selection(Some("white")), (true, false));
+        assert_eq!(peer_list_selection(Some("gray")), (false, true));
+        assert_eq!(peer_list_selection(Some("0")), (true, true));
+        assert_eq!(peer_list_selection(Some("")), (true, true));
     }
 }
