@@ -910,11 +910,13 @@ namespace levin
         run(std::move(zone_), epee::to_span(txs_), source_, core_);
       }
 
-      //! \pre Called within `zone->strand`.
-      static void run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, i_core_events* core)
+      /*! \pre Called within `zone->strand`.
+          \return how many peers took the batch. Zero means nothing is
+          connected — the caller decides whether that is worth reporting. */
+      static std::size_t run(std::shared_ptr<detail::zone> zone, epee::span<const blobdata> txs, const boost::uuids::uuid& source, i_core_events* core)
       {
         if (!zone || !zone->p2p || txs.empty())
-          return;
+          return 0;
 
         assert(zone->strand.running_in_this_thread());
 
@@ -932,6 +934,7 @@ namespace levin
           MWARNING("Unable to send transaction(s), no available connections");
 
         relay_wake::arm(std::move(zone), core);
+        return accepted;
       }
     };
 
@@ -996,6 +999,26 @@ namespace levin
                      "unrelayed so the origin retries on the short grid");
               continue;
             }
+            /* RECORDED EVEN IF NO PEER TAKES IT, and that is a deliberate
+               trade rather than an oversight.
+
+               Recording is what MOVES THE STAMP. `set_relayed` replaces
+               `time_t::max()` with `now`, which is the only way this entry
+               ever becomes relayable again — the stem arm skips while the
+               stamp is in the future, and nothing else writes it. So on a node
+               with no peers the choice is:
+
+                 record   -> claims a relay that reached nobody, and the entry
+                             re-relays on the ordinary fluff grid once peers
+                             return;
+                 skip     -> the stamp stays at max and the transaction is
+                             stranded FOREVER, including after peers return.
+
+               The first is a transient inaccuracy that self-corrects at the
+               next re-relay; the second is the permanent loss this whole
+               branch was added to prevent. So it records, and says so loudly
+               when nothing took it rather than leaving an operator to infer a
+               successful fluff from a silent log. */
             MDEBUG("carrier discarded a forwarded stem; falling back to fluff");
             const std::vector<blobdata> one{pending.blob};
             if (core)
@@ -1003,7 +1026,12 @@ namespace levin
               core->on_transactions_relayed(
                 epee::to_span(one), relay_method::fluff, z.nzone);
             }
-            relay_fluff::run(zone, epee::to_span(one), pending.source, core);
+            if (relay_fluff::run(zone, epee::to_span(one), pending.source, core) == 0)
+            {
+              MWARNING("carrier discard recorded as relayed but NO peer took it — "
+                       "the entry is retryable rather than stranded, and will "
+                       "re-relay on the ordinary grid once a peer is available");
+            }
             continue;
           }
 

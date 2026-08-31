@@ -691,11 +691,19 @@ pub extern "C" fn shekyl_relay_zone_new(
 ///   off, and the one most likely to be misread as a fragment-size violation;
 /// - serialising or framing the notification failed;
 /// - the queue refused it: no such `channel`, or the framed message is not a
-///   whole number of windows / exceeds `carrier::MAX_FRAGMENTS`.
+///   whole number of windows / exceeds `carrier::MAX_FRAGMENTS`;
+/// - **the channel is FULL** — it already holds an epoch's worth of windows.
 ///
-/// A single boolean is kept deliberately: none of these is recoverable by the
-/// caller, and a status enum would invite branching on a distinction that
-/// only matters to a developer reading a log.
+/// That last one is the only refusal reachable by doing nothing wrong. The
+/// others are caller bugs or a transaction the carrier structurally cannot
+/// take; this one means the carrier is saturated, and the answer is the
+/// ordinary wire — which is what the producer does.
+///
+/// A single boolean is still kept deliberately, but NOT because "none of
+/// these is recoverable", which is what this said before the budget existed
+/// and is no longer true. It is kept because the caller's recovery is the
+/// same for all of them: send it the ordinary way. A status enum would invite
+/// branching on a distinction that changes nothing the caller does.
 ///
 /// # One transaction per notification, made unrepresentable
 ///

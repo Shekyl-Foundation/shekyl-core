@@ -10,8 +10,11 @@
 //! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
 //! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
 //! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
-//! C++ is transport until step 5; it cannot enable the carrier. A
-//! transaction body is still an opaque blob here. See
+//! C++ is transport, and since the 2026-08-27 development opt-in it CAN
+//! enable the carrier — `make_relay_zone` sets the noise bit when
+//! `set_carrier_development(true)`. It remains transport only: Rust decides
+//! whether and when channels fire. A transaction body is still an opaque blob
+//! here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
@@ -312,8 +315,9 @@ pub struct Zone {
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
     /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
-    /// double duty as its own enable flag. C++ still holds the payload buffers;
-    /// Rust owns *whether* and *when* channels fire.
+    /// double duty as its own enable flag. The payload buffers moved to
+    /// [`crate::NoiseQueues`] with the executor port, as this module's own
+    /// header says; Rust owns the buffers, *whether* and *when*.
     noise: NoiseSchedule,
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.

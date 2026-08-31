@@ -5,16 +5,23 @@ on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
 restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
 not startable. See §2.9 for the series, §3 for what has landed.
 
-This document exists because the cover mechanism is **deliberately inert, fully
-built, and has no production caller** — which is indistinguishable, to a
-dead-code sweep or a new maintainer, from abandoned scaffolding. It is not.
+> **UPDATED 2026-08-29: the mechanism now HAS its production caller** — see
+> §3.1a. It is still **inert by default**, behind a development opt-in, so the
+> do-not-delete argument below stands unchanged in force; what changed is that
+> "no caller" is no longer the reason a caller grep comes up empty.
+
+This document exists because the cover mechanism was **deliberately inert,
+fully built, and had no production caller** — which is indistinguishable, to a
+dead-code sweep or a new maintainer, from abandoned scaffolding. It was not.
 `DAEMON_RELAY_PRIVACY.md` §42 is a standing restoration proposal with a ruled
 architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 (§42.5a/b).
 
-> **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** The absence of
-> a production caller is *the current state of a two-line configuration
-> decision* (§1.1), not evidence of abandonment. The deletion criteria that
+> **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** This was
+> written when the absence of a production caller was *the current state of a
+> two-line configuration decision* (§1.1), not evidence of abandonment. The
+> caller exists now; the rule stays, because inertness behind the opt-in still
+> makes a runtime trace look empty. The deletion criteria that
 > would actually justify removing this machinery are stated in §1.6, and none
 > of them is "grep found no callers". **§1.7 states the criteria for keeping
 > it**, pre-registered 2026-08-23 before the 17 KiB window is built.

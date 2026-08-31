@@ -3636,6 +3636,14 @@ TEST_F(levin_notify, a_discarded_forwarded_stem_falls_back_to_fluff)
     io_service_.poll();
     drive_schedule(notifier, [](std::size_t) { return false; }, 24);
 
+    /* The assertion is that the entry was UN-STRANDED, not that a peer took
+       it. Every peer is gone by this point — that is how the unbind is forced
+       — so the fluff reaches nobody and the daemon logs it. Recording anyway
+       is the deliberate trade at the call site: it moves `last_relayed_time`
+       off `time_t::max()`, which is the only thing that ever makes this entry
+       relayable again, and the entry then re-relays on the ordinary grid once
+       a peer returns. Not recording would strand it permanently, including
+       after peers come back. */
     ASSERT_NE(0u, events_.relayed_method_size())
         << "a forwarded stem discarded by the carrier was recorded as nothing. "
            "Admission stamped `last_relayed_time` with time_t::max() and only "
