@@ -782,6 +782,47 @@ TEST(daemon_submit_shims, the_join_probe_does_not_fill_the_unbond_bundle)
   EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None);
 }
 
+TEST(daemon_submit_shims, an_unbond_probe_with_nowhere_to_put_the_bundle_faults)
+{
+  // The debit battery reads the record's CONTENTS (UB3/UB5/UB7/UB9), so an
+  // UNBOND probe that cannot return them is an incoherent argument set, not
+  // a request for a cheaper probe. Refusing at the boundary keeps the
+  // failure where it was caused; silently filling only the presence bit
+  // would surface it a layer up as an engine fault, on a fact set that
+  // cannot verify anything.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  const crypto::hash p_id{};
+  EXPECT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, /*out_unbond=*/nullptr),
+    SHEKYL_SUBMIT_INTERNAL_FAULT);
+  // And the scans must not have run: a refused call reads nothing.
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None);
+}
+
+TEST(daemon_submit_shims, the_emission_probe_still_admits_a_null_bundle_handle)
+{
+  // The asymmetry is deliberate and this pins it, so a later tidy-up that
+  // makes the two arms "consistent" has to delete an assertion to do it.
+  // For emission the POD's claim-conflict bit is a complete answer on its
+  // own (the §8.7.2 E6 re-check consumes exactly that), so omitting the E7
+  // bundle is a legitimate cheaper probe rather than an incoherent call.
+  ShimFixture fx;
+  const SubmitTx s = fx.make_tx(0, 0);
+  crypto::hash emission_p_id;
+  memset(&emission_p_id, 0xE7, sizeof(emission_p_id));
+  const uint64_t epochs[1] = {11};
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  EXPECT_EQ(fx.snapshot_emission(s, emission_p_id, epochs, 1, facts, ki_conflict,
+      /*out_emission=*/nullptr),
+    SHEKYL_SUBMIT_OK);
+  EXPECT_EQ(facts.emission_probed, 1);
+}
+
 TEST(daemon_submit_shims, an_unknown_bond_probe_kind_is_a_marshalling_fault)
 {
   ShimFixture fx;

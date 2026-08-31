@@ -369,7 +369,21 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
            n_emission_epochs > SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS)) ||
         (bond_p_canonical_id != nullptr &&
           bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_JOIN &&
-          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_UNBOND))
+          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_UNBOND) ||
+        // An UNBOND probe with nowhere to put the bundle is an incoherent
+        // argument set, not a request for a cheaper probe. The debit arm's
+        // Phase-C battery cannot run on the presence bit alone -- UB3, UB5,
+        // UB7 and UB9 all read the record's CONTENTS -- so dropping the
+        // bundle would leave the caller holding a fact set that cannot
+        // verify anything, discoverable only later and one layer up.
+        //
+        // Deliberately NOT the emission arm's rule, which admits a null
+        // out_emission: there the POD's claim-conflict bit IS a complete
+        // answer for a consumer that only needs the §8.7.2 E6 re-check, and
+        // the E7 bundle is an extra. Do not flatten the two.
+        (bond_p_canonical_id != nullptr &&
+          bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND &&
+          out_unbond == nullptr))
     {
       MERROR("submit snapshot: bad arguments (marshalling fault)");
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
@@ -406,8 +420,9 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     // (it is the kind-agnostic "a record exists for this p_canonical_id"
     // fact); this bundle adds the record's CONTENTS, which only the debit
     // arm needs. Rust pins the two against each other.
-    if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND
-        && out_unbond)
+    // No `&& out_unbond` here: the argument check above already refused that
+    // shape, and repeating it would re-read as "the bundle is optional".
+    if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND)
     {
       auto handle = std::make_unique<shekyl_submit_unbond_facts_handle>();
       if (!fill_unbond_facts_locked(bc, bond_p_id, *handle))

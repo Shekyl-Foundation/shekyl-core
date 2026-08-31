@@ -251,6 +251,15 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // as bundle->record_present -- from two DB reads under one lock scope. They
 // cannot legitimately disagree, and the Rust shim refuses the pair if they
 // do rather than verifying an Unbond against half a record.
+//
+// An _UNBOND probe REQUIRES a non-NULL out_unbond -- INTERNAL_FAULT
+// otherwise. The debit battery cannot run on the presence bit alone
+// (UB3/UB5/UB7/UB9 all read the record's contents), so a dropped bundle is
+// an incoherent call, not a cheaper probe. This is deliberately NOT the
+// emission rule below, where a NULL out_emission is legitimate: there the
+// POD's claim-conflict bit is a complete answer on its own. Do not flatten
+// the two into one convention.
+//
 // emission_p_canonical_id (32 bytes) + emission_epochs (n_emission_epochs
 // u64s): non-NULL for an emission submission, keying the §8.7.2 E6 claim-slot
 // probe (emission_probed/emission_claim_conflict) and, when out_emission is
