@@ -34,7 +34,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  # clang + libclang-dev: the live-daemon gates step runs
+  # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
+  # dev-dependencies -- which include gungraun with `client_requests`, whose
+  # `valgrind-requests` build script runs bindgen. bindgen needs libclang AND
+  # clang's own resource headers (a bare container fails with
+  # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
+  # which is why the Rust workflow never needed this; these jobs run in bare
+  # ubuntu containers, which do not.
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
