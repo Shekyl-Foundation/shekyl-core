@@ -147,9 +147,10 @@ that disposition; removed-rule records (MSW-6, the CLSAG/ring surface, the
 claim-era types) appear in §5/§6 as history, not rows. Reproducible counts:
 
 ```sh
-grep -c '^| CEN-' docs/design/CONSENSUS_RULE_CENSUS_3.md          # rows
-grep '^| CEN-' … | awk -F'|' '{gsub(/ /,"",$5); print $5}' | sort | uniq -c  # C/P
-grep '^| CEN-' … | awk -F'|' '{gsub(/ /,"",$6); print $6}' | sort | uniq -c  # buckets
+f=docs/design/CONSENSUS_RULE_CENSUS_3.md
+grep -c '^| CEN-' "$f"                                                          # rows
+grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$5); print $5}' | sort | uniq -c  # C/P
+grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$6); print $6}' | sort | uniq -c  # buckets
 ```
 
 Inverse spot-check (all six MUST appear as rows, or the census is red — all
@@ -460,7 +461,7 @@ Census notes, not rulings. Each names design-round input; none is fixed here
 14. **The weight/reward-zone arbitration is an acknowledged hole**: `GENESIS_TX_WIRE_FORMAT.md` :806–811 punted the `FULL_REWARD_ZONE` V1/V2/V5 lineage question "to the economics doc"; no economics doc, decision-log entry, or FOLLOWUPS row ever received it (CEN-G6b). Consumed as given everywhere.
 15. **Checkpoint machinery is live with empty data** (CEN-E1/E2/E5): a trust mechanism whose tables no design round has examined; the compiled-hash fast path (CEN-E3) was examined and explicitly left "a shipping decision nobody has taken".
 16. **The reorg acceptance design was never examined** (CEN-K4/K6): prevalidate-only alt storage, full validation at promotion, strictly-greater cumulative-difficulty switch — no Shekyl record; inherited shape throughout, now interleaved with Shekyl-specific state (witness re-supply CW-2, archival journals' pop-side belts).
-17. **`verify_block_attestation` runs before PoW** on both paths (5738 < 5818; 2253 < 2347). Cheap pre-cutover (empty witness); the Phase-5 ordering constraint (signature leg must sit behind PoW before population activates) is recorded at both sites — the census confirms it is not yet satisfied by ordering today. The FOLLOWUPS entry that carried this constraint survives only as a truncated headline (docs/FOLLOWUPS.md:467 mentions neither PoW nor ordering; the original body is in git at `4ff749085`), so the one-liner is re-filed by this census (§7).
+17. **`verify_block_attestation` runs before PoW** on both paths (5738 < 5818; 2253 < 2347). Cheap pre-cutover (empty witness); the Phase-5 ordering constraint (signature leg must sit behind PoW before population activates) is recorded at both sites — the census confirms it is not yet satisfied by ordering today. The FOLLOWUPS entry that carried this constraint survives only as a truncated headline ("Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy" — mentioning neither PoW nor ordering; the original body is in git at `4ff749085`), so the one-liner is re-filed by this census (§7).
 18. **FAKECHAIN carve-outs inside consensus functions** (CEN-I2's type/version gates, CEN-B5's root check, CEN-D7's fixed difficulty, the SEB env override init gate): regtest levers compiled into production paths — enumeration input for the rewrite's test-seam design.
 19. **`docs/MERKLE_TREE.md` documents the curve tree, not the block tx-hash tree** its name implies (grounded negative: no `tree_hash`/`get_block_hash` content) — the known naming residue, confirmed.
 20. **BP+ range-proof verification is inherited C++** (`src/fcmp/bulletproofs_plus.cc`, CEN-H19) sitting inside an otherwise Rust-verdict CT layer; `CPP_INHERITANCE_INVENTORY.md` carries its file-level disposition, but the census flags it as the largest inherited-crypto verifier still on the acceptance path.
@@ -536,12 +537,18 @@ first assumption (the RK convention). Behavioral statements in §4 follow the
     surface reading; the verification pass corrected them against the
     code. Comment-vs-code divergences are design-round input, not fixed
     here.
-11. **FOLLOWUPS itself has truncated entries** (observed, not fixed):
-    docs/FOLLOWUPS.md:467 survives as a headline whose body (the
-    attestation-behind-PoW ordering constraint) is gone, and entries at
-    :941/:944/:947 end mid-sentence — pre-existing damage; the ordering
-    one-liner is re-filed by this census (§7), the rest is a docs-hygiene
-    item outside census scope.
+11. **FOLLOWUPS itself has truncated entries** (observed, not fixed): the
+    "Credit-wire cutover has two preconditions the Phase-2 verify cannot
+    satisfy" entry survives as a headline whose body (the
+    attestation-behind-PoW ordering constraint) is gone, and four
+    consecutive entries near the end of the pre-genesis list are cut
+    mid-sentence ("Age-stratify the foundation floor…", "L12 floor-decay
+    schedule…", "Bootstrap APR overshoot…", "Vanguard eligibility flag
+    set…") — pre-existing damage; the ordering one-liner is re-filed by
+    this census (§7), the rest is a docs-hygiene item outside census
+    scope. FOLLOWUPS entries are cited here by headline, not line
+    number: that file is living and its line numbers are not pinned by
+    this census's sha.
 12. **A sibling independent census exists and was not consulted.** PR #583
     (`CONSENSUS_RULE_CENSUS_2.md`, family `RC-`, same pinned sha) landed
     during this walk. Per the steering rule both PRs carry, the two row
