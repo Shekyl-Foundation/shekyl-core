@@ -118,10 +118,21 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
 /// would otherwise cost up to 4096 sequential daemon calls). Returns
 /// the parsed bodies positionally aligned with `txids`.
 ///
-/// Error semantics match [`fetch_proof_tx`]: a txid the daemon does not
-/// know is [`ProofsError::TxNotFound`] carrying the first missing txid
-/// in request order; a malformed body or batch is
-/// [`ProofsError::Daemon`].
+/// Error semantics match [`fetch_proof_tx`] with one deliberate
+/// addition: a txid the daemon does not know is
+/// [`ProofsError::TxNotFound`] carrying the first missing txid in
+/// request order; a malformed body or batch is [`ProofsError::Daemon`];
+/// and a txid the daemon serves **from its pool** is
+/// [`ProofsError::TxUnconfirmed`]. The single-tx fetch above accepts
+/// pooled entries because its consumers (the tx-proof checks) report
+/// `in_pool` / `confirmations` honestly in their result; this batch
+/// fetch serves the reserve-proof check, whose result is a bare
+/// `total - spent` with no pool dimension — an unconfirmed output
+/// counted there presents mempool money, which a competing spend can
+/// still erase, as live confirmed reserve. Reserve is a claim about
+/// the chain, so a locator naming a pooled tx refuses loudly (naming
+/// the txid, so an honest-but-early prover knows to wait for
+/// confirmation) rather than quietly shrinking the total.
 pub(crate) async fn fetch_proof_txs<R: Rpc>(
     rpc: &R,
     txids: &[[u8; 32]],
@@ -159,6 +170,16 @@ pub(crate) async fn fetch_proof_txs<R: Rpc>(
                 .map(shekyl_rpc_types::HashHex::to_bytes)
                 .collect();
             return Err(tx_not_found_in_request_order(batch, &missed_hashes));
+        }
+        // Refuse pooled entries before parsing. `resp.txs` is indexed by
+        // request position (RK-4c's export), so `batch[i]` names the tx the
+        // verifier asked about at slot `i` — the honest name for the error.
+        // A daemon lying about `location` can only cause a spurious refusal
+        // here, never a false acceptance.
+        for (requested, entry) in batch.iter().zip(&resp.txs) {
+            if matches!(entry.location, TxLocation::Pooled { .. }) {
+                return Err(ProofsError::TxUnconfirmed(hex::encode(requested)));
+            }
         }
         bodies.extend(
             parse_tx_batch(batch, &resp.txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?,

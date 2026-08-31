@@ -291,6 +291,10 @@ mod check_workflows {
         height: usize,
         /// Number of `get_transactions` requests served.
         get_transactions_calls: Arc<AtomicUsize>,
+        /// txid hexes the daemon reports from its POOL rather than the
+        /// chain — the reserve path must refuse these, the tx-proof
+        /// path must report them honestly.
+        pooled: Arc<std::collections::BTreeSet<String>>,
     }
 
     impl Rpc for MockRpc {
@@ -321,18 +325,25 @@ mod check_workflows {
                                 as_json: String::new(),
                                 pruned: false,
                                 double_spend_seen: false,
-                                location: shekyl_rpc_types::TxLocation::Mined {
-                                    block_height: TX_BLOCK_HEIGHT,
-                                    // Derived, not invented: the daemon
-                                    // computes this against the tip it read
-                                    // for the whole gather, so a double that
-                                    // hard-codes it disagrees with its own
-                                    // heights and only passed while the
-                                    // wallet recomputed the value instead of
-                                    // reading it.
-                                    confirmations: CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT,
-                                    block_timestamp: 0,
-                                    output_indices: Vec::new(),
+                                location: if self.pooled.contains(h.as_str()) {
+                                    shekyl_rpc_types::TxLocation::Pooled {
+                                        relayed: true,
+                                        received_timestamp: 1,
+                                    }
+                                } else {
+                                    shekyl_rpc_types::TxLocation::Mined {
+                                        block_height: TX_BLOCK_HEIGHT,
+                                        // Derived, not invented: the daemon
+                                        // computes this against the tip it
+                                        // read for the whole gather, so a
+                                        // double that hard-codes it disagrees
+                                        // with its own heights and only
+                                        // passed while the wallet recomputed
+                                        // the value instead of reading it.
+                                        confirmations: CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT,
+                                        block_timestamp: 0,
+                                        output_indices: Vec::new(),
+                                    }
                                 },
                             }),
                             None => missed.push(
@@ -489,6 +500,7 @@ mod check_workflows {
                 spent_status: Arc::new(spent_status),
                 height: CHAIN_HEIGHT,
                 get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+                pooled: Arc::new(std::collections::BTreeSet::new()),
             },
             local,
         }
@@ -846,6 +858,7 @@ mod check_workflows {
             spent_status: Arc::new(vec![]),
             height: CHAIN_HEIGHT,
             get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+            pooled: Arc::new(std::collections::BTreeSet::new()),
         };
 
         let bodies = fetch_proof_txs(&rpc, &ids).await.expect("all txs served");
@@ -872,6 +885,30 @@ mod check_workflows {
         match err {
             ProofsError::TxNotFound(hex) => assert_eq!(hex, hex::encode(unknown)),
             other => panic!("expected TxNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_reserve_proof_pooled_locator_txid_is_tx_unconfirmed() {
+        // A reserve proof is a claim about CONFIRMED funds, and
+        // `CheckedReserveProof` has no pool dimension — so a locator
+        // naming a tx the daemon serves from its pool must refuse
+        // loudly, carrying the txid, rather than let an unconfirmed
+        // output (still erasable by a competing spend) count into
+        // `total - spent` as live reserve. The refusal fires even
+        // though the very same proof verifies once the tx confirms:
+        // the fixture below is the standard valid fixture, with the
+        // daemon's answer — not the proof — moved to the pool.
+        let mut fx = make_fixture(vec![]);
+        fx.rpc.pooled = Arc::new(std::collections::BTreeSet::from([hex::encode(fx.txid)]));
+        let proof = reserve_proof_string(&fx);
+
+        let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a pooled locator tx refuses");
+        match err {
+            ProofsError::TxUnconfirmed(hex) => assert_eq!(hex, hex::encode(fx.txid)),
+            other => panic!("expected TxUnconfirmed, got {other:?}"),
         }
     }
 

@@ -313,6 +313,10 @@ fn map_walletless_error(e: ProofsError) -> WalletRpcError {
             tracing::info!(txid = %txid, "proof-named tx unknown to the daemon");
             WalletRpcError::ProofTxNotFound
         }
+        ProofsError::TxUnconfirmed(txid) => {
+            tracing::info!(txid = %txid, "reserve locator names a pooled (unconfirmed) tx");
+            WalletRpcError::ProofTxUnconfirmed
+        }
         // Reachable only via `map_proofs_error`'s passthrough when the
         // capability context was already consumed; map defensively.
         ProofsError::NotFullWallet => WalletRpcError::CapabilityForbids {
@@ -440,6 +444,10 @@ mod tests {
             (
                 ProofsError::TxNotFound("ab".repeat(32)),
                 WalletRpcErrorCode::ProofTxNotFound,
+            ),
+            (
+                ProofsError::TxUnconfirmed("cd".repeat(32)),
+                WalletRpcErrorCode::ProofTxUnconfirmed,
             ),
             (
                 ProofsError::InvalidRecipient,

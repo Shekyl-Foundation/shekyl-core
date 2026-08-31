@@ -60,6 +60,8 @@
 
 ### Fixed
 
+- **A reserve proof whose locator names a pooled transaction is refused, not counted.** `check_reserve_proof`'s batch fetch parsed whatever the daemon served without inspecting `location`, so an unconfirmed transaction's outputs verified cryptographically and entered `total - spent` — mempool money, still erasable by a competing spend, presented as live confirmed reserve (`CheckedReserveProof` has no pool dimension a verifier could consult). The batch fetch now refuses pooled entries with the new `-29304 PROOF_TX_UNCONFIRMED`, carrying the txid so an honest-but-early prover knows to wait for confirmation and regenerate; the tx-proof paths are deliberately unchanged, since they report `in_pool`/`confirmations` honestly. Registered in `docs/api/wallet_rpc.yaml`; bite-verified — with the guard removed, the pooled-locator fixture proof verifies. Found by Copilot on #576.
+
 - **`--prune-blockchain` no longer deletes the hash of a pruned
   transaction.** `BlockchainLMDB::prune_tx_data` dropped `txs_prunable_hash`
   and `txs_pqc_auths` together with the prunable body. The body going is the

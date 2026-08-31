@@ -136,6 +136,17 @@ pub enum ProofsError {
     #[error("transaction {0} is unknown to the daemon")]
     TxNotFound(String),
 
+    /// A txid embedded in a reserve proof's locators is in the daemon's
+    /// pool, not the chain. Reserve is a claim about confirmed funds —
+    /// `CheckedReserveProof` has no pool dimension, so an unconfirmed
+    /// output counted into `total - spent` would present mempool money
+    /// (still erasable by a competing spend) as live reserve. Refused
+    /// with the txid so an honest-but-early prover knows to wait for
+    /// confirmation and regenerate. Contract
+    /// `-29304 PROOF_TX_UNCONFIRMED`.
+    #[error("transaction {0} is unconfirmed (in the pool, not the chain)")]
+    TxUnconfirmed(String),
+
     /// `get_reserve_proof` on a non-FULL wallet (the proof signs with
     /// the spend key). Contract `-29005`.
     #[error("reserve proofs require an open FULL wallet")]
