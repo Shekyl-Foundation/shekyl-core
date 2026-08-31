@@ -92,6 +92,47 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
     })
 }
 
+/// Owns a C++-allocated snapshot bundle handle and frees it on drop.
+///
+/// **Why RAII and not a free at each exit.** The snapshot shim can set an
+/// out-handle and *then* fail: the fee-per-byte arm and both catch blocks in
+/// `daemon_submit_ffi.cpp` all run after `handle.release()`. So the fault
+/// path has to free what the success path frees, and so does every early
+/// return between the two conversions — the emission arm's `ShimFault`
+/// returns sit after the emission handle is freed but before the unbond one
+/// is. Freeing by hand means five exits each remembering two handles; the
+/// emission handle was already leaking on the fault path before the unbond
+/// bundle existed, and a third bundle would have inherited it.
+///
+/// A null handle is the legitimate "no probe ran" case and drops as a no-op.
+struct CxxBundle<T> {
+    raw: *mut T,
+    free: unsafe extern "C" fn(*mut T),
+}
+
+impl<T> CxxBundle<T> {
+    /// Adopt whatever the shim wrote, **before** the return code is checked
+    /// — a handle set on a call that then faults is exactly the leak.
+    fn adopt(raw: *mut T, free: unsafe extern "C" fn(*mut T)) -> Self {
+        Self { raw, free }
+    }
+
+    fn as_ptr(&self) -> *const T {
+        self.raw.cast_const()
+    }
+}
+
+impl<T> Drop for CxxBundle<T> {
+    fn drop(&mut self) {
+        if !self.raw.is_null() {
+            // SAFETY: `raw` came from the shim's out-parameter and is freed
+            // exactly once, here — no other path frees it, and the type is
+            // not `Copy` or `Clone`.
+            unsafe { (self.free)(self.raw) };
+        }
+    }
+}
+
 /// Convert the §8.7.1.1 Unbond fact view into owned facts.
 ///
 /// # Safety
@@ -322,22 +363,26 @@ impl SubmitStateShim for FfiSubmitShim {
             )
         };
 
+        // Adopt before branching on `rc`: the C++ side sets these
+        // out-handles and can fail afterwards, so the fault path owns them
+        // too. Everything below returns through these guards.
+        let emission_bundle =
+            CxxBundle::adopt(emission_handle, ffi::shekyl_submit_emission_facts_free);
+        let unbond_bundle = CxxBundle::adopt(unbond_handle, ffi::shekyl_submit_unbond_facts_free);
+
         if rc != ffi::SHEKYL_SUBMIT_OK {
             tracing::error!(rc, "submit snapshot shim returned fault");
             return Err(ShimFault);
         }
-        // Copy-then-free posture: the E6/E7 bundle is converted to owned
-        // facts inside this frame (the handle's buffers are valid until the
-        // free below); every early return after this point must free, so
-        // conversion happens first and the free is unconditional.
+        // Copy-then-drop: the bundle is converted to owned facts inside this
+        // frame, while the guard still holds the C++ buffers alive.
         let emission = if let Some((_, epochs)) = emission_probe {
             let converted = unsafe {
-                ffi::shekyl_submit_emission_facts_view(emission_handle)
+                ffi::shekyl_submit_emission_facts_view(emission_bundle.as_ptr())
                     .as_ref()
                     .ok_or(())
                     .and_then(|view| emission_facts_from_ffi(view))
             };
-            unsafe { ffi::shekyl_submit_emission_facts_free(emission_handle) };
             match converted {
                 Ok(facts) if facts.snapshots.len() == epochs.len() => Some(facts),
                 Ok(_) => {
@@ -352,15 +397,14 @@ impl SubmitStateShim for FfiSubmitShim {
         } else {
             None
         };
-        // Same copy-then-free posture for the §8.7.1.1 bundle.
+        // Same copy-then-drop for the §8.7.1.1 bundle.
         let unbond = if matches!(bond_probe, Some(BondProbe::Unbond(_))) {
             let converted = unsafe {
-                ffi::shekyl_submit_unbond_facts_view(unbond_handle)
+                ffi::shekyl_submit_unbond_facts_view(unbond_bundle.as_ptr())
                     .as_ref()
                     .ok_or(())
                     .and_then(|view| unbond_facts_from_ffi(view))
             };
-            unsafe { ffi::shekyl_submit_unbond_facts_free(unbond_handle) };
             match converted {
                 Ok(facts) => Some(facts),
                 Err(()) => {
@@ -570,5 +614,56 @@ mod tests {
         let facts = facts_from_ffi(&pod_with(0), &[]).expect("converts");
         assert_eq!(facts.reference, None);
         assert!(facts.key_image_conflicts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cxx_bundle_tests {
+    use super::CxxBundle;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Opaque;
+
+    static ADOPTED_FREES: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C" fn count_adopted(_: *mut Opaque) {
+        ADOPTED_FREES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    static NULL_FREES: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C" fn count_null(_: *mut Opaque) {
+        NULL_FREES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_bundle_frees_once_on_drop_including_the_fault_path() {
+        // The shim can set an out-handle and *then* return a fault, so the
+        // guard has to free on a path that never reaches the conversion.
+        // This is that path: adopt, drop without ever calling `as_ptr`.
+        let mut backing = Opaque;
+        let raw: *mut Opaque = &raw mut backing;
+        ADOPTED_FREES.store(0, Ordering::SeqCst);
+        {
+            let _guard = CxxBundle::adopt(raw, count_adopted);
+        }
+        assert_eq!(
+            ADOPTED_FREES.load(Ordering::SeqCst),
+            1,
+            "a handle adopted on a faulting call must still be freed exactly once"
+        );
+    }
+
+    #[test]
+    fn a_null_bundle_is_a_no_op() {
+        // "No probe ran" is the common case and must not call the C++ free
+        // with a null pointer.
+        NULL_FREES.store(0, Ordering::SeqCst);
+        {
+            let _guard = CxxBundle::adopt(std::ptr::null_mut::<Opaque>(), count_null);
+        }
+        assert_eq!(
+            NULL_FREES.load(Ordering::SeqCst),
+            0,
+            "an unset handle must not be freed"
+        );
     }
 }

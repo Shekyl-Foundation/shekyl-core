@@ -6,10 +6,26 @@
 //! The **debit authorization pin** — the single check standing between a
 //! compromised serving host and a collateral-draining exit.
 //!
-//! Every value-out bond-post arm (`Unbond`, `HoldingsUpdate`, `Rebond`)
-//! authorizes against the **record's committed `bond_spend_pk`**, never
-//! against a key the transaction brings along and never against the
-//! persona's identity key. That distinction is the whole point: a
+//! A **value-out** bond-post authorizes against the **record's committed
+//! `bond_spend_pk`**, never against a key the transaction brings along and
+//! never against the persona's identity key.
+//!
+//! **The selector is `bond_debit > 0`, not the post kind.** Consensus
+//! consumers today are `Unbond` and the **drop** arm of `HoldingsUpdate`.
+//! `Rebond` is *not* one: its verify requires `bond_debit == 0` and
+//! `blockchain.cpp` authorizes it with the **identity** key on the
+//! credit path, exactly as `HoldingsUpdate`-add is. Applying this pin
+//! there would reject a legitimate credit — and keying the rule on kind
+//! rather than on the debit term is the specific mistake the block-level
+//! fast-path arm documents at length, because it would reject valid
+//! `HoldingsUpdate`-add blocks under fast sync while fully-verifying nodes
+//! accept them.
+//!
+//! (An earlier revision of this module listed `Rebond` here. It came from
+//! reading `archival_marshal_record_facts`'s "record-mutating arms" comment
+//! as if it enumerated value-out arms. Record-mutating and value-out are
+//! different axes: every debit mutates the record, not every record
+//! mutation is a debit.) That distinction is the whole point: a
 //! serving host holds the identity hybrid key and can therefore produce a
 //! valid Auth-P, so an identity-authorized debit would let a host
 //! compromise become a collateral drain. `bond_spend_pk` is cold

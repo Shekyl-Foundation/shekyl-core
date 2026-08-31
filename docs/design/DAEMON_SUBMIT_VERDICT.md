@@ -1475,9 +1475,16 @@ bundles for another arm — at which point the bundle rides along for free.
 **One lock scope, whole bundle.** The record value, the UB4 slice and the UB6
 watermark are read under the *same* pool→blockchain lock scope as the rest of
 `SubmitFacts` — a record from before a block paired with a watermark from after
-it describes a state the chain never occupied. The Phase-D `Raced(fresh)` leg
-re-gathers the **entire** bundle from the reparsed blob; stale and fresh fields
-are never merged.
+it describes a state the chain never occupied.
+
+At Phase D the same rule applies to what *is* re-gathered — the POD, per the
+scope note above — and the fields the commit does not re-read are simply
+absent from `Raced(fresh)`, not carried over stale. Merging a fresh POD with a
+Phase-B bundle would reintroduce exactly the composite figure this paragraph
+forbids, one phase later. (An earlier revision of this paragraph said the
+Phase-D leg re-gathers the *entire* bundle. It does not, and that reading
+would have made UB4–UB7 look race-rechecked when the scope note above records
+that they deliberately are not.)
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):

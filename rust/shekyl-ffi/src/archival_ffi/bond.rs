@@ -409,8 +409,11 @@ pub unsafe extern "C" fn shekyl_archival_last_served_scan(
 /// Pin a debit's presented authorizer against the bond record's committed
 /// `bond_spend_pk` (`shekyl-archival-retention::debit_auth_pin`).
 ///
-/// The single authorization gate for every value-out bond-post arm
-/// (`Unbond`, `HoldingsUpdate`, `Rebond`). The C++ block path calls this;
+/// The single authorization gate for a **value-out** bond-post — selected by
+/// `bond_debit > 0`, not by post kind. Consensus consumers are `Unbond` and
+/// the **drop** arm of `HoldingsUpdate`; `Rebond` and `HoldingsUpdate`-add
+/// are credit paths that consensus authorizes with the identity key, and
+/// applying this pin to them would reject legitimate posts. The C++ block path calls this;
 /// the Rust submit battery calls the same function natively
 /// (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3), so the two paths cannot
 /// drift on the one predicate that has no recovery — a compromised serving

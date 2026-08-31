@@ -6,12 +6,16 @@
 #
 # The debit-authorization predicate has ONE implementation.
 #
-# Every value-out bond-post arm (Unbond, HoldingsUpdate, Rebond) authorizes
-# against the bond record's COMMITTED bond_spend_pk, never the persona's
-# identity key -- which a serving host holds, and which would therefore turn a
-# host compromise into a collateral drain. That predicate lives in
-# `shekyl-archival-retention::debit_auth_pin` and is reached from C++ only
-# through `shekyl_archival_debit_auth_pin`.
+# A VALUE-OUT bond-post authorizes against the bond record's COMMITTED
+# bond_spend_pk, never the persona's identity key -- which a serving host
+# holds, and which would therefore turn a host compromise into a collateral
+# drain. That predicate lives in `shekyl-archival-retention::debit_auth_pin`
+# and is reached from C++ only through `shekyl_archival_debit_auth_pin`.
+#
+# The selector is `bond_debit > 0`, NOT the post kind: consumers are Unbond
+# and the DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are
+# credit paths (bond_debit == 0) authorized by the IDENTITY key, so this gate
+# must not be read as prescribing the record-key pin for them.
 #
 # WHY A GATE AND NOT A COMMENT: it was implemented three times. The per-tx
 # path and the checkpoint fast path in blockchain.cpp each spelled it out,
@@ -47,8 +51,9 @@ fi
 # `shekyl_ffi.h` declaration and the wrapper's own definition, so the count
 # could never fall below two and the arm could never fail (observed
 # 2026-08-29 -- the first draft of this arm passed its own bite).
-# Three arms authorize a value-out today: the per-tx Unbond and
-# HoldingsUpdate/Rebond verifies, plus the checkpoint fast path.
+# Three sites authorize a value-out today: the per-tx Unbond verify, the
+# per-tx HoldingsUpdate-DROP verify, and the checkpoint fast path. (Rebond
+# is not one -- credit path, identity key.)
 callers=$(rg -n --no-filename 'archival_debit_auth_pin\(' src/ -g '*.cpp' \
           | rg -v '^\s*[0-9]+:bool archival_debit_auth_pin\(' \
           | rg -v 'shekyl_archival_debit_auth_pin\(' \
