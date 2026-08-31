@@ -14,6 +14,18 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **The block-weight penalty-free-zone arbitration was punted and never landed.** `GENESIS_TX_WIRE_FORMAT.md` :806–811 flagged the `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` V1/V2/V5 lineage (300 000 consumed as given) as "the arbitration belongs to the economics doc"; no doc ever received it, and the long-term 1.7× clamps ride along unexamined (owner: [`CONSENSUS_RULE_CENSUS_3.md`](design/CONSENSUS_RULE_CENSUS_3.md) CEN-G6b, §5.14).
+  - Target: pre-genesis
+
+- **A failed curve-tree leaf construction silently omits the output from the tree.** `shekyl_construct_curve_tree_leaf`'s false return at blockchain_db.cpp:570–576 (and the `continue` arms just above) drops the output from pending insertion with no abort and no verify-time twin — the block connects and the output is deterministically, permanently unspendable on every node; decide fail-closed vs. documented-skip as design-round input (owner: [`CONSENSUS_RULE_CENSUS_3.md`](design/CONSENSUS_RULE_CENSUS_3.md) CEN-L11).
+  - Target: pre-genesis
+
+- **Attestation verify must move behind PoW before credit-wire population activates.** `verify_block_attestation` runs before `check_hash` on both acceptance paths (blockchain.cpp:5738 < 5818; 2253 < 2347) — free pre-cutover (empty witness), but post-cutover it does up to one hybrid-signature verify per pass record before any work is proven, a DoS surface; the Phase-5 ordering constraint is pinned at both call sites (re-filed: the earlier entry survives only as the truncated headline "Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy") (owner: [`ARCHIVAL_CREDIT_WIRE.md`](design/ARCHIVAL_CREDIT_WIRE.md) §3; census: [`CONSENSUS_RULE_CENSUS_3.md`](design/CONSENSUS_RULE_CENSUS_3.md) §5.17).
+  - Target: pre-genesis
+
+- **Dead hard-fork version dispatch survives from genesis (rule 60).** All eleven `HF_VERSION_*` constants are 1 with unreachable else-arms, four are wholly unreferenced, the voting machinery runs inert on every block with its verdict discarded (blockchain_db.cpp:641), and `HF_VERSION_SMALLER_BP+1` resolving to `UINT64_MAX` silently disables pruned-span requests — delete the dead branches or rule the machinery kept, as its own pass (owner: [`CONSENSUS_RULE_CENSUS_3.md`](design/CONSENSUS_RULE_CENSUS_3.md) §5.4, CEN-B2/B3).
+  - Target: pre-genesis
+
 - **`#[serde(default)]` still lets an omitted daemon field become its zero value.** RK-4c refused *unknown* fields on the RPC read surface (`deny_unknown_fields`, `shekyl-rpc-types::chain`/`transactions`), which catches a renamed field but not an omitted one: 27 fields across those two modules default silently if the daemon simply leaves them out, and a zero height or an empty status reads as data. Needs a per-field pass — some absences are legitimate `KV_SERIALIZE_OPT` omissions the oracle vectors depend on, so this is judgement per field, not a sweep (owner: [`DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md) §3.2).
   - Target: pre-genesis
 
