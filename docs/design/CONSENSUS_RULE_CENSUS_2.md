@@ -32,15 +32,15 @@ privacy.
 | Quantity | Count |
 | --- | ---: |
 | Validation sites walked (functions that can reject a block or a tx-as-included-in-a-block) | 48 |
-| Independently ratifiable rules (rows RC-1…RC-155, RC-157…RC-172; RC-156 unused) | **171** |
-| Consensus | 161 |
+| Independently ratifiable rules (rows RC-1…RC-155, RC-157…RC-182; RC-156 unused) | **181** |
+| Consensus | 171 |
 | Policy (relay/mempool only; `kept_by_block` discriminator) | 10 |
-| Bucket 1 — Shekyl-specific, written spec | 97 |
+| Bucket 1 — Shekyl-specific, written spec | 103 |
 | Bucket 2 — inherited and ratified, locatable pointer | 6 |
-| Bucket 3 — inherited, examined, marked for deletion | 15 |
-| Bucket 4 — inherited, never examined | 53 |
+| Bucket 3 — inherited, examined, marked for deletion | 16 |
+| Bucket 4 — inherited, never examined | 56 |
 
-Sum check: `97 + 6 + 15 + 53 = 171`. Consensus + policy: `161 + 10 = 171`.
+Sum check: `103 + 6 + 16 + 56 = 181`. Consensus + policy: `171 + 10 = 181`.
 The rows exhaust the denominator. An unlisted rule would be ratified by
 silence — the failure mode this census exists to close. RC-156 is unused
 (a draft duplicate of RC-53; same bound, already cited on both sites).
@@ -59,9 +59,9 @@ silence — the failure mode this census exists to close. RC-156 is unused
 | PQC auth | RC-100…RC-108 (9) | 9 | 0 | 0 | 0 | 0 |
 | Archival (serve-credit / bond-post / emission) | RC-109…RC-133 (25) | 24 | 0 | 0 | 1 | 0 |
 | Reorg / alt-chain | RC-134…RC-142 (9) | 2 | 0 | 0 | 7 | 0 |
-| Storage layer | RC-143…RC-150 (8) | 2 | 0 | 0 | 6 | 0 |
+| Storage layer | RC-143…RC-150, RC-173…RC-180 (16) | 7 | 0 | 1 | 8 | 0 |
 | Mempool policy | RC-151…RC-155, RC-157…RC-161 (10) | 1 | 1 | 1 | 7 | 10 |
-| Hardfork / version table | RC-162…RC-168 (7) | 1 | 0 | 5 | 1 | 0 |
+| Hardfork / version table | RC-162…RC-168, RC-181…RC-182 (9) | 2 | 0 | 5 | 2 | 0 |
 
 ### 0.2 Inverse spot-check (must be present or the census is red)
 
@@ -409,6 +409,14 @@ A constraint enforced only by the DB is still a consensus rule.
 | RC-148 | Duplicate alt-block hash throws. | `db_lmdb.cpp:4738` | C | 4 | — | |
 | RC-149 | Coinbase and archival-emission outputs are indexed under amount 0 regardless of plaintext amount. | `db_lmdb.cpp:1361–1368`; add_transaction counterpart | C | 1 | amount-0 CT; emission loud amounts still tree-indexed at 0 | |
 | RC-150 | `add_spent_key` is the spent-keys uniqueness constraint; `has_key_image` is the read side for RC-85. | `db_lmdb.cpp:1411–1425`, `:3816` | C | 4 | — | Same table as RC-144. |
+| RC-173 | One `archival_shard_segment` row per shard: `MDB_NOOVERWRITE`; a second freeze of the same shard is FATAL. | `db_lmdb.cpp:8529–8535`; freeze hook `:7978–8030` | C | 1 | [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md); O-2 CREATE-only | **DB-only.** No Blockchain duplicate check. |
+| RC-174 | Miner-tx hash uniqueness: `tx_hashes` are checked at `:5936`; the **coinbase** hash is not. `TX_EXISTS` at `add_transaction_data` is the only connect-time uniqueness check for the miner tx. | `db_lmdb.cpp:1071–1074`; `blockchain_db.cpp` `add_transaction` | C | 4 | — | Twin of RC-147, miner-tx-only site. |
+| RC-175 | `blk.tx_hashes.size() == txs.size()` at store time. | `blockchain_db.cpp:455–456` | C | 4 | — | Connect already iterated hashes; this is the write abort. |
+| RC-176 | Emission already-claimed epoch / no-bond / cap / unclaimable at `apply` is FATAL even if the Blockchain `(P,E)` pass was skipped. | `db_lmdb.cpp:6428–6484` | C | 1 | E3 WS-2; RC-130 is the Blockchain twin | Checkpoint-fast-path belt. |
+| RC-177 | Epoch-close compute failure, budget-accrual overflow, or settlement `(passes, issued)` fold refusal aborts the same `add_block` write txn. | `db_lmdb.cpp:8358–8360`, `:8407–8418`, `:7423–7426`; hooked from `blockchain_db.cpp:654–655` | C | 1 | [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md); [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | **DB is the enforcement site.** |
+| RC-178 | Slash apply: no bond / shard not held / interval decision fail / bonded underflow / burned overflow is FATAL. | `db_lmdb.cpp:5922–6042` | C | 1 | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) | Same write txn as RC-177. |
+| RC-179 | Unbond / HoldingsUpdate / Rebond connect: missing record, fold fail, or holdings invariant breach is FATAL. | `db_lmdb.cpp:6549–6597`, `:6746–6789` | C | 1 | gate-4; [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) | Backstop if per-tx verify was skipped. |
+| RC-180 | `if (blk.major_version >= 4)` cumulative-RCT in `block_info` never runs (live major is 1). | `db_lmdb.cpp:989–997` | C | 3 | rule 60 (Monero v4 dispatch) | `bi_cum_rct` is this block’s RCT count only. |
 
 ### 3.12 Mempool policy (`kept_by_block` discriminator)
 
@@ -438,12 +446,14 @@ Included in the denominator; **P** = does not fork the chain.
 | RC-166 | `mainnet_hard_fork_version_1_till = 0` (and test/stage twins). | `hardforks.cpp:39,45` | C | 3 | rule 60 | |
 | RC-167 | `check_output_types` still has `hf > VIEW_TAGS`, `hf < VIEW_TAGS`, and grace-period mixed-type arms. Unreachable at hf=1 with `SHEKYL_NG=1` (first arm wins). | `cryptonote_format_utils.cpp:985–1001` | C | 3 | rule 60 | |
 | RC-168 | After a connect that advances hf, the pool is re-validated at the new version (genesis skipped). With one fork this never fires post-genesis. | `blockchain.cpp:6480–6490` | C | 3 | rule 60 | |
+| RC-181 | `get_min_block_weight(version)` **ignores** `version` and always returns `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`. | `cryptonote_basic_impl.cpp:81–85` | C | 4 | — | Feeds RC-48 / RC-69. Version argument is vestigial. |
+| RC-182 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns **height 1** (the table row), not 0. Emission-split `genesis_ng_height` at connect is therefore 1. Genesis (height 0) is `original_version` 1 but is not that lookup. | `hardfork.cpp:383–393`; used `blockchain.cpp:1783`, `:6345` | C | 1 | v3-from-genesis table; comment economics.h deleted `hf < NG` gates | Independently ratifiable from “NG from genesis”. |
 
 ---
 
 ## 4. Sum check
 
-IDs RC-1…RC-155 and RC-157…RC-172 = **171** rows. RC-156 was never
+IDs RC-1…RC-155 and RC-157…RC-182 = **181** rows. RC-156 was never
 issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 
 | Section | IDs | Count | B1 | B2 | B3 | B4 |
@@ -458,12 +468,12 @@ issued (the `handle_incoming_tx` blob-size site is already on RC-53).
 | 3.8 PQC | 100–108 | 9 | 9 | 0 | 0 | 0 |
 | 3.9 archival | 109–133 | 25 | 24 | 0 | 0 | 1 |
 | 3.10 reorg | 134–142 | 9 | 2 | 0 | 0 | 7 |
-| 3.11 storage | 143–150 | 8 | 2 | 0 | 0 | 6 |
+| 3.11 storage | 143–150, 173–180 | 16 | 7 | 0 | 1 | 8 |
 | 3.12 mempool | 151–155, 157–161 | 10 | 1 | 1 | 1 | 7 |
-| 3.13 hardfork | 162–168 | 7 | 1 | 0 | 5 | 1 |
-| **Total** | | **171** | **97** | **6** | **15** | **53** |
+| 3.13 hardfork | 162–168, 181–182 | 9 | 2 | 0 | 5 | 2 |
+| **Total** | | **181** | **103** | **6** | **16** | **56** |
 
-`97+6+15+53 = 171`. Flags: 161 consensus + 10 policy = 171.
+`103+6+16+56 = 181`. Flags: 171 consensus + 10 policy = 181.
 
 Policy rows: RC-151, 152, 153, 154, 155, 157, 158, 159, 160, 161.
 RC-159 is flagged P even though the origin-pin has a Shekyl spec — it
@@ -634,6 +644,14 @@ actually contained at `8ba1aae3d`.
     legs that were folded into RC-48 (inclusive 2×median bound,
     release multiplier, remaining-supply cap, 720-block volume
     window) are now RC-169–RC-172.
+
+17. **Storage-layer walk added DB-only connect FATALS** the Blockchain
+    class does not duplicate: shard-segment CREATE-only (RC-173),
+    miner-tx hash uniqueness (RC-174), epoch-close / slash / bond
+    apply (RC-176–RC-179), dead `major_version >= 4` cum-RCT
+    (RC-180), vestigial `get_min_block_weight(version)` (RC-181),
+    and `genesis_ng_height == 1` (RC-182). An unlisted DB FATAL
+    would have been ratified by silence.
 
 ---
 
