@@ -379,16 +379,76 @@ json_handler!(start_mining, "/start_mining");
 json_handler!(stop_mining, "/stop_mining");
 json_handler!(mining_status, "/mining_status");
 json_handler!(save_bc, "/save_bc");
-json_handler!(get_peer_list, "/get_peer_list");
 json_handler!(set_log_hash_rate, "/set_log_hash_rate");
 json_handler!(set_log_level, "/set_log_level");
 json_handler!(set_log_categories, "/set_log_categories");
 json_handler!(stop_daemon, "/stop_daemon");
-json_handler!(get_net_stats, "/get_net_stats");
 json_handler!(set_limit, "/set_limit");
 json_handler!(out_peers, "/out_peers");
 json_handler!(in_peers, "/in_peers");
 json_handler!(pop_blocks, "/pop_blocks");
+
+/// `/get_net_stats` — process start plus the global throttle counters
+/// (RK-5a). Admin-only; the route table is what enforces that.
+pub async fn get_net_stats(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let facts = crate::chain_facts::FfiP2pFacts::new(core);
+        crate::methods::get_net_stats(&facts)
+    })
+    .await;
+    render("get_net_stats", result)
+}
+
+/// `/get_peer_list` — the white and gray peerlists (RK-5a). Admin-only.
+///
+/// The request body is optional and its two members are optional within it,
+/// so an empty body means the daemon's own defaults — `public_only` **true**,
+/// `include_blocked` false.
+pub async fn get_peer_list(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+    let request: shekyl_rpc_types::GetPeerListRequest = if body.trim().is_empty() {
+        shekyl_rpc_types::GetPeerListRequest::default()
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(?e, "get_peer_list: malformed request");
+                return json_error("request could not be decoded");
+            }
+        }
+    };
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let facts = crate::chain_facts::FfiP2pFacts::new(core);
+        crate::methods::get_peer_list(&request, &facts)
+    })
+    .await;
+    render("get_peer_list", result)
+}
+
+/// The three-way match every native REST handler above ends in, written once.
+fn render<T: serde::Serialize>(
+    method: &'static str,
+    result: Result<Result<T, crate::methods::RpcFault>, tokio::task::JoinError>,
+) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    match result {
+        Ok(Ok(reply)) => match serde_json::to_string(&reply) {
+            Ok(json) => json_ok(json),
+            Err(e) => {
+                tracing::warn!(?e, method, "reply could not be encoded");
+                json_error("reply could not be encoded")
+            }
+        },
+        Ok(Err(fault)) => {
+            tracing::warn!(?fault, method, "facts unavailable");
+            json_error("p2p facts unavailable")
+        }
+        Err(e) => {
+            tracing::warn!(?e, method, "handler task did not complete");
+            json_error("handler task did not complete")
+        }
+    }
+}
 
 /// `/get_stem_tallies` — per-successor relay outcome counts (§55).
 ///
