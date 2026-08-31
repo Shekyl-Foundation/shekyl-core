@@ -293,10 +293,20 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 // testable only through a live daemon; new exports take this shape.
 //
 // `shekyl_rpc_chain_tip` is not split this way yet: it reads
-// `is_synchronized()` off the p2p payload object, for which this tree has no
-// test double, so splitting it would move the untestable dependency rather
-// than remove it. It is covered by the live daemon check until a p2p double
-// exists (RK-5 builds one for `get_info`, which needs the same object).
+// `is_synchronized()` off the p2p payload object. This comment used to say
+// that a p2p double was coming with RK-5, which needed the same object —
+// **that double cannot be built.** `m_p2p` is a concrete
+// `node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, not an
+// interface, so nothing can subclass it, and the one `node_server` harness in
+// the tree (tests/unit_tests/node_server.cpp) instantiates the template on
+// `test_core` — a different type, not a double for this one.
+//
+// The answer is a rule, not a fixture: a facts body takes what a fixture can
+// build as objects (`Blockchain&`, the pool) and everything else **as
+// scalars**. The p2p reads then arrive as plain integers a test supplies, and
+// the thin `extern "C"` adapter is the only thing that touches `m_p2p`. RK-5a
+// retrofits this export to that shape; until it does, the live daemon check
+// is the only cover, which is why it is the one export with no fixture.
 
 #include "crypto/hash.h"
 

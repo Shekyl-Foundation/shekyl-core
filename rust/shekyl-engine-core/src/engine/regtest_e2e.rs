@@ -3237,44 +3237,25 @@ fn capture_block(
 /// This is the regression guard for the bridge's origin context. Until
 /// 2026-08-26 the dispatchers passed `nullptr` for the handler's
 /// `connection_context*`, so `m_restricted && ctx` was false at every site and
-/// a restricted listener behaved as an unrestricted one — no request
-/// caps, and, on the pool paths, disclosure of transactions the node had not
+/// a restricted listener behaved as an unrestricted one — no request caps,
+/// and, on the pool paths, disclosure of transactions the node had not
 /// broadcast.
 ///
-/// It lives here rather than beside the C++ because the assertion has to cross
-/// the whole production path — Rust HTTP handler, `core_rpc_ffi_json_endpoint`,
-/// the dispatch table, the C++ handler — and only a live daemon has all of it.
-/// A C++ unit test of the origin helper cannot see the dispatchers, so
-/// reverting a call site to `nullptr` leaves it green; this one goes red.
+/// **Every leg here crosses the bridge, and only those legs are here.** RK-4c
+/// migrated `/get_transactions` and `/is_key_image_spent` to native Rust, so
+/// their cap assertions stopped saying anything about the bridge while still
+/// passing under a name that claimed they did — six green assertions where the
+/// bridge had three. They now live in
+/// `native_handlers_apply_their_own_request_caps`, which is what they actually
+/// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
+/// two `dispatch_jsonrpc_we` refusals, one per answer shape.
 ///
-/// One daemon serves both listeners, so the two postures are compared against
+/// Both listeners come from one daemon, so the postures are compared against
 /// the same chain in the same process, and the unrestricted rows are the
 /// blast-radius check: the fix must not narrow the admin listener.
-///
-/// Coverage, stated rather than implied, and **re-derived when RK-4c migrated
-/// two of these routes out of C++**. `/get_transactions` and
-/// `/is_key_image_spent` are now served natively, so their rows guard the Rust
-/// caps and no longer say anything about the bridge — leaving them as the REST
-/// evidence would have been a claim that quietly stopped being true while the
-/// test kept passing. `/get_info` replaces them for that purpose: it is still
-/// bridged, and its `restricted` is the same site-209 expression, observable
-/// on an idle daemon because `start_time` and `free_space` are sentinel-valued
-/// under it.
-///
-/// So: the `/get_info` row crosses `core_rpc_ffi_json_endpoint` into
-/// `dispatch_json`; the JSON-RPC rows cross `core_rpc_ffi_json_rpc` into
-/// `dispatch_jsonrpc_we`, once for each of its two answer shapes (a refusal in
-/// `error_resp`, one in `res.status`). Those are the only two dispatch
-/// templates left — the third had no table rows and was deleted. Not reached:
-/// `dispatch_submitblock` and `dispatch_calcpow`, whose handlers read no `ctx`
-/// and so have nothing to assert.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
-    /// `RESTRICTED_TRANSACTIONS_COUNT` in `core_rpc_server.cpp`.
-    const TX_CAP: usize = 100;
-    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`.
-    const KI_CAP: usize = 5000;
     /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
     const BLOCK_CAP: usize = 1000;
 
@@ -3286,62 +3267,49 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         .await
         .expect("unrestricted rpc client");
 
-    // Hashes that resolve to nothing: the cap is a request-shape refusal and
+    // Hashes that resolve to nothing: a cap is a request-shape refusal and
     // fires before any lookup, so the chain's contents are irrelevant.
     let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
 
-    let status = |v: &serde_json::Value| -> String {
-        v.get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("<missing status>")
-            .to_owned()
-    };
-
-    // Over the cap, restricted: refused. This is the REST half — it goes red if
-    // `dispatch_json` stops passing the origin. The JSON-RPC template has its
-    // own assertions further down; neither holds the other.
-    let over: serde_json::Value = restricted
-        .rpc_call(
-            "get_transactions",
-            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
-        )
+    // ── the bridge's REST template ──────────────────────────────────────
+    //
+    // The two capped routes above are native as of RK-4c, so they no longer
+    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
+    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
+    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
+    // without a populated chain. If a dispatcher stops passing the origin,
+    // these two answers become the admin ones.
+    let admin_info: serde_json::Value = unrestricted
+        .rpc_call("get_info", None::<serde_json::Value>)
         .await
-        .expect("restricted /get_transactions over cap");
+        .expect("admin get_info");
+    let restricted_info: serde_json::Value = restricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("restricted get_info");
     assert_eq!(
-        status(&over),
-        "Too many transactions requested in restricted mode",
-        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
-         says OK the handler saw a null connection context and the restricted \
-         gate is inert again"
+        restricted_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "a restricted listener must not disclose the node's start time; if this \
+         is the real start time the handler saw a null connection context"
     );
-
-    // At the cap, restricted: served. Pins the boundary rather than "refuses
-    // everything", which a broken-in-the-other-direction change would pass.
-    let at: serde_json::Value = restricted
-        .rpc_call(
-            "get_transactions",
-            Some(json!({ "txs_hashes": hashes(TX_CAP) })),
-        )
-        .await
-        .expect("restricted /get_transactions at cap");
     assert_eq!(
-        status(&at),
-        "OK",
-        "exactly {TX_CAP} hashes is within the cap"
+        restricted_info
+            .get("free_space")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::MAX),
+        "a restricted listener must not disclose free space"
     );
-
-    // The key-image cap is a second, independently-numbered site.
-    let ki_over: serde_json::Value = restricted
-        .rpc_call(
-            "is_key_image_spent",
-            Some(json!({ "key_images": hashes(KI_CAP + 1) })),
-        )
-        .await
-        .expect("restricted /is_key_image_spent over cap");
-    assert_eq!(
-        status(&ki_over),
-        "Too many key images queried in restricted mode",
-        "a restricted listener must refuse more than {KI_CAP} key images"
+    assert!(
+        admin_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            > 0,
+        "the admin listener must still report the start time — otherwise the \
+         assertions above would hold for a daemon that reports nothing to anyone"
     );
 
     // ── The other template ──────────────────────────────────────────────
@@ -3411,46 +3379,90 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         Some("OK"),
         "the unrestricted listener must still serve the whole-chain histogram"
     );
+}
 
-    // ── the bridge's REST template ──────────────────────────────────────
-    //
-    // The two capped routes above are native as of RK-4c, so they no longer
-    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
-    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
-    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
-    // without a populated chain. If a dispatcher stops passing the origin,
-    // these two answers become the admin ones.
-    let admin_info: serde_json::Value = unrestricted
-        .rpc_call("get_info", None::<serde_json::Value>)
+/// The native handlers apply their own request caps.
+///
+/// These three legs were part of the bridge guard until RK-4c served
+/// `/get_transactions` and `/is_key_image_spent` from Rust. They are still
+/// worth asserting — the caps moved to Rust with the methods and nothing else
+/// checks them — but they no longer cross `dispatch_json`, so reverting a
+/// dispatcher to `nullptr` leaves them green. Split out under a name that says
+/// what they cover, because a reviewer counting assertions under the bridge
+/// guard's name would otherwise credit the bridge with subjects it does not
+/// have.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn native_handlers_apply_their_own_request_caps() {
+    /// `RESTRICTED_TRANSACTIONS_COUNT`, now enforced by the native handler.
+    const TX_CAP: usize = 100;
+    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`, likewise.
+    const KI_CAP: usize = 5000;
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
-        .expect("admin get_info");
-    let restricted_info: serde_json::Value = restricted
-        .rpc_call("get_info", None::<serde_json::Value>)
+        .expect("restricted rpc client");
+    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
         .await
-        .expect("restricted get_info");
+        .expect("unrestricted rpc client");
+
+    // Hashes that resolve to nothing: the cap is a request-shape refusal and
+    // fires before any lookup, so the chain's contents are irrelevant.
+    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
+
+    let status = |v: &serde_json::Value| -> String {
+        v.get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("<missing status>")
+            .to_owned()
+    };
+
+    // Over the cap, restricted: refused. This is the REST half — it goes red if
+    // `dispatch_json` stops passing the origin. The JSON-RPC template has its
+    // own assertions further down; neither holds the other.
+    let over: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /get_transactions over cap");
     assert_eq!(
-        restricted_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "a restricted listener must not disclose the node's start time; if this \
-         is the real start time the handler saw a null connection context"
+        status(&over),
+        "Too many transactions requested in restricted mode",
+        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
+         says OK the handler saw a null connection context and the restricted \
+         gate is inert again"
     );
+
+    // At the cap, restricted: served. Pins the boundary rather than "refuses
+    // everything", which a broken-in-the-other-direction change would pass.
+    let at: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP) })),
+        )
+        .await
+        .expect("restricted /get_transactions at cap");
     assert_eq!(
-        restricted_info
-            .get("free_space")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::MAX),
-        "a restricted listener must not disclose free space"
+        status(&at),
+        "OK",
+        "exactly {TX_CAP} hashes is within the cap"
     );
-    assert!(
-        admin_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            > 0,
-        "the admin listener must still report the start time — otherwise the \
-         assertions above would hold for a daemon that reports nothing to anyone"
+
+    // The key-image cap is a second, independently-numbered site.
+    let ki_over: serde_json::Value = restricted
+        .rpc_call(
+            "is_key_image_spent",
+            Some(json!({ "key_images": hashes(KI_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /is_key_image_spent over cap");
+    assert_eq!(
+        status(&ki_over),
+        "Too many key images queried in restricted mode",
+        "a restricted listener must refuse more than {KI_CAP} key images"
     );
 
     // Blast radius: the same over-cap request on the admin listener is served.

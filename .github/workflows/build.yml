@@ -302,7 +302,8 @@ jobs:
           # arm was ever exercised.
           for t in \
             engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
-            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
+            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm \
+            engine::regtest_e2e::native_handlers_apply_their_own_request_caps
           do
             set +e
             cargo test -p shekyl-engine-core --lib "$t" \
