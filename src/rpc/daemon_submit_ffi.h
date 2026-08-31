@@ -237,12 +237,20 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // txid / reference_block: 32 bytes each. key_images: n_key_images × 32
 // bytes, flat, submission order. out_ki_conflicts: n_key_images entries.
 // bond_p_canonical_id: 32 bytes or NULL — non-NULL for a bond-post
-// submission. bond_probe_kind selects the question: _JOIN keys the §8.7.1
-// BP3 record-absence probe (get_archival_bond_hybrid_pubkey) into
-// bond_record_probed/exists; _UNBOND keys the §8.7.1.1 fact bundle into
-// *out_unbond (a handle the caller must free; NULL on absent probe) and
-// leaves bond_record_probed clear, so exactly one of the two facts is ever
-// filled.
+// submission of ANY kind, keying the record probe
+// (get_archival_bond_hybrid_pubkey) into bond_record_probed/exists. That
+// pair is kind-AGNOSTIC on purpose: it is the record's PRESENCE, which both
+// arms re-check at Phase D (§8.7.1 BP3 wants it absent, §8.7.1.1 UB2 wants
+// it present), and the commit shim re-gathers only this POD -- never the
+// bundle below. bond_probe_kind selects what is gathered ON TOP: _UNBOND
+// additionally marshals the record's CONTENTS into *out_unbond (a handle the
+// caller must free; NULL when no unbond probe ran), which only the debit
+// arm's Phase-C battery needs. _JOIN gathers nothing extra.
+//
+// Presence therefore arrives twice for an _UNBOND probe -- as the POD bit and
+// as bundle->record_present -- from two DB reads under one lock scope. They
+// cannot legitimately disagree, and the Rust shim refuses the pair if they
+// do rather than verifying an Unbond against half a record.
 // emission_p_canonical_id (32 bytes) + emission_epochs (n_emission_epochs
 // u64s): non-NULL for an emission submission, keying the §8.7.2 E6 claim-slot
 // probe (emission_probed/emission_claim_conflict) and, when out_emission is

@@ -104,21 +104,32 @@ pub struct SubmitFacts {
     /// review). The ref-age comparison consumes the raw count deliberately
     /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
     pub chain_height: ChainCount,
-    /// §8.7.1 row BP3: an archival bond record exists for the submitted
-    /// **JoinMarket** bond-post's `p_canonical_id`
-    /// (`get_archival_bond_hybrid_pubkey` probe, read under the same lock
-    /// scope as the other facts). JoinMarket wants *absence*; the Unbond
-    /// arm wants presence **and** the record's contents, and carries them
-    /// in [`unbond`](Self::unbond) instead — one fact, never two copies.
+    /// An archival bond record exists for the submitted bond-post's
+    /// `p_canonical_id` (`get_archival_bond_hybrid_pubkey` probe, read under
+    /// the same lock scope as the other facts).
     ///
-    /// `Some(exists)` iff the snapshot ran [`BondProbe::Join`]; `None` for
-    /// every other shape, Unbond included. A `None` on a JoinMarket
-    /// bond-post is a shim contract violation, surfaced by the engine as
+    /// **Kind-agnostic, and deliberately so.** Both arms read this one bit,
+    /// in opposite directions — §8.7.1 BP3 requires the record *absent*,
+    /// §8.7.1.1 UB2 requires it *present* — and it is the only archival
+    /// fact the **commit** shim re-gathers, because Phase D re-collects the
+    /// POD and not the variable-size bundles. Restricting it to JoinMarket
+    /// would leave UB2 with no Phase-D re-check at all.
+    ///
+    /// `Some(exists)` iff a [`BondProbe`] ran, either variant; `None` for
+    /// every non-bond-post shape. A `None` on a bond-post is a shim
+    /// contract violation, surfaced by the engine as
     /// [`crate::submit::EngineFault::ShimContract`] before the verifier
     /// runs — never a guessed fact. On the Phase-D `Raced(fresh)` leg the
-    /// commit shim re-probes from the reparsed blob, so a bond-post block
-    /// landing during Phase C classifies `DoubleSpendConflict` (the
-    /// claim-slot leg) from fresh facts.
+    /// commit shim re-probes from the reparsed blob, so a record appearing
+    /// (JoinMarket) or vanishing (Unbond) during Phase C classifies
+    /// `DoubleSpendConflict` from fresh facts.
+    ///
+    /// For an Unbond the same presence also rides
+    /// [`unbond`](Self::unbond)`.record`, from a second DB read under the
+    /// same lock scope: this bit is *presence*, the bundle is *contents*.
+    /// The shim pins the two against each other rather than trusting
+    /// either — a disagreement is storage inconsistency, and reading past
+    /// it would verify an Unbond against half a record.
     pub bond_record_exists: Option<bool>,
     /// §8.7.1.1 rows UB2/UB3/UB4/UB6/UB7: the Unbond debit arm's fact
     /// bundle. `Some` iff the snapshot ran [`BondProbe::Unbond`]; a `None`
@@ -160,9 +171,12 @@ pub struct SubmitFacts {
 /// the pubkey by the verifier's BP2 leg.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BondProbe<'a> {
-    /// JoinMarket (row BP3) — fills [`SubmitFacts::bond_record_exists`].
+    /// JoinMarket (row BP3) — the record must be **absent**; the presence
+    /// bit in [`SubmitFacts::bond_record_exists`] is the whole answer.
     Join(&'a [u8; 32]),
-    /// Unbond (§8.7.1.1) — fills [`SubmitFacts::unbond`].
+    /// Unbond (§8.7.1.1) — the record must be **present**, so the same
+    /// presence bit is joined by [`SubmitFacts::unbond`] carrying the
+    /// record's contents as verify operands.
     Unbond(&'a [u8; 32]),
 }
 

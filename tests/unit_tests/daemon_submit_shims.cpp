@@ -701,7 +701,7 @@ TEST(daemon_submit_shims, unbond_gather_runs_the_accessor_the_holdings_kind_sele
     uint8_t ki_conflict = 0;
     shekyl_submit_unbond_facts_handle* handle = nullptr;
     // The mock DB keys nothing on the id; the probe routing is the subject.
-  const crypto::hash p_id{};
+    const crypto::hash p_id{};
     ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
         SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle),
       SHEKYL_SUBMIT_OK);
@@ -760,8 +760,10 @@ TEST(daemon_submit_shims, unbond_gather_reports_an_absent_record_without_touchin
 
 TEST(daemon_submit_shims, the_join_probe_does_not_fill_the_unbond_bundle)
 {
-  // One probe, one fact: the JoinMarket arm asks only whether a record
-  // exists, so it must not marshal the debit arm's contents.
+  // Both arms fill the POD's presence bit -- it is kind-agnostic, and the
+  // commit re-check needs it for either. What the JOIN probe must NOT do is
+  // marshal the debit arm's CONTENTS: a bundle nobody asked for is a scan
+  // and a ~2 KiB key copy under the snapshot lock for every bond entry.
   ShimFixture fx;
   fx.db->bond_record_present = true;
 
