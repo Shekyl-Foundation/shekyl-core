@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Independent second consensus-rule census (`RC-`).** 167 independently
+  ratifiable rules, walked from the block and transaction acceptance
+  entry points at `8ba1aae3d` and classified into four buckets. The
+  census is the instrument for the consensus rewrite; no chain
+  behavior change.
+
 ### Removed
 
 - **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
