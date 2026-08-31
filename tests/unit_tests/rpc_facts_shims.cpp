@@ -455,10 +455,64 @@ TEST(rpc_facts_shims, header_for_an_unproducible_in_range_block_is_inconsistent)
   EXPECT_EQ(1, ok.found);
 }
 
+// ── RK-5a: the chain tip, the seam's smallest example ───────────────────────
+//
+// `chain_tip` was written before the `Blockchain&`-plus-scalars shape existed
+// and read `core` and `m_p2p` directly, which left it the one export a
+// fixture could not drive — its only cover was a live daemon. These are the
+// tests the retrofit bought.
+
+// The tip is one block, read once: `chain_height` is the *count*, and
+// `top_hash` is the hash of the block one below it. A pairing that read the
+// height and the hash separately could report a height whose hash belongs to
+// its predecessor; `get_tail_id(height)` cannot.
+TEST(rpc_facts_shims, chain_tip_reports_the_count_and_the_top_block_hash)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_chain_tip_facts facts{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::chain_tip(bap.bc, 0, 0, &facts));
+  EXPECT_EQ(CHAIN_HEIGHT, facts.chain_height);
+  const crypto::hash expected = hash_at(CHAIN_HEIGHT - 1);
+  EXPECT_EQ(0, std::memcmp(facts.top_hash, expected.data, sizeof(facts.top_hash)));
+}
+
+// The two scalars are reported **verbatim**, and that is the contract worth
+// pinning: the wire's rule is "`target_height` is 0 when synchronized", and
+// that rule lives in the Rust handler, not here. If this export ever applied
+// it, the raw target would become unobservable and `sync_info` and
+// `get_info` — which both need to distinguish "synchronized" from "target
+// happens to be zero" — would be reading a value that had already been
+// collapsed. A synchronized daemon with a non-zero target must survive the
+// seam intact.
+TEST(rpc_facts_shims, chain_tip_passes_the_p2p_scalars_through_uncollapsed)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_chain_tip_facts synced{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::chain_tip(bap.bc, 1, 12345, &synced));
+  EXPECT_EQ(1, synced.synchronized);
+  EXPECT_EQ(12345u, synced.target_height);
+
+  shekyl_rpc_chain_tip_facts behind{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::chain_tip(bap.bc, 0, 12345, &behind));
+  EXPECT_EQ(0, behind.synchronized);
+  EXPECT_EQ(12345u, behind.target_height);
+
+  // Any non-zero `synchronized` normalizes to exactly 1, so the Rust twin can
+  // read the byte as a bool without a third state.
+  shekyl_rpc_chain_tip_facts truthy{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::chain_tip(bap.bc, 200, 0, &truthy));
+  EXPECT_EQ(1, truthy.synchronized);
+}
+
 TEST(rpc_facts_shims, null_out_pointer_refuses)
 {
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::chain_tip(bap.bc, 0, 0, nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::block_hash_at(bap.bc, 0, nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
     daemon_rpc_facts::block_header_at(bap.bc, 0, false, nullptr));

@@ -46,6 +46,47 @@ namespace
 
 namespace daemon_rpc_facts {
 
+// Body of `shekyl_rpc_chain_tip`; see the header for the scalar rule that
+// decides which of its facts are parameters. `synchronized` and
+// `target_height` are p2p / `core` scalars the adapter snapshots — neither is
+// reachable from a `Blockchain`, and neither is mockable, so they arrive as
+// values a test states outright.
+int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
+  uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept
+{
+  if (!out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    // `get_tail_id(height)` returns the hash and the height of the *same*
+    // block: one call, so the pair cannot straddle a block being connected.
+    // That is why this reads the tail rather than pairing
+    // `get_current_blockchain_height()` with a separate hash lookup, which is
+    // the race `block_hash_at` takes the lock to close.
+    uint64_t top_height = 0;
+    const crypto::hash top_hash = bc.get_tail_id(top_height);
+    out->chain_height = top_height + 1;
+    std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
+    out->target_height = target_height;
+    out->synchronized = synchronized ? 1 : 0;
+    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("chain tip facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("chain tip facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 // Body of `shekyl_rpc_block_hash_at`; see the header for why it is separate.
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
   shekyl_rpc_block_hash_facts* out) noexcept
@@ -884,28 +925,29 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
-    std::memset(out, 0, sizeof(*out));
     cryptonote::core& core = h->rpc->get_core();
-    uint64_t top_height = 0;
-    crypto::hash top_hash = crypto::null_hash;
-    core.get_blockchain_top(top_height, top_hash);
-    out->chain_height = top_height + 1;
-    std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
-    out->target_height = core.get_target_blockchain_height();
-    out->synchronized = h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
-    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
-    return SHEKYL_RPC_FACTS_OK;
+    // The two scalars, snapshotted here because neither is reachable from a
+    // `Blockchain` and neither can be doubled. `is_synchronized()` lives on
+    // the p2p payload object; `get_target_blockchain_height()` is a plain
+    // `core` member.
+    const uint8_t synchronized =
+      h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
+    const uint64_t target_height = core.get_target_blockchain_height();
+    return daemon_rpc_facts::chain_tip(core.get_blockchain_storage(),
+      synchronized, target_height, out);
   }
   catch (const std::exception& e)
   {
     MERROR("chain tip facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
+    if (out)
+      std::memset(out, 0, sizeof(*out));
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
   catch (...)
   {
     MERROR("chain tip facts: unknown exception");
-    std::memset(out, 0, sizeof(*out));
+    if (out)
+      std::memset(out, 0, sizeof(*out));
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
 }

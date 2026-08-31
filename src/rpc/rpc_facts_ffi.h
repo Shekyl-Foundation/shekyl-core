@@ -292,27 +292,29 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 // a core_rpc_server. A facts export shaped as one opaque block would be
 // testable only through a live daemon; new exports take this shape.
 //
-// `shekyl_rpc_chain_tip` is not split this way yet: it reads
-// `is_synchronized()` off the p2p payload object. This comment used to say
-// that a p2p double was coming with RK-5, which needed the same object —
-// **that double cannot be built.** `m_p2p` is a concrete
+// **The seam's rule, settled in RK-5a.** A body takes what a fixture can
+// build as objects (`Blockchain&`, the pool) and everything else — the p2p
+// reads, the build-time constants — **as scalars the adapter snapshots**.
+// This is not a convenience: `m_p2p` is a concrete
 // `node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, not an
 // interface, so nothing can subclass it, and the one `node_server` harness in
 // the tree (tests/unit_tests/node_server.cpp) instantiates the template on
-// `test_core` — a different type, not a double for this one.
+// `test_core` — a different type, not a double for this one. A p2p double
+// cannot be built, so the p2p facts arrive as plain integers a test supplies
+// and the thin `extern "C"` adapter is the only thing that touches `m_p2p`.
 //
-// The answer is a rule, not a fixture: a facts body takes what a fixture can
-// build as objects (`Blockchain&`, the pool) and everything else **as
-// scalars**. The p2p reads then arrive as plain integers a test supplies, and
-// the thin `extern "C"` adapter is the only thing that touches `m_p2p`. RK-5a
-// retrofits this export to that shape; until it does, the live daemon check
-// is the only cover, which is why it is the one export with no fixture.
+// `shekyl_rpc_chain_tip` was the one export with no fixture, written before
+// this shape existed; RK-5a retrofitted it, and it is now the smallest
+// example of the rule.
 
 #include "crypto/hash.h"
 
 namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
+
+int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
+    uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept;
 
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
     shekyl_rpc_block_hash_facts* out) noexcept;
