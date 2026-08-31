@@ -384,9 +384,6 @@ namespace cryptonote
     LOG_PRINT_L0("Connections: " << ENDL << ss.str());
   }
   //------------------------------------------------------------------------------------------------------------------------
-  // Returns a list of connection_info objects describing each open p2p connection
-  //------------------------------------------------------------------------------------------------------------------------
-  //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::process_payload_sync_data(const CORE_SYNC_DATA& hshd, cryptonote_connection_context& context, bool is_inital)
   {

@@ -160,7 +160,11 @@ pub struct PeerFacts {
     pub host: String,
     pub id: u64,
     pub last_seen: u64,
-    /// ipv4 only, host byte order; 0 otherwise.
+    /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
+    /// returns it: the four octets in **network** order. On a little-endian
+    /// host that means 10.32.0.7 is `0x0700_200a`, which is the value in the
+    /// oracle vector beside the host string it renders to. Zero for every
+    /// non-ipv4 arm.
     pub ip: u32,
     pub pruning_seed: u32,
     /// 0 for the address arms that carry none.

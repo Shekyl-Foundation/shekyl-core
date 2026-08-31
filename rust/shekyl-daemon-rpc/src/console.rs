@@ -654,6 +654,24 @@ fn unix_now() -> u64 {
 // where both are empty by construction — printed `OUT :`. The address column
 // here uses `address`, which is populated for every arm.
 
+/// Format a float for a human: fixed precision, then trailing zeros and a
+/// bare trailing dot removed.
+///
+/// Rust's `{}` on an `f64` prints the shortest string that round-trips, which
+/// is exactly the wrong property for a display — `7.0 / 1000.0 * 100.0`
+/// renders `0.7000000000000001`. The C++ printed through an ostream at its
+/// six-significant-digit default; this is not that, and does not try to be
+/// (console output is not a wire contract). What it is is bounded: the noise
+/// cannot reach the operator, and a value that is exactly round still reads
+/// round.
+fn trimmed(value: f64, decimals: usize) -> String {
+    let s = format!("{value:.decimals$}");
+    match s.find('.') {
+        Some(_) => s.trim_end_matches('0').trim_end_matches('.').to_owned(),
+        None => s,
+    }
+}
+
 /// `d<days>.h<hours>.m<minutes>.s<seconds>`, as
 /// `epee::misc_utils::get_time_interval_string` formats it.
 fn time_interval(seconds: u64) -> String {
@@ -721,9 +739,27 @@ fn human_readable_timespan(seconds: u64) -> String {
     "a long time".to_owned()
 }
 
-/// The peerlist as the console asks for it: blocked peers included, because
-/// the operator asking for the peer list is the one person who wants to see
-/// them.
+/// What the console passes for `public_only`: the whole peerlist. Named
+/// rather than written twice as a bare `false`, so the two commands cannot
+/// drift apart — `print_pl` and `print_pl_stats` reporting different lists
+/// would read as a peerlist that changed between two adjacent commands.
+const PUBLIC_ONLY: bool = false;
+
+/// The peerlist as the console asks for it.
+///
+/// Blocked peers included, because the operator asking for the peer list is
+/// the one person who wants to see them — and **the whole list, not the
+/// public part of it**, which is what both C++ callers asked for. That is
+/// worth spelling out because the wire default is the opposite and reading
+/// the struct suggests otherwise: `public_only` is `KV_SERIALIZE_OPT(…,
+/// true)`, but an `OPT` default is applied when *deserializing* a document
+/// that omits the field, and the console never deserialized one — it filled
+/// an `epee::misc_utils::struct_init` request, which value-initializes, so
+/// `public_only` was `false` on the in-process arm and serialized as an
+/// explicit `false` on the RPC arm. `print_pl_stats` also wrote `= false`
+/// outright. Asking for the public list here would silently drop the
+/// non-public zones from `print_pl` and leave it disagreeing with the counts
+/// `print_pl_stats` prints.
 fn fetch_peer_list(
     src: &Source,
     public_only: bool,
@@ -793,13 +829,18 @@ fn print_peer_list(
     pruned_only: bool,
     now: u64,
 ) -> Result<String, String> {
-    let reply = fetch_peer_list(src, true)?;
+    let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let mut out = Vec::new();
     let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
+        // `take` **before** `filter`: `limit` bounds the peers examined, not
+        // the peers printed. That is the C++ order — it advanced an iterator
+        // `limit` entries and let `print_peer` skip the unpruned ones inside
+        // the loop — so `print_pl 5 pruned` shows the pruned peers among the
+        // first five, not the first five pruned peers.
         for peer in peers
             .iter()
-            .filter(|p| !pruned_only || p.pruning_seed != 0)
             .take(if limit == 0 { usize::MAX } else { limit })
+            .filter(|p| !pruned_only || p.pruning_seed != 0)
         {
             out.push(render_peer(prefix, peer, now));
         }
@@ -815,9 +856,7 @@ fn print_peer_list(
 
 /// `print_pl_stats`: how full each list is.
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
-    // `public_only = false`: the stats are about the whole list, not the
-    // publicly shareable part of it.
-    let reply = fetch_peer_list(src, false)?;
+    let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let (white_limit, gray_limit) = CoreRpc::peerlist_limits();
     let line = |name: &str, size: usize, limit: u32| -> String {
         let percent = if limit == 0 {
@@ -830,7 +869,10 @@ fn print_peer_list_stats(src: &Source) -> Result<String, String> {
             let fraction = size as f64 / f64::from(limit);
             fraction * 100.0
         };
-        format!("{name} list size: {size}/{limit} ({percent}%)")
+        format!(
+            "{name} list size: {size}/{limit} ({}%)",
+            trimmed(percent, 4)
+        )
     };
     Ok(format!(
         "{}\n{}",
@@ -903,7 +945,7 @@ fn print_connections(src: &Source) -> Result<String, String> {
                 "{}({})/{}({})",
                 c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
             ),
-            format!("{:?}", c.state).to_lowercase(),
+            c.state.as_str(),
             c.live_time,
             c.avg_download,
             c.current_download,
@@ -914,14 +956,17 @@ fn print_connections(src: &Source) -> Result<String, String> {
     Ok(out.join("\n"))
 }
 
-/// `get_address_type_name`'s mapping, as the console prints it.
+/// `get_address_type_name`'s mapping, as the console printed it — including
+/// its lower-case `invalid`, which is the only arm whose spelling differs
+/// from the others. Carried verbatim; the C++ it came from is deleted, so
+/// this is the definition now rather than a second copy of one.
 fn address_type_name(address_type: u8) -> &'static str {
     match address_type {
         1 => "IPv4",
         2 => "IPv6",
         3 => "I2P",
         4 => "Tor",
-        _ => "Invalid",
+        _ => "invalid",
     }
 }
 
@@ -1043,8 +1088,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
     )]
     let progress = (reply.height as f64 / target as f64) * 100.0;
     let mut out = vec![format!(
-        "Height: {}, target: {target} ({progress}%)",
-        reply.height
+        "Height: {}, target: {target} ({}%)",
+        reply.height,
+        trimmed(progress, 4)
     )];
     let current_download: u64 = reply.peers.iter().map(|p| p.info.current_download).sum();
     out.push(format!("Downloading at {current_download} kB/s"));
@@ -1071,13 +1117,14 @@ fn sync_info(src: &Source) -> Result<String, String> {
         )]
         let megabytes = size as f64 / 1e6;
         out.push(format!(
-            "{:<24}  {}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {megabytes} MB queued",
+            "{:<24}  {}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
             p.info.address,
             p.info.peer_id,
-            format!("{:?}", p.info.state).to_lowercase(),
+            p.info.state.as_str(),
             p.info.pruning_seed,
             p.info.height,
             p.info.current_download,
+            trimmed(megabytes, 6),
         ));
     }
     let total: u64 = reply.spans.iter().map(|s| s.size).sum();
@@ -1086,7 +1133,11 @@ fn sync_info(src: &Source) -> Result<String, String> {
         reason = "a size for a human, in megabytes"
     )]
     let total_mb = total as f64 / 1e6;
-    out.push(format!("{} spans, {total_mb} MB", reply.spans.len()));
+    out.push(format!(
+        "{} spans, {} MB",
+        reply.spans.len(),
+        trimmed(total_mb, 6)
+    ));
     out.push(reply.overview.clone());
     for s in &reply.spans {
         // `nblocks == 0` would make `start + nblocks - 1` wrap; the C++ had
@@ -1105,12 +1156,13 @@ fn sync_info(src: &Source) -> Result<String, String> {
         } else {
             let speed = f64::from(s.speed) / 100.0;
             out.push(format!(
-                "{:<24}  {}/{:x} ({range}, {} kB)  {} kB/s ({speed})",
+                "{:<24}  {}/{:x} ({range}, {} kB)  {} kB/s ({})",
                 s.remote_address,
                 s.nblocks,
                 seed,
                 s.size / 1000,
-                s.rate / 1000
+                s.rate / 1000,
+                trimmed(speed, 2)
             ));
         }
     }
@@ -1918,8 +1970,8 @@ mod tests {
         assert_eq!(address_type_name(2), "IPv6");
         assert_eq!(address_type_name(3), "I2P");
         assert_eq!(address_type_name(4), "Tor");
-        assert_eq!(address_type_name(0), "Invalid");
-        assert_eq!(address_type_name(200), "Invalid");
+        assert_eq!(address_type_name(0), "invalid");
+        assert_eq!(address_type_name(200), "invalid");
     }
 
     /// Every selector the C++ parser can forward, plus the ones it cannot.

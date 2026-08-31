@@ -533,7 +533,8 @@ pub struct PeerFactsFfi {
     pub host_len: usize,
     pub id: u64,
     pub last_seen: u64,
-    /// ipv4 only, host byte order; 0 otherwise.
+    /// The ipv4 address with its four octets in **network** order, as
+    /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
     pub ip: u32,
     pub pruning_seed: u32,
     /// 0 for the address arms that carry none.

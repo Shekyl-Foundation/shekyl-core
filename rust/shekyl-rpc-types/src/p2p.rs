@@ -25,7 +25,8 @@
 //!   this slice that is not `false`, so it is omitted when true and emitted
 //!   when false — the inverse of every other optional field here.
 //! - **`ip` is two different types under one name.** [`Peer::ip`] is a
-//!   number (a host-order ipv4 address, zero for every other address arm);
+//!   number (an ipv4 address with its octets in network order, zero for every
+//!   other address arm);
 //!   [`ConnectionInfo::ip`] is a string. Modelling both as one shape
 //!   round-trips neither.
 //!
@@ -111,8 +112,12 @@ const fn is_false(b: &bool) -> bool {
 pub struct Peer {
     pub id: u64,
     pub host: String,
-    /// A host-order ipv4 address — a **number**, unlike
-    /// [`ConnectionInfo::ip`]. Zero for every non-ipv4 arm.
+    /// The ipv4 address with its four octets in **network** order — a
+    /// **number**, unlike [`ConnectionInfo::ip`], which carries the same
+    /// address as a dotted string. `10.32.0.7` is `117448714`
+    /// (`0x0700_200a`); the pair appears together in
+    /// `tests/vectors/rpc/get_peer_list_v1.json`. Zero for every non-ipv4
+    /// arm.
     pub ip: u32,
     pub port: u16,
     pub last_seen: u64,
@@ -156,6 +161,28 @@ pub enum ConnectionState {
     Standby,
     Normal,
     Unknown,
+}
+
+impl ConnectionState {
+    /// The name this state carries on the wire.
+    ///
+    /// Deliberately a second spelling of what `rename_all = "snake_case"`
+    /// produces, because the console prints the name and `Debug` would give
+    /// it `beforehandshake` where the same daemon's JSON says
+    /// `before_handshake`. The duplication is bounded by
+    /// `every_state_name_matches_its_serialization`, which asserts the two
+    /// agree for every variant — so this cannot drift from the wire without
+    /// a test going red.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeHandshake => "before_handshake",
+            Self::Synchronizing => "synchronizing",
+            Self::Standby => "standby",
+            Self::Normal => "normal",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl From<u8> for ConnectionState {
@@ -276,4 +303,27 @@ pub struct SyncInfoResponse {
     /// An ASCII picture of the download queue — `"[]"` when it is empty. A
     /// *string* holding brackets, not an empty array.
     pub overview: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionState;
+
+    /// `as_str` and serde must agree for every variant. The console prints
+    /// the first and the wire carries the second, and a daemon that answered
+    /// `normal` over JSON while printing something else on its own console
+    /// would be describing one connection two ways.
+    #[test]
+    fn every_state_name_matches_its_serialization() {
+        for state in [
+            ConnectionState::BeforeHandshake,
+            ConnectionState::Synchronizing,
+            ConnectionState::Standby,
+            ConnectionState::Normal,
+            ConnectionState::Unknown,
+        ] {
+            let serialized = serde_json::to_string(&state).expect("serialize");
+            assert_eq!(format!("\"{}\"", state.as_str()), serialized, "{state:?}");
+        }
+    }
 }

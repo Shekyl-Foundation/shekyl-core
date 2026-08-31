@@ -384,7 +384,7 @@ typedef struct shekyl_rpc_peer_facts {
     size_t       host_len;
     uint64_t     id;
     uint64_t     last_seen;
-    uint32_t     ip;                   // ipv4 only, host byte order; else 0
+    uint32_t     ip;                   // ipv4 only, octets in network order; else 0
     uint32_t     pruning_seed;
     uint16_t     port;                 // 0 for the address arms that carry none
     uint8_t      white;                // 1 = white list, 0 = gray

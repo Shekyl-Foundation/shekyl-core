@@ -80,8 +80,9 @@ async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) ->
 }
 
 /// Overwrite `rpc_connections_count` in a `get_info` body with the live count
-/// from the connection tracker — Rust owns the count; the C++ handler reports 0
-/// (see `core_rpc_server::get_connections_count`). Restricted RPC discloses 0,
+/// from the connection tracker — Rust owns the count; the C++ handler writes a
+/// literal 0 (`on_get_info`, since RK-5a deleted the accessor that had been
+/// returning one). Restricted RPC discloses 0,
 /// matching the C++ policy for the peer/connection fields, so the tracker value
 /// is only injected on the unrestricted listener. Any parse failure returns the
 /// body unchanged rather than dropping the response.

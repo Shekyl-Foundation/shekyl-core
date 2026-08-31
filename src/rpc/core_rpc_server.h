@@ -85,8 +85,6 @@ namespace cryptonote
         const bool restricted,
         const std::string& port
       );
-    //! Reported as 0 here; the live count is owned by the Rust Axum listener
-    //! (ConnTracker) and injected into get_info's rpc_connections_count there.
     network_type nettype() const { return m_core.get_nettype(); }
     // The operator's --rpc-bind-ip (or --rpc-restricted-bind-ip) as given,
     // unparsed; valid after init(). Rust parses, classifies and binds it.
