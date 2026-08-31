@@ -1475,7 +1475,7 @@ fn a_failed_send_restarts_the_message_from_its_first_fragment() {
             first, second,
             "a failed send RESTARTS the channel, so the next emission is the \
              message's FIRST fragment again — not the fragment that failed, \
-             and not the next one. A half-delivered message must not be \
+             and not the next one. A partly sent message must not be \
              completed to whatever successor the slot holds later."
         );
         // And the restart is a real restart: with >1 window enqueued, a
@@ -1569,7 +1569,7 @@ fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
         one — which is exactly the defect the parameter was added to
         prevent, so leaving it unchecked would have made the fix
         unguarded. */
-        let delivered_to = REC.with(|r| {
+        let accepted_for = REC.with(|r| {
             r.borrow()
                 .noise
                 .iter()
@@ -1580,7 +1580,7 @@ fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
         });
         assert_eq!(
             done[0],
-            (0xABCD, true, delivered_to),
+            (0xABCD, true, accepted_for),
             "the verdict must name the enqueuer's token, sent = true, and the \
              peer channel 0's final emission actually went to"
         );

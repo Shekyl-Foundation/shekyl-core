@@ -968,8 +968,10 @@ success arm of `make_payload_send_txs`**, deliberately: #573 moved them there
 because `set_relayed` writes `meta.relayed`, `local_relay_base` reads exactly
 that bit to choose an origin's backoff, and a send that never happened claiming
 the long wait is a falsification. **An enqueue is not a send.** The queue
-accepts a message; the window goes out later, at a cadence tick, and CV-1
-discards an in-flight run when the epoch rolls. Recording at enqueue puts back
+accepts a message; the window goes out later, at a cadence tick, and a roll
+that REBINDS the channel restarts the run in flight (CV-1) — a roll on its own
+discards nothing, which `a_queued_message_survives_an_epoch_roll` pins.
+Recording at enqueue puts back
 the defect #573 removed, in a place where the gap between "accepted" and "sent"
 is not microseconds but up to a full epoch.
 
@@ -1178,6 +1180,23 @@ contract correction and not a redesign.
 **Naming.** `sent` is kept rather than renamed to `accepted`. It means here
 exactly what `send()` means everywhere in this tree, and the C and Rust homes
 each state the gap explicitly so the name cannot be read as an overclaim.
+Identifiers that asserted the stronger fact — a `delivered` send-status local,
+a `delivered_to` test binding, a test named for the peer that "received" it —
+were renamed, because a name is a claim the doc above it cannot qualify.
+
+**A vocabulary gate was considered and REJECTED (2026-08-31).** After this
+correction propagated to a dozen further sites over two review rounds, a CI
+grep forbidding "received"/"reached the wire" across the carrier files looked
+attractive. It fails both of the tests such a gate has to pass. The same words
+are TRUE two paragraphs away — a fluff peer does receive, and several correct
+sentences here are denials that must contain the word — so the check either
+fires on legitimate prose or is scoped so narrowly it cannot fire at all, which
+is `47-gate-subject-assertion`'s empty-subject failure. And the job it would do
+is "new prose must match the defined contract", which is what the contract
+homes, `a_queued_message_survives_an_epoch_roll`, and this section already do;
+policing vocabulary is not the same as policing correctness
+(`no-convention-theater-gates`). Reopen only if the claim recurs in code that
+POSTDATES this section — which would mean the homes are not being read.
 
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 

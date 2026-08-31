@@ -41,7 +41,9 @@
   carrier instead of sending directly. **API:**
   `shekyl_relay_zone_noise_enqueue` takes a caller-minted `token`, and
   `shekyl_relay_zone_poll` takes a `ShekylRelayCarrierResolvedCb` reporting
-  whether each enqueued message reached the wire. The pool is told a
+  whether the transport accepted every window of each enqueued message —
+  acceptance into epee's asynchronous write queue, not proof a peer received
+  it, since a socket failing afterwards never revises the verdict. The pool is told a
   carrier-borne transaction was relayed **only on completion** — an enqueue is
   not a send, and a discarded message reads as *not relayed* so the origin
   retries on the short grid rather than waiting out the derived interval for a

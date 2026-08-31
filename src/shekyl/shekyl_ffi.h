@@ -3090,7 +3090,7 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! above, accepted by the transport for that connection -- or null on a
 //! discard. Reported rather than remembered: a channel binds to whatever
 //! its stem slot holds at send time, so the destination chosen when the
-//! transaction was accepted may not be the node that received it. Recording
+//! transaction was enqueued may not be the one the send was bound to. Recording
 //! the enqueue-time peer would charge an F-10 observation to a node that never
 //! saw the transaction -- a wrong entry in the tallies, not a missing one.
 //!

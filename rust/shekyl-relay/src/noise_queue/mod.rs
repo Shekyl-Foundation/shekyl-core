@@ -92,18 +92,20 @@ pub struct CarrierToken(pub u64);
 /// for a transaction that was never sent and will not be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarrierOutcome {
-    /// Every window of the message went out, to `peer`.
+    /// Every window was accepted by the transport for `peer` — see the type
+    /// doc above for why that is acceptance and not receipt.
     ///
     /// **The peer is reported because the enqueuer cannot know it.** A channel
     /// binds to whatever its stem slot holds at each send, and an epoch
     /// rebuild or a mid-epoch rebind moves that. Recording the peer chosen at
-    /// enqueue time would charge an F-10 observation to a node that never
-    /// received the transaction — a wrong entry in the tallies, not a missing
+    /// enqueue time would charge an F-10 observation to a node the message was
+    /// never sent to at all — a wrong entry in the tallies, not a missing
     /// one.
     ///
     /// It is unambiguous for a COMPLETED message precisely because of CV-1: a
     /// rebind restarts the run rather than resuming it, so every window of a
-    /// message that finished went to one peer, and this is that peer.
+    /// message that finished was accepted for ONE peer, and this is that
+    /// peer.
     Sent {
         token: CarrierToken,
         peer: ConnectionId,
@@ -114,7 +116,9 @@ pub enum CarrierOutcome {
 }
 
 impl CarrierOutcome {
-    /// The peer that received the whole message, or `None` for a discard.
+    /// The peer every window was accepted for, or `None` for a discard.
+    ///
+    /// Not proof of receipt — see [`CarrierOutcome`].
     #[must_use]
     pub fn peer(self) -> Option<ConnectionId> {
         match self {

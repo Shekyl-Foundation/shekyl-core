@@ -603,8 +603,8 @@ fn a_zero_window_budget_is_refused() {
     assert!(NoiseQueues::new(2, vec![0xDD; W], 0).is_none());
 }
 
-/// **The completion names the peer that RECEIVED it, not the one bound when it
-/// was enqueued.**
+/// **The completion names the peer the finished run was ACCEPTED for, not the
+/// one bound when it was enqueued.**
 ///
 /// The enqueuer cannot know the successor: a channel binds to whatever its slot
 /// holds at each send. Recording the enqueue-time peer would charge an F-10
@@ -612,10 +612,12 @@ fn a_zero_window_budget_is_refused() {
 /// tallies rather than a missing one.
 ///
 /// Unambiguous only because of CV-1: a rebind restarts the run, so a message
-/// that completed went entirely to one peer. This drives a rebind mid-message
-/// to prove the reported peer follows the delivery rather than the enqueue.
+/// that completed was accepted for exactly one peer. This drives a rebind
+/// mid-message to prove the reported peer follows the SEND rather than the
+/// enqueue. Acceptance, not receipt — the queue never learns whether a peer
+/// got anything (`CarrierOutcome`).
 #[test]
-fn a_completion_names_the_peer_that_received_it() {
+fn a_completion_names_the_peer_the_run_was_accepted_for() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(2), CarrierToken(99)));
 
@@ -639,6 +641,6 @@ fn a_completion_names_the_peer_that_received_it() {
             peer: id(2)
         }],
         "the completion must name the peer the message was RESTARTED against \
-         and delivered to, not the one it first went out to"
+         and accepted for, not the one it was first bound to"
     );
 }

@@ -3097,7 +3097,7 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
 
     ASSERT_NE(0u, events_.relayed_method_size())
         << "the carrier never told the pool the transaction was relayed. "
-           "Either it never reached the wire, or the completion verdict did "
+           "Either the transport never accepted it, or the completion verdict did "
            "not cross back — and an origin left unrecorded here waits on the "
            "short grid for a transaction that has already gone";
 

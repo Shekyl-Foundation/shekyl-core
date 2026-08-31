@@ -649,11 +649,13 @@ namespace levin
 
           COLLECTS ONLY. See `carrier_verdict` for why nothing is applied here.
 
-          `peer` is the successor the message actually went to, reported by the
-          carrier rather than remembered from enqueue: a channel binds to
-          whatever its slot holds at send time, so the destination chosen when
-          the transaction was accepted may not be the node that received it.
-          Null on a discard. */
+          `peer` is the connection the carrier's windows were ACCEPTED for,
+          reported by the carrier rather than remembered from enqueue: a
+          channel binds to whatever its slot holds at send time, so the
+          destination chosen when the transaction was enqueued may not be the
+          one the send was bound to. Acceptance, not receipt — a socket that
+          fails afterwards never revises this verdict (`shekyl_ffi.h`'s
+          `ShekylRelayCarrierResolvedCb`). Null on a discard. */
       static void on_carrier_resolved(void* ctx, std::uint64_t token, bool sent,
                                       const std::uint8_t* peer) noexcept
       {
@@ -1246,10 +1248,12 @@ namespace levin
 
                The pool is still told NOTHING here. An enqueue is not a send:
                the windows go out on later cadence ticks, and a roll that
-               rebinds the channel restarts the run in flight (CV-1). `record_relayed` and the stem
-               observation fire in `apply_carrier_verdicts`, where the send is
-               known to have happened and the successor is known to be the peer
-               that received it. */
+               rebinds the channel restarts the run in flight (CV-1).
+               `record_relayed` and the stem observation fire in
+               `apply_carrier_verdicts`, where the send
+               is known to have been made and the successor is known to be the
+               connection the transport accepted it for — acceptance, not
+               receipt (§3.1d). */
             const auto placed = zone_->carrier_pending_by_token.emplace(
               token, detail::zone::carrier_pending{tx, id.front(), source_, tx_relay});
 

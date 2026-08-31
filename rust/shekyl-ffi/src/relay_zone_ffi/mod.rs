@@ -370,18 +370,18 @@ fn dispatch(
                 // fragment; `failed` RESTARTS the channel — offset and binding
                 // cleared, epoch bumped — so a multi-window message resumes
                 // from its first fragment rather than its current one. A
-                // half-delivered message must not be finished to a different
+                // partly sent message must not be finished to a different
                 // successor, and the queue cannot know how much of it the
-                // failed send reached the wire with.
+                // failed send was accepted with.
                 let bytes = send.bytes();
-                let delivered = noise(
+                let accepted = noise(
                     ctx,
                     channel,
                     peer.as_bytes().as_ptr(),
                     bytes.as_ptr(),
                     bytes.len(),
                 );
-                if delivered {
+                if accepted {
                     send.sent(q);
                 } else {
                     send.failed(q);
@@ -446,7 +446,7 @@ extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool,
 /// A placeholder for the exports that cannot produce a `NoiseSend`.
 /// `force_fluff` releases batches and can produce neither covert variant;
 /// reaching this is a dispatch bug, so it asserts in debug rather than failing
-/// silently, and reports "not delivered" so no token is ever resolved by it.
+/// silently, and reports "not accepted" so no token is ever resolved by it.
 extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8, _: *const u8, _: usize) -> bool {
     debug_assert!(false, "force_fluff produced a NoiseSend effect");
     false
