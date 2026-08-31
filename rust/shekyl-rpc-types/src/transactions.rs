@@ -192,10 +192,21 @@ impl TryFrom<RawTxEntry> for TxEntry {
             in_pool: raw.in_pool,
         };
         // `in_pool` selects the arm. Members of the arm it did not select are
-        // ignored rather than refused: they are known fields in a combination
-        // this daemon does not emit, and tolerating them is the same
-        // additive-evolution rule the crate applies to unknown fields. What
-        // is *not* tolerated is a selected arm with a member absent.
+        // ignored rather than refused -- and that is emphatically NOT the
+        // crate's unknown-field rule, which is the opposite: `RawTxEntry`
+        // carries `deny_unknown_fields`, so a name this struct does not
+        // declare is a parse error at the boundary. What is tolerated here
+        // is narrower and different in kind: every one of these names IS
+        // declared, because the wire shape is flat and carries both arms'
+        // members as independent options. `in_pool` decides which of them
+        // the reply is required to have populated; a value left in the other
+        // set is a declared field in a combination this daemon does not
+        // emit, and dropping it is how the flat shape becomes a typed arm.
+        // What is *not* tolerated is a selected arm with a member absent.
+        //
+        // The distinction is load-bearing: reading this as unknown-field
+        // tolerance would invite loosening the denial on a parser that sits
+        // on the trust boundary.
         let location = if raw.in_pool {
             TxLocation::Pooled {
                 relayed: raw.relayed.ok_or_else(|| missing("relayed"))?,
