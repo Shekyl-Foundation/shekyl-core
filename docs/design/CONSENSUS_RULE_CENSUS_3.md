@@ -174,8 +174,11 @@ Every bucket-2 evidence pointer in §4 (and every bucket-1 pointer that a
 row's bucket assignment turns on) was verified against the pinned tree:
 the cited doc line was read and contains the quoted claim. Three pointers
 that code comments or first drafts carried were corrected to their real
-homes during that verification (§6.5); none failed terminally, so no row
-was demoted.
+homes during that verification (§6.5); none failed terminally, so pointer
+verification itself demoted no rows. One row **was** demoted on a
+different axis: CEN-F12 moved 2 → 4 when the behavioral-correction pass
+showed its gate is unreachable (§6.8/§6.10) — the sole bucket move
+between the first-complete draft and this version.
 
 ---
 
@@ -513,10 +516,13 @@ first assumption (the RK convention). Behavioral statements in §4 follow the
    a storage-layer recomputation of contained-tx hashes; found lookup-by-hash
    at connect plus verbatim trust at the DB (§5.8). The census records the
    agreement argument where it actually lives (CEN-G2).
-8. **`is_valid_decomposed_amount` was expected to be dead** (confidential
-   amounts) — it is live, but only for the miner tx's loud outputs
-   (CEN-F12), and the Q2 record shows it was examined and kept-moot rather
-   than overlooked.
+8. **`is_valid_decomposed_amount` took two corrections to land.** Expected
+   dead (confidential amounts); the first draft then read the gate as live
+   for the miner tx's loud outputs and bucketed it 2 on the Q2 record; the
+   verification pass showed the gate itself is an unreachable
+   hard-fork-version branch (`version` is the HF version, always 1 — see
+   item 10), so the row was rewritten as dead code and demoted to
+   bucket 4 (CEN-F12). The Q2 record sheds the *chunking*, not this gate.
 9. **No anchor drift:** the dispatch sha and the census sha are the same
    commit (`8ba1aae3d`), and every brief anchor resolved at its stated
    line; no re-location was needed.
