@@ -64,7 +64,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.submit"
 
 // ── §4.5 layout pins (mirrored by const asserts in shekyl-daemon-rpc) ──────
-static_assert(sizeof(shekyl_submit_facts_ffi) == 96, "SubmitFactsFfi size");
+static_assert(sizeof(shekyl_submit_facts_ffi) == 104, "SubmitFactsFfi size");
 static_assert(alignof(shekyl_submit_facts_ffi) == 8, "SubmitFactsFfi align");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
@@ -83,6 +83,8 @@ static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 64, "f
 static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 72, "weight_limit offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 80, "chain_height offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 88, "in_chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_bonded_total) == 96,
+  "bond_record_bonded_total offset");
 
 using namespace cryptonote;
 
@@ -270,7 +272,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
 void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   const crypto::hash& txid, const std::vector<crypto::key_image>& key_images,
   const crypto::hash& reference_block,
-  const crypto::hash* bond_p_canonical_id,
+  const crypto::hash* bond_p_canonical_id, uint8_t bond_probe_kind,
   const crypto::hash* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_facts_ffi& facts, uint8_t* ki_conflicts)
@@ -283,6 +285,17 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
     facts.bond_record_probed = 1;
     facts.bond_record_exists =
       bc.get_db().get_archival_bond_hybrid_pubkey(*bond_p_canonical_id, existing_pubkey) ? 1 : 0;
+    // The debit arm additionally needs the BALANCE, because presence does not
+    // move when a persona exits: apply_archival_unbond rewrites the row with
+    // bonded_total_atomic == 0 rather than deleting it. Read only for the
+    // _UNBOND probe -- the credit arm's question is answered by presence
+    // alone, and this is a second, heavier record load.
+    if (bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND && facts.bond_record_exists)
+    {
+      shekyl::db::ArchivalBondValue record{};
+      if (bc.get_db().get_archival_bond_value(*bond_p_canonical_id, record))
+        facts.bond_record_bonded_total = record.bonded_total_atomic;
+    }
   }
 
   if (emission_p_canonical_id)
@@ -410,7 +423,7 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<Blockchain> bc_lock(bc);
 
     collect_facts_locked(pool, bc, id, kis, ref,
-      bond_p_canonical_id ? &bond_p_id : nullptr,
+      bond_p_canonical_id ? &bond_p_id : nullptr, bond_probe_kind,
       emission_p_canonical_id ? &emission_p_id : nullptr,
       emission_epochs, n_emission_epochs,
       *out_facts, out_ki_conflicts);
@@ -588,6 +601,10 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     // "at most one" or stop assuming it. (Same for `bond_p_id` above, whose
     // spelling this one copied.)
     bool bond_is_unbond = false;
+    // The debit the transaction was verified against. Phase C required it to
+    // equal the record's bonded total, so any drift in that total during
+    // Phase C makes these bytes unconnectable.
+    uint64_t bond_debit = 0;
     const txin_archival_reward_emission* emission_vin = nullptr;
     for (const auto& in : tx.vin)
     {
@@ -599,6 +616,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
         bond_p_id = &bond_vin.p_canonical_id;
         bond_is_unbond = bond_vin.post_kind
           == static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+        bond_debit = bond_vin.bond_debit;
       }
       else if (std::holds_alternative<txin_archival_reward_emission>(in))
         emission_vin = &std::get<txin_archival_reward_emission>(in);
@@ -638,6 +656,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
 
     shekyl_submit_facts_ffi fresh;
     collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id,
+      bond_is_unbond ? SHEKYL_SUBMIT_BOND_PROBE_UNBOND : SHEKYL_SUBMIT_BOND_PROBE_JOIN,
       emission_vin ? &emission_p_id : nullptr, emission_epochs, emission_epochs_len,
       fresh, out_fresh_ki_conflicts);
     if (fresh.fee_per_byte == 0)
@@ -681,9 +700,17 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       // record now gone means a competing debit connected during C. Either
       // way the claim slot moved — Rust classifies DoubleSpendConflict from
       // these fresh facts; C++ chooses no verdict.
+      // §8.7.1 BP3 (credit): a record APPEARING during C consumed the claim
+      // slot. §8.7.1.1 UB2 (debit): the record does not disappear on exit --
+      // apply_archival_unbond rewrites the row with a zero bonded total -- so
+      // the debit arm re-checks the BALANCE it was verified against. Gone, or
+      // no longer equal to this transaction's bond_debit, both mean these
+      // bytes can no longer connect. Rust classifies; C++ chooses no verdict.
       raced = fresh.bond_record_probed != 0
-        && (bond_is_unbond ? fresh.bond_record_exists == 0
-                           : fresh.bond_record_exists != 0);
+        && (bond_is_unbond
+              ? (fresh.bond_record_exists == 0
+                 || fresh.bond_record_bonded_total != bond_debit)
+              : fresh.bond_record_exists != 0);
     if (!raced)
       // §8.7.2 E6 re-check: the emission claim slot moved during C (record
       // gone, or a claimed epoch consumed by a competing claim) — Rust
@@ -901,6 +928,7 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->weight_limit = submit_facts_field_value(seed, 8);
   out->chain_height = submit_facts_field_value(seed, 9);
   out->in_chain_height = submit_facts_field_value(seed, 11);
+  out->bond_record_bonded_total = submit_facts_field_value(seed, 16);
 }
 
 int shekyl_submit_facts_test_check(const shekyl_submit_facts_ffi* facts, uint64_t seed)

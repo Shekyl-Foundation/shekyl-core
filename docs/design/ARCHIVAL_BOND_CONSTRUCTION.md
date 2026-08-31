@@ -464,7 +464,7 @@ the persona-bound transaction around that vin is built too — `AssembleUnbond`
 assembles the whole exit, with the surface-A auth slot under `bond_spend_pk`.
 So the section title overstates for that kind: two of the four are exercised,
 not one. What `Unbond` still lacks is not construction but **reachability** —
-no RPC method, no CLI verb — and neither slice 3's engine walk nor the Unbond submit fact set (landed 2026-08-29) lifted it; the gate is now the missing dispatch alone. **`Rebond` and `HoldingsUpdate` remain
+no RPC method, no CLI verb, and nothing dispatching the assembled bytes — and neither slice 3's engine walk nor the Unbond submit fact set (landed 2026-08-29) lifted any of the three. **`Rebond` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture

@@ -94,6 +94,13 @@ pub struct SubmitFactsFfi {
     /// `in_chain` so the pair cannot be racy (§4.1). Valid iff `in_chain`;
     /// zeroed otherwise.
     pub in_chain_height: u64,
+    /// The probed record's bonded total; valid iff `bond_record_probed` and
+    /// the probe was [`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`].
+    ///
+    /// Presence does not move when a persona exits — `apply_archival_unbond`
+    /// rewrites the row with a zero bonded total rather than deleting it — so
+    /// the debit arm's Phase-D re-check reads the balance instead.
+    pub bond_record_bonded_total: u64,
 }
 
 impl SubmitFactsFfi {
@@ -109,6 +116,7 @@ impl SubmitFactsFfi {
             bond_record_exists: 0,
             emission_probed: 0,
             emission_claim_conflict: 0,
+            bond_record_bonded_total: 0,
             reserved: [0; 7],
             ref_height: 0,
             root: [0; 32],
@@ -123,7 +131,7 @@ impl SubmitFactsFfi {
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 96);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 104);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
@@ -134,6 +142,7 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) =
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_probed) == 7);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_claim_conflict) == 8);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 96);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 9);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 24);

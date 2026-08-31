@@ -131,6 +131,20 @@ pub struct SubmitFacts {
     /// either — a disagreement is storage inconsistency, and reading past
     /// it would verify an Unbond against half a record.
     pub bond_record_exists: Option<bool>,
+    /// The probed record's bonded total; `Some` iff a [`BondProbe::Unbond`]
+    /// ran and the record exists.
+    ///
+    /// **This is the fact the debit arm re-checks at Phase D, and presence is
+    /// not a substitute for it.** `apply_archival_unbond` rewrites the row
+    /// with `bonded_total_atomic == 0` rather than deleting it, so an exited
+    /// persona still probes as *present*. A competing Unbond connecting
+    /// during Phase C moves the balance, never the row — a re-check keyed on
+    /// presence could not observe the exit it exists to catch.
+    ///
+    /// Phase C required `bond_debit == record_bonded_total`, so the engine's
+    /// race test is this value against the submitted vin's own debit: gone,
+    /// or no longer equal, and the bytes can no longer connect.
+    pub bond_record_bonded_total: Option<u64>,
     /// §8.7.1.1 rows UB2/UB3/UB4/UB6/UB7: the Unbond debit arm's fact
     /// bundle. `Some` iff the snapshot ran [`BondProbe::Unbond`]; a `None`
     /// on an Unbond submission is a shim contract violation, pre-checked
@@ -440,9 +454,19 @@ pub trait SubmitStateShim {
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
     ///
     /// `bond_probe` is `Some` for a bond-post submission and names which
-    /// archival-bond question to ask: [`BondProbe::Join`] fills
-    /// [`SubmitFacts::bond_record_exists`], [`BondProbe::Unbond`] fills
-    /// [`SubmitFacts::unbond`]. `None` skips the probe.
+    /// archival-bond question to ask. The outputs are **not** mutually
+    /// exclusive, and an alternate implementor that treats them that way
+    /// will fault the engine:
+    ///
+    /// - **Both variants must fill [`SubmitFacts::bond_record_exists`]** —
+    ///   it is the kind-agnostic presence bit, required for every bond-post
+    ///   and re-read at Phase D by both arms.
+    /// - [`BondProbe::Unbond`] must **additionally** fill
+    ///   [`SubmitFacts::unbond`] (the record's contents, for Phase C) and
+    ///   [`SubmitFacts::bond_record_bonded_total`] (the balance, for the
+    ///   Phase-D re-check that presence cannot express).
+    ///
+    /// `None` skips the probe entirely.
     ///
     /// `Err(ShimFault)` is the shim's internal-failure arm (DB exception,
     /// marshalling fault) — never a verdict input.

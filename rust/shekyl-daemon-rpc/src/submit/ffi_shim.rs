@@ -80,6 +80,10 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
         // same validity-gate shape as in_chain_height.
         bond_record_exists: (pod.bond_record_probed != 0).then_some(pod.bond_record_exists != 0),
+        // Valid only for an Unbond probe against a present record; the
+        // caller gates it, since a bare 0 is a legitimate value here (the
+        // exited state) and must not be confused with "not probed".
+        bond_record_bonded_total: None,
         // Filled by the caller from the §8.7.1.1 handle (variable-size, so
         // it travels beside the POD) — the same shape as `emission`.
         unbond: None,
@@ -428,6 +432,19 @@ impl SubmitStateShim for FfiSubmitShim {
         // inconsistency, and reading past it would verify an Unbond against
         // half a record.
         if let Some(bundle) = unbond.as_ref() {
+            // Two reads of the same row under one lock scope must agree on
+            // the balance too, not just on presence — the Phase-D re-check
+            // compares against this number.
+            if let Some(record) = bundle.record.as_ref() {
+                if record.bonded_total_atomic() != pod.bond_record_bonded_total {
+                    tracing::error!(
+                        bundle_total = record.bonded_total_atomic(),
+                        pod_total = pod.bond_record_bonded_total,
+                        "submit snapshot shim disagreed with itself about the bonded total"
+                    );
+                    return Err(ShimFault);
+                }
+            }
             if bundle.record.is_some() != (pod.bond_record_exists != 0) {
                 tracing::error!(
                     bundle_present = bundle.record.is_some(),
@@ -446,6 +463,12 @@ impl SubmitStateShim for FfiSubmitShim {
             ShimFault
         })?;
         facts.emission = emission;
+        // Gate on the probe *and* on presence: `bond_record_bonded_total` is
+        // 0 both for "no record" and for "record with nothing bonded", and
+        // only the second is a value the engine may compare against.
+        facts.bond_record_bonded_total = (matches!(bond_probe, Some(BondProbe::Unbond(_)))
+            && pod.bond_record_exists != 0)
+            .then_some(pod.bond_record_bonded_total);
         facts.unbond = unbond;
         Ok(facts)
     }
@@ -537,6 +560,7 @@ mod tests {
             weight_limit: 149_400,
             chain_height: 200,
             in_chain_height: 0,
+            bond_record_bonded_total: 0,
         }
     }
 

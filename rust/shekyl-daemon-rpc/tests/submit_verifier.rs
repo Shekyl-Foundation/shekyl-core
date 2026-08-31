@@ -50,7 +50,7 @@ use shekyl_daemon_rpc::submit::{
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
-use shekyl_rpc_types::SubmitVerdict;
+use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_tx_builder::{
     encode_final_tx, phase1_payload_hashes, sign_pqc_auths, sign_transaction,
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
@@ -130,6 +130,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         // the max (100).
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
         bond_record_exists: None,
+        bond_record_bonded_total: None,
         unbond: None,
         emission: None,
         emission_claim_conflict: None,
@@ -1011,6 +1012,7 @@ fn non_spend_kinds_refuse_loudly() {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        bond_record_bonded_total: None,
         unbond: None,
         emission: None,
         emission_claim_conflict: None,
@@ -1399,6 +1401,8 @@ fn unbond_admitting_facts() -> SubmitFacts {
     // Row UB2 as the POD sees it, and the bundle carrying the contents. The
     // shim pins these two against each other.
     facts.bond_record_exists = Some(true);
+    // The Phase-D balance fact, pinned to the same total the bundle carries.
+    facts.bond_record_bonded_total = Some(unbond_fixture().record_bonded_total);
     facts.chain_height = ChainCount::from_raw(unbond_chain_height());
     facts.reference = Some(ReferenceFacts {
         height: BlockHeight::from_raw(unbond_chain_height() - 50),
@@ -1920,4 +1924,60 @@ fn a_missing_unbond_bundle_faults_the_engine_rather_than_rejecting() {
         "expected a ShimContract fault, got {err:?}"
     );
     assert_eq!(shim.commit_count(), 0, "a faulted submission never commits");
+}
+
+#[test]
+fn a_competing_unbond_that_exits_the_record_is_a_terminal_conflict() {
+    // The race presence CANNOT see. `apply_archival_unbond` does a
+    // whole-record write: the exited persona keeps its row with
+    // `bonded_total_atomic == 0`, and the pubkey probe still reports it
+    // present. So the fresh facts below are exactly what the daemon returns
+    // after a competing Unbond connects during Phase C — record present,
+    // balance gone — and a re-check keyed on presence would classify this as
+    // "no premise moved" and admit a transaction that can never connect.
+    let fx = unbond_fixture();
+    let mut fresh = unbond_admitting_facts();
+    fresh.bond_record_exists = Some(true);
+    fresh.bond_record_bonded_total = Some(0);
+    let shim = MockShim::new(
+        unbond_admitting_facts(),
+        CommitOutcome::Raced(Box::new(fresh)),
+    );
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&fx.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(
+        verdict,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::DoubleSpendConflict
+        },
+        "an exit that consumed the balance is terminal for these bytes"
+    );
+}
+
+#[test]
+fn a_balance_that_moved_under_the_debit_is_also_terminal() {
+    // The credit-side twin: a Rebond or HoldingsUpdate-add connecting during
+    // Phase C RAISES the record's total, so the vin's `bond_debit` no longer
+    // equals it and the full-exit equality can never hold again for these
+    // bytes. Keying on "exited" alone would miss this; keying on the balance
+    // catches both directions.
+    let fx = unbond_fixture();
+    let mut fresh = unbond_admitting_facts();
+    fresh.bond_record_bonded_total = Some(fx.record_bonded_total + 1);
+    let shim = MockShim::new(
+        unbond_admitting_facts(),
+        CommitOutcome::Raced(Box::new(fresh)),
+    );
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&fx.hex, SubmitCaller::Owner)
+            .expect("no engine fault"),
+        SubmitVerdict::Rejected {
+            cause: RejectCause::DoubleSpendConflict
+        },
+        "a debit that no longer matches the record's total is unconnectable"
+    );
 }

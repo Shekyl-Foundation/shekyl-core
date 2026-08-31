@@ -67,15 +67,46 @@ if [ "${callers:-0}" -lt 3 ]; then
   fail=1
 fi
 
-# ── The invariant: no C++ site compares against a stored bond_spend_pk ───
-hits=$(rg -n --no-heading 'record\.bond_spend_pk|\.bond_spend_pk\s*$' src/ -g '*.cpp' -g '*.h' \
-        | rg '(==|!=)' || true)
+# ── The invariant: no C++ STATEMENT compares an auth key to a stored key ──
+#
+# Statement-scoped, not line-scoped. The first draft matched `bond_spend_pk`
+# and a comparison operator on the same physical line, with the receiver
+# spelled literally `record` -- so it caught the shape I happened to bite it
+# with and missed the ones a real re-implementation would take: the operands
+# reversed, the comparison wrapped across lines, or the record held in a
+# variable named anything else. clang-format wraps at 100 columns, and this
+# predicate is longer than that, so the split form is the LIKELY one.
+#
+# So: strip comments, join each statement onto one line, then require a
+# statement to mention a bond_spend_pk, a comparison operator, AND an auth
+# key (pqc_auths / auth_pubkey / auth_key). That last conjunct is what keeps
+# the §9.11 vin belt out of the net -- `bond.bond_spend_pk.size() != LEN`
+# asks whether the WIRE carried a key, names no auth key, and is a different
+# question from who is authorized.
+#
+# HONEST LIMIT, because a gate advertised as complete is worse than one whose
+# reach is written down: this cannot catch a copy split across statements
+# (`const auto& k = rec.bond_spend_pk;` then `if (auth == k)`), because the
+# operands never meet in one statement. No grep can. What it does catch is
+# the realistic accident -- someone re-spelling the predicate inline, the way
+# it was already spelled three times -- and the call-site count above catches
+# an arm dropping the shared pin entirely. Structural enforcement would need
+# a clang-based check over the AST; that is the reopening criterion (rule 21)
+# if a split-statement copy ever lands.
+statements=$(rg --no-line-number --no-heading '' src/ -g '*.cpp' -g '*.h' \
+              | sed 's://.*::' \
+              | tr '\n' ' ' \
+              | sed 's:;:;\n:g')
+hits=$(printf '%s\n' "$statements" \
+        | rg 'bond_spend_pk' \
+        | rg '(==|!=)' \
+        | rg '(pqc_auths|auth_pubkey|auth_key)' || true)
 if [ -n "$hits" ]; then
-  echo "FAIL: a C++ site compares against a stored record's bond_spend_pk."
+  echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
   echo "      (shekyl-archival-retention::debit_auth_pin); call"
   echo "      shekyl_archival_debit_auth_pin instead of re-deriving it."
-  echo "$hits"
+  printf '%s\n' "$hits"
   fail=1
 fi
 

@@ -1423,15 +1423,32 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 | UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `:4926` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
 | UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `:4928-4948` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
 
-**The record fact's time asymmetry (UB2), and why it is not BP3 with the sign
-flipped.** BP3 wants *absence* and treats a record appearing during Phase C as
-a claim-slot conflict. UB2 wants *presence*, and the same fact value carries
-two different verdicts depending on when it was observed: a record **never
-present** is a submitter error (`Malformed` — these bytes can never connect),
-while a record **present at B and gone at D** means a competing debit connected
-during C, which is terminal for this `P` and classifies `DoubleSpendConflict`.
-This is the `reference` field's asymmetry (`ReferenceNotFound` at C vs
-`StaleRoot` at a D re-check) applied to the record probe.
+**The exit does not remove the row, so UB2 is not BP3 with the sign flipped.**
+BP3 wants *absence*, and a record appearing during Phase C is a claim-slot
+conflict. The debit arm cannot simply invert that, because
+`apply_archival_unbond` performs a **whole-record write**: the exited persona
+keeps its row with `bonded_total_atomic == 0`, empty holdings and the closing
+interval, and `get_archival_bond_hybrid_pubkey` still reports it **present**
+(the v4 claimed set and `first_paying_emission_height` have to survive the
+release — F-S1). A competing Unbond moves the **balance**, never the row, so a
+Phase-D re-check keyed on presence could never observe the exit it exists to
+catch.
+
+UB2 therefore carries two facts and re-checks the second. At Phase B/C a record
+**never present** is a submitter error (`Malformed` — these bytes can never
+connect). At Phase D the test is the record's balance against the submitted
+vin's own `bond_debit`, which the Phase-C battery required it to equal: gone,
+zeroed by a competing exit, **or raised** by a `Rebond` / `HoldingsUpdate`-add
+that connected during Phase C — each leaves the full-exit equality
+unsatisfiable for these bytes, so each classifies `DoubleSpendConflict`. Keying
+on the balance rather than on "exited" catches the credit-side direction for
+free.
+
+The time asymmetry survives — one fact, two verdicts by observation time, the
+`reference` field's shape (`ReferenceNotFound` at C vs `StaleRoot` at a D
+re-check). It is the *balance* that carries it, not presence. (An earlier
+revision said "present at B and gone at D". The row does not go away, and a
+check written to that description is inert.)
 
 **Why UB4 carries the scan discriminant instead of just the epochs.** The
 kind→scan decision is Rust's (`HoldingsKind::last_served_scan`, exhaustive on

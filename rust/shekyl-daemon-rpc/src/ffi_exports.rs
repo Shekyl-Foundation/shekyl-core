@@ -306,6 +306,7 @@ fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
         weight_limit: submit_facts_field_value(seed, 8),
         chain_height: submit_facts_field_value(seed, 9),
         in_chain_height: submit_facts_field_value(seed, 11),
+        bond_record_bonded_total: submit_facts_field_value(seed, 16),
     }
 }
 

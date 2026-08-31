@@ -428,13 +428,24 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     block for the same P landed while we verified (Phase C
         //     required the record absent). Same terminality as the
         //     key-image leg — someone else consumed the claim slot.
-        //     The debit arm reads the SAME fact in the opposite direction
-        //     (§8.7.1.1 UB2): Phase C required the record PRESENT, so a
-        //     record now gone means a competing debit connected during C.
-        //     Terminal either way — the claim slot moved.
+        //     The debit arm cannot use that fact in the opposite direction,
+        //     because the record does NOT disappear on exit:
+        //     `apply_archival_unbond` rewrites the row with a zero bonded
+        //     total. §8.7.1.1 UB2 therefore re-checks the BALANCE Phase C
+        //     verified against — the vin's own `bond_debit`, which the
+        //     battery required to equal the record's total. Gone, or no
+        //     longer equal, and these bytes can never connect. Terminal
+        //     either way: the slot moved.
         if parsed.kind == SubmitTxKind::BondPost {
             let slot_moved = if parsed.bond_post_is_unbond() {
-                fresh.bond_record_exists == Some(false)
+                let debit = parsed.bond_post().map(|(_, bond)| bond.bond_debit);
+                match (fresh.bond_record_bonded_total, debit) {
+                    (Some(total), Some(debit)) => total != debit,
+                    // No balance fact on an Unbond re-check is a shim
+                    // contract violation, not a silent pass; fall through to
+                    // the fault arm at the end rather than guessing.
+                    _ => false,
+                }
             } else {
                 fresh.bond_record_exists == Some(true)
             };

@@ -123,6 +123,21 @@ typedef struct shekyl_submit_facts_ffi {
     uint64_t weight_limit;
     uint64_t chain_height;
     uint64_t in_chain_height;
+    // The probed record's bonded total, valid iff bond_record_probed AND the
+    // probe kind was _UNBOND. Appended (offset 96) so no existing offset
+    // moves.
+    //
+    // WHY PRESENCE IS NOT ENOUGH: apply_archival_unbond does a WHOLE-RECORD
+    // write, so an exited persona keeps its row with bonded_total_atomic == 0
+    // and get_archival_bond_hybrid_pubkey still reports it present. A
+    // competing Unbond connecting during Phase C therefore leaves
+    // bond_record_exists == 1, and a re-check keyed on presence can never
+    // observe the exit. The balance is what moves; the row does not.
+    //
+    // 0 is not ambiguous here: paired with bond_record_exists it distinguishes
+    // "no row" from "row with nothing bonded", and the second IS the exited
+    // state a debit must be refused against.
+    uint64_t bond_record_bonded_total;
 } shekyl_submit_facts_ffi;
 
 // ── §8.7.2 emission fact marshal (rows E6 + E7) ─────────────────────────────

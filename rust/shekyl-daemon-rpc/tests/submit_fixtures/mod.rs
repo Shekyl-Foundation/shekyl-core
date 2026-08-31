@@ -281,6 +281,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        bond_record_bonded_total: None,
         unbond: None,
         emission: None,
         emission_claim_conflict: None,
