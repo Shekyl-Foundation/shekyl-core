@@ -3300,9 +3300,9 @@ std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
 //! out_channel is the stem slot and is meaningful only when the carrier is
 //! noise (written 0 otherwise). Every out-param is written on the
 //! null-handle path so a mishandled NO_ROUTE cannot be read as a noise
-//! stem. Deliberately unused by production notify yet —
-//! COVER_TRAFFIC_RESTORATION.md §2.9 step 1; do not delete on a
-//! caller grep (§1.6).
+//! stem. `dandelionpp_notify` is its production caller as of 2026-08-29 —
+//! COVER_TRAFFIC_RESTORATION.md §3.1a. It stood unused before that, kept
+//! against a caller grep on §1.6's criteria, which still govern deletion.
 std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,

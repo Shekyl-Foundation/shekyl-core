@@ -618,8 +618,28 @@ namespace levin
         boost::uuids::uuid peer;
       };
 
-      //! Verdicts collected during a poll; drained by `apply_carrier_verdicts`.
+      /*! Verdicts collected during a poll; drained by `apply_carrier_verdicts`.
+
+          RESERVE BEFORE POLLING — see `reserve_verdicts`. `take_resolved`
+          drains an outcome out of Rust before the callback runs, so a throw
+          from `push_back` loses it permanently, and a lost verdict is not a
+          dropped log line: its `carrier_pending_by_token` entry becomes
+          immortal, every later offer of that transaction is deduplicated
+          against it, and the deduplicated offer is not added to `to_send`
+          either. The transaction would never be sent again by any path. */
       std::vector<carrier_verdict> verdicts;
+
+      /*! Size the buffer for every outcome this poll could produce.
+
+          Each pending token resolves at most once, so the pending count is an
+          exact upper bound. Called BEFORE `shekyl_relay_zone_poll`, where a
+          `bad_alloc` propagates normally and costs nothing — no outcome has
+          left Rust yet. After that point the callback is `noexcept` and has
+          nowhere to put a failure. */
+      void reserve_verdicts(const detail::zone& z)
+      {
+        verdicts.reserve(z.carrier_pending_by_token.size());
+      }
 
       /*! What became of a transaction handed to the carrier.
 
@@ -644,7 +664,13 @@ namespace levin
         }
         catch (const std::exception& e)
         {
-          MERROR("Failed to buffer a carrier verdict: " << e.what());
+          /* Reserved ahead of the poll, so this is not reachable by an
+             allocation. If it ever fires the verdict is lost and its pending
+             entry is immortal, which strands that transaction — loud, and
+             named, so it is not read as a dropped log line. */
+          MERROR("LOST a carrier verdict for token " << token << ": " << e.what()
+                 << " — its pending entry is now immortal and that transaction "
+                    "will be deduplicated out of every later offer");
         }
       }
 
@@ -880,6 +906,7 @@ namespace levin
            needs it to filter by blockchain height. */
         const std::uint64_t at = now_ms();
         relay_effects sink{zone_, core_};
+        sink.reserve_verdicts(*zone_);
         shekyl_relay_zone_poll(
           zone_->relay.get(), at,
           std::addressof(sink), relay_effects::on_outbound,
@@ -1473,6 +1500,7 @@ namespace levin
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
       const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
       relay_effects sink{z, core};
+      sink.reserve_verdicts(*z);
       shekyl_relay_zone_poll(
         z->relay.get(), at,
         std::addressof(sink), relay_effects::on_outbound,

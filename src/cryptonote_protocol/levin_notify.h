@@ -143,9 +143,20 @@ namespace levin
         of whether the zone also runs noise channels
         (`shekyl_relay_zone_noise_enabled`). Noise is a carrier, not a routing
         verdict: it does not demote a stem, and it does not broadcast to every
-        channel. Until the daemon cutover gives `NoiseQueues` an in-process
-        caller, a noise-configured zone still emits its dummy cadence but this
-        method does not queue the transaction onto it.
+        channel.
+
+        SINCE 2026-08-29 THIS METHOD DOES QUEUE ONTO THE CARRIER. On a
+        noise-configured zone in a stem epoch it consumes
+        `plan_dispatch_with_refresh` and enqueues on the returned channel
+        instead of sending directly, so the cadence carries real transactions
+        rather than dummies alone. The pool is told a carrier-borne
+        transaction was relayed only when its terminal verdict says every
+        window reached the wire — an enqueue is not a send
+        (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
+
+        The zone must still be noise-configured, which needs the development
+        opt-in; without it the carrier is off and this method behaves as
+        before.
 
         \param txs The transactions that need to be serialized and relayed.
         \param source The source of the notification. `is_nil()` indicates this

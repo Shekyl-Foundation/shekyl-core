@@ -1560,11 +1560,29 @@ fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
         }
         let done = take_resolved();
         assert_eq!(done.len(), 1, "exactly one message completed");
+
+        /* THE PEER IS ASSERTED, not merely recorded. The recorder captures it
+        because F-10 charges an observation to the peer a stem was given to,
+        and the whole reason this callback reports the peer is that the
+        enqueuer cannot know it. An assertion that compared only
+        `(token, sent)` would stay green against a null peer or the wrong
+        one — which is exactly the defect the parameter was added to
+        prevent, so leaving it unchecked would have made the fix
+        unguarded. */
+        let delivered_to = REC.with(|r| {
+            r.borrow()
+                .noise
+                .iter()
+                .filter(|(c, _, _)| *c == 0)
+                .map(|(_, p, _)| *p)
+                .next_back()
+                .expect("channel 0 emitted")
+        });
         assert_eq!(
-            (done[0].0, done[0].1),
-            (0xABCD, true),
-            "the last window must resolve the message, with the enqueuer's own \
-             token and sent = true"
+            done[0],
+            (0xABCD, true, delivered_to),
+            "the verdict must name the enqueuer's token, sent = true, and the \
+             peer channel 0's final emission actually went to"
         );
         shekyl_relay_zone_free(h);
     }
