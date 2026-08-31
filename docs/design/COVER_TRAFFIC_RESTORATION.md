@@ -28,7 +28,7 @@ architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 
 ---
 
-## 1. The audit — every component, and why each has no production caller
+## 1. The audit (2026-08-20) — every component, and why each HAD no production caller
 
 ### 1.1 The mechanism is inert at exactly TWO points
 

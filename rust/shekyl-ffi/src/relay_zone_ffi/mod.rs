@@ -654,10 +654,10 @@ pub extern "C" fn shekyl_relay_zone_new(
         let Ok(dummy) = shekyl_levin::noise_notify(carrier::WINDOW_BYTES) else {
             return core::ptr::null_mut();
         };
-        // The budget is what ONE EPOCH can deliver on a channel. Accepting
-        // more guarantees CV-1 discards the surplus at the roll, so the excess
-        // was never going to arrive — and an unbounded queue would grow with
-        // the caller's identity map behind it.
+        // The budget is what ONE EPOCH can deliver on a channel — a backlog
+        // bound, since nothing drains the queue at a roll. It is the only
+        // bound there is, and the caller's identity map grows behind it, so
+        // the epoch is the argument that sizes both. See `window_budget`.
         let budget = carrier::noise_windows_in_epoch(min_epoch_secs) as usize;
         let Some(q) = NoiseQueues::new(stems, dummy, budget) else {
             // Same refusal channel as `Zone::new` above: a null handle.

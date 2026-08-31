@@ -1349,8 +1349,8 @@ unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
     shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
 
     let before = REC.with(|r| r.borrow().noise.len());
-    // Covert ticks are 10-15 s apart and the epoch minimum is 600 s, so a
-    // handful of wakes stays well inside one epoch.
+    // Covert ticks average 5 s (3.333 s + U[0, 3.334 s]) and the epoch minimum
+    // here is 600 s, so a handful of wakes stays well inside one epoch.
     for _ in 0..16 {
         if REC.with(|r| r.borrow().noise.len()) > before {
             return;
@@ -1639,6 +1639,143 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
             vec![(0x1234, false)],
             "an unbound channel discards what it held, and the discard must \
              cross as sent = false — silence here is the record that never fires"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// Poll exactly one wake, keeping both stem slots fed.
+///
+/// `drive_one_noise_send` loops until an emission lands, which hides the wake
+/// an epoch rolls on. This one advances a single step so a caller can watch
+/// `GATHER.calls` cross.
+///
+/// The peers fed here MUST also appear in `GATHER.supply`: a roll rebuilds the
+/// map from the gathered set, and a slot that lands on no peer unbinds and
+/// discards what it held. Tests that care about surviving a roll depend on
+/// that overlap, so it is a precondition and not a coincidence.
+unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
+    let peers: Vec<u8> = [id(1), id(2)].concat();
+    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
+    let due = shekyl_relay_zone_next_wake(h);
+    shekyl_relay_zone_poll(
+        h,
+        due,
+        std::ptr::null_mut(),
+        rec_gather,
+        rec_fluff,
+        rec_noise,
+        rec_resolved,
+    );
+}
+
+/// **An epoch roll discards nothing that is queued.**
+///
+/// Written because the opposite was asserted, in six places, for as long as
+/// the budget existed: that accepting more than an epoch delivers was safe
+/// because "CV-1 discards the surplus at the roll". It does not. A rollover
+/// rebuilds the stem map and never touches `NoiseQueues`; the only drain is
+/// `unbind`, which needs a slot to resolve to NO peer at its due tick, and
+/// CV-1 restarts an in-flight run without dropping anything from `pending`.
+///
+/// The claim survived unchallenged because nothing observed this axis — every
+/// carrier test stays inside one epoch. That is what makes the budget the ONLY
+/// bound on growth rather than a tidier-up after one, so it is worth a gate.
+///
+/// The slots stay bound across the roll on purpose (`drive_one_wake` re-feeds
+/// the same two peers): an unbound slot is the one case that DOES discard, and
+/// hitting it here would test the opposite arm by accident.
+///
+/// What edit reds this: make the epoch branch of `Driver::poll` push
+/// `Effect::NoiseUnbind` for each channel on a rebuild.
+#[test]
+fn a_queued_message_survives_an_epoch_roll() {
+    reset();
+    let _ = take_resolved();
+    const W: usize = shekyl_relay_privacy::params::carrier::WINDOW_BYTES;
+    let msg = vec![0xA7u8; W];
+
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        // 60 s still affords a full-size message, and rolls an order of
+        // magnitude sooner than the 600 s the other cases use, so the boundary
+        // arrives inside a bounded loop.
+        let h = shekyl_relay_zone_new(0, TOR, 2, 60, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null(), "60 s affords MAX_FRAGMENTS windows");
+        GATHER.with(|g| g.borrow_mut().supply = vec![id(1), id(2), id(3)]);
+
+        // Bind the slots BEFORE enqueueing. Into an empty stem map the first
+        // due tick is an unbind, which would discard the backlog for a reason
+        // that has nothing to do with the roll.
+        drive_one_wake(h);
+
+        // The channel is TOPPED UP each wake rather than filled once. A full
+        // budget is one epoch of windows counted at the slowest cadence, so it
+        // drains in about three quarters of an epoch — filling once and waiting
+        // empties the channel before the boundary and tests nothing.
+        let mut next_token = 100u64;
+        let mut enqueued = 0usize;
+        let mut rolled = false;
+        let mut resolved_at_roll = 0usize;
+        for _ in 0..2000 {
+            while shekyl_relay_zone_noise_enqueue(h, 0, msg.as_ptr(), msg.len(), next_token) {
+                next_token += 1;
+                enqueued += 1;
+            }
+            let before = GATHER.with(|g| g.borrow().calls);
+            drive_one_wake(h);
+            if GATHER.with(|g| g.borrow().calls) > before {
+                // SENT, not merely resolved: a discard resolves too, so
+                // counting both would let the discard-at-roll defect satisfy
+                // this guard and fail the vacuity check instead of the
+                // assertion that names the property.
+                resolved_at_roll =
+                    RESOLVED.with(|r| r.borrow().iter().filter(|(_, sent, _)| *sent).count());
+                rolled = true;
+                break;
+            }
+        }
+        assert!(rolled, "the epoch rolled inside the loop");
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            2,
+            "both slots stayed bound across the roll — an unbound slot is the \
+             one case that DOES discard, and hitting it here would test the \
+             opposite arm by accident"
+        );
+
+        assert!(
+            resolved_at_roll < enqueued,
+            "the roll must land on a non-empty channel or this proves nothing: \
+             {resolved_at_roll} of {enqueued} had already been sent"
+        );
+
+        // Stop topping up; everything already queued still reaches the wire.
+        for _ in 0..2000 {
+            if RESOLVED.with(|r| r.borrow().len()) == enqueued {
+                break;
+            }
+            drive_one_wake(h);
+        }
+
+        let out = take_resolved();
+        assert_eq!(
+            out.len(),
+            enqueued,
+            "every message resolves; a roll strands none"
+        );
+        assert!(
+            out.iter().all(|(_, sent, _)| *sent),
+            "a roll discards nothing, so no verdict may say sent = false"
+        );
+        let mut tokens: Vec<u64> = out.iter().map(|(t, _, _)| *t).collect();
+        tokens.sort_unstable();
+        assert_eq!(
+            tokens,
+            (100..next_token).collect::<Vec<u64>>(),
+            "each enqueued token resolves exactly once"
         );
         shekyl_relay_zone_free(h);
     }

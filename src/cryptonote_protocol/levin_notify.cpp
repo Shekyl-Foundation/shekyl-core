@@ -573,8 +573,12 @@ namespace levin
         Handlers are transport: frame and send. Neither decides anything —
         the decisions were taken in Rust before the callback fired, which is
         why no variant tag crosses the boundary and there is nothing here to
-        decode wrongly. The noise arms log and return: no zone constructed
-        here enables the carrier.
+        decode wrongly. That now includes the noise arms rather than excusing
+        them: `on_noise` transports a carrier window and reports whether the
+        write took, and `on_carrier_resolved` BUFFERS what the poll resolved
+        without acting on it. Both are reachable — `make_relay_zone` enables
+        the carrier on an encrypted zone under the development opt-in, which
+        defaults off.
 
         \pre A handler must NOT call back into the zone. It runs while Rust
         holds `&mut` on the zone's state, so re-entering through any
@@ -1240,8 +1244,8 @@ namespace levin
                the same rule, that the side which can fail goes first.
 
                The pool is still told NOTHING here. An enqueue is not a send:
-               the windows go out on later cadence ticks, and CV-1 discards an
-               in-flight run when the epoch rolls. `record_relayed` and the stem
+               the windows go out on later cadence ticks, and a roll that
+               rebinds the channel restarts the run in flight (CV-1). `record_relayed` and the stem
                observation fire in `apply_carrier_verdicts`, where the send is
                known to have happened and the successor is known to be the peer
                that received it. */

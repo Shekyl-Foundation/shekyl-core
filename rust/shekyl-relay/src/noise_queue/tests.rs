@@ -394,8 +394,10 @@ fn cv4_the_comparison_can_distinguish_cadences() {
 /// The cap is CV-1's, and before this it was checked only at `Zone::new` — a
 /// configuration was validated for `MAX_FRAGMENTS` worst-case sends while
 /// `enqueue` accepted any whole multiple of the window. A longer message
-/// entered a zone validated for a shorter one and lost its remainder at the
-/// next epoch roll, silently, because CV-1 discards rather than reports.
+/// entered a zone validated for a shorter one and could never finish: it does
+/// not fit in one epoch, and any roll that hands its slot to a different peer
+/// restarts it from the first fragment (CV-1), silently, because a restart is
+/// not reported.
 ///
 /// It is also the bound on a BATCH. `NOTIFY_NEW_TRANSACTIONS` carries a vector,
 /// so a notification is not one transaction by construction; two maximum
@@ -558,8 +560,9 @@ fn a_stale_send_token_cannot_complete_a_later_message() {
 /// one transaction; nothing bounded how many.
 ///
 /// Refusing at the door sends the overflow by the ordinary wire, which is where
-/// it would have gone anyway. Accepting it instead would queue work CV-1
-/// discards at the next epoch roll.
+/// it would have gone anyway. Accepting it instead would queue work nothing
+/// clears: a roll does not touch this queue, so the backlog would simply grow.
+/// See `window_budget` for why this arm is the only bound.
 ///
 /// What edit reds this: dropping the budget arm from `enqueue`.
 #[test]
@@ -578,8 +581,8 @@ fn a_channel_refuses_more_than_its_window_budget() {
     );
     assert!(
         !q.enqueue(0, striped(1), CarrierToken(3)),
-        "the 5th window is over budget and must be refused, not queued for a \
-         tick that will never come"
+        "the 5th window is over budget and must be refused, not added to a \
+         backlog nothing drains"
     );
 
     // And the budget is per CHANNEL, not global: a sibling channel is

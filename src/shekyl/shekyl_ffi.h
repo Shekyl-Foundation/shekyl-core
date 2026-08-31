@@ -3363,11 +3363,16 @@ void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void*
 //!
 //! That last one is the only refusal a caller can hit by doing nothing wrong,
 //! and it is the reason this list claims to be exhaustive rather than
-//! illustrative. A channel holds at most one epoch's worth of windows, because
-//! the drain is one window per due tick and anything beyond that is discarded
-//! at the roll rather than delivered. A full channel means the carrier is
-//! saturated, not that the transaction is malformed -- send it by the ordinary
-//! wire, which is what the producer does.
+//! illustrative. A channel holds at most one epoch's worth of windows. That is
+//! a BACKLOG bound, not a delivery guarantee: the drain is one window per due
+//! tick, and nothing else empties the queue -- an epoch rollover redraws the
+//! stem map without touching it, so queued messages survive a roll. The cap is
+//! therefore the only thing standing between a node that stems faster than the
+//! cadence and unbounded growth, here and in the caller's token map. What it
+//! admits is delay: a message accepted behind a full channel waits up to about
+//! an epoch for the wire. A full channel means the carrier is saturated, not
+//! that the transaction is malformed -- send it by the ordinary wire, which is
+//! what the producer does.
 //! `token` is the caller's handle for this message, opaque to the carrier and
 //! returned verbatim through `ShekylRelayCarrierResolvedCb`. It is deliberately
 //! NOT a transaction hash: the queue holds framed bytes it cannot parse, which

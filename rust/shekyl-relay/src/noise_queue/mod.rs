@@ -289,11 +289,23 @@ pub struct NoiseQueues {
     /// bound. Refusing at the door instead sends the overflow by the ordinary
     /// wire, which is where it would have gone anyway.
     ///
-    /// Set to what an epoch can actually deliver. Accepting more than that
-    /// guarantees CV-1 discards the remainder at the roll, so the excess was
-    /// never going to arrive: this makes the accepted work match the delivery
-    /// the schedule can promise, exactly as the per-message `MAX_FRAGMENTS`
-    /// check makes it match the invariant `Zone::new` validates.
+    /// **This is the ONLY bound on growth, and nothing else drains a queue.**
+    /// An epoch roll rebuilds the stem slots and does not touch `NoiseQueues`:
+    /// pending messages survive it. The single drain is [`NoiseQueues::unbind`],
+    /// which fires only when a channel's slot resolves to no peer at its due
+    /// tick, and reports [`CarrierOutcome::Discarded`] for everything it
+    /// clears. CV-1 restarts an in-flight run when its peer changes; it drops
+    /// nothing from `pending`. So the surplus is not something a roll would
+    /// have thrown away — without this cap it simply accumulates.
+    ///
+    /// Set to one epoch's worth of deliverable windows
+    /// ([`carrier::noise_windows_in_epoch`], counted at the SLOWEST cadence so
+    /// the figure cannot overstate what a channel drains). That is a backlog
+    /// bound, not a delivery promise: a channel may not fall more than about
+    /// one epoch behind. What it admits is queueing delay — a message accepted
+    /// behind a full budget waits up to roughly an epoch for the wire. Whether
+    /// that interacts with the origin's retry grid is for the owed
+    /// re-derivation round, not this type.
     window_budget: usize,
     /// Terminal outcomes awaiting collection by [`NoiseQueues::take_resolved`].
     resolved: Vec<CarrierOutcome>,
@@ -367,10 +379,11 @@ impl NoiseQueues {
         // a configuration is validated against that many worst-case sends. But
         // nothing stopped a longer message being enqueued into it: the length
         // check above admits any whole multiple of the window, so a six-window
-        // message entered a zone validated for five and lost its remainder at
-        // the next epoch roll — silently, since CV-1 discards rather than
-        // reports. Refusing here makes the accepted work match the checked
-        // invariant.
+        // message entered a zone validated for five and could never finish:
+        // it cannot complete within one epoch, and any roll that hands its
+        // slot to a different peer restarts it from the first fragment (CV-1)
+        // — silently, since a restart is not reported. Refusing here makes the
+        // accepted work match the checked invariant.
         //
         // This is also what bounds a BATCH. `NOTIFY_NEW_TRANSACTIONS` carries a
         // vector (`make_tx_message` takes `std::vector<blobdata>`), so a
@@ -386,8 +399,9 @@ impl NoiseQueues {
         // bounds one transaction; nothing bounded how many. The drain is one
         // window per due tick, so without this a node stemming faster than the
         // cadence grows the queue — and the caller's identity map with it —
-        // until memory runs out, while CV-1 quietly discards the surplus at
-        // every epoch roll.
+        // until memory runs out. Nothing else would clear it: a roll does not
+        // touch this queue. See `window_budget` for why that makes this arm
+        // the only bound rather than a tidier-up after one.
         let window = self.window();
         match self.channels.get_mut(channel) {
             Some(q)

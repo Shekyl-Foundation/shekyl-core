@@ -120,8 +120,9 @@ pub enum ZoneNewError {
         /// The stem/channel count that was requested.
         got: usize,
     },
-    /// The epoch cannot carry a full-size message, so the message can never
-    /// arrive: CV-1 discards the in-flight remainder at every epoch roll.
+    /// The epoch cannot carry a full-size message, so the message may never
+    /// arrive: it cannot finish within one epoch, and any roll that hands its
+    /// slot to a different peer restarts it from the first fragment (CV-1).
     ///
     /// Budget is [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
@@ -147,7 +148,8 @@ impl fmt::Display for ZoneNewError {
             Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
                 f,
                 "noise epoch carries {affords} windows but a full message needs \
-                 {needs}; the remainder is discarded at every epoch roll"
+                 {needs}; a roll that rebinds the slot restarts it from the first \
+                 fragment, so it may never finish"
             ),
         }
     }
@@ -373,8 +375,9 @@ impl Zone {
     /// compiles out in release and therefore let the mismatched zone be
     /// built in exactly the configuration that ships.
     ///
-    /// **A noise epoch must carry a full-size message** — otherwise CV-1
-    /// discards the remainder at every roll. The budget is
+    /// **A noise epoch must carry a full-size message** — otherwise it cannot
+    /// finish inside one epoch, and any roll that rebinds its slot restarts it
+    /// from the first fragment (CV-1), so it may never arrive. The budget is
     /// [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
     /// this is a refusal rather than a `const` assertion.
