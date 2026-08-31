@@ -158,7 +158,9 @@ pub type NoiseSendCb = extern "C" fn(
 /// What became of a message handed to the carrier — reported once, terminally.
 ///
 /// `token` is the value the enqueuer minted; `sent` is true only when every
-/// window of the message reached the wire.
+/// window of the message was accepted by the transport — see
+/// [`shekyl_relay::CarrierOutcome`] for why that is acceptance and not
+/// acknowledgement.
 ///
 /// # Both arms, and the false one is why this exists
 ///

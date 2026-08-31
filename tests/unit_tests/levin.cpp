@@ -3081,6 +3081,12 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
         ++rolls;
     }
 
+    /* F-10's half, captured before the drive. The stem observation is a
+       SECOND consequence of a carrier completion and nothing observed it:
+       deleting `shekyl_relay_zone_record_stem` from the verdict path left
+       every carrier test in this file green while the tallies got nothing. */
+    const std::size_t stem_before = notifier.stem_in_flight();
+
     // Drive the cadence until the pool hears about it. One minimal
     // transaction frames to a single window, so it completes on the first
     // emission of its channel — but which channel is due is the schedule's
@@ -3103,10 +3109,31 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
         << "the pool was told about a different transaction than the one the "
            "carrier carried";
 
+    EXPECT_GT(notifier.stem_in_flight(), stem_before)
+        << "the carrier completed and the pool was told, but no stem "
+           "observation was recorded — F-10 charges a successor from the "
+           "verdict, and with this arm gone its tallies never see the send";
+
+    /* AND THE WIRE HALF. Being told is not evidence of what went out: a
+       carrier that emitted the dummy forever would satisfy every assertion
+       above, because the pool learns from the verdict rather than from the
+       socket. So the emissions are READ rather than drained unread — which is
+       what the draining loop that stood here did, and it is why this test
+       claimed an end-to-end criterion it did not establish. */
+    std::size_t carried = 0;
     for (auto& ctx : contexts_)
         ctx.process_send_queue();
     while (receiver_.notified_size())
-        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+    {
+        const auto notification =
+          receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        if (notification.txs == txs)
+            ++carried;
+    }
+    EXPECT_EQ(1u, carried)
+        << "exactly one emission must carry the transaction: zero means the "
+           "carrier put only cover on the wire while the pool was told "
+           "otherwise, and more than one means it was sent twice";
 }
 
 /*! **A batch the carrier can only partly take splits, and each half is

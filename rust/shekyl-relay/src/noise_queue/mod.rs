@@ -62,11 +62,26 @@ pub struct CarrierToken(pub u64);
 
 /// What became of an enqueued message. Reported once, terminally.
 ///
+/// # What [`Self::Sent`] means, and what it does not
+///
+/// Every window was **accepted by the transport** — not acknowledged by the
+/// peer. This type reports what its caller's send returned, and for the C++
+/// producer that is `connections::send`, which places bytes on a connection's
+/// asynchronous write queue. A socket that fails after accepting them never
+/// comes back, so relay recording and the F-10 observation are charged on
+/// acceptance.
+///
+/// The name mirrors what `send` means throughout this tree rather than
+/// overstating it; strengthening it needs a completion signal the transport
+/// does not offer, which is a `docs/FOLLOWUPS.md` item against the daemon
+/// transport cutover.
+///
 /// # Both arms exist, and the failure arm is the load-bearing one
 ///
 /// A completion signal alone is not enough. [`NoiseQueues::unbind`] clears a
 /// channel's pending messages, so a message can leave the queue having never
-/// reached the wire — and a caller waiting only for [`Self::Sent`] would wait
+/// been offered to the transport at all — and a caller waiting only for
+/// [`Self::Sent`] would wait
 /// forever on a record that will never fire. That is the unresolved-token
 /// shape [`NoiseSend`]'s non-destructive take was designed against, one layer
 /// up, and it is why discard reports too.
@@ -118,7 +133,8 @@ impl CarrierOutcome {
         }
     }
 
-    /// Whether the message reached the wire in full.
+    /// Whether every window was accepted by the transport — see
+    /// [`CarrierOutcome`] for what that does and does not guarantee.
     #[must_use]
     pub fn was_sent(self) -> bool {
         matches!(self, Self::Sent { .. })
@@ -225,10 +241,11 @@ impl NoiseSend {
             .expect("noise offset + window");
         if next >= message.bytes.len() {
             q.offset = None;
-            // The message is fully on the wire. This is the ONLY point at
-            // which that becomes true, which is why the completion is reported
-            // from here rather than from the caller's send: the caller knows a
-            // FRAGMENT went out, not a message.
+            // Every window of the message has now been accepted by the
+            // transport. This is the ONLY point at which that becomes true,
+            // which is why the completion is reported from here rather than
+            // from the caller's send: the caller knows a FRAGMENT was
+            // accepted, not a message.
             // The peer this run was bound to IS the successor: CV-1 restarts
             // on rebind, so a message that completed went entirely to it.
             let done = q.pending.pop_front().map(|m| m.token).zip(q.bound);
@@ -303,9 +320,13 @@ pub struct NoiseQueues {
     /// the figure cannot overstate what a channel drains). That is a backlog
     /// bound, not a delivery promise: a channel may not fall more than about
     /// one epoch behind. What it admits is queueing delay — a message accepted
-    /// behind a full budget waits up to roughly an epoch for the wire. Whether
-    /// that interacts with the origin's retry grid is for the owed
-    /// re-derivation round, not this type.
+    /// behind a full budget waits up to roughly an epoch for the wire. One
+    /// consequence is already handled by the producer rather than owed: the
+    /// pool re-offers a `local` entry at `MIN_RELAY_TIME` (300 s), inside a
+    /// backlog that may run to a full epoch (600 s), so `dandelionpp_notify`
+    /// dedups by txid instead of enqueueing the same transaction twice. What
+    /// remains for the owed re-derivation round is the timing derivation
+    /// itself, not that hazard.
     window_budget: usize,
     /// Terminal outcomes awaiting collection by [`NoiseQueues::take_resolved`].
     resolved: Vec<CarrierOutcome>,

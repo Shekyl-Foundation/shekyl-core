@@ -854,7 +854,8 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 
 The carrier's executor, join, boundary, enqueue crossing **and producer** are
 built (§3.1a, landed 2026-08-29): a real transaction rides the carrier, and the
-pool is told only once it reaches the wire. All of it is reachable only after
+pool is told only once the transport has accepted every window (not once a
+peer has acknowledged one — §3.1d). All of it is reachable only after
 `cryptonote::levin::set_carrier_development(true)`, a runtime opt-in defaulting
 off — so nothing pays the ~42 GB/month posture until it is armed.
 
@@ -1136,6 +1137,47 @@ carrying a fragment — that is the invariant, not an accounting convenience —
 the budget is spent whether or not anyone is transacting. A measurement taken
 on an idle node is therefore a *complete* measurement of the sustained cost,
 not a floor for it.
+
+### 3.1d What a carrier verdict of `sent` actually asserts (2026-08-31)
+
+**It asserts transport ACCEPTANCE, not delivery, and the contracts now say
+so.** Found in review: `on_noise` returns the result of
+`connections::send`, and epee's `connection<T>::send` places the bytes on the
+connection's asynchronous write queue (`m_state.data.write.queue`) and calls
+`start_write()`. The return means the write was *queued*, not that it left the
+socket and certainly not that a peer received it. A connection that fails after
+accepting the bytes never comes back through the resolution callback, so
+`CarrierOutcome::Sent` fires and the relay record and F-10 observation are
+charged anyway.
+
+**The ruling is to define the contract honestly rather than strengthen it, and
+the blocker is named.** Reporting true write completion needs a completion
+signal epee does not expose; adding one means thickening inherited C++
+(`20-rust-vs-cpp-policy`) immediately below the layer scheduled for the daemon
+Rust cutover, and even socket-write completion would not be peer receipt. The
+reopening criterion is that cutover, where the write path is Rust-owned and
+completion is expressible — carried as a `FOLLOWUPS.md` one-liner, per
+`21-reversion-clause-discipline`.
+
+**What makes this acceptable today rather than merely deferred.** The carrier
+is the STRICTEST recorder on the relay path, not the weakest. `on_fluff` never
+inspects its send result, and `fluff_and_record` records *before* sending; the
+stem arm records an origination's `local` class "whatever the transport did".
+The carrier alone checks the `send` return (`res > 0`) and falls back to fluff
+when the transport refuses. So the residual gap — an async failure after
+acceptance — is one every relay path in this file shares and none of them can
+close from here; the carrier does not widen it.
+
+**The F-10 exposure is latent.** A verdict charged to a successor that never
+received the bytes is a wrong entry in the tallies rather than a missing one,
+which is the hazard §3.1a's successor argument was written against. It has no
+consumer today: the selection tier that reads those tallies is §12.11 and is
+unbuilt, and the transport cutover lands before it. That is why this is a
+contract correction and not a redesign.
+
+**Naming.** `sent` is kept rather than renamed to `accepted`. It means here
+exactly what `send()` means everywhere in this tree, and the C and Rust homes
+each state the gap explicitly so the name cannot be read as an overclaim.
 
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 

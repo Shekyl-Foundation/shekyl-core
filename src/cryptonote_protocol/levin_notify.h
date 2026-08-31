@@ -151,7 +151,7 @@ namespace levin
         instead of sending directly, so the cadence carries real transactions
         rather than dummies alone. The pool is told a carrier-borne
         transaction was relayed only when its terminal verdict says every
-        window reached the wire — an enqueue is not a send
+        window was accepted by the transport — an enqueue is not a send
         (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 
         The zone must still be noise-configured, which needs the development

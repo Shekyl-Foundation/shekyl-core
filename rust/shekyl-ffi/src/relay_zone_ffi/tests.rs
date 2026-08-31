@@ -1752,7 +1752,8 @@ fn a_queued_message_survives_an_epoch_roll() {
              {resolved_at_roll} of {enqueued} had already been sent"
         );
 
-        // Stop topping up; everything already queued still reaches the wire.
+        // Stop topping up; everything already queued still drains to the
+        // transport.
         for _ in 0..2000 {
             if RESOLVED.with(|r| r.borrow().len()) == enqueued {
                 break;

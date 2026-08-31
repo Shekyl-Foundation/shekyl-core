@@ -3041,7 +3041,23 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //!
 //! `token` is the value the enqueuer passed to
 //! `shekyl_relay_zone_noise_enqueue`; `sent` is true only when EVERY window of
-//! the message reached the wire.
+//! the message was ACCEPTED BY THE TRANSPORT.
+//!
+//! ACCEPTED, not acknowledged -- and the name `sent` is kept rather than
+//! renamed because it means here exactly what `send()` means everywhere in
+//! this tree. epee queues writes asynchronously: `connections::send` reports
+//! that the bytes were placed on a connection's write queue, not that they
+//! left the socket and not that a peer received them. A connection that fails
+//! after accepting them does not come back through this callback.
+//!
+//! So relay recording and the F-10 observation are charged on transport
+//! acceptance. That is the same basis every other relay path here records on,
+//! and a STRICTER one than the fluff arm: `on_fluff` never looks at its send
+//! result and `fluff_and_record` records before sending, while the carrier
+//! checks the `send` return and falls back to fluff when the transport
+//! refuses. Reporting true write completion would need a completion signal
+//! epee does not expose; it becomes expressible at the daemon transport
+//! cutover, where the write path is Rust-owned (`docs/FOLLOWUPS.md`).
 //!
 //! BOTH ARMS, AND THE FALSE ONE IS WHY THIS EXISTS. A completion signal alone
 //! leaves a caller waiting forever on a message the carrier discarded: an
@@ -3070,8 +3086,9 @@ typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! what a reviewer will otherwise read as a breach.
 //!
 //! Must not throw across the FFI boundary.
-//! `peer` is the 16-byte connection id the message was DELIVERED to, or null
-//! on a discard. Reported rather than remembered: a channel binds to whatever
+//! `peer` is the 16-byte connection id the message was sent to -- in the sense
+//! above, accepted by the transport for that connection -- or null on a
+//! discard. Reported rather than remembered: a channel binds to whatever
 //! its stem slot holds at send time, so the destination chosen when the
 //! transaction was accepted may not be the node that received it. Recording
 //! the enqueue-time peer would charge an F-10 observation to a node that never

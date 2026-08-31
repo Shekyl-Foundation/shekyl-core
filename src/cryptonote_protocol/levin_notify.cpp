@@ -682,12 +682,13 @@ namespace levin
           re-entering the zone is safe: Rust no longer holds a borrow.
 
           This is the only place the pool learns a carrier-borne transaction
-          was relayed. A verdict of `sent == false` records NOTHING — the
-          message left the carrier without reaching a peer, so `relayed` stays
-          false and the origin retries on the short grid rather than waiting
-          out the derived interval for a transaction that was never sent. */
-      /*! Apply what the poll collected. **Called after `poll` RETURNS**, so
-          re-entering the zone is safe: Rust no longer holds a borrow.
+          was relayed. A `sent == false` verdict is handled PER RELAY CLASS,
+          because the two classes retry by different mechanisms: an
+          origination records nothing and retries on the short grid, while a
+          forwarded stem has no such retry and falls back to fluff. The
+          definition carries that argument — do not restate it here, because
+          the draft that did said "records NOTHING" for both and was wrong for
+          one of them.
 
           Defined out of line, below `relay_fluff` — a discarded transaction
           falls back to fluffing, and that type is declared after this one. */
@@ -1075,7 +1076,7 @@ namespace levin
                 ? relay_method::local : relay_method::stem,
               z.nzone);
           }
-          /* The successor is the peer the carrier DELIVERED to, not the one
+          /* The successor is the peer the carrier SENT to, not the one
              chosen at enqueue. And the source is the transaction's own, not
              nil: `nullptr` here would mark every carrier observation as
              locally originated and collapse every forwarded stem into the
@@ -1719,7 +1720,7 @@ namespace levin
 
        So a carrier zone carries REAL transactions rather than dummies alone,
        and the pool learns of one only when its verdict says every window
-       reached the wire (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
+       was accepted by the transport (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 
        In a shipped build no zone here enables noise at all — the opt-in
        defaults off — so the deleted branch would have been unreachable in

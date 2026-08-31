@@ -595,6 +595,9 @@ Default. Lands before genesis if it should exist at launch.
 - **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md)
   - Target: pre-genesis
 
+- **Relay: a carrier verdict of `sent` means the transport ACCEPTED the bytes, not that they reached a peer.** `connections::send` queues an asynchronous write, so a socket failing after acceptance still resolves `CarrierOutcome::Sent` and charges the relay record and the F-10 observation. Named blocker: epee exposes no write-completion signal, and adding one thickens inherited C++ directly beneath the layer the daemon Rust cutover replaces (`20-rust-vs-cpp-policy`); socket completion would still not be peer receipt. Reopen at that cutover, where the write path is Rust-owned. Contracts state the gap today, and the exposure is latent — §12.11, the consumer of those tallies, is unbuilt [`COVER_TRAFFIC_RESTORATION.md` §3.1d](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
 - **§56.5 ruled the cadence memoryless; the shipped law is still bounded uniform, and nothing tracked it.** Carries §57's three exits and §58.2's admission threshold `θ`, both priced at the retired 12.5 s mean [`DAEMON_RELAY_PRIVACY.md` §56.7](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 

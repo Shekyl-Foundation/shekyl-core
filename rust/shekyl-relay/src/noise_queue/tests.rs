@@ -430,7 +430,8 @@ fn enqueue_refuses_a_message_over_the_fragment_cap() {
 
 // ---------------------------------------------------------------------------
 // Terminal outcomes. The producer cannot record a relay until it knows the
-// message reached the wire, and cannot wait forever if it never will.
+// message was accepted by the transport, and cannot wait forever if it never
+// will be.
 // ---------------------------------------------------------------------------
 
 /// A message reports SENT exactly once, and only when its LAST window goes out.
