@@ -284,10 +284,10 @@ namespace levin
         transport for the carrier as it is for stem and fluff.
 
         CLOSED 2026-08-29 — all four pieces below are built, and
-        `dandelionpp_notify` is the enqueue path. Kept as the record of what
-        the gap was, because the decomposition is what made it tractable: the
-        line before it said the gap was "a Rust-internal join, not a language
-        boundary move", and both halves were wrong.
+        `dandelionpp_notify` is the enqueue path. The numbered list is kept as
+        the record of what the gap WAS, not as a description of the code: the
+        decomposition is what made the gap tractable, and the correction that
+        produced it is the paragraph below.
 
         CORRECTED AGAIN 2026-08-26. The line here previously said the gap was
         "a Rust-internal join, not a language boundary move". The first half
@@ -1220,21 +1220,45 @@ namespace levin
               continue; // Owned by the carrier; its verdict will resolve it.
             }
             const std::uint64_t token = zone_->next_carrier_token++;
+
+            /* THE PENDING RECORD IS ESTABLISHED FIRST, BEFORE CROSSING.
+
+               Both sides must own the token or neither may. Enqueueing first
+               and recording second leaves a window where the queue holds the
+               message and C++ has no record of it: the `emplace` allocates and
+               copies a whole transaction, so under memory pressure it can
+               throw AFTER the carrier has taken ownership. The message then
+               rides the carrier, is delivered, and its verdict arrives for a
+               token nothing knows — logged as unknown and dropped. The pool is
+               never told, so an origin re-sends at MIN_RELAY_TIME and a
+               forwarded stem keeps `time_t::max()` and is stranded.
+
+               Recorded first, the failure lands where it is free: nothing has
+               crossed, the transaction falls to `refused` like any other
+               refusal, and the ordinary wire carries it. This is the mirror of
+               the reserved verdict buffer on the other side of the crossing —
+               the same rule, that the side which can fail goes first.
+
+               The pool is still told NOTHING here. An enqueue is not a send:
+               the windows go out on later cadence ticks, and CV-1 discards an
+               in-flight run when the epoch rolls. `record_relayed` and the stem
+               observation fire in `apply_carrier_verdicts`, where the send is
+               known to have happened and the successor is known to be the peer
+               that received it. */
+            const auto placed = zone_->carrier_pending_by_token.emplace(
+              token, detail::zone::carrier_pending{tx, id.front(), source_, tx_relay});
+
             if (!shekyl_relay_zone_noise_enqueue(
                   zone_->relay.get(), channel,
                   reinterpret_cast<const std::uint8_t*>(tx.data()), tx.size(), token))
             {
+              /* Refused: erase the record so the token is owned by neither
+                 side, and let the ordinary wire take it. */
+              if (placed.second)
+                zone_->carrier_pending_by_token.erase(placed.first);
               refused.push_back(std::move(tx));
               continue;
             }
-            /* Recorded ONLY on acceptance, and the pool is told NOTHING yet.
-               An enqueue is not a send: the windows go out on later cadence
-               ticks, and CV-1 discards an in-flight run when the epoch rolls.
-               `record_relayed` and the stem observation fire in
-               `on_carrier_resolved`, where the send is known to have happened
-               and the successor is known to be the peer that received it. */
-            zone_->carrier_pending_by_token.emplace(
-              token, detail::zone::carrier_pending{tx, id.front(), source_, tx_relay});
           }
           to_send = std::move(refused);
           if (to_send.empty())

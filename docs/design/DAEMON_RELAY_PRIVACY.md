@@ -15510,6 +15510,24 @@ transit **plus** the fragment/cadence term, additive, and it re-runs when the
 carrier gains a caller. A second covert-hop rule here would be a duplicate to
 synchronise.
 
+> **The caller landed 2026-08-29, so that trigger has fired — and it fires for
+> exactly one of the two quantities on this page.** Keeping them apart is the
+> point of this note.
+>
+> - **The LATENCY arithmetic above still stands as arithmetic.** Regime 2's hop
+>   is regime 1's measured transit plus the cadence term, and that sum does not
+>   become a measurement because a caller exists. §91.6's rule was about
+>   deriving against a mechanism that does not exist; the mechanism exists now,
+>   and the derivation is unchanged.
+> - **The BANDWIDTH measurement is newly owed and is a different quantity.**
+>   `COVER_TRAFFIC_RESTORATION.md` §3.1c pre-registers it: actual bytes on the
+>   wire against the per-node ceiling, with the expected divergences and the
+>   bar for a real defect named before the first reading. It is a FOLLOWUPS
+>   item and the condition on the ~42 GB/month budget's provisional sign-off.
+>
+> Conflating them would read this section as owing a re-derivation it does not
+> owe, or as discharging a measurement it never covered.
+
 ### 94.2 The five degrees of freedom, frozen
 
 These are the knobs that get turned *after* a number arrives to make it say

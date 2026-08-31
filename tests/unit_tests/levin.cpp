@@ -418,10 +418,12 @@ namespace
 
         /*! Build a notifier on the clearnet or i2p zone.
 
-            No noise parameter: C++ cannot enable the carrier any more (the
-            machinery is deleted, `NoiseQueues` is the port), so a `noise_size`
-            argument could only ever have been 0. Every caller passed 0 once
-            the three covert gtests went. */
+            No noise parameter: the C++ noise machinery is deleted and
+            `NoiseQueues` owns the window, so a `noise_size` argument has
+            nothing left to size. Enabling the carrier is not a per-notifier
+            argument either — it is the process-wide runtime opt-in
+            `set_carrier_development`, default off, which the cases that need
+            it drive explicitly. */
         std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
             epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::i2p;
@@ -2868,27 +2870,6 @@ TEST_F(levin_notify, a_failed_stem_is_not_recorded_as_relayed)
         receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
 
-/*! C++ cannot enable the noise carrier, and this is what says so.
-
-    The predecessor of this test (`noise_does_not_override_the_phase`, #513)
-    drove a noise-enabled zone and asserted the phase survived. Its subject is
-    gone: the C++ noise machinery — `noise_channel`, `send_noise`,
-    `clear_channel`, `queue_covert_notify`, the channel deque and the payload —
-    is deleted, `NoiseQueues` in `shekyl-relay` is the carrier, and
-    `make_relay_zone` never sets `SHEKYL_RELAY_ZONE_NOISE_ENABLED`. A test
-    whose subject no longer exists is not coverage, so it is replaced rather
-    than kept limping.
-
-    What replaces it is the invariant that makes the two remaining noise effect
-    callbacks unreachable. They are loud failures rather than no-ops, and this
-    is the assertion that says nothing can reach them: `has_noise` reads the
-    Rust-owned zone fact through `shekyl_relay_zone_noise_enabled`, so it is
-    not a constant this test could pass against by construction — it goes red
-    the moment any C++ path enables a noise zone again.
-
-    The phase-versus-carrier property itself now lives only in Rust
-    (`a_noise_carrier_does_not_change_the_phase`), which is correct: the
-    carrier is only in Rust. */
 /*! The development opt-in reaches the carrier, and CI can run it.
 
     The point of a RUNTIME flag rather than `#ifdef`: behind a compile-time
@@ -2941,7 +2922,17 @@ TEST_F(levin_notify, the_development_opt_in_enables_the_carrier_on_an_encrypted_
 
     What survives, and is worth a gate: the DEFAULT is off, and nothing in an
     ordinary build turns it on. That is the invariant every other fixture in
-    this file leans on when it asserts `has_noise == false`. */
+    this file leans on when it asserts `has_noise == false`.
+
+    Its own predecessor (`noise_does_not_override_the_phase`, #513) went when
+    the C++ noise machinery did — `noise_channel`, `send_noise`,
+    `clear_channel`, `queue_covert_notify`, the channel deque and the payload
+    are all deleted, and `NoiseQueues` in `shekyl-relay` is the carrier. The
+    phase-versus-carrier property that test asserted lives in Rust now
+    (`a_noise_carrier_does_not_change_the_phase`), which is where the carrier
+    is. `has_noise` here reads the Rust-owned zone fact through
+    `shekyl_relay_zone_noise_enabled`, so it is not a constant this test could
+    pass against by construction. */
 /* The `res > 0` fix's regression test was blocked by the harness, and the
    blocker turned out to BE the defect next door.
 
