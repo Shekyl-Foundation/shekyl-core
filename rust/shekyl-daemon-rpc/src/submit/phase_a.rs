@@ -124,6 +124,17 @@ impl ParsedSubmission {
         })
     }
 
+    ///
+    /// **Returns the FIRST bond-post input, and the daemon's C++ commit path
+    /// reads the LAST** (its vin loop assigns on every bond-post it sees).
+    /// With two bond-post vins in one transaction the two sides would
+    /// re-check different inputs of the same bytes — a consensus divergence,
+    /// not a cosmetic one. What makes that unreachable is enforced elsewhere
+    /// in this module and is not visible at either read site:
+    /// [`SubmitTxKind::BondPost`] is classified only on `n_bond_post == 1`,
+    /// and `shekyl-wire`'s `validate()` forbids mixing a bond-post with an
+    /// emission vin. A new caller that reads per-vin bond-post state must
+    /// either preserve "at most one" or stop assuming it.
     pub fn bond_post(&self) -> Option<(usize, &BondPost)> {
         self.tx
             .prefix

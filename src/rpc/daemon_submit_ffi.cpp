@@ -559,6 +559,19 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     // JoinMarket's (§8.7.1.1 UB2): JoinMarket races when a record APPEARS
     // during Phase C, Unbond races when the one it debits DISAPPEARS. Derived
     // from the reparsed blob, exactly as the probe key is.
+    //
+    // INVARIANT this loop depends on, enforced two layers away: a submission
+    // carries AT MOST ONE bond-post vin. The loop below assigns on every
+    // bond-post input, so with two it would describe the LAST; the Rust side
+    // reads the FIRST (`ParsedSubmission::bond_post`, a `find_map`). The two
+    // sides would then re-check different vins of the same transaction --
+    // a consensus divergence, not a cosmetic one. What prevents it is
+    // `phase_a.rs`: `SubmitTxKind::BondPost` is classified only on
+    // `n_bond_post == 1`, and `shekyl-wire`'s `validate()` forbids mixing a
+    // bond-post with an emission vin. Neither guard is visible from here, so
+    // any new per-vin bond-post read added to this loop must either preserve
+    // "at most one" or stop assuming it. (Same for `bond_p_id` above, whose
+    // spelling this one copied.)
     bool bond_is_unbond = false;
     const txin_archival_reward_emission* emission_vin = nullptr;
     for (const auto& in : tx.vin)
