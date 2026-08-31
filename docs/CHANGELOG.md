@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Independent second consensus-rule census (`RC-`).** 181 independently
+  ratifiable rules, walked from the block and transaction acceptance
+  entry points at `8ba1aae3d` and classified into four buckets. The
+  census is the instrument for the consensus rewrite; no chain
+  behavior change.
+
+- **Consensus-rule census (CEN-1).** `docs/design/CONSENSUS_RULE_CENSUS_3.md`
+  enumerates every rule on the block/tx acceptance path at dev `8ba1aae3d`
+  (161 rows; 84 Shekyl-spec'd / 23 inherited-ratified / 54 never examined)
+  as the specification substrate for the consensus Rust rewrite (2026-08-30
+  ruling: census precedes rewrite). Docs only; no behavior change.
+
 ### Removed
 
 - **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
@@ -162,12 +176,6 @@
   constructed one were staging an unreachable shape.
 
 ### Added
-
-- **Consensus-rule census (CEN-1).** `docs/design/CONSENSUS_RULE_CENSUS_3.md`
-  enumerates every rule on the block/tx acceptance path at dev `8ba1aae3d`
-  (161 rows; 84 Shekyl-spec'd / 23 inherited-ratified / 54 never examined)
-  as the specification substrate for the consensus Rust rewrite (2026-08-30
-  ruling: census precedes rewrite). Docs only; no behavior change.
 
 - **A stall alarm for pending claims and drains.** A record dispatched but not
   settled past the alarm horizon is named in the operator log, keyed by kind
