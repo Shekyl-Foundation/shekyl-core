@@ -904,157 +904,21 @@ bool t_rpc_command_executor::print_block_by_height(uint64_t height, bool include
 bool t_rpc_command_executor::print_transaction(crypto::hash transaction_hash,
   bool include_metadata,
   bool include_hex,
-  bool include_json) {
-  cryptonote::COMMAND_RPC_GET_TRANSACTIONS::request req;
-  cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response res;
-
-  std::string fail_message = "Problem fetching transaction";
-
-  req.txs_hashes.push_back(epee::string_tools::pod_to_hex(transaction_hash));
-  req.decode_as_json = false;
-  req.split = true;
-  req.prune = false;
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/gettransactions", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_transactions(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  if (1 == res.txs.size() || 1 == res.txs_as_hex.size())
-  {
-    if (1 == res.txs.size())
-    {
-      // only available for new style answers
-      static const std::string empty_hash = epee::string_tools::pod_to_hex(crypto::cn_fast_hash("", 0));
-      // prunable_hash will equal empty_hash when nothing is prunable (mostly when the transaction is coinbase)
-      bool pruned = res.txs.front().prunable_as_hex.empty() && res.txs.front().prunable_hash != epee::string_tools::pod_to_hex(crypto::null_hash) && res.txs.front().prunable_hash != empty_hash;
-      if (res.txs.front().in_pool)
-        tools::success_msg_writer() << "Found in pool";
-      else
-        tools::success_msg_writer() << "Found in blockchain at height " << res.txs.front().block_height << (pruned ? " (pruned)" : "");
-    }
-
-    const std::string &as_hex = (1 == res.txs.size()) ? res.txs.front().as_hex : res.txs_as_hex.front();
-    const std::string &pruned_as_hex = (1 == res.txs.size()) ? res.txs.front().pruned_as_hex : "";
-    const std::string &prunable_as_hex = (1 == res.txs.size()) ? res.txs.front().prunable_as_hex : "";
-    // Print metadata if requested
-    if (include_metadata)
-    {
-      if (!res.txs.front().in_pool)
-      {
-        tools::msg_writer() << "Block timestamp: " << res.txs.front().block_timestamp << " (" << tools::get_human_readable_timestamp(res.txs.front().block_timestamp) << ")";
-      }
-      cryptonote::blobdata blob;
-      if (epee::string_tools::parse_hexstr_to_binbuff(pruned_as_hex + prunable_as_hex, blob))
-      {
-        cryptonote::transaction tx;
-        if (cryptonote::parse_and_validate_tx_from_blob(blob, tx))
-        {
-          tools::msg_writer() << "Size: " << blob.size();
-          tools::msg_writer() << "Weight: " << cryptonote::get_transaction_weight(tx);
-        }
-        else
-          tools::fail_msg_writer() << "Error parsing transaction blob";
-      }
-      else
-        tools::fail_msg_writer() << "Error parsing transaction from hex";
-    }
-
-    // Print raw hex if requested
-    if (include_hex)
-    {
-      if (!as_hex.empty())
-      {
-        tools::success_msg_writer() << as_hex << std::endl;
-      }
-      else
-      {
-        std::string output = pruned_as_hex + prunable_as_hex;
-        tools::success_msg_writer() << output << std::endl;
-      }
-    }
-
-    // Print json if requested
-    if (include_json)
-    {
-      cryptonote::transaction tx;
-      cryptonote::blobdata blob;
-      std::string source = as_hex.empty() ? pruned_as_hex + prunable_as_hex : as_hex;
-      bool pruned = !pruned_as_hex.empty() && prunable_as_hex.empty();
-      if (!epee::string_tools::parse_hexstr_to_binbuff(source, blob))
-      {
-        tools::fail_msg_writer() << "Failed to parse tx to get json format";
-      }
-      else
-      {
-        bool ret;
-        if (pruned)
-          ret = cryptonote::parse_and_validate_tx_base_from_blob(blob, tx);
-        else
-          ret = cryptonote::parse_and_validate_tx_from_blob(blob, tx);
-        if (!ret)
-        {
-          tools::fail_msg_writer() << "Failed to parse tx blob to get json format";
-        }
-        else
-        {
-          tools::success_msg_writer() << cryptonote::obj_to_json_str(tx) << std::endl;
-        }
-      }
-    }
-  }
-  else
-  {
-    tools::fail_msg_writer() << "Transaction wasn't found: " << transaction_hash << std::endl;
-  }
-
-  return true;
+  bool include_json)
+{
+  // RK-4c: renders in Rust on both arms, as print_block does. The flags go
+  // over as the console spells them, so one syntax is parsed in one place.
+  std::vector<std::string> argv{"print_transaction",
+    epee::string_tools::pod_to_hex(transaction_hash)};
+  if (include_metadata) argv.push_back("+meta");
+  if (include_hex) argv.push_back("+hex");
+  if (include_json) argv.push_back("+json");
+  return run_rust_console(argv);
 }
 
 bool t_rpc_command_executor::is_key_image_spent(const crypto::key_image &ki) {
-  cryptonote::COMMAND_RPC_IS_KEY_IMAGE_SPENT::request req;
-  cryptonote::COMMAND_RPC_IS_KEY_IMAGE_SPENT::response res;
-
-  std::string fail_message = "Problem checking key image";
-
-  req.key_images.push_back(epee::string_tools::pod_to_hex(ki));
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/is_key_image_spent", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_is_key_image_spent(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  if (1 == res.spent_status.size())
-  {
-    // first as hex
-    tools::success_msg_writer() << ki << ": " << (res.spent_status.front() ? "spent" : "unspent") << (res.spent_status.front() == cryptonote::COMMAND_RPC_IS_KEY_IMAGE_SPENT::SPENT_IN_POOL ? " (in pool)" : "");
-  }
-  else
-  {
-    tools::fail_msg_writer() << "key image status could not be determined" << std::endl;
-  }
-
-  return true;
+  // RK-4c: renders in Rust on both arms.
+  return run_rust_console({"is_key_image_spent", epee::string_tools::pod_to_hex(ki)});
 }
 
 bool t_rpc_command_executor::print_transaction_pool_long() {

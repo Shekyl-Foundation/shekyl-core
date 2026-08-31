@@ -45,6 +45,79 @@ pub struct CoreRpc {
 unsafe impl Send for CoreRpc {}
 unsafe impl Sync for CoreRpc {}
 
+/// One request slot's answer from `shekyl_rpc_transactions`, copied out of
+/// the C++ views before the owner is released.
+///
+/// Not a wire type: which of `pruned` / `prunable` the reply shows, and in
+/// what form, is the handler's `(split, prune, decode_as_json)` matrix. This
+/// is what the store held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxSlot {
+    /// Neither the chain nor the pool had it.
+    Missed,
+    /// Found in a block.
+    Chain {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        prunable_hash: [u8; 32],
+        block_height: u64,
+        block_timestamp: u64,
+        output_indices: Vec<u64>,
+        /// The store holds no verification data for it.
+        pruned_flag: bool,
+    },
+    /// Found in the mempool.
+    Pool {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        prunable_hash: [u8; 32],
+        double_spend_seen: bool,
+        relayed: bool,
+        received_timestamp: u64,
+    },
+}
+
+/// Project one FFI entry onto its [`TxSlot`], or `None` when `where_found`
+/// carries a discriminator the contract does not define.
+///
+/// Split out of the `unsafe` walk because that walk cannot be driven without a
+/// live `core_rpc_server`, and this is the part with a decision in it. The
+/// pointer arithmetic stays at the call site; what crosses here is already
+/// owned data.
+///
+/// `None` rather than a silent `Missed`: the contract permits 0/1/2 and nothing
+/// more, so a fourth value is the export breaking it. Answering "not found"
+/// would report success about a transaction this daemon may well hold — an ABI
+/// violation rendered as a fact about the caller's request.
+fn slot_of(
+    e: &ffi::TxEntryFfi,
+    pruned: Vec<u8>,
+    prunable: Vec<u8>,
+    output_indices: Vec<u64>,
+) -> Option<TxSlot> {
+    match e.where_found {
+        0 => Some(TxSlot::Missed),
+        1 => Some(TxSlot::Chain {
+            pruned,
+            prunable,
+            prunable_hash: e.prunable_hash,
+            block_height: e.block_height,
+            block_timestamp: e.block_timestamp,
+            output_indices,
+            pruned_flag: e.pruned_flag != 0,
+        }),
+        2 => Some(TxSlot::Pool {
+            pruned,
+            prunable,
+            prunable_hash: e.prunable_hash,
+            double_spend_seen: e.double_spend_seen != 0,
+            relayed: e.relayed != 0,
+            received_timestamp: e.received_timestamp,
+        }),
+        _ => None,
+    }
+}
+
 impl CoreRpc {
     /// Wrap a raw `core_rpc_server*` obtained from C++.
     ///
@@ -381,6 +454,150 @@ impl CoreRpc {
         }
     }
 
+    /// Transactions by hash, one answer per request slot, plus the tip the
+    /// gather was taken against.
+    ///
+    /// `include_sensitive` decides whether a transaction the node has not
+    /// broadcast is disclosed at all — not a field trim (§2.2). The caller
+    /// passes `!restricted`; this function does not decide it.
+    pub fn transactions(
+        &self,
+        txids: &[[u8; 32]],
+        include_sensitive: bool,
+    ) -> Result<(Vec<TxSlot>, u64), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let flat: Vec<u8> = txids.iter().flat_map(|h| h.iter().copied()).collect();
+        let mut rows: *const ffi::TxEntryFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut chain_height: u64 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; every out pointer is valid for the call. On OK
+        // the rows borrow memory owned by `owner`, released below before this
+        // function returns, with every copy taken first.
+        unsafe {
+            let rc = ffi::shekyl_rpc_transactions(
+                self.handle,
+                if flat.is_empty() {
+                    std::ptr::null()
+                } else {
+                    flat.as_ptr()
+                },
+                txids.len(),
+                u8::from(include_sensitive),
+                &raw mut rows,
+                &raw mut len,
+                &raw mut chain_height,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            // Past this point an owner may exist, so nothing returns until it
+            // is released.
+            let mut out = Vec::with_capacity(len);
+            // Set by an entry carrying a discriminator the FFI contract does
+            // not define. Recorded rather than returned on the spot, because the
+            // owner is still live and nothing returns before it is freed.
+            let mut undefined_where: Option<u8> = None;
+            if !rows.is_null() {
+                for e in std::slice::from_raw_parts(rows, len) {
+                    let bytes = |p: *const u8, n: usize| -> Vec<u8> {
+                        if p.is_null() || n == 0 {
+                            Vec::new()
+                        } else {
+                            std::slice::from_raw_parts(p, n).to_vec()
+                        }
+                    };
+                    let pruned = bytes(e.pruned, e.pruned_len);
+                    let prunable = bytes(e.prunable, e.prunable_len);
+                    let output_indices = if e.output_indices.is_null() || e.output_indices_len == 0
+                    {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(e.output_indices, e.output_indices_len).to_vec()
+                    };
+                    match slot_of(e, pruned, prunable, output_indices) {
+                        Some(slot) => out.push(slot),
+                        None => {
+                            undefined_where = Some(e.where_found);
+                            out.push(TxSlot::Missed);
+                        }
+                    }
+                }
+            }
+            ffi::shekyl_rpc_transactions_free(owner);
+            if undefined_where.is_some() {
+                return Err(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL);
+            }
+            Ok((out, chain_height))
+        }
+    }
+
+    /// epee's JSON rendering of one transaction (RK-D11). `pruned` selects the
+    /// base-only rendering, which is what the wire shows for a pruned reply.
+    pub fn tx_to_json(&self, blob: &[u8], pruned: bool) -> Result<String, i32> {
+        let mut out: *const std::os::raw::c_char = std::ptr::null();
+        let mut len: usize = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: the out pointers are valid for the call; on OK the string
+        // borrows `owner`, copied and then released before returning.
+        unsafe {
+            let rc = ffi::shekyl_rpc_tx_to_json(
+                if blob.is_empty() {
+                    std::ptr::null()
+                } else {
+                    blob.as_ptr()
+                },
+                blob.len(),
+                u8::from(pruned),
+                &raw mut out,
+                &raw mut len,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let json = if out.is_null() || len == 0 {
+                String::new()
+            } else {
+                String::from_utf8_lossy(std::slice::from_raw_parts(out.cast::<u8>(), len))
+                    .into_owned()
+            };
+            ffi::shekyl_rpc_tx_json_free(owner);
+            Ok(json)
+        }
+    }
+
+    /// Key images, one status per request slot: 0 unspent, 1 spent in the
+    /// chain, 2 spent in the pool.
+    pub fn key_images_spent(&self, key_images: &[[u8; 32]]) -> Result<Vec<u8>, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let flat: Vec<u8> = key_images.iter().flat_map(|k| k.iter().copied()).collect();
+        let mut status = vec![0u8; key_images.len()];
+        // SAFETY: live handle; `status` is exactly `key_images.len()` bytes,
+        // which is the length the export writes.
+        let rc = unsafe {
+            ffi::shekyl_rpc_key_images_spent(
+                self.handle,
+                if flat.is_empty() {
+                    std::ptr::null()
+                } else {
+                    flat.as_ptr()
+                },
+                key_images.len(),
+                status.as_mut_ptr(),
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        Ok(status)
+    }
+
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {
@@ -425,4 +642,63 @@ unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
         .into_owned();
     unsafe { ffi::core_rpc_ffi_free_string(ptr) };
     Some(s)
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    fn entry(where_found: u8) -> ffi::TxEntryFfi {
+        ffi::TxEntryFfi {
+            pruned: std::ptr::null(),
+            pruned_len: 0,
+            prunable: std::ptr::null(),
+            prunable_len: 0,
+            output_indices: std::ptr::null(),
+            output_indices_len: 0,
+            block_height: 3,
+            block_timestamp: 1_700_000_000,
+            received_timestamp: 1_700_000_001,
+            prunable_hash: [0x5A; 32],
+            where_found,
+            pruned_flag: 0,
+            double_spend_seen: 1,
+            relayed: 1,
+            reserved: [0; 4],
+        }
+    }
+
+    /// The three values the contract defines map to their slots.
+    #[test]
+    fn defined_where_found_values_map_to_their_slots() {
+        assert!(matches!(
+            slot_of(&entry(0), Vec::new(), Vec::new(), Vec::new()),
+            Some(TxSlot::Missed)
+        ));
+        assert!(matches!(
+            slot_of(&entry(1), Vec::new(), Vec::new(), vec![7]),
+            Some(TxSlot::Chain { .. })
+        ));
+        assert!(matches!(
+            slot_of(&entry(2), Vec::new(), Vec::new(), Vec::new()),
+            Some(TxSlot::Pool { .. })
+        ));
+    }
+
+    /// **A fourth value is the export breaking its contract, not a miss.**
+    ///
+    /// Mapping it to `Missed` would answer the caller successfully — "no such
+    /// transaction" — about one this daemon may well hold: an ABI violation
+    /// rendered as a fact about their request. `None` is what makes the caller
+    /// free the owner and raise an internal facts error instead.
+    #[test]
+    fn an_undefined_where_found_is_refused_not_read_as_missed() {
+        for undefined in [3u8, 4, 255] {
+            assert!(
+                slot_of(&entry(undefined), Vec::new(), Vec::new(), Vec::new()).is_none(),
+                "where_found={undefined} is outside the contract and must not \
+                 project to a slot"
+            );
+        }
+    }
 }

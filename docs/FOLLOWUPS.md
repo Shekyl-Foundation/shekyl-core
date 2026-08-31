@@ -11,7 +11,17 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+
 Default. Lands before genesis if it should exist at launch.
+
+- **`#[serde(default)]` still lets an omitted daemon field become its zero value.** RK-4c refused *unknown* fields on the RPC read surface (`deny_unknown_fields`, `shekyl-rpc-types::chain`/`transactions`), which catches a renamed field but not an omitted one: 27 fields across those two modules default silently if the daemon simply leaves them out, and a zero height or an empty status reads as data. Needs a per-field pass — some absences are legitimate `KV_SERIALIZE_OPT` omissions the oracle vectors depend on, so this is judgement per field, not a sweep (owner: [`DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md) §3.2).
+  - Target: pre-genesis
+
+- **Live-oracle spend-hash KAT: a daemon-captured blob for the FCMP++/PQC spend arms.** Struct-derived cross-language hash parity landed with PR #576 (`pruned_tx_hash_parity.rs`/`.cpp` for the 4-part spend arm, `serve_credit_tx_parity.rs` + C++ leg for the 3-part), binding the two implementations to each other but not yet to a chain. Blocked on the FCMP++ spend path producing a daemon-accepted transaction to capture (`fcmp_spend_e2e.rs`'s self-validated builder is the stand-in); capture alongside `capture_coinbase.py`'s corpus when it exists (owner: [`GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md) §11).
+  - Target: pre-genesis
+
+- **A pruned node keeps whole `pqc_auths` because they have no hash table.** A pruned v3 txid is `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)` and `pqc_auth_hash` is computed from the raw `txs_pqc_auths` bytes, so nameability costs the entire PQ signature slice where `txs_prunable_hash` does the same job in 32 bytes (`db_lmdb.cpp` `prune_tx_data`, PR #576; owner: [`LMDB_SCHEMA.md`](LMDB_SCHEMA.md)). A `txs_pqc_auth_hash` table would close it. **Unmeasured — do not open on the guess:** reopen with a real `pqc_auths`-vs-retained-bytes ratio from a pruned datadir, which an LMDB schema addition and its migration should be justified by.
+  - Target: pre-genesis
 
 - **Delete `fill_construct_tx_rct_stub`** — the remaining half of the CT-naming [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md)
   - Target: pre-genesis

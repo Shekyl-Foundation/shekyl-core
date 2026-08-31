@@ -561,6 +561,7 @@ components:
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
         - -29303   # PROOF_TX_NOT_FOUND
+        - -29304   # PROOF_TX_UNCONFIRMED
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
@@ -723,6 +724,12 @@ components:
                                           request (or embedded in a reserve
                                           proof's locators) is unknown to
                                           the daemon
+          -29304 PROOF_TX_UNCONFIRMED     proofs: a reserve-proof locator
+                                          names a tx the daemon holds only
+                                          in its pool; unconfirmed money
+                                          cannot back a reserve claim —
+                                          wait for confirmation and
+                                          regenerate the proof
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
                                           id naming no row (a malformed id
                                           is -32602, not this)

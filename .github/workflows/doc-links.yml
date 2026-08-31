@@ -39,6 +39,7 @@ on:
       - "scripts/ci/check_followups_targets.py"
       - "scripts/ci/check_index_prefix_uniqueness.py"
       - "scripts/ci/check_no_claim_era_spec.py"
+      - "scripts/ci/check_landed_rows_stamped.py"
       - ".cursor/rules/**"
       # The schema-coverage gate reads the table list and VERSION out of
       # db_lmdb.cpp, so a source-only table/version change must start this
@@ -125,3 +126,10 @@ jobs:
         # txin_stake_claim spec. Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_no_claim_era_spec.py
+
+      - name: Run landed-row stamp check
+        # A row claiming a slice **landed** must name its PR; six consecutive
+        # RK slices merged unstamped and the banner went stale (PR #576).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_landed_rows_stamped.py

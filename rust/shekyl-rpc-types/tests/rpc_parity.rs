@@ -19,7 +19,9 @@
 use serde_json::Value;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetBlockResponse,
-    GetHeightResponse, GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_VERSION,
+    GetHeightResponse, GetTransactionsRequest, GetTransactionsResponse, GetVersionResponse,
+    HardForkEntry, HashHex, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
+    RpcStatus, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -70,6 +72,44 @@ fn parsed(json: &str) -> Value {
     serde_json::from_str(json).expect("vector / output is JSON")
 }
 
+/// Parity for `get_version`, whose `version` field is the one value a vector
+/// cannot track.
+///
+/// `CORE_RPC_VERSION` moves whenever a wire shape changes — RK-4c's removal of
+/// `txs_as_hex` / `txs_as_json` took it to 3.25 — while these vectors are
+/// epee's output from RK-1, and the emitter that produced them was deleted
+/// with `get_version`'s C++ handler. A vector is never hand-edited, so the
+/// moving field is named here instead: everything else is compared against the
+/// oracle byte-for-byte, and `version` is asserted against the constant
+/// directly. Silently normalising both sides would have hidden a wrong
+/// constant; asserting it is what keeps the bump deliberate.
+fn assert_version_parity(vector: &str, built: &GetVersionResponse) {
+    assert_eq!(
+        built.version, CORE_RPC_VERSION,
+        "the built reply must carry the current constant"
+    );
+    let mut ours = parsed(&serde_json::to_string(built).expect("serialize"));
+    let mut theirs = parsed(vector);
+    let historical = theirs
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .expect("the oracle vector carries a version");
+    assert!(
+        u64::from(CORE_RPC_VERSION) >= historical,
+        "CORE_RPC_VERSION must never go backwards: {CORE_RPC_VERSION} < {historical}"
+    );
+    ours.as_object_mut().expect("object").remove("version");
+    theirs.as_object_mut().expect("object").remove("version");
+    assert_eq!(
+        ours, theirs,
+        "every field but `version` must still match the epee oracle"
+    );
+    let back: GetVersionResponse =
+        serde_json::from_str(vector).expect("the oracle vector deserializes");
+    assert_eq!(back.hard_forks, built.hard_forks);
+    assert_eq!(back.current_height, built.current_height);
+}
+
 fn assert_parity<T>(vector: &str, built: &T)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -110,7 +150,7 @@ fn get_version_synced_matches_the_oracle() {
             height: 0,
         }],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_synced_v1.json"),
         &built,
     );
@@ -139,7 +179,7 @@ fn get_version_syncing_matches_the_oracle() {
             },
         ],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_syncing_v1.json"),
         &built,
     );
@@ -155,7 +195,7 @@ fn get_version_all_defaults_matches_the_oracle() {
         target_height: 0,
         hard_forks: vec![],
     };
-    assert_parity(
+    assert_version_parity(
         include_str!("vectors/rpc/get_version_all_defaults_v1.json"),
         &built,
     );
@@ -367,5 +407,374 @@ fn get_block_without_transactions_omits_the_list() {
     assert!(
         !wire.contains("tx_hashes"),
         "an empty transaction list is dropped, not emitted as []: {wire}"
+    );
+}
+
+// ─── RK-4c: the transaction read set ─────────────────────────────────────────
+
+/// The emitter's `tagged_hex` — `tagged_hash` rendered the way a request
+/// carries it, since both request types take hashes as strings (RK-D12).
+fn tagged_hex(tag: u8) -> String {
+    tagged_hash(tag).to_string()
+}
+
+#[test]
+fn get_transactions_request_matches_the_oracle() {
+    let built = GetTransactionsRequest {
+        txs_hashes: vec![tagged_hex(1), tagged_hex(2)],
+        decode_as_json: true,
+        prune: true,
+        split: true,
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_request_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_request_defaults_matches_the_oracle() {
+    let built = GetTransactionsRequest {
+        txs_hashes: vec![tagged_hex(3)],
+        decode_as_json: false,
+        prune: false,
+        split: false,
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_request_defaults_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_chain_and_pool_matches_the_oracle() {
+    // The vector that pins `entry`'s branch: one mined entry and one pooled
+    // one, so both field sets are in the same document. The emitter set the
+    // *other* arm's members on each entry to non-default values, so a mirror
+    // that emitted them would not be parsed-equal here.
+    let mined = TxEntry {
+        tx_hash: tagged_hash(11),
+        as_hex: "0011223344".to_owned(),
+        pruned_as_hex: String::new(),
+        prunable_as_hex: String::new(),
+        prunable_hash: tagged_hash(12),
+        as_json: String::new(),
+        pruned: false,
+        double_spend_seen: false,
+        location: TxLocation::Mined {
+            block_height: 1_234_567,
+            confirmations: 89,
+            block_timestamp: 1_750_000_000,
+            output_indices: vec![7, 8, 4_294_967_296],
+        },
+    };
+    let pooled = TxEntry {
+        tx_hash: tagged_hash(21),
+        as_hex: "aabbcc".to_owned(),
+        pruned_as_hex: String::new(),
+        prunable_as_hex: String::new(),
+        prunable_hash: tagged_hash(22),
+        as_json: String::new(),
+        pruned: false,
+        double_spend_seen: true,
+        location: TxLocation::Pooled {
+            relayed: true,
+            received_timestamp: 1_750_000_123,
+        },
+    };
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: vec![mined, pooled],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_split_form_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: vec![TxEntry {
+            tx_hash: tagged_hash(31),
+            as_hex: String::new(),
+            pruned_as_hex: "0102030405".to_owned(),
+            prunable_as_hex: "0607".to_owned(),
+            prunable_hash: tagged_hash(32),
+            as_json: String::new(),
+            pruned: true,
+            double_spend_seen: false,
+            location: TxLocation::Mined {
+                block_height: 100,
+                confirmations: 1,
+                block_timestamp: 1_750_000_001,
+                // Empty inside the chain arm: dropped like every other empty
+                // sequence, which is what the vector proves.
+                output_indices: Vec::new(),
+            },
+        }],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_decoded_matches_the_oracle() {
+    let as_json = "{\"version\": 2, \"unlock_time\": 0}".to_owned();
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: vec![TxEntry {
+            tx_hash: tagged_hash(41),
+            as_hex: "00".to_owned(),
+            pruned_as_hex: String::new(),
+            prunable_as_hex: String::new(),
+            prunable_hash: tagged_hash(42),
+            as_json,
+            pruned: false,
+            double_spend_seen: false,
+            location: TxLocation::Mined {
+                block_height: 7,
+                confirmations: 3,
+                block_timestamp: 1_750_000_007,
+                output_indices: vec![0],
+            },
+        }],
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_missed_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs: Vec::new(),
+        missed_tx: vec![tagged_hash(51), tagged_hash(52)],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_missed_v2.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_transactions_refusal_matches_the_oracle() {
+    let built = GetTransactionsResponse {
+        status: RpcStatus("Too many transactions requested in restricted mode".to_owned()),
+        txs: Vec::new(),
+        missed_tx: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_transactions_refusal_v2.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_request_matches_the_oracle() {
+    let built = IsKeyImageSpentRequest {
+        key_images: vec![tagged_hex(61), tagged_hex(62), tagged_hex(63)],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_request_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_matches_the_oracle() {
+    let built = IsKeyImageSpentResponse {
+        status: RpcStatus::ok(),
+        spent_status: vec![
+            KeyImageStatus::Unspent,
+            KeyImageStatus::SpentInBlockchain,
+            KeyImageStatus::SpentInPool,
+        ],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn is_key_image_spent_empty_matches_the_oracle() {
+    let built = IsKeyImageSpentResponse {
+        status: RpcStatus::ok(),
+        spent_status: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/is_key_image_spent_empty_v1.json"),
+        &built,
+    );
+}
+
+/// The `txs_as_hex` / `txs_as_json` retirement, asserted as a difference.
+///
+/// The `_v1` vectors are the shape the C++ served before rule 60 removed those
+/// two members; `_v2` is what the same emitter produced after. Keeping both and
+/// asserting the difference is what makes the deletion checkable: re-adding
+/// either member to the Rust type fails the `_v2` parity tests above, and
+/// changing anything *else* in the reply fails this one. A `_v2` file alone
+/// would only say what the shape is now, not what was removed to get there.
+///
+/// Per-vector presence is not asserted, because it is not true: epee omits an
+/// empty sequence, so `txs_as_json` appears only in the fixture that asked for
+/// `decode_as_json`. What is asserted is that across the set each retired
+/// member was actually exercised — otherwise this test could pass while
+/// silently checking the removal of only one of them.
+/// **`get_version`'s v2 differs from v1 by exactly the version constant.**
+///
+/// `CORE_RPC_VERSION` moved to Rust, so this field can no longer be
+/// re-captured from C++ — which is precisely why the pair is asserted rather
+/// than the v2 file trusted. `get_transactions` dropping two members is a wire
+/// change, the constant records it (3.24 → 3.25), and this pins that the
+/// recording touched nothing else in the reply.
+/// **An unknown field on the read surface is refused, not ignored.**
+///
+/// The tolerance these types used to carry was justified by "additive
+/// daemon-side evolution must not break an older wallet" — a constraint this
+/// tree does not have, since there is no network and every client ships with
+/// the daemon. What it bought instead was a *renamed* field arriving unnoticed
+/// while the name we look for defaults, which is a wrong value wearing the
+/// shape of a legitimate one.
+///
+/// The second half is the one that matters and the one a future edit is most
+/// likely to undo: the same document **without** the stray field must still
+/// parse, so this pins a refusal of the unknown rather than a refusal of
+/// everything.
+#[test]
+fn an_unknown_field_is_refused_on_the_read_surface() {
+    use shekyl_rpc_types::{GetHeightResponse, GetTransactionsResponse};
+
+    let good = r#"{"status":"OK","height":7,"hash":"ab"}"#
+        .replace("\"ab\"", &format!("\"{}\"", "ab".repeat(32)));
+    serde_json::from_str::<GetHeightResponse>(&good).expect("the modelled document parses");
+
+    let with_extra = good.replace("{\"status\"", "{\"heightt\":7,\"status\"");
+    let err = serde_json::from_str::<GetHeightResponse>(&with_extra)
+        .expect_err("a field this type does not model must be refused");
+    assert!(
+        format!("{err}").contains("unknown field"),
+        "the refusal must name the unknown field: {err}"
+    );
+
+    // And on the transactions surface the wallet's proofs path reads.
+    let txs = r#"{"status":"OK","txs":[],"missed_tx":[],"surprise":1}"#;
+    assert!(
+        serde_json::from_str::<GetTransactionsResponse>(txs).is_err(),
+        "an unmodelled field must not be ignored on a reply that feeds proofs"
+    );
+}
+
+/// **A request this tree sends omits its empty sequences, as epee does.**
+///
+/// The omission rule is the wire's, not the response types' — a client that
+/// emits `"txs_hashes":[]` where epee emits nothing has diverged from the
+/// captured shape just as surely as a server would. Both directions are
+/// asserted, because `skip_serializing_if` silently does nothing if the field
+/// is later given a non-`Vec` type or the attribute is dropped.
+#[test]
+fn request_sequences_are_omitted_when_empty_and_present_when_not() {
+    use shekyl_rpc_types::{GetTransactionsRequest, IsKeyImageSpentRequest};
+
+    let empty = serde_json::to_value(GetTransactionsRequest::default()).unwrap();
+    assert!(
+        empty.get("txs_hashes").is_none(),
+        "an empty txs_hashes must be omitted, not emitted as []: {empty}"
+    );
+    let filled = serde_json::to_value(GetTransactionsRequest {
+        txs_hashes: vec!["ab".repeat(32)],
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        filled.get("txs_hashes").is_some(),
+        "a non-empty txs_hashes must still be carried: {filled}"
+    );
+
+    let empty = serde_json::to_value(IsKeyImageSpentRequest::default()).unwrap();
+    assert!(
+        empty.get("key_images").is_none(),
+        "an empty key_images must be omitted, not emitted as []: {empty}"
+    );
+    let filled = serde_json::to_value(IsKeyImageSpentRequest {
+        key_images: vec!["cd".repeat(32)],
+    })
+    .unwrap();
+    assert!(
+        filled.get("key_images").is_some(),
+        "a non-empty key_images must still be carried: {filled}"
+    );
+}
+
+#[test]
+fn get_version_v2_is_v1_with_only_the_version_bumped() {
+    let mut before = parsed(include_str!("vectors/rpc/get_version_synced_v1.json"));
+    let after = parsed(include_str!("vectors/rpc/get_version_synced_v2.json"));
+
+    let old = before
+        .as_object_mut()
+        .expect("v1 vector is an object")
+        .insert(
+            "version".to_string(),
+            serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
+        )
+        .expect("v1 carries a version");
+
+    assert_ne!(
+        old,
+        serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
+        "v1 already carries the current constant — the pair has nothing to record"
+    );
+    assert_eq!(
+        before, after,
+        "v2 must differ from v1 by exactly CORE_RPC_VERSION"
+    );
+}
+
+#[test]
+fn v2_is_v1_minus_exactly_the_two_retired_members() {
+    const RETIRED: [&str; 2] = ["txs_as_hex", "txs_as_json"];
+    let mut seen = [false; 2];
+    for (v1, v2) in [
+        (
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v1.json"),
+            include_str!("vectors/rpc/get_transactions_chain_and_pool_v2.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_decoded_v1.json"),
+            include_str!("vectors/rpc/get_transactions_decoded_v2.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_transactions_split_form_v1.json"),
+            include_str!("vectors/rpc/get_transactions_split_form_v2.json"),
+        ),
+    ] {
+        let mut before = parsed(v1);
+        let after = parsed(v2);
+        let obj = before.as_object_mut().expect("v1 vector is an object");
+        for (i, key) in RETIRED.iter().enumerate() {
+            if obj.remove(*key).is_some() {
+                seen[i] = true;
+            }
+        }
+        assert_eq!(
+            before, after,
+            "v2 must differ from v1 by exactly the retired members"
+        );
+    }
+    assert!(
+        seen.iter().all(|s| *s),
+        "each retired member must appear in at least one v1 vector, or its \
+         removal is not actually being checked: {RETIRED:?} seen = {seen:?}"
     );
 }

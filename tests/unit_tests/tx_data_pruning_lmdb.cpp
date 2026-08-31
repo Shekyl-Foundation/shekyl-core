@@ -30,6 +30,8 @@
 
 #include "gtest/gtest.h"
 
+#include "pqc_spend_fixture.h"
+
 #include <boost/filesystem.hpp>
 
 #include "misc_language.h"
@@ -157,6 +159,14 @@ bool construct_miner_only_block(
   return true;
 }
 
+// A structurally parseable v3 FCMP++ spend carrying **non-empty `pqc_auths`**
+// and a prunable region. Coinbase transactions cannot stand in here:
+// `has_pqc` is `version >= 3 && !vin.empty() && !holds_alternative<txin_gen>`,
+// so a miner-only chain leaves `txs_pqc_auths` empty and cannot exercise the
+// segment `prune_tx_data` was fixed to retain. No cryptographic validity is
+// needed — the store splits the blob by offset, it does not verify it.
+using shekyl_test_fixtures::make_pqc_spend;
+
 bool build_two_miner_only_blocks(account_base& miner, block& b0, block& b1)
 {
   std::vector<size_t> block_weights;
@@ -208,11 +218,106 @@ TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
   const crypto::hash miner_txh = get_transaction_hash(db.get_block_from_height(0).miner_tx);
   ASSERT_TRUE(db.tx_has_verification_data(miner_txh));
 
-  ASSERT_TRUE(db.prune_tx_data(1));
-  ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
-  ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+  crypto::hash hash_before{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_before));
+  cryptonote::blobdata pruned_before;
+  ASSERT_TRUE(db.get_pruned_tx_blob(miner_txh, pruned_before));
+  ASSERT_FALSE(pruned_before.empty());
 
   ASSERT_TRUE(db.prune_tx_data(1));
   ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+
+  cryptonote::blobdata full_after;
+  ASSERT_FALSE(db.get_tx_blob(miner_txh, full_after))
+      << "the complete body is gone locally; shard archival is what still holds it";
+  cryptonote::blobdata pruned_after;
+  ASSERT_TRUE(db.get_pruned_tx_blob(miner_txh, pruned_after));
+  EXPECT_EQ(pruned_before, pruned_after)
+      << "the unprunable prefix must survive so the chain can still name the tx";
+  crypto::hash hash_after{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_after))
+      << "dropping the hash with the body leaves a txid that cannot be rebound";
+  EXPECT_EQ(hash_before, hash_after);
+
+  ASSERT_TRUE(db.prune_tx_data(1));
+  ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
+  ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
+  ASSERT_TRUE(db.get_prunable_tx_hash(miner_txh, hash_after));
+  EXPECT_EQ(hash_before, hash_after);
+}
+
+// **The retained pqc segment, exercised.** The sibling test above uses
+// miner-only blocks, and a coinbase has no `pqc_auths` — so it proves the
+// prunable-hash half of `prune_tx_data`'s contract and is silent on the other.
+// This one carries a real v3 spend and asserts the property both retained
+// items exist for: after pruning the body, the chain can still NAME what it
+// kept. `get_pruned_transaction_hash` mixes `pqc_auth_hash` and
+// `prunable_hash`, so dropping either would change the txid — which is what
+// made a pruned transaction unnameable before the fix.
+TEST(tx_data_pruning_lmdb, a_pruned_spend_keeps_its_pqc_segment_and_stays_nameable)
+{
+  account_base miner;
+  miner.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
+  block b0{}, b1{};
+  ASSERT_TRUE(build_two_miner_only_blocks(miner, b0, b1));
+
+  const transaction spend = make_pqc_spend();
+  const cryptonote::blobdata spend_blob = tx_to_blob(spend);
+  const crypto::hash spend_id = get_transaction_hash(spend);
+  b0.tx_hashes.push_back(spend_id);
+
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const size_t w0 = get_transaction_weight(b0.miner_tx) + spend_blob.size();
+  const size_t w1 = get_transaction_weight(b1.miner_tx);
+  const difficulty_type cum0 = 1;
+  const difficulty_type cum1 = 2;
+  const uint64_t coins0 = get_outs_money_amount(b0.miner_tx);
+  const uint64_t coins1 = coins0 + get_outs_money_amount(b1.miner_tx);
+
+  {
+    db_wtxn_guard w(&db);
+    // Last two arguments are the attestation witness and the block's txs, in
+    // that order — the spend rides in the txs list, not the witness.
+    db.add_block(std::make_pair(b0, block_to_blob(b0)), w0, w0, cum0, coins0, 0,
+      {}, {std::make_pair(spend, spend_blob)});
+    db.add_block(std::make_pair(b1, block_to_blob(b1)), w1, w1, cum1, coins1, 0, {}, {});
+  }
+  ASSERT_EQ(db.height(), 2u);
+
+  // The segment must be there to begin with, or the assertions below pass
+  // over an empty one and prove nothing.
+  cryptonote::blobdata pruned_before;
+  ASSERT_TRUE(db.get_pruned_tx_blob(spend_id, pruned_before));
+  cryptonote::blobdata full_before;
+  ASSERT_TRUE(db.get_tx_blob(spend_id, full_before));
+  ASSERT_GT(full_before.size(), pruned_before.size())
+    << "the spend must have a prunable half for pruning to remove";
+  crypto::hash prunable_before{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(spend_id, prunable_before));
+
+  ASSERT_TRUE(db.prune_tx_data(1));
+
+  // The body is gone; the two hash operands are not.
+  cryptonote::blobdata full_after;
+  EXPECT_FALSE(db.get_tx_blob(spend_id, full_after))
+    << "the prunable body must be dropped — that is what pruning is for";
+  cryptonote::blobdata pruned_after;
+  ASSERT_TRUE(db.get_pruned_tx_blob(spend_id, pruned_after));
+  EXPECT_EQ(pruned_before, pruned_after)
+    << "the pruned blob carries the pqc segment; a dropped segment shortens it";
+  crypto::hash prunable_after{};
+  ASSERT_TRUE(db.get_prunable_tx_hash(spend_id, prunable_after));
+  EXPECT_EQ(prunable_before, prunable_after);
+
+  // The contract itself: what survived still names the transaction.
+  transaction reparsed;
+  ASSERT_TRUE(parse_and_validate_tx_base_from_blob(pruned_after, reparsed));
+  EXPECT_EQ(spend_id, get_pruned_transaction_hash(reparsed, prunable_after))
+    << "a pruned transaction must still compute its own txid";
 }

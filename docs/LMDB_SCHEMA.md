@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 10 (schema v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 11 (schema v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -146,7 +146,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
-| Writers | `add_transaction_data` (conditional), `remove_transaction_data` |
+| Writers | `add_transaction_data` (conditional), `remove_transaction_data`. **Not** `prune_tx_data` — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
 
@@ -161,8 +161,8 @@ Prunable suffix of serialized transactions (`CtSigPrunable`: Bulletproof+ range 
 | Key comparator | `compare_uint64` |
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value | Bytes from `unprunable_size` to end of tx blob. Variable length. |
-| Writers | `add_transaction_data`, `remove_transaction_data` |
-| Readers | `get_prunable_tx_blob`, `get_prunable_tx_hash` |
+| Writers | `add_transaction_data`, `remove_transaction_data`, `prune_tx_data` (delete only) |
+| Readers | `get_prunable_tx_blob` |
 | Introduced | Genesis (DB v0) |
 
 ### `txs_prunable_hash`
@@ -176,7 +176,7 @@ Hash of the prunable section, kept for verification when the prunable data itsel
 | Key | `uint64_t` tx_id (8 bytes) |
 | Value (dup) | `crypto::hash` (32 bytes) |
 | Dup sort | `compare_uint64` (first 8 bytes of hash treated as uint64) |
-| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data` |
+| Writers | `add_transaction_data` (for tx version > 1), `remove_transaction_data`. **Not** `prune_tx_data` — the hash is what still names a pruned transaction. |
 | Introduced | Genesis (DB v0) |
 
 ### `txs_prunable_tip`
@@ -1181,6 +1181,20 @@ rule 42's persisted-block version, which correctly does not fire (no block
 blob byte moves). **Within v10 (no bump):** the additive
 `archival_settlement` table rides the boundary as the witness tables rode
 v9.
+
+### Schema v10 → v11 (breaking, no migration path)
+
+DB v11: retention semantics, not layout. `prune_tx_data`'s depth pass must
+**keep** `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable
+body: both are operands of the pruned v3 txid
+(`get_pruned_transaction_hash`), and neither has a hash table of its own.
+v10 code deleted them, so a v10 datadir that ever ran `--prune-blockchain`
+holds transactions the v11 reader cannot name — the RPC facts export
+answers `INCONSISTENT` for each of them, forever, with no repair path (the
+bytes are gone). The rows are required now; a datadir that may lack them is
+refused loudly at open rather than mis-served at runtime. Delete and
+resync. No table is added, no key or value moves — the bump asserts a
+retention requirement the old writer violated.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.

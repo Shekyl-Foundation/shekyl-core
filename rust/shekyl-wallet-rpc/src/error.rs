@@ -134,6 +134,9 @@ pub enum WalletRpcErrorCode {
     ProofNoProvableOutputs = -29302,
     /// Proofs: a txid named by the request is unknown to the daemon.
     ProofTxNotFound = -29303,
+    /// Proofs: a reserve-proof locator names a tx the daemon holds only
+    /// in its pool — unconfirmed money cannot back a reserve claim.
+    ProofTxUnconfirmed = -29304,
     /// `get_transfer_by_id`: no match.
     UnknownTransferId = -29400,
     /// Stake: funding not ready (W1-clean refusal — fund the persona /
@@ -346,6 +349,9 @@ pub enum WalletRpcError {
     /// proof's locators) is unknown to the daemon.
     #[error("transaction not found")]
     ProofTxNotFound,
+    /// Proofs: a reserve-proof locator names an unconfirmed (pooled) tx.
+    #[error("transaction is unconfirmed")]
+    ProofTxUnconfirmed,
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
@@ -542,6 +548,7 @@ impl WalletRpcError {
             Self::ProofTxSecretUnavailable => WalletRpcErrorCode::ProofTxSecretUnavailable,
             Self::ProofNoProvableOutputs => WalletRpcErrorCode::ProofNoProvableOutputs,
             Self::ProofTxNotFound => WalletRpcErrorCode::ProofTxNotFound,
+            Self::ProofTxUnconfirmed => WalletRpcErrorCode::ProofTxUnconfirmed,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,

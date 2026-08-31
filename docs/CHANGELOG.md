@@ -24,6 +24,12 @@
 
 ### Changed
 
+- **`engine_trait_bench_key_dispatch_baseline_iai` collects via Callgrind client requests** (the `ledger_iai` pattern) instead of gungraun's wrapper toggle, which reported `instructions=0` deterministically on CI once rustc folded the wrapper — retries and fresh runners reproduced the build and so reproduced the zero. Count moves by 38 instructions in ~14.6M; the post-merge `update-baseline` run absorbs it. The facts shim's pool remap is also linear now — one forward cursor over `missed`, valid because `get_transactions_info` returns hits in request order — instead of a rescan that was quadratic on the uncapped unrestricted listener; a cursor/contract violation refuses as `ERR_INTERNAL` rather than reporting a pooled transaction missing, and a `[H, H]` duplicate-slot test pins the remap (shared v3 spend fixture, `pqc_spend_fixture.h`). Developer-facing and daemon-internal; no wire change.
+
+- **A tx proof's `confirmations` is the daemon's gather-lock count, not a number the wallet re-derives from a later tip.** `confirmations_of` issued a second `get_height` and subtracted the `block_height` captured in the earlier `get_transactions` — two chain snapshots for one answer, so a block landing between the two requests inflated the count, and a reorg could make it describe a chain the block is no longer on. The native handler already computes `chain_height - block_height` against the tip it reads once for the whole gather (the one-lock rule RK-4c introduced); the wallet was discarding exactly that guarantee and paying an extra round trip for a worse answer. It now carries the value. Taking the daemon's number is no more trusting than the arithmetic was — both operands were always its to choose — and it is self-consistent. `FetchedTx` holds a `TxChainState` arm rather than `in_pool: bool` beside `block_height: Option<u64>`, so "pooled at 12 confirmations" is unrepresentable and `confirmations_of` is total: no RPC, no `async`, no unreachable error branch. Found by Copilot on #576.
+
+- **A doc row claiming a slice `**landed**` must now name its PR (`scripts/ci/check_landed_rows_stamped.py`).** Stamping the row is step 6 of `DAEMON_RPC_KV_CUTOVER.md`'s per-slice checklist and it was skipped for six consecutive merged slices, leaving that document's `Status:` banner reading *"design open for RK-4a"* while RK-4a, RK-4b and RK-4c had all been written. Because rule 95's banner is what a grep-driven reader uses to classify every claim below it, one stale banner misclassifies a whole file. The gate binds only the knowable half — a merge sha cannot exist pre-merge, so an in-flight row passes — and it strips code spans before matching, so a log entry *naming* the placeholder is not read as one *using* it. Developer-facing only; no runtime or wire effect.
+
 - **The confirmed `prune_blockchain` command now completes both pruning
   phases before returning.** `Blockchain::prune_blockchain` previously ran
   only the stripe prune; the output-metadata pass (`prune_tx_data`, which
@@ -53,6 +59,25 @@
   observation gap. See `COVER_TRAFFIC_RESTORATION.md` §3.3.
 
 ### Fixed
+
+- **A reserve proof whose locator names a pooled transaction is refused, not counted.** `check_reserve_proof`'s batch fetch parsed whatever the daemon served without inspecting `location`, so an unconfirmed transaction's outputs verified cryptographically and entered `total - spent` — mempool money, still erasable by a competing spend, presented as live confirmed reserve (`CheckedReserveProof` has no pool dimension a verifier could consult). The batch fetch now refuses pooled entries with the new `-29304 PROOF_TX_UNCONFIRMED`, carrying the txid so an honest-but-early prover knows to wait for confirmation and regenerate; the tx-proof paths are deliberately unchanged, since they report `in_pool`/`confirmations` honestly. Registered in `docs/api/wallet_rpc.yaml`; bite-verified — with the guard removed, the pooled-locator fixture proof verifies. Found by Copilot on #576.
+
+- **`--prune-blockchain` no longer deletes the hash of a pruned
+  transaction.** `BlockchainLMDB::prune_tx_data` dropped `txs_prunable_hash`
+  and `txs_pqc_auths` together with the prunable body. The body going is the
+  point — those bytes live in shard archival (`docs/V3_STAKER_ARCHIVAL.md`
+  set C). The hash staying is why the table exists: a pruned v3 txid is
+  `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)`, and there
+  is no `pqc_auth_hash` table, so dropping either operand left a chain that
+  could not name what it kept. Stripe pruning (`prune_worker`) already
+  retained the hash; the depth pass now matches. `/get_transactions` on a
+  pruned node can therefore still bind the prefix to its txid, and a store
+  that holds a body with no hash beside it remains `FactsFault::Inconsistent`.
+  Because a datadir pruned by the old code already lost those rows — and would
+  otherwise open silently and answer `INCONSISTENT` for every previously
+  pruned transaction, forever — the LMDB schema version is bumped **v10 →
+  v11**: retention semantics, not layout, and the standing remedy (delete and
+  resync) applies at open instead of surfacing weeks later as RPC errors.
 
 - **A confirmed emission claim or drain now releases its seal — before this,
   neither ever did.** Both paths seal a one-live-per-persona record before
@@ -196,6 +221,300 @@
   producer merging is not the event that lifts RESERVED.
 
 ### Changed
+
+- **`/get_transactions` and `/is_key_image_spent` are served natively in Rust,
+  and their C++ handlers are deleted (RK-4c).** Both console commands —
+  `print_tx` and `is_key_image_spent` — render in Rust on both arms, the
+  wallet's refresh and proofs paths read through the shared wire types instead
+  of hand-rolled JSON, and `COMMAND_RPC_GET_TRANSACTIONS`,
+  `COMMAND_RPC_IS_KEY_IMAGE_SPENT`, their dispatch rows and both restricted
+  caps are gone.
+  The facts export answers **per request slot** rather than batching two
+  lookups and re-sorting them, which removes the two internal errors that
+  existed only because that sort could disagree with itself ("tx hash
+  mismatch", "internal error - txs is empty").
+  `entry`'s KV map branches on `in_pool`, so the Rust type makes the branch a
+  type: `Mined` or `Pooled`, with `in_pool` derived from the arm. A flat
+  struct of optional members round-trips every captured vector while still
+  able to emit documents the daemon cannot produce.
+  Two divergences are deliberate: the reply's `tx_hash` is canonical
+  lower-case rather than an echo of the request's casing, and a `spent_status`
+  outside 0/1/2 is a malformed reply rather than a fourth state a caller has
+  to guess about.
+
+- **`get_transactions` no longer returns `txs_as_hex` / `txs_as_json`, and
+  `CORE_RPC_VERSION` is 3.25.** The handler filled them "in case an old wallet
+  asks" and the old wallet is `src/wallet/`, deleted — so they duplicated
+  `txs[i].as_hex` and `.as_json` for a reader that does not exist (rule 60).
+  The `_v2` oracle vectors were captured from the edited C++ struct before it
+  was deleted, so the new shape has a real oracle rather than a hand-written
+  one, and the `_v1` files stay beside them so the removal itself is
+  assertable. `get_version` earns a `_v2` for the same bump, by a different
+  route: its reply carries `CORE_RPC_VERSION`, and that constant moved to Rust,
+  so the new value cannot be re-captured from C++ at all. The vectors are never
+  hand-edited, so the bump gets a file beside the capture, held honest by a pair
+  test that substitutes the live constant into `_v1` and demands the result
+  equal `_v2` exactly — it may differ by that constant and nothing else, and it
+  cannot go stale against it either.
+
+- **The facts export reads the prunable hash unconditionally, and refuses a
+  store that contradicts itself.** Two defects, one root: the exporter was
+  written against what the deleted C++ handler did, and pruning is a Shekyl
+  system that Monero never had, so that handler is not authority for it.
+
+  The hash was read only when the prunable **blob** was present. But
+  `prune_worker` and `prune_tx_data` delete `txs_prunable` (and the worker,
+  `txs_prunable_tip`) and never `txs_prunable_hash` — retaining the hash
+  after dropping the bytes is the entire reason to store it, since it is
+  what still binds a pruned body to its transaction. So on a pruned daemon every pruned transaction would have
+  reported an all-zero `prunable_hash`. Pruned-daemon mode is node-local and
+  ships post-genesis without coordination (rule 75); its absence today is not a
+  reason to encode its absence. The hash is now read for every transaction the
+  chain holds, and the blob's absence is what it actually means — pruned, a
+  fact about this node, not a fault.
+
+  A **missing** hash, and a `get_tx_outputs_gindexs` that returns false, are
+  now `SHEKYL_RPC_FACTS_ERR_INCONSISTENT` rather than an all-zero field and an
+  empty index list. Both had a plausible-looking fallback that would have
+  reached the caller as a fact about their request instead of a fault of this
+  node — which is the property `FactsFault::Inconsistent` exists to carry, and
+  its doc now names all three reads that raise it rather than only the height
+  case it was written for.
+
+  The entry vector is left to `vector(n)`'s value-initialization instead of
+  being `memset` afterwards. Value-initialization zeroes every scalar and gives
+  the pointer members real null pointers rather than an all-zero byte pattern
+  that is only null by convention, so the `memset` added nothing — while being
+  undefined at `txids_len == 0`, where `data()` may be null and passing null to
+  `memset` is undefined even for a zero count. An empty `get_transactions`
+  request is valid, so that length is reachable, and it now has a test.
+
+- **The release checklist's testnet consensus script reaches
+  `get_transactions` again.** `scripts/check_testnet_genesis_consensus.py`
+  wrapped the call in a `/json_rpc` envelope, but `get_transactions` is a REST
+  endpoint — it has no row in either JSON-RPC dispatch table and never did on
+  this bridge, so the script died at "Method not found" before its genesis
+  comparison ever ran (RK-4c's field-name update sat on a call that could not
+  succeed). It now POSTs to `/get_transactions` directly; the JSON-RPC helper
+  stays for the methods that are dispatched there (`get_block_header_by_height`,
+  `get_info`). Release-tooling only; no runtime or wire effect.
+
+- **A daemon refusal is no longer read as data.** `Rpc::rpc_call` and
+  `json_rpc_call` only deserialize — they do not enforce the wire's `status` —
+  so a daemon could answer a non-OK status *and* a complete, plausible body in
+  one document, and five typed consumers read the body first: both
+  `block_fetch` calls, both `proofs_chain_facts` fetches, and the reserve
+  proof's `is_key_image_spent`.
+
+  It matters most where the reply feeds a judgement rather than a display: a
+  refusal carrying one plausible-length `spent_status` array changes a reserve
+  proof's total, and one carrying a plausible entry lets a proof verify against
+  a transaction the daemon just declined to vouch for. The own-node default
+  narrows who can send such a document; it does not make it evidence.
+
+  One `refuse_unless_ok` rather than five checks, so the refusal reads the same
+  way everywhere and a sixth typed consumer has something to reach for. The
+  test builds a body that clears every check *downstream* of the status — right
+  count, matching `tx_hash`, a pruned blob `parse_pruned_tx` accepts — so
+  without the check the call **succeeds** and hands back a transaction; that is
+  the hazard, not a parse error arriving late.
+
+- **An undefined `where_found` is refused, not read as "not found".** The FFI
+  contract permits 0/1/2; anything else was mapped to `Missed`, which answers
+  the caller successfully about a transaction this daemon may well hold — an
+  ABI violation rendered as a fact about their request. It now frees the owner
+  and raises an internal facts error, as the block path already did for a
+  length no allocation could have produced.
+
+  The mapping moved to `slot_of`, a pure function beside the `unsafe` walk,
+  because the walk needs a live `core_rpc_server` and this is the part with a
+  decision in it. The pointer arithmetic stays at the call site; what crosses
+  is already owned data — which is what makes the refusal testable at all.
+
+- **`key_images_spent` has the three-way test its logic needs.** The status
+  values and the slot re-association are the whole of that function: unspent
+  images are gathered with their positions, asked of the pool, and written back
+  through `unspent_slots`. A request whose images are all one kind cannot tell
+  a correct re-association from an off-by-one, so the fixture mixes chain-spent,
+  unspent and pool-spent and puts the **pool hit last** — writing pool answers
+  in arrival order then lands it on the wrong image, and does. The pool entry is
+  seeded through the DB so `tx_memory_pool::init` builds `m_spent_key_images`
+  the way production does, rather than the test asserting over a hand-set field.
+
+- **The C++ RK-4c replaced is deleted, not left callerless.** Retiring
+  `on_get_transactions` was the last caller of
+  `Blockchain::get_split_transactions_blobs` and of the `core::` wrappers
+  `get_split_transactions_blobs`, `get_pool_transactions_info` and
+  `are_key_images_spent[_in_pool]`. The first of those carries a pruning model
+  that is **wrong for Shekyl**: it reads the prunable hash only when the
+  prunable *blob* survived, and sets the hash to null when it did not — the
+  exact inversion of what `prune_worker` does, and the same defect this slice
+  corrected in the facts export.
+
+  Leaving it callerless would be worse than never having written it.
+  Pruning-and-serving-from-archive has no Monero counterpart, so the inherited
+  C++ is a *first draft of a Shekyl system*, and a wrong first draft sitting in
+  the tree is what the next port reads as the design. Deleted with its `core::`
+  wrapper, its declaration and its explicit template instantiation.
+
+  The reads underneath stay: `have_tx_keyimges_as_spent`,
+  `check_for_key_images` and `get_transactions_info` all have live callers — the
+  facts shim calls the last two directly, which is precisely what left the
+  wrappers dead. `get_transaction_version` went with them and is disclosed as
+  a different case: it was **already** dead on `dev`, with no callers and no
+  header declaration, so it was swept under rule 15 rather than orphaned here.
+
+- **The docs that described the old trust boundary were swept with it.** The
+  binding below left seven statements asserting the opposite — that a pruned
+  body is "not re-hashed" and the daemon's label is "the only association
+  handle" — across `block_fetch`, its suite, and the cutover design doc. A doc
+  that contradicts an enforcement is worse than a stale one: it tells the next
+  reader the boundary is weaker than it is, and a design section tells the next
+  *slice* to build it that way. Review flagged three; a sweep for the claim
+  found five in code plus two in the contract, and all seven are corrected at
+  source.
+
+  Two of those were the canonical contract rather than commentary: RK-D8's
+  shape-preservation rule now records RK-4c's field retirement as a **narrow,
+  satisfied exception** (parity green first, removal as its own commit, so the
+  divergence still bisects — the discipline, not a waiver), and §6's
+  `CORE_RPC_VERSION` baseline says 3.25 rather than the 3.22 it froze at, since
+  a baseline that stops tracking the constant reads as a freeze.
+
+- **A pruned transaction body is bound to the hash that was asked for.** The
+  batch parser checked the reply's `tx_hash` **label** against the request and
+  never the body, so a daemon could serve any canonical transaction under the
+  requested label: shape validation passes, the label matches, and a proof
+  consumer then verifies outputs belonging to a transaction that may not be on
+  this chain.
+
+  The identity is now recomputed from the bytes.
+  `Transaction::hash_with_supplied_prunable` is the Rust equivalent of
+  `get_pruned_transaction_hash` — a pruned body has no prunable section, so
+  plain `hash()` substitutes the null hash and returns an identity no
+  transaction has. The reply's `prunable_hash` is the daemon's to choose too and
+  gains it nothing: choosing freely leaves it solving
+  `H(prefix ‖ base ‖ pqc ‖ X) = txid` for `X`, a keccak preimage rather than a
+  substitution. The full form is bound the same way, via `hash()` directly.
+
+  Both hashes share one construction rather than two, so the pruned and
+  unpruned paths cannot drift into hashing the same transaction two ways.
+
+  Two existing fixtures had to change, which is the finding confirming itself:
+  they paired arbitrary labels with arbitrary bodies, and one served **the same
+  body under two different requested hashes** — the substitution case, sitting
+  in the happy-path test, passing only because the label was the whole check.
+  They now derive the label from the body.
+
+- **The console stops replacing the daemon's reason with its own complaint.**
+  A native handler reports failure as a `RestErrorEnvelope`, which the success
+  types do not model, so two success-only decodes reported "malformed reply"
+  over the server's stated cause. Refusing unknown fields made that certain
+  rather than incidental — the envelope's `error` is precisely the field the
+  success type does not model. Both sites now use `decode_reply`, which tries
+  the envelope second, as `print_height` already did.
+
+- **The RPC read surface refuses unknown fields.** `shekyl-rpc-types::chain`
+  and `::transactions` tolerated them because "additive daemon-side evolution
+  must not break an older wallet" — not a constraint this tree has, since there
+  is no network and every client ships with the daemon. What the tolerance
+  bought was a **renamed** field arriving unnoticed while the name we look for
+  defaults: a wrong value wearing the shape of a legitimate one, on replies that
+  feed proof verification.
+
+  Free to remove, and checked rather than assumed: every captured epee vector
+  still parses with the denial on, so the types already modelled everything the
+  daemon emits. It also aligns the daemon surface with the wallet-RPC decision
+  (F-1), where an unknown key is `-32602` rather than a guess.
+
+  `SubmitVerdict` keeps its tolerance, on its real reason rather than the compat
+  one: a verdict arrives mid-submit, where a daemon and wallet from different
+  in-tree builds must still agree on whether the transaction was accepted, and
+  failing that parse turns an informational field into an ambiguous submit —
+  the outcome the §2.3 skew design exists to prevent. `skew_c` pins it.
+
+  **Not a fix for silent defaults**, and the docs say so: `#[serde(default)]`
+  still lets an *omitted* field become its zero value, and 27 fields across the
+  two modules do. That audit is filed separately because it needs per-field
+  judgement — some absences are legitimate `KV_SERIALIZE_OPT` omissions the
+  vectors depend on.
+
+- **`print_transaction` binds the reply to the request, not just its arity.**
+  It accepted whatever single entry came back, so a daemon could answer with a
+  different transaction — every field well-formed, only the identity wrong —
+  and the console printed it under the operator's hash. It could also answer
+  with an entry *and* report that hash missed, and the entry won. Now the
+  entry's `tx_hash` must equal what was asked and `missed_tx` must be empty,
+  which is the rule `parse_tx_batch` already holds the wallet's consumers to.
+
+  These two cases need a canned reply rather than the projection-backed
+  fixture: the projection only ever answers about the hash it was handed, so it
+  cannot state a reply that contradicts the request.
+
+- **The pruned-spend test carries a real spend, so the retained PQC segment is
+  actually exercised.** `has_pqc` is false for a coinbase (`txin_gen`), so a
+  miner-only chain leaves `txs_pqc_auths` empty — the sibling test proved the
+  prunable-hash half of `prune_tx_data`'s contract and was silent on the other.
+  The new case adds a v3 spend with non-empty `pqc_auths` and asserts the
+  property both retained items exist for: after the body is dropped, the chain
+  can still **name** what it kept, via
+  `get_pruned_transaction_hash(pruned, prunable_hash) == txid`. Re-deleting the
+  segment fails it on that assertion.
+
+- **`print_transaction` stopped calling every confirmed transaction pruned.**
+  The console asks whether the daemon still holds a transaction's prunable
+  half, and reads `prunable_as_hex` to decide — a field only the **split** form
+  fills. It was requesting the whole transaction, so the halves arrived
+  concatenated in `as_hex` with `prunable_as_hex` empty, which is
+  indistinguishable from "the daemon pruned it": every ordinary mined
+  transaction printed as `(pruned)`. `split` here is not a display preference
+  but what makes the label answerable, which is why the C++ console set it too.
+
+  Covered end to end, by a fixture that answers with the **real projection**
+  over fixed facts rather than a canned reply — a canned reply is blind to this
+  defect, since it would return split-form data whatever the console asked for,
+  and the test would pass over the bug. Reverting `split` reproduces
+  `Found in blockchain at height 3 (pruned)` for a transaction whose prunable
+  half is present, while the genuinely-pruned case stays green, so the fix is
+  not the label being disabled.
+
+- **`get_transactions` and `is_key_image_spent` requests omit their empty
+  sequences.** epee drops an empty sequence rather than emitting `[]`, for
+  plain `KV_SERIALIZE` members as well as OPT ones — the response types in this
+  module already said so, and the request types did not. The rule is the
+  wire's, so it binds requests this tree *sends* exactly as it binds replies it
+  serves. A sweep of every `Vec` field on every request type in the crate found
+  these two and no others: `GetBlocksByHeightRequest.heights` derives no
+  `Serialize` at all, so the attribute would have been decoration there.
+
+- **The `get_transactions` projection matrix is covered.** It replaced a C++
+  matrix and nothing reached it — the parity vectors build `TxEntry` directly,
+  and the live console test only ever hits the genesis transaction's
+  empty-prunable, `decode_as_json = false` corner. Table-driven now across
+  `split` / `prune` / `decode_as_json`, the chain/pool/miss slots, and a
+  renderer failure, with an injected renderer that echoes what it was handed so
+  the assertions pin *what* was rendered and under which `base_only` — the
+  `prune` case must render base-only, or the json leaks the half `prune`
+  withheld.
+
+- **The proofs workflow's daemon-facing half is its own module**
+  (`engine/proofs_chain_facts.rs`). Typing the daemon replies pushed
+  `proofs.rs` to 1204 lines, over the decomposition ratchet's 1200 cap, and the
+  gate offers two ways out — carve it, or baseline it. Neither was taken
+  literally: the split is by responsibility, not by line count. Everything in
+  the new module answers "what does the chain say about this transaction?"
+  across an **untrusted boundary**, where a daemon may lie, omit, reorder, or
+  answer with a body nobody asked for; what stays in `proofs.rs` is
+  cryptographic work over facts already established. Different job, different
+  failure mode.
+
+  The seam is five items wide — four functions plus the record two of them
+  return — and the not-found reporter stays private, since a caller needing it
+  would be doing the new module's job somewhere else. The split also surfaced
+  coupling worth removing: `proofs_tests.rs` had been reaching wire types
+  (`Ct`, `Transaction`) through `use super::*`, inheriting a workflow module's
+  third-party imports rather than naming its own.
+
 
 - **Documentation lifecycle is now a first-class process.** `docs/README.md`
   and `.cursor/rules/95-documentation-lifecycle.mdc` classify every doc

@@ -34,7 +34,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  # clang + libclang-dev: the live-daemon gates step runs
+  # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
+  # dev-dependencies -- which include gungraun with `client_requests`, whose
+  # `valgrind-requests` build script runs bindgen. bindgen needs libclang AND
+  # clang's own resource headers (a bare container fails with
+  # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
+  # which is why the Rust workflow never needed this; these jobs run in bare
+  # ubuntu containers, which do not.
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -263,7 +271,7 @@ jobs:
       # no extra build, ~3 seconds. `--ignored` because the test is opted out
       # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
       # it finds one.
-      - name: restricted-RPC gate (live daemon, production path)
+      - name: live-daemon gates (restricted RPC + console in-process arm)
         if: matrix.pack_ctest
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
@@ -288,21 +296,29 @@ jobs:
           # `cargo test` reports "0 passed" and exits 0 when a filter matches
           # nothing. The count assertion is what refuses that green no-op
           # (rule 47: a gate must assert its own subject exists).
-          set +e
-          cargo test -p shekyl-engine-core --lib \
+          # Two guards, run one at a time so each asserts its own "1 passed":
+          # the restricted gate through the FFI bridge, and the console's
+          # in-process arm, which RK-4c shipped broken because only the remote
+          # arm was ever exercised.
+          for t in \
             engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
-            -- --ignored --exact --nocapture > gate.log 2>&1
-          status=$?
-          set -e
-          cat gate.log
-          if [ "$status" -ne 0 ]; then
-            echo "FATAL: the restricted-RPC gate's test failed" >&2
-            exit "$status"
-          fi
-          grep -qE '^test result: ok\. 1 passed' gate.log || {
-            echo "FATAL: the gate selected no test — the filter or the test name moved" >&2
-            exit 1
-          }
+            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
+          do
+            set +e
+            cargo test -p shekyl-engine-core --lib "$t" \
+              -- --ignored --exact --nocapture > gate.log 2>&1
+            status=$?
+            set -e
+            cat gate.log
+            if [ "$status" -ne 0 ]; then
+              echo "FATAL: $t failed" >&2
+              exit "$status"
+            fi
+            grep -qE '^test result: ok\. 1 passed' gate.log || {
+              echo "FATAL: $t selected no test — the filter or the name moved" >&2
+              exit 1
+            }
+          done
 
       # Pack the CTest tree for the 24.04 test job. Same shape as
       # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF

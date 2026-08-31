@@ -141,9 +141,167 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
         }
     }
 }
-json_handler!(get_transactions, "/get_transactions");
+/// What can go wrong inside `get_transactions`' blocking section: the facts
+/// shim refused, or the daemon could not render a body it had just read out of
+/// its own store. Distinct because they are distinct answers to the caller.
+enum TxFault {
+    Facts(i32),
+    Render(crate::methods::RenderFailed),
+}
+
+/// `GET|POST /get_transactions` (alias `/gettransactions`) — served natively
+/// (RK-4c). The gather is one FFI call answering per request slot; the
+/// `(split, prune, decode_as_json)` matrix and both refusals are Rust's.
+///
+/// `state.restricted` decides two things the C++ could not, because the bridge
+/// passed a null `ctx` until #570: the request cap, and whether the pool read
+/// may disclose a transaction the node has not broadcast.
+pub async fn get_transactions(
+    State(state): State<Arc<AppState>>,
+    body: String,
+) -> impl IntoResponse {
+    let request: shekyl_rpc_types::GetTransactionsRequest = if body.trim().is_empty() {
+        shekyl_rpc_types::GetTransactionsRequest::default()
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(?e, "get_transactions: malformed request");
+                return json_error("request could not be decoded");
+            }
+        }
+    };
+    let restricted = state.restricted;
+    if restricted && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT {
+        return json_ok(status_only(
+            "Too many transactions requested in restricted mode",
+        ));
+    }
+    let ids = match crate::methods::parse_request_hashes(
+        &request.txs_hashes,
+        crate::methods::TX_PARSE_FAILED,
+    ) {
+        Ok(ids) => ids,
+        Err(status) => return json_ok(status_only(&status)),
+    };
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // `!restricted` is the pool's sensitivity flag: false withholds a
+        // transaction that is not `relay_category::broadcasted` (§2.2).
+        let (slots, chain_height) = core
+            .transactions(&ids, !restricted)
+            .map_err(TxFault::Facts)?;
+        // A rendering the daemon cannot produce fails the request rather than
+        // answering OK with an empty `as_json`, which is what the C++ did and
+        // is the only answer a caller can act on.
+        crate::methods::project_transactions(
+            &request,
+            &ids,
+            &slots,
+            chain_height,
+            |blob, pruned| core.tx_to_json(blob, pruned),
+        )
+        .map_err(TxFault::Render)
+    })
+    .await;
+    match result {
+        Ok(Ok(reply)) => match serde_json::to_string(&reply) {
+            Ok(json) => json_ok(json),
+            Err(e) => {
+                tracing::warn!(?e, "get_transactions: reply could not be encoded");
+                json_error("reply could not be encoded")
+            }
+        },
+        Ok(Err(TxFault::Facts(rc))) => {
+            tracing::warn!(rc, "get_transactions: facts unavailable");
+            json_error("transaction facts unavailable")
+        }
+        Ok(Err(TxFault::Render(f))) => {
+            tracing::warn!(txid = %f.txid, code = f.code, "get_transactions: tx could not be rendered");
+            json_error("transaction could not be decoded to json")
+        }
+        Err(e) => {
+            tracing::warn!(?e, "get_transactions: handler task did not complete");
+            json_error("handler did not complete")
+        }
+    }
+}
+
+/// `GET|POST /is_key_image_spent` — served natively (RK-4c).
+pub async fn is_key_image_spent(
+    State(state): State<Arc<AppState>>,
+    body: String,
+) -> impl IntoResponse {
+    let request: shekyl_rpc_types::IsKeyImageSpentRequest = if body.trim().is_empty() {
+        shekyl_rpc_types::IsKeyImageSpentRequest::default()
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(?e, "is_key_image_spent: malformed request");
+                return json_error("request could not be decoded");
+            }
+        }
+    };
+    if state.restricted
+        && request.key_images.len() > crate::methods::RESTRICTED_SPENT_KEY_IMAGES_COUNT
+    {
+        return json_ok(status_only(
+            "Too many key images queried in restricted mode",
+        ));
+    }
+    let ids = match crate::methods::parse_request_hashes(
+        &request.key_images,
+        crate::methods::KI_PARSE_FAILED,
+    ) {
+        Ok(ids) => ids,
+        Err(status) => return json_ok(status_only(&status)),
+    };
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || core.key_images_spent(&ids)).await;
+    match result {
+        Ok(Ok(status)) => {
+            let mut spent_status = Vec::with_capacity(status.len());
+            for s in status {
+                match shekyl_rpc_types::KeyImageStatus::try_from(s) {
+                    Ok(v) => spent_status.push(v),
+                    Err(e) => {
+                        tracing::warn!(%e, "is_key_image_spent: shim returned an unknown status");
+                        return json_error("key image facts unavailable");
+                    }
+                }
+            }
+            let reply = shekyl_rpc_types::IsKeyImageSpentResponse {
+                status: shekyl_rpc_types::RpcStatus::ok(),
+                spent_status,
+            };
+            match serde_json::to_string(&reply) {
+                Ok(json) => json_ok(json),
+                Err(e) => {
+                    tracing::warn!(?e, "is_key_image_spent: reply could not be encoded");
+                    json_error("reply could not be encoded")
+                }
+            }
+        }
+        Ok(Err(rc)) => {
+            tracing::warn!(rc, "is_key_image_spent: facts unavailable");
+            json_error("key image facts unavailable")
+        }
+        Err(e) => {
+            tracing::warn!(?e, "is_key_image_spent: handler task did not complete");
+            json_error("handler did not complete")
+        }
+    }
+}
+
+/// A refusal body: HTTP 200 carrying a non-OK `status` and nothing else, which
+/// is the shape the C++ answered these two routes' refusals with and the shape
+/// the `refusal` oracle vector pins.
+fn status_only(message: &str) -> String {
+    serde_json::json!({ "status": message }).to_string()
+}
+
 json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
-json_handler!(is_key_image_spent, "/is_key_image_spent");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");

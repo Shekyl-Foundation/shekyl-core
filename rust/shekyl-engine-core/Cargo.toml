@@ -89,6 +89,12 @@ shekyl-tor = { path = "../shekyl-tor" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+# The daemon's wire types, in production and not only in test doubles (RK-4c).
+# The refresh path hand-rolled `get_transactions` params and walked the reply
+# as untyped JSON — a second definition of a shape that already has one, and
+# the copy the daemon cannot see is the one that drifts. Doubles have answered
+# with these types since RK-1 (RK-D1); this is production catching up.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
@@ -275,7 +281,14 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # `ci/benchmarks` workflow installs (`^0.19`). Migrated from
 # `iai-callgrind = "0.16"` per
 # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
-gungraun = "0.19"
+# `client_requests` for the same reason shekyl-engine-state enables it:
+# collection driven by Callgrind client requests instead of the default
+# `--toggle-collect=*::__gungraun_wrapper_mod::*`, which records
+# `instructions=0` whenever rustc folds that wrapper — deterministically
+# for a given binary, so retries cannot clear it (see
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` and the
+# key-dispatch baseline bench's module doc).
+gungraun = { version = "0.19", features = ["client_requests"] }
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s

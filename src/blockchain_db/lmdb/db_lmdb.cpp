@@ -125,7 +125,16 @@ using namespace crypto;
 //   Within V10 (no bump): the additive `archival_settlement` table (SO-D2)
 //   rides this boundary for the same reason the witness tables rode V9 — a new
 //   empty table on an existing env asserts no incompatibility.
-#define VERSION 10
+// V11: retention semantics, not layout — `prune_tx_data` must KEEP
+// `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable body:
+// both are operands of the pruned v3 txid (`get_pruned_transaction_hash`),
+// and neither has a hash table of its own. V10 code's depth pass deleted
+// them, so a V10 datadir that ever pruned holds txs the V11 reader cannot
+// name — the facts export answers INCONSISTENT for each of them, forever,
+// with no repair path (the bytes are gone). The rows are required now, so
+// a datadir that may lack them is refused at open rather than mis-served
+// at runtime. Delete and resync.
+#define VERSION 11
 
 namespace
 {
@@ -10163,9 +10172,15 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
       MDB_val ktx{};
       ktx.mv_data = &tx_id;
       ktx.mv_size = sizeof(tx_id);
+      // Drop the prunable *bytes* only. The hash stays: it is an operand of
+      // the txid (`get_pruned_transaction_hash`), and keeping it after
+      // dropping the body is why `txs_prunable_hash` exists. `txs_pqc_auths`
+      // is the second unprunable segment (`docs/LMDB_SCHEMA.md`); there is
+      // no pqc_auth_hash table, so deleting it would make a v3 tx fall
+      // through to the v2 3-part mix and become unnameable. Full bodies
+      // live in shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not
+      // on a pruned node.
       (void)mdb_del(wtxn, m_txs_prunable, &ktx, NULL);
-      (void)mdb_del(wtxn, m_txs_prunable_hash, &ktx, NULL);
-      (void)mdb_del(wtxn, m_txs_pqc_auths, &ktx, NULL);
     };
 
     for (; h < batch_end; ++h)

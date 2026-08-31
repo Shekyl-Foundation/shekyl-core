@@ -17,6 +17,34 @@
 //! The actor paths are criterion-only by design; see the criterion
 //! sibling's docstring for the reversion clause.
 //!
+//! # Why Callgrind client requests, not the default toggle
+//!
+//! Gungraun's default collection starts when `__gungraun_wrapper_mod` is
+//! *entered* (`--toggle-collect` + `--collect-at-start=no`). When rustc
+//! inlines or ICF-folds that wrapper, the toggle never fires and Callgrind
+//! reports exactly zero for every counter while the run itself exits `Ok` —
+//! the capture guard's `instructions=0` rejection. The investigation
+//! (`docs/investigation/2026-05-09-bench-baseline-flake.md`) documented this
+//! for `ledger_iai`'s one-liner cells and converted them to client requests;
+//! its remaining remediation for other cells was "re-run on a fresh runner",
+//! on the observation that the flake tracked runner-VM state.
+//!
+//! This bench then produced the case that remediation cannot cover
+//! (PR #576, 2026-08-30): the zero was **deterministic** for a given
+//! source + toolchain — four consecutive CI runs, a fresh-runner re-run of
+//! the identical commit, three in-run retries each, all zero, while the
+//! same commit measured ~14.6M instructions under the identical valgrind,
+//! rustc and gungraun versions locally and in an ubuntu-24.04 container.
+//! A folded wrapper is a property of the emitted binary, so a retry
+//! anywhere that reproduces the build reproduces the zero. Client-request
+//! sequences are position-based magic instructions inside the measured
+//! region itself; they survive whatever the optimizer does to the wrapper.
+//! Setup stays uninstrumented via `--instr-atstart=no` + `EntryPoint::None`;
+//! `measure` bounds the claim. The count this reports differs from the
+//! toggle-based one by the handful of client-request instructions —
+//! far inside the ±10% warn band — and the post-merge `update-baseline`
+//! run refreshes `bench-baseline` with it.
+//!
 //! # Why an actor-free fixture
 //!
 //! [`KeyBaselineBenchFixture`] holds just the `LocalKeys` and a prebuilt
@@ -64,7 +92,10 @@ use std::hint::black_box;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use gungraun::{library_benchmark, library_benchmark_group, main};
+use gungraun::client_requests::callgrind as callgrind_cr;
+use gungraun::{
+    library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
+};
 use shekyl_engine_core::__bench_internals::{
     build_key_baseline_fixture, drop_key_baseline_fixture, KeyBaselineBenchFixture,
 };
@@ -112,12 +143,28 @@ fn poll_ready<F: Future>(fut: F) -> F::Output {
 fn engine_trait_bench_key_dispatch_baseline_claim_mine(
     fixture: Box<KeyBaselineBenchFixture>,
 ) -> Box<KeyBaselineBenchFixture> {
-    black_box(poll_ready(fixture.claim_mine()));
+    measure(|| black_box(poll_ready(fixture.claim_mine())));
     fixture
+}
+
+/// Run `f` between Callgrind `start`/`stop_instrumentation` so the count is
+/// the claim itself — not setup, not the fixture's return move. Works if
+/// inlined: the client-request sequences are position-based
+/// (`ledger_iai.rs` is the pattern's origin; see the module doc for why the
+/// default toggle cannot be trusted here).
+fn measure<T>(f: impl FnOnce() -> T) -> T {
+    callgrind_cr::start_instrumentation();
+    let out = f();
+    callgrind_cr::stop_instrumentation();
+    out
 }
 
 library_benchmark_group!(
     name = engine_trait_bench_key_dispatch_baseline_group;
+    config = LibraryBenchmarkConfig::default()
+        .tool(Callgrind::with_args(["--instr-atstart=no"])
+            .entry_point(EntryPoint::None)
+        );
     benchmarks = engine_trait_bench_key_dispatch_baseline_claim_mine,
 );
 

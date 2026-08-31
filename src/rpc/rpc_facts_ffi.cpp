@@ -18,6 +18,8 @@
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
+#include "cryptonote_core/tx_pool.h"
+#include "rpc_tx_json.h"
 #include "misc_log_ex.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
@@ -433,6 +435,335 @@ struct blocks_owner
   std::vector<shekyl_rpc_block_entry> entries;
 };
 
+// Owns every allocation behind one `transactions` answer. Entry views point
+// into these vectors, so the fill is two-pass for `blocks_owner`'s reason:
+// pointers taken in pass one would dangle when a vector reallocated.
+struct transactions_owner
+{
+  std::vector<std::string> pruned;      // one per request slot; empty when missed
+  std::vector<std::string> prunable;
+  std::vector<std::vector<uint64_t>> output_indices;
+  std::vector<shekyl_rpc_tx_entry> entries;
+};
+
+// Body of `shekyl_rpc_transactions`.
+//
+// Takes the `Blockchain` and the pool separately rather than a `core`, for
+// `blocks_by_height`'s reason — a body that required a `core` would only be
+// reachable through a live daemon — and because passing the two lock domains
+// as two arguments is what makes the rule below visible at the signature.
+//
+// **Two passes over two stores, and no lock spanning them.** The chain reads
+// happen first, then the pool is asked about what the chain did not have.
+// `tx_memory_pool` takes `m_transactions_lock` then `m_blockchain`
+// (`tx_pool.cpp`), so holding the chain lock across a pool read would be the
+// AB half of an AB-BA deadlock against every pool path that already runs BA.
+// The blob, height and timestamp of a chain hit are read inside one
+// `CRITICAL_REGION_LOCAL(bc)` along with the tip, so they describe one chain
+// state and there is no blob-to-height race left to name.
+//
+// The window that remains is between the two passes: a transaction mined
+// *after* the chain pass missed it and *before* the pool is asked has left the
+// pool and is not in this reply's chain results, so it comes back as missed
+// though the chain now holds it. The C++ handler had the same granularity and
+// the same window; it is named here rather than closed by a lock that would
+// trade a stale answer for a hung daemon (§3.2).
+int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
+  const uint8_t* txids, size_t txids_len, uint8_t include_sensitive,
+  const shekyl_rpc_tx_entry** out, size_t* out_len, uint64_t* out_chain_height,
+  void** out_owner) noexcept
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!out || !out_len || !out_chain_height || !out_owner || (!txids && txids_len))
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  *out_chain_height = 0;
+  try
+  {
+    std::vector<crypto::hash> ids(txids_len);
+    for (size_t i = 0; i < txids_len; ++i)
+      std::memcpy(ids[i].data, txids + i * 32, 32);
+
+    std::unique_ptr<transactions_owner> owned(new transactions_owner());
+    owned->pruned.resize(txids_len);
+    owned->prunable.resize(txids_len);
+    owned->output_indices.resize(txids_len);
+    // `vector(n)` value-initializes its elements, which zeroes every scalar
+    // and gives the pointer members real null pointers rather than an
+    // all-zero byte pattern that is only null by convention. The `memset`
+    // this replaces added nothing on top of that and was undefined at
+    // `txids_len == 0`, where `data()` may be null and passing null to
+    // `memset` is undefined even for a zero count — and an empty
+    // `get_transactions` request is valid.
+    std::vector<shekyl_rpc_tx_entry> facts(txids_len);
+
+    // ── chain ──────────────────────────────────────────────────────────────
+    // The tip is read once, inside the same lock as the per-transaction
+    // reads, so `confirmations` is computed by the handler against a height
+    // that describes the same chain state the rest of the entry does.
+    {
+      CRITICAL_REGION_LOCAL(bc);
+      *out_chain_height = bc.get_current_blockchain_height();
+      for (size_t i = 0; i < txids_len; ++i)
+      {
+        cryptonote::blobdata pruned_blob;
+        if (!bc.get_db().get_pruned_tx_blob(ids[i], pruned_blob))
+          continue;
+        owned->pruned[i] = std::move(pruned_blob);
+
+        // The prunable HASH is read unconditionally, and the prunable BLOB is
+        // optional — that asymmetry is pruning's design, not an oversight.
+        // Both `prune_worker` and `prune_tx_data` delete `txs_prunable` (and
+        // the worker, `txs_prunable_tip`) and never `txs_prunable_hash`:
+        // keeping the hash after dropping the bytes is the entire point of
+        // storing it, since it is what still lets a client bind the pruned
+        // body to the transaction. Reading the hash only when the blob
+        // survived would therefore report an all-zero hash for every
+        // transaction on a pruned daemon — the node-local mode this daemon
+        // ships post-genesis without coordination (rule 75), so the absence
+        // of that mode today is not a reason to encode its absence.
+        //
+        // A missing hash is an inconsistent store rather than a fact: the
+        // write path stores it for every transaction it indexes (the
+        // `tx.version > 1` guard there is Monero-era, and Shekyl is
+        // v3-from-genesis with no v1 transactions to except — rule 60), and
+        // removal takes the hash with the transaction. Fabricating zeros here
+        // would hand the caller a valid-looking field for a store that cannot
+        // support it.
+        crypto::hash ph;
+        if (!bc.get_db().get_prunable_tx_hash(ids[i], ph))
+        {
+          MERROR("shekyl_rpc_transactions: chain holds "
+            << epee::string_tools::pod_to_hex(ids[i])
+            << " with no prunable hash beside it");
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        std::memcpy(facts[i].prunable_hash, ph.data, 32);
+
+        cryptonote::blobdata prunable_blob;
+        if (bc.get_db().get_prunable_tx_blob(ids[i], prunable_blob))
+          owned->prunable[i] = std::move(prunable_blob);
+
+        facts[i].where = 1;
+        facts[i].block_height = bc.get_db().get_tx_block_height(ids[i]);
+        facts[i].block_timestamp = bc.get_db().get_block_timestamp(facts[i].block_height);
+        facts[i].pruned_flag = bc.get_db().tx_has_verification_data(ids[i]) ? 0 : 1;
+
+        // A transaction the chain holds has outputs — a spend with fewer than
+        // two is consensus-invalid — so a false here is the index disagreeing
+        // with the transaction it was found beside, under this same lock.
+        // Reporting that as an empty index list would turn corruption into a
+        // successful, inaccurate reply.
+        if (!bc.get_tx_outputs_gindexs(ids[i], owned->output_indices[i]))
+        {
+          MERROR("shekyl_rpc_transactions: chain holds "
+            << epee::string_tools::pod_to_hex(ids[i])
+            << " with no output-index record beside it");
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+      }
+    }
+
+    // ── pool ───────────────────────────────────────────────────────────────
+    // Only what the chain did not hold, and only if the caller is entitled to
+    // see transactions the node has not broadcast.
+    std::vector<crypto::hash> missed;
+    std::vector<size_t> missed_slots;
+    for (size_t i = 0; i < txids_len; ++i)
+      if (facts[i].where == 0)
+      {
+        missed.push_back(ids[i]);
+        missed_slots.push_back(i);
+      }
+    if (!missed.empty())
+    {
+      std::vector<std::pair<crypto::hash, cryptonote::tx_memory_pool::tx_details>> found;
+      pool.get_transactions_info(missed, found, include_sensitive != 0);
+      // One result per input occurrence, so a repeated txid must consume a
+      // repeated slot: a request like [H, H] must answer both, not write the
+      // first slot twice and report the second missing.
+      //
+      // `get_transactions_info` walks `missed` in order and pushes only the
+      // hits (`tx_pool.cpp`), so `found` is an in-order SUBSEQUENCE of
+      // `missed`. One forward cursor therefore consumes each occurrence
+      // exactly once and never revisits a slot. The previous form searched
+      // from zero for every hit, which is O(hits x missed) hash comparisons
+      // on a listener that deliberately has no request cap -- a caller could
+      // pay for the quadratic term with a single large unrestricted request.
+      size_t k = 0;
+      for (const auto& entry : found)
+      {
+        // Back to the request slot it came from. The C++ re-sorted a merged
+        // list to recover this; here the mapping never left.
+        while (k < missed.size() && missed[k] != entry.first)
+          ++k;
+        if (k == missed.size())
+          // The subsequence contract above failed, so this hit belongs to no
+          // remaining slot. Silently skipping it would report a transaction
+          // the pool holds as missing -- a wrong answer in the shape of a
+          // legitimate one. Refuse instead, as this shim does for every other
+          // state the daemon should not be able to produce.
+          return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+        const size_t slot = missed_slots[k];
+        ++k;
+        const cryptonote::tx_memory_pool::tx_details& td = entry.second;
+        std::stringstream ss;
+        binary_archive<true> ba(ss);
+        if (!const_cast<cryptonote::transaction&>(td.tx).serialize_base(ba))
+          return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+        owned->pruned[slot] = ss.str();
+        // The pool stores the whole blob; the prunable half is what follows
+        // the base, which is how the C++ handler split it.
+        if (td.tx_blob.size() > owned->pruned[slot].size())
+          owned->prunable[slot] = td.tx_blob.substr(owned->pruned[slot].size());
+        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx);
+        std::memcpy(facts[slot].prunable_hash, ph.data, 32);
+        facts[slot].where = 2;
+        facts[slot].double_spend_seen = td.double_spend_seen ? 1 : 0;
+        facts[slot].relayed = td.relayed ? 1 : 0;
+        facts[slot].received_timestamp = td.receive_time;
+      }
+    }
+
+    // Second pass: the vectors are final, so views into them are stable.
+    owned->entries = std::move(facts);
+    for (size_t i = 0; i < txids_len; ++i)
+    {
+      shekyl_rpc_tx_entry& e = owned->entries[i];
+      e.pruned = owned->pruned[i].empty()
+        ? nullptr : reinterpret_cast<const uint8_t*>(owned->pruned[i].data());
+      e.pruned_len = owned->pruned[i].size();
+      e.prunable = owned->prunable[i].empty()
+        ? nullptr : reinterpret_cast<const uint8_t*>(owned->prunable[i].data());
+      e.prunable_len = owned->prunable[i].size();
+      e.output_indices = owned->output_indices[i].empty()
+        ? nullptr : owned->output_indices[i].data();
+      e.output_indices_len = owned->output_indices[i].size();
+    }
+    *out = owned->entries.empty() ? nullptr : owned->entries.data();
+    *out_len = owned->entries.size();
+    *out_owner = owned.release();
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("shekyl_rpc_transactions: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("shekyl_rpc_transactions: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
+// Body of `shekyl_rpc_key_images_spent`. Chain first, then the pool for the
+// ones the chain did not have — the same two questions the C++ handler asked,
+// minus its filter/re-index dance, because the answer is written straight into
+// the caller's slot.
+int key_images_spent(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
+  const uint8_t* key_images, size_t count, uint8_t* out_status) noexcept
+{
+  if (!out_status || (!key_images && count))
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::vector<crypto::key_image> kis(count);
+    for (size_t i = 0; i < count; ++i)
+      std::memcpy(&kis[i], key_images + i * 32, 32);
+
+    std::vector<bool> spent;
+    {
+      CRITICAL_REGION_LOCAL(bc);
+      spent = bc.have_tx_keyimges_as_spent(epee::span<const crypto::key_image>(kis.data(), kis.size()));
+      if (spent.size() != count)
+        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+    }
+    std::vector<crypto::key_image> unspent;
+    std::vector<size_t> unspent_slots;
+    for (size_t i = 0; i < count; ++i)
+    {
+      out_status[i] = spent[i] ? 1 : 0;
+      if (!spent[i])
+      {
+        unspent.push_back(kis[i]);
+        unspent_slots.push_back(i);
+      }
+    }
+    if (!unspent.empty())
+    {
+      std::vector<bool> in_pool;
+      // Filters on `relay_category::broadcasted` unconditionally, so a
+      // stem-phase transaction's key image does not answer here whoever asks.
+      if (!pool.check_for_key_images(unspent, in_pool) || in_pool.size() != unspent.size())
+        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+      for (size_t k = 0; k < unspent.size(); ++k)
+        if (in_pool[k])
+          out_status[unspent_slots[k]] = 2;
+    }
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("shekyl_rpc_key_images_spent: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("shekyl_rpc_key_images_spent: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
+// Body of `shekyl_rpc_tx_to_json` (RK-D11). No core, no lock: it parses the
+// blob the caller passes and renders it the way epee did, which is the only
+// part of this that has to stay in C++.
+int tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
+  const char** out, size_t* out_len, void** out_owner) noexcept
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!out || !out_len || !out_owner || (!blob && blob_len))
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  try
+  {
+    const cryptonote::blobdata data(reinterpret_cast<const char*>(blob), blob_len);
+    cryptonote::transaction tx;
+    std::unique_ptr<std::string> rendered(new std::string());
+    if (pruned)
+    {
+      if (!cryptonote::parse_and_validate_tx_base_from_blob(data, tx))
+        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+      cryptonote::pruned_transaction ptx{tx};
+      *rendered = cryptonote::obj_to_json_str(ptx);
+    }
+    else
+    {
+      if (!cryptonote::parse_and_validate_tx_from_blob(data, tx))
+        return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+      *rendered = cryptonote::obj_to_json_str(tx);
+    }
+    *out = rendered->data();
+    *out_len = rendered->size();
+    *out_owner = rendered.release();
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("shekyl_rpc_tx_to_json: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("shekyl_rpc_tx_to_json: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 // Body of `shekyl_rpc_blocks_by_height`. Carries what the deleted
 // `on_get_blocks_by_height` did, minus the restricted cap, which is handler
 // policy (RK-D6).
@@ -696,6 +1027,46 @@ int shekyl_rpc_blocks_by_height(core_rpc_handle* h, const uint64_t* heights,
   return daemon_rpc_facts::blocks_by_height(h->rpc->get_core().get_blockchain_storage(),
     heights, heights_len,
     out, out_len, out_failed_height, out_ok, out_owner);
+}
+
+int shekyl_rpc_transactions(core_rpc_handle* h, const uint8_t* txids, size_t txids_len,
+  uint8_t include_sensitive, const shekyl_rpc_tx_entry** out, size_t* out_len,
+  uint64_t* out_chain_height, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  cryptonote::core& core = h->rpc->get_core();
+  return daemon_rpc_facts::transactions(core.get_blockchain_storage(),
+    core.get_pool(), txids, txids_len, include_sensitive, out, out_len,
+    out_chain_height, out_owner);
+}
+
+void shekyl_rpc_transactions_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::transactions_owner*>(owner);
+}
+
+int shekyl_rpc_tx_to_json(const uint8_t* blob, size_t blob_len, uint8_t pruned,
+  const char** out, size_t* out_len, void** out_owner)
+{
+  return daemon_rpc_facts::tx_to_json(blob, blob_len, pruned, out, out_len, out_owner);
+}
+
+void shekyl_rpc_tx_json_free(void* owner)
+{
+  delete static_cast<std::string*>(owner);
+}
+
+int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
+  size_t count, uint8_t* out_status)
+{
+  if (!h || !h->rpc)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  cryptonote::core& core = h->rpc->get_core();
+  return daemon_rpc_facts::key_images_spent(core.get_blockchain_storage(),
+    core.get_pool(), key_images, count, out_status);
 }
 
 void shekyl_rpc_blocks_by_height_free(void* owner)

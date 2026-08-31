@@ -1,5 +1,29 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-08-30) — the flake has a deterministic form, and "re-run
+> the workflow" cannot clear it; `key_dispatch_baseline_iai` converted to
+> client requests.** On PR #576 the `engine_trait_bench_key_dispatch_baseline_iai`
+> cell reported `instructions=0` on four consecutive CI runs, three in-run
+> retries each, **and on a fresh-runner re-run of the identical commit** —
+> while the same commit measured ~14.6M instructions under the identical
+> valgrind (3.22.0-0ubuntu3), rustc (1.94.0) and gungraun (0.19.3) locally
+> and in an ubuntu-24.04 container, single-bench and full-sequence alike.
+> That falsifies the 2026-06-25 note's remediation for this cell: the June
+> observation was that only a fresh runner clears it, but a folded wrapper
+> is a property of the emitted binary, so when the fold is deterministic
+> for a given source + toolchain, every runner that reproduces the build
+> reproduces the zero. (Both observations can be true — a fold sitting at
+> an inlining threshold flips on VM-state-sensitive inputs; one past it
+> does not flip at all.) Applied the §Update-2026-08-14 remedy:
+> `client_requests` + `start`/`stop_instrumentation` + `EntryPoint::None`
+> + `--instr-atstart=no`, the `ledger_iai` pattern. Measured locally:
+> 14,593,850 vs 14,593,888 toggle-based — 38 instructions, -0.00026%,
+> far inside the ±10% `engine_trait_bench_*` warn band — and the run falls
+> from ~40s to ~1.6s because setup is no longer instrumented. The
+> remaining toggle-based `_iai` cells stay as they are until one of them
+> zeros: each conversion moves a baseline, and a moved baseline should be
+> bought by a demonstrated failure, not by symmetry.
+
 > **Update (2026-08-14) — cause identified; `ledger_iai` now uses
 > Callgrind client requests.** The six `hot_path_bench_ledger_postcard_*`
 > cells that the producer guard rejects (`instructions=0` while

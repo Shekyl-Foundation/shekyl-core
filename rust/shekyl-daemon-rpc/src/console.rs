@@ -255,6 +255,283 @@ fn print_height(src: &Source) -> Result<String, String> {
     Ok(reply.height.to_string())
 }
 
+/// `print_transaction <hash> [+meta] [+hex] [+json]` — RK-4c. Reads
+/// `get_transactions` and nothing else, which is why it migrates with it
+/// (§2.1).
+///
+/// The C++ rendered the JSON client-side: it parsed the hex back into a
+/// transaction and called `obj_to_json_str` locally. Here the daemon is asked
+/// for it (`decode_as_json`) and the reply's `as_json` is printed. Same
+/// string — both are epee over the same transaction — and it works on the
+/// remote arm, which has no core to render with.
+fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
+    let Some(hash) = args.first() else {
+        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
+            .to_owned());
+    };
+    let (mut meta, mut hex_out, mut json_out) = (false, false, false);
+    for flag in &args[1..] {
+        match flag.as_str() {
+            "+meta" => meta = true,
+            "+hex" => hex_out = true,
+            "+json" => json_out = true,
+            other => {
+                return Err(format!(
+                    "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
+                ))
+            }
+        }
+    }
+    // `split` is not a display preference here, it is what makes the
+    // "(pruned)" label answerable. The label asks whether the daemon holds
+    // this transaction's prunable half, and reads `prunable_as_hex` to decide
+    // — a field only the split form fills. Ask for the whole transaction
+    // instead and the halves arrive concatenated in `as_hex` with
+    // `prunable_as_hex` empty, which is indistinguishable from "pruned" and
+    // would label every ordinary confirmed transaction as such. The C++
+    // console set `req.split = true` for the same reason; the rendering below
+    // already reassembles the halves.
+    let request = shekyl_rpc_types::GetTransactionsRequest {
+        txs_hashes: vec![hash.clone()],
+        decode_as_json: json_out,
+        prune: false,
+        split: true,
+    };
+    let reply = fetch_transactions(src, &request)?;
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    // Exactly one, not "at least one": this command requested a single
+    // hash. Empty is "not found"; extra entries are a malformed reply,
+    // same shape as `is_key_image_spent` beside it.
+    // A count is not a binding. The daemon is untrusted here, so the entry
+    // must be the one that was asked for: `parse_tx_batch` holds the wallet's
+    // consumers to the same rule, and a console that printed whatever came
+    // back would answer a question the operator did not ask.
+    if !reply.missed_tx.is_empty() {
+        return Err(format!("Transaction wasn't found: {hash}"));
+    }
+    let tx = match reply.txs.as_slice() {
+        [] => return Err(format!("Transaction wasn't found: {hash}")),
+        [tx] => tx,
+        _ => {
+            return Err(format!(
+                "print_transaction: asked about 1 transaction, got {}",
+                reply.txs.len()
+            ))
+        }
+    };
+    if !tx.tx_hash.to_string().eq_ignore_ascii_case(hash) {
+        return Err(format!(
+            "print_transaction: asked about {hash}, got {}",
+            tx.tx_hash
+        ));
+    }
+
+    // The label check above says the daemon *claims* this entry answers the
+    // request; it does not make it so — every field of the reply is the
+    // daemon's to choose, and the remote arm posts wherever the operator
+    // pointed it. So the body is bound the way `parse_tx_batch` binds the
+    // wallet's: parse the bytes and recompute the identity. A reply carrying
+    // its prunable half (or a transaction with nothing prunable) rehashes
+    // whole; a storage-pruned body mixes the reply's `prunable_hash` in,
+    // which turns a substituted body into a keccak preimage instead of a
+    // free choice. `as_json` stays unverified: it is the daemon's epee
+    // rendering of the same bytes the binding just checked (RK-D11).
+    //
+    // "(pruned)" below means the daemon holds no prunable half for a
+    // transaction that has one — `prunable_hash` distinguishes that from a
+    // coinbase, which has nothing prunable to begin with and whose hash is
+    // null or the hash of the empty string.
+    let pruned = tx.prunable_as_hex.is_empty() && !is_empty_prunable(&tx.prunable_hash);
+    let full_hex = if tx.as_hex.is_empty() {
+        format!("{}{}", tx.pruned_as_hex, tx.prunable_as_hex)
+    } else {
+        tx.as_hex.clone()
+    };
+    let blob = hex::decode(&full_hex)
+        .map_err(|_| format!("print_transaction: the daemon's body for {hash} is not hex"))?;
+    let parsed = shekyl_wire::Transaction::from_bytes(&blob).map_err(|_| {
+        format!("print_transaction: the daemon's body for {hash} is not a transaction")
+    })?;
+    let derived = if pruned {
+        parsed.hash_with_supplied_prunable(tx.prunable_hash.to_bytes())
+    } else {
+        parsed.hash()
+    };
+    let derived_hex = hex::encode(derived);
+    if !derived_hex.eq_ignore_ascii_case(hash) {
+        return Err(format!(
+            "print_transaction: the entry is labeled {hash} but its body hashes \
+             to {derived_hex} — a label is not an identity"
+        ));
+    }
+
+    let mut out = Vec::new();
+    match &tx.location {
+        shekyl_rpc_types::TxLocation::Pooled { .. } => out.push("Found in pool".to_owned()),
+        shekyl_rpc_types::TxLocation::Mined { block_height, .. } => {
+            out.push(format!(
+                "Found in blockchain at height {block_height}{}",
+                if pruned { " (pruned)" } else { "" }
+            ));
+        }
+    }
+
+    if meta {
+        if let shekyl_rpc_types::TxLocation::Mined {
+            block_timestamp, ..
+        } = &tx.location
+        {
+            out.push(format!(
+                "Block timestamp: {block_timestamp} ({})",
+                human_readable_timestamp(*block_timestamp)
+            ));
+        }
+        // The parse is the binding's, above — a body that did not parse (or
+        // did not hash to the request) never reached this rendering, so the
+        // old "Error parsing transaction" soft lines have no input left.
+        out.push(format!("Size: {}", blob.len()));
+        out.push(format!("Weight: {}", parsed.weight()));
+    }
+    if hex_out {
+        out.push(full_hex);
+    }
+    if json_out {
+        out.push(tx.as_json.clone());
+    }
+    Ok(out.join("\n"))
+}
+
+/// A `prunable_hash` that means "there was nothing prunable" rather than "the
+/// prunable half was dropped": all-zero, or the hash of the empty string,
+/// which is what a transaction with no prunable part carries.
+///
+/// The constant is `crypto::cn_fast_hash("", 0)`, the expression the C++
+/// console computed once into a static. **Measured, not assumed** — an
+/// earlier draft of this function carried a plausible-looking wrong value,
+/// which would have printed "(pruned)" for transactions that are not:
+///
+/// ```text
+/// crypto::hash h = crypto::cn_fast_hash("", 0);   // -> c5d24601…d85a470
+/// ```
+const EMPTY_PRUNABLE_HASH: &str =
+    "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+
+fn is_empty_prunable(h: &shekyl_rpc_types::HashHex) -> bool {
+    h.is_zero() || h.to_string() == EMPTY_PRUNABLE_HASH
+}
+
+/// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.
+fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
+    let Some(ki) = args.first() else {
+        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
+            .to_owned());
+    };
+    let request = shekyl_rpc_types::IsKeyImageSpentRequest {
+        key_images: vec![ki.clone()],
+    };
+    let reply = match src {
+        // Direct, for `fetch_transactions`'s reason: the C++ route is gone.
+        Source::Live(core) => {
+            let ids = crate::methods::parse_request_hashes(
+                &request.key_images,
+                crate::methods::KI_PARSE_FAILED,
+            )?;
+            let raw = core
+                .key_images_spent(&ids)
+                .map_err(|rc| format!("is_key_image_spent: facts unavailable ({rc})"))?;
+            let mut spent_status = Vec::with_capacity(raw.len());
+            for s in raw {
+                spent_status.push(
+                    shekyl_rpc_types::KeyImageStatus::try_from(s)
+                        .map_err(|e| format!("is_key_image_spent: {e}"))?,
+                );
+            }
+            shekyl_rpc_types::IsKeyImageSpentResponse {
+                status: shekyl_rpc_types::RpcStatus::ok(),
+                spent_status,
+            }
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+            let raw = ctl_client::post_blocking(address, "/is_key_image_spent", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            // Through `decode_reply`, as `print_height` does: a native handler
+            // reports failure as a `RestErrorEnvelope`, and a success-only
+            // decode turns the server's stated reason into "malformed reply".
+            // Refusing unknown fields made that worse, not better — the
+            // envelope's `error` is exactly the field this type does not model.
+            decode_reply::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw, "is_key_image_spent")?
+        }
+    };
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    // Exactly one, not "at least one": the request carries one key image, the
+    // reply is positional, and a reply of a different length is unreadable
+    // rather than partially readable — the property the type's own doc names.
+    let [status] = reply.spent_status.as_slice() else {
+        return Err(format!(
+            "is_key_image_spent: asked about 1 key image, got {} statuses",
+            reply.spent_status.len()
+        ));
+    };
+    Ok(format!(
+        "{ki}: {}",
+        match status {
+            shekyl_rpc_types::KeyImageStatus::Unspent => "unspent",
+            shekyl_rpc_types::KeyImageStatus::SpentInBlockchain => "spent",
+            shekyl_rpc_types::KeyImageStatus::SpentInPool => "spent (in pool)",
+        }
+    ))
+}
+
+/// The `get_transactions` fetch, shared by the console commands that need it.
+///
+/// The live arm calls the facts path and the projection **directly**, as
+/// `print_block` does — not `json_endpoint`, which dispatches through the C++
+/// JSON table this slice empties. Naming a route by string there would have
+/// compiled and then answered "no reply" the moment the route left C++, which
+/// is exactly what it did until Copilot caught it on this PR. Calling the
+/// Rust functions makes that class of breakage a compile error.
+///
+/// The console is the operator's own node, so the pool read is unrestricted —
+/// the same answer the C++ gave a null `ctx` (§7, 2026-08-26).
+fn fetch_transactions(
+    src: &Source,
+    request: &shekyl_rpc_types::GetTransactionsRequest,
+) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
+    match src {
+        Source::Live(core) => {
+            let ids = crate::methods::parse_request_hashes(
+                &request.txs_hashes,
+                crate::methods::TX_PARSE_FAILED,
+            )?;
+            let (slots, chain_height) = core
+                .transactions(&ids, true)
+                .map_err(|rc| format!("get_transactions: facts unavailable ({rc})"))?;
+            crate::methods::project_transactions(
+                request,
+                &ids,
+                &slots,
+                chain_height,
+                |blob, pruned| core.tx_to_json(blob, pruned),
+            )
+            .map_err(|f| format!("could not decode {} to json ({})", f.txid, f.code))
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+            let raw = ctl_client::post_blocking(address, "/get_transactions", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            // See the `is_key_image_spent` arm: a native handler's failure is a
+            // `RestErrorEnvelope`, so decoding success-only reports "malformed"
+            // over the reason the server actually gave.
+            decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
+        }
+    }
+}
+
 /// Run one console command and hand back its rendered output.
 ///
 /// * `argv` / `argc` — the command and its arguments; `argv[0]` selects.
@@ -328,6 +605,8 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             let include_hex = args.get(2).is_some_and(|f| f == "+hex");
             print_block(&source, by_hash, argument, include_hex)
         }
+        "print_transaction" => print_transaction(&source, &args[1..]),
+        "is_key_image_spent" => is_key_image_spent(&source, &args[1..]),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -405,6 +684,436 @@ mod tests {
             s.write_all(reply.as_bytes()).unwrap();
         });
         address
+    }
+
+    /// A one-request acceptor that answers by running the **real projection**
+    /// over fixed facts, so the reply depends on the request the console
+    /// actually sent.
+    ///
+    /// A canned reply would be blind to the defect this exists to catch: the
+    /// "(pruned)" label reads `prunable_as_hex`, which only the split form
+    /// fills, so a fixture that always returns split-form data would pass
+    /// whatever the console asked for. Serving the projection makes the
+    /// request an input rather than a formality.
+    fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = s.read(&mut buf).expect("read request");
+            let raw = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
+            let request: shekyl_rpc_types::GetTransactionsRequest =
+                serde_json::from_str(&body).expect("the console sends a typed request");
+            let reply = crate::methods::project_transactions(
+                &request,
+                &[txid],
+                &[slot],
+                9,
+                |blob, pruned| {
+                    Ok(format!(
+                        "{{\"json\":\"{}\",\"pruned\":{pruned}}}",
+                        hex::encode(blob)
+                    ))
+                },
+            )
+            .expect("projection succeeds");
+            let out = serde_json::to_string(&reply).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        address
+    }
+
+    /// A structurally canonical spend for the body-binding: the console now
+    /// recomputes each entry's identity from its bytes, so a fixture can no
+    /// longer label an arbitrary blob — a fixture that invents a hash is
+    /// staging the substitution the binding exists to refuse (the engine's
+    /// doubles learned this the same way).
+    fn console_spend() -> shekyl_wire::Transaction {
+        use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
+        use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, TxPrefix};
+        shekyl_wire::Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: [0x42; 32],
+                }],
+                outputs: vec![
+                    Output {
+                        amount: 0,
+                        key: [1; 32],
+                        view_tag: 0,
+                    },
+                    Output {
+                        amount: 0,
+                        key: [3; 32],
+                        view_tag: 1,
+                    },
+                ],
+                extra: vec![],
+            },
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0; 32],
+                base: CtBase {
+                    enc_amounts: vec![[0; 9], [0; 9]],
+                    enc_labels: vec![[0; 9], [0; 9]],
+                    commitments: vec![[2; 32], [3; 32]],
+                },
+                pqc_auths: vec![PqcAuth {
+                    auth_version: 1,
+                    scheme_id: 1,
+                    flags: 0,
+                    hybrid_public_key: vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
+                    hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
+                }],
+                prunable: Some(Prunable {
+                    serve_credit_pruned: vec![],
+                    bulletproofs: vec![BpPlus {
+                        a: [0; 32],
+                        a1: [0; 32],
+                        b: [0; 32],
+                        r1: [0; 32],
+                        s1: [0; 32],
+                        d1: [0; 32],
+                        l: vec![[0; 32]; 7],
+                        r: vec![[0; 32]; 7],
+                    }],
+                    tree_depth: 1,
+                    fcmp_proof: vec![0; 8],
+                    pseudo_outs: vec![[0; 32]],
+                }),
+            },
+        }
+    }
+
+    /// [`console_spend`] split at the production boundary: (pruned form,
+    /// prunable tail) — the two halves a split `get_transactions` reply
+    /// carries, whose concatenation is the full serialization.
+    fn console_spend_halves() -> (Vec<u8>, Vec<u8>) {
+        let tx = console_spend();
+        let full = tx.serialize();
+        let mut pruned_tx = console_spend();
+        let shekyl_wire::Ct::Fcmp { prunable, .. } = &mut pruned_tx.ct else {
+            unreachable!("console_spend is Fcmp by construction");
+        };
+        *prunable = None;
+        let pruned = pruned_tx.serialize();
+        let tail = full[pruned.len()..].to_vec();
+        (pruned, tail)
+    }
+
+    fn mined_slot(prunable: Vec<u8>) -> crate::core::TxSlot {
+        crate::core::TxSlot::Chain {
+            pruned: console_spend_halves().0,
+            prunable,
+            // Nonempty: this transaction HAS a prunable half, so an empty
+            // `prunable_as_hex` would mean the daemon dropped it.
+            prunable_hash: [0x5A; 32],
+            block_height: 3,
+            block_timestamp: 1_700_000_000,
+            output_indices: vec![1],
+            pruned_flag: false,
+        }
+    }
+
+    /// **An ordinary confirmed transaction is not labelled `(pruned)`.**
+    ///
+    /// It was, until this test: the console asked for the whole transaction,
+    /// so the halves came back concatenated in `as_hex` with `prunable_as_hex`
+    /// empty — which the label cannot tell apart from a daemon that pruned the
+    /// half away. Every mined transaction printed as `(pruned)`.
+    #[test]
+    fn a_retained_transaction_is_not_reported_pruned() {
+        // The halves reassemble to the full body, so the identity is the
+        // whole-transaction hash.
+        let txid = console_spend().hash();
+        let addr = one_shot_projected(mined_slot(console_spend_halves().1), txid);
+        let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert!(
+            out.contains("Found in blockchain at height 3"),
+            "expected the confirmed line, got: {out}"
+        );
+        assert!(
+            !out.contains("(pruned)"),
+            "a transaction whose prunable half the daemon still holds must not \
+             be labelled pruned: {out}"
+        );
+    }
+
+    /// And the label still fires when the half really is gone — so the test
+    /// above is not passing by disabling the label.
+    #[test]
+    fn a_pruned_transaction_is_reported_pruned() {
+        // The prunable half is gone, so the identity mixes the reply's
+        // supplied digest — the same recomputation the binding performs.
+        let txid = console_spend().hash_with_supplied_prunable([0x5A; 32]);
+        let addr = one_shot_projected(mined_slot(Vec::new()), txid);
+        let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert!(
+            out.contains("(pruned)"),
+            "a transaction whose prunable half is absent must be labelled \
+             pruned: {out}"
+        );
+    }
+
+    /// **An echoed label over a substituted body is refused.** The label
+    /// check compares two daemon-chosen strings, so a daemon that echoes the
+    /// requested hash while serving another canonical body sails through it;
+    /// the binding recomputes the identity from the bytes and refuses. This
+    /// is `parse_tx_batch`'s rule applied to the console's remote arm, which
+    /// posts wherever the operator pointed it.
+    #[test]
+    fn an_echoed_label_over_a_substituted_body_is_refused() {
+        // The identity of a DIFFERENT transaction (unlock_time moved), which
+        // the daemon echoes while serving `console_spend`'s body.
+        let mut other = console_spend();
+        other.prefix.unlock_time = 5;
+        let requested = other.hash();
+        let (pruned, tail) = console_spend_halves();
+        let entry = shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(requested),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode(pruned),
+            prunable_as_hex: hex::encode(tail),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry],
+            missed_tx: vec![],
+        };
+        let addr = one_shot_raw(reply);
+        let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("a label is not an identity"),
+            "the substituted body must be refused by the binding, not \
+             rendered: {out}"
+        );
+    }
+
+    /// **And on the pruned arm, where the daemon also chooses the digest.**
+    /// The test above substitutes a body whose prunable half is present, so
+    /// the identity is a whole-body hash the daemon cannot steer. The pruned
+    /// arm is the interesting one: `prunable_hash` is the daemon's to pick,
+    /// and the comment on the binding claims picking it freely buys nothing
+    /// because it leaves `H(prefix ‖ base ‖ pqc ‖ X) = txid` to solve for
+    /// `X`. That claim is argued at the call site and pinned here — the
+    /// daemon serves another transaction's pruned body under this label and
+    /// supplies the very digest that makes the *requested* identity come out
+    /// right for its own body, which is the best choice available to it.
+    #[test]
+    fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
+        const CHOSEN: [u8; 32] = [0x11; 32];
+        // The pruned identity of a DIFFERENT transaction, under the digest
+        // the daemon will also supply — so only the body differs.
+        let mut other = console_spend();
+        other.prefix.unlock_time = 5;
+        let requested = other.hash_with_supplied_prunable(CHOSEN);
+        // Sanity: the two bodies really do have different pruned identities,
+        // or the refusal below would prove nothing.
+        assert_ne!(
+            requested,
+            console_spend().hash_with_supplied_prunable(CHOSEN),
+            "the fixture must substitute a genuinely different body"
+        );
+        let (pruned, _tail) = console_spend_halves();
+        let entry = shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(requested),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode(pruned),
+            // The half is gone, so the binding takes the pruned arm.
+            prunable_as_hex: String::new(),
+            prunable_hash: HashHex::from_bytes(CHOSEN),
+            as_json: String::new(),
+            pruned: true,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry],
+            missed_tx: vec![],
+        };
+        let addr = one_shot_raw(reply);
+        let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("a label is not an identity"),
+            "a substituted pruned body must be refused however the digest is \
+             chosen, not rendered: {out}"
+        );
+    }
+
+    /// A reply with extra entries is unreadable, not "use the first one".
+    /// The command requested one hash; the adjacent key-image command already
+    /// requires a one-element slice for the same reason.
+    #[test]
+    fn extra_transaction_entries_are_a_malformed_reply() {
+        let txid = [0x33; 32];
+        let entry = |n: u8| shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes([n; 32]),
+            as_hex: String::new(),
+            pruned_as_hex: "aabb".to_owned(),
+            prunable_as_hex: "ccdd".to_owned(),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                confirmations: 6,
+                block_timestamp: 1_700_000_000,
+                output_indices: vec![1],
+            },
+        };
+        let reply = shekyl_rpc_types::GetTransactionsResponse {
+            status: RpcStatus::ok(),
+            txs: vec![entry(0x33), entry(0x34)],
+            missed_tx: vec![],
+        };
+        let addr = one_shot(typed_reply(&reply));
+        let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
+        assert!(
+            out.contains("asked about 1 transaction, got 2"),
+            "extra entries must be named, not silently truncated: {out}"
+        );
+    }
+
+    /// A one-request acceptor answering with a fixed document, for the cases
+    /// where the point is that the daemon said something the request did not
+    /// ask for — which the projection-backed fixture cannot stage, because it
+    /// only ever answers about the hash it was handed.
+    fn one_shot_raw(reply: shekyl_rpc_types::GetTransactionsResponse) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).expect("read request");
+            let out = serde_json::to_string(&reply).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        address
+    }
+
+    fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
+        shekyl_rpc_types::TxEntry {
+            tx_hash: HashHex::from_bytes(txid),
+            as_hex: String::new(),
+            pruned_as_hex: hex::encode([0xAAu8, 0xBB]),
+            prunable_as_hex: hex::encode([0xCCu8]),
+            prunable_hash: HashHex::from_bytes([0x5A; 32]),
+            as_json: String::new(),
+            pruned: false,
+            double_spend_seen: false,
+            location: shekyl_rpc_types::TxLocation::Mined {
+                block_height: 3,
+                block_timestamp: 1_700_000_000,
+                confirmations: 1,
+                output_indices: vec![1],
+            },
+        }
+    }
+
+    /// **The server's reason survives to the operator.**
+    ///
+    /// A native handler reports failure as a `RestErrorEnvelope`, which the
+    /// success type does not model — so a success-only decode reported
+    /// "malformed reply" over the reason the daemon actually gave, and refusing
+    /// unknown fields made that certain rather than incidental. `decode_reply`
+    /// tries the envelope second, which is what keeps the failure actionable.
+    #[test]
+    fn a_handler_error_envelope_reaches_the_operator() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).expect("read request");
+            let out = r#"{"error":"the store is inconsistent at height 7"}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                out.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(out.as_bytes()).unwrap();
+        });
+        let (_, out) = run(
+            &["print_transaction", &hex::encode([0x31u8; 32])],
+            Some(&address),
+        );
+        assert!(
+            out.contains("the store is inconsistent at height 7"),
+            "the daemon's own reason must reach the operator, not be replaced \
+             by a decode complaint: {out}"
+        );
+    }
+
+    /// **A reply about a different transaction is not an answer.** The count
+    /// matched, every field was well-formed, and only the identity was wrong —
+    /// so a console binding the reply to the request by arity alone would have
+    /// printed another transaction under the operator's hash.
+    #[test]
+    fn an_entry_for_a_different_hash_is_refused() {
+        let asked = [0x31u8; 32];
+        let served = [0x99u8; 32];
+        let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            txs: vec![mined_entry(served)],
+            missed_tx: Vec::new(),
+        });
+        let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+        assert!(
+            out.contains("asked about") && !out.contains("Found in blockchain"),
+            "an entry for another hash must be refused, not rendered: {out}"
+        );
+    }
+
+    /// A reply that answers AND reports the hash missed is self-contradictory;
+    /// the miss is the honest half, so it decides.
+    #[test]
+    fn an_entry_alongside_a_missed_hash_is_not_found() {
+        let asked = [0x31u8; 32];
+        let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            txs: vec![mined_entry(asked)],
+            missed_tx: vec![HashHex::from_bytes(asked)],
+        });
+        let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+        assert!(
+            out.contains("wasn't found"),
+            "a contradictory reply must not render as a hit: {out}"
+        );
     }
 
     /// The C++ printed `<unknown>` below its cutoff and UTC

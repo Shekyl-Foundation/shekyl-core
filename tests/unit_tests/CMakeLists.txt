@@ -118,6 +118,7 @@ set(unit_tests_sources
   ct_balance_differential.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
+  pruned_tx_hash_parity.cpp
   tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
   txpool_ref_age.cpp
@@ -205,6 +206,8 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFIN
 # macro expands to a valid C string literal — verified in build.ninja.
 SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
+SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
+  PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json")
 SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
   SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")

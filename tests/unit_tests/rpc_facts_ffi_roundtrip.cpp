@@ -137,4 +137,25 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_block_entry, txs) == 16, "txs offset");
   static_assert(offsetof(shekyl_rpc_block_entry, tx_lens) == 24, "tx_lens offset");
   static_assert(offsetof(shekyl_rpc_block_entry, tx_count) == 32, "tx_count offset");
+
+  // RK-4c: one requested transaction's answer. Pointers have no seed value to
+  // fill and compare, so the layout is what gets pinned — offsets, not just
+  // sizeof, because a field that moves without changing the total size is
+  // exactly the edit sizeof cannot see.
+  static_assert(sizeof(shekyl_rpc_tx_entry) == 112, "tx entry changed size");
+  static_assert(offsetof(shekyl_rpc_tx_entry, pruned) == 0, "pruned offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, pruned_len) == 8, "pruned_len offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, prunable) == 16, "prunable offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, prunable_len) == 24, "prunable_len offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, output_indices) == 32, "output_indices offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, output_indices_len) == 40, "output_indices_len offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, block_height) == 48, "block_height offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, block_timestamp) == 56, "block_timestamp offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, received_timestamp) == 64, "received_timestamp offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, prunable_hash) == 72, "prunable_hash offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, where) == 104, "where offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, pruned_flag) == 105, "pruned_flag offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, double_spend_seen) == 106, "double_spend_seen offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, relayed) == 107, "relayed offset");
+  static_assert(offsetof(shekyl_rpc_tx_entry, reserved) == 108, "reserved offset");
 }

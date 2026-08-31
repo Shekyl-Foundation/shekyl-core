@@ -289,6 +289,49 @@ const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, txs) == 16);
 const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_lens) == 24);
 const _: () = assert!(std::mem::offset_of!(BlockEntryFfi, tx_count) == 32);
 
+/// Twin of `shekyl_rpc_tx_entry`: one requested transaction's answer (RK-4c),
+/// indexed by request position. Every pointer borrows memory owned by the
+/// opaque owner the export returns, and is invalid the moment
+/// `shekyl_rpc_transactions_free` runs.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TxEntryFfi {
+    pub pruned: *const u8,
+    pub pruned_len: usize,
+    pub prunable: *const u8,
+    pub prunable_len: usize,
+    pub output_indices: *const u64,
+    pub output_indices_len: usize,
+    pub block_height: u64,
+    pub block_timestamp: u64,
+    pub received_timestamp: u64,
+    pub prunable_hash: [u8; 32],
+    /// 0 = not found, 1 = chain, 2 = pool.
+    pub where_found: u8,
+    pub pruned_flag: u8,
+    pub double_spend_seen: u8,
+    pub relayed: u8,
+    pub reserved: [u8; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<TxEntryFfi>() == 112);
+const _: () = assert!(std::mem::align_of::<TxEntryFfi>() == 8);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned) == 0);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned_len) == 8);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable) == 16);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable_len) == 24);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, output_indices) == 32);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, output_indices_len) == 40);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, block_height) == 48);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, block_timestamp) == 56);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, received_timestamp) == 64);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, prunable_hash) == 72);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, where_found) == 104);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, pruned_flag) == 105);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, double_spend_seen) == 106);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, relayed) == 107);
+const _: () = assert!(std::mem::offset_of!(TxEntryFfi, reserved) == 108);
+
 /// Twin of `shekyl_rpc_block_payload`: the variable-length half of a
 /// block's facts. Every pointer borrows memory owned by the opaque owner the
 /// export returns, and is invalid the moment `shekyl_rpc_block_free` runs.
@@ -456,6 +499,43 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_blocks_by_height_free(owner: *mut std::ffi::c_void);
+
+    /// Transactions by hash, answered per request slot (RK-4c). `txids` is
+    /// `txids_len * 32` bytes; `out_chain_height` is the tip, read once for
+    /// the whole gather. On OK the rows borrow memory owned by `*out_owner`,
+    /// released with `shekyl_rpc_transactions_free`.
+    pub fn shekyl_rpc_transactions(
+        h: *mut CoreRpcHandle,
+        txids: *const u8,
+        txids_len: usize,
+        include_sensitive: u8,
+        out: *mut *const TxEntryFfi,
+        out_len: *mut usize,
+        out_chain_height: *mut u64,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_transactions_free(owner: *mut std::ffi::c_void);
+
+    /// epee's JSON rendering of one transaction (RK-D11). No handle, no lock.
+    pub fn shekyl_rpc_tx_to_json(
+        blob: *const u8,
+        blob_len: usize,
+        pruned: u8,
+        out: *mut *const std::os::raw::c_char,
+        out_len: *mut usize,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_tx_json_free(owner: *mut std::ffi::c_void);
+
+    /// Key images, answered per request slot: `out_status` is a caller-owned
+    /// array of `count` bytes (0 unspent, 1 chain, 2 pool). Fixed size, so no
+    /// owner.
+    pub fn shekyl_rpc_key_images_spent(
+        h: *mut CoreRpcHandle,
+        key_images: *const u8,
+        count: usize,
+        out_status: *mut u8,
+    ) -> i32;
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -621,6 +701,48 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_blocks_by_height_free(_owner: *mut std::ffi::c_void) {}
+
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_transactions(
+        _h: *mut super::CoreRpcHandle,
+        _txids: *const u8,
+        _txids_len: usize,
+        _include_sensitive: u8,
+        _out: *mut *const super::TxEntryFfi,
+        _out_len: *mut usize,
+        _out_chain_height: *mut u64,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        super::SHEKYL_RPC_FACTS_ERR_NULL
+    }
+
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_transactions_free(_owner: *mut std::ffi::c_void) {}
+
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_tx_to_json(
+        _blob: *const u8,
+        _blob_len: usize,
+        _pruned: u8,
+        _out: *mut *const std::os::raw::c_char,
+        _out_len: *mut usize,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        super::SHEKYL_RPC_FACTS_ERR_NULL
+    }
+
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_tx_json_free(_owner: *mut std::ffi::c_void) {}
+
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_key_images_spent(
+        _h: *mut super::CoreRpcHandle,
+        _key_images: *const u8,
+        _count: usize,
+        _out_status: *mut u8,
+    ) -> i32 {
+        super::SHEKYL_RPC_FACTS_ERR_NULL
+    }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_hash_at(
         _h: *mut CoreRpcHandle,

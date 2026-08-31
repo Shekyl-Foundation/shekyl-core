@@ -11,10 +11,27 @@
 //! C++. Field names are the wire names; `u64` serializes as a JSON number
 //! (as epee did); hashes are lowercase hex strings; every C++
 //! `KV_SERIALIZE_OPT(field, default)` is mirrored by
-//! `#[serde(default, skip_serializing_if = …)]` so an older client sees an
-//! identical document. Unknown fields are tolerated on deserialize (no
-//! `deny_unknown_fields`) — additive daemon-side evolution must not break an
-//! older wallet. Parity against the captured epee output is pinned by
+//! `#[serde(default, skip_serializing_if = …)]`, which is what makes a reply
+//! byte-equal to the captured epee document — the reason is oracle parity, not
+//! any client's tolerance.
+//!
+//! Unknown fields are **refused** (`deny_unknown_fields`). They were tolerated
+//! on the grounds that "additive daemon-side evolution must not break an older
+//! wallet", which is not a constraint this tree has: there is no network, and
+//! every client ships with the daemon. What the tolerance did buy was a
+//! *renamed* field arriving unnoticed while the name we look for defaults —
+//! a wrong value that reads as a legitimate one. Refusing turns that into a
+//! parse error at the boundary, the same way `deny_unknown_fields` on the
+//! wallet-RPC params makes an unknown key `-32602` rather than a guess.
+//!
+//! Checked, not assumed: every captured vector still parses with the denial on,
+//! so the types already model everything the daemon emits.
+//!
+//! **This is not a fix for silent defaults.** `#[serde(default)]` still lets an
+//! *omitted* field become its zero value; denial only catches the extra or
+//! renamed one. Auditing those defaults is its own pass (FOLLOWUPS).
+//!
+//! Parity against the captured epee output is pinned by
 //! `tests/rpc_parity.rs` over `tests/vectors/rpc/` (RK-D4).
 
 use serde::{Deserialize, Serialize};
@@ -25,7 +42,11 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.24: `/get_transaction_pool_hashes.bin`
+/// `CORE_RPC_VERSION_MINOR`. 3.25: `get_transactions` drops `txs_as_hex` and
+/// `txs_as_json` — the handler filled them "in case an old wallet asks" and
+/// the old wallet is `src/wallet/`, deleted, so they duplicated
+/// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
+/// A removed member is a wire change, so it bumps this. 3.24: `/get_transaction_pool_hashes.bin`
 /// retired — the `.bin` sibling of a route that is called, with no caller of
 /// its own; found by `ci/rpc-route-liveness` on its first run and disposed of
 /// on the predicate RK-4x already ruled. 3.23: `/get_blocks.bin` (+ `/getblocks.bin`) and
@@ -36,7 +57,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 24;
+pub const CORE_RPC_VERSION_MINOR: u32 = 25;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -47,6 +68,7 @@ pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERS
 /// statuses handlers emit; clients branch on [`RpcStatus::is_ok`], never on a
 /// string literal of their own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(transparent)]
 pub struct RpcStatus(pub String);
 
@@ -90,6 +112,7 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// transport sends the body whatever the HTTP status, so a client that wants
 /// the reason decodes this when the success type does not fit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RestErrorEnvelope {
     pub status: RpcStatus,
     pub error: String,
@@ -98,6 +121,7 @@ pub struct RestErrorEnvelope {
 /// Response of `GET|POST /get_height` (alias `/getheight`). The request body
 /// is empty (and ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetHeightResponse {
     pub status: RpcStatus,
     /// Chain height: the top block's height **plus one** (a chain holding
@@ -110,6 +134,7 @@ pub struct GetHeightResponse {
 /// Result of the `get_block_count` JSON-RPC method (alias `getblockcount`).
 /// Params are ignored, as the C++ handler ignored its positional list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockCountResponse {
     pub status: RpcStatus,
     /// Chain height — the block *count*, i.e. top block height plus one.
@@ -127,6 +152,7 @@ pub struct GetBlockCountResponse {
 /// JSON string (the block hash as 64 lowercase hex characters), not an object,
 /// and carries no `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockHashParams(pub [u64; 1]);
 
 /// The daemon's block header — the wire's `block_header_response`, shared by
@@ -138,6 +164,7 @@ pub struct GetBlockHashParams(pub [u64; 1]);
 /// the low 64 bits as a number, the whole value as `0x`-prefixed minimal
 /// lowercase hex, and the top 64 bits separately — three fields, one value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BlockHeader {
     pub major_version: u8,
     pub minor_version: u8,
@@ -190,6 +217,7 @@ pub struct BlockHeader {
 /// "Failed to parse hex representation of block hash. Hex = …" that names
 /// what the caller actually sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockRequest {
     #[serde(default)]
     pub hash: String,
@@ -208,6 +236,7 @@ pub struct GetBlockRequest {
 /// through untouched (RK-D11). It duplicates `blob`, which carries the same
 /// block in the consensus encoding, and both retire together in RK-W.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockResponse {
     pub status: RpcStatus,
     pub block_header: BlockHeader,
@@ -234,6 +263,7 @@ pub struct GetBlockResponse {
 /// instead (`daemon_rpc::methods::block_header_request`), which is where the
 /// object-only rule lives too.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockHeaderByHeightRequest {
     #[serde(default)]
     pub height: u64,
@@ -243,6 +273,7 @@ pub struct GetBlockHeaderByHeightRequest {
 
 /// Result of `get_block_header_by_height`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetBlockHeaderByHeightResponse {
     pub status: RpcStatus,
     pub block_header: BlockHeader,
@@ -251,6 +282,7 @@ pub struct GetBlockHeaderByHeightResponse {
 /// One row of [`GetVersionResponse::hard_forks`]: the version that activates
 /// at `height`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HardForkEntry {
     pub hf_version: u8,
     pub height: u64,
@@ -258,6 +290,7 @@ pub struct HardForkEntry {
 
 /// Result of the `get_version` JSON-RPC method (no params).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetVersionResponse {
     pub status: RpcStatus,
     /// [`CORE_RPC_VERSION`] of the answering daemon.
@@ -289,9 +322,13 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 24) == 0x0003_0018 == 196632, the value the
-        // captured get_version vectors carry.
-        assert_eq!(CORE_RPC_VERSION, 196_632);
+        // MAKE_CORE_RPC_VERSION(3, 25) == 0x0003_0019 == 196633. The captured
+        // get_version vectors carry 196632 (3.24), which is what they emitted
+        // before RK-4c removed `txs_as_hex` / `txs_as_json`; a vector is not
+        // edited to follow a constant, so `assert_version_parity` compares
+        // every other field against them and this pins the constant itself.
+        assert_eq!(CORE_RPC_VERSION, 196_633);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 25);
     }
 
     #[test]

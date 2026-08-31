@@ -1,0 +1,17 @@
+{
+  "status": "OK",
+  "txs": [{
+    "as_hex": "00",
+    "as_json": "{\"version\": 2, \"unlock_time\": 0}",
+    "block_height": 7,
+    "block_timestamp": 1750000007,
+    "confirmations": 3,
+    "double_spend_seen": false,
+    "in_pool": false,
+    "output_indices": [0],
+    "prunable_as_hex": "",
+    "prunable_hash": "2a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc03",
+    "pruned_as_hex": "",
+    "tx_hash": "2930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb02"
+  }]
+}

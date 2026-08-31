@@ -928,11 +928,14 @@ automatically triggered after each `save_curve_tree_checkpoint` call in
 
 ### Transaction Data Pruning
 
-`prune_tx_data(depth)` removes `txs_prunable`, `txs_prunable_hash`, and
-`txs_pqc_auths` for transactions in blocks below `height - depth`
-(default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000 when `depth == 0`).
-It stores `output_pruning_metadata_t` for each affected output, then
-deletes verification data. For RCT coinbase outputs, output lookups use
+`prune_tx_data(depth)` removes `txs_prunable` for transactions in blocks
+below `height - depth` (default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000
+when `depth == 0`). The prunable **hash** and the `txs_pqc_auths` slice stay:
+both are operands of the transaction's identity, and a pruned node that
+dropped them could no longer name what it kept. The complete body is served
+from shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not from the pruned
+node. It stores `output_pruning_metadata_t` for each affected output, then
+deletes the prunable verification body. For RCT coinbase outputs, output lookups use
 amount `0` in the amount index (matching `add_transaction`), not the
 plaintext `vout.amount`. A `tx_prune_next_block` watermark in `m_properties`
 stores the first block height not yet processed (with one-time read of legacy

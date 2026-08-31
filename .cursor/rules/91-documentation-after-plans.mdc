@@ -67,6 +67,20 @@ the changes.
   transport-cap sweep matched a released `CHANGELOG` entry stating the old cap;
   the four live comments were corrected and that entry deliberately was not.
 
+- **A match can be the rationale for the fix, phrased as the hazard.** Beyond
+  *asserts-is* and *records-was* there is a third category, and it is the one
+  that reverses meaning when swept: a live present-tense sentence describing a
+  hazard **inside the construct that closes it**. It is indistinguishable from
+  the vulnerability at one line of context, and "fixing" it rewrites the
+  sentence documenting the fix into a claim the fix is missing — a diff that
+  reads correct in review. Landed 2026-08-29 (PR #576): a sweep for a trusted
+  label matched `gf7_sealing_run.rs`'s *"the grader trusts the label; a
+  mislabeled row would be undetectable downstream"*, which is the parenthetical
+  justifying why the arm is bound **by construction** — an enum that makes a
+  transposed label unrepresentable. It was correctly left alone. Read the
+  enclosing block, not the line, and ask which of the three a match is. Run the
+  inverse sweep too: a line-grep cannot find the claim it did not spell.
+
 **Why this discipline exists at all, stated plainly:** the tree's **executable**
 surface is checked continuously — by builds, tests, const-asserts, CI gates. Its
 **descriptive** surface is checked *never*. One round in August 2026 turned up

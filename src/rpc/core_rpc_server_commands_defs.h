@@ -86,7 +86,7 @@ namespace cryptonote
 // whether they can talk to a given daemon without having to know in
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
-// CORE_RPC_VERSION (3.24) lives in rust/shekyl-rpc-types/src/chain.rs since
+// CORE_RPC_VERSION (3.25) lives in rust/shekyl-rpc-types/src/chain.rs since
 // RK-1: get_version, its only reader, is served natively.
 
   struct rpc_request_base
@@ -127,123 +127,8 @@ namespace cryptonote
         };
         typedef epee::misc_utils::struct_init<response_t> response;
     };
-  struct COMMAND_RPC_GET_TRANSACTIONS
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<std::string> txs_hashes;
-      bool decode_as_json;
-      bool prune;
-      bool split;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(txs_hashes)
-        KV_SERIALIZE(decode_as_json)
-        KV_SERIALIZE_OPT(prune, false)
-        KV_SERIALIZE_OPT(split, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct entry
-    {
-      std::string tx_hash;
-      std::string as_hex;
-      std::string pruned_as_hex;
-      std::string prunable_as_hex;
-      std::string prunable_hash;
-      std::string as_json;
-      bool pruned;
-      bool in_pool;
-      bool double_spend_seen;
-      uint64_t block_height;
-      uint64_t confirmations;
-      uint64_t block_timestamp;
-      uint64_t received_timestamp;
-      std::vector<uint64_t> output_indices;
-      bool relayed;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_hash)
-        KV_SERIALIZE(as_hex)
-        KV_SERIALIZE(pruned_as_hex)
-        KV_SERIALIZE(prunable_as_hex)
-        KV_SERIALIZE(prunable_hash)
-        KV_SERIALIZE(as_json)
-        KV_SERIALIZE_OPT(pruned, false)
-        KV_SERIALIZE(in_pool)
-        KV_SERIALIZE(double_spend_seen)
-        if (!this_ref.in_pool)
-        {
-          KV_SERIALIZE(block_height)
-          KV_SERIALIZE(confirmations)
-          KV_SERIALIZE(block_timestamp)
-          KV_SERIALIZE(output_indices)
-        }
-        else
-        {
-          KV_SERIALIZE(relayed)
-          KV_SERIALIZE(received_timestamp)
-        }
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      // older compatibility stuff
-      std::vector<std::string> txs_as_hex;  //transactions blobs as hex (old compat)
-      std::vector<std::string> txs_as_json; //transactions decoded as json (old compat)
-
-      // in both old and new
-      std::vector<std::string> missed_tx;   //not found transactions
-
-      // new style
-      std::vector<entry> txs;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(txs_as_hex)
-        KV_SERIALIZE(txs_as_json)
-        KV_SERIALIZE(txs)
-        KV_SERIALIZE(missed_tx)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   //-----------------------------------------------
-  struct COMMAND_RPC_IS_KEY_IMAGE_SPENT
-  {
-    enum STATUS {
-      UNSPENT = 0,
-      SPENT_IN_BLOCKCHAIN = 1,
-      SPENT_IN_POOL = 2,
-    };
-
-    struct request_t: public rpc_request_base
-    {
-      std::vector<std::string> key_images;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(key_images)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<int> spent_status;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(spent_status)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   //-----------------------------------------------
 

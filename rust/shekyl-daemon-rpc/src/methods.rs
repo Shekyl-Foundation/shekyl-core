@@ -12,6 +12,7 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
+use crate::core::TxSlot;
 use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
@@ -19,6 +20,7 @@ use shekyl_rpc_types::{
     GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
     CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
+use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::BlockHeight;
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault};
@@ -432,6 +434,194 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
     }
 }
 
+// ─── RK-4c: the transaction read set ─────────────────────────────────────────
+
+/// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
+/// `/get_transactions`. It fires for the first time in this tree: the C++
+/// gated it on `m_restricted && ctx` while the bridge passed a null `ctx`
+/// (#570 fixed the bridge; this carries the constant to the native handler).
+pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
+
+/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — the same, for `/is_key_image_spent`.
+pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
+
+/// The two parse refusals the C++ handler distinguished, kept distinct because
+/// they tell the caller different things: the first says "that is not hex",
+/// the second says "that is hex, of the wrong length".
+pub const TX_PARSE_FAILED: &str = "Failed to parse hex representation of transaction hash";
+const SIZE_MISMATCH: &str = "Failed, size of data mismatch";
+pub const KI_PARSE_FAILED: &str = "Failed to parse hex representation of key image";
+
+/// Parse request hashes into 32-byte ids, or the status the caller gets.
+///
+/// `Err` is a *status string*, not an [`RpcFault`]: these routes answer a
+/// refusal as HTTP 200 with a non-OK `status`, which is the shape the refusal
+/// vector pins.
+pub fn parse_request_hashes(hex: &[String], parse_msg: &str) -> Result<Vec<[u8; 32]>, String> {
+    let mut out = Vec::with_capacity(hex.len());
+    for h in hex {
+        let Ok(bytes) = hex::decode(h) else {
+            return Err(parse_msg.to_owned());
+        };
+        // Length is checked after decoding, so hex-of-the-wrong-length gets the
+        // size message rather than the parse one — the C++ order.
+        let Ok(arr): Result<[u8; 32], _> = bytes.try_into() else {
+            return Err(SIZE_MISMATCH.to_owned());
+        };
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+/// Project gathered slots into the reply, applying the request's
+/// `(split, prune, decode_as_json)` matrix.
+///
+/// `render` is the epee JSON rendering (RK-D11), injected so this stays a pure
+/// function: the decision of *whether* and *which* rendering to ask for is
+/// here, in Rust, and only the rendering itself is C++.
+///
+/// **One deliberate divergence.** The C++ echoed the request's hash string
+/// back verbatim (`e.tx_hash = *txhi++`), so a caller sending upper-case hex
+/// got upper-case back. `HashHex` re-encodes canonically, so the reply is
+/// always lower-case. Echoing caller-controlled casing is not a property worth
+/// preserving, and pre-genesis there is no client depending on it (RK-D8).
+/// A rendering the daemon could not produce.
+///
+/// The C++ failed the whole request when `parse_and_validate_tx*_from_blob`
+/// refused a body it had just read out of its own store, and that is the right
+/// answer: a caller who asked for `decode_as_json` and got a successful reply
+/// with an empty `as_json` cannot tell "no JSON" from "the daemon's store
+/// disagrees with its parser".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderFailed {
+    pub txid: String,
+    pub code: i32,
+}
+
+pub fn project_transactions<R>(
+    request: &GetTransactionsRequest,
+    ids: &[[u8; 32]],
+    slots: &[TxSlot],
+    chain_height: u64,
+    render: R,
+) -> Result<GetTransactionsResponse, RenderFailed>
+where
+    R: Fn(&[u8], bool) -> Result<String, i32>,
+{
+    let mut txs = Vec::new();
+    let mut missed = Vec::new();
+
+    for (id, slot) in ids.iter().zip(slots.iter()) {
+        let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
+            TxSlot::Missed => {
+                missed.push(HashHex::from_bytes(*id));
+                continue;
+            }
+            TxSlot::Chain {
+                pruned,
+                prunable,
+                prunable_hash,
+                block_height,
+                block_timestamp,
+                output_indices,
+                pruned_flag,
+            } => (
+                pruned,
+                prunable,
+                prunable_hash,
+                TxLocation::Mined {
+                    block_height: *block_height,
+                    // Against the tip read once for the whole gather, so two
+                    // entries cannot be counted from two different heights.
+                    confirmations: chain_height.saturating_sub(*block_height),
+                    block_timestamp: *block_timestamp,
+                    output_indices: output_indices.clone(),
+                },
+                *pruned_flag,
+            ),
+            TxSlot::Pool {
+                pruned,
+                prunable,
+                prunable_hash,
+                double_spend_seen: _,
+                relayed,
+                received_timestamp,
+            } => (
+                pruned,
+                prunable,
+                prunable_hash,
+                TxLocation::Pooled {
+                    relayed: *relayed,
+                    received_timestamp: *received_timestamp,
+                },
+                // A pooled transaction is never reported pruned: the C++ set
+                // this from the store's verification data, which a pool entry
+                // has by construction.
+                false,
+            ),
+        };
+        let double_spend_seen = matches!(
+            slot,
+            TxSlot::Pool {
+                double_spend_seen: true,
+                ..
+            }
+        );
+
+        // The matrix. `split` or `prune` asked for the halves; so does a
+        // transaction the store has no prunable half for, because there is
+        // nothing to concatenate.
+        let split_form = request.split || request.prune || prunable.is_empty();
+        let mut entry = TxEntry {
+            tx_hash: HashHex::from_bytes(*id),
+            as_hex: String::new(),
+            pruned_as_hex: String::new(),
+            prunable_as_hex: String::new(),
+            prunable_hash: HashHex::from_bytes(*prunable_hash),
+            as_json: String::new(),
+            pruned: pruned_flag,
+            double_spend_seen,
+            location,
+        };
+        if split_form {
+            entry.pruned_as_hex = hex::encode(pruned);
+            if !request.prune {
+                entry.prunable_as_hex = hex::encode(prunable);
+            }
+            if request.decode_as_json {
+                // Base-only rendering when that is all the reply carries.
+                let base_only = request.prune || prunable.is_empty();
+                let blob: Vec<u8> = if base_only {
+                    pruned.clone()
+                } else {
+                    [pruned.as_slice(), prunable.as_slice()].concat()
+                };
+                entry.as_json = render(&blob, base_only).map_err(|code| RenderFailed {
+                    txid: entry.tx_hash.to_string(),
+                    code,
+                })?;
+            }
+        } else {
+            let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
+            entry.as_hex = hex::encode(&full);
+            if request.decode_as_json {
+                entry.as_json = render(&full, false).map_err(|code| RenderFailed {
+                    txid: entry.tx_hash.to_string(),
+                    code,
+                })?;
+            }
+        }
+
+        txs.push(entry);
+    }
+
+    Ok(GetTransactionsResponse {
+        status: RpcStatus::ok(),
+        txs,
+        missed_tx: missed,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -638,15 +828,193 @@ pub(crate) mod tests {
         assert_eq!(ours, oracle);
     }
 
+    // ── the get_transactions projection matrix ───────────────────────────
+
+    fn chain_slot(prunable: &[u8]) -> TxSlot {
+        TxSlot::Chain {
+            pruned: vec![0xAA, 0xBB],
+            prunable: prunable.to_vec(),
+            prunable_hash: [0x11; 32],
+            block_height: 7,
+            block_timestamp: 1_700_000_000,
+            output_indices: vec![3, 4],
+            pruned_flag: false,
+        }
+    }
+
+    /// Renders a marker naming the arguments it was handed, so a test can
+    /// assert **what** was rendered and with which `base_only`, not merely
+    /// that something was.
+    ///
+    /// Returns the closure rather than being one: the `Result` is the
+    /// projection's bound, not this renderer's own failure mode, and stating
+    /// it as `impl Fn(..) -> Result<..>` puts that requirement where a reader
+    /// sees it.
+    fn echo_render() -> impl Fn(&[u8], bool) -> Result<String, i32> {
+        |blob: &[u8], base_only: bool| Ok(format!("{}|base_only={base_only}", hex::encode(blob)))
+    }
+
+    fn req(split: bool, prune: bool, decode_as_json: bool) -> GetTransactionsRequest {
+        GetTransactionsRequest {
+            txs_hashes: vec![],
+            decode_as_json,
+            prune,
+            split,
+        }
+    }
+
+    /// **The projection matrix, driven across every axis that changes a
+    /// field.** This replaced a C++ matrix, and the parity vectors do not
+    /// reach it — they build `TxEntry` directly — so without this the
+    /// behaviour is unpinned on all three request flags at once.
+    #[test]
+    fn projection_matrix_over_split_prune_and_decode() {
+        const PRUNED_HEX: &str = "aabb";
+        const PRUNABLE_HEX: &str = "ccdd";
+        let prunable = [0xCC, 0xDD];
+
+        // (split, prune, decode) -> (as_hex, pruned_as_hex, prunable_as_hex, as_json)
+        let cases: [(bool, bool, bool, &str, &str, &str, &str); 6] = [
+            // Neither flag: the whole transaction, concatenated, one field.
+            (false, false, false, "aabbccdd", "", "", ""),
+            (
+                false,
+                false,
+                true,
+                "aabbccdd",
+                "",
+                "",
+                "aabbccdd|base_only=false",
+            ),
+            // `split`: the halves, both carried; json still covers both.
+            (true, false, false, "", PRUNED_HEX, PRUNABLE_HEX, ""),
+            (
+                true,
+                false,
+                true,
+                "",
+                PRUNED_HEX,
+                PRUNABLE_HEX,
+                "aabbccdd|base_only=false",
+            ),
+            // `prune`: the prunable half is withheld, and json is base-only —
+            // rendering the full blob here would leak what `prune` withheld.
+            (false, true, false, "", PRUNED_HEX, "", ""),
+            (false, true, true, "", PRUNED_HEX, "", "aabb|base_only=true"),
+        ];
+
+        for (split, prune, decode, as_hex, pruned_as_hex, prunable_as_hex, as_json) in cases {
+            let out = project_transactions(
+                &req(split, prune, decode),
+                &[[0x01; 32]],
+                &[chain_slot(&prunable)],
+                9,
+                echo_render(),
+            )
+            .expect("render succeeds");
+            let e = &out.txs[0];
+            let label = format!("split={split} prune={prune} decode={decode}");
+            assert_eq!(e.as_hex, as_hex, "as_hex @ {label}");
+            assert_eq!(e.pruned_as_hex, pruned_as_hex, "pruned_as_hex @ {label}");
+            assert_eq!(
+                e.prunable_as_hex, prunable_as_hex,
+                "prunable_as_hex @ {label}"
+            );
+            assert_eq!(e.as_json, as_json, "as_json @ {label}");
+        }
+    }
+
+    /// **An empty prunable half takes the split form even unasked**, because
+    /// there is nothing to concatenate — and its json is base-only for the
+    /// same reason. This is the branch the live console test reaches (the
+    /// genesis transaction), and the only one it reaches.
+    #[test]
+    fn an_empty_prunable_half_is_split_form_and_renders_base_only() {
+        let out = project_transactions(
+            &req(false, false, true),
+            &[[0x02; 32]],
+            &[chain_slot(&[])],
+            9,
+            echo_render(),
+        )
+        .expect("render succeeds");
+        let e = &out.txs[0];
+        assert!(e.as_hex.is_empty(), "no concatenated form exists");
+        assert_eq!(e.pruned_as_hex, "aabb");
+        assert!(e.prunable_as_hex.is_empty());
+        assert_eq!(e.as_json, "aabb|base_only=true");
+    }
+
+    /// Chain, pool and miss land in their own places: the first two become
+    /// entries carrying their location, the third only a `missed_tx` id.
+    #[test]
+    fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
+        let out = project_transactions(
+            &req(true, false, false),
+            &[[0x01; 32], [0x02; 32], [0x03; 32]],
+            &[
+                chain_slot(&[0xCC]),
+                TxSlot::Pool {
+                    pruned: vec![0xAA],
+                    prunable: vec![0xCC],
+                    prunable_hash: [0x22; 32],
+                    double_spend_seen: true,
+                    relayed: true,
+                    received_timestamp: 1_700_000_001,
+                },
+                TxSlot::Missed,
+            ],
+            9,
+            echo_render(),
+        )
+        .expect("render succeeds");
+
+        assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
+        assert_eq!(out.missed_tx.len(), 1);
+        assert!(matches!(out.txs[0].location, TxLocation::Mined { .. }));
+        assert!(matches!(out.txs[1].location, TxLocation::Pooled { .. }));
+        assert!(
+            out.txs[1].double_spend_seen,
+            "the pool's double-spend flag must survive the projection"
+        );
+        assert!(
+            !out.txs[1].pruned,
+            "a pooled transaction is never reported pruned"
+        );
+    }
+
+    /// A renderer failure names the transaction it failed on and fails the
+    /// whole reply — it is not swallowed into an empty `as_json`.
+    #[test]
+    fn a_renderer_failure_names_its_transaction_and_fails_the_reply() {
+        let err = project_transactions(
+            &req(false, false, true),
+            &[[0x09; 32]],
+            &[chain_slot(&[0xCC])],
+            9,
+            |_, _| Err(-7),
+        )
+        .expect_err("a failing renderer must fail the reply");
+        assert_eq!(err.code, -7);
+        assert_eq!(err.txid, HashHex::from_bytes([0x09; 32]).to_string());
+    }
+
     #[test]
     fn get_version_reproduces_the_synced_oracle_vector() {
         // Synchronized with a non-zero raw target: the rule zeroes it, and the
         // zero is omitted on the wire exactly as epee omitted it.
+        //
+        // Against `_v2`: this PR's wire change bumped `CORE_RPC_VERSION` to
+        // 3.25, and the vectors are never hand-edited (see their README), so
+        // the bump gets a file beside the C++ capture rather than inside it.
+        // `get_version_v2_is_v1_with_only_the_version_bumped` is what keeps
+        // `_v2` honest — it may differ from the oracle by that constant and
+        // nothing else.
         let out = get_version(&facts(true, 999_999)).unwrap();
         assert_eq!(out.target_height, 0);
         let ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v1.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v2.json"
         ))
         .unwrap();
         assert_eq!(ours, oracle);

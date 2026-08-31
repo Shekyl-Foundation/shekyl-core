@@ -790,4 +790,16 @@ TEST(archival_serve_credit, full_tx_bytes_match_the_rust_oracle)
   EXPECT_TRUE(parsed.pqc_auths.empty());
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
       << "tx id differs across languages";
+
+  // The PRUNED identity on the 3-part (empty-pqc_auths) arm: mixing the
+  // prunable digest back in via `get_pruned_transaction_hash` must reproduce
+  // the cross-language txid -- the derivation a pruned daemon's reader
+  // depends on, asserted here against the same pin the Rust leg's
+  // `hash_with_supplied_prunable` asserts. The 4-part spend arm has its own
+  // pin (`pruned_tx_hash_parity.cpp`).
+  crypto::hash prunable_hash;
+  ASSERT_TRUE(calculate_transaction_prunable_hash(parsed, nullptr, prunable_hash));
+  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
+            k.tx_hash_hex)
+      << "pruned identity (supplied digest) diverged from the txid";
 }

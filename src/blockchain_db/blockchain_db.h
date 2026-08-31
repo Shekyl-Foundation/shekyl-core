@@ -1924,8 +1924,10 @@ public:
    * @brief prune confirmed transaction data beyond the reorg safety depth.
    *
    * For each transaction in blocks older than (tip - depth), stores output
-   * metadata in the output_metadata table and removes prunable verification
-   * data (and the optional `txs_pqc_auths` slice).
+   * metadata in the output_metadata table and removes the prunable body
+   * (`txs_prunable`). The prunable hash and the `txs_pqc_auths` slice stay:
+   * both are operands of the transaction's identity, and the complete body
+   * is served from shard archival rather than from a pruned node.
    *
    * @param depth  confirmation depth; use 0 for CRYPTONOTE_TX_PRUNE_DEPTH
    * @return true on success
