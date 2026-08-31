@@ -12,6 +12,7 @@
 //! before the FFI shims exist.
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_wire::transaction::Ct;
 
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
@@ -174,11 +175,27 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // are refused in Phase C, so they ask JoinMarket's question and
         // never reach a verdict that consumes the answer.
         let bond_probe_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        // The debit arm's probe carries the bond slot's auth key so the
+        // gather can run the cheap pin before its expensive scan (§8.7.1.1);
+        // Phase C still runs UB3 itself.
+        let bond_auth = parsed
+            .bond_post()
+            .and_then(|(index, _)| match &parsed.tx.ct {
+                Ct::Fcmp { pqc_auths, .. } => {
+                    pqc_auths.get(index).map(|a| a.hybrid_public_key.as_slice())
+                }
+                _ => None,
+            });
         let bond_probe = bond_probe_id.as_ref().map(|id| {
-            if parsed.bond_post_is_unbond() {
-                BondProbe::Unbond(id)
-            } else {
-                BondProbe::Join(id)
+            match (parsed.bond_post_is_unbond(), bond_auth) {
+                (true, Some(auth_pubkey)) => BondProbe::Unbond {
+                    p_canonical_id: id,
+                    auth_pubkey,
+                },
+                // No auth slot for the bond vin is a malformed submission the
+                // battery refuses anyway; ask the cheap question rather than
+                // inventing a key, and let Phase C issue the verdict.
+                _ => BondProbe::Join(id),
             }
         });
         // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the

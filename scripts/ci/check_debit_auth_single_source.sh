@@ -47,23 +47,61 @@ if ! rg -q 'pub fn debit_auth_pin\(' rust/shekyl-archival-retention/src/debit_au
   fail=1
 fi
 
-# CALL sites, not occurrences: counting the symbol would also count the
-# `shekyl_ffi.h` declaration and the wrapper's own definition, so the count
-# could never fall below two and the arm could never fail (observed
-# 2026-08-29 -- the first draft of this arm passed its own bite).
-# Three sites authorize a value-out today: the per-tx Unbond verify, the
-# per-tx HoldingsUpdate-DROP verify, and the checkpoint fast path. (Rebond
-# is not one -- credit path, identity key.)
-callers=$(rg -n --no-filename 'archival_debit_auth_pin\(' src/ -g '*.cpp' \
-          | rg -v '^\s*[0-9]+:bool archival_debit_auth_pin\(' \
-          | rg -v 'shekyl_archival_debit_auth_pin\(' \
-          | wc -l | tr -d ' ')
-if [ "${callers:-0}" -lt 3 ]; then
-  echo "FAIL: expected at least 3 C++ call sites for the shared debit pin"
-  echo "      (per-tx debit verifies + the checkpoint fast path); found ${callers:-0}."
-  echo "      A dropped caller means an arm stopped authorizing its value-out,"
-  echo "      which the comparison arm below cannot see -- there is nothing to"
-  echo "      compare when the check is simply gone."
+# Each REQUIRED site by name, not a count. A count cannot tell a removed
+# checkpoint call from a new unrelated one, and it counts comments; both were
+# true of the previous version. These are the four places consensus decides a
+# value-out is authorized, and each is asserted to reach the shared predicate:
+#
+#   blockchain.cpp   "Unbond"                 per-tx debit verify
+#   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
+#   blockchain.cpp   "block fast-check debit" checkpoint fast path
+#   daemon_submit_ffi.cpp                     the submit gather's work gate
+#
+# Comments are stripped first, so a mention in prose cannot stand in for a
+# call. Adding a fifth value-out arm means adding its row here — deliberately,
+# because a new arm that authorizes nothing is the failure this gate exists
+# for and it cannot be detected by looking at the arms that do.
+# Comment-stripped file body, captured rather than piped. `rg -q` exits on the
+# first match, which SIGPIPEs the upstream `sed`, which under `pipefail` makes
+# the whole pipeline non-zero -- i.e. every required call would read as ABSENT
+# and the gate would fail closed for the wrong reason (rule 46: a gate verdict
+# never travels through a pipe). Observed on the first run of this arm.
+code_only() { sed 's://.*::' "$1"; }
+
+require_call() {
+  local file="$1" needle="$2" label="$3" body hits
+  body=$(code_only "$file")
+  hits=$(printf '%s\n' "$body" | rg -c "$needle" || true)
+  if [ "${hits:-0}" -lt 1 ]; then
+    echo "FAIL: ${label} no longer reaches the shared debit pin."
+    echo "      An arm that stops authorizing its value-out is invisible to the"
+    echo "      comparison check below -- there is nothing to compare when the"
+    echo "      check is simply gone."
+    fail=1
+  fi
+}
+
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_debit_auth_pin\(record, auth_pubkey, "Unbond"\)' \
+  "per-tx Unbond verify"
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
+  "per-tx HoldingsUpdate-drop verify"
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_debit_auth_pin\(record,' \
+  "checkpoint fast path"
+require_call src/rpc/daemon_submit_ffi.cpp \
+  'shekyl_archival_debit_auth_pin\(' \
+  "submit gather work gate"
+
+# And the Rust submit battery, which the previous version never checked at
+# all: it could have inlined its own comparison and passed.
+rust_pin=$(rg -c 'debit_auth_pin\(record\.bond_spend_pk\(\)' \
+             rust/shekyl-daemon-rpc/src/submit/verifier.rs || true)
+if [ "${rust_pin:-0}" -lt 1 ]; then
+  echo "FAIL: the Rust submit battery no longer calls debit_auth_pin."
+  echo "      UB3 is the debit arm's authorization; an inlined comparison"
+  echo "      there is a fourth implementation of the predicate."
   fail=1
 fi
 

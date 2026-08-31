@@ -1389,6 +1389,7 @@ fn unbond_record_facts() -> UnbondRecordFacts {
         shekyl_archival_retention::HoldingsKind::CompleteTree,
         shekyl_archival_retention::LastServedScan::AllShards,
         vec![UNBOND_SERVED_EPOCH],
+        false,
     )
     .expect("the all-shards scan is what a CompleteTree record selects")
 }
@@ -1683,6 +1684,7 @@ fn a_record_committing_no_key_authorizes_nothing() {
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
                 vec![UNBOND_SERVED_EPOCH],
+                false,
             )
             .expect("scan matches the kind"),
         ),
@@ -1748,6 +1750,7 @@ fn the_cooldown_is_enforced_against_the_gathered_anchor() {
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
                 vec![recent],
+                false,
             )
             .expect("scan matches the kind"),
         ),
@@ -1796,6 +1799,7 @@ fn a_full_interval_log_makes_the_exit_unverifiable() {
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
                 vec![UNBOND_SERVED_EPOCH],
+                false,
             )
             .expect("scan matches the kind"),
         ),
@@ -1823,6 +1827,7 @@ fn the_debit_must_remove_the_records_whole_balance() {
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
                 vec![UNBOND_SERVED_EPOCH],
+                false,
             )
             .expect("scan matches the kind"),
         ),
@@ -1851,6 +1856,7 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
             shekyl_archival_retention::HoldingsKind::CompleteTree,
             shekyl_archival_retention::LastServedScan::HeldShards,
             Vec::new(),
+            false,
         ),
         Err(LastServedScanMismatch {
             gathered: shekyl_archival_retention::LastServedScan::HeldShards,
@@ -1868,6 +1874,7 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
             shekyl_archival_retention::HoldingsKind::ShardSetCompact,
             shekyl_archival_retention::LastServedScan::AllShards,
             Vec::new(),
+            false,
         )
         .is_err(),
         "a compact record gathered with the all-shards scan must also refuse"

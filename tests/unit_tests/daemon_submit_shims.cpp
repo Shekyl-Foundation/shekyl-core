@@ -485,7 +485,8 @@ struct ShimFixture
   int snapshot(const SubmitTx& s, shekyl_submit_facts_ffi& facts, uint8_t& ki_conflict,
     const crypto::hash* bond_p_id = nullptr,
     uint8_t bond_probe_kind = SHEKYL_SUBMIT_BOND_PROBE_JOIN,
-    shekyl_submit_unbond_facts_handle** out_unbond = nullptr)
+    shekyl_submit_unbond_facts_handle** out_unbond = nullptr,
+    const std::vector<uint8_t>* bond_auth = nullptr)
   {
     const crypto::key_image& ki = std::get<txin_to_key>(s.tx.vin[0]).k_image;
     return daemon_submit::snapshot_facts(bap.txpool, bap.bc,
@@ -494,6 +495,8 @@ struct ShimFixture
       reinterpret_cast<const uint8_t*>(cert_ref.data),
       bond_p_id ? reinterpret_cast<const uint8_t*>(bond_p_id->data) : nullptr,
       bond_probe_kind,
+      bond_auth && !bond_auth->empty() ? bond_auth->data() : nullptr,
+      bond_auth ? bond_auth->size() : 0,
       /*emission_p_canonical_id=*/nullptr, /*emission_epochs=*/nullptr, 0,
       /*out_emission=*/nullptr, out_unbond,
       &facts, &ki_conflict);
@@ -510,6 +513,7 @@ struct ShimFixture
       reinterpret_cast<const uint8_t*>(ki.data), 1,
       reinterpret_cast<const uint8_t*>(cert_ref.data),
       /*bond_p_canonical_id=*/nullptr, SHEKYL_SUBMIT_BOND_PROBE_JOIN,
+      /*bond_auth_pubkey=*/nullptr, 0,
       reinterpret_cast<const uint8_t*>(emission_p_id.data),
       epochs, n_epochs,
       out_emission, /*out_unbond=*/nullptr,
@@ -702,8 +706,9 @@ TEST(daemon_submit_shims, unbond_gather_runs_the_accessor_the_holdings_kind_sele
     shekyl_submit_unbond_facts_handle* handle = nullptr;
     // The mock DB keys nothing on the id; the probe routing is the subject.
     const crypto::hash p_id{};
+    const std::vector<uint8_t> auth(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
     ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
-        SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle),
+        SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &auth),
       SHEKYL_SUBMIT_OK);
     ASSERT_NE(handle, nullptr) << "the UNBOND probe must fill the bundle";
 
@@ -823,6 +828,75 @@ TEST(daemon_submit_shims, the_emission_probe_still_admits_a_null_bundle_handle)
   EXPECT_EQ(facts.emission_probed, 1);
 }
 
+TEST(daemon_submit_shims, a_failed_debit_pin_skips_the_expensive_scan)
+{
+  // Resource gate, observed at the accessor rather than at the flag: the
+  // per-shard last-served scan is two LMDB seeks per served shard with the
+  // pool and blockchain locks held, and without the pin in front of it any
+  // caller could buy that scan with an unsigned, unfunded transaction naming
+  // a known CompleteTree record.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  fx.db->unbond_bonded_total = 750'000'000;
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  const crypto::hash p_id{};
+  // A well-formed key that is NOT the record's committed one -- the identity
+  // key stands in for "a serving host signing its own exit".
+  const std::vector<uint8_t> wrong_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xAB);
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &wrong_key),
+    SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None)
+    << "a refused debit must not buy the per-shard scan";
+
+  const shekyl_submit_unbond_facts_ffi* view =
+    shekyl_submit_unbond_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->record_present, 1);
+  EXPECT_EQ(view->record.last_served_scan_skipped, 1)
+    << "the empty slice must be marked unread, or Rust folds it to "
+       "\"never served\" and ELAPSES the cooldown";
+  EXPECT_EQ(view->record.per_shard_last_served_len, 0u);
+  // The cheap facts still ride along: Rust runs the real UB3 pin on them.
+  EXPECT_EQ(view->record.bonded_total_atomic, 750'000'000u);
+  ASSERT_EQ(view->record.bond_spend_pk_len, config::PQC_HYBRID_SINGLE_KEY_LEN);
+  shekyl_submit_unbond_facts_free(handle);
+}
+
+TEST(daemon_submit_shims, the_matching_debit_key_buys_the_scan)
+{
+  // The inverse arm, so the gate above cannot pass by refusing everything.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  const crypto::hash p_id{};
+  const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key),
+    SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::AllShards);
+  const shekyl_submit_unbond_facts_ffi* view =
+    shekyl_submit_unbond_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->record.last_served_scan_skipped, 0);
+  EXPECT_EQ(view->record.per_shard_last_served_len, 1u);
+  shekyl_submit_unbond_facts_free(handle);
+}
+
 TEST(daemon_submit_shims, an_unknown_bond_probe_kind_is_a_marshalling_fault)
 {
   ShimFixture fx;
@@ -845,7 +919,7 @@ TEST(daemon_submit_shims, snapshot_null_args_are_internal_fault)
   uint8_t ki_conflict = 0;
   EXPECT_EQ(daemon_submit::snapshot_facts(fx.bap.txpool, fx.bap.bc,
       nullptr, nullptr, 0, nullptr, nullptr, SHEKYL_SUBMIT_BOND_PROBE_JOIN,
-      nullptr, nullptr, 0, nullptr, nullptr,
+      nullptr, 0, nullptr, nullptr, 0, nullptr, nullptr,
       &facts, &ki_conflict),
     SHEKYL_SUBMIT_INTERNAL_FAULT);
 }

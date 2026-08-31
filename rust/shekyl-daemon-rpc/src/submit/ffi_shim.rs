@@ -205,6 +205,7 @@ unsafe fn unbond_facts_from_ffi(view: &ffi::SubmitUnbondFactsFfi) -> Result<Unbo
                 holdings_kind,
                 gathered_scan,
                 per_shard_last_served,
+                r.last_served_scan_skipped != 0,
             )
             .map_err(|_| ())?,
         )
@@ -354,7 +355,7 @@ impl SubmitStateShim for FfiSubmitShim {
         let mut emission_handle: *mut ffi::SubmitEmissionFactsHandle = std::ptr::null_mut();
         let mut unbond_handle: *mut ffi::SubmitUnbondFactsHandle = std::ptr::null_mut();
         let bond_probe_kind = match bond_probe {
-            Some(BondProbe::Unbond(_)) => ffi::SHEKYL_SUBMIT_BOND_PROBE_UNBOND,
+            Some(BondProbe::Unbond { .. }) => ffi::SHEKYL_SUBMIT_BOND_PROBE_UNBOND,
             // The C++ side ignores the byte when no id is passed.
             Some(BondProbe::Join(_)) | None => ffi::SHEKYL_SUBMIT_BOND_PROBE_JOIN,
         };
@@ -375,6 +376,8 @@ impl SubmitStateShim for FfiSubmitShim {
                 reference_block.as_bytes().as_ptr(),
                 bond_probe.map_or(std::ptr::null(), |probe| probe.p_canonical_id().as_ptr()),
                 bond_probe_kind,
+                bond_probe.map_or(std::ptr::null(), |probe| probe.auth_pubkey().as_ptr()),
+                bond_probe.map_or(0, |probe| probe.auth_pubkey().len()),
                 emission_probe.map_or(std::ptr::null(), |(id, _)| id.as_ptr()),
                 emission_probe.map_or(std::ptr::null(), |(_, epochs)| const_ptr_or_null(epochs)),
                 emission_probe.map_or(0, |(_, epochs)| epochs.len()),
@@ -420,7 +423,7 @@ impl SubmitStateShim for FfiSubmitShim {
             None
         };
         // Same copy-then-drop for the §8.7.1.1 bundle.
-        let unbond = if matches!(bond_probe, Some(BondProbe::Unbond(_))) {
+        let unbond = if matches!(bond_probe, Some(BondProbe::Unbond { .. })) {
             let converted = unsafe {
                 ffi::shekyl_submit_unbond_facts_view(unbond_bundle.as_ptr())
                     .as_ref()
@@ -476,7 +479,7 @@ impl SubmitStateShim for FfiSubmitShim {
             tracing::error!("submit snapshot shim skipped the requested emission probe");
             return Err(ShimFault);
         }
-        let unbond_probe = matches!(bond_probe, Some(BondProbe::Unbond(_)));
+        let unbond_probe = matches!(bond_probe, Some(BondProbe::Unbond { .. }));
         let mut facts = facts_from_ffi(&pod, &ki_conflicts, unbond_probe).map_err(|()| {
             tracing::error!("submit snapshot shim returned unknown key-image descriptor");
             ShimFault

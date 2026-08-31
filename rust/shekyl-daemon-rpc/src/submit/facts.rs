@@ -194,14 +194,36 @@ pub enum BondProbe<'a> {
     /// Unbond (§8.7.1.1) — the record must be **present**, so the same
     /// presence bit is joined by [`SubmitFacts::unbond`] carrying the
     /// record's contents as verify operands.
-    Unbond(&'a [u8; 32]),
+    ///
+    /// Carries the bond slot's `pqc_auths` key alongside the id. That is
+    /// not for the verdict — Phase C runs UB3 itself — but so the gather can
+    /// run the cheap debit-auth pin **before** the per-shard last-served
+    /// scan, which is two LMDB seeks per served shard under the pool and
+    /// blockchain locks. Without it an unsigned, unfunded transaction naming
+    /// a known `CompleteTree` record buys that scan on every submit.
+    Unbond {
+        /// The vin's claimed `p_canonical_id`.
+        p_canonical_id: &'a [u8; 32],
+        /// The bond slot's `pqc_auths[i].hybrid_public_key`.
+        auth_pubkey: &'a [u8],
+    },
 }
 
 impl BondProbe<'_> {
     /// The `p_canonical_id` this probe is keyed on, whichever arm it is.
     pub fn p_canonical_id(&self) -> &[u8; 32] {
         match self {
-            Self::Join(id) | Self::Unbond(id) => id,
+            Self::Join(id) => id,
+            Self::Unbond { p_canonical_id, .. } => p_canonical_id,
+        }
+    }
+
+    /// The debit arm's work-gate operand; empty for the credit arm, which
+    /// gathers nothing expensive.
+    pub fn auth_pubkey(&self) -> &[u8] {
+        match self {
+            Self::Join(_) => &[],
+            Self::Unbond { auth_pubkey, .. } => auth_pubkey,
         }
     }
 }
@@ -241,6 +263,7 @@ pub struct UnbondRecordFacts {
     bond_spend_pk: Vec<u8>,
     holdings_kind: HoldingsKind,
     per_shard_last_served: Vec<u64>,
+    last_served_scan_skipped: bool,
 }
 
 /// The gather ran the wrong last-served accessor for this record's holdings
@@ -280,6 +303,7 @@ impl UnbondRecordFacts {
         holdings_kind: HoldingsKind,
         gathered_scan: LastServedScan,
         per_shard_last_served: Vec<u64>,
+        last_served_scan_skipped: bool,
     ) -> Result<Self, LastServedScanMismatch> {
         let expected = holdings_kind.last_served_scan();
         if gathered_scan != expected {
@@ -294,7 +318,21 @@ impl UnbondRecordFacts {
             bond_spend_pk,
             holdings_kind,
             per_shard_last_served,
+            last_served_scan_skipped,
         })
+    }
+
+    /// The gather refused to run the last-served scan because the debit-auth
+    /// pin failed, so [`per_shard_last_served`](Self::per_shard_last_served)
+    /// is empty **because it was never read**.
+    ///
+    /// The verifier must refuse rather than fold: an unread slice folds to
+    /// "never served", which *elapses* the release cooldown — the permissive
+    /// direction. The Phase-C UB3 pin refuses the same submission on its own,
+    /// so this is the belt that keeps a marshalling divergence from turning
+    /// a skipped read into a passed check.
+    pub fn last_served_scan_skipped(&self) -> bool {
+        self.last_served_scan_skipped
     }
 
     /// The record's current bonded total — an Unbond debit must remove all

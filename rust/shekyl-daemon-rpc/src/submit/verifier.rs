@@ -716,6 +716,19 @@ fn verify_debit_arm(
         return Err(VerifyFailure::Malformed);
     }
 
+    // ── The gather refused to scan, so there is nothing to fold ────────
+    // An unread slice folds to "never served", which ELAPSES the cooldown.
+    // UB3 above already refused this submission (the gather skipped the scan
+    // for the same reason), so reaching here means the two pins disagreed —
+    // refuse rather than fold the permissive answer.
+    if record.last_served_scan_skipped() {
+        tracing::error!(
+            "unbond gather skipped the last-served scan but the Phase-C pin \
+             passed — refusing rather than folding an unread slice"
+        );
+        return Err(VerifyFailure::Malformed);
+    }
+
     // ── UB4/UB5: fold the gathered slice into the cooldown anchor ───────
     // The shim already pinned the gather's scan discriminant against the
     // record's holdings kind (a mismatch is a ShimContract fault, not a

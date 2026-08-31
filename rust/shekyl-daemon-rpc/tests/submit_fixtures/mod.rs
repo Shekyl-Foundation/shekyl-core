@@ -370,7 +370,7 @@ impl SubmitStateShim for MockShim {
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
             bond_p_canonical_id: bond_probe.map(|probe| *probe.p_canonical_id()),
-            bond_probe_is_unbond: matches!(bond_probe, Some(BondProbe::Unbond(_))),
+            bond_probe_is_unbond: matches!(bond_probe, Some(BondProbe::Unbond { .. })),
             emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),
         });
         Ok(self.facts.clone())

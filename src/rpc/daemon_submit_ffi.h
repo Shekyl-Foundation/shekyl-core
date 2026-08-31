@@ -72,7 +72,7 @@ enum {
 };
 
 // POD fact snapshot (§4.1) — also the shape of Phase-D fresh facts when the
-// commit races. Byte layout (size 96, align 8), asserted on both sides:
+// commit races. Byte layout (size 104, align 8), asserted on both sides:
 //
 //   offset  0: in_pool               (u8; txid pool-resident at `all` category — §3.1 F40)
 //   offset  1: in_chain              (u8; txid in main chain)
@@ -102,6 +102,9 @@ enum {
 //   offset 88: in_chain_height       (u64; valid iff in_chain — the F40 confirming-block
 //                                      height, read under the same lock scope as the
 //                                      membership fact so the pair cannot be racy)
+//   offset 96: bond_record_bonded_total (u64; valid iff bond_record_probed AND the probe
+//                                      kind was _UNBOND -- the debit arm's Phase-D
+//                                      predicate, because an exit preserves the row)
 //
 // Key-image conflicts travel beside the struct as a plain uint8_t array
 // (one SHEKYL_SUBMIT_KI_* entry per submitted key image, submission order).
@@ -224,6 +227,12 @@ typedef struct shekyl_submit_unbond_record_ffi {
     // served", which makes the release cooldown elapse for a record that has
     // been serving. Rust pins this byte against the record's holdings kind.
     uint8_t  last_served_scan;
+    // 1 = the gather REFUSED to run the scan because the debit-auth pin
+    // failed, so per_shard_last_served is empty-because-unread rather than
+    // empty-because-never-served. Rust must refuse rather than fold: an
+    // unread slice folds to "never served", which is the PERMISSIVE cooldown
+    // answer.
+    uint8_t  last_served_scan_skipped;
     const uint64_t* per_shard_last_served;
     size_t   per_shard_last_served_len;
 } shekyl_submit_unbond_record_ffi;
@@ -272,6 +281,18 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // cannot legitimately disagree, and the Rust shim refuses the pair if they
 // do rather than verifying an Unbond against half a record.
 //
+// An _UNBOND probe also requires bond_auth_pubkey (the bond slot's
+// pqc_auths key, from the same blob as the probe id). It gates the EXPENSIVE
+// half of the gather: the per-shard last-served scan is two LMDB seeks per
+// served shard, run while the pool and blockchain locks are held, and
+// without this gate any caller could force it on a known CompleteTree record
+// with an unsigned, unfunded transaction. The block path already performs
+// the cheap key pin before its cursor scans; this mirrors that ordering.
+//
+// It is a WORK gate, not a verdict. The same shared pin runs again Rust-side
+// and issues the actual refusal, so a divergence here can only cause less
+// work, never a different answer.
+//
 // An _UNBOND probe REQUIRES a non-NULL out_unbond -- INTERNAL_FAULT
 // otherwise. The debit battery cannot run on the presence bit alone
 // (UB3/UB5/UB7/UB9 all read the record's contents), so a dropped bundle is
@@ -293,6 +314,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     const uint8_t* reference_block,
     const uint8_t* bond_p_canonical_id,
     uint8_t bond_probe_kind,
+    const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
@@ -370,6 +392,7 @@ int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
     const uint8_t* reference_block,
     const uint8_t* bond_p_canonical_id,
     uint8_t bond_probe_kind,
+    const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,

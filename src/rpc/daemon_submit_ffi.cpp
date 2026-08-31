@@ -197,6 +197,7 @@ namespace {
 //
 // Returns false on a marshal fault (unknown holdings kind) -- never a verdict.
 bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
+  const std::vector<uint8_t>& auth_pubkey,
   shekyl_submit_unbond_facts_handle& handle)
 {
   shekyl::db::ArchivalBondValue record{};
@@ -216,11 +217,43 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
       << static_cast<unsigned>(record.holdings_kind));
     return false;
   }
+  handle.bond_spend_pk = record.bond_spend_pk;
+
+  // WORK GATE, cheap-first, mirroring the block path's ordering: the pin is a
+  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD with
+  // the pool and blockchain locks held. Without this an unsigned, unfunded
+  // transaction naming a known CompleteTree record would buy an attacker that
+  // scan on every submit.
+  //
+  // Not a verdict -- the same shared pin runs again Rust-side and issues the
+  // refusal. This can only cause less work, never a different answer. The
+  // skipped flag is what stops Rust folding an unread slice into "never
+  // served", which is the PERMISSIVE cooldown result.
+  // The shared predicate directly: `archival_debit_auth_pin` is file-local to
+  // blockchain.cpp, and re-spelling its two comparisons here is exactly what
+  // the single-source gate forbids.
+  const uint8_t pin_rc = shekyl_archival_debit_auth_pin(
+    record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
+    record.bond_spend_pk.size(),
+    auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
+    auth_pubkey.size());
+  if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+  {
+    handle.view.record.last_served_scan_skipped = 1;
+    handle.view.record.bonded_total_atomic = record.bonded_total_atomic;
+    handle.view.record.bad_interval_count = record.bad_intervals.size();
+    handle.view.record.bond_spend_pk =
+      handle.bond_spend_pk.empty() ? nullptr : handle.bond_spend_pk.data();
+    handle.view.record.bond_spend_pk_len = handle.bond_spend_pk.size();
+    handle.view.record.holdings_kind = record.holdings_kind;
+    handle.view.record.last_served_scan = scan;
+    return true;
+  }
+
   handle.per_shard_last_served =
     (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
       ? bc.get_db().archival_bond_all_last_served_epochs(p_id)
       : bc.get_db().archival_bond_last_served_epochs(p_id, record.held_shard_ids);
-  handle.bond_spend_pk = record.bond_spend_pk;
 
   shekyl_submit_unbond_record_ffi& out = handle.view.record;
   out.bonded_total_atomic = record.bonded_total_atomic;
@@ -365,6 +398,7 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
   uint8_t bond_probe_kind,
+  const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
@@ -438,7 +472,9 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND)
     {
       auto handle = std::make_unique<shekyl_submit_unbond_facts_handle>();
-      if (!fill_unbond_facts_locked(bc, bond_p_id, *handle))
+      const std::vector<uint8_t> auth_key(bond_auth_pubkey,
+        bond_auth_pubkey + bond_auth_pubkey_len);
+      if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, *handle))
         return SHEKYL_SUBMIT_INTERNAL_FAULT;
       *out_unbond = handle.release();
     }
@@ -845,6 +881,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
   uint8_t bond_probe_kind,
+  const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
@@ -857,8 +894,9 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   core& c = h->rpc->get_core();
   return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
     txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
-    bond_probe_kind, emission_p_canonical_id, emission_epochs,
-    n_emission_epochs, out_emission, out_unbond, out_facts, out_ki_conflicts);
+    bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len,
+    emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
+    out_unbond, out_facts, out_ki_conflicts);
 }
 
 int shekyl_submit_commit_tx(core_rpc_handle* h,
