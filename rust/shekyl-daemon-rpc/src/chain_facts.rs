@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
-use crate::core::CoreRpc;
+use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
 use crate::ffi;
 
 /// What the chain tip looks like right now, plus the one build fact
@@ -203,6 +203,39 @@ pub struct BlockFacts {
     pub tx_hashes: Vec<TxHash>,
 }
 
+/// The facts the p2p handlers consume (`sync_info`, `/get_net_stats`,
+/// `/get_peer_list`, `get_connections`).
+///
+/// Separate from [`ChainFacts`] because the two have no overlap and no shared
+/// lock domain: these read `m_p2p` and the global throttle, and none of them
+/// touches the blockchain. `sync_info` needs both and takes both, which makes
+/// the fact that it reads two unsynchronised sources visible at its
+/// signature rather than buried in a handler.
+///
+/// The values are the C++ objects' **raw** fields; every elapsed time and
+/// rate on the wire is derived from them in [`crate::methods`].
+pub trait P2pFacts: Send + Sync {
+    fn net_stats(&self) -> Result<NetStats, FactsFault>;
+    /// The live connections and the single instant they were read at.
+    fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault>;
+    /// The block-download queue and the stripe this node wants next.
+    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
+    /// The peerlist, white entries then gray. `public_only` selects a
+    /// different p2p call, not a filter over one result.
+    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
+}
+
+/// Throttle counters and the core's start time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetStats {
+    /// Unix seconds.
+    pub start_time: u64,
+    pub total_packets_in: u64,
+    pub total_bytes_in: u64,
+    pub total_packets_out: u64,
+    pub total_bytes_out: u64,
+}
+
 /// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
 /// [`CoreRpc`] handle. Both reads block briefly on the C++ side; the
 /// transport dispatches them via `spawn_blocking`.
@@ -243,6 +276,44 @@ fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
         major_version: pod.major_version,
         minor_version: pod.minor_version,
         orphan_status: pod.orphan_status != 0,
+    }
+}
+
+/// Production [`P2pFacts`] over the same live handle.
+pub struct FfiP2pFacts {
+    core: Arc<CoreRpc>,
+}
+
+impl FfiP2pFacts {
+    pub fn new(core: Arc<CoreRpc>) -> Self {
+        Self { core }
+    }
+}
+
+impl P2pFacts for FfiP2pFacts {
+    fn net_stats(&self) -> Result<NetStats, FactsFault> {
+        let pod = self.core.net_stats().map_err(FactsFault::from_code)?;
+        Ok(NetStats {
+            start_time: pod.start_time,
+            total_packets_in: pod.total_packets_in,
+            total_bytes_in: pod.total_bytes_in,
+            total_packets_out: pod.total_packets_out,
+            total_bytes_out: pod.total_bytes_out,
+        })
+    }
+
+    fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
+        self.core.connections().map_err(FactsFault::from_code)
+    }
+
+    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
+        self.core.sync_spans().map_err(FactsFault::from_code)
+    }
+
+    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault> {
+        self.core
+            .peer_list(public_only)
+            .map_err(FactsFault::from_code)
     }
 }
 

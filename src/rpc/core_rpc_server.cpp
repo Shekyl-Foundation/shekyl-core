@@ -219,7 +219,14 @@ namespace cryptonote
     uint64_t total_conn = restricted ? 0 : m_p2p.get_public_connections_count();
     res.outgoing_connections_count = restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
     res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
-    res.rpc_connections_count = restricted ? 0 : get_connections_count();
+    // Always zero, and the reason is not the restriction. The C++ server has
+    // not owned the RPC connections since the Axum cutover, so the accessor
+    // this read was a literal `return 0` with two identical arms — a dead
+    // conditional shaped like a live restriction gate. The Rust tracker fills
+    // this field over the top of whatever is written here
+    // (`handlers::json::fill_rpc_connections_count`). The literal goes when
+    // `/get_info` itself moves, in RK-5c.
+    res.rpc_connections_count = 0;
     res.white_peerlist_size = restricted ? 0 : m_p2p.get_public_white_peers_count();
     res.grey_peerlist_size = restricted ? 0 : m_p2p.get_public_gray_peers_count();
 
@@ -280,22 +287,6 @@ namespace cryptonote
 
     res.tx_prune_height = m_core.get_blockchain_storage().get_db().get_last_pruned_tx_data_height();
 
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_net_stats(const COMMAND_RPC_GET_NET_STATS::request& req, COMMAND_RPC_GET_NET_STATS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_net_stats);
-    res.start_time = (uint64_t)m_core.get_start_time();
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_in);
-      epee::net_utils::network_throttle_manager::get_global_throttle_in().get_stats(res.total_packets_in, res.total_bytes_in);
-    }
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_out);
-      epee::net_utils::network_throttle_manager::get_global_throttle_out().get_stats(res.total_packets_out, res.total_bytes_out);
-    }
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -459,53 +450,6 @@ namespace cryptonote
       res.status = "Error while storing blockchain";
       return true;
     }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_peer_list(const COMMAND_RPC_GET_PEER_LIST::request& req, COMMAND_RPC_GET_PEER_LIST::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_peer_list);
-    std::vector<nodetool::peerlist_entry> white_list;
-    std::vector<nodetool::peerlist_entry> gray_list;
-
-    if (req.public_only)
-    {
-      m_p2p.get_public_peerlist(gray_list, white_list);
-    }
-    else
-    {
-      m_p2p.get_peerlist(gray_list, white_list);
-    }
-
-    for (auto & entry : white_list)
-    {
-      if (!req.include_blocked && m_p2p.is_host_blocked(entry.adr, NULL))
-        continue;
-      if (entry.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-        res.white_list.emplace_back(entry.id, entry.adr.as<epee::net_utils::ipv4_network_address>().ip(),
-            entry.adr.as<epee::net_utils::ipv4_network_address>().port(), entry.last_seen, entry.pruning_seed);
-      else if (entry.adr.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-        res.white_list.emplace_back(entry.id, entry.adr.as<epee::net_utils::ipv6_network_address>().host_str(),
-            entry.adr.as<epee::net_utils::ipv6_network_address>().port(), entry.last_seen, entry.pruning_seed);
-      else
-        res.white_list.emplace_back(entry.id, entry.adr.str(), entry.last_seen, entry.pruning_seed);
-    }
-
-    for (auto & entry : gray_list)
-    {
-      if (!req.include_blocked && m_p2p.is_host_blocked(entry.adr, NULL))
-        continue;
-      if (entry.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-        res.gray_list.emplace_back(entry.id, entry.adr.as<epee::net_utils::ipv4_network_address>().ip(),
-            entry.adr.as<epee::net_utils::ipv4_network_address>().port(), entry.last_seen, entry.pruning_seed);
-      else if (entry.adr.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-        res.gray_list.emplace_back(entry.id, entry.adr.as<epee::net_utils::ipv6_network_address>().host_str(),
-            entry.adr.as<epee::net_utils::ipv6_network_address>().port(), entry.last_seen, entry.pruning_seed);
-      else
-        res.gray_list.emplace_back(entry.id, entry.adr.str(), entry.last_seen, entry.pruning_seed);
-    }
-
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1330,17 +1274,6 @@ namespace cryptonote
     return m_p2p.stem_tallies_json();
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_connections(const COMMAND_RPC_GET_CONNECTIONS::request& req, COMMAND_RPC_GET_CONNECTIONS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_connections);
-
-    res.connections = m_p2p.get_payload_object().get_connections();
-
-    res.status = CORE_RPC_STATUS_OK;
-
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_info_json(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
     if (!on_get_info(req, res, ctx) || res.status != CORE_RPC_STATUS_OK)
@@ -1796,31 +1729,6 @@ namespace cryptonote
       error_resp.message = res.status;
       return false;
     }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_sync_info(const COMMAND_RPC_SYNC_INFO::request& req, COMMAND_RPC_SYNC_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(sync_info);
-
-    crypto::hash top_hash;
-    m_core.get_blockchain_top(res.height, top_hash);
-    ++res.height; // turn top block height into blockchain height
-    res.target_height = m_p2p.get_payload_object().is_synchronized() ? 0 : m_core.get_target_blockchain_height();
-    res.next_needed_pruning_seed = m_p2p.get_payload_object().get_next_needed_pruning_stripe().second;
-
-    for (const auto &c: m_p2p.get_payload_object().get_connections())
-      res.peers.push_back({c});
-    const cryptonote::block_queue &block_queue = m_p2p.get_payload_object().get_block_queue();
-    block_queue.foreach([&](const cryptonote::block_queue::span &span) {
-      const std::string span_connection_id = epee::string_tools::pod_to_hex(span.connection_id);
-      uint32_t speed = (uint32_t)(100.0f * block_queue.get_speed(span.connection_id) + 0.5f);
-      res.spans.push_back({span.start_block_height, span.nblocks, span_connection_id, (uint32_t)(span.rate + 0.5f), speed, span.size, span.origin.str()});
-      return true;
-    });
-    res.overview = block_queue.get_overview(res.height);
 
     res.status = CORE_RPC_STATUS_OK;
     return true;

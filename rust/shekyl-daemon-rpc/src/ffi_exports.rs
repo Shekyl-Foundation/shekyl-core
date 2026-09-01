@@ -348,6 +348,53 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
     }
 }
 
+fn net_stats_facts_filled(seed: u64) -> crate::ffi::NetStatsFactsFfi {
+    crate::ffi::NetStatsFactsFfi {
+        start_time: submit_facts_field_value(seed, 0),
+        total_packets_in: submit_facts_field_value(seed, 1),
+        total_bytes_in: submit_facts_field_value(seed, 2),
+        total_packets_out: submit_facts_field_value(seed, 3),
+        total_bytes_out: submit_facts_field_value(seed, 4),
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_net_stats_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_net_stats_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_net_stats_facts_rust_fill(
+    out: *mut crate::ffi::NetStatsFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(net_stats_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_net_stats_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_net_stats_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_net_stats_facts_rust_check(
+    facts: *const crate::ffi::NetStatsFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == net_stats_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
 // Seed-derived per-field values are deliberately truncated into the narrow
 // fields — the point is to exercise every byte of the layout (F26).
 #[allow(clippy::cast_possible_truncation)]

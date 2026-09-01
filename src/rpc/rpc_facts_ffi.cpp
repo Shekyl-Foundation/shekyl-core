@@ -11,6 +11,7 @@
 #include <variant>
 #include <mutex>
 #include <vector>
+#include <limits>
 
 #include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
@@ -19,6 +20,11 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
+#include "common/pruning.h"
+#include "cryptonote_protocol/block_queue.h"
+#include "net/net_utils_base.h"
+#include "p2p/net_node.h"
+#include "string_tools.h"
 #include "rpc_tx_json.h"
 #include "misc_log_ex.h"
 #include "shekyl/shekyl_ffi.h"
@@ -45,6 +51,47 @@ namespace
 }
 
 namespace daemon_rpc_facts {
+
+// Body of `shekyl_rpc_chain_tip`; see the header for the scalar rule that
+// decides which of its facts are parameters. `synchronized` and
+// `target_height` are p2p / `core` scalars the adapter snapshots — neither is
+// reachable from a `Blockchain`, and neither is mockable, so they arrive as
+// values a test states outright.
+int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
+  uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept
+{
+  if (!out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    // `get_tail_id(height)` returns the hash and the height of the *same*
+    // block: one call, so the pair cannot straddle a block being connected.
+    // That is why this reads the tail rather than pairing
+    // `get_current_blockchain_height()` with a separate hash lookup, which is
+    // the race `block_hash_at` takes the lock to close.
+    uint64_t top_height = 0;
+    const crypto::hash top_hash = bc.get_tail_id(top_height);
+    out->chain_height = top_height + 1;
+    std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
+    out->target_height = target_height;
+    out->synchronized = synchronized ? 1 : 0;
+    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("chain tip facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("chain tip facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
 
 // Body of `shekyl_rpc_block_hash_at`; see the header for why it is separate.
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
@@ -426,6 +473,30 @@ int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
 // Owns every allocation behind one `blocks_by_height` answer. The entry
 // views point into these vectors, so they must not reallocate after the
 // views are built — hence the two-pass fill: blobs first, pointers second.
+// ── RK-5a owners ────────────────────────────────────────────────────────────
+//
+// Same two-pass discipline as `blocks_owner`: the strings are filled first
+// and the views taken afterwards, because a pointer taken during the fill
+// would dangle the moment a vector reallocated.
+struct connections_owner
+{
+  std::vector<std::string> address;
+  std::vector<std::string> host;
+  std::vector<shekyl_rpc_connection_facts> entries;
+};
+
+struct sync_spans_owner
+{
+  std::vector<std::string> remote_address;
+  std::vector<shekyl_rpc_sync_span_facts> entries;
+};
+
+struct peer_list_owner
+{
+  std::vector<std::string> host;
+  std::vector<shekyl_rpc_peer_facts> entries;
+};
+
 struct blocks_owner
 {
   std::vector<std::string> blocks;               // one per height
@@ -884,30 +955,316 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
-    std::memset(out, 0, sizeof(*out));
     cryptonote::core& core = h->rpc->get_core();
-    uint64_t top_height = 0;
-    crypto::hash top_hash = crypto::null_hash;
-    core.get_blockchain_top(top_height, top_hash);
-    out->chain_height = top_height + 1;
-    std::memcpy(out->top_hash, top_hash.data, sizeof(out->top_hash));
-    out->target_height = core.get_target_blockchain_height();
-    out->synchronized = h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
-    out->release_build = SHEKYL_VERSION_IS_RELEASE ? 1 : 0;
-    return SHEKYL_RPC_FACTS_OK;
+    // The two scalars, snapshotted here because neither is reachable from a
+    // `Blockchain` and neither can be doubled. `is_synchronized()` lives on
+    // the p2p payload object; `get_target_blockchain_height()` is a plain
+    // `core` member.
+    const uint8_t synchronized =
+      h->rpc->get_p2p().get_payload_object().is_synchronized() ? 1 : 0;
+    const uint64_t target_height = core.get_target_blockchain_height();
+    return daemon_rpc_facts::chain_tip(core.get_blockchain_storage(),
+      synchronized, target_height, out);
   }
   catch (const std::exception& e)
   {
     MERROR("chain tip facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
+    if (out)
+      std::memset(out, 0, sizeof(*out));
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
   catch (...)
   {
     MERROR("chain tip facts: unknown exception");
+    if (out)
+      std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
+// ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
+
+int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
+{
+  if (!h || !h->rpc || !out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    out->start_time = static_cast<uint64_t>(h->rpc->get_core().get_start_time());
+    {
+      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_in);
+      epee::net_utils::network_throttle_manager::get_global_throttle_in()
+        .get_stats(out->total_packets_in, out->total_bytes_in);
+    }
+    {
+      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_out);
+      epee::net_utils::network_throttle_manager::get_global_throttle_out()
+        .get_stats(out->total_packets_out, out->total_bytes_out);
+    }
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("net stats facts: exception: " << e.what());
     std::memset(out, 0, sizeof(*out));
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
+  catch (...)
+  {
+    MERROR("net stats facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
+int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
+  const shekyl_rpc_connection_facts** out, size_t* out_len, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc || !out_now || !out || !out_len || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  *out_now = 0;
+  std::unique_ptr<daemon_rpc_facts::connections_owner> owned;
+  try
+  {
+    owned.reset(new daemon_rpc_facts::connections_owner());
+    // **One clock read for the whole snapshot.** The C++ handler this
+    // replaces read `time(NULL)` twice per connection, so a connection's
+    // reported `live_time` and the divisor behind its own averages could come
+    // from different seconds. Every elapsed quantity is now derived by the
+    // caller against this one instant.
+    const uint64_t now = static_cast<uint64_t>(time(NULL));
+    // `for_each_connection` is the node server's, and it is private there —
+    // reachable only through `i_p2p_endpoint`, the interface `node_server`
+    // publicly implements and the payload handler itself calls it through.
+    // Upcasting to that interface is the sanctioned access, not a way around
+    // one: it is the same entry point `get_connections()` uses.
+    nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
+      h->rpc->get_p2p();
+    endpoint.for_each_connection(
+      [&](cryptonote::cryptonote_connection_context& ctx,
+          nodetool::peerid_type peer_id, uint32_t support_flags)
+    {
+      shekyl_rpc_connection_facts e;
+      std::memset(&e, 0, sizeof(e));
+      owned->address.push_back(ctx.m_remote_address.str());
+      owned->host.push_back(ctx.m_remote_address.host_str());
+      e.peer_id = peer_id;
+      std::memcpy(e.connection_id, ctx.m_connection_id.data, sizeof(e.connection_id));
+      e.started = static_cast<uint64_t>(ctx.m_started);
+      e.last_recv = static_cast<uint64_t>(ctx.m_last_recv);
+      e.last_send = static_cast<uint64_t>(ctx.m_last_send);
+      e.recv_count = ctx.m_recv_cnt;
+      e.send_count = ctx.m_send_cnt;
+      e.current_speed_down = ctx.m_current_speed_down;
+      e.current_speed_up = ctx.m_current_speed_up;
+      e.height = ctx.m_remote_blockchain_height;
+      e.support_flags = support_flags;
+      e.pruning_seed = ctx.m_pruning_seed;
+      e.port = ctx.m_remote_address.port();
+      e.state = static_cast<uint8_t>(ctx.m_state);
+      e.address_type = static_cast<uint8_t>(ctx.m_remote_address.get_type_id());
+      e.incoming = ctx.m_is_income ? 1 : 0;
+      e.localhost = ctx.m_remote_address.is_loopback() ? 1 : 0;
+      e.local_ip = ctx.m_remote_address.is_local() ? 1 : 0;
+      owned->entries.push_back(e);
+      return true;
+    });
+
+    for (size_t i = 0; i < owned->entries.size(); ++i)
+    {
+      owned->entries[i].address = owned->address[i].data();
+      owned->entries[i].address_len = owned->address[i].size();
+      owned->entries[i].host = owned->host[i].data();
+      owned->entries[i].host_len = owned->host[i].size();
+    }
+    *out_now = now;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("connections facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("connections facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  *out = owned->entries.empty() ? nullptr : owned->entries.data();
+  *out_len = owned->entries.size();
+  *out_owner = owned.release();
+  return SHEKYL_RPC_FACTS_OK;
+}
+
+void shekyl_rpc_connections_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::connections_owner*>(owner);
+}
+
+int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_stripe,
+  const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc || !out_next_needed_pruning_stripe || !out || !out_len || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  *out_next_needed_pruning_stripe = 0;
+  std::unique_ptr<daemon_rpc_facts::sync_spans_owner> owned;
+  uint32_t stripe = 0;
+  try
+  {
+    owned.reset(new daemon_rpc_facts::sync_spans_owner());
+    auto& payload = h->rpc->get_p2p().get_payload_object();
+    stripe = payload.get_next_needed_pruning_stripe().second;
+    const cryptonote::block_queue& queue = payload.get_block_queue();
+    queue.foreach([&](const cryptonote::block_queue::span& span)
+    {
+      shekyl_rpc_sync_span_facts e;
+      std::memset(&e, 0, sizeof(e));
+      owned->remote_address.push_back(span.origin.str());
+      e.start_block_height = span.start_block_height;
+      e.nblocks = span.nblocks;
+      e.size = span.size;
+      std::memcpy(e.connection_id, span.connection_id.data, sizeof(e.connection_id));
+      e.rate = span.rate;
+      e.speed_fraction = queue.get_speed(span.connection_id);
+      e.filled = span.blocks.empty() ? 0 : 1;
+      owned->entries.push_back(e);
+      return true;
+    });
+
+    for (size_t i = 0; i < owned->entries.size(); ++i)
+    {
+      owned->entries[i].remote_address = owned->remote_address[i].data();
+      owned->entries[i].remote_address_len = owned->remote_address[i].size();
+    }
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("sync spans facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("sync spans facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  *out_next_needed_pruning_stripe = stripe;
+  *out = owned->entries.empty() ? nullptr : owned->entries.data();
+  *out_len = owned->entries.size();
+  *out_owner = owned.release();
+  return SHEKYL_RPC_FACTS_OK;
+}
+
+void shekyl_rpc_sync_spans_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::sync_spans_owner*>(owner);
+}
+
+int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
+  const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner)
+{
+  if (out_owner)
+    *out_owner = nullptr;
+  if (!h || !h->rpc || !out || !out_len || !out_owner)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  *out = nullptr;
+  *out_len = 0;
+  std::unique_ptr<daemon_rpc_facts::peer_list_owner> owned;
+  try
+  {
+    owned.reset(new daemon_rpc_facts::peer_list_owner());
+    auto& p2p = h->rpc->get_p2p();
+    // Both accessors take (gray, white) in that order.
+    std::vector<nodetool::peerlist_entry> gray_list;
+    std::vector<nodetool::peerlist_entry> white_list;
+    if (public_only)
+      p2p.get_public_peerlist(gray_list, white_list);
+    else
+      p2p.get_peerlist(gray_list, white_list);
+
+    const auto append = [&](const std::vector<nodetool::peerlist_entry>& list, uint8_t white)
+    {
+      for (const nodetool::peerlist_entry& entry : list)
+      {
+        shekyl_rpc_peer_facts e;
+        std::memset(&e, 0, sizeof(e));
+        e.id = entry.id;
+        e.last_seen = static_cast<uint64_t>(entry.last_seen);
+        e.pruning_seed = entry.pruning_seed;
+        e.white = white;
+        // Unconditional: whether a blocked peer is reported is the request's
+        // policy, and the request lives in Rust now.
+        e.blocked = p2p.is_host_blocked(entry.adr, NULL) ? 1 : 0;
+        // The three arms differ in what `host` means; resolving them here is
+        // what leaves the caller with no address branch of its own.
+        if (entry.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+        {
+          const auto& v4 = entry.adr.as<epee::net_utils::ipv4_network_address>();
+          e.ip = v4.ip();
+          e.port = v4.port();
+          owned->host.push_back(epee::string_tools::get_ip_string_from_int32(v4.ip()));
+        }
+        else if (entry.adr.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
+        {
+          e.port = entry.adr.as<epee::net_utils::ipv6_network_address>().port();
+          owned->host.push_back(entry.adr.host_str());
+        }
+        else
+        {
+          owned->host.push_back(entry.adr.str());
+        }
+        owned->entries.push_back(e);
+      }
+    };
+    append(white_list, 1);
+    append(gray_list, 0);
+
+    for (size_t i = 0; i < owned->entries.size(); ++i)
+    {
+      owned->entries[i].host = owned->host[i].data();
+      owned->entries[i].host_len = owned->host[i].size();
+    }
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("peer list facts: exception: " << e.what());
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("peer list facts: unknown exception");
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  *out = owned->entries.empty() ? nullptr : owned->entries.data();
+  *out_len = owned->entries.size();
+  *out_owner = owned.release();
+  return SHEKYL_RPC_FACTS_OK;
+}
+
+void shekyl_rpc_peer_list_free(void* owner)
+{
+  delete static_cast<daemon_rpc_facts::peer_list_owner*>(owner);
+}
+
+void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
+{
+  if (out_white)
+    *out_white = P2P_LOCAL_WHITE_PEERLIST_LIMIT;
+  if (out_gray)
+    *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
+}
+
+uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height)
+{
+  return tools::get_pruning_seed(start_block_height,
+    std::numeric_limits<uint64_t>::max(), CRYPTONOTE_PRUNING_LOG_STRIPES);
 }
 
 int shekyl_rpc_hardforks(core_rpc_handle* h,
@@ -1077,6 +1434,27 @@ void shekyl_rpc_blocks_by_height_free(void* owner)
 void shekyl_rpc_block_free(void* owner)
 {
   delete static_cast<daemon_rpc_facts::block_payload_owner*>(owner);
+}
+
+void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  out->start_time = field_value(seed, 0);
+  out->total_packets_in = field_value(seed, 1);
+  out->total_bytes_in = field_value(seed, 2);
+  out->total_packets_out = field_value(seed, 3);
+  out->total_bytes_out = field_value(seed, 4);
+}
+
+int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed)
+{
+  if (!facts)
+    return -1;
+  shekyl_rpc_net_stats_facts expected;
+  shekyl_rpc_net_stats_facts_test_fill(&expected, seed);
+  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed)

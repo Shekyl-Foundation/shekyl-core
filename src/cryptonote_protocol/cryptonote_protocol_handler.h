@@ -110,7 +110,6 @@ namespace cryptonote
     t_core& get_core(){return m_core;}
     virtual bool is_synchronized() const final { return !no_sync() && m_synchronized; }
     void log_connections();
-    std::list<connection_info> get_connections();
     const block_queue &get_block_queue() const { return m_block_queue; }
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
