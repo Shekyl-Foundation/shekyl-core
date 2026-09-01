@@ -5542,6 +5542,7 @@ timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidat
     // silently medianed the way the inherited alt path medianed the whole
     // alt chain.
     MERROR("internal error: timestamp window holds " << window.size() << " > " << SHEKYL_DAA_MTP_WINDOW << " entries");
+    median_out = 0;
     return timestamp_rule_verdict::window_too_wide;
   }
 
@@ -5569,7 +5570,11 @@ timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidat
 bool Blockchain::check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  switch (shekyl_check_timestamp_rule(b.timestamp, timestamps, m_db->get_block_timestamp(0), (uint64_t)time(NULL), median_ts))
+  // The genesis timestamp is only consumed as the padding value for short
+  // windows (the first 11 blocks, or a near-genesis fork) — don't pay an
+  // LMDB read for it on the full-window hot path.
+  const uint64_t genesis_ts = timestamps.size() < SHEKYL_DAA_MTP_WINDOW ? m_db->get_block_timestamp(0) : 0;
+  switch (shekyl_check_timestamp_rule(b.timestamp, timestamps, genesis_ts, (uint64_t)time(NULL), median_ts))
   {
     case timestamp_rule_verdict::ok:
       return true;

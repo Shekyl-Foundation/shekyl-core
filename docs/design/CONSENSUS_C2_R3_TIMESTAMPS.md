@@ -282,10 +282,10 @@ rule symmetry.
 **Execution record (2026-09-01, this PR).** The plan below was executed as
 written; the rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
 (`blockchain.cpp:5528`, declared `blockchain.h` tail), consumed by the
-vector overload (`:5569`, now FTL-bearing and const-correct), the main-path
-window builder (`:5589`, carve-out deleted, genesis padding via the rule
+vector overload (`:5570`, now FTL-bearing and const-correct), the main-path
+window builder (`:5594`, carve-out deleted, genesis padding via the rule
 fn), the alt admission site (`:2317` newest-11 truncation + `:2322` call),
-and the template floor (`:1955–1957`, `median + 1`). **Red observed first,
+and the template floor (`:1957`, `median + 1`). **Red observed first,
 all four losing legs, each for its named reason** (candidate accepted by the
 inherited code — "block verification context check failed"):
 `gen_block_ts_at_median` (Q1 boundary), `gen_block_alt_ts_window_truncation`
@@ -310,7 +310,7 @@ height-0 block is rejected by `handle_alternative_block`'s existing
 init).
 
 1. **Shared boundary vectors first** (rule 30: vectors before
-   implementation): `docs/test_vectors/mtp_boundary_vectors.json` — cases
+   implementation): `docs/test_vectors/MTP_BOUNDARY_V1.json` — cases
    over a fixed 11-window: `median−1` / `median` (the `==` case) / `median+1`
    candidates with verdicts, an unsorted-window case (median is by sorted
    order), a padded-window case (Q2: fewer than 11 predecessors), and an
