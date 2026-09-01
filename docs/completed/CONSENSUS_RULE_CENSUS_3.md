@@ -154,7 +154,7 @@ that disposition; removed-rule records (MSW-6, the CLSAG/ring surface, the
 claim-era types) appear in §5/§6 as history, not rows. Reproducible counts:
 
 ```sh
-f=docs/design/CONSENSUS_RULE_CENSUS_3.md
+f=docs/completed/CONSENSUS_RULE_CENSUS_3.md
 grep -c '^| CEN-' "$f"                                                          # rows
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$5); print $5}' | sort | uniq -c  # C/P
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$6); print $6}' | sort | uniq -c  # buckets

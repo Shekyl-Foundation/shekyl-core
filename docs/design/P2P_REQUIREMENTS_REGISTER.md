@@ -16,8 +16,10 @@ Every source claim below was read at this sha; re-verify before drafting the
 brief if `dev` has moved.
 
 **Identifier family:** `PW-` (P2P wire), checked unique against the index's
-existing families (CW/VG/SH/CT-ACT/PC/RF/SO/CR/CB/F-D/…) — no collision.
-Register at birth (rule 94 §1) when this lands as a tracked doc.
+existing families (CW/VG/SH/CT-ACT/PC/RF/SO/CR/CB/F-D/…; `P-` is distinct
+under the alphabetic-prefix-until-digit test) — no collision. Registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the landing PR
+(rule 94 §1).
 
 **Scope boundary, ratified by prior work, verified this session:**
 `RPC_TRANSPORT_POSTURE.md` §2.1 (`:99-106`) — "P2P is not RPC... RPC is
@@ -41,7 +43,7 @@ justification, not RT-4's.
 | PW-5 | Static-static exchange has no direct KEM equivalent; the replacement (`skem` + key-confirmation message) costs a round trip. Directly relevant: RT-9-adjacent, operator-pinned patterns (KK/IK-family) rely on `ss`/`se`/`es`. | `2022539_PQC_Noise.pdf` §2.3 (translation recipe) | Scope the extra round-trip cost explicitly wherever a mutually-pinned pattern is used |
 | PW-6 | No standardized test-vector suite exists yet for PQNoise/hybrid patterns — NoisePQC++'s own authors generated their own deterministic vectors. | `2608.00954v1_Noise_PQC.pdf` §5.2.3 | **P2P-2 must budget minting Shekyl's own pinned hybrid-handshake KATs from scratch — no external oracle to lean on** |
 | PW-7 | Rust prior art exists (Clatter) but is narrower in scope (X25519-only classical side); worth reading for pattern-encoding decisions, not depending on (no-FFI discipline). | `2022539_PQC_Noise.pdf` §2.4.1 references | Informational |
-| PW-8 | No rekey/forward-secrecy schedule specified yet for long-lived operator-to-operator sessions (harvest-now-decrypt-later applies to session traffic, not just the handshake). | This session's analysis | Open — P2P-2 must state a rekey schedule, not just a handshake |
+| PW-8 | No rekey/forward-secrecy schedule specified yet for long-lived peer-to-peer sessions (harvest-now-decrypt-later applies to session traffic, not just the handshake; the §Scope boundary puts operator-to-operator sessions on the RPC side — this row governs the adversarial P2P wire). | This session's analysis | Open — P2P-2 must state a rekey schedule, not just a handshake |
 
 ---
 

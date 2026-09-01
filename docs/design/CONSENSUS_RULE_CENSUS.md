@@ -290,13 +290,13 @@ split.
 
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CEN-D1 | The block's PoW longhash must satisfy the difficulty target (`check_hash(pow, diff)` must pass); FFI failure rejects | 5818 (main) / 2347 (alt) | C | 1 | spec | PoW-gate design: [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md); difficulty values: [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) | RC-24 ⇒ split across this row and CEN-D1b: the *gate* is Shekyl design; the *comparison form* is D1b |
+| CEN-D1 | The block's PoW longhash must satisfy the difficulty target (`check_hash(pow, diff)` must pass); FFI failure rejects. **Skipped** when CEN-E3's compiled-hash `fast_check` holds; the alt path runs it at alt difficulty (CEN-D5) | 5818 (main) / 2347 (alt) | C | 1 | spec | PoW-gate design: [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md); difficulty values: [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) | RC-24 ⇒ split across this row and CEN-D1b: the *gate* is Shekyl design; the *comparison form* is D1b |
 | CEN-D1b | The acceptance comparison is `hash · difficulty < 2^256` with the 32-byte hash read as a 256-bit little-endian integer — implemented in Rust (`shekyl_difficulty_check_hash`; the inherited 64/128-bit fast/slow split was deleted in the port, proven equivalent over a differential corpus) | src/cryptonote_basic/difficulty.cpp:52–86 (marshaling wrapper + contract comment); rust/shekyl-difficulty (`check_hash`); vectors rust/shekyl-difficulty/tests/check_hash_vectors.rs | C | 4 | KAT-port | vectors + the port record (difficulty.cpp:52–58 comment) | Split from CEN-D1 in C1 (RC-24's bucket-2 reading vs CEN's §5 residue note). The comparison is sealed by vectors, not ratified: whether 2^256-target semantics are right-for-Shekyl was never separately ruled |
 | CEN-D2 | The longhash function is RandomX v2 via Rust FFI unconditionally (height/version ignored); on FFI failure the hash is forced to `0xff…` so it can never meet a target (fail closed; alt path pre-seeds `0xff…`) | cryptonote_tx_utils.cpp:748/:766; src/crypto/pow_registry.cpp:6; fail-closed :784–794; alt pre-seed blockchain.cpp:2325–2326 | C | 1 | spec | [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) ("C JIT for mining, Rust interpreter for verification — permanent") | RC-22 (hash half), RC-23 ⇒ merged |
 | CEN-D3 | RandomX seed block: epoch 2048 with lag 64 — `seedheight(h) = 0 for h ≤ 2112, else (h−65) & ~2047`; seed hash is the block id at that height (alt path: resolved along the alt chain when the seed height is on it). The `SEEDHASH_EPOCH_*` env override is refused on public networks (fakechain-only lever, init-time) | rust/shekyl-pow-randomx/src/seed_epoch.rs:109; blockchain.cpp:6493, 2327–2345; env refusal 640–643 | C | 1 | spec | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823 (seed-epoch schedule spec — note it lives here, not in `RANDOMX_V2_PLAN.md` or `SPEC_ANCHORS.md`); [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) :171, :201 (non-tunable) | RC-22 (seed half), RC-25, RC-27 ⇒ merged |
 | CEN-D4 | Next-block difficulty is LWMA-1 over the last N+1 (=91) blocks (Rust `lwma1_next_difficulty`); below N blocks of history the genesis difficulty constant (100) applies; target block time T = `SHEKYL_DAA_TARGET_SECONDS` (120) | 1082–1175; rust/shekyl-difficulty/src/lwma1.rs | C | 1 | spec | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) (ratified 2026-05-18); `config/consensus_constants.json` `daa_*` | RC-19, RC-20, RC-21 ⇒ merged. Bias 99/200, clamp 6, min-L 1/20 are deliberate bare literals per the Round-3 disposition |
-| CEN-D5 | Alt-chain difficulty: the same LWMA-1 fed by a window stitched from main-chain prefix + alt-chain suffix, window ending at `bei.height−1`; `bei.height == 0` asserts | 1544–1638 | C | 4 | none | — | RC-26 ⇒ merged with a recorded judgment disagreement: RC read this bucket 1 via `DAA_LWMA1.md`; the spec *names* the alt consumer and warns on its off-by-one (:1765–1767) but does not ratify the stitch construction itself — window-stitching shape stays inherited/unexamined; the LWMA core is CEN-D4's |
-| CEN-D6 | Difficulty of zero aborts block acceptance (overflow-guard assert) | 5766 / 2324 | C | 4 | none | — | |
+| CEN-D5 | Alt-chain difficulty: the same LWMA-1 fed by a window stitched from main-chain prefix + alt-chain suffix, window ending at `bei.height−1`; a height-0 alt candidate sentinel-returns difficulty 0 (`CHECK_AND_ASSERT_MES` log-and-return at 1559–1563), which CEN-D6's zero guard then rejects | 1544–1638 | C | 4 | none | — | RC-26 ⇒ merged with a recorded judgment disagreement: RC read this bucket 1 via `DAA_LWMA1.md`; the spec *names* the alt consumer and warns on its off-by-one (:1765–1767) but does not ratify the stitch construction itself — window-stitching shape stays inherited/unexamined; the LWMA core is CEN-D4's |
+| CEN-D6 | A zero next-block difficulty **rejects the block** — `CHECK_AND_ASSERT_MES` is log-and-return-false (`misc_log_ex.h:396`), not a process abort; the value can only be 0 via a difficulty-function sentinel return (e.g. CEN-D5's height-0 arm) | 5766 / 2324 | C | 4 | none | — | Both walks called this an "assert"; corrected against the macro in the C1 review round (§7.14) |
 | CEN-D7 | `--fixed-difficulty` overrides the DAA (regtest lever; height 0 forced to 1) — a test-only carve-out live in the production binary | 1084–1087, 1546–1548 | C | 4 | none | — | RC-28 ⇒ merged. §10 R9 (test-seam design) |
 
 ### 4.E Checkpoints and fast-sync trust
@@ -458,7 +458,7 @@ Reward emission (per tx; whole-tx shape CEN-H22):
 
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CEN-K1 | An alt block claiming height 0 is rejected | 2222–2228; difficulty assert 1561 | C | 4 | none | — | RC-134 ⇒ merged with a recorded judgment disagreement: RC read this bucket 1 (rule 60 + comment :1553–1558); no record *names* alternative-genesis rejection, so it stays 4 under the §2 bar |
+| CEN-K1 | An alt block claiming height 0 is rejected | 2222–2228; difficulty-side sentinel return 1559–1563 (CEN-D5/D6) | C | 4 | none | — | RC-134 ⇒ merged with a recorded judgment disagreement: RC read this bucket 1 (rule 60 + comment :1553–1558); no record *names* alternative-genesis rejection, so it stays 4 under the §2 bar |
 | CEN-K2 | Alt-chain linkage: the stored alt chain must connect to the main chain at the claimed height with matching hashes (asserted while rebuilding) | 2153–2205 | C | 4 | none | — | |
 | CEN-K3 | An alt block already stored as an alt block is rejected | 2461; DB belt `MDB_NODUPDATA` src/blockchain_db/lmdb/db_lmdb.cpp:4736–4740 | C | 4 | none | — | RC-148 ⇒ merged (DB belt site added) |
 | CEN-K4 | Alt blocks are accepted into storage after: version (CEN-B1 at ideal-version-for-height), attestation (CEN-B4), timestamp vs alt-window median (CEN-C2), checkpoint, PoW at alt difficulty (CEN-D1/D5), and **prevalidate**-only miner-tx checks; `validate_miner_transaction`, `check_tx_inputs` and the curve-root check are deferred to promotion | 2214–2509 | C | 4 | none | — | the deferral is the reorg path's central unexamined design decision. §3.5 table; §10 R1 |
@@ -699,6 +699,16 @@ input, not fixes.
     (CEN-B4); `FCMP_PLUS_PLUS.md` §7's three drifts — header-vs-table
     root read (CEN-I12), the un-evidenced key-image y-normalization step
     (open question, §3.4), the retired staked-maturity arm (CEN-L12).
+14. **"Assert" language on the difficulty guards corrected against the
+    macro** (PR-586 review round). `CHECK_AND_ASSERT_MES` is
+    log-and-return-false (`contrib/epee/include/misc_log_ex.h:396`): the
+    zero-difficulty guards at 5766/2324 **reject the block**, and the
+    height-0 alt-difficulty arm at 1559–1563 **sentinel-returns
+    difficulty 0** into that guard — no process abort exists on this
+    path (the :5763 FIXME's "can also assert" is the same loose usage).
+    CEN-D5/D6 and CEN-K1's site note were reworded; CEN-D1 gained the
+    CEN-E3 fast-path cross-reference. Behavioral content of the rows is
+    unchanged.
 
 ---
 
