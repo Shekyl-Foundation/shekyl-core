@@ -273,7 +273,20 @@ rather than *identification*.
 that lane lands.** This is consistent with what is already in the tree: the
 Q12-D6a ruling records that a node "routes clearnet, which exposes its IP as a
 relay source", and rejects reading (a) precisely because "the operator who
-configured Tor to avoid IP exposure still gets it."
+configured Tor to avoid IP exposure still gets it.
+
+**That half of the ruling is a product commitment, and it binds a lane this
+round does not own.** "Installed default" is a UX obligation, not just a
+routing preference: under
+[`81-no-protocol-knowledge`](../../.cursor/rules/81-no-protocol-knowledge.mdc)
+a user must not need to know what Tor *is* to get the property, and under
+[`80-usability`](../../.cursor/rules/80-usability.mdc) the default is what most
+users will actually run. It reaches the **Tor / P-transport lane** as
+**ratified ground for its next brief** — bundled installation, default-on, and
+the failure modes that follow when the bundled Tor cannot start
+([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)) are that
+lane's to specify, not P2P-2's to design. Recorded here **so it is inherited
+rather than rediscovered**; see §6's fences."
 
 **What this closes and what it does not.** It closes (iii) — clearnet DPI
 resistance is **out of scope for anonymity**, because it is unachievable while
@@ -563,6 +576,10 @@ The umbrella chat reviews the round's output before it goes to ratification.
   `COVER_TRAFFIC_RESTORATION.md` and `shekyl-relay-privacy` own it. The
   wire-visible consequences (2002's `_` padding and `dandelionpp_fluff`,
   fragmentation sizing) are in scope; the cadence is not.
+- **The Tor lane's UX is out, but its ground is now fixed.** Rick's ruling
+  (§1.4(iii)) makes Tor the recommended transport and the installed default.
+  Bundling, default-on and the cannot-start failure modes belong to the
+  Tor / P-transport lane; P2P-2 neither designs them nor re-opens them.
 - **No implementation.** P2P-3.
 
 ---
