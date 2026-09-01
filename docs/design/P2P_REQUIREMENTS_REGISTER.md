@@ -4,7 +4,7 @@
 `drop_connections` sites and §12.10's framing independently confirmed),
 ready to land as a tracked doc. Four deltas from that review are folded in
 below (PW-3 correction, PW-22 rewrite, PW-27, PW-28). Sequencing ruling:
-this lands first as its own docs PR with `PW-` registered in the index at
+this lands first with `PW-` registered in the index at
 birth (rule 94 §1); P2P-1 (the wire census) is the next artifact and absorbs
 §7's open tasks as census work rather than a separate errand. This is not
 the P2P-2 dispatch brief; it is the durable input the brief gets drafted
