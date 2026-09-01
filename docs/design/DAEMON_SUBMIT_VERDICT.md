@@ -1413,6 +1413,7 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
+| UB0 | **Possession pre-gate (submit-only, no consensus twin):** the bond slot's `pqc_auths` signature verifies against the key the slot presents | `verify_debit_slot_possession` | **A′ — runs BEFORE the Phase-B gather**, which is the whole point of it; `Malformed`. Facts-free (auth blob + payload hash), so it is legal ahead of the snapshot. Not a consensus rule: K13 already verifies this slot with every other one, and the block path has no submit surface to protect. See the work-ordering note below |
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `:4890-4897` | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
 | UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `:4901-4902` | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
 | UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin`, `:4906-4907` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
@@ -1422,6 +1423,26 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 | UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `:4923` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
 | UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `:4926` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
 | UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `:4928-4948` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
+
+**Why UB0 exists, and why it is not redundant with UB3.** The gather that
+produces UB2/UB4's facts runs a per-shard last-served scan — up to
+`2 * MAX_HOLDINGS_SHARDS` (8192) LMDB seeks — with the pool and blockchain
+locks held. The C++ gather runs UB3's pin *before* that scan as a work gate,
+but that pin compares two **public** values: `bond_spend_pk` rides the
+JoinMarket post on the wire, so anyone who syncs the chain can read the
+record's committed key, present it, sign with garbage, and buy the scan on
+every submit. K13 does refuse the signature — after the scan has run.
+
+UB0 supplies the missing half. The two compose and neither subsumes the other:
+UB0 proves possession of the **presented** key, UB3 proves the presented key is
+the **record's**. A caller who holds some other key legitimately still buys no
+scan (UB3 refuses); a caller presenting the record's public key without its
+private half never reaches the gather (UB0 refuses). Only the holder of the
+cold `bond_spend_pk` — the party actually entitled to exit — reaches the scan.
+
+It also narrows an oracle: UB0 runs before **any** record read, so submit
+latency no longer tells an unauthenticated caller whether a bond record exists.
+
 
 **The exit does not remove the row, so UB2 is not BP3 with the sign flipped.**
 BP3 wants *absence*, and a record appearing during Phase C is a claim-slot

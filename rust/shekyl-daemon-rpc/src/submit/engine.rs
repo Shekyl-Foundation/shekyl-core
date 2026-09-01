@@ -21,6 +21,7 @@ use crate::submit::facts::{
 };
 use crate::submit::fee::fee_meets_floor;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
+use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
 
 /// An internal fault — **never a verdict** (§3.4 / §4.2). The transport
@@ -165,6 +166,32 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             }
         };
 
+        // ── The debit arm's possession pre-gate, before any lock ───────
+        // §8.7.1.1's gather runs a per-shard last-served scan — up to
+        // 2 * MAX_HOLDINGS_SHARDS (8192) LMDB seeks — with the pool and
+        // blockchain locks held. The gather's own cheap pin compares the
+        // presented authorizer to the record's committed `bond_spend_pk`,
+        // and BOTH of those are public values (the key rides the JoinMarket
+        // post on the wire), so that pin authenticates nobody on its own:
+        // copy the key off the chain, sign with garbage, buy the scan.
+        //
+        // Proof of possession is the missing half, and it is facts-free, so
+        // it belongs here — ahead of the snapshot rather than at K13, which
+        // runs after the gather has already done the work. Debit arm only:
+        // the credit arm triggers no scan, so gating it would spend a hybrid
+        // verify to protect nothing.
+        if parsed.bond_post_is_unbond() {
+            if let Err(failure) = verify_debit_slot_possession(&parsed) {
+                tracing::debug!(
+                    "submit rejected: unbond bond-post slot failed the possession \
+                     pre-gate (no fact gather performed)"
+                );
+                return Ok(SubmitVerdict::Rejected {
+                    cause: failure.into(),
+                });
+            }
+        }
+
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
         // A bond-post additionally asks an archival-bond question, keyed on
         // the vin's claimed p_canonical_id (BP2 pins the claim to the pubkey
@@ -213,7 +240,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             )
             .map_err(|_| EngineFault::SnapshotFault)?;
 
-        // Early return on identity only. In-chain outranks in-pool (a
+        // Early return on identity only -- with one exception above it, the
+        // debit arm's possession pre-gate, which refuses BEFORE this point
+        // and therefore before the snapshot exists. That ordering is the
+        // point of the gate (no lock-held scan for an unauthenticated
+        // caller), and its visible cost is that a malformed-signature Unbond
+        // whose txid collides with a pooled one now reads Rejected{Malformed}
+        // rather than AlreadyInPool. That is the more accurate answer for
+        // bytes that are in fact malformed, and it discloses less.
+        // In-chain outranks in-pool (a
         // just-mined tx can transiently be both; "settled" is the more
         // useful truth). A snapshot key-image hit is a re-check input,
         // never a verdict — emitting DoubleSpendConflict here would

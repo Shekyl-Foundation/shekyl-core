@@ -66,7 +66,22 @@ fi
 # the whole pipeline non-zero -- i.e. every required call would read as ABSENT
 # and the gate would fail closed for the wrong reason (rule 46: a gate verdict
 # never travels through a pipe). Observed on the first run of this arm.
-code_only() { sed 's://.*::' "$1"; }
+#
+# BLOCK comments are stripped too, and that is not pedantry: `/* ... */` around
+# a chunk of code is the ordinary way a C++ maintainer disables it while
+# debugging. Stripping only `//` left the disabled call's text in the body, so
+# `require_call` still found it and the gate certified an arm that no longer
+# authorized anything. Block first, then line: a `//` line containing an
+# unterminated `/*` has no closer, so the non-greedy block pass leaves it for
+# the line pass.
+#
+# HONEST LIMIT: this is a stripper, not a lexer. A `/*` or `//` inside a STRING
+# LITERAL is treated as a comment opener, so a literal containing one can hide
+# following text on that line. The direction of that failure is a spurious RED
+# (a required call reads as absent), never a silent pass, and no such literal
+# exists on these paths today. The clang-AST reopening criterion below covers
+# this too.
+code_only() { python3 "$(dirname "$0")/strip_c_comments.py" "$1"; }
 
 require_call() {
   local file="$1" needle="$2" label="$3" body hits
@@ -139,8 +154,10 @@ fi
 # an arm dropping the shared pin entirely. Structural enforcement would need
 # a clang-based check over the AST; that is the reopening criterion (rule 21)
 # if a split-statement copy ever lands.
-statements=$(rg --no-line-number --no-heading '' src/ -g '*.cpp' -g '*.h' \
-              | sed 's://.*::' \
+# Same stripper as the call-site arms: a re-implementation parked inside a
+# block comment is not a live copy, and matching it would be a spurious red.
+statements=$(rg --files src/ -g '*.cpp' -g '*.h' \
+              | while IFS= read -r f; do code_only "$f"; done \
               | tr '\n' ' ' \
               | sed 's:;:;\n:g')
 hits=$(printf '%s\n' "$statements" \

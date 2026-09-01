@@ -38,13 +38,20 @@
 //! remove the requirement. The authorizer now rides the surface-A
 //! `pqc_auths` slot, and this pin is what ties that slot to the record.
 //!
-//! **One copy, two callers.** The C++ block path calls this over FFI
-//! (`shekyl_archival_debit_auth_pin`, replacing the former
-//! `archival_debit_auth_pin` helper in `blockchain.cpp`) and the Rust
-//! submit battery calls it natively
-//! (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3). A second implementation
-//! of this check is precisely the edit that must never land: the two
-//! copies would drift on the one predicate that has no recovery.
+//! **One implementation.** C++ reaches it over FFI as
+//! `shekyl_archival_debit_auth_pin` (replacing the former
+//! `archival_debit_auth_pin` helper in `blockchain.cpp`); Rust calls it
+//! natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3). A second
+//! implementation is precisely the edit that must never land: two copies
+//! would drift on the one predicate that has no recovery.
+//!
+//! The authoritative list of call sites is
+//! `scripts/ci/check_debit_auth_single_source.sh`, which asserts each one
+//! by name in CI. It is named here rather than restated because a count in
+//! prose is a defect generator: an earlier revision of this paragraph said
+//! "two callers" and was stale within its own pull request — the submit
+//! gather's work gate had become a third C++ caller, and the gate the
+//! sentence was describing already required it.
 
 use thiserror::Error;
 

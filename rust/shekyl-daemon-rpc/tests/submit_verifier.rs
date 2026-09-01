@@ -1347,6 +1347,11 @@ struct UnbondFixture {
     bond_spend_pk: Vec<u8>,
     /// `P`'s identity key — the key a compromised serving host has.
     identity_pk: Vec<u8>,
+    /// The key the transaction actually PRESENTS in its bond `pqc_auths`
+    /// slot. Separate from the signing key on purpose: the forged-signature
+    /// variant presents the record's key while signing with another, which
+    /// is the whole shape of the pre-gate's attack.
+    slot_pk: Vec<u8>,
     /// The bonded total this exit debits.
     record_bonded_total: u64,
 }
@@ -1364,6 +1369,11 @@ fn unbond_fixture() -> &'static UnbondFixture {
 enum UnbondAuthKey {
     BondSpend,
     Identity,
+    /// The DoS shape: present the record's committed `bond_spend_pk` — a
+    /// PUBLIC value, readable off-chain by anyone who syncs — but sign with
+    /// a key the attacker actually holds. The gather's cheap pin compares
+    /// the two public keys and passes; only a signature check refuses it.
+    BondSpendKeyForgedSignature,
 }
 
 /// The settlement epochs the fixture's facts sit in. Chosen so the cooldown
@@ -1532,7 +1542,11 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     .expect("sign the unbond transaction");
 
     let slot_pk = match auth_key {
-        UnbondAuthKey::BondSpend => bond_spend_pk.clone(),
+        // The forged variant PRESENTS the record's key — that is what makes
+        // the gather's public-key pin pass it.
+        UnbondAuthKey::BondSpend | UnbondAuthKey::BondSpendKeyForgedSignature => {
+            bond_spend_pk.clone()
+        }
         UnbondAuthKey::Identity => identity_pk.clone(),
     };
     let mut wire_input = WireEncodeInput {
@@ -1570,7 +1584,13 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
         UnbondAuthKey::BondSpend => &p_keys.bond_spend_sk,
-        UnbondAuthKey::Identity => &p_keys.hybrid_sign_sk,
+        // `Identity` presents this key and signs with it — a VALID signature
+        // by the wrong signer. The forged variant presents `bond_spend_pk`
+        // and signs with this one, so its signature cannot verify against the
+        // key it presents. Same signing key, opposite propositions.
+        UnbondAuthKey::Identity | UnbondAuthKey::BondSpendKeyForgedSignature => {
+            &p_keys.hybrid_sign_sk
+        }
     };
     let bond_sig = HybridEd25519MlDsa
         .sign(
@@ -1584,7 +1604,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),
-        public_key: slot_pk,
+        public_key: slot_pk.clone(),
     });
     wire_input.pqc_auths = pqc_auths;
 
@@ -1606,6 +1626,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         parsed,
         bond_spend_pk,
         identity_pk,
+        slot_pk,
         record_bonded_total,
     }
 }
@@ -1910,6 +1931,94 @@ fn the_engine_asks_the_debit_arms_question_for_an_unbond() {
         snapshots[0].bond_probe_is_unbond,
         "an Unbond must ask the debit arm's question (§8.7.1.1 contents), \
          not JoinMarket's presence bit"
+    );
+}
+
+#[test]
+fn a_forged_debit_signature_never_reaches_the_fact_gather() {
+    // The attack, built rather than described. `bond_spend_pk` is PUBLIC —
+    // it rides the JoinMarket post on the wire — so an attacker presents the
+    // record's own key, which is exactly what the gather's cheap pin compares
+    // against, and signs with a key they actually hold. The pin sees two
+    // equal public values and passes.
+    //
+    // What that bought, before the possession pre-gate: the per-shard
+    // last-served scan, up to 2 * MAX_HOLDINGS_SHARDS (8192) LMDB seeks with
+    // the pool and blockchain locks held, on every submit, from an
+    // unauthenticated caller.
+    //
+    // THE ASSERTION IS THE ABSENCE OF THE GATHER, not the verdict. The
+    // verdict was already Rejected{Malformed} before the fix — K13 caught the
+    // signature, but only after the scan had run. A verdict assertion here is
+    // green on the broken engine, which is precisely the shape of test that
+    // let this defect through review twice.
+    let forged = build_unbond_fixture(UnbondAuthKey::BondSpendKeyForgedSignature);
+    assert_eq!(
+        forged.slot_pk, forged.bond_spend_pk,
+        "the attack must PRESENT the record's committed key — if it presented \
+         some other key the gather's pin would refuse it and this test would \
+         pass without exercising the pre-gate at all"
+    );
+    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&forged.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(
+        verdict,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::Malformed
+        },
+        "a bond slot whose signature does not verify is malformed"
+    );
+    assert_eq!(
+        shim.snapshot_count(),
+        0,
+        "the possession pre-gate must refuse BEFORE the fact gather: no \
+         snapshot means no lock-held per-shard scan for an unauthenticated \
+         caller"
+    );
+    assert_eq!(
+        shim.commit_count(),
+        0,
+        "a refused submission commits nothing"
+    );
+}
+
+#[test]
+fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
+    // The pre-gate's OTHER direction, and the reason it is not simply a
+    // second copy of UB3. This Unbond is *validly signed* — by P's identity
+    // key, the key a compromised serving host holds — so possession holds and
+    // the engine must proceed to the gather. UB3 is what refuses it, on the
+    // ground that the presented key is not the record's committed one.
+    //
+    // If the pre-gate ever grew a key-identity check it would refuse here,
+    // this assertion would go red, and the two checks would have collapsed
+    // into one — leaving nothing that distinguishes "wrong signature" from
+    // "wrong signer" in the operator log (rule 82).
+    let forged = build_unbond_fixture(UnbondAuthKey::Identity);
+    assert_ne!(
+        forged.slot_pk, forged.bond_spend_pk,
+        "this arm presents a DIFFERENT key from the record's"
+    );
+    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&forged.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(
+        verdict,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::Malformed
+        },
+        "UB3 refuses an identity-key debit"
+    );
+    assert_eq!(
+        shim.snapshot_count(),
+        1,
+        "possession held, so the pre-gate must NOT have refused: the refusal \
+         is UB3's, downstream of the gather"
     );
 }
 

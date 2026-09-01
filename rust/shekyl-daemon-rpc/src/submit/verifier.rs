@@ -1004,63 +1004,141 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
         return Err(VerifyFailure::Malformed);
     }
     for (auth, payload_hash) in pqc_auths.iter().zip(&payload_hashes) {
-        if auth.auth_version != 1 || auth.flags != 0 {
-            return Err(VerifyFailure::Malformed);
-        }
-        if auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG {
-            return Err(VerifyFailure::Malformed);
-        }
-        if auth.hybrid_public_key.is_empty() {
-            return Err(VerifyFailure::Malformed);
-        }
-        match auth.scheme_id {
-            PQC_SCHEME_SINGLE => {
-                if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
-                    return Err(VerifyFailure::Malformed);
-                }
-                let Ok(public_key) = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
-                else {
-                    return Err(VerifyFailure::Malformed);
-                };
-                let Ok(signature) = HybridSignature::from_canonical_bytes(&auth.hybrid_signature)
-                else {
-                    return Err(VerifyFailure::Malformed);
-                };
-                if HybridEd25519MlDsa
-                    .verify(
-                        &public_key,
-                        shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                        payload_hash,
-                        &signature,
-                    )
-                    .is_err()
-                {
-                    return Err(VerifyFailure::Malformed);
-                }
-            }
-            PQC_SCHEME_MULTISIG => {
-                if auth.hybrid_public_key.len() < MULTISIG_KEY_HEADER_LEN
-                    || auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB
-                {
-                    return Err(VerifyFailure::Malformed);
-                }
-                // Group-id binding no longer exists (Option E′ deleted
-                // `group_id`; identity is the address fingerprint). This is
-                // the single `verify_multisig` entry point.
-                if verify_multisig(
-                    auth.scheme_id,
-                    &auth.hybrid_public_key,
-                    &auth.hybrid_signature,
-                    payload_hash,
-                )
-                .is_err()
-                {
-                    return Err(VerifyFailure::Malformed);
-                }
-            }
-            // Excluded by the closed-set check above.
-            _ => return Err(VerifyFailure::Malformed),
-        }
+        verify_pqc_auth_slot(auth, payload_hash)?;
     }
     Ok(())
+}
+
+/// One `pqc_auths` slot, verified in isolation: version pin, zero flags,
+/// known scheme id, per-scheme key-blob bounds, then the hybrid
+/// Ed25519+ML-DSA or multisig verification over that input's
+/// signing-preimage hash.
+///
+/// Split out of [`verify_pqc_auths`] so the debit arm's **possession
+/// pre-gate** ([`verify_debit_slot_possession`]) and K13 proper run the
+/// *same* verification rather than a pair free to drift. The pre-gate
+/// exists to keep an unauthenticated caller out of the §8.7.1.1 gather's
+/// lock-held per-shard scan; a slot the pre-gate accepted and K13 later
+/// rejected would hand back exactly the work the gate denies.
+///
+/// **Facts-free by construction** — every operand is the auth blob and the
+/// payload hash, neither of which comes from the snapshot. That is what
+/// makes it legal to run *before* the fact gather, and it is the property
+/// to preserve: a daemon fact reaching this function would put a DB read
+/// back in front of the authorization it is ordered to follow.
+fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), VerifyFailure> {
+    if auth.auth_version != 1 || auth.flags != 0 {
+        return Err(VerifyFailure::Malformed);
+    }
+    if auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG {
+        return Err(VerifyFailure::Malformed);
+    }
+    if auth.hybrid_public_key.is_empty() {
+        return Err(VerifyFailure::Malformed);
+    }
+    match auth.scheme_id {
+        PQC_SCHEME_SINGLE => {
+            if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
+                return Err(VerifyFailure::Malformed);
+            }
+            let Ok(public_key) = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
+            else {
+                return Err(VerifyFailure::Malformed);
+            };
+            let Ok(signature) = HybridSignature::from_canonical_bytes(&auth.hybrid_signature)
+            else {
+                return Err(VerifyFailure::Malformed);
+            };
+            if HybridEd25519MlDsa
+                .verify(
+                    &public_key,
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                    payload_hash,
+                    &signature,
+                )
+                .is_err()
+            {
+                return Err(VerifyFailure::Malformed);
+            }
+        }
+        PQC_SCHEME_MULTISIG => {
+            if auth.hybrid_public_key.len() < MULTISIG_KEY_HEADER_LEN
+                || auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB
+            {
+                return Err(VerifyFailure::Malformed);
+            }
+            // Group-id binding no longer exists (Option E′ deleted
+            // `group_id`; identity is the address fingerprint). This is
+            // the single `verify_multisig` entry point.
+            if verify_multisig(
+                auth.scheme_id,
+                &auth.hybrid_public_key,
+                &auth.hybrid_signature,
+                payload_hash,
+            )
+            .is_err()
+            {
+                return Err(VerifyFailure::Malformed);
+            }
+        }
+        // Excluded by the closed-set check above.
+        _ => return Err(VerifyFailure::Malformed),
+    }
+    Ok(())
+}
+
+/// The debit arm's **possession pre-gate**: prove the submitter holds the
+/// private key for the bond slot's presented authorizer, *before* the
+/// §8.7.1.1 fact gather takes the pool→blockchain locks.
+///
+/// **Why this exists, stated as the attack it closes.** The gather's cheap
+/// pin (`debit_auth_pin`, run C++-side at `daemon_submit_ffi.cpp`) compares
+/// the presented key to the record's committed `bond_spend_pk`. Both are
+/// **public**: `bond_spend_pk` rides the JoinMarket bond post on the wire
+/// and is therefore readable by anyone who syncs the chain. Equality of two
+/// public values authenticates nobody — an attacker copies the record's key
+/// into `pqc_auths`, signs with garbage, passes the pin, and buys the
+/// per-shard last-served scan: up to `2 * MAX_HOLDINGS_SHARDS` (8192) LMDB
+/// seeks with both locks held, on every submit, unauthenticated. K13 does
+/// reject the signature — but only after the gather has already run.
+///
+/// So the two checks compose, and neither is redundant:
+///
+/// * this one proves possession of the **presented** key (signature), and
+/// * the gather's pin ties the presented key to the **record's** key.
+///
+/// A possession-proven caller presenting their *own* key still gets no scan
+/// (the pin refuses); a caller presenting the record's key without its
+/// private half never reaches the gather (this refuses). Only the holder of
+/// the cold `bond_spend_pk` — the party actually entitled to exit — buys the
+/// scan.
+///
+/// It also narrows an oracle: the pre-gate runs before *any* record read, so
+/// an unauthenticated caller can no longer time submit-response latency to
+/// learn whether a bond record exists.
+///
+/// Cost is one hybrid verify, no locks held, on a path that already verifies
+/// every auth at K13 — strictly *less* work than the gather it replaces for
+/// the attack case, and the same total for the honest one.
+pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<(), VerifyFailure> {
+    let Ct::Fcmp { pqc_auths, .. } = &parsed.tx.ct else {
+        return Err(VerifyFailure::Malformed);
+    };
+    // The same arity pin K13 applies. Checked here too rather than assumed:
+    // the pre-gate indexes `pqc_auths` by the vin's position, so a mismatched
+    // arity would let it verify a slot belonging to a different input.
+    if pqc_auths.is_empty() || pqc_auths.len() != parsed.tx.prefix.inputs.len() {
+        return Err(VerifyFailure::Malformed);
+    }
+    let Some((index, _)) = parsed.bond_post() else {
+        return Err(VerifyFailure::Malformed);
+    };
+    let payload_hashes = parsed.tx.pqc_signing_payload_hashes();
+    if payload_hashes.len() != pqc_auths.len() {
+        return Err(VerifyFailure::Malformed);
+    }
+    let (Some(auth), Some(payload_hash)) = (pqc_auths.get(index), payload_hashes.get(index)) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    verify_pqc_auth_slot(auth, payload_hash)
 }

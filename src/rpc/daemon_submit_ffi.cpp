@@ -220,10 +220,25 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   handle.bond_spend_pk = record.bond_spend_pk;
 
   // WORK GATE, cheap-first, mirroring the block path's ordering: the pin is a
-  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD with
-  // the pool and blockchain locks held. Without this an unsigned, unfunded
-  // transaction naming a known CompleteTree record would buy an attacker that
-  // scan on every submit.
+  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD --
+  // up to 2 * MAX_HOLDINGS_SHARDS (8192) -- with the pool and blockchain
+  // locks held.
+  //
+  // WHAT THIS PIN DOES AND DOES NOT DO. It compares two PUBLIC values: the
+  // record's committed bond_spend_pk (which rides the JoinMarket post on the
+  // wire, so anyone who syncs the chain can read it) against the key the
+  // submission presents. Equality of publics authenticates nobody -- an
+  // earlier revision of this comment claimed the gate kept "an unsigned,
+  // unfunded transaction" out of the scan, which was false: copy the key off
+  // the chain, sign with garbage, and the pin passes. What actually keeps an
+  // unauthenticated caller out is the Rust engine's POSSESSION pre-gate
+  // (`verify_debit_slot_possession`), which verifies the bond slot's PQC auth
+  // before this gather is ever called.
+  //
+  // So the pin's remaining job is the half possession cannot do: possession
+  // proves the caller holds the PRESENTED key, and this proves the presented
+  // key is the RECORD's. A caller who legitimately holds some other key still
+  // buys no scan. Neither check subsumes the other.
   //
   // Not a verdict -- the same shared pin runs again Rust-side and issues the
   // refusal. This can only cause less work, never a different answer. The
