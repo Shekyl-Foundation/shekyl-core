@@ -201,12 +201,24 @@ def self_test() -> int:
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         return self_test()
-    if len(sys.argv) != 2:
-        print("usage: strip_c_comments.py <file> | --self-test", file=sys.stderr)
+    paths = sys.argv[1:]
+    if not paths:
+        print("usage: strip_c_comments.py <file>... | --self-test", file=sys.stderr)
         return 2
-    path = sys.argv[1]
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        sys.stdout.write(strip(fh.read(), rust=path.endswith(RUST_SUFFIXES)))
+    # Several files per invocation: the domain-registry gate strips ~759
+    # production files per pattern, and one interpreter start per file made
+    # the honest version of that gate too slow to run. Output is concatenated;
+    # every caller consumes it as a stream, not per-file.
+    out = sys.stdout
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                out.write(strip(fh.read(), rust=path.endswith(RUST_SUFFIXES)))
+        except OSError as exc:
+            print(f"strip_c_comments: cannot read {path}: {exc}", file=sys.stderr)
+            return 1
+        # Keep a boundary so a match cannot be forged across two files.
+        out.write("\n")
     return 0
 
 

@@ -1396,7 +1396,7 @@ submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
 classification would be unverifiable guesswork. The battery still refuses them
 `Malformed` (loud, logged) under their own reopening criterion — a producer.
 
-#### 8.7.1.1 Unbond rows (the debit arm; `blockchain.cpp:4886-4951`)
+#### 8.7.1.1 Unbond rows (the debit arm; `check_archival_bond_post_input`, the `archival_bond_post_kind::Unbond` arm)
 
 Unbond is the **debit** bond-post: it consumes an existing record rather than
 creating one, so its fact set is the *inverse* of BP3's and its authorizer is
