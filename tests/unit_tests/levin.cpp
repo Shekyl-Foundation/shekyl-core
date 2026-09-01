@@ -3417,11 +3417,14 @@ TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothin
     `Silent` the gate exists to prevent — through a window of microseconds
     rather than an epoch.
 
-    So the observation is gated a second time, after the recording. The pair
-    can only LOSE observations, never invent them: a transaction taken
-    immediately after a `set_relayed` that did apply costs a valid observation,
-    which is the safe direction, because a missing entry in F-10's tallies is
-    recoverable in a way a wrong one is not.
+    So the observation is gated a second time, after the recording. That
+    NARROWS the window; it does not close it, and an earlier version of this
+    docstring claimed it inverted the polarity. `pool_has_tx` releases the
+    txpool lock before returning, so a removal between the second check and
+    `record_stem` still arms an observation for an absent transaction. What
+    this case pins is the arm the gate CAN cover — the entry gone by the time
+    the recording runs — not a guarantee that no false `Silent` is reachable
+    (§3.1e).
 
     The relay record itself is NOT re-gated — it either applied or it did not,
     and this test asserts it was attempted, so a regression that skipped the

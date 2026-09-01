@@ -15195,15 +15195,27 @@ peer — is recorded as nothing at all. `relayed` stays false and the entry take
 That is the right outcome and it is reached by a different argument than the
 other two, which is why it is written down rather than assumed to be covered.
 The unsent `insert_attested_tx` entry keeps the short grid because **no stem
-was ever launched**; the carrier discard keeps it because a stem was *launched
-and then abandoned*, and nothing on the network holds the transaction either
-way. Same conclusion, different premise.
+was ever launched**; the carrier discard keeps it because the carrier attempt
+was *abandoned before the message was ever accepted in full*, and nothing on
+the network holds the transaction either way. Same conclusion, different
+premise.
+
+*(Corrected 2026-09-01: this said "launched and then abandoned", which
+overstates what a discard implies. `unbind` drops a channel's whole backlog —
+messages behind the front were never offered to the transport at all, and only
+the front one may have had windows accepted. "Launched" is true of at most one
+of them.)*
 
 **So the 1148 s in this section is conditional on the send having happened, and
 the condition is new.** Item 3's derivation provisions for *"the stem was
 swallowed at hop 1"* — a stem that reached a peer and died there. A carrier
-discard never reached a peer, so it is not that class and must not draw that
-interval: waiting 1148 s for a transaction still sitting in nobody's mempool is
+discard cannot be that class: the complete transaction was never accepted by
+one transport run, so no peer can reassemble it as a valid stem. (Not the same
+as "never reached a peer" — epee reports acceptance into its write queue and
+nothing about receipt, so a partially accepted front message may well have put
+bytes on a socket. What is guaranteed is INCOMPLETE acceptance, and that is
+what makes reassembly impossible.) It must not draw that interval: waiting
+1148 s for a transaction no peer can hold is
 the swallow case inverted, with the origin doing the waiting for an event that
 cannot occur. Wherever this document says an origin re-broadcasts at 1148 s,
 read it as *an origin whose transaction was sent*.

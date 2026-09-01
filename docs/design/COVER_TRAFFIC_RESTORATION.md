@@ -1231,10 +1231,19 @@ and moots what `set_relayed` would do against a missing entry. Pinned by
 the verdict arrives, which is after the windows are on the wire. Cancelling
 earlier would need an enqueue-cancellation path — `NoiseQueues` has no such
 API, and `unbind` clears a whole channel, so cancelling one message would
-discard its channel-mates. The cost of not having it is one window of wasted
-cover carrying a transaction peers already hold and will drop, which is
-exactly what cover traffic is for. Reopening criterion: a cancellation API
-becomes worth building if some other caller needs one — not for this.
+discard its channel-mates. **Corrected 2026-09-01: the cost is not one
+window.** The gate runs on the VERDICT, which arrives only after the message
+completes, so a transaction mined before its first carrier tick still emits
+every one of its windows — up to `MAX_FRAGMENTS` (5) × `WINDOW_BYTES`
+(20 480) ≈ **100 KiB** of cover carrying a transaction peers already hold and
+will drop. An earlier draft said "one window", which understated it by the
+fragment cap.
+
+That is still what cover traffic is for, and it is bounded per transaction
+rather than per epoch, which is why the conclusion does not change. Reopening
+criterion: a cancellation API becomes worth building if some other caller
+needs one, or if measured carrier bandwidth (§3.1c) shows mined-while-queued
+traffic is a material share of the budget — not on this argument alone.
 
 **The membership gate is not atomic with the recording, and the fix is a
 SECOND gate rather than a combined core operation (2026-09-01).**
@@ -1250,14 +1259,36 @@ carrier-only variant duplicates a widely-used notification to serve one
 caller. What the observation actually needs is cheaper — re-ask the question
 after the recording, and arm only if the answer is still yes.
 
-That pair is still not race-free, and the residual is chosen rather than
-missed: a transaction taken immediately after a `set_relayed` that DID apply
-costs a valid observation. **The checks can only lose observations, never
-invent them** — and a missing entry in F-10's tallies is recoverable in a way
-a wrong one is not (§3.1a). The first gate is not subsumed: it also stops the
-discard arm fluffing a transaction already in a block, which the second runs
-too late to prevent. Pinned by
-`a_pool_drop_during_recording_arms_no_observation`.
+**That pair NARROWS the window; it does not invert the polarity, and saying
+it did was wrong (corrected 2026-09-01).** `pool_has_tx` releases the txpool
+lock before returning, so a block can take the entry between the second check
+and `record_stem` and the observation is armed for a transaction that is gone
+— the same false `Silent`. The claim that "the checks can only lose
+observations, never invent them" was a property this construction cannot
+deliver, and it was stated in the code, this section, and a test docstring.
+
+What is true is the scale, and the comparison to what sits beside it.
+Ungated, the exposure was the carrier's whole backlog — up to an epoch of
+wall-clock in which any block could take the entry. Gated once, the gap
+between the first check and `set_relayed`. Gated twice, the gap between the
+second check and the arm. **And the ordinary stem arm does not check the pool
+at all** before `record_stem_observation`, so the carrier is the only relay
+path here that narrows this even once; it does not introduce the hazard, it
+inherits it and shrinks it.
+
+Closing it needs one of two things that do not exist: the txpool cancelling
+in-flight observations when it removes a transaction, or `expire` re-asking
+membership before it counts a `Silent` — the latter being the better place,
+since the `Silent` is what does the damage and expiry is where it is decided.
+Both are new plumbing across the FFI into a layer the daemon cutover
+replaces. **Reopening criterion:** §12.11, the selection tier that consumes
+these tallies, becoming real — it is unbuilt today, so nothing reads the
+false entry — or the cutover giving Rust a pool query it can call at expiry.
+
+The first gate is not subsumed by the second: it also stops the discard arm
+fluffing a transaction already in a block, which the second runs too late to
+prevent. `a_pool_drop_during_recording_arms_no_observation` pins the arm the
+gates DO cover — the entry gone by the time the recording runs.
 
 **The wake handler guarantees `arm()` structurally, not site by site.** The
 same change that made `apply_carrier_verdicts` `noexcept` also added

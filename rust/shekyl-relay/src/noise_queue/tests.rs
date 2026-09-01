@@ -434,12 +434,17 @@ fn enqueue_refuses_a_message_over_the_fragment_cap() {
 // will be.
 // ---------------------------------------------------------------------------
 
-/// A message reports SENT exactly once, and only when its LAST window goes out.
+/// A message reports SENT exactly once, and only when its LAST window is
+/// ACCEPTED.
 ///
 /// The producer's whole reason for needing this: a caller resolving a
-/// `NoiseSend` knows a *fragment* went out, not a message. Recording a relay on
-/// the first fragment would claim a send for a transaction still half in the
-/// queue.
+/// `NoiseSend` knows the transport took a *fragment*, not a message. Recording
+/// a relay on the first fragment would claim a send for a transaction still
+/// half in the queue.
+///
+/// Acceptance, not receipt — [`CarrierOutcome`] carries what `Sent` does and
+/// does not assert, and this test is its primary oracle, so the wording here
+/// is what a reader will take the contract to be.
 #[test]
 fn a_message_reports_sent_only_when_its_last_window_goes_out() {
     let mut q = queues(1);
@@ -496,9 +501,10 @@ fn unbind_reports_every_message_it_discards() {
 /// A message HALF sent and then unbound reports discarded, not sent.
 ///
 /// This is the case that makes the two arms different rather than redundant:
-/// fragments of it really did reach the wire, and the transaction still never
-/// arrived. A producer that treated partial delivery as a relay would give the
-/// origin the long backoff for a transaction the peer cannot reassemble.
+/// the transport really did accept some of its fragments, and the message was
+/// still never accepted in full. A producer that treated a partial run as a
+/// relay would give the origin the long backoff for a transaction no peer can
+/// reassemble.
 #[test]
 fn a_partially_sent_message_that_is_unbound_reports_discarded() {
     let mut q = queues(1);

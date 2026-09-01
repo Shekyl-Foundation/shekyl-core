@@ -1155,13 +1155,26 @@ namespace levin
              false `Silent` the first gate exists to prevent, just through a
              window of microseconds instead of an epoch.
 
-             This cannot be race-free either, and the residual is deliberate:
-             if the entry is taken immediately AFTER a `set_relayed` that did
-             apply, this skips an observation that was valid. That is the safe
-             direction, and it is the property worth having — the pair of
-             checks can only LOSE observations, never invent them, and a
-             missing entry in F-10's tallies is recoverable in a way a wrong
-             one is not (§3.1a).
+             THIS DOES NOT MAKE THE PAIR RACE-FREE, and an earlier draft of
+             this comment claimed a polarity it does not have. `pool_has_tx`
+             releases the txpool lock before returning, so a block can take the
+             entry between this check and `record_stem` below and the
+             observation is armed for a transaction that is gone — the same
+             false `Silent`, through a window narrower again. The pair
+             NARROWS; it does not invert. It can lose a valid observation too,
+             when the entry goes immediately after a `set_relayed` that
+             applied.
+
+             What is true is the scale and the comparison. Ungated, the window
+             was the carrier's whole backlog — up to an epoch. Gated once, it
+             was the gap between the first check and `set_relayed`. Gated
+             twice, it is the gap between this check and the call below. And
+             the ordinary stem arm, which arms an observation right after its
+             send, does not check the pool at ALL — so this is the only relay
+             path here that narrows it even once. Closing it needs the txpool
+             to cancel observations on removal, or the expiry to re-ask before
+             counting a `Silent`; both are new plumbing and §3.1e records the
+             criterion for building them.
 
              The first gate is still load-bearing and not subsumed by this one:
              it also stops the discard arm fluffing a transaction that is
