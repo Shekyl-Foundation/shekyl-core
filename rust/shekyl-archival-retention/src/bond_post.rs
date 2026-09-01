@@ -552,6 +552,42 @@ pub fn verify_join_market_bond_post(
     Ok(())
 }
 
+/// The Unbond guards decidable from the **record's cheap fields** — its
+/// balance and its bad-interval count — with no per-shard scan.
+///
+/// Split out for the same reason as [`unbond_vin_statics`], and to fix a
+/// sharper problem: the daemon's gather deliberately skips its per-shard scan
+/// for exactly these three states, and the submit battery's skipped-scan belt
+/// sits **above** them. Without this, an ordinary malformed Unbond tripped the
+/// belt and was logged at `error!` as an internal inconsistency, when the
+/// honest answer was a quiet `Malformed` naming the guard that refused it.
+/// Running these before the belt restores the belt's meaning: reaching it now
+/// means a skip nothing explains.
+///
+/// The caller supplies `current_bonded` already unwrapped, because record
+/// ABSENCE is a different verdict on the submit path (a competing exit,
+/// classified at Phase D) than it is here.
+pub fn unbond_record_statics(
+    vin: &ArchivalBondPostVin,
+    current_bonded: u64,
+    record_bad_interval_count: usize,
+) -> Result<(), BondPostError> {
+    if current_bonded == 0 {
+        return Err(BondPostError::NothingToUnbond);
+    }
+    // The debit removes the whole current balance (§3.2 table; §4.3 refund).
+    if vin.bond_debit != current_bonded {
+        return Err(BondPostError::DebitNotFullBalance);
+    }
+    // The connect must append the clean interval-close (§4.3 F3); a full log
+    // (`bond_connect::MAX_BOND_BAD_INTERVALS`, the codec's `kMaxBadIntervals`
+    // pin) makes the tx unconnectable, so it is unverifiable too.
+    if record_bad_interval_count >= crate::bond_connect::MAX_BOND_BAD_INTERVALS {
+        return Err(BondPostError::IntervalLogFull);
+    }
+    Ok(())
+}
+
 /// The Unbond guards that need **only the vin** — no record, no chain state.
 ///
 /// Split out of [`verify_unbond_bond_post`] so the daemon's submit pre-gate can
@@ -631,23 +667,9 @@ pub fn verify_unbond_bond_post(
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
     };
-    if current_bonded == 0 {
-        return Err(BondPostError::NothingToUnbond);
-    }
+    unbond_record_statics(vin, current_bonded, record_bad_interval_count)?;
 
     unbond_vin_statics(vin)?;
-
-    // The debit removes the whole current balance (§3.2 table; §4.3 refund).
-    if vin.bond_debit != current_bonded {
-        return Err(BondPostError::DebitNotFullBalance);
-    }
-
-    // The connect must append the clean interval-close (§4.3 F3); a full log
-    // (`bond_connect::MAX_BOND_BAD_INTERVALS`, the codec's `kMaxBadIntervals`
-    // pin) makes the tx unconnectable, so it is unverifiable too.
-    if record_bad_interval_count >= crate::bond_connect::MAX_BOND_BAD_INTERVALS {
-        return Err(BondPostError::IntervalLogFull);
-    }
 
     // Release cooldown: the grace window past the last served epoch must have
     // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).

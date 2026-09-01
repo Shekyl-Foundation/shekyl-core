@@ -2009,6 +2009,112 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     );
 }
 
+/// A minimal [`tracing::Subscriber`] recording each event's level. Hand-rolled
+/// rather than pulling `tracing-subscriber` in as a dev dependency for one
+/// assertion — the same shape `shekyl-scanner`'s gate tests use.
+#[derive(Clone, Default)]
+struct LevelCapture {
+    levels: Arc<std::sync::Mutex<Vec<tracing::Level>>>,
+}
+
+impl tracing::Subscriber for LevelCapture {
+    fn enabled(&self, _m: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _a: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+    fn record(&self, _s: &tracing::Id, _v: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _s: &tracing::Id, _f: &tracing::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        self.levels
+            .lock()
+            .expect("capture mutex")
+            .push(*event.metadata().level());
+    }
+    fn enter(&self, _s: &tracing::Id) {}
+    fn exit(&self, _s: &tracing::Id) {}
+}
+
+#[test]
+fn an_ordinary_invalid_unbond_does_not_log_an_internal_error() {
+    // The gather deliberately skips its per-shard scan for a record whose
+    // cheap state already dooms the exit — a zero balance here. Those UB9
+    // guards used to sit BELOW the skipped-scan belt, so an ordinary invalid
+    // transaction tripped the belt and was logged at ERROR as an internal
+    // inconsistency ("the Phase-C pin passed"). It is a malformed submission,
+    // not a broken shim, and the operator log must not say otherwise (rule 82).
+    //
+    // The verdict is `Malformed` either way, so the verdict cannot distinguish
+    // the two paths — the log level is the whole observable, which is why this
+    // test captures it.
+    let fx = unbond_fixture();
+    let mut facts = unbond_admitting_facts();
+    facts.unbond = Some(UnbondFacts {
+        record: Some(
+            UnbondRecordFacts::new(
+                0, // exited: nothing left to unbond (UB9 NothingToUnbond)
+                0,
+                fx.bond_spend_pk.clone(),
+                shekyl_archival_retention::HoldingsKind::CompleteTree,
+                shekyl_archival_retention::LastServedScan::AllShards,
+                Vec::new(),
+                true, // the gather skipped the scan for exactly that reason
+            )
+            .expect("scan matches the kind"),
+        ),
+        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+    });
+
+    let capture = LevelCapture::default();
+    let result = tracing::subscriber::with_default(capture.clone(), || verify(&fx.parsed, &facts));
+    assert_eq!(
+        result,
+        Err(VerifyFailure::Malformed),
+        "an exited record's exit is refused"
+    );
+    let levels = capture.levels.lock().expect("capture mutex");
+    assert!(
+        !levels.contains(&tracing::Level::ERROR),
+        "an ordinary invalid Unbond must be refused quietly by the named \
+         guard, not logged as an internal inconsistency; saw {levels:?}"
+    );
+}
+
+#[test]
+fn an_unexplained_skipped_scan_is_still_a_loud_error() {
+    // The belt's remaining job, and the inverse of the test above: a skip that
+    // NOTHING explains — the record is perfectly valid, the pin matches, the
+    // statics pass — is a shim contract violation, and must stay loud.
+    let fx = unbond_fixture();
+    let mut facts = unbond_admitting_facts();
+    facts.unbond = Some(UnbondFacts {
+        record: Some(
+            UnbondRecordFacts::new(
+                fx.record_bonded_total,
+                0,
+                fx.bond_spend_pk.clone(),
+                shekyl_archival_retention::HoldingsKind::CompleteTree,
+                shekyl_archival_retention::LastServedScan::AllShards,
+                Vec::new(),
+                true, // skipped with no reason the statics can name
+            )
+            .expect("scan matches the kind"),
+        ),
+        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+    });
+
+    let capture = LevelCapture::default();
+    let result = tracing::subscriber::with_default(capture.clone(), || verify(&fx.parsed, &facts));
+    assert_eq!(result, Err(VerifyFailure::Malformed));
+    let levels = capture.levels.lock().expect("capture mutex");
+    assert!(
+        levels.contains(&tracing::Level::ERROR),
+        "a skip nothing explains is a shim contract violation and must stay \
+         loud; saw {levels:?}"
+    );
+}
+
 #[test]
 fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     // The pre-gate's vin-only half. Possession alone does not stop a cold-key

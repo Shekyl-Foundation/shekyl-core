@@ -335,15 +335,23 @@ impl UnbondRecordFacts {
         })
     }
 
-    /// The gather refused to run the last-served scan because the debit-auth
-    /// pin failed, so [`per_shard_last_served`](Self::per_shard_last_served)
-    /// is empty **because it was never read**.
+    /// The gather did not run the last-served scan, so
+    /// [`per_shard_last_served`](Self::per_shard_last_served) is empty
+    /// **because it was never read** — not because the record never served.
     ///
     /// The verifier must refuse rather than fold: an unread slice folds to
     /// "never served", which *elapses* the release cooldown — the permissive
-    /// direction. The Phase-C UB3 pin refuses the same submission on its own,
-    /// so this is the belt that keeps a marshalling divergence from turning
-    /// a skipped read into a passed check.
+    /// direction.
+    ///
+    /// **Authorization cannot be inferred from this.** The gather skips
+    /// whenever a pre-scan guard shows the scan cannot change the verdict: an
+    /// already-known txid, a failed debit pin, a zero balance, a balance the
+    /// vin's `bond_debit` no longer matches, or a full bad-interval log. Each
+    /// of those is refused by name before the belt — UB3 for the pin, the
+    /// shared `unbond_record_statics` for the record states — so by the time
+    /// the belt reads this flag, a `true` means a skip *nothing explains*,
+    /// i.e. a shim contract violation rather than an invalid transaction.
+    /// (One revision ago the pin was the only reason, and this doc said so.)
     pub fn last_served_scan_skipped(&self) -> bool {
         self.last_served_scan_skipped
     }

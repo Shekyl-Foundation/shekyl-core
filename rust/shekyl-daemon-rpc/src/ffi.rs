@@ -257,9 +257,18 @@ pub struct SubmitUnbondRecordFfi {
     /// (`SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_*`). Echoed by the gather and
     /// pinned Rust-side against `holdings_kind`.
     pub last_served_scan: u8,
-    /// 1 = the gather refused to run the scan because the debit-auth pin
-    /// failed, so the slice is empty-because-unread. Folding it would give
-    /// the permissive "never served" cooldown answer.
+    /// 1 = the gather did NOT run the per-shard scan, so the slice is
+    /// empty-because-**unread** rather than empty-because-never-served.
+    /// Folding it would give the permissive "never served" cooldown answer,
+    /// so a consumer must refuse rather than fold.
+    ///
+    /// **Says nothing about authorization.** The gather skips whenever a
+    /// pre-scan guard shows the scan cannot change the answer: an already-known
+    /// txid, a failed debit pin, a zero balance, a balance the vin's
+    /// `bond_debit` no longer matches, or a full bad-interval log. Inferring
+    /// "the pin failed" from this byte was true of an earlier revision and is
+    /// not true now; the reasons are listed on `fill_unbond_facts_locked`,
+    /// which owns them.
     pub last_served_scan_skipped: u8,
     pub per_shard_last_served: *const u64,
     pub per_shard_last_served_len: usize,

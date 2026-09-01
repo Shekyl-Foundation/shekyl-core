@@ -227,11 +227,19 @@ typedef struct shekyl_submit_unbond_record_ffi {
     // served", which makes the release cooldown elapse for a record that has
     // been serving. Rust pins this byte against the record's holdings kind.
     uint8_t  last_served_scan;
-    // 1 = the gather REFUSED to run the scan because the debit-auth pin
-    // failed, so per_shard_last_served is empty-because-unread rather than
+    // 1 = the gather did NOT run the per-shard scan, so
+    // per_shard_last_served is empty-because-UNREAD rather than
     // empty-because-never-served. Rust must refuse rather than fold: an
     // unread slice folds to "never served", which is the PERMISSIVE cooldown
     // answer.
+    //
+    // It carries NO authorization meaning. The gather skips whenever a
+    // pre-scan guard shows the scan cannot change the verdict -- an
+    // already-known txid, a failed debit pin, a zero balance, a balance the
+    // vin's bond_debit no longer matches, or a full bad-interval log. The
+    // authoritative list is the work-gate invariant on
+    // fill_unbond_facts_locked; do not restate it here, and do not read this
+    // byte as "the pin failed" (which it did mean, one revision ago).
     uint8_t  last_served_scan_skipped;
     const uint64_t* per_shard_last_served;
     size_t   per_shard_last_served_len;

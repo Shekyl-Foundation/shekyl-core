@@ -82,11 +82,12 @@ use rand_core::OsRng;
 use shekyl_archival_retention::{
     debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, settlement_epoch_at_height,
-    unbond_vin_statics, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin, BondPostError,
-    BondPostKind as RetentionBondPostKind, BondTerm, ClaimantBondRecord, CreditPair,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, RewardCommit, ShardSet,
+    unbond_record_statics, unbond_vin_statics, verify_bond_post_ct_balance,
+    verify_join_market_bond_post, verify_unbond_bond_post, whole_record_last_served,
+    ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
+    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, RewardCommit, ShardSet,
 };
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::multisig::verify_multisig;
@@ -719,21 +720,41 @@ fn verify_debit_arm(
         return Err(VerifyFailure::Malformed);
     }
 
+    // ── The record-only UB9 guards, ahead of the skipped-scan belt ─────
+    // These are the states the gather deliberately skips its scan for, and
+    // they must be refused HERE, by name, rather than by the belt below. The
+    // belt cannot tell an expected skip from a broken shim, so letting an
+    // ordinary malformed Unbond reach it produced an `error!` claiming an
+    // internal inconsistency for what is simply an invalid transaction.
+    //
+    // The shared consensus function, never a restatement: `verify_unbond_bond_post`
+    // runs the identical guards, so the block path and this arm cannot drift.
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    if unbond_record_statics(
+        &vin,
+        record.bonded_total_atomic(),
+        record.bad_interval_count(),
+    )
+    .is_err()
+    {
+        return Err(VerifyFailure::Malformed);
+    }
+
     // ── The gather refused to scan, so there is nothing to fold ────────
     // An unread slice folds to "never served", which ELAPSES the cooldown —
     // the permissive direction — so a skipped scan is refused, never folded.
     //
-    // The gather skips for three reasons, and none of them can legitimately
-    // reach this line with a verdict of "accept":
+    // Every skip the gather performs is now accounted for ABOVE this line:
     //   * identity (txid already known) — the engine returned AlreadyInPool /
-    //     AlreadyInChain long before Phase C, so this is unreachable;
-    //   * the debit pin failed — UB3 above already refused;
-    //   * the record's balance no longer equals this vin's `bond_debit` — UB9
-    //     below would refuse on exactly that, so refusing here is the same
-    //     verdict reached earlier.
-    // Reaching here therefore means either a skip whose matching refusal did
-    // not fire, or a shim that skipped for no reason. Both are `Malformed`,
-    // and both are worth the loud log.
+    //     AlreadyInChain long before Phase C;
+    //   * the debit pin failed — UB3 refused;
+    //   * zero balance, a debit the balance no longer matches, or a full
+    //     interval log — the record statics just refused, by name.
+    // So reaching here means a skip NOTHING explains: a shim that skipped
+    // without cause. That is a contract violation, not an invalid
+    // transaction, and it is worth the loud log.
     if record.last_served_scan_skipped() {
         tracing::error!(
             "unbond gather skipped the last-served scan but the Phase-C pin \
@@ -758,9 +779,7 @@ fn verify_debit_arm(
     let current_settlement_epoch = settlement_epoch_at_height(facts.chain_height.to_raw());
 
     // ── UB9: the economic battery, the same function the block path calls ─
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
-        return Err(VerifyFailure::Malformed);
-    };
+    // `vin` was built above, for the record statics.
     match verify_unbond_bond_post(
         &vin,
         Some(record.bonded_total_atomic()),
