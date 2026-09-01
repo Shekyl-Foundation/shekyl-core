@@ -197,8 +197,8 @@ namespace {
 //
 // Returns false on a marshal fault (unknown holdings kind) -- never a verdict.
 bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
-  const std::vector<uint8_t>& auth_pubkey,
-  shekyl_submit_unbond_facts_handle& handle)
+  const std::vector<uint8_t>& auth_pubkey, bool identity_known,
+  uint64_t bond_debit, shekyl_submit_unbond_facts_handle& handle)
 {
   shekyl::db::ArchivalBondValue record{};
   const bool present = bc.get_db().get_archival_bond_value(p_id, record);
@@ -219,63 +219,62 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   }
   handle.bond_spend_pk = record.bond_spend_pk;
 
-  // WORK GATE, cheap-first, mirroring the block path's ordering: the pin is a
-  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD with
-  // the pool and blockchain locks held.
+  // THE WORK GATE. The scan below is two LMDB seeks PER SERVED SHARD with the
+  // pool and blockchain locks held, and for a CompleteTree record that count
+  // tracks the frozen-segment count rather than any constant -- it grows with
+  // the chain. Everything above it is cheap. So the invariant this gate exists
+  // to hold is:
   //
-  // How large that is depends on the record's holdings kind, and the honest
-  // bound is NOT a constant. For a HeldShards record it is the codec cap:
-  // <= MAX_HOLDINGS_SHARDS (4096) shards, so <= 8192 seeks. For a CompleteTree
-  // record the all-shards form walks every shard carrying a serve-credit row
-  // under that persona's key prefix, which tracks the frozen-segment count and
-  // therefore GROWS WITH THE CHAIN -- there is no constant ceiling, and
-  // CompleteTree is the shape an attacker would pick.
+  //   THE SCAN RUNS AT MOST ONCE PER (IDENTITY, STATE):
+  //   an UNKNOWN txid, AND a debit that matches the live balance.
   //
-  // WHAT THIS PIN DOES AND DOES NOT DO. It compares two PUBLIC values: the
-  // record's committed bond_spend_pk (which rides the JoinMarket post on the
-  // wire, so anyone who syncs the chain can read it) against the key the
-  // submission presents. Equality of publics authenticates nobody -- an
-  // earlier revision of this comment claimed the gate kept "an unsigned,
-  // unfunded transaction" out of the scan, which was false: copy the key off
-  // the chain, sign with garbage, and the pin passes. What actually keeps an
-  // unauthenticated caller out is the Rust engine's POSSESSION pre-gate
-  // (`verify_debit_slot_possession`), which verifies the bond slot's PQC auth
-  // before this gather is ever called.
+  // Each clause below is one half of that, and each closes a replay this gate
+  // did NOT close in an earlier revision. Writing the invariant down rather
+  // than the three patches is deliberate: the same finding arrived three times
+  // (key equality, then possession, then replay), every time because the check
+  // authenticated something other than the event that triggers the work.
   //
-  // So the pin's remaining job is the half possession cannot do: possession
-  // proves the caller holds the PRESENTED key, and this proves the presented
-  // key is the RECORD's. A caller who legitimately holds some other key still
-  // buys no scan. Neither check subsumes the other.
+  //   1. IDENTITY. A broadcast Unbond's bytes are public, and its signature
+  //      stays valid forever, so anyone could resubmit them to buy the scan --
+  //      the engine's possession pre-gate passes, and its in-pool/in-chain
+  //      early return happens only AFTER this gather. The caller therefore
+  //      tells us when the txid is already known; the engine will return
+  //      identity without ever reading the bundle.
   //
-  // Not a verdict -- the same shared pin runs again Rust-side and issues the
-  // refusal. This can only cause less work, never a different answer. The
-  // skipped flag is what stops Rust folding an unread slice into "never
-  // served", which is the PERMISSIVE cooldown result.
-  // The shared predicate directly: `archival_debit_auth_pin` is file-local to
-  // blockchain.cpp, and re-spelling its two comparisons here is exactly what
-  // the single-source gate forbids.
+  //      `identity_known` is `in_chain || in_pool_broadcast`, NOT `in_pool`.
+  //      An embargoed tx is in_pool but not broadcast, and the engine
+  //      discloses only `in_pool_broadcast` to a foreign caller (§3.1), so a
+  //      foreign resubmit of an embargoed tx does NOT early-return -- it falls
+  //      through to Phase C and needs the scan. Skipping on `in_pool` would
+  //      refuse a valid submission.
+  //
+  //   2. AUTHORIZATION. The shared debit pin. Note this compares two PUBLIC
+  //      values (the record's committed bond_spend_pk rides the JoinMarket
+  //      post on the wire), so it authenticates nobody on its own; possession
+  //      is proved by the engine's UB0 pre-gate before this is reached. The
+  //      two compose -- possession proves the caller holds the PRESENTED key,
+  //      this proves the presented key is the RECORD's.
+  //
+  //   3. STATE. A broadcast Unbond that state motion has since invalidated -- a
+  //      slash, or a competing exit -- is never in the pool and never in chain,
+  //      so clause 1 never fires, and the exited row keeps its bond_spend_pk,
+  //      so clause 2 still passes. Each replay would buy the scan and be
+  //      refused only at UB9. `bond_debit` is fixed in the signed bytes and UB9
+  //      requires it to equal the record's whole balance, so a mismatch here
+  //      cannot verify no matter what the scan returns.
+  //
+  // None of this is a verdict. Every clause only causes LESS work: Rust runs
+  // the same pins itself and issues the refusal, and the skipped flag makes it
+  // refuse rather than fold an unread slice into the permissive "never served".
   const uint8_t pin_rc = shekyl_archival_debit_auth_pin(
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
     auth_pubkey.size());
-  if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
-  {
-    handle.view.record.last_served_scan_skipped = 1;
-    handle.view.record.bonded_total_atomic = record.bonded_total_atomic;
-    handle.view.record.bad_interval_count = record.bad_intervals.size();
-    handle.view.record.bond_spend_pk =
-      handle.bond_spend_pk.empty() ? nullptr : handle.bond_spend_pk.data();
-    handle.view.record.bond_spend_pk_len = handle.bond_spend_pk.size();
-    handle.view.record.holdings_kind = record.holdings_kind;
-    handle.view.record.last_served_scan = scan;
-    return true;
-  }
-
-  handle.per_shard_last_served =
-    (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
-      ? bc.get_db().archival_bond_all_last_served_epochs(p_id)
-      : bc.get_db().archival_bond_last_served_epochs(p_id, record.held_shard_ids);
+  const bool skip_scan =
+    identity_known
+    || pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK
+    || record.bonded_total_atomic != bond_debit;
 
   shekyl_submit_unbond_record_ffi& out = handle.view.record;
   out.bonded_total_atomic = record.bonded_total_atomic;
@@ -285,6 +284,16 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   out.bond_spend_pk_len = handle.bond_spend_pk.size();
   out.holdings_kind = record.holdings_kind;
   out.last_served_scan = scan;
+  if (skip_scan)
+  {
+    out.last_served_scan_skipped = 1;
+    return true;
+  }
+
+  handle.per_shard_last_served =
+    (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
+      ? bc.get_db().archival_bond_all_last_served_epochs(p_id)
+      : bc.get_db().archival_bond_last_served_epochs(p_id, record.held_shard_ids);
   out.per_shard_last_served =
     handle.per_shard_last_served.empty() ? nullptr : handle.per_shard_last_served.data();
   out.per_shard_last_served_len = handle.per_shard_last_served.size();
@@ -421,6 +430,7 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* bond_p_canonical_id,
   uint8_t bond_probe_kind,
   const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+  uint64_t bond_debit,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
@@ -500,7 +510,14 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
       std::vector<uint8_t> auth_key;
       if (bond_auth_pubkey && bond_auth_pubkey_len > 0)
         auth_key.assign(bond_auth_pubkey, bond_auth_pubkey + bond_auth_pubkey_len);
-      if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, *handle))
+      // Clause 1 of the work-gate invariant: the engine returns identity
+      // without ever reading this bundle, so a resubmit of already-known
+      // bytes must not buy the scan. `in_pool` alone is NOT the condition --
+      // see the embargo note on fill_unbond_facts_locked.
+      const bool identity_known =
+        out_facts->in_chain != 0 || out_facts->in_pool_broadcast != 0;
+      if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, identity_known,
+            bond_debit, *handle))
         return SHEKYL_SUBMIT_INTERNAL_FAULT;
       *out_unbond = handle.release();
     }
@@ -908,6 +925,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* bond_p_canonical_id,
   uint8_t bond_probe_kind,
   const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+  uint64_t bond_debit,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
@@ -920,7 +938,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   core& c = h->rpc->get_core();
   return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
     txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
-    bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len,
+    bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len, bond_debit,
     emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
     out_unbond, out_facts, out_ki_conflicts);
 }

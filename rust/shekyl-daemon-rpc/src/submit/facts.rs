@@ -211,6 +211,14 @@ pub enum BondProbe<'a> {
         p_canonical_id: &'a [u8; 32],
         /// The bond slot's `pqc_auths[i].hybrid_public_key`.
         auth_pubkey: &'a [u8],
+        /// The vin's fixed `bond_debit`. UB9 requires it to equal the
+        /// record's whole balance, so a gather that sees a different balance
+        /// can skip the scan: no scan result can make these bytes verify.
+        /// That is the clause which stops a broadcast-then-invalidated Unbond
+        /// from being replayed for the scan indefinitely — such a tx is
+        /// neither in-pool nor in-chain, so the identity clause never fires
+        /// for it.
+        bond_debit: u64,
     },
 }
 

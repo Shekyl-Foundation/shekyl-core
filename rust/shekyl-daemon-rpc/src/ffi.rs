@@ -561,6 +561,7 @@ extern "C" {
         bond_probe_kind: u8,
         bond_auth_pubkey: *const u8,
         bond_auth_pubkey_len: usize,
+        bond_debit: u64,
         emission_p_canonical_id: *const u8,
         emission_epochs: *const u64,
         n_emission_epochs: usize,

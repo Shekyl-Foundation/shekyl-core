@@ -359,6 +359,14 @@ impl SubmitStateShim for FfiSubmitShim {
             // The C++ side ignores the byte when no id is passed.
             Some(BondProbe::Join(_)) | None => ffi::SHEKYL_SUBMIT_BOND_PROBE_JOIN,
         };
+        // The debit arm's state clause: the gather skips its per-shard scan
+        // when the live balance no longer equals this vin's fixed debit, since
+        // UB9 could not pass whatever the scan returned. Zero for every other
+        // probe, where the C++ side ignores it.
+        let bond_debit = match bond_probe {
+            Some(BondProbe::Unbond { bond_debit, .. }) => bond_debit,
+            Some(BondProbe::Join(_)) | None => 0,
+        };
 
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
@@ -378,6 +386,7 @@ impl SubmitStateShim for FfiSubmitShim {
                 bond_probe_kind,
                 bond_probe.map_or(std::ptr::null(), |probe| probe.auth_pubkey().as_ptr()),
                 bond_probe.map_or(0, |probe| probe.auth_pubkey().len()),
+                bond_debit,
                 emission_probe.map_or(std::ptr::null(), |(id, _)| id.as_ptr()),
                 emission_probe.map_or(std::ptr::null(), |(_, epochs)| const_ptr_or_null(epochs)),
                 emission_probe.map_or(0, |(_, epochs)| epochs.len()),

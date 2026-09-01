@@ -1932,6 +1932,22 @@ fn the_engine_asks_the_debit_arms_question_for_an_unbond() {
         "an Unbond must ask the debit arm's question (§8.7.1.1 contents), \
          not JoinMarket's presence bit"
     );
+    // The probe must carry the VIN'S OWN debit, not a placeholder. The gather
+    // skips its per-shard scan when the probe's debit does not equal the
+    // record's live balance, so a wrong value here makes every valid Unbond
+    // skip the scan and be refused by the skipped-scan belt — and no fact set
+    // this mock serves could reveal it, because the mock never runs the
+    // gather.
+    assert_eq!(
+        snapshots[0].bond_probe_debit,
+        Some(bond.bond_debit),
+        "the debit arm's probe must carry the vin's own bond_debit"
+    );
+    assert_eq!(
+        bond.bond_debit, fx.record_bonded_total,
+        "fixture sanity: a full exit debits the record's whole balance, so a \
+         placeholder 0 would be distinguishable from the real value here"
+    );
 }
 
 #[test]

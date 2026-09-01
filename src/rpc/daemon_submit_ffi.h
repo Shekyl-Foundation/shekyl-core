@@ -288,6 +288,13 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // path already performs the cheap key pin before its cursor scans; this
 // mirrors that ordering.
 //
+// An _UNBOND probe also carries bond_debit, the vin's fixed debit term. UB9
+// requires it to equal the record's whole balance, so a mismatch cannot verify
+// whatever the scan returns -- the gather skips the scan on that ground, which
+// is what stops a broadcast-then-invalidated Unbond being replayed for the
+// scan forever (it is neither in-pool nor in-chain, so the identity skip never
+// fires for it). See the invariant on fill_unbond_facts_locked.
+//
 // It does NOT keep an unauthenticated caller out on its own -- both compared
 // keys are public. Possession is proved earlier, by the Rust engine's UB0
 // pre-gate, and the two checks compose. The argument lives in ONE place,
@@ -322,6 +329,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     const uint8_t* bond_p_canonical_id,
     uint8_t bond_probe_kind,
     const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+    uint64_t bond_debit,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
@@ -400,6 +408,7 @@ int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
     const uint8_t* bond_p_canonical_id,
     uint8_t bond_probe_kind,
     const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+    uint64_t bond_debit,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,

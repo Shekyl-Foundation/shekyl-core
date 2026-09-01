@@ -315,6 +315,13 @@ pub struct SnapshotRecord {
     /// §8.7.1.1): the debit arm needs the record's contents, not just its
     /// presence, and asking the wrong one is invisible in the id alone.
     pub bond_probe_is_unbond: bool,
+    /// The `bond_debit` the debit arm's probe carried. The C++ gather skips
+    /// its per-shard scan when this does not equal the record's live balance,
+    /// so an engine that passed a wrong value (0, say) would make the gather
+    /// skip for EVERY valid Unbond and the battery refuse it — a refusal no
+    /// mock-served fact set can expose, because the mock never runs the
+    /// gather. Recorded so a test can assert the vin's own value reaches it.
+    pub bond_probe_debit: Option<u64>,
     /// The §8.7.2 E6/E7 probe the engine passed (emission submissions
     /// only): the vin-derived claimant id + claimed epochs.
     pub emission_probe: Option<([u8; 32], Vec<u64>)>,
@@ -371,6 +378,10 @@ impl SubmitStateShim for MockShim {
             reference_block: *reference_block,
             bond_p_canonical_id: bond_probe.map(|probe| *probe.p_canonical_id()),
             bond_probe_is_unbond: matches!(bond_probe, Some(BondProbe::Unbond { .. })),
+            bond_probe_debit: match bond_probe {
+                Some(BondProbe::Unbond { bond_debit, .. }) => Some(bond_debit),
+                _ => None,
+            },
             emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),
         });
         Ok(self.facts.clone())

@@ -720,10 +720,20 @@ fn verify_debit_arm(
     }
 
     // ── The gather refused to scan, so there is nothing to fold ────────
-    // An unread slice folds to "never served", which ELAPSES the cooldown.
-    // UB3 above already refused this submission (the gather skipped the scan
-    // for the same reason), so reaching here means the two pins disagreed —
-    // refuse rather than fold the permissive answer.
+    // An unread slice folds to "never served", which ELAPSES the cooldown —
+    // the permissive direction — so a skipped scan is refused, never folded.
+    //
+    // The gather skips for three reasons, and none of them can legitimately
+    // reach this line with a verdict of "accept":
+    //   * identity (txid already known) — the engine returned AlreadyInPool /
+    //     AlreadyInChain long before Phase C, so this is unreachable;
+    //   * the debit pin failed — UB3 above already refused;
+    //   * the record's balance no longer equals this vin's `bond_debit` — UB9
+    //     below would refuse on exactly that, so refusing here is the same
+    //     verdict reached earlier.
+    // Reaching here therefore means either a skip whose matching refusal did
+    // not fire, or a shim that skipped for no reason. Both are `Malformed`,
+    // and both are worth the loud log.
     if record.last_served_scan_skipped() {
         tracing::error!(
             "unbond gather skipped the last-served scan but the Phase-C pin \

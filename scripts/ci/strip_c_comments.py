@@ -128,6 +128,28 @@ def strip(src: str, rust: bool = False) -> str:
         if c == "/" and i + 1 < n:
             if src[i + 1] == "/":
                 while i < n and src[i] != "\n":
+                    # C and C++ splice `\<newline>` in translation phase 2,
+                    # BEFORE comments are recognised in phase 3, so a line
+                    # comment ending in a backslash swallows the next line
+                    # too. `// disabled \` above a call means the compiler
+                    # never sees that call — but this scanner used to end at
+                    # the physical newline and hand it back to the gate,
+                    # which would then certify a disabled authorization site.
+                    # Rust has no line splicing, so it keeps ending at the
+                    # newline; that difference is asserted in --self-test.
+                    if rust or src[i] != "\\":
+                        i += 1
+                        continue
+                    j = i + 1
+                    if j < n and src[j] == "\r":
+                        j += 1
+                    if j < n and src[j] == "\n":
+                        # Consume the splice, but EMIT the newline: every
+                        # consumer of this output is line-oriented, and
+                        # swallowing it would shift every line below.
+                        out.append("\n")
+                        i = j + 1
+                        continue
                     i += 1
                 continue
             if src[i + 1] == "*":
@@ -169,6 +191,10 @@ CASES = [
      "int x = 1'000'000; // live_call()", False, "live_call"),
     ("c++ block comment ends at first terminator",
      "/* a */ int y; /* b */", False, "/*"),
+    ("c++ line comment splices over a backslash-newline",
+     "// disabled \\\n  live_call();\n", False, "live_call"),
+    ("c++ splice handles CRLF",
+     "// disabled \\\r\n  live_call();\n", False, "live_call"),
 ]
 
 
@@ -185,6 +211,9 @@ def self_test() -> int:
         ("rust code after a nested comment", "/* /* */ */ live_call()", True),
         ("c++ code after a comment", "/* x */ live_call();", False),
         ("rust code after a lifetime", "fn f<'a>() {} live_call()", True),
+        # Rust does not splice: the line after a backslash-ended `//` is CODE,
+        # and eating it would make the gate fail closed for the wrong reason.
+        ("rust does not splice a backslash-newline", "// disabled \\\nlive_call()", True),
     ]
     for label, src, rust in survive:
         got = strip(src, rust=rust)

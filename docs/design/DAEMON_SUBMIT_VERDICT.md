@@ -1465,6 +1465,37 @@ cold `bond_spend_pk` — the party actually entitled to exit — reaches the sca
 It also narrows an oracle: UB0 runs before **any** record read, so submit
 latency no longer tells an unauthenticated caller whether a bond record exists.
 
+**The invariant, stated once, because the patches kept missing it.** This
+finding arrived three times — key equality, then possession, then replay — and
+each revision authenticated something other than the event that triggers the
+work. What the gate must hold is:
+
+> **The per-shard scan runs at most once per (identity, state):** an *unknown*
+> txid, **and** a `bond_debit` matching the live balance.
+
+The two clauses are the two skips in `fill_unbond_facts_locked`, and each
+closes a replay the previous revision left open:
+
+* **Identity.** A broadcast Unbond's bytes are public and its signature stays
+  valid forever, so anyone could resubmit them; UB0 passes, and the engine's
+  in-pool/in-chain early return happens only *after* the gather. The gather is
+  therefore told when the txid is already known. The condition is
+  `in_chain || in_pool_broadcast`, **not** `in_pool`: an embargoed tx is
+  in-pool but not broadcast, and a foreign caller is shown only
+  `in_pool_broadcast` (§3.1), so it does *not* early-return and genuinely needs
+  the scan.
+* **State.** A broadcast Unbond invalidated by later state motion — a slash, a
+  competing exit — is neither in-pool nor in-chain, so the identity clause
+  never fires for it, and the exited row keeps its `bond_spend_pk`, so UB3
+  still passes. `bond_debit` is fixed in the signed bytes and UB9 requires it
+  to equal the whole balance, so a mismatch cannot verify whatever the scan
+  returns.
+
+What remains, and is accepted: the **first** submission of a genuinely valid,
+unknown Unbond scans once. That is the floor — the work the fact set exists to
+do — and it costs the caller a cold-key signature over bytes that bind the
+current balance.
+
 
 **The exit does not remove the row, so UB2 is not BP3 with the sign flipped.**
 BP3 wants *absence*, and a record appearing during Phase C is a claim-slot

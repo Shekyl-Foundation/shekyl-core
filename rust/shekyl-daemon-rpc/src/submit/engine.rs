@@ -219,6 +219,10 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 (true, Some(auth_pubkey)) => BondProbe::Unbond {
                     p_canonical_id: id,
                     auth_pubkey,
+                    bond_debit: parsed
+                        .bond_post()
+                        .map(|(_, bond)| bond.bond_debit)
+                        .unwrap_or(0),
                 },
                 // No auth slot for the bond vin is a malformed submission the
                 // battery refuses anyway; ask the cheap question rather than
