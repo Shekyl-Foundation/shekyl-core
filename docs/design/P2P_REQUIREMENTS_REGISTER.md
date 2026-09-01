@@ -1,6 +1,6 @@
 # P2P-2 requirements register
 
-**Status:** Steering-reviewed 2026-08-31 — sound, spot-checked (four
+**Status:** OPEN — steering-reviewed 2026-08-31; sound, spot-checked (four
 `drop_connections` sites and §12.10's framing independently confirmed),
 ready to land as a tracked doc. Four deltas from that review are folded in
 below (PW-3 correction, PW-22 rewrite, PW-27, PW-28). Sequencing ruling:
@@ -53,7 +53,7 @@ justification, not RT-4's.
 | --- | --- | --- | --- |
 | PW-9 (L-1) | `LEVIN_SIGNATURE` is a fixed 8-byte constant — perfect DPI signature. | `rust/shekyl-levin/src/header.rs:14`, verified this session | Open |
 | PW-10 (L-2) | `DEFAULT_MAX_PACKET_SIZE = 100 MB`, inherited not derived. | `header.rs:27` | Open — derive from largest legitimate message |
-| PW-11 (L-3) | Unknown flag bits preserved verbatim — a covert channel between colluding peers across an honest relay, for a protocol with one implementation. | `header.rs:29-30` | Open — reject unknown bits pre-genesis |
+| PW-11 (L-3) | Unknown flag bits preserved verbatim in the `Flags` type (decode/encode round-trip is byte-identical) — **a latent affordance, not an active cross-relay channel on the current path**: `classify` consumes the header into command/return-code/payload (`reader.rs:458–474`) and every outbound constructor mints a fresh header with only known flags (`message.rs:25–48`), so an application relay never forwards an inbound flag word (verified: no verbatim re-forward path in the crate). Rejecting unknown bits pre-genesis stands, justified as canonical framing plus closing the latent affordance before any future path forwards raw buckets — not as closing a live covert channel. | `header.rs:29-30`; `reader.rs:458–474`; `message.rs:25–48` | Open — reject unknown bits pre-genesis (canonical framing) |
 | PW-12 (L-4) | `return_code: i32` on every bucket — inherited RPC-over-Levin affordance leaking implementation state. | `header.rs:103` | Open |
 | PW-13 (L-5) | Compression before encryption is a CRIME/BREACH-class oracle; interacts directly with Dandelion++'s padding/size defenses. | `compress.rs:25,32` | Open — check compression is disabled wherever padding is load-bearing |
 | PW-14 (L-6) | Cross-IP identity linkage, narrowed at the tree (the L-6 carry-over was stale at this register's own pin): `rpc_port` and `rpc_credits_per_hash` are already forced to 0 on send with the RT-posture rationale in-code (`net_node.inl:2157–2163`) — the residue is the two wire *fields'* existence (redesign deletion candidates), not a live advertisement; anonymity zones announce the fixed sentinel `peer_id` (`net_node.h:115–130`, deliberately non-random, init-enforced, to prevent onion↔clearnet correlation); the live linkage surface is the **public zone's** random `peer_id` (plus `my_port` when pingback-capable) announced on handshake and ping. | `p2p_protocol_defs.h:180-196`; `net_node.inl:2150–2166`; `net_node.h:113–132` | Open — see §3 below, largely superseded by the identity-model direction |
@@ -95,7 +95,14 @@ connection-continuity bookkeeping, distinct from trust-by-identity.
 
 **PW-19 — fully-ephemeral session identity ("NN"-family Noise) is a real,
 named point in the design space** (the person steering this round's own
-proposal), not a deviation from the framework. It cleanly kills PW-14/L-6.
+proposal), not a deviation from the framework. It kills the
+**transport-layer half** of PW-14/L-6 (no static handshake key to link).
+It does **not** by itself touch the application-layer half:
+`basic_node_data.peer_id` / `my_port` are Levin message-layer fields that
+ride above any Noise pattern — deleting them (or making them per-session,
+respecting PW-14's anonymity-zone sentinel constraint) is an **explicit
+requirement of this row**, decided by the Shekyl-native message layer,
+not a side effect of choosing NN.
 Costs: identity-based banning dies (a banned peer reconnects with a fresh
 key) — **see PW-20**, the required replacement.
 
