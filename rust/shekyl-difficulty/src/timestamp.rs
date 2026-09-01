@@ -49,7 +49,7 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// of the preceding `MTP_WINDOW` timestamps (Median-Time-Past rule).
 ///
 /// The strict boundary is **ratified**, not incidental: C2-R3-Q1
-/// (`docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md` §4, 2026-09-01)
+/// (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4, 2026-09-01)
 /// re-derived the `>`-vs-`>=` question after §5.5's "preserved
 /// unchanged" premise was refuted at the tree, and ruled strict. This
 /// predicate is the future consensus rewrite's implementation of that

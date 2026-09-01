@@ -5601,6 +5601,16 @@ timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidat
   // rewrite's twin predicates (shekyl-difficulty's is_above_mtp /
   // is_timestamp_below_ftl) are pinned to this function by the shared
   // vectors docs/test_vectors/MTP_BOUNDARY_V1.json.
+  //
+  // Deliberately C++, deliberately NOT routed through the Rust predicates
+  // (rule 20's migration-is-a-planning-activity clause, not its
+  // new-logic-goes-behind-FFI clause): the consensus validator's Rust
+  // migration is the census C3 program with a rule-07 atomic cutover, and
+  // until that cutover the two implementations stay INDEPENDENT so the
+  // shared vectors can detect drift between them — wiring the Rust
+  // predicate in here would make the differential pair circular. This
+  // function is C3-cutover deletion surface: it consolidates what were
+  // five scattered rule surfaces into the one thing C3 deletes.
   if (window.size() > SHEKYL_DAA_MTP_WINDOW)
   {
     // The newest-11 selection is order-dependent and therefore the

@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 // Shared C2-R3 boundary vectors for the ruled timestamp rule
-// (docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01),
+// (docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01),
 // consumed from docs/test_vectors/MTP_BOUNDARY_V1.json against the live
 // validator's rule owner `cryptonote::shekyl_check_timestamp_rule`. The
 // same file drives rust/shekyl-difficulty/tests/mtp_boundary_vectors.rs

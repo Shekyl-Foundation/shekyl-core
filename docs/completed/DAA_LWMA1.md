@@ -1518,7 +1518,7 @@ LWMA-1's properties depend on incoming-timestamp validation that is
   preserving was the *non-strict* one (`timestamp < median` was the
   only reject; equality was accepted). The boundary was therefore
   re-derived from zero and **re-ratified strict** by C2-R3-Q1
-  ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](../design/CONSENSUS_C2_R3_TIMESTAMPS.md)
+  ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md)
   §4), which also ruled the parts this bullet left to the inherited
   code: the window is the **11 timestamps immediately preceding the
   candidate on its own chain** (alt path included — the inherited alt

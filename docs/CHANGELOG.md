@@ -95,7 +95,7 @@
 ### Changed
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
-  (C2-R3, `docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
+  (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
   2026-09-01).** A candidate timestamp is valid iff it is at most
   `local_clock + 540 s` (checked at main connect AND alt admission — the
   alt store previously had no future-time bound) and strictly greater

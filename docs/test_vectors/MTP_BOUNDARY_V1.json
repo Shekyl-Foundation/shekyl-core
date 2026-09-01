@@ -1,7 +1,7 @@
 {
   "comment": [
     "Shared boundary vectors for the C2-R3 ruled timestamp rule",
-    "(docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01):",
+    "(docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01):",
     "a candidate timestamp T is consensus-valid iff T <= local_clock + 540",
     "(FTL) and T > M (MTP), where M is element index 5 (0-based) of the",
     "sorted window of the 11 timestamps immediately preceding the candidate,",

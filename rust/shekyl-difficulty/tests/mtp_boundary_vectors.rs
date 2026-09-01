@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Shared C2-R3 boundary vectors for the ruled timestamp rule
-//! (`docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
+//! (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
 //! 2026-09-01), consumed from
 //! `docs/test_vectors/MTP_BOUNDARY_V1.json`.
 //!

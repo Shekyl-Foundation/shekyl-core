@@ -1,22 +1,27 @@
 # C2-R3 — Timestamps design round: MTP boundary, bootstrap carve-out, alt-path FTL
 
-**Status:** **RATIFIED 2026-09-01 (Rick)** — all three rulings signed as
-proposed (§8); implementation lands in this round's PR. First design round of
-the C2 program ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10
-batch R3). Ratification review independently re-derived every load-bearing
-claim against `dev @ 30cd547e2`; no factual corrections. The §5.1
-genesis-mint-timestamp flag was ruled a FOLLOWUPS row, not this PR's scope.
+**Status:** **CLOSED-as-record (2026-09-01)** — all three rulings ratified by
+Rick as proposed (§8) and the implementation landed in the same PR (#592);
+this document is the round's finished ruling record (rule 95 closed-plan
+class; archived per index §8 in the landing PR). It owns no open work: the
+R9 clock-seam harness, the genesis-mint-timestamp question, and the R1 batch
+live in the census §10 queue and FOLLOWUPS. First design round of the C2
+program ([`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md)
+§10 batch R3). Ratification review independently re-derived every
+load-bearing claim against `dev @ 30cd547e2`; no factual corrections. The
+§5.1 genesis-mint-timestamp flag was ruled a FOLLOWUPS row, not this PR's
+scope.
 **Pinned sha:** `30cd547e2e9146bd30d7313e644246a9794b57d3` (`dev` tip,
 2026-09-01). Every `file:line` in this doc was re-located at this pin; where a
 prior citation drifted, both numbers are recorded.
 **Identifier family:** `C2-R3-Q1…Q3` (registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 this PR). Census rows
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 this PR). Census rows
 in scope: CEN-C2 (Q1), CEN-C3 (Q2), CEN-C1's alt-FTL note (Q3).
 **Authority chain:** census §10 R3 + rows CEN-C1/C2/C3 (CEN-C2 adjudicated at
 the tree by C1 steering — built on, not re-derived);
-[`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §4–§5; pinned LWMA sources
-[`refs/zawy12_issue_3_lwma1.md`](refs/zawy12_issue_3_lwma1.md) /
-[`refs/zawy12_issue_24_history.md`](refs/zawy12_issue_24_history.md); rules
+[`DAA_LWMA1.md`](DAA_LWMA1.md) §4–§5; pinned LWMA sources
+[`refs/zawy12_issue_3_lwma1.md`](../design/refs/zawy12_issue_3_lwma1.md) /
+[`refs/zawy12_issue_24_history.md`](../design/refs/zawy12_issue_24_history.md); rules
 00 / 30 / 50 / 60.
 
 **Scope fence (restated from the dispatch):** reorg / checkpoint / fork-choice
@@ -32,7 +37,7 @@ were not in the census row and were found by this round's re-grounding pass.
 
 | # | Surface | Where (at `30cd547e2`) | Behavior today |
 | --- | --- | --- | --- |
-| 1 | Ratified spec | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.5 :1511–:1514 | "must be **strictly greater** than the median … Already implemented in the inherited block-header validator; preserved unchanged" — the premise ("preserved unchanged") is refuted at surface 2; the census carries this as class `ratified-premise-refuted` |
+| 1 | Ratified spec | [`DAA_LWMA1.md`](DAA_LWMA1.md) §5.5 :1511–:1514 | "must be **strictly greater** than the median … Already implemented in the inherited block-header validator; preserved unchanged" — the premise ("preserved unchanged") is refuted at surface 2; the census carries this as class `ratified-premise-refuted` |
 | 2 | Live C++ validator | `src/cryptonote_core/blockchain.cpp:5519` (vector overload body 5514–5527) | `if (b.timestamp < median_ts) return false` — **non-strict**: equality accepted. Median via `epee::misc_utils::median` |
 | 3 | Unwired Rust predicate | `rust/shekyl-difficulty/src/timestamp.rs:64` (`is_above_mtp`) | `incoming > median` — **strict**, spec-conformant, **zero production callers** |
 | 4 | **Miner-template floor (Jagerman bump) — found this round** | `blockchain.cpp:1948–1954` (the spec's §5.5 cite of :1650–1656 has drifted; same code) | `if (!check_block_timestamp(b, median_ts)) b.timestamp = median_ts;` — sets the template timestamp **to** the median. Self-consistent only under the non-strict boundary; under strict it mints a template the node itself rejects whenever `time(NULL) ≤ median` |
@@ -73,7 +78,7 @@ not from memory:
 
 - The **entire** MTP requirement in the LWMA-1 reference is one config line:
   `// BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 11; // aka "MTP"`
-  ([`refs/zawy12_issue_3_lwma1.md`](refs/zawy12_issue_3_lwma1.md) :66). It
+  ([`refs/zawy12_issue_3_lwma1.md`](../design/refs/zawy12_issue_3_lwma1.md) :66). It
   names the inherited CryptoNote check and sets its **window**; it says nothing
   about the comparison boundary. (The CN check it configures is the non-strict
   one — a fact about the inherited code, not an argument; rule 60.)
@@ -84,7 +89,7 @@ not from memory:
   solvetime + symmetric `±6T` clamp (`DAA_LWMA1.md` §5.3 steps 2–3; a
   window-equal timestamp contributes a clamped solvetime of 0).
 - The manipulation analysis
-  ([`refs/zawy12_issue_24_history.md`](refs/zawy12_issue_24_history.md))
+  ([`refs/zawy12_issue_24_history.md`](../design/refs/zawy12_issue_24_history.md))
   credits MTP's defensive value to the **window size** ("a certain theoretical
   malicious attack is now stopped by using MTP=11 instead of 60", item 10) and
   places out-of-sequence-timestamp protection **inside the algorithm or
@@ -368,6 +373,20 @@ fix evaluated on the merits rather than adopted verbatim:
   cache and rebuilds through the fresh path, closing the drift item at
   its root. Same `time(NULL)` testability posture as the refusal arm
   (R9 clock-seam).
+- One review prescription was **rejected on the merits** (recorded here
+  so it is not re-litigated per surface): routing the C++ rule owner
+  through the Rust predicates via FFI now. Rule 20's
+  new-consensus-logic-behind-FFI clause is governed here by its own
+  migration-is-a-planning-activity clause: the consensus validator's
+  Rust migration is the census **C3** program (ruled 2026-08-31) with a
+  rule-07 atomic cutover, and until that cutover the C++ owner and the
+  Rust twins stay deliberately **independent** so the shared vectors can
+  detect drift between two implementations — wiring the predicate in
+  pre-C3 would make the differential pair circular and split rule
+  authority mid-program. The C++ owner is C3-cutover deletion surface
+  by construction (five scattered surfaces consolidated into the one
+  function C3 deletes); the in-code comment at the rule owner records
+  the same disposition.
 
 1. **Shared boundary vectors first** (rule 30: vectors before
    implementation): `docs/test_vectors/MTP_BOUNDARY_V1.json` — cases
