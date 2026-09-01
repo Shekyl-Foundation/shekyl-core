@@ -4,6 +4,25 @@
 
 ### Added
 
+- **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
+  enumerates the peer-to-peer wire surface and the connection-management
+  behavior around it at `dev` `30cd547e2` — 55 bucketed rows, 3 b1 / 6 b2 /
+  2 b3 / 44 b4, on the same four-bucket bar and evidence-class column as the
+  consensus census. Mechanical denominator (26 C++ KV maps, 72 field lines,
+  22 Rust `PortableMap` twins) with a sum check whose 4-map residual is
+  accounted row by row, and six named inverse spot-checks. Mints one new
+  evidence class, `inherited-defensive`, for a defence the tree carries by
+  lineage with no Shekyl record examining it. Discharges the requirements
+  register's §7 tasks 1–4 and records task 5 as not verifiable from the
+  repository. Findings of note: `connection_entry_base` has zero callers
+  tree-wide and `network_address_old` only a size printer (both bucket-3
+  deletion candidates); `network_config`'s never-sent KV map would advertise
+  a 50 MB packet limit against the 100 MB the transport enforces; the
+  Shi et al. (NDSS 2025) eclipse attack's double-spend arm is refused at the
+  tree by an **inherited** Monero guard (`f7fd209ed`, 2024-03-07) that no
+  Shekyl record has examined, while its graylist and whitelist sub-attacks
+  are unaddressed. Docs only, no behavior change.
+
 - **Merged consensus-rule census (C1).** `docs/design/CONSENSUS_RULE_CENSUS.md`
   supersedes the three census walks as the single live instrument and the
   consensus-rewrite's specification input (171 rows, buckets 87/14/2/68;

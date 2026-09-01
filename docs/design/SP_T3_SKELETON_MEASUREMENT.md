@@ -1,7 +1,15 @@
 # SP-T3 serving skeleton — the PD-F-2 dispersion measurement
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** measurement spike, opened 2026-08-03. SPIKE-F-1 **REFUTED AS
+STATED** (`:79`); SPIKE-F-12 **CONFIRMS AN ACCEPTED RESIDUAL** (`:80`) — the
+tor entry-guard set is per-process/datadir, so one tor process means one guard
+set sees every stem successor (§21.1). **Status corrected 2026-09-01:** this
+line deferred to [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md), which
+carries no row for this spike — a dangling pointer found by the P2P-1 census
+archaeology sweep ([`P2P_1_WIRE_CENSUS.md`](P2P_1_WIRE_CENSUS.md) §1). The
+status is stated here instead, where the spike's own findings live.
+
 **Branch:** `spike/sp-t3-serving-skeleton` · **Base:** `dev@146c7a9`
 **Class:** measurement spike. Not TJ-B. Not consensus.
 **Opened:** 2026-08-03

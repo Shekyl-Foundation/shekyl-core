@@ -680,6 +680,15 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
+- **P2P wire census bucket-3 residue — two dead wire structs [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) PWC-F1, PWC-F2
+  - Target: pre-genesis
+
+- **P2P wire census — `network_config`'s never-sent KV map advertises a packet limit the transport does not enforce (50 MB vs 100 MB) [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) PWC-F3
+  - Target: pre-genesis
+
+- **P2P wire census — Shi et al. (NDSS 2025) graylist and whitelist sub-attacks unaddressed; the double-spend arm is refused only by an inherited, never-examined guard [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) §5.2, PWC-E7
+  - Target: pre-genesis
+
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
   - Target: pre-genesis
 
