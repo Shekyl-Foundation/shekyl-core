@@ -204,6 +204,14 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED: u8 = 47;
 /// at the same `ShardSet::new` boundary as the count cap ("a set on the wire").
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD: u8 = 48;
 
+/// Debit authorization (`shekyl_archival_debit_auth_pin`): the bond record
+/// commits no canonical-length `bond_spend_pk`, so it authorizes **no** debit.
+/// Fail closed — never an identity-key fallback.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY: u8 = 49;
+/// Debit authorization: the presented `pqc_auths` key is not the record's
+/// committed `bond_spend_pk` (identity-key or foreign-key authorization).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
+
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
 /// A required out-pointer was null.

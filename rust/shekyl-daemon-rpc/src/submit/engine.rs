@@ -12,12 +12,16 @@
 //! before the FFI shims exist.
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_wire::transaction::Ct;
 
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
-use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
+use crate::submit::facts::{
+    BondProbe, CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta,
+};
 use crate::submit::fee::fee_meets_floor;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
+use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
 
 /// An internal fault — **never a verdict** (§3.4 / §4.2). The transport
@@ -162,11 +166,70 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             }
         };
 
+        // ── The debit arm's possession pre-gate, before any lock ───────
+        // §8.7.1.1's gather runs a per-shard last-served scan — two LMDB
+        // seeks per served shard, with the pool and blockchain locks held,
+        // and for a CompleteTree record that count tracks the frozen-segment
+        // count rather than any constant. The gather's own cheap pin compares the
+        // presented authorizer to the record's committed `bond_spend_pk`,
+        // and BOTH of those are public values (the key rides the JoinMarket
+        // post on the wire), so that pin authenticates nobody on its own:
+        // copy the key off the chain, sign with garbage, buy the scan.
+        //
+        // Proof of possession is the missing half, and it is facts-free, so
+        // it belongs here — ahead of the snapshot rather than at K13, which
+        // runs after the gather has already done the work. Debit arm only:
+        // the credit arm triggers no scan, so gating it would spend a hybrid
+        // verify to protect nothing.
+        if parsed.bond_post_is_unbond() {
+            if let Err(failure) = verify_debit_slot_possession(&parsed) {
+                tracing::debug!(
+                    "submit rejected: unbond bond-post slot failed the possession \
+                     pre-gate (no fact gather performed)"
+                );
+                return Ok(SubmitVerdict::Rejected {
+                    cause: failure.into(),
+                });
+            }
+        }
+
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
-        // A bond-post additionally asks for the §8.7.1 BP3 record fact,
-        // keyed on the vin's claimed p_canonical_id (BP2 pins the claim to
-        // the pubkey in Phase C).
-        let bond_p_canonical_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        // A bond-post additionally asks an archival-bond question, keyed on
+        // the vin's claimed p_canonical_id (BP2 pins the claim to the pubkey
+        // in Phase C). Which question depends on the post kind, and the two
+        // are opposites: JoinMarket wants the record ABSENT (§8.7.1 BP3),
+        // Unbond wants it PRESENT with its contents as verify operands
+        // (§8.7.1.1). The other non-JoinMarket kinds have no producer and
+        // are refused in Phase C, so they ask JoinMarket's question and
+        // never reach a verdict that consumes the answer.
+        let bond_probe_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        // The debit arm's probe carries the bond slot's auth key so the
+        // gather can run the cheap pin before its expensive scan (§8.7.1.1);
+        // Phase C still runs UB3 itself.
+        let bond_auth = parsed
+            .bond_post()
+            .and_then(|(index, _)| match &parsed.tx.ct {
+                Ct::Fcmp { pqc_auths, .. } => {
+                    pqc_auths.get(index).map(|a| a.hybrid_public_key.as_slice())
+                }
+                _ => None,
+            });
+        let bond_probe = bond_probe_id.as_ref().map(|id| {
+            match (parsed.bond_post_is_unbond(), bond_auth) {
+                (true, Some(auth_pubkey)) => BondProbe::Unbond {
+                    p_canonical_id: id,
+                    auth_pubkey,
+                    bond_debit: parsed
+                        .bond_post()
+                        .map(|(_, bond)| bond.bond_debit)
+                        .unwrap_or(0),
+                },
+                // No auth slot for the bond vin is a malformed submission the
+                // battery refuses anyway; ask the cheap question rather than
+                // inventing a key, and let Phase C issue the verdict.
+                _ => BondProbe::Join(id),
+            }
+        });
         // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the
         // vin-derived claimant id + claimed epochs (E2 pins the derivation
         // to the auth key in Phase C).
@@ -177,12 +240,20 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 &parsed.txid,
                 &parsed.key_images,
                 &parsed.reference_block,
-                bond_p_canonical_id.as_ref(),
+                bond_probe,
                 emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
             )
             .map_err(|_| EngineFault::SnapshotFault)?;
 
-        // Early return on identity only. In-chain outranks in-pool (a
+        // Early return on identity only -- with one exception above it, the
+        // debit arm's possession pre-gate, which refuses BEFORE this point
+        // and therefore before the snapshot exists. That ordering is the
+        // point of the gate (no lock-held scan for an unauthenticated
+        // caller), and its visible cost is that a malformed-signature Unbond
+        // whose txid collides with a pooled one now reads Rejected{Malformed}
+        // rather than AlreadyInPool. That is the more accurate answer for
+        // bytes that are in fact malformed, and it discloses less.
+        // In-chain outranks in-pool (a
         // just-mined tx can transiently be both; "settled" is the more
         // useful truth). A snapshot key-image hit is a re-check input,
         // never a verdict — emitting DoubleSpendConflict here would
@@ -314,6 +385,13 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 "bond-post snapshot carries no bond_record_exists fact (BP3 probe skipped?)",
             ));
         }
+        // The §8.7.1.1 twin: the debit arm additionally needs the record's
+        // CONTENTS, so an Unbond snapshot must carry the fact bundle.
+        if parsed.bond_post_is_unbond() && facts.unbond.is_none() {
+            return Err(EngineFault::ShimContract(
+                "unbond snapshot carries no §8.7.1.1 fact bundle (probe skipped?)",
+            ));
+        }
         // The §8.7.2 E6/E7 contract twin: an emission snapshot must carry
         // the fact bundle the engine asked for.
         if parsed.kind == SubmitTxKind::Emission && facts.emission.is_none() {
@@ -407,10 +485,52 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     block for the same P landed while we verified (Phase C
         //     required the record absent). Same terminality as the
         //     key-image leg — someone else consumed the claim slot.
-        if parsed.kind == SubmitTxKind::BondPost && fresh.bond_record_exists == Some(true) {
-            return Ok(SubmitVerdict::Rejected {
-                cause: RejectCause::DoubleSpendConflict,
-            });
+        //     The debit arm cannot use that fact in the opposite direction,
+        //     because the record does NOT disappear on exit:
+        //     `apply_archival_unbond` rewrites the row with a zero bonded
+        //     total. §8.7.1.1 UB2 therefore re-checks the BALANCE Phase C
+        //     verified against — the vin's own `bond_debit`, which the
+        //     battery required to equal the record's total.
+        //
+        //     Terminal on REMEDY, not on impossibility. `bond_debit` is fixed
+        //     in the signed bytes, so a moved balance makes these bytes stale
+        //     and the correct instruction is REBUILD against the new balance —
+        //     which is what `DoubleSpendConflict` means here. `Retryable`
+        //     means "resubmit these same bytes later" and would be wrong.
+        //
+        //     Do not restore the older claim that these bytes "can never
+        //     connect": a partial slash lowers the balance by one FLOOR and a
+        //     later Rebond credits the same FLOOR back, so it can return to
+        //     exactly the bound value. The hazard is bounded by the reference
+        //     age window and by the wallet being the bytes' only holder (a
+        //     rejected tx is never relayed) — see §8.7.1.1's UB2 note, which
+        //     carries the full argument and the terminal-reject-prune link.
+        if parsed.kind == SubmitTxKind::BondPost {
+            let slot_moved = if parsed.bond_post_is_unbond() {
+                let debit = parsed.bond_post().map(|(_, bond)| bond.bond_debit);
+                match (fresh.bond_record_bonded_total, debit) {
+                    // The balance moved under a fixed debit: an exit zeroed
+                    // it, or a credit raised it. Either way unconnectable.
+                    (Some(total), Some(debit)) => total != debit,
+                    // No balance, but the record is explicitly ABSENT. That
+                    // is a moved slot the shim already knows about — C++
+                    // raises `Raced` for it — and it is not an unknown to
+                    // fall through on. The balance is `None` here precisely
+                    // *because* there is no record to read one from.
+                    (None, _) if fresh.bond_record_exists == Some(false) => true,
+                    // Anything else — present but no balance, or no probe at
+                    // all — is a shim contract violation. Fall through to the
+                    // fault arm rather than guess a verdict.
+                    _ => false,
+                }
+            } else {
+                fresh.bond_record_exists == Some(true)
+            };
+            if slot_moved {
+                return Ok(SubmitVerdict::Rejected {
+                    cause: RejectCause::DoubleSpendConflict,
+                });
+            }
         }
         // 3c. Emission claim-slot conflict, the §8.7.2 E6 re-check: the
         //     claimant record vanished (an Unbond connected) or a claimed

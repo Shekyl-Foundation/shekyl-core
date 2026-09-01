@@ -94,6 +94,13 @@ pub struct SubmitFactsFfi {
     /// `in_chain` so the pair cannot be racy (§4.1). Valid iff `in_chain`;
     /// zeroed otherwise.
     pub in_chain_height: u64,
+    /// The probed record's bonded total; valid iff `bond_record_probed` and
+    /// the probe was [`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`].
+    ///
+    /// Presence does not move when a persona exits — `apply_archival_unbond`
+    /// rewrites the row with a zero bonded total rather than deleting it — so
+    /// the debit arm's Phase-D re-check reads the balance instead.
+    pub bond_record_bonded_total: u64,
 }
 
 impl SubmitFactsFfi {
@@ -109,6 +116,7 @@ impl SubmitFactsFfi {
             bond_record_exists: 0,
             emission_probed: 0,
             emission_claim_conflict: 0,
+            bond_record_bonded_total: 0,
             reserved: [0; 7],
             ref_height: 0,
             root: [0; 32],
@@ -123,7 +131,7 @@ impl SubmitFactsFfi {
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 96);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 104);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
@@ -134,6 +142,7 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) =
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_probed) == 7);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_claim_conflict) == 8);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 96);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 9);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 24);
@@ -222,6 +231,63 @@ pub struct SubmitEmissionFactsFfi {
 /// Opaque C++-owned buffer holder (`shekyl_submit_emission_facts_handle`).
 #[repr(C)]
 pub struct SubmitEmissionFactsHandle {
+    _opaque: [u8; 0],
+}
+
+// ── §8.7.1.1 Unbond fact marshal (rows UB2/UB3/UB4/UB6/UB7) ────────────────
+// Mirrors of `daemon_submit_ffi.h`'s Unbond PODs.
+
+/// Which archival-bond question the Phase-B probe asks
+/// (`SHEKYL_SUBMIT_BOND_PROBE_JOIN`): the record must be **absent**.
+pub const SHEKYL_SUBMIT_BOND_PROBE_JOIN: u8 = 0;
+/// (`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`): the record must be **present**, and
+/// its contents are verify operands.
+pub const SHEKYL_SUBMIT_BOND_PROBE_UNBOND: u8 = 1;
+
+/// `shekyl_submit_unbond_record_ffi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitUnbondRecordFfi {
+    pub bonded_total_atomic: u64,
+    pub bad_interval_count: usize,
+    pub bond_spend_pk: *const u8,
+    pub bond_spend_pk_len: usize,
+    pub holdings_kind: u8,
+    /// Which accessor produced `per_shard_last_served`
+    /// (`SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_*`). Echoed by the gather and
+    /// pinned Rust-side against `holdings_kind`.
+    pub last_served_scan: u8,
+    /// 1 = the gather did NOT run the per-shard scan, so the slice is
+    /// empty-because-**unread** rather than empty-because-never-served.
+    /// Folding it would give the permissive "never served" cooldown answer,
+    /// so a consumer must refuse rather than fold.
+    ///
+    /// **Says nothing about authorization.** The gather skips whenever a
+    /// pre-scan guard shows the scan cannot change the answer: an already-known
+    /// txid, a failed debit pin, a zero balance, a balance the vin's
+    /// `bond_debit` no longer matches, or a full bad-interval log. Inferring
+    /// "the pin failed" from this byte was true of an earlier revision and is
+    /// not true now; the reasons are listed on `fill_unbond_facts_locked`,
+    /// which owns them.
+    pub last_served_scan_skipped: u8,
+    pub per_shard_last_served: *const u64,
+    pub per_shard_last_served_len: usize,
+}
+
+/// `shekyl_submit_unbond_facts_ffi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitUnbondFactsFfi {
+    pub record_present: u8,
+    pub record: SubmitUnbondRecordFfi,
+    /// The slash watermark **as stored**; `u64::MAX` is the "nothing settled
+    /// yet" sentinel, normalised once in `ffi_shim`.
+    pub last_settled_slash_epoch: u64,
+}
+
+/// Opaque C++-owned buffer holder (`shekyl_submit_unbond_facts_handle`).
+#[repr(C)]
+pub struct SubmitUnbondFactsHandle {
     _opaque: [u8; 0],
 }
 
@@ -778,10 +844,15 @@ extern "C" {
         n_key_images: usize,
         reference_block: *const u8,
         bond_p_canonical_id: *const u8,
+        bond_probe_kind: u8,
+        bond_auth_pubkey: *const u8,
+        bond_auth_pubkey_len: usize,
+        bond_debit: u64,
         emission_p_canonical_id: *const u8,
         emission_epochs: *const u64,
         n_emission_epochs: usize,
         out_emission: *mut *mut SubmitEmissionFactsHandle,
+        out_unbond: *mut *mut SubmitUnbondFactsHandle,
         out_facts: *mut SubmitFactsFfi,
         out_ki_conflicts: *mut u8,
     ) -> i32;
@@ -791,6 +862,12 @@ extern "C" {
     ) -> *const SubmitEmissionFactsFfi;
 
     pub fn shekyl_submit_emission_facts_free(h: *mut SubmitEmissionFactsHandle);
+
+    pub fn shekyl_submit_unbond_facts_view(
+        h: *const SubmitUnbondFactsHandle,
+    ) -> *const SubmitUnbondFactsFfi;
+
+    pub fn shekyl_submit_unbond_facts_free(h: *mut SubmitUnbondFactsHandle);
 
     #[allow(clippy::too_many_arguments)]
     pub fn shekyl_submit_commit_tx(
