@@ -135,20 +135,52 @@ Keepalive-Timeout 10 s.
 be traceable to a source read in this round or a prior one that named its
 verification.
 
-**PW-3 / PWC-X7 — the debt is now *reachable*, and the round owes it.** The
-census recorded PW-3's pattern attribution as not verifiable from the
-repository; that was true of `shekyl-core` and false of the corpus, which
-carries `2608.00954v1_Noise_PQC.pdf`. Re-verification is therefore possible
-and belongs to D-T2. One pointer, so the round does not repeat the census's
-dead end: **PW-3 cites "Fig. 6" for a handshake-size claim, but Figure 6's
-caption is *"Public key and ciphertext sizes for DH and ML-KEM"*** — a
-primitive-size figure, not per-pattern handshake totals. A per-pattern byte
-count must come from elsewhere in the paper; the same page carries a
-mean-RTT chart whose x-axis is pattern names, and text extraction does **not**
-preserve which bar belongs to which pattern, so the figure has to be read
-visually rather than grepped. Until that is done, **no pattern-specific byte
-count may be quoted** — the ~14× magnitude is not what is in doubt, the
-attribution is.
+### 1.4 PW-3 / PWC-X7 — **debt discharged, and the finding is worse than recorded**
+
+The census recorded PW-3's attribution as unverifiable from the repository:
+true of `shekyl-core`, false of the corpus. Now closed, from the paper's own
+prose rather than from any figure read.
+
+**The right figure is 4(c), not Fig. 6.** Figure 6 is *"Public key and
+ciphertext sizes for DH and ML-KEM"* — primitive sizes. The per-pattern
+handshake totals are **Fig. 4(c), "Message overhead per handshake"**, chart
+title *"Handshake Message Overhead: Bytes per Handshake"*, y-axis *"Total
+Bytes Exchanged"*, x-axis groups **NN / XX / IK / KK** left to right.
+
+**And PW-3's headline number belongs to the wrong pattern — the register's own
+caveat was right.** §6.2(e) states it in prose, which is authoritative over any
+bar read:
+
+> PQ patterns incur 28.6–46.8× more wire overhead than classical, with KK
+> highest because its classical baseline is very small… HFS grows less than
+> pure PQ in multi-message patterns (e.g., **XX: HFS 14.4×** vs. PQ 36.1×)…
+> **NNhfs is the exception at 33.0× because classical NN starts from only 80
+> bytes.**
+
+| | classical | HFS ratio |
+| --- | --- | --- |
+| **NN** — Shekyl's pattern | **80 B** | **33.0×** (≈ 2.6 KB) |
+| XX | 192 B | 14.4× |
+
+So the register's "~14× classical→hybrid" is **XX's** figure and its 192 B is
+**XX's** baseline. PW-3 suspected exactly this ("extracted adjacent to the NN
+pattern's row, not confirmed against XX") and was correct. **For the NN-family
+gossip lane the multiplier is 33.0×, not ~14×** — more than double what the
+register records, because NN's classical baseline is the smallest of the four
+and the KEM material is a constant added to it.
+
+**This makes D-T2 more load-bearing, not less.** A 33× first-flight expansion
+is a far stronger bucketing signal than 14×, and PW-3's fixed-size padding band
+is the requirement that answers it. The round must not carry the softer number
+into the threat argument.
+
+Two constraints on use: the ratio and the 80 B are quoted from the paper's
+prose and are safe; **the absolute HFS byte count (≈ 2.6 KB, consistent with
+33.0 × 80 B) is inferred and must be pinned from the table or a
+higher-resolution read before it enters normative text.** And note this closes
+a loop with §0(b): PW-8's "2.4–2.8 KB" is a plausible *absolute* NN-hybrid
+handshake size — what was wrong there was comparing it against BOLT-8's
+*classical* 166 B, not the magnitude itself.
 
 ---
 
@@ -184,7 +216,7 @@ remains is to make them concrete and normative.
 | id | Decision | Grounded in |
 | --- | --- | --- |
 | D-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
-| D-T2 | **Fixed-size padding band**, independent of pattern and KEM — named as a hard requirement, not assumed as a side-effect of encryption | PW-3 (**do not quote its byte figure**, PWC-X7) |
+| D-T2 | **Fixed-size padding band**, independent of pattern and KEM — named as a hard requirement, not assumed as a side-effect of encryption. The signal it answers is a **33.0×** first-flight expansion for `NN` (§1.4), not the ~14× the register records — that is XX's figure | PW-3 as corrected in §1.4; pin the absolute byte count before it enters normative text |
 | D-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset | PW-8 (ruled; carry the §0(b) correction) |
 | D-T4 | **`e1`/`ekem1` semantics written normatively in this document**, `noise_hfs_spec` cited as provenance only | **PW-7c** |
 | D-T5 | Wire prefix: what replaces `LEVIN_SIGNATURE`'s fixed 8 bytes | PWC-A1, PW-9 |
