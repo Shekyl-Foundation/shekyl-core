@@ -199,8 +199,13 @@ pub enum BondProbe<'a> {
     /// not for the verdict — Phase C runs UB3 itself — but so the gather can
     /// run the cheap debit-auth pin **before** the per-shard last-served
     /// scan, which is two LMDB seeks per served shard under the pool and
-    /// blockchain locks. Without it an unsigned, unfunded transaction naming
-    /// a known `CompleteTree` record buys that scan on every submit.
+    /// blockchain locks.
+    ///
+    /// This key alone authenticates nobody: it and the record's copy are both
+    /// public, so it only stops a *validly signed* caller presenting an
+    /// unrelated key. Refusing an invalid signature is UB0's job, upstream of
+    /// this probe. The composition is argued once, in
+    /// `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1's "Why UB0 exists" note.
     Unbond {
         /// The vin's claimed `p_canonical_id`.
         p_canonical_id: &'a [u8; 32],

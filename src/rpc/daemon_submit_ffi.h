@@ -284,10 +284,17 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // An _UNBOND probe also requires bond_auth_pubkey (the bond slot's
 // pqc_auths key, from the same blob as the probe id). It gates the EXPENSIVE
 // half of the gather: the per-shard last-served scan is two LMDB seeks per
-// served shard, run while the pool and blockchain locks are held, and
-// without this gate any caller could force it on a known CompleteTree record
-// with an unsigned, unfunded transaction. The block path already performs
-// the cheap key pin before its cursor scans; this mirrors that ordering.
+// served shard, run while the pool and blockchain locks are held. The block
+// path already performs the cheap key pin before its cursor scans; this
+// mirrors that ordering.
+//
+// It does NOT keep an unauthenticated caller out on its own -- both compared
+// keys are public. Possession is proved earlier, by the Rust engine's UB0
+// pre-gate, and the two checks compose. The argument lives in ONE place,
+// DAEMON_SUBMIT_VERDICT.md §8.7.1.1's "Why UB0 exists" note; do not restate it
+// here (an earlier revision of this comment asserted the pin stopped "an
+// unsigned, unfunded transaction", which was false and outlived its own
+// retraction in daemon_submit_ffi.cpp).
 //
 // It is a WORK gate, not a verdict. The same shared pin runs again Rust-side
 // and issues the actual refusal, so a divergence here can only cause less

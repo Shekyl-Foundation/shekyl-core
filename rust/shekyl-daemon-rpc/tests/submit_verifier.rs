@@ -2050,7 +2050,8 @@ fn a_competing_unbond_that_exits_the_record_is_a_terminal_conflict() {
     // present. So the fresh facts below are exactly what the daemon returns
     // after a competing Unbond connects during Phase C — record present,
     // balance gone — and a re-check keyed on presence would classify this as
-    // "no premise moved" and admit a transaction that can never connect.
+    // "no premise moved" and admit a transaction whose balance binding no
+    // longer holds.
     let fx = unbond_fixture();
     let mut fresh = unbond_admitting_facts();
     fresh.bond_record_exists = Some(true);

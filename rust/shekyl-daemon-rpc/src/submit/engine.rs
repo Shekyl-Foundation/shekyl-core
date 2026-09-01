@@ -486,9 +486,21 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     `apply_archival_unbond` rewrites the row with a zero bonded
         //     total. §8.7.1.1 UB2 therefore re-checks the BALANCE Phase C
         //     verified against — the vin's own `bond_debit`, which the
-        //     battery required to equal the record's total. Gone, or no
-        //     longer equal, and these bytes can never connect. Terminal
-        //     either way: the slot moved.
+        //     battery required to equal the record's total.
+        //
+        //     Terminal on REMEDY, not on impossibility. `bond_debit` is fixed
+        //     in the signed bytes, so a moved balance makes these bytes stale
+        //     and the correct instruction is REBUILD against the new balance —
+        //     which is what `DoubleSpendConflict` means here. `Retryable`
+        //     means "resubmit these same bytes later" and would be wrong.
+        //
+        //     Do not restore the older claim that these bytes "can never
+        //     connect": a partial slash lowers the balance by one FLOOR and a
+        //     later Rebond credits the same FLOOR back, so it can return to
+        //     exactly the bound value. The hazard is bounded by the reference
+        //     age window and by the wallet being the bytes' only holder (a
+        //     rejected tx is never relayed) — see §8.7.1.1's UB2 note, which
+        //     carries the full argument and the terminal-reject-prune link.
         if parsed.kind == SubmitTxKind::BondPost {
             let slot_moved = if parsed.bond_post_is_unbond() {
                 let debit = parsed.bond_post().map(|(_, bond)| bond.bond_debit);

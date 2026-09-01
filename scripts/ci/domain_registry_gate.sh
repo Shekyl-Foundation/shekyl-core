@@ -93,6 +93,15 @@ fail=0
 # counts, which is its own review, not this one.
 code_only() { python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" "$1"; }
 
+# Rule 47: the row-presence arm is only as good as the stripper, so assert the
+# stripper before trusting it. A regression there would widen this gate in the
+# passing direction without any row changing.
+if ! python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" --self-test; then
+  echo "FAIL: the comment stripper failed its own regression cases; the"
+  echo "      row-presence check below reads its output."
+  exit 1
+fi
+
 # ── Tripwire 1: row-presence + const binding + frozen-doc cross-check ───────
 # Tab is IFS whitespace, so a plain IFS=$'\t' read COLLAPSES adjacent tabs and
 # shifts empty middle columns left (diverging from the Rust test's split('\t')).

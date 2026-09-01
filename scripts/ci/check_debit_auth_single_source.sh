@@ -73,20 +73,29 @@ fi
 # never travels through a pipe). Observed on the first run of this arm.
 #
 # BLOCK comments are stripped too, and that is not pedantry: `/* ... */` around
-# a chunk of code is the ordinary way a C++ maintainer disables it while
-# debugging. Stripping only `//` left the disabled call's text in the body, so
+# a chunk of code is the ordinary way a maintainer disables it while debugging.
+# Stripping only `//` left the disabled call's text in the body, so
 # `require_call` still found it and the gate certified an arm that no longer
-# authorized anything. Block first, then line: a `//` line containing an
-# unterminated `/*` has no closer, so the non-greedy block pass leaves it for
-# the line pass.
+# authorized anything.
 #
-# HONEST LIMIT: this is a stripper, not a lexer. A `/*` or `//` inside a STRING
-# LITERAL is treated as a comment opener, so a literal containing one can hide
-# following text on that line. The direction of that failure is a spurious RED
-# (a required call reads as absent), never a silent pass, and no such literal
-# exists on these paths today. The clang-AST reopening criterion below covers
-# this too.
+# The stripper is language-aware (Rust nests block comments, C++ does not; a
+# Rust `'` is usually a lifetime rather than a quote) and documents its own
+# unmodelled cases. Those limits are NOT restated here: the previous revision
+# of this comment described string-literal handling the helper already had, and
+# a limits note written from intention rather than from the code is exactly the
+# staleness this gate exists to prevent. Read strip_c_comments.py.
 code_only() { python3 "$here/strip_c_comments.py" "$1"; }
+
+# Rule 47 applied to the helper: every arm below is only as good as the
+# stripper, so assert the stripper is correct BEFORE trusting its output. A
+# stripper regression would otherwise widen every check here at once, silently
+# and in the passing direction.
+if ! python3 "$here/strip_c_comments.py" --self-test; then
+  echo "FAIL: the comment stripper failed its own regression cases; every"
+  echo "      call-site assertion below reads its output, so their verdicts"
+  echo "      cannot be trusted."
+  exit 1
+fi
 
 require_call() {
   local file="$1" needle="$2" label="$3" body hits

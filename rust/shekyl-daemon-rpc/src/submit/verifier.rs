@@ -701,8 +701,11 @@ fn verify_debit_arm(
     };
 
     // ── UB2: the record must exist ──────────────────────────────────────
-    // Absent *here*, at Phase B/C, means these bytes can never connect —
-    // a submitter error, `Malformed`. Absent at the Phase-D re-check after
+    // Absent *here*, at Phase B/C, is a submitter error — `Malformed`,
+    // whose remedy is rebuild, not retry. (Terminal on remedy rather than on
+    // impossibility: a later JoinMarket could re-create the row at a floor
+    // equal to this vin's fixed `bond_debit`. §8.7.1.1's UB2 note carries the
+    // argument and the bound.) Absent at the Phase-D re-check after
     // being present at B is a competing debit that connected during Phase
     // C, and the engine classifies that `DoubleSpendConflict` from the
     // fresh facts. Same fact value, different verdict by when it was
