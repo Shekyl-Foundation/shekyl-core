@@ -140,13 +140,14 @@
 #                                                   lift this gate. RESERVED
 #                                                   is anchored to what
 #                                                   actually holds it: no RPC
-#                                                   verb, no CLI command,
+#                                                   verb, no CLI command, and
 #                                                   nothing dispatching the
-#                                                   assembled bytes, and
-#                                                   native /submit_transaction
-#                                                   still refusing Unbond as
-#                                                   Malformed until the Unbond
-#                                                   submit fact set lands.
+#                                                   assembled bytes. Native
+#                                                   /submit_transaction was a
+#                                                   fourth condition until
+#                                                   2026-08-29 and is not one
+#                                                   now — it admits an Unbond
+#                                                   (§8.7.1.1).
 #                                                   (Re-anchored 2026-08-28:
 #                                                   this previously read
 #                                                   "RESERVED stands until
@@ -178,23 +179,33 @@
 #                                                   wire encoding, and the
 #                                                   surface-A pqc_auths slot
 #                                                   under bond_spend_pk — not
-#                                                   just the vin. Three
-#                                                   things still sit between
-#                                                   that and a working verb,
-#                                                   and none of them is the
-#                                                   walk: nothing DISPATCHES
-#                                                   the assembled bytes yet;
-#                                                   native
-#                                                   `/submit_transaction`
-#                                                   still refuses Unbond
-#                                                   (`BondPostKind::Other`)
-#                                                   as Malformed — the
-#                                                   construction-leg reopen
-#                                                   has fired, the Unbond
-#                                                   submit fact set has not;
+#                                                   just the vin. TWO things
+#                                                   still sit between that and
+#                                                   a working verb, and
+#                                                   neither is the walk nor
+#                                                   the submit battery — both
+#                                                   landed: nothing DISPATCHES
+#                                                   the assembled bytes yet,
 #                                                   and `unstake` is the
-#                                                   composed unbond() = post
-#                                                   + a decorrelated drain.
+#                                                   composed unbond() = post +
+#                                                   a decorrelated drain.
+#                                                   UPDATE 2026-08-29: native
+#                                                   `/submit_transaction` used
+#                                                   to be a third condition
+#                                                   and no longer is — the
+#                                                   Unbond submit fact set
+#                                                   landed
+#                                                   (DAEMON_SUBMIT_VERDICT.md
+#                                                   §8.7.1.1), so a dispatched
+#                                                   Unbond would now be
+#                                                   ACCEPTED. That narrows the
+#                                                   margin rather than
+#                                                   widening it:
+#                                                   unreachability is now the
+#                                                   whole of what holds this
+#                                                   path closed, where it used
+#                                                   to be one of two
+#                                                   independent layers.
 #                                                   Read this entry as "the
 #                                                   hard part exists and is
 #                                                   unreachable", never as

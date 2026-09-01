@@ -22,11 +22,14 @@ use crate::core::CoreRpc;
 use crate::ffi;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
-    CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
+    BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
+    ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta, UnbondFacts,
+    UnbondRecordFacts,
 };
-use shekyl_archival_retention::{BadInterval, HoldingsDescriptor, HoldingsKind, ShardSet};
+use shekyl_archival_retention::{
+    BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet,
+};
 
 /// Production shim over the `shekyl_submit_*` FFI, sharing the daemon's
 /// [`CoreRpc`] handle. All three calls block on the C++ side (short lock
@@ -45,7 +48,22 @@ impl FfiSubmitShim {
 /// Convert the POD snapshot + conflict array into the engine's fact type.
 /// `Err(())` on a descriptor byte outside the documented set (contract
 /// violation; callers map to their internal-fault arm).
-fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, ()> {
+/// `unbond_probe` says whether the call this POD answers asked the debit
+/// arm's question. It gates `bond_record_bonded_total`, and it is a
+/// parameter rather than something derived from the POD because C++ only
+/// *gathers* the balance for an `_UNBOND` probe — for a JoinMarket probe the
+/// field is a zero that was never read, and `Some(0)` there would be a
+/// fabricated fact.
+///
+/// **Both call sites must pass it.** The Phase-D leg returns these facts
+/// directly, so a `None` here is not "the snapshot path restores it later" —
+/// it is the balance the race classifier needs going missing at exactly the
+/// moment it is needed.
+fn facts_from_ffi(
+    pod: &ffi::SubmitFactsFfi,
+    ki: &[u8],
+    unbond_probe: bool,
+) -> Result<SubmitFacts, ()> {
     let key_image_conflicts = ki
         .iter()
         .map(|&b| match b {
@@ -77,12 +95,130 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
         // same validity-gate shape as in_chain_height.
         bond_record_exists: (pod.bond_record_probed != 0).then_some(pod.bond_record_exists != 0),
+        // Valid only for an Unbond probe against a present record: a bare 0
+        // is a legitimate value here (the exited state) and must not be
+        // confused with "not probed".
+        bond_record_bonded_total: (unbond_probe
+            && pod.bond_record_probed != 0
+            && pod.bond_record_exists != 0)
+            .then_some(pod.bond_record_bonded_total),
+        // Filled by the caller from the §8.7.1.1 handle (variable-size, so
+        // it travels beside the POD) — the same shape as `emission`.
+        unbond: None,
         // The E6/E7 fact bundle is converted separately by the snapshot
         // path (it rides a C++-owned handle, not the POD); the fresh-facts
         // path carries only the E6 re-check bit.
         emission: None,
         emission_claim_conflict: (pod.emission_probed != 0)
             .then_some(pod.emission_claim_conflict != 0),
+    })
+}
+
+/// Owns a C++-allocated snapshot bundle handle and frees it on drop.
+///
+/// **Why RAII and not a free at each exit.** The snapshot shim can set an
+/// out-handle and *then* fail: the fee-per-byte arm and both catch blocks in
+/// `daemon_submit_ffi.cpp` all run after `handle.release()`. So the fault
+/// path has to free what the success path frees, and so does every early
+/// return between the two conversions — the emission arm's `ShimFault`
+/// returns sit after the emission handle is freed but before the unbond one
+/// is. Freeing by hand means five exits each remembering two handles; the
+/// emission handle was already leaking on the fault path before the unbond
+/// bundle existed, and a third bundle would have inherited it.
+///
+/// A null handle is the legitimate "no probe ran" case and drops as a no-op.
+struct CxxBundle<T> {
+    raw: *mut T,
+    free: unsafe extern "C" fn(*mut T),
+}
+
+impl<T> CxxBundle<T> {
+    /// Adopt whatever the shim wrote, **before** the return code is checked
+    /// — a handle set on a call that then faults is exactly the leak.
+    fn adopt(raw: *mut T, free: unsafe extern "C" fn(*mut T)) -> Self {
+        Self { raw, free }
+    }
+
+    fn as_ptr(&self) -> *const T {
+        self.raw.cast_const()
+    }
+}
+
+impl<T> Drop for CxxBundle<T> {
+    fn drop(&mut self) {
+        if !self.raw.is_null() {
+            // SAFETY: `raw` came from the shim's out-parameter and is freed
+            // exactly once, here — no other path frees it, and the type is
+            // not `Copy` or `Clone`.
+            unsafe { (self.free)(self.raw) };
+        }
+    }
+}
+
+/// Convert the §8.7.1.1 Unbond fact view into owned facts.
+///
+/// # Safety
+///
+/// `view` and every pointer reachable from it must be valid for the whole
+/// call (the C++ handle's contract: buffers live until
+/// `shekyl_submit_unbond_facts_free`). `Err(())` on a marshal-shape
+/// violation — an unknown holdings kind, an unknown scan discriminant, or a
+/// scan that does not match the record's holdings kind. Every one of those
+/// is a contract fault, never a guessed fact: the scan mismatch in
+/// particular fails **permissively** if believed (an empty slice folds to
+/// "never served", which lets the release cooldown elapse for a record that
+/// has been serving), so it is refused here rather than folded.
+unsafe fn unbond_facts_from_ffi(view: &ffi::SubmitUnbondFactsFfi) -> Result<UnbondFacts, ()> {
+    let record = if view.record_present != 0 {
+        let r = &view.record;
+        let holdings_kind = HoldingsKind::from_u8(r.holdings_kind).map_err(|_| ())?;
+        let gathered_scan = match r.last_served_scan {
+            0 => LastServedScan::HeldShards,
+            1 => LastServedScan::AllShards,
+            _ => return Err(()),
+        };
+        let bond_spend_pk = if r.bond_spend_pk_len == 0 {
+            Vec::new()
+        } else if r.bond_spend_pk.is_null() {
+            return Err(());
+        } else {
+            unsafe { std::slice::from_raw_parts(r.bond_spend_pk, r.bond_spend_pk_len) }.to_vec()
+        };
+        let per_shard_last_served = if r.per_shard_last_served_len == 0 {
+            Vec::new()
+        } else if r.per_shard_last_served.is_null() {
+            return Err(());
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(r.per_shard_last_served, r.per_shard_last_served_len)
+            }
+            .to_vec()
+        };
+        // The row-UB4 pin lives in the constructor: a record whose gather
+        // ran the wrong accessor is unconstructable, so nothing downstream
+        // can fold a permissively-empty slice.
+        Some(
+            UnbondRecordFacts::new(
+                r.bonded_total_atomic,
+                r.bad_interval_count,
+                bond_spend_pk,
+                holdings_kind,
+                gathered_scan,
+                per_shard_last_served,
+                r.last_served_scan_skipped != 0,
+            )
+            .map_err(|_| ())?,
+        )
+    } else {
+        None
+    };
+    Ok(UnbondFacts {
+        record,
+        // The one place the C++ storage sentinel is normalised (§8.7.1.1
+        // row UB6): `u64::MAX` is `get_archival_last_slash_epoch`'s initial
+        // value, never a settled epoch.
+        last_settled_slash_epoch: (view.last_settled_slash_epoch != u64::MAX)
+            .then_some(view.last_settled_slash_epoch),
     })
 }
 
@@ -211,12 +347,26 @@ impl SubmitStateShim for FfiSubmitShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-        bond_p_canonical_id: Option<&[u8; 32]>,
+        bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         let mut pod = ffi::SubmitFactsFfi::zeroed();
         let mut ki_conflicts = vec![0u8; key_images.len()];
         let mut emission_handle: *mut ffi::SubmitEmissionFactsHandle = std::ptr::null_mut();
+        let mut unbond_handle: *mut ffi::SubmitUnbondFactsHandle = std::ptr::null_mut();
+        let bond_probe_kind = match bond_probe {
+            Some(BondProbe::Unbond { .. }) => ffi::SHEKYL_SUBMIT_BOND_PROBE_UNBOND,
+            // The C++ side ignores the byte when no id is passed.
+            Some(BondProbe::Join(_)) | None => ffi::SHEKYL_SUBMIT_BOND_PROBE_JOIN,
+        };
+        // The debit arm's state clause: the gather skips its per-shard scan
+        // when the live balance no longer equals this vin's fixed debit, since
+        // UB9 could not pass whatever the scan returned. Zero for every other
+        // probe, where the C++ side ignores it.
+        let bond_debit = match bond_probe {
+            Some(BondProbe::Unbond { bond_debit, .. }) => bond_debit,
+            Some(BondProbe::Join(_)) | None => 0,
+        };
 
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
@@ -232,32 +382,41 @@ impl SubmitStateShim for FfiSubmitShim {
                 const_ptr_or_null(key_images).cast::<u8>(),
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
-                bond_p_canonical_id.map_or(std::ptr::null(), |id| id.as_ptr()),
+                bond_probe.map_or(std::ptr::null(), |probe| probe.p_canonical_id().as_ptr()),
+                bond_probe_kind,
+                bond_probe.map_or(std::ptr::null(), |probe| probe.auth_pubkey().as_ptr()),
+                bond_probe.map_or(0, |probe| probe.auth_pubkey().len()),
+                bond_debit,
                 emission_probe.map_or(std::ptr::null(), |(id, _)| id.as_ptr()),
                 emission_probe.map_or(std::ptr::null(), |(_, epochs)| const_ptr_or_null(epochs)),
                 emission_probe.map_or(0, |(_, epochs)| epochs.len()),
                 &raw mut emission_handle,
+                &raw mut unbond_handle,
                 &raw mut pod,
                 mut_ptr_or_null(ki_conflicts.as_mut_slice()),
             )
         };
 
+        // Adopt before branching on `rc`: the C++ side sets these
+        // out-handles and can fail afterwards, so the fault path owns them
+        // too. Everything below returns through these guards.
+        let emission_bundle =
+            CxxBundle::adopt(emission_handle, ffi::shekyl_submit_emission_facts_free);
+        let unbond_bundle = CxxBundle::adopt(unbond_handle, ffi::shekyl_submit_unbond_facts_free);
+
         if rc != ffi::SHEKYL_SUBMIT_OK {
             tracing::error!(rc, "submit snapshot shim returned fault");
             return Err(ShimFault);
         }
-        // Copy-then-free posture: the E6/E7 bundle is converted to owned
-        // facts inside this frame (the handle's buffers are valid until the
-        // free below); every early return after this point must free, so
-        // conversion happens first and the free is unconditional.
+        // Copy-then-drop: the bundle is converted to owned facts inside this
+        // frame, while the guard still holds the C++ buffers alive.
         let emission = if let Some((_, epochs)) = emission_probe {
             let converted = unsafe {
-                ffi::shekyl_submit_emission_facts_view(emission_handle)
+                ffi::shekyl_submit_emission_facts_view(emission_bundle.as_ptr())
                     .as_ref()
                     .ok_or(())
                     .and_then(|view| emission_facts_from_ffi(view))
             };
-            unsafe { ffi::shekyl_submit_emission_facts_free(emission_handle) };
             match converted {
                 Ok(facts) if facts.snapshots.len() == epochs.len() => Some(facts),
                 Ok(_) => {
@@ -272,22 +431,70 @@ impl SubmitStateShim for FfiSubmitShim {
         } else {
             None
         };
+        // Same copy-then-drop for the §8.7.1.1 bundle.
+        let unbond = if matches!(bond_probe, Some(BondProbe::Unbond { .. })) {
+            let converted = unsafe {
+                ffi::shekyl_submit_unbond_facts_view(unbond_bundle.as_ptr())
+                    .as_ref()
+                    .ok_or(())
+                    .and_then(|view| unbond_facts_from_ffi(view))
+            };
+            match converted {
+                Ok(facts) => Some(facts),
+                Err(()) => {
+                    tracing::error!("submit snapshot shim returned a malformed unbond bundle");
+                    return Err(ShimFault);
+                }
+            }
+        } else {
+            None
+        };
         // The probe contracts: requested ⇒ answered. A silently skipped
         // probe would fault later as an engine ShimContract; catch it at
         // the boundary it broke.
-        if bond_p_canonical_id.is_some() && pod.bond_record_probed == 0 {
+        if bond_probe.is_some() && pod.bond_record_probed == 0 {
             tracing::error!("submit snapshot shim skipped the requested bond-record probe");
             return Err(ShimFault);
+        }
+        // Two DB reads answer "does a record exist for this id" — the POD's
+        // pubkey probe and the bundle's record load — under one lock scope.
+        // They cannot legitimately disagree; a disagreement is a storage
+        // inconsistency, and reading past it would verify an Unbond against
+        // half a record.
+        if let Some(bundle) = unbond.as_ref() {
+            // Two reads of the same row under one lock scope must agree on
+            // the balance too, not just on presence — the Phase-D re-check
+            // compares against this number.
+            if let Some(record) = bundle.record.as_ref() {
+                if record.bonded_total_atomic() != pod.bond_record_bonded_total {
+                    tracing::error!(
+                        bundle_total = record.bonded_total_atomic(),
+                        pod_total = pod.bond_record_bonded_total,
+                        "submit snapshot shim disagreed with itself about the bonded total"
+                    );
+                    return Err(ShimFault);
+                }
+            }
+            if bundle.record.is_some() != (pod.bond_record_exists != 0) {
+                tracing::error!(
+                    bundle_present = bundle.record.is_some(),
+                    pod_exists = pod.bond_record_exists != 0,
+                    "submit snapshot shim disagreed with itself about the bond record"
+                );
+                return Err(ShimFault);
+            }
         }
         if emission_probe.is_some() && pod.emission_probed == 0 {
             tracing::error!("submit snapshot shim skipped the requested emission probe");
             return Err(ShimFault);
         }
-        let mut facts = facts_from_ffi(&pod, &ki_conflicts).map_err(|()| {
+        let unbond_probe = matches!(bond_probe, Some(BondProbe::Unbond { .. }));
+        let mut facts = facts_from_ffi(&pod, &ki_conflicts, unbond_probe).map_err(|()| {
             tracing::error!("submit snapshot shim returned unknown key-image descriptor");
             ShimFault
         })?;
         facts.emission = emission;
+        facts.unbond = unbond;
         Ok(facts)
     }
 
@@ -328,13 +535,19 @@ impl SubmitStateShim for FfiSubmitShim {
         match rc {
             ffi::SHEKYL_SUBMIT_OK => CommitOutcome::Committed,
             ffi::SHEKYL_SUBMIT_PRUNED_ON_INSERT => CommitOutcome::PrunedOnInsert,
-            ffi::SHEKYL_SUBMIT_RACED => match facts_from_ffi(&fresh_pod, &fresh_ki) {
-                Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
-                Err(()) => {
-                    tracing::error!("submit commit shim returned unknown key-image descriptor");
-                    CommitOutcome::InternalFault
+            // `expected.unbond.is_some()` iff Phase B ran the debit probe —
+            // the same discriminant, carried by facts the caller already
+            // holds, so the commit conversion cannot silently drop the fact
+            // its own race classification depends on.
+            ffi::SHEKYL_SUBMIT_RACED => {
+                match facts_from_ffi(&fresh_pod, &fresh_ki, expected.unbond.is_some()) {
+                    Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
+                    Err(()) => {
+                        tracing::error!("submit commit shim returned unknown key-image descriptor");
+                        CommitOutcome::InternalFault
+                    }
                 }
-            },
+            }
             _ => {
                 tracing::error!(rc, "submit commit shim returned fault");
                 CommitOutcome::InternalFault
@@ -378,6 +591,7 @@ mod tests {
             weight_limit: 149_400,
             chain_height: 200,
             in_chain_height: 0,
+            bond_record_bonded_total: 0,
         }
     }
 
@@ -392,6 +606,7 @@ mod tests {
                 ffi::SHEKYL_SUBMIT_KI_OWN_TX,
                 ffi::SHEKYL_SUBMIT_KI_OTHER,
             ],
+            false,
         )
         .expect("documented arms convert");
         assert_eq!(
@@ -410,14 +625,14 @@ mod tests {
         let mut chain_pod = pod_with(1);
         chain_pod.in_chain = 1;
         chain_pod.in_chain_height = 180;
-        let chain_facts = facts_from_ffi(&chain_pod, &[]).expect("converts");
+        let chain_facts = facts_from_ffi(&chain_pod, &[], false).expect("converts");
         assert_eq!(chain_facts.in_chain, Some(BlockHeight::from_raw(180)));
 
         // in_pool_broadcast converts independently of in_pool (the foreign-
         // disclosure fact).
         let mut broadcast_pod = pod_with(1);
         broadcast_pod.in_pool_broadcast = 1;
-        let broadcast_facts = facts_from_ffi(&broadcast_pod, &[]).expect("converts");
+        let broadcast_facts = facts_from_ffi(&broadcast_pod, &[], false).expect("converts");
         assert!(broadcast_facts.in_pool_broadcast);
         let reference = facts.reference.expect("ref_block_found = 1");
         assert_eq!(reference.height, BlockHeight::from_raw(150));
@@ -427,7 +642,7 @@ mod tests {
 
         // A byte outside the documented set is a contract violation, not a
         // guessed fact.
-        assert!(facts_from_ffi(&pod_with(1), &[3]).is_err());
+        assert!(facts_from_ffi(&pod_with(1), &[3], false).is_err());
 
         // The BP3 probe pair converts under the same validity-gate shape
         // as in_chain_height: unset probe → None (exists byte ignored),
@@ -436,14 +651,14 @@ mod tests {
         let mut probed_pod = pod_with(1);
         probed_pod.bond_record_probed = 1;
         assert_eq!(
-            facts_from_ffi(&probed_pod, &[])
+            facts_from_ffi(&probed_pod, &[], false)
                 .expect("converts")
                 .bond_record_exists,
             Some(false)
         );
         probed_pod.bond_record_exists = 1;
         assert_eq!(
-            facts_from_ffi(&probed_pod, &[])
+            facts_from_ffi(&probed_pod, &[], false)
                 .expect("converts")
                 .bond_record_exists,
             Some(true)
@@ -452,8 +667,106 @@ mod tests {
 
     #[test]
     fn unknown_reference_maps_to_none() {
-        let facts = facts_from_ffi(&pod_with(0), &[]).expect("converts");
+        let facts = facts_from_ffi(&pod_with(0), &[], false).expect("converts");
         assert_eq!(facts.reference, None);
         assert!(facts.key_image_conflicts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod balance_conversion_tests {
+    use super::*;
+
+    fn unbond_pod(exists: u8, total: u64) -> ffi::SubmitFactsFfi {
+        let mut pod = ffi::SubmitFactsFfi::zeroed();
+        pod.bond_record_probed = 1;
+        pod.bond_record_exists = exists;
+        pod.bond_record_bonded_total = total;
+        pod
+    }
+
+    #[test]
+    fn the_commit_conversion_carries_the_balance_for_an_unbond() {
+        // The Phase-D leg returns `facts_from_ffi`'s output DIRECTLY — there
+        // is no later step to restore a dropped field, unlike the snapshot
+        // path. This is the conversion the mock-shim race tests bypass
+        // entirely, so without this the balance re-check is inert in
+        // production while those tests stay green.
+        let facts = facts_from_ffi(&unbond_pod(1, 0), &[], true).expect("converts");
+        assert_eq!(
+            facts.bond_record_bonded_total,
+            Some(0),
+            "a zero balance is the EXITED state, not a missing fact"
+        );
+    }
+
+    #[test]
+    fn a_joinmarket_probe_fabricates_no_balance() {
+        // C++ only gathers the balance for an `_UNBOND` probe, so the field
+        // is an unread zero on the credit arm. Reporting `Some(0)` would be
+        // a fact nobody measured.
+        let facts = facts_from_ffi(&unbond_pod(1, 0), &[], false).expect("converts");
+        assert_eq!(facts.bond_record_bonded_total, None);
+    }
+
+    #[test]
+    fn an_absent_record_yields_no_balance_to_compare() {
+        // Absence is carried by the presence bit; the balance stays `None`
+        // because there is no record to read one from. The engine treats
+        // that pair as a moved slot rather than as an unknown.
+        let facts = facts_from_ffi(&unbond_pod(0, 0), &[], true).expect("converts");
+        assert_eq!(facts.bond_record_bonded_total, None);
+        assert_eq!(facts.bond_record_exists, Some(false));
+    }
+}
+
+#[cfg(test)]
+mod cxx_bundle_tests {
+    use super::CxxBundle;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Opaque;
+
+    static ADOPTED_FREES: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C" fn count_adopted(_: *mut Opaque) {
+        ADOPTED_FREES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    static NULL_FREES: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C" fn count_null(_: *mut Opaque) {
+        NULL_FREES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_bundle_frees_once_on_drop_including_the_fault_path() {
+        // The shim can set an out-handle and *then* return a fault, so the
+        // guard has to free on a path that never reaches the conversion.
+        // This is that path: adopt, drop without ever calling `as_ptr`.
+        let mut backing = Opaque;
+        let raw: *mut Opaque = &raw mut backing;
+        ADOPTED_FREES.store(0, Ordering::SeqCst);
+        {
+            let _guard = CxxBundle::adopt(raw, count_adopted);
+        }
+        assert_eq!(
+            ADOPTED_FREES.load(Ordering::SeqCst),
+            1,
+            "a handle adopted on a faulting call must still be freed exactly once"
+        );
+    }
+
+    #[test]
+    fn a_null_bundle_is_a_no_op() {
+        // "No probe ran" is the common case and must not call the C++ free
+        // with a null pointer.
+        NULL_FREES.store(0, Ordering::SeqCst);
+        {
+            let _guard = CxxBundle::adopt(std::ptr::null_mut::<Opaque>(), count_null);
+        }
+        assert_eq!(
+            NULL_FREES.load(Ordering::SeqCst),
+            0,
+            "an unset handle must not be freed"
+        );
     }
 }

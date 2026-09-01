@@ -50,10 +50,10 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: Unbond assembles (PR-P4) but has no RPC/CLI; Rebond/HoldingsUpdate still refuse.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
+- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
-- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); blocked on the Unbond submit fact set.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); the submit fact set landed, so what it now needs is the engine dispatch seam.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release
@@ -120,6 +120,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Drain/claim dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572).**
+  - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).

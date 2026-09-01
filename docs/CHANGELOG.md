@@ -260,6 +260,28 @@
 
 ### Added
 
+- **`POST /submit_transaction` accepts `Unbond` bond-posts.** The battery
+  covered the `JoinMarket` kind only and refused every other one `Malformed`;
+  it now carries the Unbond fact set (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1) and
+  dispatches `verify_unbond_bond_post`, the same function the block path
+  already runs. `HoldingsUpdate` and `Rebond` still refuse — no wallet builds
+  either kind, so a fact set for them would be untestable guesswork.
+
+  **No wallet can reach this yet.** The staking exit stays deliberately
+  unreachable: no RPC method, no CLI verb, nothing dispatching the assembled
+  bytes. What changed is that a dispatched Unbond would now be accepted rather
+  than refused.
+
+  Security-relevant, and the reason this is not a copy of the credit arm: a
+  bond-post *credit* is authorized by `P`'s identity key, but a *debit* moves
+  bonded collateral out, and the identity key is the one a serving host holds
+  in order to sign responses at all. The debit is therefore authorized against
+  the record's committed cold `bond_spend_pk`, and that pin now lives in one
+  place (`shekyl-archival-retention::debit_auth_pin`) called by both the
+  daemon's block path and its submit path, rather than being implemented twice.
+  A record committing no canonical-length key authorizes nothing — there is no
+  identity-key fallback.
+
 - **A stall alarm for pending claims and drains.** A record dispatched but not
   settled past the alarm horizon is named in the operator log, keyed by kind
   *and* persona so a persona holding both a stuck claim and a stuck drain gets
@@ -311,11 +333,12 @@
   wallet-side producer yet", which was true when written and is not now.
   **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
   no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
-  RESERVED. The producer exists; what remains is reachability (the
-  regtest walk), dispatch of the assembled bytes, and native
-  `/submit_transaction` admission — Unbond is still `Malformed` there
-  until the submit fact set lands. The walk lands as its own PR, so the
-  producer merging is not the event that lifts RESERVED.
+  RESERVED. The producer exists; what remains is reachability and dispatch
+  of the assembled bytes. Native `/submit_transaction` admission was a
+  third item on that list when this entry was written and is not one now
+  — the Unbond fact set landed in this same release (see the submit entry
+  above), so the two must be read together. The walk lands as its own PR,
+  so the producer merging is not the event that lifts RESERVED.
 
 ### Changed
 

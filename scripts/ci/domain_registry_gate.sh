@@ -74,11 +74,31 @@ fail=0
 # Line-comment-stripped view of a source file: presence/const checks must see
 # code, not prose — a doc comment quoting the registered bytes must NOT keep a
 # row green after the real definition changed (that would break the gate's
-# "catches value change" guarantee). Line-based: registered literals never
-# contain `//`. Captured into a variable, NOT piped into `rg -q`: under
-# pipefail, rg -q's early exit SIGPIPEs sed and turns a successful match into
-# a pipeline failure (flaky by file size).
-code_only() { sed 's@//.*@@' "$1"; }
+# "catches value change" guarantee). Captured into a variable, NOT piped into
+# `rg -q`: under pipefail, rg -q's early exit SIGPIPEs the stripper and turns a
+# successful match into a pipeline failure (flaky by file size).
+#
+# BLOCK comments count as prose too. Stripping only `//` meant a definition
+# disabled with `/* ... */` still satisfied the row-presence check — the same
+# silent-green hole found in check_debit_auth_single_source.sh (2026-08-31),
+# which is why both now share ONE stripper rather than a sed each. Verified a
+# no-op against the current tree (114 literals, unchanged) before landing, so
+# it re-pins nothing.
+#
+# `count_pattern` below uses the same stripper, for the same reason. An earlier
+# revision left it on inline `//` stripping and justified that by asserting its
+# failure direction was benign — see the note on `count_pattern` itself for why
+# that was false, and why the conversion turned out to cost nothing.
+code_only() { python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" "$1"; }
+
+# Rule 47: the row-presence arm is only as good as the stripper, so assert the
+# stripper before trusting it. A regression there would widen this gate in the
+# passing direction without any row changing.
+if ! python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" --self-test; then
+  echo "FAIL: the comment stripper failed its own regression cases; the"
+  echo "      row-presence check below reads its output."
+  exit 1
+fi
 
 # ── Tripwire 1: row-presence + const binding + frozen-doc cross-check ───────
 # Tab is IFS whitespace, so a plain IFS=$'\t' read COLLAPSES adjacent tabs and
@@ -196,13 +216,27 @@ PROD_GLOBS=(-g 'rust/**/*.rs' -g '!**/tests/**' -g '!**/benches/**' -g '!**/fuzz
 
 count_pattern() {
   # Count total matches (not lines) of a regex across production rust code,
-  # comment-stripped: print matching lines, drop `//...` tails, then re-extract
-  # — a match that lived only in a comment (doc-comment code example) vanishes
-  # and does not move the pin. Optional second arg: path scope (default: rust).
+  # with comments stripped by the SHARED stripper — whole files, not rg output
+  # lines. Optional second arg: path scope (default: rust).
+  #
+  # It used to strip `//` inline with sed, and this comment used to claim the
+  # residual failure could only be a spurious red (a commented example
+  # INFLATING a pin). That was wrong, and wrong in the dangerous direction:
+  # `/* cshake256_32(...) */` still matched, so block-commenting out a LIVE
+  # call left the count unchanged and the gate never noticed the site had
+  # gone. A silent green on a domain-separation mechanism, documented as safe
+  # because the direction was asserted rather than measured.
+  #
+  # Converting was also free: all three pins are byte-identical under both
+  # methods on the tree where this landed (43 / 2 / 2), so nothing is re-pinned
+  # here and any future delta is a real change in live call sites.
+  #
+  # One interpreter start per pattern, not per file: `xargs` may split the
+  # list, which is fine because every consumer reads this as one stream.
   local pattern=$1
   local scope=${2:-rust}
-  rg --no-filename "${PROD_GLOBS[@]}" -- "$pattern" "$scope" 2>/dev/null \
-    | sed 's@//.*@@' \
+  rg --files "${PROD_GLOBS[@]}" "$scope" 2>/dev/null \
+    | xargs python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" \
     | rg -o -- "$pattern" | wc -l | tr -d ' '
 }
 

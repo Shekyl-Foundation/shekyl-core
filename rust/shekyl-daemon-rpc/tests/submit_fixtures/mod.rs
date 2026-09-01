@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use shekyl_daemon_rpc::submit::{
-    CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault, SubmitFacts,
-    SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
+    BondProbe, CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault,
+    SubmitFacts, SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
@@ -281,6 +281,8 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        bond_record_bonded_total: None,
+        unbond: None,
         emission: None,
         emission_claim_conflict: None,
     }
@@ -309,6 +311,17 @@ pub struct SnapshotRecord {
     /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
     /// only).
     pub bond_p_canonical_id: Option<[u8; 32]>,
+    /// Which archival-bond question the engine asked (§8.7.1 BP3 vs
+    /// §8.7.1.1): the debit arm needs the record's contents, not just its
+    /// presence, and asking the wrong one is invisible in the id alone.
+    pub bond_probe_is_unbond: bool,
+    /// The `bond_debit` the debit arm's probe carried. The C++ gather skips
+    /// its per-shard scan when this does not equal the record's live balance,
+    /// so an engine that passed a wrong value (0, say) would make the gather
+    /// skip for EVERY valid Unbond and the battery refuse it — a refusal no
+    /// mock-served fact set can expose, because the mock never runs the
+    /// gather. Recorded so a test can assert the vin's own value reaches it.
+    pub bond_probe_debit: Option<u64>,
     /// The §8.7.2 E6/E7 probe the engine passed (emission submissions
     /// only): the vin-derived claimant id + claimed epochs.
     pub emission_probe: Option<([u8; 32], Vec<u64>)>,
@@ -356,14 +369,19 @@ impl SubmitStateShim for MockShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-        bond_p_canonical_id: Option<&[u8; 32]>,
+        bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         self.snapshots.lock().unwrap().push(SnapshotRecord {
             txid: *txid,
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
-            bond_p_canonical_id: bond_p_canonical_id.copied(),
+            bond_p_canonical_id: bond_probe.map(|probe| *probe.p_canonical_id()),
+            bond_probe_is_unbond: matches!(bond_probe, Some(BondProbe::Unbond { .. })),
+            bond_probe_debit: match bond_probe {
+                Some(BondProbe::Unbond { bond_debit, .. }) => Some(bond_debit),
+                _ => None,
+            },
             emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),
         });
         Ok(self.facts.clone())

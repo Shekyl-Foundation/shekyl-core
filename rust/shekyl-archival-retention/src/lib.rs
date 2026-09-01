@@ -48,6 +48,7 @@ pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
+pub mod debit_auth;
 pub mod distinct;
 pub mod emission_kat_shape;
 pub mod emission_verify;
@@ -97,9 +98,9 @@ pub use bond_floor::{
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
-    bond_post_block_unique, bond_post_funding_floor_met, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
-    verify_unbond_bond_post, BondPostError,
+    bond_post_block_unique, bond_post_funding_floor_met, unbond_pre_cooldown_guards,
+    unbond_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_rebond_bond_post, verify_unbond_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
@@ -136,6 +137,7 @@ pub use constants::{
     SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
+pub use debit_auth::{debit_auth_pin, DebitAuthError};
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,

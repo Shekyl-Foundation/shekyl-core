@@ -206,12 +206,23 @@ constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — 
 The prior "drivable now" claim was wrong: arm #2's retire trigger is a confirmed
 `Unbond` post, and while the consensus **block-path** verifies for non-JoinMarket
 kinds exist (`shekyl-archival-retention` runs them today), the **submit-side**
-fact sets are JoinMarket-only (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 pins the JM BP
-rows only) and **no wallet constructs these kinds yet** — so no Unbond can reach
-a regtest chain through any production path. Named blockers: the non-JoinMarket
-submit battery (the PR-4b sibling for `Unbond`/`Rebond`/`HoldingsUpdate` rows)
-**and** the wallet-side unbond entry. The armed settlement-epoch override for
-the W-lapse rides whichever lands last. Arm #3's production-discharge leg, by
+fact sets were JoinMarket-only (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 pinned the JM
+BP rows only) and **no wallet constructs these kinds yet** — so no Unbond could
+reach a regtest chain through any production path. Named blockers: the
+non-JoinMarket submit battery (the PR-4b sibling for
+`Unbond`/`Rebond`/`HoldingsUpdate` rows) **and** the wallet-side unbond entry.
+The armed settlement-epoch override for the W-lapse rides whichever lands last.
+
+**UPDATE 2026-08-29 (PR-A) — the first named blocker is CLEARED for `Unbond`.**
+`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 now pins the UB rows and the native battery
+dispatches `verify_unbond_bond_post`, so `/submit_transaction` **accepts** a
+well-formed `Unbond`. `Rebond` and `HoldingsUpdate` fact sets remain
+deliberately unbuilt (rule 21: no producer) and are not on arm #2's trigger
+path, so the blocker is discharged for everything arm #2 needs. **Still
+blocking: the wallet-side unbond entry** — nothing dispatches the assembled
+bytes, so arm #2's confirmed-`Unbond` trigger still cannot be produced through
+a production path, and the armed settlement-epoch override now rides that entry
+alone rather than "whichever lands last". Arm #3's production-discharge leg, by
 contrast, needs no post at all and **LANDED 2026-07-19**
 (`e2e_arm3_phantom_slot_collected_at_open`: the SA-DQ-3 persist-then-no-broadcast
 crash against the live chain, collected by the production open; SHEKYLD_BIN

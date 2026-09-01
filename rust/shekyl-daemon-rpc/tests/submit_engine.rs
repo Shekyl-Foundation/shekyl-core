@@ -14,8 +14,8 @@ mod submit_fixtures;
 use std::sync::Arc;
 
 use shekyl_daemon_rpc::submit::{
-    parse_submission, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller, SubmitEngine,
-    SubmitFacts, VerifyFailure,
+    parse_submission, BondProbe, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller,
+    SubmitEngine, SubmitFacts, VerifyFailure,
 };
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
@@ -339,7 +339,7 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
             _txid: &shekyl_types::TxHash,
             _key_images: &[[u8; 32]],
             _reference_block: &shekyl_types::BlockHash,
-            _bond_p_canonical_id: Option<&[u8; 32]>,
+            _bond_probe: Option<BondProbe<'_>>,
             _emission_probe: Option<(&[u8; 32], &[u64])>,
         ) -> Result<SubmitFacts, shekyl_daemon_rpc::submit::ShimFault> {
             Err(shekyl_daemon_rpc::submit::ShimFault)

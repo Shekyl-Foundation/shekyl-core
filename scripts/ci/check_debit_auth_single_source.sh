@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The debit-authorization predicate has ONE implementation.
+#
+# A VALUE-OUT bond-post authorizes against the bond record's COMMITTED
+# bond_spend_pk, never the persona's identity key -- which a serving host
+# holds, and which would therefore turn a host compromise into a collateral
+# drain. That predicate lives in `shekyl-archival-retention::debit_auth_pin`
+# and is reached from C++ only through `shekyl_archival_debit_auth_pin`.
+#
+# The selector is `bond_debit > 0`, NOT the post kind: consumers are Unbond
+# and the DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are
+# credit paths (bond_debit == 0) authorized by the IDENTITY key, so this gate
+# must not be read as prescribing the record-key pin for them.
+#
+# WHY A GATE AND NOT A COMMENT: it was implemented three times. The per-tx
+# path and the checkpoint fast path in blockchain.cpp each spelled it out,
+# and the Rust submit battery was about to be a fourth. The copies are far
+# apart, they read as ordinary two-line conditions, and a drift between them
+# is a consensus split between fast-syncing and fully-verifying nodes -- the
+# failure mode the fast-path arm was itself written to prevent.
+#
+# The gate is narrow on purpose: it forbids a COMPARISON against a stored
+# record's bond_spend_pk. Marshalling that key across the FFI (.data()/.size()
+# as arguments), storing it, and the separate §9.11 coupling belt on the VIN's
+# bond_spend_pk are all untouched -- that belt asks whether the wire carried a
+# key at all, which is a different question from who is authorized.
+set -uo pipefail
+
+# Resolve this script's own directory BEFORE the cd. `code_only` invokes a
+# sibling helper, and `$0` is a relative path when the gate is called by one,
+# so reading it after the cd would look for the helper under whichever
+# directory we just moved to -- a gate failing for the wrong reason (rule 46).
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here/../.."
+
+fail=0
+
+# ── Rule 47: assert the subject exists before asserting its absence ──────
+# Absence of a hit is only evidence if the thing being centralised is there.
+# Anchored on the open paren: an unanchored `pub fn debit_auth_pin` also
+# matches `debit_auth_pin_renamed`, so the assertion would survive the very
+# rename it exists to catch (observed 2026-08-29 -- the first draft of this
+# gate passed its own bite).
+if ! rg -q 'pub fn debit_auth_pin\(' rust/shekyl-archival-retention/src/debit_auth.rs; then
+  echo "FAIL: debit_auth_pin is missing from shekyl-archival-retention -- this gate"
+  echo "      would pass vacuously against a tree that lost the shared predicate."
+  fail=1
+fi
+
+# Each REQUIRED site by name, not a count. A count cannot tell a removed
+# checkpoint call from a new unrelated one, and it counts comments; both were
+# true of the previous version. These are the four places consensus decides a
+# value-out is authorized, and each is asserted to reach the shared predicate:
+#
+#   blockchain.cpp   "Unbond"                 per-tx debit verify
+#   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
+#   blockchain.cpp   "block fast-check debit" checkpoint fast path
+#   daemon_submit_ffi.cpp                     the submit gather's work gate
+#
+# Comments are stripped first, so a mention in prose cannot stand in for a
+# call. Adding a fifth value-out arm means adding its row here — deliberately,
+# because a new arm that authorizes nothing is the failure this gate exists
+# for and it cannot be detected by looking at the arms that do.
+# Comment-stripped file body, captured rather than piped. `rg -q` exits on the
+# first match, which SIGPIPEs the upstream `sed`, which under `pipefail` makes
+# the whole pipeline non-zero -- i.e. every required call would read as ABSENT
+# and the gate would fail closed for the wrong reason (rule 46: a gate verdict
+# never travels through a pipe). Observed on the first run of this arm.
+#
+# BLOCK comments are stripped too, and that is not pedantry: `/* ... */` around
+# a chunk of code is the ordinary way a maintainer disables it while debugging.
+# Stripping only `//` left the disabled call's text in the body, so
+# `require_call` still found it and the gate certified an arm that no longer
+# authorized anything.
+#
+# The stripper is language-aware (Rust nests block comments, C++ does not; a
+# Rust `'` is usually a lifetime rather than a quote) and documents its own
+# unmodelled cases. Those limits are NOT restated here: the previous revision
+# of this comment described string-literal handling the helper already had, and
+# a limits note written from intention rather than from the code is exactly the
+# staleness this gate exists to prevent. Read strip_c_comments.py.
+code_only() { python3 "$here/strip_c_comments.py" "$1"; }
+
+# Rule 47 applied to the helper: every arm below is only as good as the
+# stripper, so assert the stripper is correct BEFORE trusting its output. A
+# stripper regression would otherwise widen every check here at once, silently
+# and in the passing direction.
+if ! python3 "$here/strip_c_comments.py" --self-test; then
+  echo "FAIL: the comment stripper failed its own regression cases; every"
+  echo "      call-site assertion below reads its output, so their verdicts"
+  echo "      cannot be trusted."
+  exit 1
+fi
+
+require_call() {
+  local file="$1" needle="$2" label="$3" body hits
+  body=$(code_only "$file")
+  hits=$(printf '%s\n' "$body" | rg -c "$needle" || true)
+  if [ "${hits:-0}" -lt 1 ]; then
+    echo "FAIL: ${label} no longer reaches the shared debit pin."
+    echo "      An arm that stops authorizing its value-out is invisible to the"
+    echo "      comparison check below -- there is nothing to compare when the"
+    echo "      check is simply gone."
+    fail=1
+  fi
+}
+
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_debit_auth_pin\(record, auth_pubkey, "Unbond"\)' \
+  "per-tx Unbond verify"
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
+  "per-tx HoldingsUpdate-drop verify"
+# Anchored on the arm label, not on the call shape: `archival_debit_auth_pin(record,`
+# also matches both per-tx calls, so deleting the checkpoint pin left hits behind
+# and this arm could not fail. It was the one arm I did not bite when the gate
+# landed, and it was the one that was broken.
+require_call src/cryptonote_core/blockchain.cpp \
+  '"block fast-check debit"' \
+  "checkpoint fast path"
+require_call src/rpc/daemon_submit_ffi.cpp \
+  'shekyl_archival_debit_auth_pin\(' \
+  "submit gather work gate"
+
+# And the Rust submit battery, which the previous version never checked at
+# all: it could have inlined its own comparison and passed.
+# Comment-stripped like the C++ arms: reading the raw file let a commented-out
+# call satisfy the gate. Rust line comments are `//` too, so `code_only` works
+# unchanged.
+rust_body=$(code_only rust/shekyl-daemon-rpc/src/submit/verifier.rs)
+rust_pin=$(printf '%s\n' "$rust_body" \
+           | rg -c 'debit_auth_pin\(record\.bond_spend_pk\(\)' || true)
+if [ "${rust_pin:-0}" -lt 1 ]; then
+  echo "FAIL: the Rust submit battery no longer calls debit_auth_pin."
+  echo "      UB3 is the debit arm's authorization; an inlined comparison"
+  echo "      there is a fourth implementation of the predicate."
+  fail=1
+fi
+
+# ── The invariant: no C++ STATEMENT compares an auth key to a stored key ──
+#
+# Statement-scoped, not line-scoped. The first draft matched `bond_spend_pk`
+# and a comparison operator on the same physical line, with the receiver
+# spelled literally `record` -- so it caught the shape I happened to bite it
+# with and missed the ones a real re-implementation would take: the operands
+# reversed, the comparison wrapped across lines, or the record held in a
+# variable named anything else. clang-format wraps at 100 columns, and this
+# predicate is longer than that, so the split form is the LIKELY one.
+#
+# So: strip comments, join each statement onto one line, then require a
+# statement to mention a bond_spend_pk, a comparison operator, AND an auth
+# key (pqc_auths / auth_pubkey / auth_key). That last conjunct is what keeps
+# the §9.11 vin belt out of the net -- `bond.bond_spend_pk.size() != LEN`
+# asks whether the WIRE carried a key, names no auth key, and is a different
+# question from who is authorized.
+#
+# HONEST LIMIT, because a gate advertised as complete is worse than one whose
+# reach is written down: this cannot catch a copy split across statements
+# (`const auto& k = rec.bond_spend_pk;` then `if (auth == k)`), because the
+# operands never meet in one statement. No grep can. What it does catch is
+# the realistic accident -- someone re-spelling the predicate inline, the way
+# it was already spelled three times -- and the call-site count above catches
+# an arm dropping the shared pin entirely. Structural enforcement would need
+# a clang-based check over the AST; that is the reopening criterion (rule 21)
+# if a split-statement copy ever lands.
+# Same stripper as the call-site arms: a re-implementation parked inside a
+# block comment is not a live copy, and matching it would be a spurious red.
+statements=$(rg --files src/ -g '*.cpp' -g '*.h' \
+              | while IFS= read -r f; do code_only "$f"; done \
+              | tr '\n' ' ' \
+              | sed 's:;:;\n:g')
+hits=$(printf '%s\n' "$statements" \
+        | rg 'bond_spend_pk' \
+        | rg '(==|!=)' \
+        | rg '(pqc_auths|auth_pubkey|auth_key)' || true)
+if [ -n "$hits" ]; then
+  echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
+  echo "      The debit-auth predicate has one implementation"
+  echo "      (shekyl-archival-retention::debit_auth_pin); call"
+  echo "      shekyl_archival_debit_auth_pin instead of re-deriving it."
+  printf '%s\n' "$hits"
+  fail=1
+fi
+
+if [ "$fail" -eq 0 ]; then
+  echo "PASS: the debit-auth predicate is single-sourced."
+fi
+exit "$fail"
