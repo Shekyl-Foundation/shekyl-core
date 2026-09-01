@@ -65,6 +65,30 @@ enrolment") is therefore **not transferable** to P2P by default; P2P's peer
 is a stranger by construction, so any borrowed mechanism needs its own
 justification, not RT-4's.
 
+**Row-editing convention (added 2026-09-01, after the same defect twice).**
+Several rows here are **multi-claim objects** — PW-8 alone carries a ruling, a
+mechanism, four rejected options with figures, a pattern-transferability
+argument and an evidence cell. **Fixing a row's headline does not sweep its
+body.** When any claim in a row changes, **grep the whole row for that claim**
+before considering the edit done.
+
+The rule exists because it was learned twice in one session, both in PW-8: the
+headline ratio was corrected while the evidence cell still read *"not
+re-verified at primary source"*, and the options list was corrected to
+`Noise_IKpsk2` while the transferability paragraph a few hundred words later
+still said `Noise_IK`. Both would have survived a reviewer checking the
+sentence that was reported as fixed.
+
+**Sibling unit rule, same origin.** A **benchmark total is not a wire event.**
+PW-3's 33.0× and ≈2.6 KB are *whole-handshake totals across both directions*;
+because HFS splits the KEM across messages (`e1` initiator, `ekem1` responder),
+the opening message is ≈1.2 KB. Any per-message figure must be derived from the
+**token layout and our own constants**, never by relabelling an aggregate a
+paper reports. Three separate errors were made on this one number —
+attribution (XX's row read as NN's), instrument (a bar read where the paper
+states it in prose), and unit (aggregate quoted as a wire event) — which is why
+it is written down rather than remembered.
+
 ---
 
 ## 1. Transport — hybrid-PQ Noise, working assumption
