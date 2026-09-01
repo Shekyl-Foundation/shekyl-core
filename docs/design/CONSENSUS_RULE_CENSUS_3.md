@@ -19,9 +19,9 @@ C++ is a legitimate differential-test oracle only for rules deliberately
 ratified).
 **Sibling walks:** multiple deliberately independent enumerations of the
 same surface were commissioned at the same pinned sha; this document is
-the `CEN-` walk (steered as census #3). A sibling landed as PR #583:
-`CONSENSUS_RULE_CENSUS_2.md`, family `RC-` (plain-text reference until
-that PR merges; link on whichever PR lands second).
+the `CEN-` walk (steered as census #3). Siblings landing in PR #583:
+[`CONSENSUS_RULE_CENSUS_2.md`](CONSENSUS_RULE_CENSUS_2.md) (family `RC-`)
+and Survey A [`CONSENSUS_RULE_CENSUS_1.md`](CONSENSUS_RULE_CENSUS_1.md).
 **Disagreement between the walks is census material for the design
 rounds, not a defect to reconcile in either document** — no row here was
 diffed against or adjusted toward an `RC-` row; the reconciliation pass

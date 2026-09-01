@@ -182,6 +182,18 @@ Default. Lands before genesis if it should exist at launch.
 - **Alt-chain supply accumulation advances by the coinbase, not the emission
   - Target: pre-genesis
 
+- **Alt-chain admission skips the LWMA-1 future-time limit.** Main-chain `check_block_timestamp` rejects `timestamp > now + 540s` (`blockchain.cpp:5535`); the alt-path vector overload (`:5514`) does only the median check. Promotion re-applies FTL. Owner: [`CONSENSUS_RULE_CENSUS_2.md`](design/CONSENSUS_RULE_CENSUS_2.md) RC-29.
+  - Target: pre-genesis
+
+- **Tx version min/max is written twice and disagrees in form.** `ver_non_input_consensus` dispatches on `HF_VERSION_DYNAMIC_FEE` / `SHEKYL_NG` (`tx_verification_utils.cpp:55–78`); `check_tx_inputs` hardcodes 3..3 (`blockchain.cpp:3493–3506`). Live bounds match because every `HF_VERSION_*` is 1. Owner: [`CONSENSUS_RULE_CENSUS_2.md`](design/CONSENSUS_RULE_CENSUS_2.md) RC-68 / RC-82.
+  - Target: pre-genesis
+
+- **`PER_BLOCK_CHECKPOINT` is compiled on and can skip PoW and FCMP.** CMake default `PER_BLOCK_CHECKPOINT=1`; a populated `m_blocks_hash_check` row skips `check_hash` and `check_tx_inputs` (`blockchain.cpp:5786–5805`, `:3246–3253`). Empty table ⇒ inert; a populated one is a consensus skip. Owner: [`CONSENSUS_RULE_CENSUS_2.md`](design/CONSENSUS_RULE_CENSUS_2.md) RC-15 / RC-96.
+  - Target: pre-genesis
+
+- **The pool admits duplicate archival unique-keys that only fail at connect.** Serve-credit `(P,s,E)`, bond-post-per-P, and emission `(P,E)` uniqueness are block-connect rules (`blockchain.cpp:6102–6261`), not `add_tx`. Two conflicting txs can sit in the mempool; a block that includes both is rejected. Owner: [`CONSENSUS_RULE_CENSUS_2.md`](design/CONSENSUS_RULE_CENSUS_2.md) RC-113 / RC-123 / RC-130.
+  - Target: pre-genesis
+
 - **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW [`18-type-placement`](../.cursor/rules/18-type-placement.mdc)
   - Target: pre-genesis
 
