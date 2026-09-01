@@ -6,7 +6,9 @@
 # Workflow-file validity gate.
 #
 # Every file under .github/workflows/ must parse as YAML and be shaped like
-# a workflow (name / on / jobs, each job with steps or a reusable `uses`).
+# a workflow: a trigger, jobs, and each job either a reusable `uses` or a
+# runner plus steps. `name` is deliberately not among them — Actions treats
+# it as optional, so requiring it would fail a workflow Actions runs.
 #
 # Why this is a gate and not a lint nicety: a workflow file GitHub cannot
 # parse does not produce a failing job. It produces a run with **zero jobs**
@@ -35,6 +37,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
@@ -50,16 +53,35 @@ except ImportError:  # pragma: no cover - exercised by the CI image, not tests
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+_BOOL_TAG = "tag:yaml.org,2002:bool"
 
 
 class StrictLoader(yaml.SafeLoader):
-    """SafeLoader that refuses duplicate mapping keys.
+    """SafeLoader that refuses duplicate keys and resolves scalars as Actions does.
 
-    PyYAML keeps the last value and says nothing; GitHub rejects the file.
-    Validating only the surviving value would let this gate PASS a workflow
-    Actions will not run — the precise false negative it exists to prevent,
-    and the more dangerous direction of error for a gate.
+    Two departures from the base, and both exist because PyYAML implements
+    YAML 1.1 while the Actions runner reads the 1.2 core schema:
+
+    * Duplicate keys are refused. PyYAML keeps the last value and says
+      nothing; Actions rejects the file. Validating only the surviving value
+      would let this gate PASS a workflow Actions will not run.
+    * `yes`, `no`, `on` and `off` stay strings. Under 1.1 they are booleans,
+      which turns a valid step (`run: no`) into `False` and makes this gate
+      block a workflow Actions accepts. Keys already bypass construction
+      entirely; this is the same correction applied to values.
     """
+
+
+# 1.2 core schema: `true`/`false` and their case variants, nothing else.
+StrictLoader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers if tag != _BOOL_TAG]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+StrictLoader.add_implicit_resolver(
+    _BOOL_TAG,
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
 
 
 def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
@@ -194,10 +216,17 @@ def check_one(path: str, doc: object) -> list[str]:
             if not _nonempty_str(job.get("uses")):
                 problems.append(f"{where}: `uses:` has no workflow reference")
             continue
-        # Without a runner GitHub creates no job, so the check this workflow
-        # would have reported never appears — the same silent disarm again.
-        if not job.get("runs-on"):
-            problems.append(f"{where}: no `runs-on:`")
+        # Without a usable runner GitHub creates no job, so the check this
+        # workflow would have reported never appears — the same silent disarm
+        # again. Actions accepts a label, a list of labels, or a runner
+        # mapping (and an expression, which arrives as a string); a boolean
+        # or a number is refused before the job exists, so presence alone is
+        # not enough to ask.
+        runs_on = job.get("runs-on")
+        if not (
+            _nonempty_str(runs_on) or (isinstance(runs_on, (list, dict)) and runs_on)
+        ):
+            problems.append(f"{where}: `runs-on:` is missing or not a runner")
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
             problems.append(f"{where}: no non-empty `steps:` list")
