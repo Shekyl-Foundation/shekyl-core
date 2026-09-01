@@ -656,12 +656,38 @@ than one from a clearnet origin.
 
 ### 6.5 The clearnet↔Tor delta, quantified (testing posture)
 
-Tor is **not** frozen as the principal default: a pending decision — embed
-[Arti](https://gitlab.torproject.org/tpo/core/arti) vs. drive an external Tor
-gateway, and how either is surfaced in the wallet UI/UX — is deliberately not
-being taken lightly. So the design cannot lean on "the origin is on Tor." What
-it can do is **measure both configurations** and let the recommendation rest on
-a number:
+> **STATUS UPDATED 2026-09-01 — the posture half of this section is now ruled.**
+> **Tor is the recommended transport and the installed default** once that lane
+> lands (Rick, recorded in
+> [`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md) §1.4(iii)). The ground
+> is **structural, not a measured delta**: on clearnet a node's IP is known, so
+> anyone may dial it and see whether it completes a Shekyl handshake — an
+> active prober defeats every passive defence, because they participate rather
+> than observe. It composes with the no-authentication constraint (PW-19a):
+> obfuscation-token schemes such as obfs4 answer probing with a pre-shared
+> secret, which is exactly the out-of-band prior knowledge an open gossip
+> network cannot have. Clearnet therefore gives **confidentiality and
+> integrity, not anonymity**.
+>
+> **What this does and does not settle.** It settles the *posture* — which
+> transport is recommended and defaulted. It does **not** settle the pending
+> decision named below: **embed Arti vs. drive an external Tor gateway, and how
+> either is surfaced in the wallet UI/UX, remains open** and is the
+> Tor/P-transport lane's to rule.
+>
+> Note the epistemic shift, because it is why a ruling could land ahead of the
+> measurement this section calls for: the recommendation no longer rests on a
+> *delta* between two configurations. "Clearnet cannot provide anonymity" is a
+> structural result about active probing, and no measurement of the clearnet↔Tor
+> gap could have produced it. The measurements below remain valid and useful —
+> they quantify what Tor buys against the *passive* supernode adversary — but
+> they are no longer what the recommendation waits on.
+
+The original framing, retained because the measurement programme it sets up is
+unchanged: Tor was **not** frozen as the principal default, pending the
+Arti-vs-gateway decision above, so the design could not lean on "the origin is
+on Tor." What it can do is **measure both configurations** and let the
+*quantitative* claim rest on a number:
 
 - **Clearnet is the weakest allowable configuration** — the floor the mechanism
   must defend, and what a user who declines Tor actually runs.
