@@ -31,7 +31,12 @@
 # key at all, which is a different question from who is authorized.
 set -uo pipefail
 
-cd "$(dirname "$0")/../.."
+# Resolve this script's own directory BEFORE the cd. `code_only` invokes a
+# sibling helper, and `$0` is a relative path when the gate is called by one,
+# so reading it after the cd would look for the helper under whichever
+# directory we just moved to -- a gate failing for the wrong reason (rule 46).
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here/../.."
 
 fail=0
 
@@ -81,7 +86,7 @@ fi
 # (a required call reads as absent), never a silent pass, and no such literal
 # exists on these paths today. The clang-AST reopening criterion below covers
 # this too.
-code_only() { python3 "$(dirname "$0")/strip_c_comments.py" "$1"; }
+code_only() { python3 "$here/strip_c_comments.py" "$1"; }
 
 require_call() {
   local file="$1" needle="$2" label="$3" body hits

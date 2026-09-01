@@ -74,11 +74,24 @@ fail=0
 # Line-comment-stripped view of a source file: presence/const checks must see
 # code, not prose — a doc comment quoting the registered bytes must NOT keep a
 # row green after the real definition changed (that would break the gate's
-# "catches value change" guarantee). Line-based: registered literals never
-# contain `//`. Captured into a variable, NOT piped into `rg -q`: under
-# pipefail, rg -q's early exit SIGPIPEs sed and turns a successful match into
-# a pipeline failure (flaky by file size).
-code_only() { sed 's@//.*@@' "$1"; }
+# "catches value change" guarantee). Captured into a variable, NOT piped into
+# `rg -q`: under pipefail, rg -q's early exit SIGPIPEs the stripper and turns a
+# successful match into a pipeline failure (flaky by file size).
+#
+# BLOCK comments count as prose too. Stripping only `//` meant a definition
+# disabled with `/* ... */` still satisfied the row-presence check — the same
+# silent-green hole found in check_debit_auth_single_source.sh (2026-08-31),
+# which is why both now share ONE stripper rather than a sed each. Verified a
+# no-op against the current tree (114 literals, unchanged) before landing, so
+# it re-pins nothing.
+#
+# `count_pattern` below still strips `//` inline, deliberately: it consumes rg
+# output line-by-line rather than whole files, and its failure direction is the
+# opposite one — a call site parked in a block comment INFLATES a pin, which
+# shows up as a spurious red at the next re-pin, never as a missed detection.
+# Restructuring it to file-based stripping would re-derive pinned crypto-domain
+# counts, which is its own review, not this one.
+code_only() { python3 "$REPO_ROOT/scripts/ci/strip_c_comments.py" "$1"; }
 
 # ── Tripwire 1: row-presence + const binding + frozen-doc cross-check ───────
 # Tab is IFS whitespace, so a plain IFS=$'\t' read COLLAPSES adjacent tabs and

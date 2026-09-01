@@ -1425,9 +1425,13 @@ compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
 | UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `:4928-4948` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
 
 **Why UB0 exists, and why it is not redundant with UB3.** The gather that
-produces UB2/UB4's facts runs a per-shard last-served scan — up to
-`2 * MAX_HOLDINGS_SHARDS` (8192) LMDB seeks — with the pool and blockchain
-locks held. The C++ gather runs UB3's pin *before* that scan as a work gate,
+produces UB2/UB4's facts runs a per-shard last-served scan — two LMDB seeks
+per served shard — with the pool and blockchain locks held. The size of that
+is not a constant: a `HeldShards` record is bounded by the codec cap
+(`MAX_HOLDINGS_SHARDS` = 4096 shards, so ≤ 8192 seeks), but a `CompleteTree`
+record's all-shards form walks every shard carrying a serve-credit row under
+that persona, which tracks the frozen-segment count and so **grows with the
+chain**. CompleteTree is the shape an attacker would choose. The C++ gather runs UB3's pin *before* that scan as a work gate,
 but that pin compares two **public** values: `bond_spend_pk` rides the
 JoinMarket post on the wire, so anyone who syncs the chain can read the
 record's committed key, present it, sign with garbage, and buy the scan on

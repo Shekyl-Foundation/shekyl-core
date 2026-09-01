@@ -1098,9 +1098,14 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
 /// and is therefore readable by anyone who syncs the chain. Equality of two
 /// public values authenticates nobody — an attacker copies the record's key
 /// into `pqc_auths`, signs with garbage, passes the pin, and buys the
-/// per-shard last-served scan: up to `2 * MAX_HOLDINGS_SHARDS` (8192) LMDB
-/// seeks with both locks held, on every submit, unauthenticated. K13 does
-/// reject the signature — but only after the gather has already run.
+/// per-shard last-served scan — two LMDB seeks per served shard, with both
+/// locks held, on every submit, unauthenticated. That is not a constant: a
+/// `HeldShards` record is capped by the codec (`MAX_HOLDINGS_SHARDS` = 4096,
+/// so ≤ 8192 seeks), but a `CompleteTree` record's all-shards form walks
+/// every shard carrying a serve-credit row under that persona, which tracks
+/// the frozen-segment count and therefore **grows with the chain**.
+/// CompleteTree is the shape an attacker would pick. K13 does reject the
+/// signature — but only after the gather has already run.
 ///
 /// So the two checks compose, and neither is redundant:
 ///
@@ -1117,9 +1122,13 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
 /// an unauthenticated caller can no longer time submit-response latency to
 /// learn whether a bond record exists.
 ///
-/// Cost is one hybrid verify, no locks held, on a path that already verifies
-/// every auth at K13 — strictly *less* work than the gather it replaces for
-/// the attack case, and the same total for the honest one.
+/// Cost, stated exactly rather than flatteringly: the honest debit path pays
+/// **one extra hybrid verify**, because K13 re-verifies this slot with all the
+/// others afterwards. Deduplicating that would mean carrying "slot N is
+/// already verified" state into K13 — a drift pair on the battery's most
+/// safety-critical loop, to save one verify against a transaction that is
+/// about to run an FCMP++ membership proof. Not worth it. For the attack case
+/// the change is strictly negative work: one verify instead of the gather.
 pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<(), VerifyFailure> {
     let Ct::Fcmp { pqc_auths, .. } = &parsed.tx.ct else {
         return Err(VerifyFailure::Malformed);

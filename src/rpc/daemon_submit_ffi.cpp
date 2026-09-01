@@ -220,9 +220,16 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   handle.bond_spend_pk = record.bond_spend_pk;
 
   // WORK GATE, cheap-first, mirroring the block path's ordering: the pin is a
-  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD --
-  // up to 2 * MAX_HOLDINGS_SHARDS (8192) -- with the pool and blockchain
-  // locks held.
+  // couple of memcmps, the scan below is two LMDB seeks PER SERVED SHARD with
+  // the pool and blockchain locks held.
+  //
+  // How large that is depends on the record's holdings kind, and the honest
+  // bound is NOT a constant. For a HeldShards record it is the codec cap:
+  // <= MAX_HOLDINGS_SHARDS (4096) shards, so <= 8192 seeks. For a CompleteTree
+  // record the all-shards form walks every shard carrying a serve-credit row
+  // under that persona's key prefix, which tracks the frozen-segment count and
+  // therefore GROWS WITH THE CHAIN -- there is no constant ceiling, and
+  // CompleteTree is the shape an attacker would pick.
   //
   // WHAT THIS PIN DOES AND DOES NOT DO. It compares two PUBLIC values: the
   // record's committed bond_spend_pk (which rides the JoinMarket post on the
