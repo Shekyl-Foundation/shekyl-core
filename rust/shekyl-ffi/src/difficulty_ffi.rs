@@ -370,11 +370,28 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
         return SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR;
     }
 
+    // Refuse oversized windows BEFORE constructing the slice: the API
+    // promises WINDOW_TOO_WIDE for every length above the MTP window, and
+    // `from_raw_parts` has a language-level precondition (byte span <=
+    // isize::MAX) that a corrupted C length would violate as UB rather
+    // than the documented refusal. Same pre-check pattern as
+    // archival_ffi/bond.rs. The rule's own width check stays as the
+    // semantic owner for native callers; this is the boundary's copy of
+    // the guard, not a second rule site.
+    if window_len > shekyl_difficulty::MTP_WINDOW_USIZE {
+        // SAFETY: out_median is non-null per the check above; the
+        // caller's contract guarantees alignment and writability.
+        core::ptr::write(out_median, 0);
+        return SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE;
+    }
+
     let win: &[u64] = if window_len == 0 {
         &[]
     } else {
-        // SAFETY: non-null per the check above; the caller's contract
-        // guarantees `window_len` valid, aligned, initialized elements.
+        // SAFETY: non-null per the check above; `window_len <= 11` per
+        // the width refusal above, so the caller's contract of
+        // `window_len` valid, aligned, initialized elements is within
+        // slice-invariant bounds.
         slice::from_raw_parts(window, window_len)
     };
 
@@ -552,5 +569,31 @@ mod tests {
         };
         assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
         assert!(pass);
+    }
+
+    /// The boundary's width pre-check must fire BEFORE slice
+    /// construction: a hostile/corrupted `window_len` (here usize::MAX
+    /// against a 2-element buffer) must come back as the documented
+    /// WINDOW_TOO_WIDE with `*out_median == 0`. This call is only sound
+    /// BECAUSE of the pre-check — the named red edit (removing the
+    /// pre-check) turns this test into the very slice-invariant UB the
+    /// guard exists to refuse, so a regression is a crash/UB detector
+    /// here, not a clean assertion failure.
+    #[test]
+    fn oversized_window_len_is_refused_before_slice_construction() {
+        let tiny = [1u64, 2u64];
+        let mut median = 123u64;
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                tiny.as_ptr(),
+                usize::MAX,
+                0,
+                999,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE);
+        assert_eq!(median, 0);
     }
 }

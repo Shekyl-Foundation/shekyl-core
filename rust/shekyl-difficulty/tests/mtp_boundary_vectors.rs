@@ -8,15 +8,16 @@
 //! 2026-09-01), consumed from
 //! `docs/test_vectors/MTP_BOUNDARY_V1.json`.
 //!
-//! The same file drives the C++ unit test
-//! (`tests/unit_tests/mtp_boundary.cpp`) against the live C++ validator's
-//! rule function — two implementations of one consensus rule that do not
-//! share vectors drift silently. This side pins the rewrite's predicates:
-//! [`shekyl_difficulty::is_above_mtp`] (`predicate_cases`) and
-//! [`shekyl_difficulty::is_timestamp_below_ftl`] (`ftl_cases`).
-//! `assembly_cases` (genesis-timestamp window padding) gain their Rust
-//! consumer when the rewrite grows window assembly at the C3 cutover; the
-//! C++ side consumes them today.
+//! There is ONE implementation of the rule —
+//! [`shekyl_difficulty::check_timestamp_rule`], which the C++ validator
+//! consumes through the `shekyl_difficulty_check_timestamp_rule` FFI
+//! (crossing re-ratified 2026-09-01). This file pins that implementation
+//! natively over EVERY vector section (the predicates individually, the
+//! combined rule over predicate/assembly/ftl cases, width refusal, and
+//! the template edge); the C++ suite (`tests/unit_tests/mtp_boundary.cpp`)
+//! pins the same sections end-to-end through the FFI boundary the
+//! validator shim uses. Two consumers, one implementation, one vector
+//! file — drift between the native and boundary views cannot pass both.
 
 use shekyl_difficulty::consts::MTP_WINDOW_USIZE;
 use shekyl_difficulty::{is_above_mtp, is_timestamp_below_ftl};

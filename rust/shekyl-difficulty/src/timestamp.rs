@@ -74,15 +74,16 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4, 2026-09-01)
 /// re-derived the `>`-vs-`>=` question after §5.5's "preserved
 /// unchanged" premise was refuted at the tree, and ruled strict. This
-/// predicate is the future consensus rewrite's implementation of that
-/// rule — aligned with the ruling and deliberately kept: zero
-/// production callers is the designed state until the C3 cutover wires
-/// the Rust validator (the live C++ validator implements the same ruled
-/// sentence until then, pinned to this predicate by the shared vectors
-/// in `docs/test_vectors/MTP_BOUNDARY_V1.json`). Window assembly —
-/// newest-11 selection and genesis-timestamp padding (C2-R3-Q1 sub-a,
-/// C2-R3-Q2) — is the caller's job; this predicate takes the assembled
-/// 11-window.
+/// predicate is PRODUCTION-LIVE: [`check_timestamp_rule`] delegates its
+/// MTP half here, and the C++ validator consumes it through the
+/// `shekyl_difficulty_check_timestamp_rule` FFI (the crossing
+/// re-ratified 2026-09-01; the shared vectors in
+/// `docs/test_vectors/MTP_BOUNDARY_V1.json` pin the rule natively and
+/// end-to-end through that boundary). Genesis-timestamp padding
+/// (C2-R3-Q2) is performed by [`check_timestamp_rule`] before this
+/// predicate runs; only the newest-11 selection (C2-R3-Q1 sub-a, an
+/// order-dependent choice) remains with the outermost caller. This
+/// predicate takes the assembled 11-window.
 ///
 /// The `&[u64; MTP_WINDOW_USIZE]` const-sized-array reference is the
 /// consensus-property-preserving baseline per §2.5: a window of

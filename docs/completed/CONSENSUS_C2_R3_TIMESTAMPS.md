@@ -303,9 +303,11 @@ its cross-language pin is structural instead — the rule owner *refuses*
 any window wider than 11 (`window_too_wide`, unit-asserted), and the
 truncation behavior itself is exercised by the
 `gen_block_alt_ts_window_truncation` core test against the production alt
-call site; the vector file's own comment records the split. The Rust side
-consumes predicate + FTL sections today and gains the assembly consumer
-with the rewrite's window assembly at the C3 cutover.
+call site; the vector file's own comment records the split. (This
+paragraph described the pre-crossing state and is superseded by the
+crossing correction above — every vector section, `assembly_cases`
+included, has its native Rust consumer now that `check_timestamp_rule`
+landed.)
 
 **Crossing correction (2026-09-01, ratified by Rick after the rounds
 below; supersedes this record's C++-owner framing).** The §7 plan's
@@ -337,11 +339,11 @@ negative controls.
 
 The paragraphs below describe the round as originally executed,
 including the now-deleted C++ owner `cryptonote::shekyl_check_timestamp_rule`
-(`blockchain.cpp:5594`, declared `blockchain.h` tail), consumed by the
-vector overload (`:5643`, now FTL-bearing and const-correct), the main-path
+(`blockchain.cpp` — since deleted by the crossing; see the correction above), consumed by the
+vector overload (now FTL-bearing and const-correct), the main-path
 window builder (`:5667`, carve-out deleted, genesis padding via the rule
-fn), the alt admission site (`:2358` newest-11 truncation + `:2363` call),
-the template floor (`:1977`, `median + 1` with the edge refusal), and the cached-template revalidation (`:1929`). **Red observed first,
+fn), the alt admission site (newest-11 truncation + call),
+the template floor (`median + 1` with the edge refusal), and the cached-template revalidation. **Red observed first,
 all four losing legs, each for its named reason** (candidate accepted by the
 inherited code — "block verification context check failed"):
 `gen_block_ts_at_median` (Q1 boundary), `gen_block_alt_ts_window_truncation`
