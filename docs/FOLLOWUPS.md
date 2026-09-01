@@ -681,6 +681,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
+- **Relay lane: the propagation-graph default question has a SECOND cost, not just the liveness one.** Whether the graph default moves toward Tor-only is open and owned by the relay lane (`DAEMON_RELAY_PRIVACY.md` §91.2 + the 2026-09-01 disambiguation note). Cost 1 is already quantified there: `F′` at the worst zone, `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` vs clearnet's `50`, with no clearnet graph to take the *min* over. **Cost 2, found by P2P-2 and recorded so that decision does not miss it:** §12.10's eviction floor is bounded partly by **re-entry cost**, and on an anonymity network both halves of that tend to zero — §33.5 (*"key-minting is free, so that wait is the entire cost"*) and F-8 (the adversary reconnects rather than mints). §6.10's deterrent is explicitly economic and aimed at the *budget-constrained* observer, so it is the thing that evaporates. Argue, do not assume, whether the floor retains any cost term on Tor — §54.4(a)'s *inert → degraded* softening is why it is survivable. Both costs, one decision, one owner — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I3
+  - Target: pre-genesis
+
 - **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
