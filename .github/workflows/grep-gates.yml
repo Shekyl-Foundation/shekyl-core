@@ -22,6 +22,13 @@
 # second write path / unbounded /dev read / cap fossil merges. The job
 # is seconds of rg after one apt; skipping it to save a runner is the
 # wrong economy.
+#
+# That same unfiltered trigger is why the workflow-validity gate lives
+# here rather than beside the doc gates it protects: a workflow whose own
+# YAML is broken cannot start its own run, so the check on it has to ride
+# a job that is always started by something else. It cannot validate the
+# file hosting it — nothing can — so a vanished grep-gates run is what
+# the repository's required-check list is for.
 
 name: ci/grep-gates
 
@@ -45,11 +52,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install ripgrep
+      - name: Install ripgrep and PyYAML
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep python3-yaml
           rg --version
+          # Declared, not assumed: the workflow-validity gate fails closed on
+          # an unimportable parser, so the dependency is installed rather
+          # than inherited from whatever the runner image happens to ship.
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
 
       # Collect every failure rather than stopping at the first, so a
       # PR that trips two invariants shows both in one log.
@@ -92,6 +103,13 @@ jobs:
             fi
             echo "::endgroup::"
           }
+
+          # First: a workflow file GitHub cannot parse runs zero jobs and
+          # fails no named check, so it disarms its own gates silently.
+          # This job has no path filter, so it is the one that sees every
+          # workflow edit.
+          run_one "Workflow files parse and are well-formed" \
+            python3 scripts/ci/check_workflows_parse.py
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh

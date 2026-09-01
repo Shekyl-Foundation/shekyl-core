@@ -4,6 +4,12 @@
 
 ### Added
 
+- **CI gate: every workflow file must parse and be shaped like a workflow.**
+  A workflow GitHub cannot parse produces a run with zero jobs and no failing
+  named check, so the gates it carries go quiet — that is how one unquoted
+  step name took the documentation-lifecycle gate set offline. The check runs
+  in the unfiltered `grep-gates` job, so it sees every workflow edit.
+
 - **Merged consensus-rule census (C1).** `docs/design/CONSENSUS_RULE_CENSUS.md`
   supersedes the three census walks as the single live instrument and the
   consensus-rewrite's specification input (171 rows, buckets 87/14/2/68;
