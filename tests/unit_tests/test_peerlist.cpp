@@ -101,11 +101,14 @@ namespace
 
 TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 {
-  // A store this daemon writes can never exceed PEERLIST_STORE_LIST_CEILING
-  // entries per list (derivation at the constant's definition); a larger
-  // length prefix is corruption, and open() must refuse the store — falling
-  // back to the empty-peerlist re-bootstrap — rather than reserve() memory
-  // of disk-chosen magnitude at startup.
+  // PEERLIST_STORE_LIST_CEILING is derived from the runtime per-zone caps
+  // the peerlist manager trims to (derivation at the constant's
+  // definition); store() itself serializes whatever lists it is handed and
+  // enforces nothing — which is what lets this test write an oversized
+  // store. A list beyond the ceiling therefore cannot come from a normally
+  // operating daemon, and open() must refuse it — falling back to the
+  // empty-peerlist re-bootstrap — rather than reserve() memory of
+  // disk-chosen magnitude at startup.
   nodetool::peerlist_storage peers{};
   nodetool::peerlist_types types{};
   types.white.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
