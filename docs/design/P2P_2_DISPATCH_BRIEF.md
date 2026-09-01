@@ -85,8 +85,8 @@ All `PW-` rows, including the 2026-09-01 implementation-path round:
 
 ### 1.2 The wire census — `P2P_1_WIRE_CENSUS.md`
 
-All `PWC-` rows, their evidence classes, and §9's correction log. The census's
-own §7 records what it deliberately did not cover; those exclusions are
+All `PWC-` rows, their evidence classes, and that document's §9 correction log. Its
+§7 records what it deliberately did not cover; those exclusions are
 scope fences here (§6), not gaps for the round to fill opportunistically.
 
 ### 1.3 The papers corpus
@@ -127,10 +127,10 @@ correcting the register:
 | Register says | Source says | Consequence |
 | --- | --- | --- |
 | WG re-handshake ≈ 2.4–2.8 KB, ~15× BOLT-8 | 148 B + 92 B = **240 B**, ≈ **1.45×** BOLT-8's 166 B | §0(b). Fix on the register's first touch; never quote the old ratio |
-| "WireGuard is `Noise_IK`" | `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s` (§5.1 Construction) | Minor but real: **IKpsk2**, not plain IK. Does not disturb PW-19a's argument, which turns on the `K` pre-message, present in both |
-| Option (b) carries "a cadence fingerprint requiring jitter *and* padding to suppress" | WG **already jitters**: "an additional amount of jitter is added to the expiration" (§6.1) — but *to prevent two peers initiating simultaneously*, not to defeat an observer | The accurate claim is that WG's jitter is **not sized for fingerprint suppression**, not that jitter is absent. State it that way or the round inherits a false premise about what (b) would cost |
+| "WireGuard is `Noise_IK`" | `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s` (WireGuard paper §5.1, Construction) | Minor but real: **IKpsk2**, not plain IK. Does not disturb PW-19a's argument, which turns on the `K` pre-message, present in both |
+| Option (b) carries "a cadence fingerprint requiring jitter *and* padding to suppress" | WG **already jitters**: "an additional amount of jitter is added to the expiration" (WireGuard paper §6.1) — but *to prevent two peers initiating simultaneously*, not to defeat an observer | The accurate claim is that WG's jitter is **not sized for fingerprint suppression**, not that jitter is absent. State it that way or the round inherits a false premise about what (b) would cost |
 
-Verified constants (§6.1), for any row that needs them: Rekey-After-Messages
+Verified constants (WireGuard paper §6.1), for any row that needs them: Rekey-After-Messages
 2⁶⁰; Reject-After-Messages 2⁶⁴ − 2¹³ − 1; **Rekey-After-Time 120 s**;
 Reject-After-Time 180 s; Rekey-Attempt-Time 90 s; Rekey-Timeout 5 s;
 Keepalive-Timeout 10 s.
@@ -152,7 +152,7 @@ title *"Handshake Message Overhead: Bytes per Handshake"*, y-axis *"Total
 Bytes Exchanged"*, x-axis groups **NN / XX / IK / KK** left to right.
 
 **And PW-3's headline number belongs to the wrong pattern — the register's own
-caveat was right.** §6.2(e) states it in prose, which is authoritative over any
+caveat was right.** NoisePQC++ §6.2(e) states it in prose, which is authoritative over any
 bar read:
 
 > PQ patterns incur 28.6–46.8× more wire overhead than classical, with KK
@@ -312,7 +312,8 @@ stays a hard requirement. And it does not make the Tor lane a place to do
 better clearnet obfuscation: the Tor lane is the *alternative to* clearnet, not
 a wrapper that rescues it.
 
-**It reopens nothing.** §12.10's admission rules were already transport-blind;
+**It reopens nothing.** `DAEMON_RELAY_PRIVACY.md` §12.10's admission rules were
+already transport-blind;
 PW-19a already conceded the counterparty. This adds the third leg to a stance
 that was two-thirds built: **the path observer gets confidentiality on
 clearnet, the prober is conceded there, and anonymity is relocated to the
@@ -321,7 +322,7 @@ transport that can actually deliver it.**
 **The check that stops this being re-derived.** PW-19a's own text records the
 no-authentication constraint as having been re-litigated at least three times —
 it killed persona-identity-as-admission-signal (PW-21) and address/subnet/ASN
-admission (§6.10), and Q12-D6a rejected identity-as-signal twice more. The
+admission (`DAEMON_RELAY_PRIVACY.md` §6.10), and Q12-D6a rejected identity-as-signal twice more. The
 padding requirement is the next instance of the same shape, and the pattern is
 consistent enough to state as a test:
 
@@ -479,7 +480,7 @@ bucket-4 mass lives here.
 | PWD-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, `P2P_1_WIRE_CENSUS.md` §5.4 |
 | PWD-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
 | PWD-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
-| PWD-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | §5.2, PWC-D3, PWC-D10, PWC-D11 |
+| PWD-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-D3, PWC-D10, PWC-D11 |
 
 ### 2.4 Cluster A — the archival submission-path gap
 
@@ -542,7 +543,7 @@ Three dispositions, and only these:
 | Disposition | Meaning | Evidence required |
 | --- | --- | --- |
 | **Ruled** | The round decided it | The wargame table entry, with its falsifier |
-| **Absorbed** | A protocol decision subsumes it | The `D-` id that absorbs it |
+| **Absorbed** | A protocol decision subsumes it | The `PWD-` id that absorbs it |
 | **Deferred** | Not settled in this round | A **named blocker** and the owner — per rule 22, a deferral without a named blocker is not a deferral |
 
 The round's own arithmetic must close, in its closing section:
@@ -557,7 +558,7 @@ candidates and route to the p2p lane — they are **not** RK-cutover residue; th
 census's §9 records the provenance correction and why the routing changed.
 
 **Also owed at close:** every `PW-` and `PWC-` row that a decision touches gets
-a pointer back to the `D-` id that settled it (steering requirement 7). A
+a pointer back to the `PWD-` id that settled it (steering requirement 7). A
 census row whose question was answered but whose text still reads open is the
 same defect as ratification by silence, one document over.
 
@@ -611,8 +612,9 @@ Four corrections are owed, none of them this round's subject:
 1. **§12.11 / `ρ` citation decay.** `DAEMON_RELAY_PRIVACY.md` §12.11's body is
    **superseded in part** by two banners (the Exploit tier is deleted; the live
    mechanism is a uniform random draw over the non-cooled admissible set,
-   §§52/53/54). And `ρ` is **not mentioned in §12.10 at all** — its canonical
-   statement is §13.5. PW-25's claim survives; its pointer does not. PWD-I4 and
+   that document's §§52/53/54). And `ρ` is **not mentioned in its §12.10 at all** — the canonical
+   statement is that document's §13.5. PW-25's claim survives; its pointer does
+   not. PWD-I4 and
    PWD-I5 must read the live text, not the superseded body.
 2. **PW-8's WireGuard figures** — §0(b) and §1.3. The ruling stands; the
    ratio, the pattern name and the jitter claim do not. Add §1.5's zero-wire-
