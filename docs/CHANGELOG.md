@@ -4,6 +4,26 @@
 
 ### Added
 
+- **Merged consensus-rule census (C1 reconciliation).**
+  `docs/design/CONSENSUS_RULE_CENSUS.md` merges the three independent
+  census walks (Survey A, `RC-` 181 rows, `CEN-` 161 rows) plus a
+  steering-side evidence-archaeology payload into the single live census
+  instrument, re-pinned at dev `ab3cc98e6`: 171 rows (161 CEN carried +
+  8 minted + 2 split), buckets 87/14/2/68, with a per-row evidence-class
+  column (`ratified` / `ratified-premise-refuted` /
+  `examined-disposition` / `KAT-port` / `pinned-not-re-derived` /
+  `none`) replacing the binary bucket-2
+  judgment, a full accounting table resolving every RC id and Survey-A
+  item, and the C2 design-round queue (9 batches over the 70 open rows).
+  Adjudicated ground truth folded in: the MTP off-by-equality (ratified
+  strict spec vs equality-accepting live validator vs strict-but-unwired
+  Rust predicate) and the dead decomposed-amount hard-fork branch. The
+  three input walks are archived per index §8: the RC and CEN documents
+  moved to `docs/completed/` as CLOSED-as-record (content retained, links
+  repaired), Survey A stays in `docs/design/` as a mixed doc whose §6
+  Levin L-items remain open input to the P2P protocol redesign lane. Docs only;
+  no behavior change.
+
 - **Independent second consensus-rule census (`RC-`).** 181 independently
   ratifiable rules, walked from the block and transaction acceptance
   entry points at `8ba1aae3d` and classified into four buckets. The

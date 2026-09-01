@@ -1,6 +1,17 @@
 # Consensus surface census — Survey A
 
-**Status:** OPEN — Survey A of the consensus-validation surface.
+**Status:** OPEN (§6 L-items only; census content CLOSED) — the
+consensus-census content of this survey was superseded 2026-08-31
+(census-C1 reconciliation) by
+[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md), the single live
+census instrument; every U-item's disposition is in that doc's §9.3
+accounting table, and census corrections land there, never here. This
+document stays in `docs/design/` as a mixed doc (rule 95) because it still
+owns open residue: **the L-items (L-1…L-6, Levin/p2p wire) are out of the
+consensus census and are requirements input to the P2P protocol redesign
+lane (full redesign ruled 2026-08-31)** — that lane consumes §6 of this
+document directly.
+Original status: OPEN — Survey A of the consensus-validation surface.
 Last-verified 2026-08-30 against `dev` `0e6d340e`. This is a survey, not
 a set of rulings: it classifies and flags; it does not decide.
 **Method:** fresh clone, `dev` @ `0e6d340e` (2026-08-30). Every claim below is
