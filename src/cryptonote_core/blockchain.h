@@ -1767,9 +1767,10 @@ namespace cryptonote
    *   is refused, never silently medianed
    * @param genesis_ts the timestamp of block 0, the padding value
    * @param local_clock the validator's local wall clock (FTL reference)
-   * @param median_out return-by-reference the window median; set on every
-   *   arm except window_too_wide (the miner-template caller reads it
-   *   unconditionally)
+   * @param median_out return-by-reference the window median; set on
+   *   EVERY arm (the miner-template caller reads it unconditionally) —
+   *   0 on the window_too_wide refusal, where no ruled window exists to
+   *   median
    */
   timestamp_rule_verdict shekyl_check_timestamp_rule(uint64_t candidate_ts,
       std::vector<uint64_t> window, uint64_t genesis_ts, uint64_t local_clock,

@@ -10,6 +10,11 @@
 // same file drives rust/shekyl-difficulty/tests/mtp_boundary_vectors.rs
 // against the rewrite's predicates — two implementations of one consensus
 // rule that do not share vectors drift silently.
+//
+// Every JSON access goes through the checked helpers below rather than
+// rapidjson's raw operator[]: a drifted or malformed vector file must
+// surface as a readable test failure naming the missing piece, never as a
+// rapidjson assert aborting the binary.
 
 #include <fstream>
 #include <stdexcept>
@@ -34,17 +39,61 @@ rapidjson::Document load_vectors()
   rapidjson::IStreamWrapper wrapper(ifs);
   rapidjson::Document doc;
   doc.ParseStream(wrapper);
-  if (doc.HasParseError())
+  if (doc.HasParseError() || !doc.IsObject())
     throw std::runtime_error("MTP_BOUNDARY_V1.json is not valid JSON");
   return doc;
 }
 
-std::vector<uint64_t> u64_array(const rapidjson::Value& arr)
+// Uncaught std::runtime_error is reported by gtest as a failure carrying
+// the message — the readable failure mode the schema checks exist for.
+[[noreturn]] void schema_fail(const std::string& what)
 {
+  throw std::runtime_error("MTP_BOUNDARY_V1.json schema drift: " + what);
+}
+
+const rapidjson::Value& section_cases(const rapidjson::Document& doc, const char* section)
+{
+  if (!doc.HasMember(section) || !doc[section].IsObject())
+    schema_fail(std::string("missing section '") + section + "'");
+  const auto& sec = doc[section];
+  if (!sec.HasMember("cases") || !sec["cases"].IsArray())
+    schema_fail(std::string("section '") + section + "' has no 'cases' array");
+  return sec["cases"];
+}
+
+uint64_t u64_field(const rapidjson::Value& c, const char* name)
+{
+  if (!c.IsObject() || !c.HasMember(name) || !c[name].IsUint64())
+    schema_fail(std::string("case field '") + name + "' missing or not a u64");
+  return c[name].GetUint64();
+}
+
+bool bool_field(const rapidjson::Value& c, const char* name)
+{
+  if (!c.IsObject() || !c.HasMember(name) || !c[name].IsBool())
+    schema_fail(std::string("case field '") + name + "' missing or not a bool");
+  return c[name].GetBool();
+}
+
+std::string name_field(const rapidjson::Value& c)
+{
+  if (!c.IsObject() || !c.HasMember("name") || !c["name"].IsString())
+    schema_fail("case has no string 'name'");
+  return c["name"].GetString();
+}
+
+std::vector<uint64_t> u64_array_field(const rapidjson::Value& c, const char* name)
+{
+  if (!c.IsObject() || !c.HasMember(name) || !c[name].IsArray())
+    schema_fail(std::string("case field '") + name + "' missing or not an array");
   std::vector<uint64_t> out;
-  out.reserve(arr.Size());
-  for (const auto& v : arr.GetArray())
+  out.reserve(c[name].Size());
+  for (const auto& v : c[name].GetArray())
+  {
+    if (!v.IsUint64())
+      schema_fail(std::string("entry of '") + name + "' is not a u64");
     out.push_back(v.GetUint64());
+  }
   return out;
 }
 
@@ -59,22 +108,22 @@ std::vector<uint64_t> u64_array(const rapidjson::Value& arr)
 TEST(mtp_boundary, predicate_cases_match_rule_owner)
 {
   const auto doc = load_vectors();
-  const auto& cases = doc["predicate_cases"]["cases"];
+  const auto& cases = section_cases(doc, "predicate_cases");
   ASSERT_GT(cases.Size(), 0u);
 
   for (const auto& c : cases.GetArray())
   {
-    const std::string name = c["name"].GetString();
-    const std::vector<uint64_t> window = u64_array(c["window"]);
+    const std::string name = name_field(c);
+    const std::vector<uint64_t> window = u64_array_field(c, "window");
     ASSERT_EQ(SHEKYL_DAA_MTP_WINDOW, window.size()) << name;
-    const uint64_t candidate = c["candidate"].GetUint64();
-    const bool expected = c["verdict"].GetBool();
+    const uint64_t candidate = u64_field(c, "candidate");
+    const bool expected = bool_field(c, "verdict");
 
     uint64_t median = 0;
     const auto verdict = cryptonote::shekyl_check_timestamp_rule(
         candidate, window, /*genesis_ts=*/0, /*local_clock=*/candidate, median);
 
-    EXPECT_EQ(c["median"].GetUint64(), median) << name;
+    EXPECT_EQ(u64_field(c, "median"), median) << name;
     if (expected)
       EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok, verdict) << name;
     else
@@ -87,23 +136,23 @@ TEST(mtp_boundary, predicate_cases_match_rule_owner)
 TEST(mtp_boundary, assembly_cases_pad_with_genesis_timestamp)
 {
   const auto doc = load_vectors();
-  const auto& cases = doc["assembly_cases"]["cases"];
+  const auto& cases = section_cases(doc, "assembly_cases");
   ASSERT_GT(cases.Size(), 0u);
 
   for (const auto& c : cases.GetArray())
   {
-    const std::string name = c["name"].GetString();
-    const std::vector<uint64_t> history = u64_array(c["history_newest_first"]);
+    const std::string name = name_field(c);
+    const std::vector<uint64_t> history = u64_array_field(c, "history_newest_first");
     ASSERT_LE(history.size(), SHEKYL_DAA_MTP_WINDOW) << name;
-    const uint64_t genesis_ts = c["genesis_ts"].GetUint64();
-    const uint64_t candidate = c["candidate"].GetUint64();
-    const bool expected = c["verdict"].GetBool();
+    const uint64_t genesis_ts = u64_field(c, "genesis_ts");
+    const uint64_t candidate = u64_field(c, "candidate");
+    const bool expected = bool_field(c, "verdict");
 
     uint64_t median = 0;
     const auto verdict = cryptonote::shekyl_check_timestamp_rule(
         candidate, history, genesis_ts, /*local_clock=*/candidate, median);
 
-    EXPECT_EQ(c["median"].GetUint64(), median) << name;
+    EXPECT_EQ(u64_field(c, "median"), median) << name;
     if (expected)
       EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok, verdict) << name;
     else
@@ -114,20 +163,23 @@ TEST(mtp_boundary, assembly_cases_pad_with_genesis_timestamp)
 // FTL cases pin only the future-time axis: the JSON verdict says whether
 // the candidate clears local_clock + 540, so the assertion is exactly
 // "above_ftl iff the FTL half fails" — the MTP half of the combined
-// verdict is not re-derived here.
+// verdict is not re-derived here. The u64-boundary rows additionally pin
+// the arithmetic SHAPE: the deadline must be computed saturating (the
+// Rust twin's `saturating_sub` form), never as `local_clock + 540`, which
+// wraps near the top of the domain and rejects an in-bound candidate.
 TEST(mtp_boundary, ftl_cases_pin_the_future_time_axis)
 {
   const auto doc = load_vectors();
-  const auto& cases = doc["ftl_cases"]["cases"];
+  const auto& cases = section_cases(doc, "ftl_cases");
   ASSERT_GT(cases.Size(), 0u);
 
   const std::vector<uint64_t> zero_window(SHEKYL_DAA_MTP_WINDOW, 0);
   for (const auto& c : cases.GetArray())
   {
-    const std::string name = c["name"].GetString();
-    const uint64_t candidate = c["candidate"].GetUint64();
-    const uint64_t local_clock = c["local_clock"].GetUint64();
-    const bool ftl_ok = c["verdict"].GetBool();
+    const std::string name = name_field(c);
+    const uint64_t candidate = u64_field(c, "candidate");
+    const uint64_t local_clock = u64_field(c, "local_clock");
+    const bool ftl_ok = bool_field(c, "verdict");
 
     uint64_t median = 1;
     const auto verdict = cryptonote::shekyl_check_timestamp_rule(
@@ -152,4 +204,8 @@ TEST(mtp_boundary, wider_window_is_refused)
   const auto verdict = cryptonote::shekyl_check_timestamp_rule(
       /*candidate=*/999, too_wide, /*genesis_ts=*/0, /*local_clock=*/999, median);
   EXPECT_EQ(cryptonote::timestamp_rule_verdict::window_too_wide, verdict);
+  // The refusal arm pins median_out to 0 like every other arm ("set on
+  // every arm" is the header contract) — assert it so no caller starts
+  // leaning on a stale or uninitialized value here.
+  EXPECT_EQ(0u, median);
 }

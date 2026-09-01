@@ -175,7 +175,9 @@
       { "name": "ftl_one_past_bound", "candidate": 10541, "local_clock": 10000, "verdict": false },
       { "name": "ftl_far_future", "candidate": 99999, "local_clock": 10000, "verdict": false },
       { "name": "ftl_deep_past_passes", "candidate": 0, "local_clock": 10000, "verdict": true },
-      { "name": "ftl_equal_clock", "candidate": 10000, "local_clock": 10000, "verdict": true }
+      { "name": "ftl_equal_clock", "candidate": 10000, "local_clock": 10000, "verdict": true },
+      { "name": "ftl_u64_boundary_within_bound_wrapping_deadline_kills_naive_add", "candidate": 18446744073709551565, "local_clock": 18446744073709551515, "verdict": true },
+      { "name": "ftl_u64_boundary_past_bound", "candidate": 18446744073709551615, "local_clock": 18446744073709551015, "verdict": false }
     ]
   }
 }

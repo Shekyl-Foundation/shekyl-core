@@ -5582,7 +5582,14 @@ timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidat
   // caller reads it on the failure arm.
   median_out = window[SHEKYL_DAA_MTP_WINDOW / 2];
 
-  if (candidate_ts > local_clock + SHEKYL_DAA_FTL_SECONDS)
+  // Saturating form, mirroring the Rust twin's
+  // `incoming.saturating_sub(local_clock) <= FTL_SECONDS`
+  // (timestamp.rs is_timestamp_below_ftl): the naive
+  // `local_clock + FTL` deadline wraps near the top of the u64 domain and
+  // rejects an in-bound candidate — the vector row
+  // `ftl_u64_boundary_within_bound_wrapping_deadline_kills_naive_add`
+  // pins the shape in both implementations.
+  if (candidate_ts > local_clock && candidate_ts - local_clock > SHEKYL_DAA_FTL_SECONDS)
     return timestamp_rule_verdict::above_ftl;
 
   // C2-R3-Q1: strictly greater — equality rejects.
