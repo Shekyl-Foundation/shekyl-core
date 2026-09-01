@@ -224,6 +224,24 @@ deferral from anything with a freeze date.
   `f` is the fraction supporting D++, not our adversary reach; its `d` is
   **total** degree, so `STEMS = 2` is `d = 4`.
 
+**A second, independent reason the deferral is right — and one that did not
+exist when it was taken.** If the eviction floor's re-entry-cost bound is
+**transport-dependent** (§33.5: key-minting is free on an anonymity network;
+F-8: the adversary reconnects rather than mints), then a `g_max` derived before
+the default-transport question settles would be **derived against the wrong
+transport**. The Tor-only default ruling landed after this deferral and
+retroactively strengthens it.
+
+**An obligation the sub-round inherits from that, to be argued rather than
+assumed.** §6.10 deters *"the budget-constrained passive observer, by
+economics"* and explicitly does **not** defend against the unconstrained one.
+If Tor drives re-entry cost toward zero, **the economic deterrent is precisely
+the thing that evaporates.** The sub-round must state plainly whether the
+eviction floor retains *any* cost term on Tor, or whether it degrades to pure
+behavioural exclusion with no whitewash penalty. §54.4(a)'s *"inert →
+degraded"* softening is why that is survivable rather than fatal — but it is a
+survivability argument that must be **made**, not inherited.
+
 **Reopening criterion (this is the deferral's falsifier).** The sub-round opens
 when the parameter-ownership question is settled — i.e. when it can be shown
 that `g_max` does **not** depend on address-manager behaviour or seed-node
@@ -338,3 +356,33 @@ question** — a limit that bounds per-message volume while the adversary's budg
 is per-connection or per-epoch is a limit on the wrong variable, and it will
 measure green while the attack runs. Check each proposed limit against the
 quantity the adversary actually spends.
+
+**Also carried forward: `network_config` is a dead struct, not one dead
+constant** (PWC-F3 records the map; this is the fields). Enumerated at the pin,
+**four of its eight fields are write-only** — their only occurrence outside the
+struct definition is the assignment itself at `net_node.h:387-392`:
+`handshake_interval`, `packet_max_size`, `config_id`, `send_peerlist_sz`. The
+other four have real readers (`max_out_connection_count` 17,
+`max_in_connection_count` 5, `ping_connection_timeout` 2, `connection_timeout`
+2), so this is a **partial cleanup, not a whole-struct delete.**
+
+Two things make it worse than ordinary dead weight, and both belong in the row:
+
+- **Three of the five fields the KV map serializes are among the dead four**
+  (`handshake_interval`, `packet_max_size`, `config_id`). The map that *looks
+  like* a wire commitment is majority dead, which is exactly the review-cost
+  hazard the census exists to price.
+- **Two of the dead fields are dead *copies of live constants*, which makes
+  them traps rather than merely inert.** The 60-second cadence is driven by
+  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`net_node.h:618`) — a
+  **template argument from the constant**, not from the field — and
+  `send_peerlist_sz`'s value is read directly from
+  `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655`. So an engineer who
+  changed the cadence by editing `m_net_config.handshake_interval` would
+  observe **no behavioural change and no compiler complaint**. A dead field
+  holding a stale duplicate of a live value is worse than an empty one.
+
+`config_id` is the provenance tell: an identifier for *which config set is in
+force* only makes sense if configs are exchanged, and that machinery is not
+wired here. What remains is the vocabulary of a negotiation that does not
+happen.
