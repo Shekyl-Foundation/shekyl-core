@@ -99,6 +99,26 @@ namespace
   }
 }
 
+TEST(peerlist_storage, oversized_persisted_list_is_rejected)
+{
+  // A store this daemon writes can never exceed PEERLIST_STORE_LIST_CEILING
+  // entries per list (derivation at the constant's definition); a larger
+  // length prefix is corruption, and open() must refuse the store — falling
+  // back to the empty-peerlist re-bootstrap — rather than reserve() memory
+  // of disk-chosen magnitude at startup.
+  nodetool::peerlist_storage peers{};
+  nodetool::peerlist_types types{};
+  types.white.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
+  for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
+    types.white.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+
+  std::ostringstream stream{};
+  EXPECT_TRUE(peers.store(stream, types));
+
+  std::istringstream in{stream.str()};
+  EXPECT_FALSE(bool(nodetool::peerlist_storage::open(in, true)));
+}
+
 TEST(peerlist_storage, store)
 {
 

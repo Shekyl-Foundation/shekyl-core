@@ -35,7 +35,11 @@
   seeds and gossip without the anchor set's eclipse resistance for that one
   bootstrap; a *downgrade* (an old binary reading a v7 store) ends in the
   same empty-peerlist re-bootstrap, but via a load exception rather than a
-  clean version drop. Pre-genesis the wire is free to change; post-genesis
+  clean version drop. The store loader now also refuses an implausible
+  per-list length prefix (untrusted disk input, ceiling derived from the
+  per-zone peerlist caps) instead of reserving memory of disk-chosen
+  magnitude at startup — a corrupt cache re-bootstraps either way.
+  Pre-genesis the wire is free to change; post-genesis
   both fields would have been permanent (`CONSENSUS_RULE_CENSUS_1.md` U-5
   and the `rpc_port` half of L-6).
 

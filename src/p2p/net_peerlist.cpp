@@ -33,6 +33,7 @@
 #include <functional>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
@@ -85,7 +86,15 @@ namespace nodetool
 
       uint64_t size = 0;
       a & size;
-      
+
+      // The length prefix is untrusted disk input; past the ceiling it is
+      // corruption, not data (derivation at PEERLIST_STORE_LIST_CEILING).
+      // Throwing, not returning, abandons the whole store so the oversized
+      // list's remaining bytes cannot be misread as the next list; open()
+      // turns the throw into the default-config fallback (re-bootstrap).
+      if (size > PEERLIST_STORE_LIST_CEILING)
+        throw std::runtime_error("peerlist store list length implausible: corrupt store");
+
       Elem ple{};
 
       std::vector<Elem> elems{};
