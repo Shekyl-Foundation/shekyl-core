@@ -1497,10 +1497,27 @@ its gates preventing.
 
 Each clause closes a replay a previous revision left open:
 
-* **Identity.** A broadcast Unbond's bytes are public and its signature stays
-  valid forever, so anyone could resubmit them; UB0 passes, and the engine's
-  in-pool/in-chain early return happens only *after* the gather. The gather is
-  therefore told when the txid is already known. The condition is
+* **Identity — and why the txid alone is not it.** A broadcast Unbond's bytes
+  are public and its signature stays valid forever, so anyone could resubmit
+  them; UB0 passes, and the engine's in-pool/in-chain early return happens only
+  *after* the gather. The gather is therefore told when the txid is already
+  known.
+
+  But the txid is **malleable relative to the signatures**, and that broke the
+  first version of this clause. A PQC signing payload is header-only
+  (`pqc_header(i)` carries no signature bytes; `all_key_hashes` binds public
+  keys), while the txid hashes `PqcAuth::write` *including* signatures. So an
+  observer can flip one byte of a **funding** slot's signature, mint a fresh
+  txid, and leave the bond slot's signature valid — identity sees an unknown
+  transaction, the record is untouched so the state clauses pass, and each
+  variant bought the scan. A pre-gate that verified only the bond slot could
+  not see it. **UB0 therefore verifies every `pqc_auths` slot**, which is what
+  makes "unknown txid" trustworthy: a txid is only reachable by a party who can
+  produce every signature under it. The cost is that an honest debit verifies
+  its slots twice, here and at K13; that is bounded by the input count against
+  a transaction about to run an FCMP++ membership proof.
+
+  The identity condition itself is
   `in_chain || in_pool_broadcast`, **not** `in_pool`: an embargoed tx is
   in-pool but not broadcast, and a foreign caller is shown only
   `in_pool_broadcast` (§3.1), so it does *not* early-return and genuinely needs

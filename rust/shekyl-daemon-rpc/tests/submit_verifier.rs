@@ -1374,6 +1374,11 @@ enum UnbondAuthKey {
     /// a key the attacker actually holds. The gather's cheap pin compares
     /// the two public keys and passes; only a signature check refuses it.
     BondSpendKeyForgedSignature,
+    /// The malleability replay: the bond slot is signed correctly, but a byte
+    /// of the FUNDING slot's signature is flipped. Signing payloads exclude
+    /// signature bytes while the txid hashes them, so this mints a fresh txid
+    /// with the bond slot's signature still valid.
+    FundingSignatureMalleated,
     /// A VALID signature by the record's own key over a vin UB9's static
     /// guards already doom (`bond_credit != 0` ⇒ `UnbondCreditNonzero`).
     /// Possession passes, so only the pre-gate's vin-statics half refuses it
@@ -1554,7 +1559,8 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         // the gather's public-key pin pass it.
         UnbondAuthKey::BondSpend
         | UnbondAuthKey::BondSpendKeyForgedSignature
-        | UnbondAuthKey::VinStaticsDoomed => bond_spend_pk.clone(),
+        | UnbondAuthKey::VinStaticsDoomed
+        | UnbondAuthKey::FundingSignatureMalleated => bond_spend_pk.clone(),
         UnbondAuthKey::Identity => identity_pk.clone(),
     };
     let mut wire_input = WireEncodeInput {
@@ -1591,7 +1597,9 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
-        UnbondAuthKey::BondSpend | UnbondAuthKey::VinStaticsDoomed => &p_keys.bond_spend_sk,
+        UnbondAuthKey::BondSpend
+        | UnbondAuthKey::VinStaticsDoomed
+        | UnbondAuthKey::FundingSignatureMalleated => &p_keys.bond_spend_sk,
         // `Identity` presents this key and signs with it — a VALID signature
         // by the wrong signer. The forged variant presents `bond_spend_pk`
         // and signs with this one, so its signature cannot verify against the
@@ -1614,6 +1622,13 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
             .expect("encode bond auth signature"),
         public_key: slot_pk.clone(),
     });
+    if auth_key == UnbondAuthKey::FundingSignatureMalleated {
+        // Flip one byte of the FUNDING slot's signature. Every signing payload
+        // is header-only, so no slot's signature covers this byte — the bond
+        // slot stays valid — but `PqcAuth::write` feeds the txid, so the
+        // transaction id changes.
+        pqc_auths[0].signature[0] ^= 0x01;
+    }
     wire_input.pqc_auths = pqc_auths;
 
     let bytes = encode_final_tx(&wire_input).expect("encode the final unbond");
@@ -2112,6 +2127,45 @@ fn an_unexplained_skipped_scan_is_still_a_loud_error() {
         levels.contains(&tracing::Level::ERROR),
         "a skip nothing explains is a shim contract violation and must stay \
          loud; saw {levels:?}"
+    );
+}
+
+#[test]
+fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
+    // The replay a bond-slot-only pre-gate cannot see. PQC signing payloads
+    // are header-only (`pqc_header(i)` carries no signature, and
+    // `all_key_hashes` binds public keys), while the txid hashes
+    // `PqcAuth::write` INCLUDING signature bytes. So flipping one byte of a
+    // FUNDING slot's signature mints a fresh txid and leaves the bond slot's
+    // signature perfectly valid: identity sees an unknown transaction, the
+    // bond slot verifies, and the state clauses pass because the record is
+    // untouched. Every variant bought the lock-held all-shards scan and was
+    // refused only by K13, afterwards — unbounded, from anyone who observed
+    // one valid Unbond.
+    let malleated = build_unbond_fixture(UnbondAuthKey::FundingSignatureMalleated);
+    let honest = unbond_fixture();
+    assert_ne!(
+        malleated.parsed.txid, honest.parsed.txid,
+        "the flip must change the txid, or the identity clause would cover it \
+         and this test would assert nothing"
+    );
+    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&malleated.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(
+        verdict,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::Malformed
+        },
+        "a slot whose signature does not verify is malformed"
+    );
+    assert_eq!(
+        shim.snapshot_count(),
+        0,
+        "the pre-gate must verify EVERY slot, not just the bond slot: no \
+         snapshot means no lock-held per-shard scan for a malleated variant"
     );
 }
 

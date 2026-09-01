@@ -1178,10 +1178,26 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     if payload_hashes.len() != pqc_auths.len() {
         return Err(VerifyFailure::Malformed);
     }
-    let (Some(auth), Some(payload_hash)) = (pqc_auths.get(index), payload_hashes.get(index)) else {
+    let (Some(_auth), Some(_payload_hash)) = (pqc_auths.get(index), payload_hashes.get(index))
+    else {
         return Err(VerifyFailure::Malformed);
     };
-    verify_pqc_auth_slot(auth, payload_hash)?;
+    // EVERY slot, not just the bond slot. The signing payload excludes
+    // signature bytes (`pqc_header(i)` is header-only, and `all_key_hashes`
+    // binds public keys), while the txid hashes `PqcAuth::write` INCLUDING
+    // them. So flipping a byte in a *funding* slot's signature mints a fresh
+    // txid without disturbing the bond slot's signature: identity sees an
+    // unknown transaction, the bond slot still verifies, and each variant
+    // bought the lock-held scan before K13 refused it. Verifying the bond slot
+    // alone cannot see that; verifying all of them refuses it here.
+    //
+    // The cost, stated rather than hidden: an honest debit now verifies every
+    // slot twice, here and again at K13. Deduplicating would mean carrying
+    // "already verified" state into the battery's most safety-critical loop,
+    // and the work is bounded by the input count against a transaction about
+    // to run an FCMP++ membership proof. For the attack case it is strictly
+    // less work, because nothing reaches the gather.
+    verify_pqc_auths(parsed, pqc_auths)?;
 
     // The vin-only half of UB9, run here for the same reason possession is:
     // it needs no daemon fact, and the gather it precedes performs a
