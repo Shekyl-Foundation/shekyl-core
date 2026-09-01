@@ -1956,18 +1956,24 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   {
     b.timestamp = median_ts + 1;
     // The floor does NOT license an invalid template. When the window
-    // median sits at the local FTL deadline, the constraint set
-    // {ts : ts > median AND ts <= now + FTL} is EMPTY for the current
-    // second (median + 1 busts FTL; a maximal median even wraps the +1),
-    // so revalidate the bump and refuse template creation honestly
-    // rather than hand the miner a template this node would reject. The
-    // state is at most one second wide and self-heals as the clock
-    // ticks (every stored timestamp passed FTL at its own admission, so
-    // median <= now + FTL always; equality is the only refusing case) —
-    // callers already handle false from this function and retry.
+    // median sits at or beyond the local FTL deadline, the constraint
+    // set {ts : ts > median AND ts <= now + FTL} is EMPTY (median + 1
+    // busts FTL; a maximal median even wraps the +1), so revalidate the
+    // bump and refuse template creation honestly rather than hand the
+    // miner a template this node would reject. Under a non-decreasing
+    // local clock the state is at most one second wide (every stored
+    // timestamp passed FTL against the clock at its own admission, so
+    // the median can reach now + FTL only in the admission second) and
+    // self-heals on the next tick. A BACKWARD clock step of D seconds
+    // can hold median > now + FTL for up to D seconds — the refusal
+    // then persists until the clock re-passes median - FTL, which is
+    // still the correct behavior (a rolled-back clock minting blocks at
+    // its own FTL edge would mint peer-rejected blocks); the operator
+    // NTP-hygiene obligation is DAA_LWMA1.md §5.5's. Callers already
+    // handle false from this function and retry.
     if (!check_block_timestamp(b, median_ts))
     {
-      MERROR("create_block_template: no timestamp currently satisfies the C2-R3 rule (window median at the local FTL deadline); retry shortly");
+      MERROR("create_block_template: no timestamp currently satisfies the C2-R3 rule (window median at or beyond the local FTL deadline); retry shortly - if this persists, verify the system clock (NTP), it may have stepped backward");
       return false;
     }
   }
@@ -5854,8 +5860,8 @@ leave:
   TIME_MEASURE_FINISH(t1);
   TIME_MEASURE_START(t2);
 
-  // make sure block timestamp is not less than the median timestamp
-  // of a set number of the most recent blocks.
+  // C2-R3 timestamp rule: strictly above the median of the previous 11
+  // (genesis-padded) and within the future-time limit.
   if(!check_block_timestamp(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has invalid timestamp: " << bl.timestamp);

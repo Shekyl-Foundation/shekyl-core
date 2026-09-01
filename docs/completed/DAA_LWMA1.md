@@ -1586,11 +1586,15 @@ strict boundary re-ratified by C2-R3-Q1 a template *at* the median is
 one the node itself rejects; C2-R3-Q1 sub-b ruled the `+ 1` floor as
 part of the rule (the original `median_ts` form was self-consistent
 only with the non-strict comparison the refuted premise above assumed).
-The floor additionally revalidates: when the window median sits at the
-local FTL deadline no timestamp satisfies both bounds for the current
-second (an at-most-one-second, self-healing state), and template
-creation refuses loudly instead of issuing a self-rejecting template —
-see `CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3. The MTP window
+The floor additionally revalidates: when the window median sits **at or
+beyond** the local FTL deadline no timestamp satisfies both bounds, and
+template creation refuses loudly instead of issuing a self-rejecting
+template. Under a non-decreasing local clock that state is at most one
+second wide and self-heals on the next tick; a **backward clock step**
+of `Δ` can hold the median beyond the current deadline for up to `Δ`
+seconds, and the refusal then persists — correctly — until the clock
+re-passes `median − FTL` (the operator NTP-hygiene obligation above is
+the mitigation). See `CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3. The MTP window
 change from 60 to 11 (§9.6) preserves the patch's effectiveness;
 the patch is window-size-agnostic and works identically against
 either median size per jagerman's own commentary on the original

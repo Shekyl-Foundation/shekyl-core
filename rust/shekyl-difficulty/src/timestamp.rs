@@ -8,9 +8,17 @@
 //! free-floating chain parameters).
 //!
 //! Consumer responsibility: the predicates answer the question; the
-//! consumer (block-header validator in Phase 4) decides what to do
-//! with the answer. These functions are pure: no clock reads, no
-//! side effects, no logging.
+//! consumer decides what to do with the answer. These functions are
+//! pure: no clock reads, no side effects, no logging.
+//!
+//! Consumer status (C2-R3, ratified 2026-09-01): the live validator is
+//! the C++ rule owner `cryptonote::shekyl_check_timestamp_rule`, which
+//! mirrors these predicates' semantics and arithmetic shape and is
+//! pinned to them by the shared vectors
+//! `docs/test_vectors/MTP_BOUNDARY_V1.json`. These predicates are the
+//! consensus rewrite's implementation of the same rule; zero production
+//! callers is the designed state until the C3 cutover wires the Rust
+//! validator.
 
 use crate::consts::{FTL_SECONDS, MTP_WINDOW_USIZE};
 
@@ -25,10 +33,13 @@ use crate::consts::{FTL_SECONDS, MTP_WINDOW_USIZE};
 /// answer is unconditionally `true`).
 ///
 /// Per §5.5, FTL is `T*N/20 = 540` seconds and is co-tuned with the
-/// algorithm-internal `6*T` solvetime clamp. Phase 4's block-header
-/// validator consumes this predicate at the FTL check site that
-/// inherited CryptoNote `BLOCK_FUTURE_TIME_LIMIT` previously
-/// occupied.
+/// algorithm-internal `6*T` solvetime clamp. Until the C3 cutover the
+/// live FTL check is the C++ rule owner's saturating arm
+/// (`shekyl_check_timestamp_rule`), which deliberately mirrors this
+/// predicate's `saturating_sub` shape — the shared-vector u64-boundary
+/// rows pin the two against each other; this predicate takes over at
+/// the FTL check site when the rewrite's validator lands (see the
+/// module-level consumer-status note).
 #[must_use]
 pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
     incoming.saturating_sub(local_clock) <= FTL_SECONDS

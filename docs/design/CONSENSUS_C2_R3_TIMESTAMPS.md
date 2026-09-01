@@ -198,10 +198,17 @@ so the rewrite implements arithmetic, not a library.
 > chain (alt suffix + main prefix on the alt path), the window right-padded
 > with the genesis timestamp when fewer than 11 predecessors exist.
 > Miner templates floor their timestamp at `M + 1`; when no timestamp
-> satisfies both bounds — `M` at the local FTL deadline, an at-most-one-
-> second self-healing state (every stored timestamp passed FTL at its own
-> admission, so `M ≤ now + 540` always) — template creation refuses
-> loudly rather than minting a template the node itself rejects.
+> satisfies both bounds — `M` **at or beyond** the local FTL deadline —
+> template creation refuses loudly rather than minting a template the
+> node itself rejects. Under a non-decreasing local clock that state is
+> at most one second wide and self-heals on the next tick (each stored
+> timestamp passed FTL against the clock at its own admission, so the
+> median reaches `now + 540` only in the admission second); a backward
+> clock step of `Δ` can hold `M > now + 540` for up to `Δ` seconds, and
+> the refusal then persists — correctly — until the clock re-passes
+> `M − 540` (a rolled-back clock minting at its own FTL edge would mint
+> peer-rejected blocks; the operator NTP-hygiene obligation is
+> `DAA_LWMA1.md` §5.5's).
 > The rule governs blocks at height ≥ 1: block 0 has no predecessors and
 > is pinned by the compiled genesis identity, not by this rule (its one
 > validator-side arrival is `Blockchain::init`'s locally constructed
@@ -284,7 +291,18 @@ rule symmetry.
 ## 7. Implementation plan (runs only after §8 is signed; one PR with the ruling)
 
 **Execution record (2026-09-01, this PR).** The plan below was executed as
-written; the rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
+written with one named deviation: step 1's "alt-truncation case" is **not**
+a JSON vector row. Truncation is order-dependent caller logic (the rule
+owner cannot know which 11 of an arbitrary-order history are newest), so
+its cross-language pin is structural instead — the rule owner *refuses*
+any window wider than 11 (`window_too_wide`, unit-asserted), and the
+truncation behavior itself is exercised by the
+`gen_block_alt_ts_window_truncation` core test against the production alt
+call site; the vector file's own comment records the split. The Rust side
+consumes predicate + FTL sections today and gains the assembly consumer
+with the rewrite's window assembly at the C3 cutover.
+
+The rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
 (`blockchain.cpp:5568`, declared `blockchain.h` tail), consumed by the
 vector overload (`:5617`, now FTL-bearing and const-correct), the main-path
 window builder (`:5641`, carve-out deleted, genesis padding via the rule
@@ -316,14 +334,14 @@ init).
 Two review rounds (Copilot) tightened the landing further, both fixes
 evaluated on the merits rather than adopted verbatim:
 
-1. The FTL arm was rewritten to the saturating shape mirroring the Rust
+- The FTL arm was rewritten to the saturating shape mirroring the Rust
    twin (`candidate > clock && candidate − clock > FTL` ≡
    `saturating_sub`), after a u64-boundary vector row demonstrated the
    naive `clock + 540` deadline wraps and rejects an in-bound candidate
    — observed red on the C++ side before the fix; Rust was already
    saturating. Twin parity of arithmetic *shape*, not just truth table,
    is the point: these two legs are the C3-cutover differential pair.
-2. The template floor gained the §4.3 edge-refusal clause: at
+- The template floor gained the §4.3 edge-refusal clause: at
    `M = now + 540` the constraint set is empty for the current second,
    so `create_block_template` revalidates its `M + 1` bump and returns
    false loudly instead of minting a self-rejecting template (rule 82 —
