@@ -457,10 +457,15 @@ this be a one-way read.
 
 ---
 
-## 7. Verification tasks — **ALL FIVE DISCHARGED**, run as P2P-1 census work
+## 7. Verification tasks — **ALL FIVE DISCHARGED** (four by the census, one after it)
 
-> **CLOSED 2026-09-01.** Every task below was answered by the P2P-1 wire census
-> (PR #588, merged). **None is owed.** This section is retained as the record
+> **CLOSED 2026-09-01.** **Tasks 1–4** were answered by the P2P-1 wire census
+> (PR #588, merged). **Task 5 was not** — the census recorded it as *not
+> runnable there* (its §5.5), because the paper sat outside the repository it
+> could see; it was resolved afterwards in this corrections round from the
+> external corpus (`shekyl-dev` `4cabe8ef2`). The distinction is kept because
+> crediting the census with an answer it explicitly declined to give would
+> misrepresent what a pinned instrument established. **None is owed.** This section is retained as the record
 > of what was asked and where it was answered — a reader arriving here must not
 > re-run four census tasks because the heading once said "open". Striking task 5
 > alone would have made that worse, not better: one struck item among four

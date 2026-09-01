@@ -14740,6 +14740,22 @@ not a working posture — not by ruling, but by routing.**
 dual-network and are knowingly linkable, which costs nothing: long-running
 public infrastructure whose onion is discoverable anyway.
 
+> **Disambiguation added 2026-09-01 — this sentence is *not* in tension with the
+> Tor-default ruling, and the distinction is easy to lose.** §6.5 now records
+> that **Tor is the recommended transport and the installed default**
+> (`P2P_2_REQUIREMENTS_REGISTER.md` PW-3a). That is a claim about *which
+> transport ships and is steered toward*. **"Tor-only" here means something
+> narrower — running the anonymity zone *exclusively*, with no clearnet zone
+> configured at all** — which is why the next sentences discuss dual-network
+> seed hosts and a per-zone `F′`. A node can have Tor installed and default-on
+> while still running a clearnet zone; that is dual-network, not Tor-only.
+>
+> **What is genuinely open, and is this lane's, not P2P-2's:** whether the
+> Tor-default ruling should *also* move the propagation-graph default toward
+> Tor-only. This note deliberately does not answer that — it only stops the two
+> statements being read as contradicting each other when they are about
+> different things. §92.6 quotes this sentence and inherits the same reading.
+
 A fluff is broadcast across every configured zone. `F′` remains **process-wide
 at the worst zone** per §89.2 — and under A the worst zone is the anonymity
 graph, because `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's
