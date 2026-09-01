@@ -27,7 +27,7 @@ round. The merged instrument at this pin is **57 bucketed rows — 3 / 6 / 2 /
 46**; PWC-A6a and PWC-E4a were split in, and PWC-E4/E8 were recounted. The
 number is checkable at the pin:
 
-```
+```bash
 grep -cE '^\| PWC-[A-F][0-9]+a? \|' docs/design/P2P_1_WIRE_CENSUS.md   # 57
 ```
 
@@ -36,8 +36,8 @@ is built against **46**.
 
 **(b) PW-8's WireGuard cost figure is mismatched, and the round must not quote
 it.** The register flagged the WireGuard timers as *"not re-verified at primary
-source"*; that debt is now discharged — **not from the corpus, which does not
-contain the paper** (see §1.3), but by fetching Donenfeld's paper directly.
+source"*; that debt is now discharged, by reading Donenfeld's paper at source
+(the corpus also carries it — see §1.3).
 
 At source, WireGuard's handshake is **148 B initiation + 92 B response = 240 B**
 (§5.4.2 / §5.4.3 field layouts, arithmetic reproduced in §1.3). BOLT-8's
@@ -88,20 +88,37 @@ All `PWC-` rows, their evidence classes, and §9's correction log. The census's
 own §7 records what it deliberately did not cover; those exclusions are
 scope fences here (§6), not gaps for the round to fill opportunistically.
 
-### 1.3 The papers corpus — and its actual state
+### 1.3 The papers corpus
 
-**Verified, not assumed.** The steering note says WireGuard and BOLT-8 are "now
-in the corpus"; at this pin they are **not** in the local paper directories.
-`find` over `~/Nextcloud/Documents` and `~/Downloads` returns only unrelated
-WireGuard material (VPN cheatsheets, logos). Present and usable:
-`2022-539_PQC_Noise.pdf`, `2608.00954v1_Noise_PQC.pdf`,
-`2504.17809v1_Levin_protocol.pdf`, `2509.10214v1_Levi_p2p.pdf`,
-`2607.07062v1_TOR_Deanonymizing.pdf`, `2023-423_Hybrid Signatures.pdf`, plus
-the Shi et al. NDSS 2025 eclipse paper fetched during the census.
+**The corpus is complete, and it lives in the `shekyl-dev` sibling repo** —
+`~/shekyl/shekyl-dev/docs/papers/`, not in `shekyl-core` and not in the
+Nextcloud document trees. Ten items at this pin:
 
-The WireGuard citation debt is nonetheless **discharged**, by fetching
-`wireguard.com/papers/wireguard.pdf` and reading it directly. Verified at
-source, and each correcting the register:
+`wireguard.pdf` · `Bolt-08-transport.md` · `2025-95-Eclipse-Attacks-p2p.pdf`
+(Shi et al., NDSS 2025) · `doubleratchet.pdf` · `2022-539_PQC_Noise.pdf` ·
+`2608.00954v1_Noise_PQC.pdf` · `2504.17809v1_Levin_protocol.pdf` ·
+`2509.10214v1_Levi_p2p.pdf` · `2607.07062v1_TOR_Deanonymizing.pdf` ·
+`2023-423_Hybrid Signatures.pdf`.
+
+`doubleratchet.pdf` is newly relevant: it is the primary source for PW-8's
+rejected option (c), the KEM-ified ratchet, and a round revisiting that
+rejection should read it rather than the register's paraphrase.
+
+**A drafting note kept deliberately, because it is a live hazard for this
+round.** An earlier version of this section reported the corpus as
+*incomplete* — that was wrong. The search behind it piped a multi-path `find`
+through `head`; the two files sought were results **38 and 39 of 39**, below
+the cut. A truncated listing can support a positive finding but **never a
+negative one**: the thing you are looking for may be under the cut, which is
+exactly what happened. The round will make negative claims about the tree
+(PWC-E2's absent rate limit is one), and every such claim must rest on an
+unfiltered enumeration whose total is stated.
+
+**The WireGuard citation debt is discharged**, by reading
+`wireguard.com/papers/wireguard.pdf` at source. That direct read is retained as
+the provenance of record because it is verifiable independently of any local
+file; the corpus copy is the convenience copy. Verified, and each item
+correcting the register:
 
 | Register says | Source says | Consequence |
 | --- | --- | --- |
@@ -116,9 +133,22 @@ Keepalive-Timeout 10 s.
 
 **Standing instruction:** any figure quoted into `SHEKYL_P2P_PROTOCOL.md` must
 be traceable to a source read in this round or a prior one that named its
-verification. PW-3's pattern attribution (PWC-X7) is still **unverified** — the
-NoisePQC++ table is not in the repository — so no pattern-specific byte count
-may be quoted until it is re-read.
+verification.
+
+**PW-3 / PWC-X7 — the debt is now *reachable*, and the round owes it.** The
+census recorded PW-3's pattern attribution as not verifiable from the
+repository; that was true of `shekyl-core` and false of the corpus, which
+carries `2608.00954v1_Noise_PQC.pdf`. Re-verification is therefore possible
+and belongs to D-T2. One pointer, so the round does not repeat the census's
+dead end: **PW-3 cites "Fig. 6" for a handshake-size claim, but Figure 6's
+caption is *"Public key and ciphertext sizes for DH and ML-KEM"*** — a
+primitive-size figure, not per-pattern handshake totals. A per-pattern byte
+count must come from elsewhere in the paper; the same page carries a
+mean-RTT chart whose x-axis is pattern names, and text extraction does **not**
+preserve which bar belongs to which pattern, so the figure has to be read
+visually rather than grepped. Until that is done, **no pattern-specific byte
+count may be quoted** — the ~14× magnitude is not what is in doubt, the
+attribution is.
 
 ---
 
@@ -130,8 +160,20 @@ decision carries: the options considered, the adversary and channel each option
 answers (per the threat-model discipline: name `T` and its channel or there is
 no threat model), what is conceded, and the falsifier that would reopen it.
 
-A decision without a stated falsifier is not ruled; it is deferred with extra
-words.
+**The falsifier is a gate, not advice** (ruled by steering 2026-09-01). A
+decision without one is not ruled; it is deferred with extra words. This is
+[`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+applied to design decisions — reject-now-with-reopening-criteria, rather than
+pre-provisioned flexibility.
+
+**Definitional note, so the gate stays satisfiable without being watered
+down.** Not every decision has an experiment to run. For a **value choice**
+— a constant, a limit, a cadence — the falsifier is a **named reopening
+criterion**: a concrete future observation that would reopen the decision.
+"Reopen if measured p99 handshake latency on the Pi-4 floor exceeds X" is a
+falsifier; "reopen if this turns out to be wrong" is not. The test is whether
+a future reader could recognise the triggering observation without having to
+re-derive the decision.
 
 ### 2.1 Cluster T — the transport, concrete
 
@@ -243,7 +285,7 @@ Three dispositions, and only these:
 
 The round's own arithmetic must close, in its closing section:
 
-```
+```text
 ruled + absorbed + deferred = 46
 ```
 
