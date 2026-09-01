@@ -64,7 +64,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.submit"
 
 // ── §4.5 layout pins (mirrored by const asserts in shekyl-daemon-rpc) ──────
-static_assert(sizeof(shekyl_submit_facts_ffi) == 96, "SubmitFactsFfi size");
+static_assert(sizeof(shekyl_submit_facts_ffi) == 104, "SubmitFactsFfi size");
 static_assert(alignof(shekyl_submit_facts_ffi) == 8, "SubmitFactsFfi align");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
@@ -83,6 +83,8 @@ static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 64, "f
 static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 72, "weight_limit offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 80, "chain_height offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 88, "in_chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_bonded_total) == 96,
+  "bond_record_bonded_total offset");
 
 using namespace cryptonote;
 
@@ -167,7 +169,154 @@ struct shekyl_submit_emission_facts_handle
   shekyl_submit_emission_facts_ffi view{};
 };
 
+// Opaque owner of the §8.7.1.1 Unbond fact buffers. Same contract as the
+// emission handle: every pointer in `view` aliases the vectors held here, the
+// shim copies during the snapshot call and frees immediately after.
+struct shekyl_submit_unbond_facts_handle
+{
+  std::vector<uint8_t> bond_spend_pk;
+  std::vector<uint64_t> per_shard_last_served;
+  shekyl_submit_unbond_facts_ffi view{};
+};
+
 namespace {
+
+// §8.7.1.1 Unbond fact-bundle marshal. Runs inside the caller's lock scope,
+// beside every other fact, so the record, its last-served slice and the slash
+// watermark describe ONE chain state (a record read before a block paired with
+// a watermark read after it describes a state the chain never occupied).
+//
+// The kind->scan decision is Rust's (shekyl_archival_last_served_scan,
+// exhaustive on HoldingsKind); this site marshals the discriminant onto the
+// matching DB accessor and ECHOES it back, exactly as the block path's Unbond
+// arm does. The echo is not redundant: the wrong accessor fails permissively
+// (a complete-tree record has no shard list, so the held-shards accessor
+// returns nothing, which folds to "never served" and lets the release cooldown
+// elapse for a record that has been serving), and Rust pins the echo against
+// the record's holdings kind rather than trusting this gather.
+//
+// Returns false on a marshal fault (unknown holdings kind) -- never a verdict.
+bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
+  const std::vector<uint8_t>& auth_pubkey, bool identity_known,
+  uint64_t bond_debit, shekyl_submit_unbond_facts_handle& handle)
+{
+  shekyl::db::ArchivalBondValue record{};
+  const bool present = bc.get_db().get_archival_bond_value(p_id, record);
+  handle.view.record_present = present ? 1 : 0;
+  // As stored: u64::MAX ("nothing settled yet") stays the sentinel here and is
+  // normalised once, Rust-side.
+  handle.view.last_settled_slash_epoch = bc.get_db().get_archival_last_slash_epoch();
+  if (!present)
+    return true;
+
+  uint8_t scan = 0;
+  if (shekyl_archival_last_served_scan(record.holdings_kind, &scan)
+      != SHEKYL_ARCHIVAL_BOND_POST_OK)
+  {
+    MERROR("submit snapshot: unbond gather: unknown holdings kind "
+      << static_cast<unsigned>(record.holdings_kind));
+    return false;
+  }
+  handle.bond_spend_pk = record.bond_spend_pk;
+
+  // THE WORK GATE. The scan below is two LMDB seeks PER SERVED SHARD with the
+  // pool and blockchain locks held, and for a CompleteTree record that count
+  // tracks the frozen-segment count rather than any constant -- it grows with
+  // the chain. Everything above it is cheap. So the invariant this gate exists
+  // to hold is:
+  //
+  //   THE SCAN RUNS AT MOST ONCE PER (IDENTITY, STATE):
+  //   an UNKNOWN txid, AND a debit that matches the live balance.
+  //
+  // Each clause below is one half of that, and each closes a replay this gate
+  // did NOT close in an earlier revision. Writing the invariant down rather
+  // than the three patches is deliberate: the same finding arrived three times
+  // (key equality, then possession, then replay), every time because the check
+  // authenticated something other than the event that triggers the work.
+  //
+  //   1. IDENTITY. A broadcast Unbond's bytes are public, and its signature
+  //      stays valid forever, so anyone could resubmit them to buy the scan --
+  //      the engine's possession pre-gate passes, and its in-pool/in-chain
+  //      early return happens only AFTER this gather. The caller therefore
+  //      tells us when the txid is already known; the engine will return
+  //      identity without ever reading the bundle.
+  //
+  //      `identity_known` is `in_chain || in_pool_broadcast`, NOT `in_pool`.
+  //      An embargoed tx is in_pool but not broadcast, and the engine
+  //      discloses only `in_pool_broadcast` to a foreign caller (§3.1), so a
+  //      foreign resubmit of an embargoed tx does NOT early-return -- it falls
+  //      through to Phase C and needs the scan. Skipping on `in_pool` would
+  //      refuse a valid submission.
+  //
+  //   2. AUTHORIZATION. The shared debit pin. Note this compares two PUBLIC
+  //      values (the record's committed bond_spend_pk rides the JoinMarket
+  //      post on the wire), so it authenticates nobody on its own; possession
+  //      is proved by the engine's UB0 pre-gate before this is reached. The
+  //      two compose -- possession proves the caller holds the PRESENTED key,
+  //      this proves the presented key is the RECORD's.
+  //
+  //   3. STATE. A broadcast Unbond that state motion has since invalidated -- a
+  //      slash, or a competing exit -- is never in the pool and never in chain,
+  //      so clause 1 never fires, and the exited row keeps its bond_spend_pk,
+  //      so clause 2 still passes. Each replay would buy the scan and be
+  //      refused only at UB9. `bond_debit` is fixed in the signed bytes and UB9
+  //      requires it to equal the record's whole balance, so a mismatch here
+  //      cannot verify no matter what the scan returns.
+  //
+  // None of this is a verdict. Every clause only causes LESS work: Rust runs
+  // the same pins itself and issues the refusal, and the skipped flag makes it
+  // refuse rather than fold an unread slice into the permissive "never served".
+  const uint8_t pin_rc = shekyl_archival_debit_auth_pin(
+    record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
+    record.bond_spend_pk.size(),
+    auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
+    auth_pubkey.size());
+  const bool skip_scan =
+    identity_known
+    || pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK
+    // Each state clause below mirrors ONE UB9 guard that sits BEFORE the
+    // cooldown check -- the only thing the scan feeds. If a guard that
+    // precedes the cooldown must refuse, the scan's contents cannot change
+    // the answer, so gathering them is pure lock-held waste.
+    //   UB9 `NothingToUnbond`: an EXITED record keeps its row (balance 0) and
+    //   its bond_spend_pk, so identity and the pin both pass for it -- and its
+    //   cold-key holder has no collateral left to lose, which is what makes
+    //   this the cheapest replay of the three. `bond_debit == 0` matches a
+    //   zero balance, so without this clause the pair 0/0 sails through.
+    || record.bonded_total_atomic == 0
+    //   UB9 `DebitNotFullBalance`: the debit is fixed in the signed bytes.
+    || record.bonded_total_atomic != bond_debit
+    //   UB9 `IntervalLogFull`: a full log leaves no room for the connect's
+    //   interval-close, so the exit is unconnectable and therefore
+    //   unverifiable. The count only grows, so this cannot become stale in
+    //   the permissive direction. Work gate only -- a drift against the Rust
+    //   MAX_BOND_BAD_INTERVALS would cost a skipped or a wasted scan, never a
+    //   different verdict, because Rust re-runs the real guard.
+    || record.bad_intervals.size() >= shekyl::db::ArchivalBondValue::kMaxBadIntervals;
+
+  shekyl_submit_unbond_record_ffi& out = handle.view.record;
+  out.bonded_total_atomic = record.bonded_total_atomic;
+  out.bad_interval_count = record.bad_intervals.size();
+  out.bond_spend_pk =
+    handle.bond_spend_pk.empty() ? nullptr : handle.bond_spend_pk.data();
+  out.bond_spend_pk_len = handle.bond_spend_pk.size();
+  out.holdings_kind = record.holdings_kind;
+  out.last_served_scan = scan;
+  if (skip_scan)
+  {
+    out.last_served_scan_skipped = 1;
+    return true;
+  }
+
+  handle.per_shard_last_served =
+    (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
+      ? bc.get_db().archival_bond_all_last_served_epochs(p_id)
+      : bc.get_db().archival_bond_last_served_epochs(p_id, record.held_shard_ids);
+  out.per_shard_last_served =
+    handle.per_shard_last_served.empty() ? nullptr : handle.per_shard_last_served.data();
+  out.per_shard_last_served_len = handle.per_shard_last_served.size();
+  return true;
+}
 
 // The §4.1 fact collection. Caller holds the §4.4 pool→blockchain lock
 // order; everything here is a read.
@@ -205,7 +354,7 @@ namespace {
 void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   const crypto::hash& txid, const std::vector<crypto::key_image>& key_images,
   const crypto::hash& reference_block,
-  const crypto::hash* bond_p_canonical_id,
+  const crypto::hash* bond_p_canonical_id, uint8_t bond_probe_kind,
   const crypto::hash* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_facts_ffi& facts, uint8_t* ki_conflicts)
@@ -218,6 +367,17 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
     facts.bond_record_probed = 1;
     facts.bond_record_exists =
       bc.get_db().get_archival_bond_hybrid_pubkey(*bond_p_canonical_id, existing_pubkey) ? 1 : 0;
+    // The debit arm additionally needs the BALANCE, because presence does not
+    // move when a persona exits: apply_archival_unbond rewrites the row with
+    // bonded_total_atomic == 0 rather than deleting it. Read only for the
+    // _UNBOND probe -- the credit arm's question is answered by presence
+    // alone, and this is a second, heavier record load.
+    if (bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND && facts.bond_record_exists)
+    {
+      shekyl::db::ArchivalBondValue record{};
+      if (bc.get_db().get_archival_bond_value(*bond_p_canonical_id, record))
+        facts.bond_record_bonded_total = record.bonded_total_atomic;
+    }
   }
 
   if (emission_p_canonical_id)
@@ -286,9 +446,13 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
+  uint8_t bond_probe_kind,
+  const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+  uint64_t bond_debit,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
+  shekyl_submit_unbond_facts_handle** out_unbond,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts) noexcept
 {
@@ -299,13 +463,32 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
         n_key_images > MAX_SUBMIT_KEY_IMAGES ||
         (emission_p_canonical_id != nullptr &&
           (n_emission_epochs == 0 || !emission_epochs ||
-           n_emission_epochs > SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS)))
+           n_emission_epochs > SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS)) ||
+        (bond_p_canonical_id != nullptr &&
+          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_JOIN &&
+          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_UNBOND) ||
+        // An UNBOND probe with nowhere to put the bundle is an incoherent
+        // argument set, not a request for a cheaper probe. The debit arm's
+        // Phase-C battery cannot run on the presence bit alone -- UB3, UB5,
+        // UB7 and UB9 all read the record's CONTENTS -- so dropping the
+        // bundle would leave the caller holding a fact set that cannot
+        // verify anything, discoverable only later and one layer up.
+        //
+        // Deliberately NOT the emission arm's rule, which admits a null
+        // out_emission: there the POD's claim-conflict bit IS a complete
+        // answer for a consumer that only needs the §8.7.2 E6 re-check, and
+        // the E7 bundle is an extra. Do not flatten the two.
+        (bond_p_canonical_id != nullptr &&
+          bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND &&
+          out_unbond == nullptr))
     {
       MERROR("submit snapshot: bad arguments (marshalling fault)");
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
     if (out_emission)
       *out_emission = nullptr;
+    if (out_unbond)
+      *out_unbond = nullptr;
 
     const crypto::hash id = hash_from_bytes(txid);
     const crypto::hash ref = hash_from_bytes(reference_block);
@@ -324,10 +507,38 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     std::lock_guard<Blockchain> bc_lock(bc);
 
     collect_facts_locked(pool, bc, id, kis, ref,
-      bond_p_canonical_id ? &bond_p_id : nullptr,
+      bond_p_canonical_id ? &bond_p_id : nullptr, bond_probe_kind,
       emission_p_canonical_id ? &emission_p_id : nullptr,
       emission_epochs, n_emission_epochs,
       *out_facts, out_ki_conflicts);
+
+    // §8.7.1.1 Unbond fact-bundle marshal, same lock scope. The POD's
+    // bond_record_probed/exists pair is filled for every bond-post probe
+    // (it is the kind-agnostic "a record exists for this p_canonical_id"
+    // fact); this bundle adds the record's CONTENTS, which only the debit
+    // arm needs. Rust pins the two against each other.
+    // No `&& out_unbond` here: the argument check above already refused that
+    // shape, and repeating it would re-read as "the bundle is optional".
+    if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND)
+    {
+      auto handle = std::make_unique<shekyl_submit_unbond_facts_handle>();
+      // Never form `null + 0`: the contract permits a null key with zero
+      // length (the absent-record path passes exactly that), and building the
+      // range would be pointer arithmetic on a null pointer.
+      std::vector<uint8_t> auth_key;
+      if (bond_auth_pubkey && bond_auth_pubkey_len > 0)
+        auth_key.assign(bond_auth_pubkey, bond_auth_pubkey + bond_auth_pubkey_len);
+      // Clause 1 of the work-gate invariant: the engine returns identity
+      // without ever reading this bundle, so a resubmit of already-known
+      // bytes must not buy the scan. `in_pool` alone is NOT the condition --
+      // see the embargo note on fill_unbond_facts_locked.
+      const bool identity_known =
+        out_facts->in_chain != 0 || out_facts->in_pool_broadcast != 0;
+      if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, identity_known,
+            bond_debit, *handle))
+        return SHEKYL_SUBMIT_INTERNAL_FAULT;
+      *out_unbond = handle.release();
+    }
 
     // §8.7.2 E6/E7 fact-bundle marshal, same lock scope: the record's
     // verify operands + one frozen as-of-E snapshot per claimed epoch
@@ -469,13 +680,43 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     std::vector<crypto::key_image> kis;
     kis.reserve(tx.vin.size());
     const crypto::hash* bond_p_id = nullptr;
+    // The two arms race on DIFFERENT FACTS, not on one fact in two
+    // directions (§8.7.1.1 UB2): JoinMarket races when a record APPEARS
+    // during Phase C, while an exit PRESERVES the debited row -- so the debit
+    // arm races on the record's BALANCE no longer matching the debit this
+    // transaction was verified against. Both discriminants are derived from
+    // the reparsed blob, exactly as the probe key is.
+    //
+    // INVARIANT this loop depends on, enforced two layers away: a submission
+    // carries AT MOST ONE bond-post vin. The loop below assigns on every
+    // bond-post input, so with two it would describe the LAST; the Rust side
+    // reads the FIRST (`ParsedSubmission::bond_post`, a `find_map`). The two
+    // sides would then re-check different vins of the same transaction --
+    // a consensus divergence, not a cosmetic one. What prevents it is
+    // `phase_a.rs`: `SubmitTxKind::BondPost` is classified only on
+    // `n_bond_post == 1`, and `shekyl-wire`'s `validate()` forbids mixing a
+    // bond-post with an emission vin. Neither guard is visible from here, so
+    // any new per-vin bond-post read added to this loop must either preserve
+    // "at most one" or stop assuming it. (Same for `bond_p_id` above, whose
+    // spelling this one copied.)
+    bool bond_is_unbond = false;
+    // The debit the transaction was verified against. Phase C required it to
+    // equal the record's bonded total, so any drift in that total during
+    // Phase C makes these bytes unconnectable.
+    uint64_t bond_debit = 0;
     const txin_archival_reward_emission* emission_vin = nullptr;
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_to_key>(in))
         kis.push_back(std::get<txin_to_key>(in).k_image);
       else if (std::holds_alternative<txin_archival_bond_post>(in))
-        bond_p_id = &std::get<txin_archival_bond_post>(in).p_canonical_id;
+      {
+        const auto& bond_vin = std::get<txin_archival_bond_post>(in);
+        bond_p_id = &bond_vin.p_canonical_id;
+        bond_is_unbond = bond_vin.post_kind
+          == static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+        bond_debit = bond_vin.bond_debit;
+      }
       else if (std::holds_alternative<txin_archival_reward_emission>(in))
         emission_vin = &std::get<txin_archival_reward_emission>(in);
     }
@@ -514,6 +755,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
 
     shekyl_submit_facts_ffi fresh;
     collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id,
+      bond_is_unbond ? SHEKYL_SUBMIT_BOND_PROBE_UNBOND : SHEKYL_SUBMIT_BOND_PROBE_JOIN,
       emission_vin ? &emission_p_id : nullptr, emission_epochs, emission_epochs_len,
       fresh, out_fresh_ki_conflicts);
     if (fresh.fee_per_byte == 0)
@@ -550,11 +792,25 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
         memcmp(fresh.root, cert_root, sizeof(fresh.root)) != 0 ||
         !ref_age_window_holds(fresh.chain_height, fresh.ref_height);
     if (!raced)
-      // §8.7.1 BP3 re-check: Phase C verified the bond record ABSENT for
-      // a (JoinMarket) bond-post; a record now present means a competing
-      // bond-post block landed during C — Rust classifies the claim-slot
-      // DoubleSpendConflict from these fresh facts.
-      raced = fresh.bond_record_probed != 0 && fresh.bond_record_exists != 0;
+      // Bond-record re-check, direction chosen by the post kind. §8.7.1 BP3:
+      // Phase C verified the record ABSENT for a JoinMarket bond-post, so a
+      // record now present means a competing bond-post block landed during C.
+      // §8.7.1.1 UB2: an exit does NOT remove the row, so the debit arm
+      // cannot mirror that -- it re-checks the balance against the debit
+      // Phase C verified, which a competing exit zeroes and a competing
+      // credit raises. Either arm means the slot moved — Rust classifies
+      // DoubleSpendConflict from these fresh facts; C++ chooses no verdict.
+      // §8.7.1 BP3 (credit): a record APPEARING during C consumed the claim
+      // slot. §8.7.1.1 UB2 (debit): the record does not disappear on exit --
+      // apply_archival_unbond rewrites the row with a zero bonded total -- so
+      // the debit arm re-checks the BALANCE it was verified against. Gone, or
+      // no longer equal to this transaction's bond_debit, both mean these
+      // bytes can no longer connect. Rust classifies; C++ chooses no verdict.
+      raced = fresh.bond_record_probed != 0
+        && (bond_is_unbond
+              ? (fresh.bond_record_exists == 0
+                 || fresh.bond_record_bonded_total != bond_debit)
+              : fresh.bond_record_exists != 0);
     if (!raced)
       // §8.7.2 E6 re-check: the emission claim slot moved during C (record
       // gone, or a claimed epoch consumed by a competing claim) — Rust
@@ -669,14 +925,29 @@ void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h)
   delete h;
 }
 
+const shekyl_submit_unbond_facts_ffi* shekyl_submit_unbond_facts_view(
+  const shekyl_submit_unbond_facts_handle* h)
+{
+  return h ? &h->view : nullptr;
+}
+
+void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h)
+{
+  delete h;
+}
+
 int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* txid,
   const uint8_t* key_images, size_t n_key_images,
   const uint8_t* reference_block,
   const uint8_t* bond_p_canonical_id,
+  uint8_t bond_probe_kind,
+  const uint8_t* bond_auth_pubkey, size_t bond_auth_pubkey_len,
+  uint64_t bond_debit,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
+  shekyl_submit_unbond_facts_handle** out_unbond,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts)
 {
@@ -685,8 +956,9 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   core& c = h->rpc->get_core();
   return daemon_submit::snapshot_facts(c.get_pool(), c.get_blockchain_storage(),
     txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
+    bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len, bond_debit,
     emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
-    out_facts, out_ki_conflicts);
+    out_unbond, out_facts, out_ki_conflicts);
 }
 
 int shekyl_submit_commit_tx(core_rpc_handle* h,
@@ -759,6 +1031,7 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->weight_limit = submit_facts_field_value(seed, 8);
   out->chain_height = submit_facts_field_value(seed, 9);
   out->in_chain_height = submit_facts_field_value(seed, 11);
+  out->bond_record_bonded_total = submit_facts_field_value(seed, 16);
 }
 
 int shekyl_submit_facts_test_check(const shekyl_submit_facts_ffi* facts, uint64_t seed)

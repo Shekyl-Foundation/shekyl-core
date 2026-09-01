@@ -298,9 +298,11 @@ impl StakeEngineHandle {
     /// walk has landed and asserts all three named observables (the wipe, the
     /// funded gate, the seal-then-act crash ordering) — and it did **not** make
     /// anything user-callable. What still holds the exit closed is the set of
-    /// missing pieces, not a pending event: no RPC method, no CLI verb, nothing
-    /// dispatching the assembled bytes, and native `/submit_transaction`
-    /// refusing Unbond until the submit fact set lands.
+    /// missing pieces, not a pending event: no RPC method, no CLI verb, and
+    /// nothing dispatching the assembled bytes. Native `/submit_transaction`
+    /// refusing `Unbond` was a fourth piece until 2026-08-29; the submit fact
+    /// set landed (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1), so a dispatched exit
+    /// would now be admitted rather than refused.
     /// This is the engine-internal seam the walk drives — and the seam an
     /// actor-level test uses to prove the handler's persona-binding refusal is
     /// reachable, which a unit test on `UnbondRecordState` cannot do.

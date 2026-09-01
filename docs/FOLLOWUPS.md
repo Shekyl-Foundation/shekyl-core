@@ -50,10 +50,10 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: Unbond assembles (PR-P4) but has no RPC/CLI; Rebond/HoldingsUpdate still refuse.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
+- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
-- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); blocked on the Unbond submit fact set.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); the submit fact set landed, so what it now needs is the engine dispatch seam.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release
@@ -120,6 +120,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Drain/claim dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572).**
+  - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 
 - **Q11 zero-fee-input emission claim has no settlement evidence** (destitute mint-pays-fee; named blocker: accrual has no claim-match set).
@@ -675,6 +676,15 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
+  - Target: pre-genesis
+
+- **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
+  - Target: pre-genesis
+
+- **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
+  - Target: pre-genesis
+
+- **Shi et al. (NDSS 2025) graylist and whitelist sub-attacks are unaddressed, and the double-spend arm is refused only by an inherited, never-examined guard.** The guard is upstream Monero's `f7fd209ed`; Shekyl has no record examining it, so a rewrite re-deriving tx ingest drops it silently. PWC-E7, §5.2 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)

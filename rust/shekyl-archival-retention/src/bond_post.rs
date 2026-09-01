@@ -552,6 +552,91 @@ pub fn verify_join_market_bond_post(
     Ok(())
 }
 
+/// Every Unbond guard that runs **before the release cooldown** — i.e. every
+/// guard decidable without the per-shard last-served scan.
+///
+/// Split out for the same reason as [`unbond_vin_statics`], and to fix a
+/// sharper problem: the daemon's gather deliberately skips its per-shard scan
+/// for exactly these three states, and the submit battery's skipped-scan belt
+/// sits **above** them. Without this, an ordinary malformed Unbond tripped the
+/// belt and was logged at `error!` as an internal inconsistency, when the
+/// honest answer was a quiet `Malformed` naming the guard that refused it.
+/// Running these before the belt restores the belt's meaning: reaching it now
+/// means a skip nothing explains.
+///
+/// It holds the original sequence **including** [`unbond_vin_statics`], and
+/// that is not tidiness: an earlier revision extracted only the record-keyed
+/// guards, which moved `DebitNotFullBalance` ahead of `NotFullUnbond` for a vin
+/// invalid in both ways. `shekyl-ffi` pins that mapping and went red. A
+/// refactor that changes which error a caller sees is not a refactor, so the
+/// whole pre-cooldown block moves together and the order is preserved by
+/// construction.
+///
+/// The caller supplies `current_bonded` already unwrapped, because record
+/// ABSENCE is a different verdict on the submit path (a competing exit,
+/// classified at Phase D) than it is here.
+pub fn unbond_pre_cooldown_guards(
+    vin: &ArchivalBondPostVin,
+    current_bonded: u64,
+    record_bad_interval_count: usize,
+) -> Result<(), BondPostError> {
+    if current_bonded == 0 {
+        return Err(BondPostError::NothingToUnbond);
+    }
+    unbond_vin_statics(vin)?;
+    // The debit removes the whole current balance (§3.2 table; §4.3 refund).
+    if vin.bond_debit != current_bonded {
+        return Err(BondPostError::DebitNotFullBalance);
+    }
+    // The connect must append the clean interval-close (§4.3 F3); a full log
+    // (`bond_connect::MAX_BOND_BAD_INTERVALS`, the codec's `kMaxBadIntervals`
+    // pin) makes the tx unconnectable, so it is unverifiable too.
+    if record_bad_interval_count >= crate::bond_connect::MAX_BOND_BAD_INTERVALS {
+        return Err(BondPostError::IntervalLogFull);
+    }
+    Ok(())
+}
+
+/// The Unbond guards that need **only the vin** — no record, no chain state.
+///
+/// Split out of [`verify_unbond_bond_post`] so the daemon's submit pre-gate can
+/// run them *before* it asks for the §8.7.1.1 fact bundle. That gather performs
+/// a per-shard last-served scan under the pool and blockchain locks, and for a
+/// `CompleteTree` record its cost tracks the frozen-segment count, so any guard
+/// that can refuse without it should refuse first: a caller holding the cold
+/// key can otherwise mint fresh signatures over a vin these checks already
+/// doom, and buy that scan once per forged txid.
+///
+/// Extracted rather than restated. A second copy of a consensus guard living in
+/// the RPC crate is the drift this codebase spends its gates preventing; here
+/// the block path and the submit pre-gate call the same function, and the order
+/// inside `verify_unbond_bond_post` is unchanged.
+pub fn unbond_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+    if vin.bond_credit != 0 {
+        return Err(BondPostError::UnbondCreditNonzero);
+    }
+
+    // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
+    let floor = bond_floor(&vin.holdings);
+    // A full Unbond ends at the canonical empty holdings, whose floor is 0. But
+    // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
+    // so a floor-0 descriptor that still carries shards is not an exit — reject it
+    // rather than let it masquerade as empty. (Join rejects floor-0 outright as
+    // `BondFloorZero`; Unbond cannot, because the empty end-state is legitimately
+    // floor 0, so it guards the non-empty case explicitly.)
+    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
+        return Err(BondPostError::UnbondHoldingsNotEmpty);
+    }
+    if vin.bonded_total_atomic != floor {
+        return Err(BondPostError::UnbondFloorMismatch);
+    }
+    // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
+    if vin.bonded_total_atomic != 0 {
+        return Err(BondPostError::NotFullUnbond);
+    }
+    Ok(())
+}
+
 /// Verify `Unbond` bond-post semantics — a full record release (gate-4 §3.2/§3.4/
 /// §3.5/§4.3; `PHASE_2B_FSM_RETOOL.md` P2B-8).
 ///
@@ -591,44 +676,7 @@ pub fn verify_unbond_bond_post(
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
     };
-    if current_bonded == 0 {
-        return Err(BondPostError::NothingToUnbond);
-    }
-
-    if vin.bond_credit != 0 {
-        return Err(BondPostError::UnbondCreditNonzero);
-    }
-
-    // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    let floor = bond_floor(&vin.holdings);
-    // A full Unbond ends at the canonical empty holdings, whose floor is 0. But
-    // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
-    // so a floor-0 descriptor that still carries shards is not an exit — reject it
-    // rather than let it masquerade as empty. (Join rejects floor-0 outright as
-    // `BondFloorZero`; Unbond cannot, because the empty end-state is legitimately
-    // floor 0, so it guards the non-empty case explicitly.)
-    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
-        return Err(BondPostError::UnbondHoldingsNotEmpty);
-    }
-    if vin.bonded_total_atomic != floor {
-        return Err(BondPostError::UnbondFloorMismatch);
-    }
-    // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
-    if vin.bonded_total_atomic != 0 {
-        return Err(BondPostError::NotFullUnbond);
-    }
-
-    // The debit removes the whole current balance (§3.2 table; §4.3 refund).
-    if vin.bond_debit != current_bonded {
-        return Err(BondPostError::DebitNotFullBalance);
-    }
-
-    // The connect must append the clean interval-close (§4.3 F3); a full log
-    // (`bond_connect::MAX_BOND_BAD_INTERVALS`, the codec's `kMaxBadIntervals`
-    // pin) makes the tx unconnectable, so it is unverifiable too.
-    if record_bad_interval_count >= crate::bond_connect::MAX_BOND_BAD_INTERVALS {
-        return Err(BondPostError::IntervalLogFull);
-    }
+    unbond_pre_cooldown_guards(vin, current_bonded, record_bad_interval_count)?;
 
     // Release cooldown: the grace window past the last served epoch must have
     // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).

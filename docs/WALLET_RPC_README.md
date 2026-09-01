@@ -47,11 +47,13 @@ RESERVED methods remain Engine-gated: `unstake` and
 `match_transfer_to_request` (the latter gated on an Engine match
 method). `unstake` is no longer gated on a *missing producer* — PR-P4
 built the `Unbond` producer. Remaining gates: reachability (no RPC
-method, no CLI verb), dispatch of the assembled bytes, and native
-`/submit_transaction` still refusing Unbond (`BondPostKind::Other`)
-until the Unbond submit fact set lands. PR-P4 slice 3's engine walk has
-landed and asserts all three named observables; it did **not** lift any
-of these — the gate is the three conditions above, not the walk. The claim-era names `claim`
+method, no CLI verb) and dispatch of the assembled bytes. Native
+`/submit_transaction` was a third gate until 2026-08-29 and is not one
+now — the Unbond submit fact set landed
+([`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) §8.7.1.1),
+so a dispatched Unbond would be *accepted*. PR-P4 slice 3's engine walk
+landed and asserts its three named observables; it did **not** lift any
+gate either — the gate is the conditions above, never the walk. The claim-era names `claim`
 and `get_stakes` are REJECTED, not pending (emission claims are
 engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
 edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.

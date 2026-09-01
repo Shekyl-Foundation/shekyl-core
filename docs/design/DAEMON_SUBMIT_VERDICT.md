@@ -1384,17 +1384,267 @@ the internal order is otherwise verdict-invisible. Semantic legs are the **same
 `check_archival_bond_post_input` dispatches to over FFI, so the two paths
 share the verifying code.
 
-**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond).** The block path
-verifies them today (`archival_bond_post_kind` dispatch, all Rust-backed).
-Their *submit-side* fact sets — per-shard last-served cursors, the
-slash-settlement watermark, interval logs, the settlement epoch — and each
-fact's Phase-D re-check/race classification are not specified in this
-matrix. The submit battery refuses them `Malformed` (loud, logged).
-**Unbond's construction-leg reopening criterion has fired (PR-P4):**
-`build_unbond_vin` / `AssembleUnbond` exist. What remains is this matrix
-growing Unbond rows and `SubmitFacts` carrying that fact set — a daemon
-submit surface, not a wallet-producer one (rule 19). HoldingsUpdate /
-Rebond still have no producer.
+**Non-JoinMarket kinds — Unbond is now covered; HoldingsUpdate / Rebond are
+not.** The block path verifies all three today (`archival_bond_post_kind`
+dispatch, all Rust-backed). **Unbond's reopening criterion (rule 21) fired at
+PR-P4** — `build_unbond_vin` / `AssembleUnbond` are the construction leg — and
+this section's §8.7.1.1 UB rows discharge it: `SubmitFacts` carries the Unbond
+fact set and the battery dispatches `verify_unbond_bond_post`, the same
+function the block path calls. **HoldingsUpdate / Rebond have no producer**,
+so their fact sets are deliberately *not* built: a fact bundle with no
+submitter is pre-provisioned flexibility (rule 21), and its Phase-D race
+classification would be unverifiable guesswork. The battery still refuses them
+`Malformed` (loud, logged) under their own reopening criterion — a producer.
+
+#### 8.7.1.1 Unbond rows (the debit arm; `check_archival_bond_post_input`, the `archival_bond_post_kind::Unbond` arm)
+
+Unbond is the **debit** bond-post: it consumes an existing record rather than
+creating one, so its fact set is the *inverse* of BP3's and its authorizer is
+the record's committed key rather than anything the vin carries. BP1 (pubkey
+length) and BP2 (`p_canonical_id` recompute) apply unchanged, as do the
+funding-arm K12/K13 legs and the bond CT balance.
+
+**BP5 does not apply, and that is the row this section exists for.** BP5 pins
+the bond slot's auth key to the vin's *identity* key — correct on the credit
+path (`blockchain.cpp`'s JoinMarket and Rebond arms), where the post proves
+control of `P_canonical_id` and no value leaves. A debit is the opposite case:
+the identity key is held by the serving host, so pinning to it would let a host
+compromise authorize a collateral drain. UB3 replaces BP5 on this arm.
+
+**Anchors in this table are SYMBOLS, not line numbers.** They were line
+numbers, and they rotted: the UB rows pointed at `blockchain.cpp:4890-4948`,
+which is the shared prologue and the JoinMarket arm — a reviewer following them
+landed on the wrong checks entirely. Re-pinning would not have fixed the class,
+only reset its clock: the Unbond arm sits at `:4911` on the branch that wrote
+those numbers and `:4857` on the merge result, because unrelated work in the
+same file deleted 49 lines above it. A number that is correct on the branch and
+wrong on the tree that actually lands is worse than no number.
+
+The C++ twin lives in `Blockchain::check_archival_bond_post_input`, in the
+`archival_bond_post_kind::Unbond` arm; each row below names a symbol inside it
+that `rg` will find. There is deliberately **no CI gate** on these anchors: a
+gate that only checks a symbol still exists would pass while the symbol moved
+to an unrelated function, which is convention-theater rather than coverage.
+The reopening criterion (rule 21) is a row whose symbol becomes ambiguous —
+two call sites of the same name in the same function — at which point the row
+needs a discriminating argument, not a line number.
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| UB0 | **Possession pre-gate (submit-only, no consensus twin):** the bond slot's `pqc_auths` signature verifies against the key the slot presents | `verify_debit_slot_possession` | **A′ — runs BEFORE the Phase-B gather**, which is the whole point of it; `Malformed`. Facts-free (auth blob + payload hash), so it is legal ahead of the snapshot. Not a consensus rule: K13 already verifies this slot with every other one, and the block path has no submit surface to protect. See the work-ordering note below |
+| UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `"vin carries a bond_spend_pk"` belt | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
+| UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `get_archival_bond_value` (Unbond arm) | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
+| UB3 | Debit authorization: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_debit_auth_pin(record, auth_pubkey, "Unbond")` | **C over a B fact** — native `debit_auth_pin` (`shekyl-archival-retention`), the same function the block path calls over FFI; both arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
+| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
+| UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
+| UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `get_archival_last_slash_epoch` | **B fact, no D re-check** — the watermark only advances, so a Phase-B read can only be *behind* the truth, which fails **closed**; `Malformed`, contingent |
+| UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `record.bad_intervals.size()` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
+| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `shekyl_archival_settlement_epoch_at_height` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
+| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `shekyl_archival_verify_unbond_bond_post` → `verify_unbond_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
+
+**Why UB0 exists, and why it is not redundant with UB3.** The gather that
+produces UB2/UB4's facts runs a per-shard last-served scan — two LMDB seeks
+per served shard — with the pool and blockchain locks held. The size of that
+is not a constant: a `HeldShards` record is bounded by the codec cap
+(`MAX_HOLDINGS_SHARDS` = 4096 shards, so ≤ 8192 seeks), but a `CompleteTree`
+record's all-shards form walks every shard carrying a serve-credit row under
+that persona, which tracks the frozen-segment count and so **grows with the
+chain**. CompleteTree is the shape an attacker would choose. The C++ gather runs UB3's pin *before* that scan as a work gate,
+but that pin compares two **public** values: `bond_spend_pk` rides the
+JoinMarket post on the wire, so anyone who syncs the chain can read the
+record's committed key, present it, sign with garbage, and buy the scan on
+every submit. K13 does refuse the signature — after the scan has run.
+
+UB0 supplies the missing half. The two compose and neither subsumes the other:
+UB0 proves possession of the **presented** key, UB3 proves the presented key is
+the **record's**. A caller who holds some other key legitimately still buys no
+scan (UB3 refuses); a caller presenting the record's public key without its
+private half never reaches the gather (UB0 refuses). Only the holder of the
+cold `bond_spend_pk` — the party actually entitled to exit — reaches the scan.
+
+It also narrows an oracle: UB0 runs before **any** record read, so submit
+latency no longer tells an unauthenticated caller whether a bond record exists.
+
+**The invariant, stated once, because the patches kept missing it.** This
+finding arrived three times — key equality, then possession, then replay — and
+each revision authenticated something other than the event that triggers the
+work. What the gate must hold is:
+
+> **The scan is the LAST thing UB9 needs, so every guard that precedes it
+> gates it.** The gather runs the per-shard scan only for an *unknown* txid
+> whose record state could still reach UB9's cooldown check.
+
+That is a rule, not a list, and it is deliberately phrased that way: three
+earlier revisions each added the one clause the latest finding named, and a
+fourth finding then arrived for a case the list did not cover. Reading
+`verify_unbond_bond_post` top-down settles the question — **`release_cooldown_elapsed`
+is the only consumer of the scan**, so each guard above it can refuse without
+it, and every such guard belongs in front of the gather:
+
+| UB9 guard | Decidable from | Enforced before the scan by |
+| --- | --- | --- |
+| `RecordMissing` | the probe | the gather's absent-record early return |
+| `NothingToUnbond` (balance 0) | a cheap record read | gather skip clause |
+| `UnbondCreditNonzero`, `UnbondHoldingsNotEmpty`, `UnbondFloorMismatch`, `NotFullUnbond` | the **vin alone** | `unbond_vin_statics`, run in the UB0 pre-gate |
+| `DebitNotFullBalance` | a cheap record read | gather skip clause |
+| `IntervalLogFull` | a cheap record read | gather skip clause |
+| `CooldownNotElapsed` | **the scan** | — this is what the scan is *for* |
+
+The vin-only guards are the shared consensus function, not a restatement: the
+block path runs the identical checks inside `verify_unbond_bond_post`, in the
+same order. A second copy in the RPC crate is the drift this codebase spends
+its gates preventing.
+
+Each clause closes a replay a previous revision left open:
+
+* **Identity — and why the txid alone is not it.** A broadcast Unbond's bytes
+  are public and its signature stays valid forever, so anyone could resubmit
+  them; UB0 passes, and the engine's in-pool/in-chain early return happens only
+  *after* the gather. The gather is therefore told when the txid is already
+  known.
+
+  But the txid is **malleable relative to the signatures**, and that broke the
+  first version of this clause. A PQC signing payload is header-only
+  (`pqc_header(i)` carries no signature bytes; `all_key_hashes` binds public
+  keys), while the txid hashes `PqcAuth::write` *including* signatures. So an
+  observer can flip one byte of a **funding** slot's signature, mint a fresh
+  txid, and leave the bond slot's signature valid — identity sees an unknown
+  transaction, the record is untouched so the state clauses pass, and each
+  variant bought the scan. A pre-gate that verified only the bond slot could
+  not see it. **UB0 therefore verifies every `pqc_auths` slot**, which is what
+  makes "unknown txid" trustworthy: a txid is only reachable by a party who can
+  produce every signature under it. The cost is that an honest debit verifies
+  its slots twice, here and at K13; that is bounded by the input count against
+  a transaction about to run an FCMP++ membership proof.
+
+  The identity condition itself is
+  `in_chain || in_pool_broadcast`, **not** `in_pool`: an embargoed tx is
+  in-pool but not broadcast, and a foreign caller is shown only
+  `in_pool_broadcast` (§3.1), so it does *not* early-return and genuinely needs
+  the scan.
+* **State — an exited record.** This is the cheapest replay of the family,
+  because its attacker has nothing left to lose. An exit *preserves the row*
+  with a zero balance and an intact `bond_spend_pk`, so identity never fires
+  (each forged txid is new) and the pin still passes; a zero `bond_debit`
+  "matches" a zero balance, so the debit clause passed too. UB9 refuses it as
+  `NothingToUnbond` whatever the scan returns. Note the exit does **not** prune
+  the record's serve-credit rows, so the scan it was buying is still the full
+  chain-growing one.
+* **State — a moved balance.** A broadcast Unbond invalidated by later state motion — a slash, a
+  competing exit — is neither in-pool nor in-chain, so the identity clause
+  never fires for it, and the exited row keeps its `bond_spend_pk`, so UB3
+  still passes. `bond_debit` is fixed in the signed bytes and UB9 requires it
+  to equal the whole balance, so a mismatch cannot verify whatever the scan
+  returns.
+
+What remains, and is accepted: the **first** submission of a genuinely valid,
+unknown Unbond scans once. That is the floor — the work the fact set exists to
+do — and it costs the caller a cold-key signature over bytes that bind the
+current balance.
+
+
+**The exit does not remove the row, so UB2 is not BP3 with the sign flipped.**
+BP3 wants *absence*, and a record appearing during Phase C is a claim-slot
+conflict. The debit arm cannot simply invert that, because
+`apply_archival_unbond` performs a **whole-record write**: the exited persona
+keeps its row with `bonded_total_atomic == 0`, empty holdings and the closing
+interval, and `get_archival_bond_hybrid_pubkey` still reports it **present**
+(the v4 claimed set and `first_paying_emission_height` have to survive the
+release — F-S1). A competing Unbond moves the **balance**, never the row, so a
+Phase-D re-check keyed on presence could never observe the exit it exists to
+catch.
+
+UB2 therefore carries two facts and re-checks the second. At Phase B/C a record
+**never present** is a submitter error (`Malformed` — these bytes can never
+connect). At Phase D the test is the record's balance against the submitted
+vin's own `bond_debit`, which the Phase-C battery required it to equal: gone,
+zeroed by a competing exit, **or raised** by a `Rebond` / `HoldingsUpdate`-add
+that connected during Phase C — each leaves the full-exit equality
+unsatisfiable for these bytes, so each classifies `DoubleSpendConflict`. Keying
+on the balance rather than on "exited" catches the credit-side direction for
+free.
+
+The time asymmetry survives — one fact, two verdicts by observation time, the
+`reference` field's shape (`ReferenceNotFound` at C vs `StaleRoot` at a D
+re-check). It is the *balance* that carries it, not presence. (An earlier
+revision said "present at B and gone at D". The row does not go away, and a
+check written to that description is inert.)
+
+**Why UB4 carries the scan discriminant instead of just the epochs.** The
+kind→scan decision is Rust's (`HoldingsKind::last_served_scan`, exhaustive on
+the enum) precisely because the two C++ gather sites once branched on
+`is_complete_tree()` independently, coupled only by comments. The submit shim
+is a *third* gather site, and the failure it can introduce is silent and
+**permissive**: a `CompleteTree` record gathered with the held-shards accessor
+yields an empty slice, which folds to "never served", which makes the release
+cooldown *elapse* for a record that has been serving. So the fact is
+self-describing — the shim reports which accessor it ran, and the engine pins
+that byte against `holdings_kind.last_served_scan()`. A mismatch is a
+[`ShimContract`] fault, never a guessed fold. The bite: a serving
+`CompleteTree` record gathered as `HeldShards` must be observed refusing.
+
+**Phase-D scope: the terminal fact only, and why the rest do not need it.**
+The commit re-check re-gathers the POD, not the bundle — so UB2 is re-checked
+(its two facts both ride the POD: presence in
+`bond_record_probed`/`bond_record_exists`, and the balance in the appended
+`bond_record_bonded_total`, both filled from the reparsed blob) and UB4–UB7
+are not. The balance is the predicate; presence only distinguishes "no row"
+from "row with nothing bonded". That is a
+scope decision, not an omission, and it rests on which direction each fact can
+move during Phase C:
+
+- **UB2 is terminal on REMEDY, not on impossibility.** A balance that no
+  longer equals this vin's `bond_debit` means the slot moved under it — a
+  competing exit zeroed it, or a credit raised it. The verdict is
+  `DoubleSpendConflict`, which this codebase defines as *rebuild*, and rebuild
+  is right: the debit is fixed at build time, so these bytes encode a stale
+  balance and the wallet must construct a new Unbond against the current one.
+  "Retryable" here means *resubmit these same bytes later*, which is precisely
+  the wrong instruction.
+
+  An earlier revision justified the verdict by asserting no resubmission of
+  these bytes could ever succeed. **That was false**, and the correction is
+  worth keeping visible: a partial slash lowers the balance by one `FLOOR`, and
+  a later `Rebond` credits the same `FLOOR` back while closing the interval, so
+  the balance can return to exactly the value these bytes bind. No sub-case is
+  provably permanent — a fresh `JoinMarket` can even re-create an exited row at
+  a floor equal to the old debit. What bounds the hazard is not impossibility
+  but two other facts: the bytes expire with `FCMP_REFERENCE_BLOCK_MAX_AGE`, so
+  a replay must land inside that window; and the only holder of the bytes is
+  the wallet that built them, because a rejected submission is never relayed.
+  That second fact is load-bearing, which is why **terminal-reject prune**
+  (`FOLLOWUPS.md`, the #572 residue) is a *security* item and not just hygiene:
+  it is what removes the retained copy. The row's continued presence is not
+  evidence against terminality; the exit preserves it.
+- **UB6 can only fail closed.** The watermark advances monotonically, so a
+  Phase-B read is at worst *behind* the truth — it refuses an exit that had
+  become legal, never admits one that had not.
+- **UB4/UB5/UB7 are contingent, and a stale pass costs pool space, not
+  safety.** A serve landing during Phase C re-arms the cooldown; an interval
+  appended during Phase C can fill the log. Either way the block path refuses
+  the transaction at connect, so admitting it to the pool cannot put an
+  unauthorized debit on the chain. Re-marshaling the whole bundle under the
+  commit lock to reject a few seconds earlier would lengthen the write-side
+  lock scope for no consensus gain — the same pool-level scope-honesty posture
+  §8.7.2 row E13 takes.
+
+Reopening criterion (rule 21): a measured pool-occupancy problem from
+cooldown-raced Unbonds, or a commit path that already re-marshals archival
+bundles for another arm — at which point the bundle rides along for free.
+
+**One lock scope, whole bundle.** The record value, the UB4 slice and the UB6
+watermark are read under the *same* pool→blockchain lock scope as the rest of
+`SubmitFacts` — a record from before a block paired with a watermark from after
+it describes a state the chain never occupied.
+
+At Phase D the same rule applies to what *is* re-gathered — the POD, per the
+scope note above — and the fields the commit does not re-read are simply
+absent from `Raced(fresh)`, not carried over stale. Merging a fresh POD with a
+Phase-B bundle would reintroduce exactly the composite figure this paragraph
+forbids, one phase later. (An earlier revision of this paragraph said the
+Phase-D leg re-gathers the *entire* bundle. It does not, and that reading
+would have made UB4–UB7 look race-rechecked when the scope note above records
+that they deliberately are not.)
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):

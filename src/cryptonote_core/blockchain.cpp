@@ -4749,6 +4749,10 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
     return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
       "record re-enters via JoinMarket/Rebond)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY:
+    return "bond record commits no bond_spend_pk; it authorizes no debit";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
+    return "pqc auth key is not the record's committed bond_spend_pk";
   default:
     return "unknown bond-post verify code";
   }
@@ -4766,24 +4770,45 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 // record falls through to the semantic verify's RECORD_MISSING) and run this
 // BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
 // so an unauthorized attempt is rejected before it can cost LMDB seeks.
+// Debit authorization for the value-out bond-post arms. The predicate itself
+// is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
+// logs. It used to be implemented here, which made it a second copy of the one
+// check that has no recovery -- a compromised serving host holds the identity
+// hybrid key, so an identity-authorized debit is a collateral drain. The Rust
+// submit battery calls the same function natively (DAEMON_SUBMIT_VERDICT.md
+// 8.7.1.1 row UB3), so the two verifying paths share it rather than tracking
+// each other.
 bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
-  if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+  const uint8_t rc = shekyl_archival_debit_auth_pin(
+    record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
+    record.bond_spend_pk.size(),
+    auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
+    auth_pubkey.size());
+  if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
+    return true;
+  // Two arms, deliberately distinct in the log: "this record authorizes
+  // nothing" and "wrong key against a record that does" have different
+  // operator remedies.
+  if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY)
   {
     MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
       "a debit cannot be authorized (and the identity key never authorizes "
       "a value-out)");
-    return false;
   }
-  if (auth_pubkey != record.bond_spend_pk)
+  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH)
   {
     MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
       "record's committed bond_spend_pk (identity-key or foreign-key debit "
       "authorization is forbidden)");
-    return false;
   }
-  return true;
+  else
+  {
+    MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
+      << static_cast<unsigned>(rc) << ")");
+  }
+  return false;
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms
@@ -6235,7 +6260,8 @@ leave:
           // sub-increment swapped the arm's pre-GF-1 blanket rejection to the
           // real authorization: re-pin the vin's pqc auth key against the
           // record's COMMITTED bond_spend_pk (fail closed on a missing
-          // record, a keyless pre-GF-1 record, or a missing auth slot). Only
+          // record, a keyless pre-GF-1 record, or a missing auth slot) --
+          // through the SHARED pin, never a local re-spelling of it. Only
           // the theft-shaped check is re-run here; the debit's semantic legs
           // (cooldown, watermark, floor) stay checkpoint-trusted under the
           // fast path like every other skipped per-tx check.
@@ -6249,17 +6275,28 @@ leave:
           // Credits stay checkpoint-trusted here exactly as JoinMarket does.
           if (fast_check && bond.bond_debit > 0)
           {
+            // The predicate is `archival_debit_auth_pin` -- the SAME function
+            // the per-tx path and the Rust submit battery reach, not a
+            // re-spelling of it. It WAS spelled inline here until 2026-08-29,
+            // which made this arm a third copy of the one check whose entire
+            // purpose is that fast-syncing and fully-verifying nodes agree:
+            // a drift between the copies produces exactly the consensus split
+            // the comment above says this arm exists to prevent.
             shekyl::db::ArchivalBondValue record{};
-            const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
-            const bool auth_ok = have_record
-              && record.bond_spend_pk.size() == config::PQC_HYBRID_SINGLE_KEY_LEN
-              && vin_idx < btx.pqc_auths.size()
-              && btx.pqc_auths[vin_idx].hybrid_public_key == record.bond_spend_pk;
-            if (!auth_ok)
+            // A missing record leaves `record` default-constructed, so its
+            // empty bond_spend_pk drives the pin's "commits no key" arm --
+            // the same fail-closed answer the inline `have_record &&` gave.
+            (void)m_db->get_archival_bond_value(bond.p_canonical_id, record);
+            const bool slot_present = vin_idx < btx.pqc_auths.size();
+            if (!slot_present
+                || !archival_debit_auth_pin(record,
+                     btx.pqc_auths[vin_idx].hybrid_public_key,
+                     "block fast-check debit"))
             {
-              MERROR_VER("Block " << id << " has a debit-side archival bond post whose "
-                "pqc auth key does not match the record's committed bond_spend_pk (kind "
-                << static_cast<unsigned>(bond.post_kind) << ")");
+              MERROR_VER("Block " << id << " rejected: debit-side archival bond post at "
+                "vin " << vin_idx << " (kind " << static_cast<unsigned>(bond.post_kind)
+                << ") failed the debit-auth pin"
+                << (slot_present ? "" : " (no pqc auth slot for the vin)"));
               bvc.m_verifivation_failed = true;
               return_txs_to_pool();
               return false;

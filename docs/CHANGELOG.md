@@ -4,6 +4,25 @@
 
 ### Added
 
+- **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
+  enumerates the peer-to-peer wire surface and the connection-management
+  behavior around it at `dev` `30cd547e2` — 57 bucketed rows, 3 b1 / 6 b2 /
+  2 b3 / 46 b4, on the same four-bucket bar and evidence-class column as the
+  consensus census. Mechanical denominator (26 C++ KV maps, 72 field lines,
+  22 Rust `PortableMap` twins) with a sum check whose 4-map residual is
+  accounted row by row, and six named inverse spot-checks. Mints one new
+  evidence class, `inherited-defensive`, for a defence the tree carries by
+  lineage with no Shekyl record examining it. Discharges the requirements
+  register's §7 tasks 1–4 and records task 5 as not verifiable from the
+  repository. Findings of note: `connection_entry_base` has zero callers
+  tree-wide and `network_address_old` only a size printer (both bucket-3
+  deletion candidates); `network_config`'s never-sent KV map would advertise
+  a 50 MB packet limit against the 100 MB the transport enforces; the
+  Shi et al. (NDSS 2025) eclipse attack's double-spend arm is refused at the
+  tree by an **inherited** Monero guard (`f7fd209ed`, 2024-03-07) that no
+  Shekyl record has examined, while its graylist and whitelist sub-attacks
+  are unaddressed. Docs only, no behavior change.
+
 - **Merged consensus-rule census (C1).** `docs/design/CONSENSUS_RULE_CENSUS.md`
   supersedes the three census walks as the single live instrument and the
   consensus-rewrite's specification input (171 rows, buckets 87/14/2/68;
@@ -281,6 +300,28 @@
 
 ### Added
 
+- **`POST /submit_transaction` accepts `Unbond` bond-posts.** The battery
+  covered the `JoinMarket` kind only and refused every other one `Malformed`;
+  it now carries the Unbond fact set (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1) and
+  dispatches `verify_unbond_bond_post`, the same function the block path
+  already runs. `HoldingsUpdate` and `Rebond` still refuse — no wallet builds
+  either kind, so a fact set for them would be untestable guesswork.
+
+  **No wallet can reach this yet.** The staking exit stays deliberately
+  unreachable: no RPC method, no CLI verb, nothing dispatching the assembled
+  bytes. What changed is that a dispatched Unbond would now be accepted rather
+  than refused.
+
+  Security-relevant, and the reason this is not a copy of the credit arm: a
+  bond-post *credit* is authorized by `P`'s identity key, but a *debit* moves
+  bonded collateral out, and the identity key is the one a serving host holds
+  in order to sign responses at all. The debit is therefore authorized against
+  the record's committed cold `bond_spend_pk`, and that pin now lives in one
+  place (`shekyl-archival-retention::debit_auth_pin`) called by both the
+  daemon's block path and its submit path, rather than being implemented twice.
+  A record committing no canonical-length key authorizes nothing — there is no
+  identity-key fallback.
+
 - **A stall alarm for pending claims and drains.** A record dispatched but not
   settled past the alarm horizon is named in the operator log, keyed by kind
   *and* persona so a persona holding both a stuck claim and a stuck drain gets
@@ -332,11 +373,12 @@
   wallet-side producer yet", which was true when written and is not now.
   **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
   no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
-  RESERVED. The producer exists; what remains is reachability (the
-  regtest walk), dispatch of the assembled bytes, and native
-  `/submit_transaction` admission — Unbond is still `Malformed` there
-  until the submit fact set lands. The walk lands as its own PR, so the
-  producer merging is not the event that lifts RESERVED.
+  RESERVED. The producer exists; what remains is reachability and dispatch
+  of the assembled bytes. Native `/submit_transaction` admission was a
+  third item on that list when this entry was written and is not one now
+  — the Unbond fact set landed in this same release (see the submit entry
+  above), so the two must be read together. The walk lands as its own PR,
+  so the producer merging is not the event that lifts RESERVED.
 
 ### Changed
 

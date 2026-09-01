@@ -194,11 +194,13 @@ impl UnbondRecordState {
 /// Assemble the **full, wire-encoded** `Unbond` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
 ///
-/// "Wire-encoded" is not "admitted". Native `/submit_transaction` still
-/// refuses non-JoinMarket bond posts (`verifier.rs` JoinMarket kind dispatch)
-/// until the Unbond submit fact set and Phase-D re-check land. This producer
-/// is the construction leg that fired that reopening criterion; it does not
-/// itself lift admission.
+/// "Wire-encoded" is not "reachable". Native `/submit_transaction` **does**
+/// admit an `Unbond` since 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
+/// this producer is the construction leg that fired that reopening
+/// criterion). What still holds the exit closed is that nothing dispatches
+/// these bytes and no RPC method or CLI verb reaches this handler — so the
+/// margin is thinner than it was, not the same: admission used to refuse a
+/// dispatched exit as a second line of defence, and no longer would.
 ///
 /// The exit carries no ticket and draws no entry-gap offset. That seam exists
 /// to place a *bond post* at a random remove from the private funding intent
