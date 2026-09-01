@@ -217,6 +217,7 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
+  m_genesis_timestamp(0),
   m_batch_success(true),
   m_prepare_height(0)
 {
@@ -527,6 +528,11 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   db_rtxn_guard rtxn_guard(m_db);
+
+  // Block 0 exists from here on (added above when the store was empty) and
+  // is immutable, so its timestamp — the C2-R3 genesis padding value — is
+  // cached once for the timestamp-rule shim.
+  m_genesis_timestamp = m_db->get_block_timestamp(0);
 
   // check how far behind we are
   uint64_t top_block_timestamp = m_db->get_top_block_timestamp();
@@ -5603,12 +5609,11 @@ bool Blockchain::check_block_timestamp(const std::vector<uint64_t>& timestamps, 
   // the round's original C++ owner was ruled a rule-20 violation; see
   // CONSENSUS_C2_R3_TIMESTAMPS.md §7's execution record).
   //
-  // The genesis timestamp is only consumed as the padding value for short
-  // windows (the first 11 blocks, or a near-genesis fork) — don't pay an
-  // LMDB read for it on the full-window hot path.
-  const uint64_t genesis_ts = timestamps.size() < SHEKYL_DAA_MTP_WINDOW ? m_db->get_block_timestamp(0) : 0;
+  // The padding value is passed unconditionally (cached at init; block 0
+  // is immutable) so the pad-or-not decision lives wholly in the rule
+  // owner — this side carries no copy of the short-window threshold.
   const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
-      b.timestamp, timestamps.data(), timestamps.size(), genesis_ts,
+      b.timestamp, timestamps.data(), timestamps.size(), m_genesis_timestamp,
       (uint64_t)time(NULL), &median_ts);
   switch (verdict)
   {
