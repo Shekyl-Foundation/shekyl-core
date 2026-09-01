@@ -223,8 +223,8 @@ acts on the second. That splits PW-3's single requirement into three claims
 that need separate answers:
 
 **(i) No magic constant — PW-9 stands, unchanged and independently.** An 8-byte
-constant at the head of every connection answers "for what" with a single
-byte-match. Removing it is cheap and unambiguous. **But it must not be allowed
+constant at offset 0 of every connection answers "for what" with **one 8-byte
+comparison**, needing no decryption and no connection state. Removing it is cheap and unambiguous. **But it must not be allowed
 to carry an anonymity claim:** it raises the cost of *bulk passive scanning* —
 sweeping traffic for a known prefix — and does nothing against *targeted active
 probing*, which is the attack in (iii). Keep it as a hard requirement (PWD-T5),
