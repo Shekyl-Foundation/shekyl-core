@@ -1102,7 +1102,17 @@ fn sync_info(src: &Source) -> Result<String, String> {
         reply.height,
         trimmed(progress, 4)
     )];
-    let current_download: u64 = reply.peers.iter().map(|p| p.info.current_download).sum();
+    // **Every accumulation in this function saturates**, and the reason is one
+    // step upstream: `kib_per_second` clamps a finite but absurd rate to
+    // `u64::MAX` rather than invoking undefined behaviour, so a value near the
+    // ceiling is now *reachable* by design. Summing two of them overflows —
+    // which in a debug build is a panic unwinding through `extern "C"`, i.e.
+    // an abort of the daemon, and in release a wrapped number printed as a
+    // download rate. Every one of these operands is peer-influenced.
+    let current_download: u64 = reply
+        .peers
+        .iter()
+        .fold(0u64, |acc, p| acc.saturating_add(p.info.current_download));
     out.push(format!("Downloading at {current_download} kB/s"));
     if reply.next_needed_pruning_seed != 0 {
         out.push(format!(
@@ -1120,7 +1130,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
             .spans
             .iter()
             .filter(|s| s.connection_id == p.info.connection_id)
-            .fold((0u64, 0u64), |(n, b), s| (n + s.nblocks, b + s.size));
+            .fold((0u64, 0u64), |(n, b), s| {
+                (n.saturating_add(s.nblocks), b.saturating_add(s.size))
+            });
         #[expect(
             clippy::cast_precision_loss,
             reason = "a size for a human, in megabytes"
@@ -1137,7 +1149,10 @@ fn sync_info(src: &Source) -> Result<String, String> {
             trimmed(megabytes, 6),
         ));
     }
-    let total: u64 = reply.spans.iter().map(|s| s.size).sum();
+    let total: u64 = reply
+        .spans
+        .iter()
+        .fold(0u64, |acc, s| acc.saturating_add(s.size));
     #[expect(
         clippy::cast_precision_loss,
         reason = "a size for a human, in megabytes"
@@ -1150,10 +1165,14 @@ fn sync_info(src: &Source) -> Result<String, String> {
     ));
     out.push(reply.overview.clone());
     for s in &reply.spans {
-        // `nblocks == 0` would make `start + nblocks - 1` wrap; the C++ had
-        // the same expression and no such span, but the subtraction is
-        // written so it cannot.
-        let last = s.start_block_height + s.nblocks.saturating_sub(1);
+        // Both halves saturate. `nblocks == 0` would make `start + nblocks - 1`
+        // wrap through the subtraction, and a span far up the chain would wrap
+        // through the addition; the C++ wrote it as one unchecked expression.
+        // `render_overview` already saturates the same addition, which is what
+        // makes this one an omission rather than a judgement.
+        let last = s
+            .start_block_height
+            .saturating_add(s.nblocks.saturating_sub(1));
         let range = format!("{} - {last}", s.start_block_height);
         // Computed, not carried: the wire `span` has never had this field,
         // and the C++ console derived it the same way from the same height.

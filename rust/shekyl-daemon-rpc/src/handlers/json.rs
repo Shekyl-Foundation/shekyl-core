@@ -324,6 +324,25 @@ pub async fn get_info(State(state): State<Arc<AppState>>, body: String) -> impl 
 
 #[cfg(test)]
 mod tests {
+
+    /// The two ways to omit every field must ask the same question. They did
+    /// not on the C++ bridge, and that split had a live consumer.
+    #[test]
+    fn bodyless_and_empty_object_are_the_same_peer_list_request() {
+        let from_empty_object: shekyl_rpc_types::GetPeerListRequest =
+            serde_json::from_str("{}").expect("an empty object is a valid request");
+        let bodyless = shekyl_rpc_types::GetPeerListRequest::default();
+        assert_eq!(
+            from_empty_object, bodyless,
+            "however a caller omits the fields, it is asking one question"
+        );
+        assert!(
+            bodyless.public_only,
+            "and that question is the declared OPT default, not the \
+             value-initialized zero the old bridge fell back to"
+        );
+        assert!(!bodyless.include_blocked);
+    }
     use super::{fill_rpc_connections_count, json_error};
 
     /// A native method's failure names its own cause in the envelope —
@@ -406,6 +425,17 @@ pub async fn get_net_stats(State(state): State<Arc<AppState>>, _body: String) ->
 /// The request body is optional and its two members are optional within it,
 /// so an empty body means the daemon's own defaults — `public_only` **true**,
 /// `include_blocked` false.
+///
+/// **An absent body and an absent field mean the same thing here, and did not
+/// in C++.** `dispatch_json` deserialized only when the body was non-empty
+/// (`if (body_json && body_json[0])`), so a bodyless request kept the
+/// value-initialized `public_only = false` — the whole peerlist — while `{}`
+/// ran the KV map, applied `OPT(public_only, true)`, and answered the public
+/// subset. One route, two questions, decided by body length rather than by
+/// anything the caller said. Resolving both to the declared default is the
+/// correction; `bodyless_and_empty_object_are_the_same_peer_list_request`
+/// pins it, and the design doc's §7 records the one caller that had to start
+/// asking for the whole list outright.
 pub async fn get_peer_list(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
     let request: shekyl_rpc_types::GetPeerListRequest = if body.trim().is_empty() {
         shekyl_rpc_types::GetPeerListRequest::default()
