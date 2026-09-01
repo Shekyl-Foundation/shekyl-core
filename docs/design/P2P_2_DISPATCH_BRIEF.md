@@ -75,8 +75,9 @@ All `PW-` rows, including the 2026-09-01 implementation-path round:
   `SHEKYL_P2P_PROTOCOL.md`'s own text**, with `noise_hfs_spec` cited as
   *provenance, not authority*. A genesis-frozen wire cannot take authority from
   a draft marked unstable. This is a **round deliverable**, not a background
-  note: the spec must contain the token sequence, `ck` derivation, KEM
-  placement and padding band as its own normative text (§2.1, D-T4).
+  note: the spec must contain the token sequence, `ck` derivation and KEM
+  placement as its own normative text (§2.1, D-T4). *Not* a padding band — see
+  §1.4, which re-derives PW-3 and finds the band does not defend.
 - **PW-7d** — **snow as a test-only differential partner** for the classical
   half of the KAT suite: a **rule-17 wargame option parked for P2P-3**, not a
   P2P-2 decision. The round records it as an open option with its arguments;
@@ -169,10 +170,102 @@ gossip lane the multiplier is 33.0×, not ~14×** — more than double what the
 register records, because NN's classical baseline is the smallest of the four
 and the KEM material is a constant added to it.
 
-**This makes D-T2 more load-bearing, not less.** A 33× first-flight expansion
-is a far stronger bucketing signal than 14×, and PW-3's fixed-size padding band
-is the requirement that answers it. The round must not carry the softer number
-into the threat argument.
+**D-T2 stays load-bearing, but the ratio is the wrong lens — and the round
+must not inherit the alarm.** 33× is striking as a *ratio* and unremarkable as
+an *absolute*, because Shekyl's baseline is enormous by cryptocurrency
+standards; that is what FCMP++ plus hybrid PQC costs. Measured against what
+this system already moves (all verified at the pin):
+
+| | bytes | source |
+| --- | --- | --- |
+| Hybrid `NN` handshake, first flight | ≈ 2,600 (inferred) | §1.4 above — D-T2 to pin |
+| **Carrier window** — the padding quantum already in production design | **20,480** | `params/carrier.rs` `WINDOW_BYTES` |
+| Structural max transaction (8-in/16-out at `MAX_TREE_DEPTH`) | 97,964–97,969; **98,046** with the Levin envelope | `carrier.rs`, `MAX_FRAGMENTS` derivation |
+| PQC hybrid single key, **per input** | 1,996 | `cryptonote_config.h` `PQC_HYBRID_SINGLE_KEY_LEN` |
+
+The whole hybrid handshake is **about one-eighth of a single carrier window**,
+and smaller than the PQC key material of a two-input transaction before a
+single proof, output or signature byte is counted.
+
+**But the cost framing is not the question, and PW-3's answer does not survive
+examination. D-T2 must not pin a band.**
+
+The handshake's *existence* was never hideable: a TCP SYN, then bytes, then a
+session, is visible at the packet layer. **The asset is protocol identity** —
+not "an encrypted connection was opened" but "a handshake *for what*." A censor
+acts on the second. That splits PW-3's single requirement into three claims
+that need separate answers:
+
+**(i) No magic constant — PW-9 stands, unchanged.** An 8-byte constant at the
+head of every connection answers "for what" with a single byte-match. Removing
+it is cheap, unambiguous, and independent of everything below. Keep it as a
+hard requirement (D-T5).
+
+**(ii) The size fingerprint cannot be padded away, and padding would
+manufacture the signature it claims to remove.** Two reasons, the first
+verified at our own source:
+
+- **The flight is already constant-size by construction.** `NN`+hfs has no
+  variable-length component: `ML_KEM_768_EK_LEN = 1184`,
+  `ML_KEM_768_CT_LEN = 1088`, `X25519_KEM_CT_LEN = 32`
+  (`rust/shekyl-crypto-pq/src/kem.rs`), no statics, no variable payload, fixed
+  AEAD tags. **Every Shekyl handshake is already the same number of bytes.**
+  There is no variance for padding to remove — padding changes *what the
+  constant is*, not *whether one exists*.
+- **A constant is precisely what a classifier wants.** "Every connection whose
+  first flight is exactly N bytes is Shekyl" is a perfect signature. PW-3's
+  phrasing — a band "independent of pattern/KEM in use" — was written to stop
+  an observer distinguishing *between configurations*. **Shekyl ships one
+  configuration.** There are no configurations to tell apart, so the
+  requirement solves a problem this deployment does not have while leaving the
+  actual signature untouched.
+
+What the 33× told us is that the flight is *distinctive* (2.6 KB where classical
+`NN` is 80 B). It never told us padding fixes that. Turning a distinctive
+constant into a differently-sized constant is relabeling, not obfuscation.
+
+**(iii) Genuine size-unidentifiability is a different mechanism with an
+existing owner.** It requires mimicry (look like TLS) or full randomisation of
+the flow's shape — the obfs4 / Shadowsocks problem, an ongoing arms race and a
+far larger commitment than a padding line item. That work has a home already:
+the Tor / pluggable-transport lane. The honest disposition is to **concede the
+clearnet size fingerprint as a property, with a named owner elsewhere**, the
+same way clearnet MITM is conceded under PW-19a.
+
+**Why this had to be caught before D-T2 and not after.** Pinning a band would
+encode a defence that does not defend, and it would then read as green forever
+— a rule-47-shaped outcome, from a requirement the register itself wrote. A
+padded flight is exactly as classifiable as an unpadded one; the only thing the
+band changes is the number in the classifier's rule.
+
+**The scope question this raises belongs to Rick, and this brief does not
+assume either way:** *is clearnet DPI resistance in scope for Shekyl at all?*
+If it is, it needs its own round with a real mechanism, not a padding
+requirement. If it is not, the fingerprint is conceded and D-T2 reduces to (i)
+plus the concession record. **The round must not settle that by picking a
+band.**
+
+Two notes retained from the cost analysis, now serving a narrower purpose:
+the carrier comparison establishes that padding is *architecturally normal*
+here (so cost was never the obstacle — it just is not the remedy), and
+`carrier.rs` remains the **template for any constant this round does pin**:
+derivation written out, alternatives rejected on record, and
+`tests/carrier_window.rs` asserting the derivation as an *equality* rather than
+the value — its own words, *"the derivation is enforced, not performed… neither
+is a literal the test could agree with by construction."* `WINDOW_BYTES`' doc
+notes the inherited 3 KiB window "was a Monero cadence artifact" with no
+derivation; that is the failure mode any pinned constant must avoid.
+
+**Template for D-T2, and the round should be pointed at it explicitly.**
+`rust/shekyl-relay-privacy/src/params/carrier.rs` is a working example of
+exactly this deliverable: a size constant with its derivation written out
+(`MAX_FRAGMENTS = ceil(S_max / WINDOW_BYTES) = ceil(98_046 / 20_480) = 5`), the
+rejected alternatives on record (the inherited 20, and why an epoch-ceiling
+coincidence is not a derivation), and `tests/carrier_window.rs` **asserting the
+derivation rather than the value** — its own comment: *"the derivation is
+enforced, not performed… neither is a literal the test could agree with by
+construction."* A one-sided bound would have gone green on the wrong number;
+the equality is what makes it a check.
 
 Two constraints on use: the ratio and the 80 B are quoted from the paper's
 prose and are safe; **the absolute HFS byte count (≈ 2.6 KB, consistent with
@@ -181,6 +274,42 @@ higher-resolution read before it enters normative text.** And note this closes
 a loop with §0(b): PW-8's "2.4–2.8 KB" is a plausible *absolute* NN-hybrid
 handshake size — what was wrong there was comparing it against BOLT-8's
 *classical* 166 B, not the magnitude itself.
+
+### 1.5 What option (a)'s zero-byte rekey buys — a privacy argument, not a cost one
+
+PW-8's ruled mechanism costs **nothing on the wire**: `ck', k' = HKDF(ck, k)`
+plus a nonce reset, per direction, both sides deriving from state they already
+hold. Nothing is transmitted, so there is nothing for an observer to see and
+nothing to pad. **The ≈2.6 KB flight is paid once per connection, at setup, and
+never again for that connection's lifetime.** Two consequences belong on the
+record.
+
+**This is retroactively the strongest argument against option (b), and it is a
+privacy argument.** A WireGuard-style periodic re-handshake would not merely
+have cost bytes per interval — it would have **re-emitted the classifiable
+flight on a schedule**, which is both a repeated DPI opportunity and a cadence
+signal in its own right, the PW-28 hazard arriving by a second route. Option
+(a) reduces the handshake's observable footprint to the theoretical minimum:
+**exactly one event per connection.** That is cleaner than the cost argument
+the row currently carries, and it should be folded into PW-8 as the rationale
+for (a) at the register's next touch.
+
+**Handshake exposure is therefore a function of connection lifetime, which ties
+PW-3 to PW-23.** If connections churn, the classifiable event recurs; if
+work-based tenure keeps outbound relationships stable across long intervals, a
+node's handshake count tends toward *the number of distinct peers it maintains*
+rather than scaling with time. So the tenure mechanism **materially reduces
+PW-3's exposure frequency** — a peer relationship lasting hours amortises one
+flight to nothing. That composition was invisible while the two rows were
+reasoned about separately, and for once it runs in the helpful direction. It is
+noted on D-I3.
+
+**What it does not do is rescue padding.** An earlier statement of this
+analysis closed with "padding is still required"; **that is retracted by §1.4**
+— one classifiable event per connection is still classifiable, and padding does
+not make it less so when the flight is already a constant. Rotation being free
+bounds *how often* the event appears. It does not change *what the event looks
+like*, and nothing in this section should be read as reinstating the band.
 
 ---
 
@@ -216,8 +345,8 @@ remains is to make them concrete and normative.
 | id | Decision | Grounded in |
 | --- | --- | --- |
 | D-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
-| D-T2 | **Fixed-size padding band**, independent of pattern and KEM — named as a hard requirement, not assumed as a side-effect of encryption. The signal it answers is a **33.0×** first-flight expansion for `NN` (§1.4), not the ~14× the register records — that is XX's figure | PW-3 as corrected in §1.4; pin the absolute byte count before it enters normative text |
-| D-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset | PW-8 (ruled; carry the §0(b) correction) |
+| D-T2 | **Re-derive PW-3 from the asset, and do NOT pin a padding band.** §1.4 shows the flight is already constant-size by construction, so a band changes the constant without removing the signature. Split into: (i) no magic constant → D-T5; (ii) the clearnet size fingerprint **conceded**, with the Tor / pluggable-transport lane named as owner; (iii) whether clearnet DPI resistance is in scope at all — **a scope question for Rick, not for this round to settle by picking a band** | PW-3 as re-derived in §1.4; `carrier.rs` is the template for any constant the round *does* pin |
+| D-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset — **zero bytes on the wire**, both sides deriving from state they already hold | PW-8 (ruled; carry the §0(b) correction **and the §1.5 privacy rationale**) |
 | D-T4 | **`e1`/`ekem1` semantics written normatively in this document**, `noise_hfs_spec` cited as provenance only | **PW-7c** |
 | D-T5 | Wire prefix: what replaces `LEVIN_SIGNATURE`'s fixed 8 bytes | PWC-A1, PW-9 |
 | D-T6 | Packet limits derived from largest legitimate message, replacing two inherited and disagreeing constants | PWC-A5, PWC-F3, PW-10 |
@@ -246,7 +375,7 @@ bucket-4 mass lives here.
 | --- | --- | --- |
 | D-I1 | Session identity: fully ephemeral, no durable peer id on the wire | PW-19, PW-19a, PWC-D4 |
 | D-I2 | Peerlist disclosure: size, anonymisation, and whether both handshake and timed-sync carry it | PWC-D1, PWC-D2, PWC-B4, PW-16 |
-| D-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots** | PW-17, PW-18, PWC-D5, §5.4 |
+| D-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, §5.4 |
 | D-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
 | D-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
 | D-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | §5.2, PWC-D3, PWC-D10, PWC-D11 |
