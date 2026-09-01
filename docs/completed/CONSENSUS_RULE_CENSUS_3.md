@@ -1,11 +1,18 @@
 # Consensus-rule census (CEN-1)
 
-**Status:** OPEN — CEN-1 enumeration complete; per-rule design rounds not begun.
+**Status:** CLOSED-as-record (superseded 2026-08-31, census-C1 reconciliation) — merged into
+[`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md), the single live
+census instrument, which carries every CEN id forward under the same id
+(its §9.2 lists the rows whose bucket/class changed under the unified
+evidence bar, and the rows minted/split in the merge). Content retained as
+the independent-walk record; do not update this file — corrections land in
+the merged doc.
+Original status: OPEN — CEN-1 enumeration complete; per-rule design rounds not begun.
 **Pinned sha:** `8ba1aae3dbd1e3b03504d5d27c0471bb67f11b9d` (dev tip, 2026-08-31).
 Every `file:line` in this document was read at that commit; re-locate before
 citing at any other sha.
 **Identifier family:** `CEN-` (consensus census), registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit that
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 in the commit that
 lands this document (rule 94). Two token forms, both registered: `CEN-1`
 names the census work item itself (this document; the effort the
 2026-08-30 ruling authorized), and `CEN-<subsystem letter><n>` — optionally
@@ -21,7 +28,7 @@ ratified).
 same surface were commissioned at the same pinned sha; this document is
 the `CEN-` walk (steered as census #3). Siblings landing in PR #583:
 [`CONSENSUS_RULE_CENSUS_2.md`](CONSENSUS_RULE_CENSUS_2.md) (family `RC-`)
-and Survey A [`CONSENSUS_RULE_CENSUS_1.md`](CONSENSUS_RULE_CENSUS_1.md).
+and Survey A [`CONSENSUS_RULE_CENSUS_1.md`](../design/CONSENSUS_RULE_CENSUS_1.md).
 **Disagreement between the walks is census material for the design
 rounds, not a defect to reconcile in either document** — no row here was
 diffed against or adjusted toward an `RC-` row; the reconciliation pass
@@ -112,7 +119,7 @@ The census must be re-runnable at a later sha and diffable. The procedure:
    Dandelion++, fluffy-block reassembly) is out of scope except where it
    supplies acceptance inputs (the pool supplement and the attestation
    witness). The wire-format census is separate work
-   ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](BLOCK_TX_WIRE_FORMAT_PORT.md)).
+   ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](../design/BLOCK_TX_WIRE_FORMAT_PORT.md)).
 
 7. **Behavioral statements** come from the code read at the pinned sha —
    never from Monero documentation, Monero source, or memory of Monero
@@ -147,7 +154,7 @@ that disposition; removed-rule records (MSW-6, the CLSAG/ring surface, the
 claim-era types) appear in §5/§6 as history, not rows. Reproducible counts:
 
 ```sh
-f=docs/design/CONSENSUS_RULE_CENSUS_3.md
+f=docs/completed/CONSENSUS_RULE_CENSUS_3.md
 grep -c '^| CEN-' "$f"                                                          # rows
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$5); print $5}' | sort | uniq -c  # C/P
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$6); print $6}' | sort | uniq -c  # buckets

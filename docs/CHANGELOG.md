@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Merged consensus-rule census (C1).** `docs/design/CONSENSUS_RULE_CENSUS.md`
+  supersedes the three census walks as the single live instrument and the
+  consensus-rewrite's specification input (171 rows, buckets 87/14/2/68;
+  every RC/CEN/Survey-A id resolved in its §9 accounting; the C2
+  design-round queue in its §10). Consensus-relevant finding folded in: the
+  MTP timestamp boundary is three-way split (ratified-strict spec,
+  equality-accepting live validator, strict-but-unwired Rust predicate) —
+  flagged for an early ruling. The RC and CEN walks are archived to
+  `docs/completed/`; docs only, no behavior change.
+
 - **Independent second consensus-rule census (`RC-`).** 181 independently
   ratifiable rules, walked from the block and transaction acceptance
   entry points at `8ba1aae3d` and classified into four buckets. The
