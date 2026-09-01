@@ -105,10 +105,14 @@
   averaging even-length windows; below 11 blocks of history the window is
   now right-padded with the genesis timestamp instead of skipping the
   check). Miner templates floor their timestamp at `median + 1`. The rule
-  has one C++ owner (`shekyl_check_timestamp_rule`) consumed by both
-  paths, is pinned to the Rust rewrite's `is_above_mtp` /
-  `is_timestamp_below_ftl` predicates by the shared vectors
-  `docs/test_vectors/MTP_BOUNDARY_V1.json` (new; rule-30 pinned), and is
+  has ONE implementation — `shekyl-difficulty`'s `check_timestamp_rule`
+  (built on its `is_above_mtp` / `is_timestamp_below_ftl` predicates) —
+  exported through `shekyl-ffi` beside the LWMA-1 difficulty entry point;
+  the C++ validator is a marshaling shim per rule 20 (the crossing was
+  re-ratified 2026-09-01, replacing the round's original C++ owner). It is
+  pinned by the shared vectors
+  `docs/test_vectors/MTP_BOUNDARY_V1.json` (new; rule-30 pinned) natively
+  in Rust and end-to-end through the FFI, and is
   exercised red-first in `core_tests` (strict boundary, bootstrap
   padding, alt FTL, alt newest-11 truncation). Consensus-forking vs the
   inherited behavior; the pre-genesis stressnet is genesis-only and the

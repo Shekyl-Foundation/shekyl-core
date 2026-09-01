@@ -5,11 +5,13 @@
 
 // Shared C2-R3 boundary vectors for the ruled timestamp rule
 // (docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01),
-// consumed from docs/test_vectors/MTP_BOUNDARY_V1.json against the live
-// validator's rule owner `cryptonote::shekyl_check_timestamp_rule`. The
-// same file drives rust/shekyl-difficulty/tests/mtp_boundary_vectors.rs
-// against the rewrite's predicates — two implementations of one consensus
-// rule that do not share vectors drift silently.
+// consumed from docs/test_vectors/MTP_BOUNDARY_V1.json through the FFI
+// boundary (`shekyl_difficulty_check_timestamp_rule`) — the exact entry
+// point the C++ validator's marshaling shim consumes, so these tests pin
+// the ONE implementation (shekyl-difficulty's `check_timestamp_rule`)
+// end-to-end across the C ABI. The same file drives
+// rust/shekyl-difficulty/tests/mtp_boundary_vectors.rs natively; the two
+// consumers together pin the rule on both sides of the boundary.
 //
 // Every JSON access goes through the checked helpers below rather than
 // rapidjson's raw operator[]: a drifted or malformed vector file must
@@ -26,7 +28,8 @@
 
 #include "gtest/gtest.h"
 
-#include "cryptonote_core/blockchain.h"
+#include "shekyl/consensus_constants_generated.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace
 {
@@ -120,14 +123,12 @@ TEST(mtp_boundary, predicate_cases_match_rule_owner)
     const bool expected = bool_field(c, "verdict");
 
     uint64_t median = 0;
-    const auto verdict = cryptonote::shekyl_check_timestamp_rule(
-        candidate, window, /*genesis_ts=*/0, /*local_clock=*/candidate, median);
+    const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+        candidate, window.data(), window.size(), /*genesis_ts=*/0,
+        /*local_clock=*/candidate, &median);
 
     EXPECT_EQ(u64_field(c, "median"), median) << name;
-    if (expected)
-      EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok, verdict) << name;
-    else
-      EXPECT_EQ(cryptonote::timestamp_rule_verdict::not_above_median, verdict) << name;
+    EXPECT_EQ(expected ? SHEKYL_TIMESTAMP_RULE_OK : SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN, verdict) << name;
   }
 }
 
@@ -149,14 +150,12 @@ TEST(mtp_boundary, assembly_cases_pad_with_genesis_timestamp)
     const bool expected = bool_field(c, "verdict");
 
     uint64_t median = 0;
-    const auto verdict = cryptonote::shekyl_check_timestamp_rule(
-        candidate, history, genesis_ts, /*local_clock=*/candidate, median);
+    const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+        candidate, history.data(), history.size(), genesis_ts,
+        /*local_clock=*/candidate, &median);
 
     EXPECT_EQ(u64_field(c, "median"), median) << name;
-    if (expected)
-      EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok, verdict) << name;
-    else
-      EXPECT_EQ(cryptonote::timestamp_rule_verdict::not_above_median, verdict) << name;
+    EXPECT_EQ(expected ? SHEKYL_TIMESTAMP_RULE_OK : SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN, verdict) << name;
   }
 }
 
@@ -182,10 +181,11 @@ TEST(mtp_boundary, ftl_cases_pin_the_future_time_axis)
     const bool ftl_ok = bool_field(c, "verdict");
 
     uint64_t median = 1;
-    const auto verdict = cryptonote::shekyl_check_timestamp_rule(
-        candidate, zero_window, /*genesis_ts=*/0, local_clock, median);
+    const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+        candidate, zero_window.data(), zero_window.size(), /*genesis_ts=*/0,
+        local_clock, &median);
 
-    EXPECT_EQ(!ftl_ok, verdict == cryptonote::timestamp_rule_verdict::above_ftl) << name;
+    EXPECT_EQ(!ftl_ok, verdict == SHEKYL_TIMESTAMP_RULE_ABOVE_FTL) << name;
     // The median out-parameter is set even on the FTL-fail arm — the
     // miner-template caller reads it unconditionally (C2-R3 §7.3).
     EXPECT_EQ(0u, median) << name;
@@ -211,15 +211,15 @@ TEST(mtp_boundary, template_edge_no_timestamp_satisfies_both_bounds)
 
   uint64_t median = 0;
   // The local clock itself is not above the median.
-  EXPECT_EQ(cryptonote::timestamp_rule_verdict::not_above_median,
-            cryptonote::shekyl_check_timestamp_rule(clock, edge_window, 0, clock, median));
+  EXPECT_EQ(SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN,
+            shekyl_difficulty_check_timestamp_rule(clock, edge_window.data(), edge_window.size(), 0, clock, &median));
   EXPECT_EQ(edge_median, median);
   // The smallest MTP-satisfying value busts FTL.
-  EXPECT_EQ(cryptonote::timestamp_rule_verdict::above_ftl,
-            cryptonote::shekyl_check_timestamp_rule(edge_median + 1, edge_window, 0, clock, median));
+  EXPECT_EQ(SHEKYL_TIMESTAMP_RULE_ABOVE_FTL,
+            shekyl_difficulty_check_timestamp_rule(edge_median + 1, edge_window.data(), edge_window.size(), 0, clock, &median));
   // Self-healing: one clock tick later the same bump is valid.
-  EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok,
-            cryptonote::shekyl_check_timestamp_rule(edge_median + 1, edge_window, 0, clock + 1, median));
+  EXPECT_EQ(SHEKYL_TIMESTAMP_RULE_OK,
+            shekyl_difficulty_check_timestamp_rule(edge_median + 1, edge_window.data(), edge_window.size(), 0, clock + 1, &median));
 }
 
 // A window wider than 11 is a caller bug (the newest-11 selection is the
@@ -231,9 +231,10 @@ TEST(mtp_boundary, wider_window_is_refused)
 {
   const std::vector<uint64_t> too_wide(SHEKYL_DAA_MTP_WINDOW + 1, 5);
   uint64_t median = 123;
-  const auto verdict = cryptonote::shekyl_check_timestamp_rule(
-      /*candidate=*/999, too_wide, /*genesis_ts=*/0, /*local_clock=*/999, median);
-  EXPECT_EQ(cryptonote::timestamp_rule_verdict::window_too_wide, verdict);
+  const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+      /*candidate=*/999, too_wide.data(), too_wide.size(), /*genesis_ts=*/0,
+      /*local_clock=*/999, &median);
+  EXPECT_EQ(SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE, verdict);
   // The refusal arm pins median_out to 0 like every other arm ("set on
   // every arm" is the header contract) — assert it so no caller starts
   // leaning on a stale or uninitialized value here.

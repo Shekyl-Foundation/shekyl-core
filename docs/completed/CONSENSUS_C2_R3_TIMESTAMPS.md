@@ -307,7 +307,36 @@ call site; the vector file's own comment records the split. The Rust side
 consumes predicate + FTL sections today and gains the assembly consumer
 with the rewrite's window assembly at the C3 cutover.
 
-The rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
+**Crossing correction (2026-09-01, ratified by Rick after the rounds
+below; supersedes this record's C++-owner framing).** The §7 plan's
+"consensus changes land in C++ first, C++ runs stressnet until the C3
+cutover" originated in the steering brief (the umbrella chat has recorded
+the origin as its own — this is a brief-drafting error unwound, not a
+defect of the round's rulings), and Rick's rule-20 steering reminder
+unwound it for rules: **a C2 ruling whose content is a RULE lands in Rust
+behind the FFI with the C++ copy deleted; only orchestration stays C++**
+— now the standing principle for R1 onward, so C3 shrinks with every
+round. Accordingly the C++ rule owner described below was deleted and the
+rule crossed: `shekyl-difficulty::check_timestamp_rule` (built on
+`is_above_mtp` / `is_timestamp_below_ftl` / `mtp_median`, one comparison
+site per axis) is the ONE implementation, exported as
+`shekyl_difficulty_check_timestamp_rule` beside the LWMA-1 entry point
+the validator already consumes; `Blockchain::check_block_timestamp` is a
+marshaling shim; the template orchestration (window assembly, cache
+revalidation, edge refusal) legitimately stays C++. The vectors now pin
+the rule natively in Rust (every section, `assembly_cases` included) and
+end-to-end through the FFI; the execution-record bullet below that
+"rejected on the merits" the review's FFI prescription is thereby
+**overturned** — the differential-pair defense failed because a
+freshly-ruled rule has no inherited oracle (same-day, same-hand copies
+are not independent), and the landed LWMA-1 FFI precedent in the same
+validator already refuted the atomic-cutover objection. Behavior is
+unchanged: the round's red-first core_tests evidence stands, and the
+Rust mutation controls (boundary, padding, width) are the crossed code's
+negative controls.
+
+The paragraphs below describe the round as originally executed,
+including the now-deleted C++ owner `cryptonote::shekyl_check_timestamp_rule`
 (`blockchain.cpp:5594`, declared `blockchain.h` tail), consumed by the
 vector overload (`:5643`, now FTL-bearing and const-correct), the main-path
 window builder (`:5667`, carve-out deleted, genesis padding via the rule

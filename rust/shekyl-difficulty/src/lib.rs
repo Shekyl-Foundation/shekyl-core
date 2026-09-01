@@ -62,4 +62,6 @@ pub use consts::{
 };
 pub use error::Error;
 pub use lwma1::lwma1_next;
-pub use timestamp::{is_above_mtp, is_timestamp_below_ftl};
+pub use timestamp::{
+    check_timestamp_rule, is_above_mtp, is_timestamp_below_ftl, mtp_median, TimestampRuleVerdict,
+};

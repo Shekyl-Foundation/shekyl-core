@@ -71,7 +71,13 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("archival_ffi/serve_credit.rs", 3, 1),
     ("archival_ffi/tests.rs", 0, 3),
     ("ct_balance_ffi.rs", 5, 0),
-    ("difficulty_ffi.rs", 2, 0),
+    // 2 -> 3 (2026-09-01): shekyl_difficulty_check_timestamp_rule reads the
+    // <= 11-element u64 MTP window — the C2-R3 rule crossing (consensus rule
+    // moved to shekyl-difficulty; C++ is a marshaling shim per rule 20). The
+    // seam helper is u8-typed, so the u64 read re-owns the raw contract the
+    // same way the file's two lwma1 sites do (null-checked, len-bounded at
+    // the call site by SHEKYL_DAA_MTP_WINDOW-scale windows).
+    ("difficulty_ffi.rs", 3, 0),
     // RETIRED (Phase 5): `engine_file_ffi.rs` was deleted with the C++ wallet
     // stack — it existed only to serve `wallet2.cpp`. The pin is retired, not
     // retargeted: a check that measured a C++ boundary does not become a check

@@ -5591,85 +5591,43 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
   return (adjusted_current_block_ts < median_ts ? adjusted_current_block_ts : median_ts);
 }
 //------------------------------------------------------------------
-timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidate_ts,
-    std::vector<uint64_t> window, uint64_t genesis_ts, uint64_t local_clock,
-    uint64_t& median_out)
-{
-  // C2-R3 (CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01): the
-  // single owner of the consensus block-timestamp rule; both block-store
-  // admission paths (main connect and alt admission) funnel here. The Rust
-  // rewrite's twin predicates (shekyl-difficulty's is_above_mtp /
-  // is_timestamp_below_ftl) are pinned to this function by the shared
-  // vectors docs/test_vectors/MTP_BOUNDARY_V1.json.
-  //
-  // Deliberately C++, deliberately NOT routed through the Rust predicates
-  // (rule 20's migration-is-a-planning-activity clause, not its
-  // new-logic-goes-behind-FFI clause): the consensus validator's Rust
-  // migration is the census C3 program with a rule-07 atomic cutover, and
-  // until that cutover the two implementations stay INDEPENDENT so the
-  // shared vectors can detect drift between them — wiring the Rust
-  // predicate in here would make the differential pair circular. This
-  // function is C3-cutover deletion surface: it consolidates what were
-  // five scattered rule surfaces into the one thing C3 deletes.
-  if (window.size() > SHEKYL_DAA_MTP_WINDOW)
-  {
-    // The newest-11 selection is order-dependent and therefore the
-    // caller's job (C2-R3-Q1 sub-a); a wider window is refused, never
-    // silently medianed the way the inherited alt path medianed the whole
-    // alt chain.
-    MERROR("internal error: timestamp window holds " << window.size() << " > " << SHEKYL_DAA_MTP_WINDOW << " entries");
-    median_out = 0;
-    return timestamp_rule_verdict::window_too_wide;
-  }
-
-  // C2-R3-Q2: short windows are right-padded with the genesis timestamp,
-  // so the median check runs from block 1 (no bootstrap carve-out).
-  window.resize(SHEKYL_DAA_MTP_WINDOW, genesis_ts);
-  std::sort(window.begin(), window.end());
-  // C2-R3-Q1 sub-c: the median is element index 5 (0-based) of the sorted
-  // 11-element window — stated by the ruling, not inherited from
-  // epee::misc_utils::median's odd-window arm. Computed before either
-  // check so median_out is set on every verdict below; the miner-template
-  // caller reads it on the failure arm.
-  median_out = window[SHEKYL_DAA_MTP_WINDOW / 2];
-
-  // Saturating form, mirroring the Rust twin's
-  // `incoming.saturating_sub(local_clock) <= FTL_SECONDS`
-  // (timestamp.rs is_timestamp_below_ftl): the naive
-  // `local_clock + FTL` deadline wraps near the top of the u64 domain and
-  // rejects an in-bound candidate — the vector row
-  // `ftl_u64_boundary_within_bound_wrapping_deadline_kills_naive_add`
-  // pins the shape in both implementations.
-  if (candidate_ts > local_clock && candidate_ts - local_clock > SHEKYL_DAA_FTL_SECONDS)
-    return timestamp_rule_verdict::above_ftl;
-
-  // C2-R3-Q1: strictly greater — equality rejects.
-  if (candidate_ts <= median_out)
-    return timestamp_rule_verdict::not_above_median;
-
-  return timestamp_rule_verdict::ok;
-}
-//------------------------------------------------------------------
 bool Blockchain::check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
+  // Marshaling shim (rule 20) over the ONE implementation of the C2-R3
+  // block-timestamp rule: shekyl-difficulty's check_timestamp_rule,
+  // exported as shekyl_difficulty_check_timestamp_rule beside the LWMA-1
+  // difficulty entry point this validator already consumes. This side
+  // only assembles the window, reads the clock, and logs the verdict —
+  // it decides nothing (the crossing was re-ratified 2026-09-01 after
+  // the round's original C++ owner was ruled a rule-20 violation; see
+  // CONSENSUS_C2_R3_TIMESTAMPS.md §7's execution record).
+  //
   // The genesis timestamp is only consumed as the padding value for short
   // windows (the first 11 blocks, or a near-genesis fork) — don't pay an
   // LMDB read for it on the full-window hot path.
   const uint64_t genesis_ts = timestamps.size() < SHEKYL_DAA_MTP_WINDOW ? m_db->get_block_timestamp(0) : 0;
-  switch (shekyl_check_timestamp_rule(b.timestamp, timestamps, genesis_ts, (uint64_t)time(NULL), median_ts))
+  const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+      b.timestamp, timestamps.data(), timestamps.size(), genesis_ts,
+      (uint64_t)time(NULL), &median_ts);
+  switch (verdict)
   {
-    case timestamp_rule_verdict::ok:
+    case SHEKYL_TIMESTAMP_RULE_OK:
       return true;
-    case timestamp_rule_verdict::above_ftl:
+    case SHEKYL_TIMESTAMP_RULE_ABOVE_FTL:
       MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", more than " << SHEKYL_DAA_FTL_SECONDS << "s ahead of local time (LWMA-1 future-time limit)");
       return false;
-    case timestamp_rule_verdict::not_above_median:
+    case SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN:
       MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", not strictly above the median of the previous " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
       return false;
-    case timestamp_rule_verdict::window_too_wide:
+    case SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE:
+      // The newest-11 selection is order-dependent and therefore the
+      // caller's job (C2-R3-Q1 sub-a); the rule refuses a wider window
+      // rather than silently medianing it.
+      MERROR_VER("Timestamp window construction bug for block with id: " << get_block_hash(b) << " (window wider than " << SHEKYL_DAA_MTP_WINDOW << ")");
+      return false;
     default:
-      MERROR_VER("Timestamp window construction bug for block with id: " << get_block_hash(b));
+      MERROR_VER("Timestamp rule FFI misuse (code " << verdict << ") for block with id: " << get_block_hash(b));
       return false;
   }
 }

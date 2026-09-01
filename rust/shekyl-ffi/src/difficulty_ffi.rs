@@ -107,7 +107,7 @@
 
 use core::slice;
 
-use shekyl_difficulty::{check_hash, lwma1_next, Error as DifficultyError};
+use shekyl_difficulty::{check_hash, check_timestamp_rule, lwma1_next, Error as DifficultyError};
 
 /// Difficulty target at the C-ABI boundary.
 ///
@@ -299,6 +299,90 @@ pub unsafe extern "C" fn shekyl_difficulty_check_hash(
     // contract guarantees alignment and writability.
     core::ptr::write(out_pass, pass);
     SHEKYL_DIFFICULTY_OK
+}
+
+/// Verdict codes for [`shekyl_difficulty_check_timestamp_rule`],
+/// wire-stable mirrors of [`shekyl_difficulty::TimestampRuleVerdict`]'s
+/// discriminants (renumbering is an FFI break):
+/// the candidate satisfies both bounds.
+pub const SHEKYL_TIMESTAMP_RULE_OK: i32 = 0;
+/// The caller handed more than `MTP_WINDOW` (11) timestamps — a caller
+/// bug (the newest-11 selection is order-dependent and the caller's job,
+/// C2-R3-Q1 sub-a); refused, never silently medianed. `*out_median` is 0.
+pub const SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE: i32 = 1;
+/// The candidate exceeds `local_clock + FTL` (saturating arithmetic).
+pub const SHEKYL_TIMESTAMP_RULE_ABOVE_FTL: i32 = 2;
+/// The candidate is not strictly greater than the window median.
+pub const SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN: i32 = 3;
+/// A required pointer was null (`out_median`, or `window` with
+/// `window_len > 0`).
+pub const SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR: i32 = -1;
+
+/// The C2-R3 block-timestamp consensus rule
+/// (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
+/// 2026-09-01; Rust crossing re-ratified same day).
+///
+/// Wraps [`shekyl_difficulty::check_timestamp_rule`] — the ONE
+/// implementation of the ruled sentence: valid iff
+/// `candidate_ts <= local_clock + 540` (saturating) AND strictly greater
+/// than sorted-index-5 of the 11 timestamps immediately preceding the
+/// candidate, the window right-padded with `genesis_ts` when fewer than
+/// 11 predecessors exist. The C++ validator's `check_block_timestamp` is
+/// a marshaling shim over this entry point (rule 20), exactly as
+/// [`shekyl_difficulty_lwma1_next`] above serves the difficulty half.
+///
+/// # Arguments
+///
+/// - `candidate_ts` — the candidate block's timestamp.
+/// - `window` — pointer to `[u64; window_len]`, the ≤ 11 newest
+///   predecessor timestamps in any order (callers with deeper history
+///   truncate to the newest 11 first). May be null when
+///   `window_len == 0` (the block-1 case: full genesis padding); must be
+///   non-null when `window_len > 0`.
+/// - `window_len` — entries in `window`. Values above 11 return
+///   [`SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE`].
+/// - `genesis_ts` — the timestamp of block 0 (the padding value).
+/// - `local_clock` — the validator's wall clock (FTL reference).
+/// - `out_median` — receives the padded window's median on every verdict
+///   except `WINDOW_TOO_WIDE` (where it receives 0); the miner-template
+///   caller reads it unconditionally. Must be non-null.
+///
+/// # Return
+///
+/// A verdict code ≥ 0 per the constants above (the rule's answer), or
+/// [`SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR`] on pointer misuse.
+///
+/// # Safety
+///
+/// The caller must uphold: when `window_len > 0`, `window` points to
+/// `window_len` valid, aligned, initialized `u64`s; `out_median` points
+/// to a valid, aligned, writable `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
+    candidate_ts: u64,
+    window: *const u64,
+    window_len: usize,
+    genesis_ts: u64,
+    local_clock: u64,
+    out_median: *mut u64,
+) -> i32 {
+    if out_median.is_null() || (window_len > 0 && window.is_null()) {
+        return SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR;
+    }
+
+    let win: &[u64] = if window_len == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null per the check above; the caller's contract
+        // guarantees `window_len` valid, aligned, initialized elements.
+        slice::from_raw_parts(window, window_len)
+    };
+
+    let (verdict, median) = check_timestamp_rule(candidate_ts, win, genesis_ts, local_clock);
+    // SAFETY: out_median is non-null per the check above; the caller's
+    // contract guarantees alignment and writability.
+    core::ptr::write(out_median, median);
+    verdict as i32
 }
 
 #[cfg(test)]
