@@ -87,8 +87,12 @@ require_call src/cryptonote_core/blockchain.cpp \
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
   "per-tx HoldingsUpdate-drop verify"
+# Anchored on the arm label, not on the call shape: `archival_debit_auth_pin(record,`
+# also matches both per-tx calls, so deleting the checkpoint pin left hits behind
+# and this arm could not fail. It was the one arm I did not bite when the gate
+# landed, and it was the one that was broken.
 require_call src/cryptonote_core/blockchain.cpp \
-  'archival_debit_auth_pin\(record,' \
+  '"block fast-check debit"' \
   "checkpoint fast path"
 require_call src/rpc/daemon_submit_ffi.cpp \
   'shekyl_archival_debit_auth_pin\(' \
@@ -96,8 +100,12 @@ require_call src/rpc/daemon_submit_ffi.cpp \
 
 # And the Rust submit battery, which the previous version never checked at
 # all: it could have inlined its own comparison and passed.
-rust_pin=$(rg -c 'debit_auth_pin\(record\.bond_spend_pk\(\)' \
-             rust/shekyl-daemon-rpc/src/submit/verifier.rs || true)
+# Comment-stripped like the C++ arms: reading the raw file let a commented-out
+# call satisfy the gate. Rust line comments are `//` too, so `code_only` works
+# unchanged.
+rust_body=$(code_only rust/shekyl-daemon-rpc/src/submit/verifier.rs)
+rust_pin=$(printf '%s\n' "$rust_body" \
+           | rg -c 'debit_auth_pin\(record\.bond_spend_pk\(\)' || true)
 if [ "${rust_pin:-0}" -lt 1 ]; then
   echo "FAIL: the Rust submit battery no longer calls debit_auth_pin."
   echo "      UB3 is the debit arm's authorization; an inlined comparison"

@@ -472,8 +472,12 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
     if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND)
     {
       auto handle = std::make_unique<shekyl_submit_unbond_facts_handle>();
-      const std::vector<uint8_t> auth_key(bond_auth_pubkey,
-        bond_auth_pubkey + bond_auth_pubkey_len);
+      // Never form `null + 0`: the contract permits a null key with zero
+      // length (the absent-record path passes exactly that), and building the
+      // range would be pointer arithmetic on a null pointer.
+      std::vector<uint8_t> auth_key;
+      if (bond_auth_pubkey && bond_auth_pubkey_len > 0)
+        auth_key.assign(bond_auth_pubkey, bond_auth_pubkey + bond_auth_pubkey_len);
       if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, *handle))
         return SHEKYL_SUBMIT_INTERNAL_FAULT;
       *out_unbond = handle.release();
