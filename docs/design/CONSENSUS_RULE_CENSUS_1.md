@@ -5,6 +5,9 @@ Last-verified 2026-08-30 against `dev` `0e6d340e`. This is a survey, not
 a set of rulings: it classifies and flags; it does not decide.
 **Method:** fresh clone, `dev` @ `0e6d340e` (2026-08-30). Every claim below is
 a `file:line` observation, not a doc reading.
+**Dispositions since:** U-5 and the `rpc_port` half of L-6 landed 2026-08-31
+(PR #587 deletes both fields from the P2P wire; `peer_id` — the rest of
+L-6 — stays open for P2P-2).
 
 **Classification buckets** (per `16-architectural-inheritance.mdc` §"When to
 migrate vs. when to keep", which already requires a recorded "why" for every
@@ -186,6 +189,9 @@ the rounds examined the relay layer and not the pool.
 
 ### U-5 — `rpc_credits_per_hash` in the P2P handshake (LOW severity, ZERO cost)
 
+> **LANDED 2026-08-31 (PR #587):** deleted from the wire; the survey text
+> below records the pre-deletion state.
+
 `p2p_protocol_defs.h:185,194` carries `rpc_credits_per_hash` in
 `basic_node_data`, serialized on every handshake. 21 references tree-wide,
 across `net_peerlist`, `connection_context`, boost serialization.
@@ -305,6 +311,10 @@ because compression lives in the Levin layer and padding lives above it.
 ceiling that exceeds the packet ceiling.
 
 ### L-6 — Handshake carries `my_port`, `rpc_port`, `peer_id`
+
+> **PARTIALLY LANDED 2026-08-31 (PR #587):** the `rpc_port` half is deleted
+> from the wire; `my_port` and `peer_id` remain open (P2P-2). The survey
+> text below records the pre-deletion state.
 
 `p2p_protocol_defs.h:180-196`. `peer_id` is a persistent random identifier
 that **links a node across IP changes** — the exact linkage a privacy chain
