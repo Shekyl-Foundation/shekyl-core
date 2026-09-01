@@ -52,9 +52,17 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
 
+# Exactly what GitHub executes (`.yml`/`.yaml` directly under
+# .github/workflows/) plus the parked forms of the same. Suffixes, not a
+# substring: a committed editor artifact (`doc-links.yml.bak`, `...yml~`) is
+# a hygiene problem, not a workflow, and failing it here would report
+# "not a valid workflow" about a file nobody meant to be one.
+WORKFLOW_SUFFIXES = (".yml", ".yaml", ".yml.disabled", ".yaml.disabled")
+
+
 def is_workflow_file(name: str) -> bool:
     """Live `.yml`/`.yaml` plus the `.disabled` variants parked beside them."""
-    return ".yml" in name or ".yaml" in name
+    return name.endswith(WORKFLOW_SUFFIXES)
 
 
 def check_one(path: str, doc: object) -> list[str]:
@@ -105,7 +113,11 @@ def main() -> int:
         )
         return 2
 
-    names = sorted(n for n in os.listdir(WORKFLOWS) if is_workflow_file(n))
+    names = sorted(
+        n
+        for n in os.listdir(WORKFLOWS)
+        if is_workflow_file(n) and os.path.isfile(os.path.join(WORKFLOWS, n))
+    )
     if not names:
         print(
             "workflow parse: no workflow files found — the gate's subject "
@@ -119,12 +131,17 @@ def main() -> int:
         path = os.path.join(WORKFLOWS, name)
         rel = os.path.relpath(path, ROOT)
         try:
-            with open(path, encoding="utf-8") as fh:
+            # Binary, so PyYAML applies YAML's own encoding rules (BOM, then
+            # UTF-8) instead of a hard-coded decode in this file. A file that
+            # is not decodable then arrives as a ReaderError — a YAMLError,
+            # caught below — rather than a UnicodeDecodeError escaping as a
+            # traceback that aborts the sweep before the later files.
+            with open(path, "rb") as fh:
                 doc = yaml.safe_load(fh)
         except yaml.YAMLError as exc:
             mark = getattr(exc, "problem_mark", None)
             where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
-            problem = getattr(exc, "problem", str(exc))
+            problem = " ".join(str(getattr(exc, "problem", None) or exc).split())
             problems.append(f"{rel}: does not parse{where}: {problem}")
             continue
         except OSError as exc:
