@@ -63,10 +63,26 @@ class StrictLoader(yaml.SafeLoader):
 
 
 def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
+    # SafeLoader resolves `<<` merge keys here before building the mapping.
+    # This override exists to add duplicate detection and must differ from
+    # the base in nothing else, so the merge step is kept.
+    loader.flatten_mapping(node)
     mapping: dict = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
+        try:
+            duplicate = key in mapping
+        except TypeError:
+            # YAML permits a sequence or mapping as a key; Python cannot hash
+            # one. Reported as a YAML error rather than left to escape as a
+            # TypeError, which would abort the sweep over the later files.
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found unhashable key of type {type(key).__name__}",
+                key_node.start_mark,
+            ) from None
+        if duplicate:
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
@@ -96,8 +112,23 @@ def is_workflow_file(name: str) -> bool:
     return name.endswith(WORKFLOW_SUFFIXES)
 
 
+def _nonempty_str(value: object) -> bool:
+    """A field GitHub needs to read as text, actually carrying text."""
+    return isinstance(value, str) and value.strip() != ""
+
+
 def check_one(path: str, doc: object) -> list[str]:
-    """Structural checks for a parsed document. Returns problem strings."""
+    """Structural checks for a parsed document. Returns problem strings.
+
+    Scope, so the next reader knows where the line is: this is not a
+    GitHub-schema validator and must not grow into one — that is
+    `actionlint`'s job, and every rule added here is a chance to fail a
+    workflow Actions would have run. The test for admitting a check is
+    whether the malformation makes GitHub produce **no check at all**: no
+    triggers, no jobs, no runner, a step that cannot execute. Those are the
+    silent disarms this gate exists for. Cosmetic schema wrongness that
+    still yields a red job reports itself and is deliberately not checked.
+    """
     problems: list[str] = []
     if not isinstance(doc, dict):
         return [f"{path}: top level is {type(doc).__name__}, expected a mapping"]
@@ -114,6 +145,13 @@ def check_one(path: str, doc: object) -> list[str]:
         problems.append(f"{path}: `on:` given twice (bare and quoted)")
     elif True not in doc and "on" not in doc:
         problems.append(f"{path}: no `on:` trigger block")
+    else:
+        # An empty trigger is this gate's own subject, not schema pedantry:
+        # a workflow with nothing to start it never runs and never reports a
+        # check, which is the silent disarm the gate exists to catch.
+        trigger = doc[True] if True in doc else doc["on"]
+        if not trigger or not isinstance(trigger, (str, list, dict)):
+            problems.append(f"{path}: `on:` has no triggers")
 
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
@@ -130,7 +168,13 @@ def check_one(path: str, doc: object) -> list[str]:
         if "uses" in job:
             if "steps" in job:
                 problems.append(f"{where}: both `uses:` and `steps:`")
+            if not _nonempty_str(job.get("uses")):
+                problems.append(f"{where}: `uses:` has no workflow reference")
             continue
+        # Without a runner GitHub creates no job, so the check this workflow
+        # would have reported never appears — the same silent disarm again.
+        if not job.get("runs-on"):
+            problems.append(f"{where}: no `runs-on:`")
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
             problems.append(f"{where}: no non-empty `steps:` list")
@@ -146,6 +190,14 @@ def check_one(path: str, doc: object) -> list[str]:
                 problems.append(f"{where} step {i}: both `uses:` and `run:`")
             elif not has_uses and not has_run:
                 problems.append(f"{where} step {i}: neither `uses:` nor `run:`")
+            else:
+                # Present but empty is the same outcome as absent: the
+                # workflow is refused before any job exists.
+                field = "uses" if has_uses else "run"
+                if not _nonempty_str(step.get(field)):
+                    problems.append(
+                        f"{where} step {i}: `{field}:` is empty or not text"
+                    )
     return problems
 
 
