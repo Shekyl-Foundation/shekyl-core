@@ -112,7 +112,7 @@ the binary "bucket 2" judgment with a recorded class per row:
 | --- | --- | --- |
 | `spec` | Bucket-1 rows: Shekyl-designed, written spec is the evidence | 1 |
 | `ratified` | A design round / decision-log entry examined the rule and kept it, with rationale (pointer required) | **2** |
-| `ratified-premise-refuted` | A ratification exists but its factual premise is refuted at the tree (currently only CEN-C2) | **4** |
+| `ratified-premise-refuted` | A ratification exists but its factual premise is refuted at the tree (held only CEN-C2, which C2-R3 re-ratified on fresh ground into bucket 2 — the class is currently empty) | **4** |
 | `examined-disposition` | A review examined it on one path (e.g. the `DAEMON_SUBMIT_VERDICT.md` §8 submit-path matrix) without a full ratification; the row states which path | **4** |
 | `KAT-port` | Moved to Rust pinned by vectors. A seal is not a ratification; the right-for-Shekyl question is open | **4** |
 | `pinned-not-re-derived` | The value is frozen and documented but inherited without derivation | **4** |
@@ -139,15 +139,16 @@ every changed row.
 | — consensus-flagged | 162 |
 | — policy-flagged | 9 |
 | Bucket 1 (Shekyl-specific, spec'd) | 87 |
-| Bucket 2 (inherited, ratified on record) | 14 |
+| Bucket 2 (inherited, ratified on record) | 16 |
 | Bucket 3 (inherited, recorded deletion disposition) | 2 |
-| Bucket 4 (inherited, not ratified — classes recorded) | 68 |
+| Bucket 4 (inherited, not ratified — classes recorded) | 66 |
 
-Sum check: `87 + 14 + 2 + 68 = 171 = 162 + 9`. Merged set = 161 CEN rows
+Sum check: `87 + 16 + 2 + 66 = 171 = 162 + 9`. Merged set = 161 CEN rows
 + 8 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`) + 2 split
-(`CEN-D1b, F14b`). Bucket-4 class split: 1 `ratified-premise-refuted`
-+ 6 `examined-disposition` + 2 `KAT-port` + 3 `pinned-not-re-derived`
-+ 56 `none` = 68.
+(`CEN-D1b, F14b`). Bucket-4 class split: 6 `examined-disposition`
++ 2 `KAT-port` + 3 `pinned-not-re-derived` + 55 `none` = 66 (the C1-era
+split additionally held 1 `ratified-premise-refuted` + 56 `none`;
+C2-R3 ruled CEN-C2 and CEN-C3 into bucket 2, class `ratified` — §7.15).
 
 Reproducible counts (run against this file):
 
@@ -165,7 +166,7 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | A topology | 7 | 1 | 0 | 0 | 6 | 0 |
 | B header / version / attestation / root | 7 | 2 | 1 | 0 | 4 | 0 |
-| C timestamps | 3 | 1 | 0 | 0 | 2 | 0 |
+| C timestamps | 3 | 1 | 2 | 0 | 0 | 0 |
 | D PoW / difficulty | 8 | 4 | 0 | 0 | 4 | 0 |
 | E checkpoints / fast-sync | 5 | 0 | 0 | 0 | 5 | 0 |
 | F miner tx / emission | 22 | 13 | 3 | 0 | 6 | 0 |
@@ -176,7 +177,7 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | K reorg / alt chains | 11 | 1 | 0 | 0 | 10 | 0 |
 | L storage layer | 15 | 6 | 0 | 1 | 8 | 0 |
 | M mempool admission | 11 | 2 | 1 | 0 | 8 | 9 |
-| **Total** | **171** | **87** | **14** | **2** | **68** | **9** |
+| **Total** | **171** | **87** | **16** | **2** | **66** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 
@@ -226,8 +227,8 @@ the specification of record.
 | --- | --- | --- | --- |
 | Hardfork | `HardFork::check` (current) | `check_for_height` (ideal at height) | re-run main |
 | Attestation | yes | yes | re-run main |
-| Timestamp FTL | yes (`:5535`) | **no** — vector overload only | re-run main |
-| Timestamp median | yes | yes (alt timestamps) | re-run main |
+| Timestamp FTL | yes (shared rule fn `:5528`) | **yes** (same rule fn via `:2322` — C2-R3-Q3 closed the was-missing bound) | re-run main |
+| Timestamp median | yes (strict, newest 11) | yes (strict, newest 11 after `:2317` truncation — was the whole alt chain; C2-R3-Q1a) | re-run main |
 | PoW | RandomX v2 + `check_hash` | `get_altblock_longhash` + alt LWMA-1 | re-run main |
 | `prevalidate_miner_transaction` | yes | yes | re-run main |
 | `validate_miner_transaction` | yes | **no** | re-run main |
@@ -282,9 +283,9 @@ split.
 
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CEN-C1 | Block timestamp must not exceed local wall-clock + `SHEKYL_DAA_FTL_SECONDS` (540) | 5538 | C | 1 | spec | `config/consensus_constants.json` (`daa_ftl_seconds`); [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §4 :913–914 (values), :1008 ("the values Shekyl ships at genesis"); constant-swap record `docs/CHANGELOG.md` :14858–14863 | RC-29 ⇒ merged. **Main path only**: the alt-admission vector overload has no future-time bound — a timestamp `now+541` can sit on an alt chain until promotion re-applies this rule (RC decision-log #4; FOLLOWUPS row, owner repointed here). FTL placement is R3 material (§10) |
-| CEN-C2 | Live behavior: block timestamp must be ≥ the median of the previous `SHEKYL_DAA_MTP_WINDOW` (11) block timestamps — **equality accepted**, strictly-less rejected. The ratification says otherwise: [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.5 :1511–:1515 ratifies "must be **strictly greater** than the median … Already implemented in the inherited block-header validator; **preserved unchanged**" — but the inherited comparison it claims to preserve is the non-strict one, so the ratification's premise about the inherited validator is refuted at the tree. Third leg: `shekyl-difficulty` exports a spec-conformant **strict** predicate (`is_above_mtp`, rust/shekyl-difficulty/src/timestamp.rs:64, `incoming > median`) with **zero production callers** — the C++ validator inlines its own non-strict median check | 5519 (comparison; main 5749; alt 2307 over alt-chain timestamps + `complete_timestamps_vector` 2133) | C | 4 | ratified-premise-refuted | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.5 (the refuted ratification); rust/shekyl-difficulty/src/timestamp.rs:37–65 (the unwired strict twin) | RC-31, CEN §6.3 ⇒ merged; adjudicated at ground truth by C1 steering. **Flagged for an early R3 ruling + boundary test** (§10): the boundary (`==` accepted vs rejected) is consensus-forking material between the three legs. `epee::misc_utils::median` odd-window semantics were assumed, not independently specified (RC-31 note carried). Not fixed here — census posture |
-| CEN-C3 | Below `SHEKYL_DAA_MTP_WINDOW` blocks of history, any timestamp ≤ FTL is accepted (no median exists yet) | 5547 | C | 4 | none | — | RC-30 ⇒ merged. Bootstrap carve-out; the window constant is config-sourced, the carve-out shape is inherited |
+| CEN-C1 | Block timestamp must not exceed local wall-clock + `SHEKYL_DAA_FTL_SECONDS` (540) — enforced at **both** block-store admission paths (main connect and alt admission) | 5528 (FTL arm of the shared rule fn `shekyl_check_timestamp_rule`); main 5795 via 5589; alt 2322 (C2-R3-Q3 added this rejection site) | C | 1 | spec | `config/consensus_constants.json` (`daa_ftl_seconds`); [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §4 :913–914 (values), :1008 ("the values Shekyl ships at genesis"); alt-admission placement: [`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md) §6/§8 (C2-R3-Q3, ratified 2026-09-01); constant-swap record `docs/CHANGELOG.md` :14858–14863 | RC-29 ⇒ merged. The main-path-only gap (a `now+541` block parked in the alt store until promotion) is **closed**: C2-R3-Q3 ruled FTL at alt admission — the promotion-only alternative would have ratified an unbounded clamp-saturation difficulty-decay alt-spam surface. Observed red-first (`gen_block_alt_ts_above_ftl`). FOLLOWUPS row closed |
+| CEN-C2 | A candidate block's timestamp must be **strictly greater** than element index 5 (0-based) of the sorted window of the `SHEKYL_DAA_MTP_WINDOW` (11) timestamps immediately preceding it on its own chain — alt path: the **newest 11** of alt suffix + main prefix (the inherited whole-alt-chain median, with epee's even-window averaging, is deleted); windows shorter than 11 are right-padded per CEN-C3; miner templates floor their timestamp at `median + 1` | 5528 (rule fn `shekyl_check_timestamp_rule`); vector overload 5569; main 5795 via 5589; alt 2322 after the newest-11 truncation 2317; template floor 1955–1957 | C | 2 | ratified | [`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md) §4/§8 (C2-R3-Q1 + sub-decisions a/b/c, ratified 2026-09-01); shared vectors `docs/test_vectors/MTP_BOUNDARY_V1.json` (consumed by the C++ unit test and the Rust predicate tests); [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.5 refuted-premise correction note | RC-31, CEN §6.3 ⇒ merged. The C1 three-way split (§7.1) resolved on the merits: after the §5.5 "preserved unchanged" premise refutation, C2-R3-Q1 re-derived the boundary from zero and re-ratified **strict** (LWMA-1's pinned sources are boundary-indifferent; commitment 3 arbitrates). Live C++ and spec aligned; the Rust `is_above_mtp` twin is the rewrite's leg, deliberately unwired until the C3 cutover. Boundary observed red-first (`gen_block_ts_at_median`; window truncation: `gen_block_alt_ts_window_truncation`) |
+| CEN-C3 | Below `SHEKYL_DAA_MTP_WINDOW` blocks of history the median window is right-padded with the genesis timestamp — the same rule runs from block 1; **there is no bootstrap carve-out** (the inherited any-timestamp-under-FTL acceptance below 11 blocks is deleted) | 5528 (padding arm of the shared rule fn); main window build 5589–5608 | C | 2 | ratified | [`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md) §5/§8 (C2-R3-Q2, ratified 2026-09-01) | RC-30 ⇒ merged. Replace ruled over keep-with-rationale: composition decided it (one sentence covers every height and both paths, and the padding dissolves the alt near-genesis short/even-window accident); the closed hazard is honestly recorded as small (genesis ts is 0). Observed red-first (`gen_block_ts_below_median_in_bootstrap`). The genesis-mint-timestamp question spun off to FOLLOWUPS, explicitly out of R3 scope |
 
 ### 4.D PoW and difficulty
 
@@ -461,7 +462,7 @@ Reward emission (per tx; whole-tx shape CEN-H22):
 | CEN-K1 | An alt block claiming height 0 is rejected | 2222–2228; difficulty-side sentinel return 1559–1563 (CEN-D5/D6) | C | 4 | none | — | RC-134 ⇒ merged with a recorded judgment disagreement: RC read this bucket 1 (rule 60 + comment :1553–1558); no record *names* alternative-genesis rejection, so it stays 4 under the §2 bar |
 | CEN-K2 | Alt-chain linkage: the stored alt chain must connect to the main chain at the claimed height with matching hashes (asserted while rebuilding) | 2153–2205 | C | 4 | none | — | |
 | CEN-K3 | An alt block already stored as an alt block is rejected | 2461; DB belt `MDB_NODUPDATA` src/blockchain_db/lmdb/db_lmdb.cpp:4736–4740 | C | 4 | none | — | RC-148 ⇒ merged (DB belt site added) |
-| CEN-K4 | Alt blocks are accepted into storage after: version (CEN-B1 at ideal-version-for-height), attestation (CEN-B4), timestamp vs alt-window median (CEN-C2), checkpoint, PoW at alt difficulty (CEN-D1/D5), and **prevalidate**-only miner-tx checks; `validate_miner_transaction`, `check_tx_inputs` and the curve-root check are deferred to promotion | 2214–2509 | C | 4 | none | — | the deferral is the reorg path's central unexamined design decision. §3.5 table; §10 R1 |
+| CEN-K4 | Alt blocks are accepted into storage after: version (CEN-B1 at ideal-version-for-height), attestation (CEN-B4), timestamp FTL + strict median over the newest-11 window (CEN-C1/C2 per C2-R3), checkpoint, PoW at alt difficulty (CEN-D1/D5), and **prevalidate**-only miner-tx checks; `validate_miner_transaction`, `check_tx_inputs` and the curve-root check are deferred to promotion | 2214–2509 | C | 4 | none | — | the deferral is the reorg path's central unexamined design decision. §3.5 table; §10 R1 |
 | CEN-K5 | Promotion re-validates every block through the full 4-arg main-chain path (all §4.B–§4.J rules); any failure rolls back to the pre-switch chain and discards the failing alt suffix | 1425–1462 | C | 4 | none | — | RC-138 ⇒ merged. This is why skipped alt-admission checks are not silent at connect |
 | CEN-K5b | Each promoted block's credit-wire attestation witness is re-supplied from the hash-keyed alt table (and each demoted block's is captured off its height row before the pop), so the witness survives reorgs in both directions | 1436–1438, 1411–1418, 2469–2477 | C | 1 | spec | [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §3 (CW-2) | |
 | CEN-K6 | Reorg trigger: alt cumulative difficulty **strictly greater** than main (equal stays), or an alt block matching a checkpoint forces the switch | 2481–2504 | C | 4 | none | — | RC-136, RC-137 ⇒ merged |
@@ -709,6 +710,25 @@ input, not fixes.
     CEN-D5/D6 and CEN-K1's site note were reworded; CEN-D1 gained the
     CEN-E3 fast-path cross-reference. Behavioral content of the rows is
     unchanged.
+15. **C2-R3 ruled the timestamp batch — the first C2 rulings land in the
+    census** (2026-09-01, [`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md),
+    ratified by Rick). Entry #1's three-way MTP split is resolved on the
+    merits: strict `>` re-ratified on fresh ground (the pinned LWMA-1
+    sources are boundary-indifferent; commitment 3 arbitrates), the alt
+    window truncated to the newest 11 (the whole-alt-chain median with
+    epee even-window averaging is deleted), the miner-template floor is
+    `median + 1`, the bootstrap carve-out is replaced by genesis-timestamp
+    window padding, and FTL now runs at alt admission. CEN-C2/C3 →
+    bucket 2 `ratified`; CEN-C1 gained the alt rejection site (§11.2);
+    counts updated in §3/§3.1. Two surfaces the C1 rows had not named
+    were found and folded by the round: the Jagerman template bump
+    (self-consistent only under non-strict; now `median + 1`) and the
+    alt path's uncapped window. Four losing-leg behaviors observed
+    red-first in `core_tests`; the shared vectors
+    `docs/test_vectors/MTP_BOUNDARY_V1.json` pin C++ and Rust to one
+    rule. The pre-change stressnet was measured **genesis-only** (all
+    estate peers at height 1, 2026-09-01), so the consensus change
+    invalidates no chain with a future.
 
 ---
 
@@ -888,17 +908,21 @@ rest resolve per §1's bucket-3 posture.
 
 ## 10. The C2 design-round queue
 
-Every bucket-3/4 row (70 = 68 + 2), grouped into dispatchable subsystem
-batches. One stake statement per batch: **what becomes permanent at genesis
-if the batch goes unruled.** Proposed order: R3 → R1 → R2 → R4 → R5 → R8 →
-R6 → R7 → R9 — the early R3 slot is the steering-flagged MTP ruling; after
-it, batches run in descending (permanence-risk × interconnection) order.
-This queue is what makes C2 dispatchable the day C1 lands; batch
-membership below is exhaustive over the bucket-3/4 rows (counts sum to 70).
+Every bucket-3/4 row **as of C1 close** (70 = 68 + 2 — the queue
+denominator is frozen at dispatch; rulings are tracked per batch row and in
+the per-row bucket/class columns, so this table is a dispatch record, not a
+live bucket count, and is not renumbered as rows leave bucket 4). Grouped
+into dispatchable subsystem batches, one stake statement per batch: **what
+becomes permanent at genesis if the batch goes unruled.** Proposed order:
+R3 → R1 → R2 → R4 → R5 → R8 → R6 → R7 → R9 — the early R3 slot is the
+steering-flagged MTP ruling; after it, batches run in descending
+(permanence-risk × interconnection) order. This queue is what makes C2
+dispatchable the day C1 lands; batch membership below is exhaustive over
+the bucket-3/4 rows at C1 close (counts sum to 70).
 
 | Batch | Rows (count) | Stake at genesis if unruled |
 | --- | --- | --- |
-| **R3 — Timestamps** | CEN-C2, C3 (2) + CEN-C1's alt-FTL placement note | The MTP boundary ships three-way split (strict ratified spec / non-strict live C++ / strict unwired Rust predicate) — a consensus-forking discrepancy the rewrite would have to *choose* silently; LWMA-1's security assumptions rest on timestamp validation. **Flagged for an early ruling + a boundary test (adjudicated ground already in CEN-C2)** |
+| **R3 — Timestamps** — **RULED 2026-09-01** ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md): Q1 strict `>` + newest-11 alt window + `median+1` template floor, Q2 genesis-padding replaces the carve-out, Q3 FTL at alt admission; CEN-C2/C3 → bucket 2, §7.15) | CEN-C2, C3 (2) + CEN-C1's alt-FTL placement note | The MTP boundary shipped three-way split (strict ratified spec / non-strict live C++ / strict unwired Rust predicate) — a consensus-forking discrepancy the rewrite would have had to *choose* silently; LWMA-1's security assumptions rest on timestamp validation. Was flagged for an early ruling + a boundary test (adjudicated ground already in CEN-C2) |
 | **R1 — Reorg / alt-chain + checkpoints + topology** | CEN-K1–K10, E1–E5, A1, A2, A4, D5, D6 (20) | The fork-choice rule (strictly-greater + checkpoint-forced), the prevalidate-only alt-admission subset (§3.5), checkpoint trust surfaces (incl. the PoW/FCMP-skipping compiled-hash path), and reorg semantics across staking-epoch boundaries — none examined on record (§6.5) — freeze as the permanent reorg contract of a chain whose archival state is epoch-scoped |
 | **R2 — Block-weight / reward-zone / fee constants** | CEN-G6, G6b, F14b, H1, H3, M3, M4, M10 (8) | The 300 000 reward zone (an explicitly punted "fossil flag" arbitration), the 1.7× clamps, ×50 surge, the ArticMine penalty curve, the 1 MB tx cap, and every fee-formula constant fossilize as Shekyl economics without ever having been derived for Shekyl |
 | **R4 — Header identity + hardfork collapse** | CEN-B2, B3, B6, B7, A5, A6, A7, H23 (8) | The wire-identity binding (no explicit merkle field — B6) and the inert voting machinery freeze; **the V4 lattice-only activation question must be answered by design, per rules 75/21 — recorded here, deliberately not answered**: collapse-vs-redesign of the hardfork subsystem is exactly that question's mechanism half |

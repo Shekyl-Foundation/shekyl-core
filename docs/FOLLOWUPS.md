@@ -182,11 +182,8 @@ Default. Lands before genesis if it should exist at launch.
 - **Alt-chain supply accumulation advances by the coinbase, not the emission
   - Target: pre-genesis
 
-- **Alt-chain admission skips the LWMA-1 future-time limit.** Main-chain `check_block_timestamp` rejects `timestamp > now + 540s` (`blockchain.cpp:5535`); the alt-path vector overload (`:5514`) does only the median check. Promotion re-applies FTL. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-C1 (was RC-29); C2 batch R3.
-  - Target: pre-genesis
-
-- **The MTP timestamp boundary is three-way split: ratified-strict spec, non-strict live validator, strict-but-unwired Rust predicate.** `DAA_LWMA1.md` §5.5 ratifies "strictly greater than the median … preserved unchanged"; the live check (`blockchain.cpp:5519`) rejects only `timestamp < median` (equality accepted), refuting the ratification's premise about the inherited validator; `shekyl-difficulty`'s spec-conformant `is_above_mtp` (`timestamp.rs:64`, strict) has zero production callers. Needs an early C2 ruling on the boundary plus a boundary test. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-C2; C2 batch R3.
-  - Target: pre-genesis
+- **Should the genesis block header carry a real mint timestamp instead of 0?** Surfaced by C2-R3-Q2 ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](design/CONSENSUS_C2_R3_TIMESTAMPS.md) §5.1): with `timestamp: 0` (`rust/shekyl-genesis-tool/src/builder.rs:181`) the genesis-padded MTP window admits `ts = 1` at block 1; a real mint timestamp would make the chain unable to start "before" its own genesis time for free under the ratified padding rule. A genesis-mint decision (geblock + the pinned block ids across all three networks), explicitly ruled out of C2-R3's scope at ratification (2026-09-01).
+  - Target: pre-genesis (any regenesis window)
 
 - **Tx version min/max is written twice and disagrees in form.** `ver_non_input_consensus` dispatches on `HF_VERSION_DYNAMIC_FEE` / `SHEKYL_NG` (`tx_verification_utils.cpp:55–78`); `check_tx_inputs` hardcodes 3..3 (`blockchain.cpp:3493–3506`). Live bounds match because every `HF_VERSION_*` is 1. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-H2 / CEN-I3 (were RC-68 / RC-82).
   - Target: pre-genesis

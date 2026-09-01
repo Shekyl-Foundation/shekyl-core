@@ -1510,8 +1510,27 @@ LWMA-1's properties depend on incoming-timestamp validation that is
 
 - **MTP rejection.** A new block's timestamp must be strictly
   greater than the median of the previous `MTP = 11` timestamps.
-  Already implemented in the inherited block-header validator;
-  preserved unchanged.
+  ~~Already implemented in the inherited block-header validator;
+  preserved unchanged.~~
+  **Correction (2026-09-01, refuted premise — not a superseded
+  decision).** The struck sentence's factual premise was false at the
+  tree: the inherited comparison this ratification believed it was
+  preserving was the *non-strict* one (`timestamp < median` was the
+  only reject; equality was accepted). The boundary was therefore
+  re-derived from zero and **re-ratified strict** by C2-R3-Q1
+  ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](../design/CONSENSUS_C2_R3_TIMESTAMPS.md)
+  §4), which also ruled the parts this bullet left to the inherited
+  code: the window is the **11 timestamps immediately preceding the
+  candidate on its own chain** (alt path included — the inherited alt
+  path medianed the whole alt chain), the median is **element index 5
+  (0-based) of the sorted window**, windows shorter than 11 are
+  right-padded with the genesis timestamp (C2-R3-Q2 — the inherited
+  bootstrap carve-out is deleted), and miner templates floor their
+  timestamp at `median + 1` (the Jagerman bump below is `median + 1`
+  under the strict boundary, not `median`). A future reader should
+  read this as: the *decision* ("strictly greater") stands on fresh
+  ground; only its original justification ("preserved unchanged")
+  died.
 - **FTL rejection.** A new block's timestamp must be at most
   `FTL = N * T / 20 = 540 s` ahead of the validator's local clock.
   The inherited FTL of 7200 s is replaced with this value at
@@ -1555,12 +1574,18 @@ b.timestamp = time(NULL);
 uint64_t median_ts;
 if (!check_block_timestamp(b, median_ts))
 {
-  b.timestamp = median_ts;
+  b.timestamp = median_ts + 1;
 }
 ```
 
 The pattern matches the Jagerman fix exactly (set to local clock,
-then bump to median if that would be rejected). The MTP window
+then bump to the smallest consensus-valid value if that would be
+rejected). **Correction note (2026-09-01):** the bump is `median_ts
++ 1`, not the `median_ts` this section originally quoted — under the
+strict boundary re-ratified by C2-R3-Q1 a template *at* the median is
+one the node itself rejects; C2-R3-Q1 sub-b ruled the `+ 1` floor as
+part of the rule (the original `median_ts` form was self-consistent
+only with the non-strict comparison the refuted premise above assumed). The MTP window
 change from 60 to 11 (§9.6) preserves the patch's effectiveness;
 the patch is window-size-agnostic and works identically against
 either median size per jagerman's own commentary on the original

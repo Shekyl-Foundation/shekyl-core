@@ -75,6 +75,27 @@
 
 ### Changed
 
+- **Consensus: the block-timestamp rule is ratified and single-sentence
+  (C2-R3, `docs/design/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
+  2026-09-01).** A candidate timestamp is valid iff it is at most
+  `local_clock + 540 s` (checked at main connect AND alt admission — the
+  alt store previously had no future-time bound) and strictly greater
+  than element index 5 of the sorted window of the 11 timestamps
+  immediately preceding it on its own chain (equality was previously
+  accepted; the alt path previously medianed the whole alt chain,
+  averaging even-length windows; below 11 blocks of history the window is
+  now right-padded with the genesis timestamp instead of skipping the
+  check). Miner templates floor their timestamp at `median + 1`. The rule
+  has one C++ owner (`shekyl_check_timestamp_rule`) consumed by both
+  paths, is pinned to the Rust rewrite's `is_above_mtp` /
+  `is_timestamp_below_ftl` predicates by the shared vectors
+  `docs/test_vectors/MTP_BOUNDARY_V1.json` (new; rule-30 pinned), and is
+  exercised red-first in `core_tests` (strict boundary, bootstrap
+  padding, alt FTL, alt newest-11 truncation). Consensus-forking vs the
+  inherited behavior; the pre-genesis stressnet is genesis-only and the
+  estate rebuild required by the V11 schema + genesis remint absorbs the
+  regenesis. `DAA_LWMA1.md` §5.5 carries the refuted-premise correction.
+
 - **The four p2p read methods are served from Rust, and four things the C++ was
   doing are not reproduced.** `sync_info`, `get_connections`,
   `/get_net_stats` and `/get_peer_list` answer natively (RK-5a of the daemon
