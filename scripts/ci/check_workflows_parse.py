@@ -72,16 +72,43 @@ class StrictLoader(yaml.SafeLoader):
     """
 
 
-# 1.2 core schema: `true`/`false` and their case variants, nothing else.
-StrictLoader.yaml_implicit_resolvers = {
-    first: [(tag, regexp) for tag, regexp in resolvers if tag != _BOOL_TAG]
-    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-StrictLoader.add_implicit_resolver(
-    _BOOL_TAG,
-    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
-    list("tTfF"),
+# The YAML 1.2 core schema, replacing PyYAML's 1.1 set outright rather than
+# amending it. Amending only the booleans left 1.1's timestamp and
+# sexagesimal resolvers live, so `run: 2026-01-01` became a date and
+# `run: 12:34` became 754 — both then refused as "not text" by a required
+# check, for workflows Actions runs happily. Everything not matched here is
+# a string, which is what a workflow field almost always is.
+#
+# This fixes which TYPE a scalar resolves to, not what a number parses to:
+# PyYAML's int constructor still reads a leading-zero form as 1.1 octal, so
+# `012` arrives as 10 rather than 12. Nothing here reads a numeric value —
+# every field this gate inspects is text, and a number in one is a defect
+# whatever it equals — so that residue is deliberately left alone.
+_CORE_SCHEMA = (
+    ("tag:yaml.org,2002:null", r"^(?:~|null|Null|NULL|)$", list("~nN") + [""]),
+    (_BOOL_TAG, r"^(?:true|True|TRUE|false|False|FALSE)$", list("tTfF")),
+    (
+        "tag:yaml.org,2002:int",
+        r"^[-+]?(?:[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$",
+        list("-+0123456789"),
+    ),
+    (
+        "tag:yaml.org,2002:float",
+        r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+        r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$",
+        list("-+.0123456789"),
+    ),
+    # Not part of the core schema, and kept only so `<<` still arrives tagged
+    # as a merge for the loader to refuse by name. Dropping it with the rest
+    # of the 1.1 set silently turned that refusal into dead code and made a
+    # merge-key file fail as "missing runs-on" instead — the fields the merge
+    # would have supplied are simply absent under a literal `<<` key.
+    ("tag:yaml.org,2002:merge", r"^(?:<<)$", ["<"]),
 )
+
+StrictLoader.yaml_implicit_resolvers = {}
+for _tag, _pattern, _firsts in _CORE_SCHEMA:
+    StrictLoader.add_implicit_resolver(_tag, re.compile(_pattern), _firsts)
 
 
 def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
@@ -159,6 +186,11 @@ def _nonempty_str(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _all_nonempty_str(values: list) -> bool:
+    """A non-empty list whose every entry is text — event names, labels."""
+    return bool(values) and all(_nonempty_str(v) for v in values)
+
+
 
 def check_one(path: str, doc: object) -> list[str]:
     """Structural checks for a parsed document. Returns problem strings.
@@ -191,7 +223,13 @@ def check_one(path: str, doc: object) -> list[str]:
         # a workflow with nothing to start it never runs and never reports a
         # check, which is the silent disarm the gate exists to catch.
         trigger = doc["on"]
-        if not trigger or not isinstance(trigger, (str, list, dict)):
+        if isinstance(trigger, list):
+            # A list of event names, so entries have to BE names: `on: [null]`
+            # leaves the workflow with no event it can start on.
+            usable = _all_nonempty_str(trigger)
+        else:
+            usable = _nonempty_str(trigger) or (isinstance(trigger, dict) and trigger)
+        if not usable:
             problems.append(f"{path}: `on:` has no triggers")
 
     jobs = doc.get("jobs")
@@ -223,9 +261,16 @@ def check_one(path: str, doc: object) -> list[str]:
         # or a number is refused before the job exists, so presence alone is
         # not enough to ask.
         runs_on = job.get("runs-on")
-        if not (
-            _nonempty_str(runs_on) or (isinstance(runs_on, (list, dict)) and runs_on)
-        ):
+        if isinstance(runs_on, list):
+            usable = _all_nonempty_str(runs_on)
+        elif isinstance(runs_on, dict):
+            # Required-key, not allowlist: a runner mapping selects by group
+            # and/or labels, so demanding one of those catches `{foo: bar}`
+            # while staying correct if Actions adds a third key later.
+            usable = "group" in runs_on or "labels" in runs_on
+        else:
+            usable = _nonempty_str(runs_on)
+        if not usable:
             problems.append(f"{where}: `runs-on:` is missing or not a runner")
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
