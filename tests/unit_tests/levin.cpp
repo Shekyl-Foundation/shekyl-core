@@ -544,8 +544,17 @@ namespace
         {
             for (unsigned rolls = 0; rolls < max_rolls; ++rolls)
             {
-                auto context = contexts_.begin();
-                if (!notifier.send_txs(txs, context->get_id(), method))
+                /* AN ORIGINATION HAS NO SOURCE PEER, and the verdict path
+                   branches on exactly that — `pending.source.is_nil()` picks
+                   the F-10 provenance. Handing a peer id here under a `local`
+                   label drives the FORWARDED arm while the case reads as the
+                   origination one, which is what an earlier draft of this
+                   helper did. */
+                const boost::uuids::uuid source =
+                  (method == cryptonote::relay_method::local)
+                    ? boost::uuids::nil_uuid()
+                    : contexts_.begin()->get_id();
+                if (!notifier.send_txs(txs, source, method))
                     return false;
                 io_service_.restart();
                 io_service_.poll();
@@ -3259,6 +3268,24 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
     `originated_stays_in_zone` was handed the wire's method instead of the
     caller's, which would have stripped the pin off every carrier-borne
     origination.
+
+    **The origination is driven with a NIL SOURCE**, which is what production
+    does and what the verdict path branches on (`pending.source.is_nil()`
+    chooses the F-10 provenance). An earlier version of this case let the
+    fixture helper hand it a peer id, so it drove the FORWARDED arm under a
+    `local` label — a test asserting its conclusions against the wrong branch.
+
+    **What this case does NOT assert, deliberately.** That the observation is
+    charged to the LOCAL source mapping rather than a peer one. A single
+    observation gives `distinct_sources == 1` either way; discriminating them
+    needs two observations charged to the SAME successor, one local and one
+    forwarded, and which successor a carrier message lands on is the slot
+    binding's call rather than a test's. The mapping semantics are covered
+    where they can be pinned exactly — `stem_watch.rs`'s
+    `distinct_sources_counts_mappings_not_observations`, which asserts a
+    `None` source is its own mapping. This case covers the half that one
+    cannot: that an origination reaches the verdict path with a nil source at
+    all, and is recorded `local`.
 
     What edit reds this: pass `relay_method::stem` rather than
     `pending.requested` to `originated_stays_in_zone` in

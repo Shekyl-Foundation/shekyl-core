@@ -397,8 +397,11 @@ const _: () = assert!(
 /// (`NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS`).
 ///
 /// Integer division: one window short of `MAX_FRAGMENTS * per_send` drops a
-/// whole window. A full-size message still occupying a window when the epoch
-/// rolls is discarded by CV-1 and never arrives.
+/// whole window. A full-size message that cannot finish inside one epoch may
+/// never arrive: any roll that hands its channel to a DIFFERENT peer restarts
+/// it from the first fragment (CV-1). A roll on its own discards nothing —
+/// pending work survives it, which `a_queued_message_survives_an_epoch_roll`
+/// pins.
 ///
 /// This is the **ceiling** [`MAX_FRAGMENTS`] must stay under, not its
 /// definition — the inherited value was silently set equal to it.

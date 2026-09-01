@@ -1493,10 +1493,20 @@ namespace cryptonote
   bool core::pool_has_tx(const crypto::hash &id) const
   {
     /* `all`, not `broadcasted`, and the category is the whole content of this
-       function. The one production caller asks a LOCAL question -- fluffy-block
-       reconstruction, "do I already hold these bytes so I need not request
-       them" (`cryptonote_protocol_handler.inl`, the `bvc.m_missing_txs` arm) --
-       and "do I hold it" is `all` by definition. This read was
+       function. TWO production callers now, and both ask a LOCAL question to
+       which `all` is the answer by definition:
+
+         - fluffy-block reconstruction, "do I already hold these bytes so I
+           need not request them" (`cryptonote_protocol_handler.inl`, the
+           `bvc.m_missing_txs` arm);
+         - the noise carrier's verdict path, "is this still ours to record
+           against" (`levin_notify.cpp`, via `i_core_events::pool_has_tx`).
+           The carrier can hold a transaction for up to an epoch before
+           sending it, so the pool may have taken it in the meantime; the
+           answer gates the relay record and the F-10 observation
+           (`COVER_TRAFFIC_RESTORATION.md` §3.1e).
+
+       Neither cares about relay class. This read was
        `relay_category::legacy`, which excludes `local` and `stem`, so a node
        holding an embargoed stem or an originated `local` entry added it to
        `need_tx_indices` and re-requested a transaction it already had, whenever

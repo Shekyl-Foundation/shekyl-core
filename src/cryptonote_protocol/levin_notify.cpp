@@ -209,7 +209,7 @@ namespace levin
         return remote_heights[n-1];
     }
 
-    uint64_t get_blockchain_height(connections& p2p, i_core_events* core)
+    uint64_t get_blockchain_height(connections& p2p, const i_core_events* core)
     {
       const uint64_t local_blockchain_height = core->get_current_blockchain_height();
       if (core->is_synchronized())
@@ -239,7 +239,7 @@ namespace levin
       return outs;
     }
 
-    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, i_core_events* core)
+    std::vector<boost::uuids::uuid> get_out_connections(connections& p2p, const i_core_events* core)
     {
       return get_out_connections(p2p, get_blockchain_height(p2p, core));
     }
@@ -597,13 +597,16 @@ namespace levin
       std::shared_ptr<detail::zone> zone;
       /*! NON-CONST since the carrier producer landed, and the widening is
           real rather than incidental. This was `const` while the sink only
-          READ core — `on_outbound` filters by blockchain height. It now also
-          RECORDS: `on_carrier_resolved` is the one place the pool learns a
-          carrier-borne transaction was relayed, and that mutates the pool.
-          `notify::core_` was non-const all along; the `const` was added here
-          and at `relay_wake` to say "this path only reads", which stopped
-          being true. */
-      i_core_events* core = nullptr;
+          READ core — `on_outbound` filters by blockchain height — and a
+          draft of the producer widened it because `on_carrier_resolved`
+          recorded from inside the callback.
+
+          IT NO LONGER DOES. Buffering the verdicts moved every mutation into
+          `apply_carrier_verdicts`, which takes `core` as its own argument
+          after the poll returns, so this member is back to the one read it
+          started with and says so again. `relay_wake::core_` stays non-const:
+          it is what feeds that call. */
+      const i_core_events* core = nullptr;
       std::vector<boost::uuids::uuid> outs;
 
       /*! One carrier verdict, buffered for after the poll returns.
@@ -1197,10 +1200,13 @@ namespace levin
         nothing fallible between the poll and that call; this function is what
         put something there. An exception escaping here would skip `arm()`, and
         the zone's relay strand would simply stop — no more fluff releases, no
-        cadence, no epoch rolls — for the whole process lifetime. Losing one
-        verdict is recoverable; losing the timer is not, which is the same
-        trade every callback above this makes and the reason they are all
-        `noexcept` with internal catches.
+        cadence, no epoch rolls — for the whole process lifetime. The trade is
+        BOUNDED against UNBOUNDED, not recoverable against unrecoverable: a
+        lost verdict costs at most that transaction, and for a forwarded stem
+        that cost is real and permanent (§3.1e). Losing the timer costs every
+        transaction on the zone thereafter. That is the same trade every
+        callback above this makes and the reason they are all `noexcept` with
+        internal catches.
 
         Per VERDICT rather than around the loop, so one poisoned entry cannot
         take the verdicts behind it either. */
@@ -1231,9 +1237,17 @@ namespace levin
                and it is not recoverable from here; see §3.1e for why the
                answer is not to retain the record, and for the protocol-level
                backstop that bounds the damage. */
+            /* Deliberately says MAY. This catch also covers throws from AFTER
+               `on_transactions_relayed` returned — the second pool query, the
+               discard arm's fluff — where the relay is already recorded and
+               the entry is retryable on the ordinary grid. Reporting definite
+               stranding would send a reader looking for a lost transaction
+               that is not lost. */
             MERROR("LOST a carrier verdict for token " << v.token << ": " << e.what()
-                   << " — that transaction is now unrecorded, and a forwarded "
-                      "stem among them is stranded until it expires from the pool");
+                   << " — its effects are incomplete; if the relay record had "
+                      "not yet been applied and this was a forwarded stem, it "
+                      "keeps time_t::max() and is stranded until it expires "
+                      "from the pool");
           }
         }
       }
