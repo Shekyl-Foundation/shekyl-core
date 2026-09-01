@@ -658,6 +658,7 @@ const MAX_OVERVIEW_GAP: u64 = 128;
     clippy::cast_sign_loss,
     reason = "the clamp above the cast is what makes it total"
 )]
+#[deny(clippy::arithmetic_side_effects)]
 fn round_half_up(value: f32) -> u32 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
@@ -684,6 +685,7 @@ fn round_half_up(value: f32) -> u32 {
     clippy::cast_sign_loss,
     reason = "the clamp above the cast is what makes it total"
 )]
+#[deny(clippy::arithmetic_side_effects)]
 fn kib_per_second(bytes_per_second: f64) -> u64 {
     /// `u64::MAX` as the nearest `f64`. Written as a literal rather than
     /// `u64::MAX as f64`, which is itself a lossy cast: the exact value is
@@ -700,6 +702,21 @@ fn kib_per_second(bytes_per_second: f64) -> u64 {
     }
 }
 
+/// A connection's lifetime average, in KiB/s.
+///
+/// Two truncating divisions in this order, because that is the value the wire
+/// has always carried: bytes per second, then KiB. Written with `checked_div`
+/// rather than an `if seconds == 0` guard so it is total **by construction** —
+/// a guard is a thing a later edit can move away from its division, and this
+/// is not.
+fn average_kib(total: u64, seconds: u64) -> u64 {
+    total
+        .checked_div(seconds)
+        .unwrap_or(0)
+        .checked_div(BYTES_PER_KIB)
+        .unwrap_or(0)
+}
+
 /// One connection's raw facts projected onto the wire, against the single
 /// instant the whole list was read at.
 ///
@@ -712,6 +729,7 @@ fn kib_per_second(bytes_per_second: f64) -> u64 {
 /// The subtractions saturate. A `now` earlier than a connection's `started`
 /// means the clock moved backwards, and C++'s unsigned wrap turned that into
 /// an idle time of some hundreds of years; zero is the honest answer.
+#[deny(clippy::arithmetic_side_effects)]
 fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionInfo {
     let live_time = now.saturating_sub(c.started);
     let ipv4 = c.address_type == ADDRESS_TYPE_IPV4;
@@ -738,19 +756,9 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
         state: ConnectionState::from(c.state),
         live_time,
-        // Two truncating divisions, in this order, because that is the value
-        // the wire has always carried: bytes per second, then KiB.
-        avg_download: if live_time == 0 {
-            0
-        } else {
-            c.recv_count / live_time / BYTES_PER_KIB
-        },
+        avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
-        avg_upload: if live_time == 0 {
-            0
-        } else {
-            c.send_count / live_time / BYTES_PER_KIB
-        },
+        avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
         support_flags: c.support_flags,
         // `hex::encode` is lowercase and undashed, which is exactly what
@@ -774,6 +782,7 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
 /// `<` is a span already behind the chain; `_` runs are the gap ahead of the
 /// last span; `.` is requested-not-yet-arrived, `m` the span at the tip, `o`
 /// any other arrived span.
+#[deny(clippy::arithmetic_side_effects)]
 fn render_overview(spans: &[crate::core::SyncSpanFacts], chain_height: u64) -> String {
     if spans.is_empty() {
         return "[]".to_owned();
@@ -787,7 +796,12 @@ fn render_overview(spans: &[crate::core::SyncSpanFacts], chain_height: u64) -> S
         }
         if expected < span.start_block_height {
             let stride = if span.nblocks == 0 { 1 } else { span.nblocks };
-            let gap = ((span.start_block_height - expected) / stride).clamp(1, MAX_OVERVIEW_GAP);
+            let gap = span
+                .start_block_height
+                .saturating_sub(expected)
+                .checked_div(stride)
+                .unwrap_or(1)
+                .clamp(1, MAX_OVERVIEW_GAP);
             for _ in 0..gap {
                 out.push('_');
             }
@@ -1984,6 +1998,18 @@ pub(crate) mod tests {
             !facts.asked_public_only.load(Ordering::SeqCst),
             "public_only reaches the facts call, which chooses a different p2p read"
         );
+    }
+
+    /// The lifetime average, including the two inputs that would divide by
+    /// zero. Total by construction, so there is no guard to accidentally
+    /// move away from the division.
+    #[test]
+    fn a_lifetime_average_is_total() {
+        assert_eq!(average_kib(600 * 2048, 600), 2);
+        assert_eq!(average_kib(600 * 1024, 600), 1);
+        assert_eq!(average_kib(1023, 1), 0, "truncates to whole KiB");
+        assert_eq!(average_kib(u64::MAX, 0), 0, "a zero-length connection");
+        assert_eq!(average_kib(0, 0), 0);
     }
 
     /// The conversion the C++ made with an undefined cast.

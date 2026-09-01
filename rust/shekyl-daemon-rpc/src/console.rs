@@ -786,6 +786,7 @@ fn fetch_peer_list(
     Ok(reply)
 }
 
+#[deny(clippy::arithmetic_side_effects)]
 fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String {
     let elapsed = if peer.last_seen == 0 {
         // Not "d19000.h..." — a peer never seen has no interval, and the C++
@@ -831,6 +832,7 @@ fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
 ///
 /// `limit` applies **per list**, not to the pair, and `pruned` filters
 /// unpruned peers out client-side — both as the C++ did.
+#[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list(
     src: &Source,
     white: bool,
@@ -865,6 +867,7 @@ fn print_peer_list(
 }
 
 /// `print_pl_stats`: how full each list is.
+#[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
     let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let (white_limit, gray_limit) = CoreRpc::peerlist_limits();
@@ -892,6 +895,7 @@ fn print_peer_list_stats(src: &Source) -> Result<String, String> {
 }
 
 /// `print_connections`.
+#[deny(clippy::arithmetic_side_effects)]
 fn print_connections(src: &Source) -> Result<String, String> {
     let reply = match src {
         Source::Live(core) => {
@@ -920,7 +924,7 @@ fn print_connections(src: &Source) -> Result<String, String> {
     let width = reply
         .connections
         .iter()
-        .map(|c| c.address.len() + 6)
+        .map(|c| c.address.len().saturating_add(6))
         .max()
         .unwrap_or(0)
         .max(21);
@@ -998,6 +1002,7 @@ struct GetLimitReplyProvisional {
 }
 
 /// `print_net_stats`.
+#[deny(clippy::arithmetic_side_effects)]
 fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     let (stats, limits) = match src {
         Source::Live(core) => {
@@ -1028,8 +1033,14 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     }
     let seconds = now.saturating_sub(stats.start_time);
     let line = |verb: &str, bytes: u64, packets: u64, limit_kb: u64| -> String {
-        let average = if seconds == 0 { 0 } else { bytes / seconds };
-        let limit = limit_kb * 1024;
+        // Total by construction rather than guarded; see `methods::average_kib`.
+        let average = bytes.checked_div(seconds).unwrap_or(0);
+        // `/set_limit` takes an `int64_t` and passes any positive value
+        // straight to `set_rate_down_limit`, so `limit_kb` is whatever an
+        // admin typed — and `limit_kb * 1024` overflows above `u64::MAX /
+        // 1024`. Saturating, like every other peer- or admin-influenced
+        // arithmetic in this file.
+        let limit = limit_kb.saturating_mul(1024);
         let percent = if limit == 0 {
             0.0
         } else {
@@ -1066,6 +1077,7 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 }
 
 /// `sync_info`.
+#[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply = match src {
         Source::Live(core) => {
