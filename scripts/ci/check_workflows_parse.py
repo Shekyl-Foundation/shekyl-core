@@ -63,32 +63,48 @@ class StrictLoader(yaml.SafeLoader):
 
 
 def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
-    # SafeLoader resolves `<<` merge keys here before building the mapping.
-    # This override exists to add duplicate detection and must differ from
-    # the base in nothing else, so the merge step is kept.
-    loader.flatten_mapping(node)
     mapping: dict = {}
+    seen: set = set()
     for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in mapping
-        except TypeError:
+        # `<<` is refused rather than modelled. Two review rounds asserted
+        # opposite things about whether Actions honours merge keys, nothing
+        # in this repository uses one, and guessing wrong is a silent miss
+        # in one direction or a rejected valid workflow in the other. Plain
+        # anchors and aliases are untouched by this — they are resolved
+        # before construction, and workflows here do use them.
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found a `<<` merge key, which this gate does not model; "
+                "write the keys out, or settle Actions' behaviour and "
+                "update this loader",
+                key_node.start_mark,
+            )
+        if not isinstance(key_node, yaml.ScalarNode):
             # YAML permits a sequence or mapping as a key; Python cannot hash
             # one. Reported as a YAML error rather than left to escape as a
             # TypeError, which would abort the sweep over the later files.
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
-                f"found unhashable key of type {type(key).__name__}",
+                "found a non-scalar key",
                 key_node.start_mark,
-            ) from None
-        if duplicate:
+            )
+        # Duplicates are judged on the key as WRITTEN, not on the Python
+        # object it constructs to. YAML 1.1 collapses `on`, `yes` and `true`
+        # onto one boolean, so comparing constructed keys would reject
+        # `{on: a, yes: b}` — two distinct names to Actions — as a duplicate.
+        spelling = (key_node.tag, key_node.value)
+        if spelling in seen:
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
-                f"found duplicate key {key!r}",
+                f"found duplicate key {key_node.value!r}",
                 key_node.start_mark,
             )
+        seen.add(spelling)
+        key = loader.construct_object(key_node, deep=deep)
         mapping[key] = loader.construct_object(value_node, deep=deep)
     return mapping
 
@@ -117,6 +133,18 @@ def _nonempty_str(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _trigger_keys(doc: dict) -> list:
+    """The keys spelling this workflow's trigger.
+
+    Bare `on:` resolves to boolean ``True`` under YAML 1.1 and the quoted
+    form to the string. Selected by identity, not membership: Python hashes
+    ``True`` and ``1`` alike, so `True in doc` also answers yes to a document
+    whose only such key is a literal ``1:`` — a workflow with no trigger at
+    all, which is precisely what this gate must not pass.
+    """
+    return [k for k in doc if k is True or (isinstance(k, str) and k == "on")]
+
+
 def check_one(path: str, doc: object) -> list[str]:
     """Structural checks for a parsed document. Returns problem strings.
 
@@ -133,23 +161,24 @@ def check_one(path: str, doc: object) -> list[str]:
     if not isinstance(doc, dict):
         return [f"{path}: top level is {type(doc).__name__}, expected a mapping"]
 
-    if not doc.get("name"):
-        problems.append(f"{path}: no top-level `name:`")
+    # No `name:` check. Actions treats it as optional and falls back to a
+    # display name, so the workflow still runs and still reports its checks —
+    # rejecting its absence would fail a workflow Actions accepts, which the
+    # rule above forbids.
 
-    # YAML 1.1 resolves an unquoted `on:` key to the boolean True, so a
-    # workflow's trigger block arrives under either key depending on quoting.
-    # Both forms at once are two spellings of one key: distinct to PyYAML, so
-    # the duplicate-key loader cannot see it, and a single redefined trigger
-    # to GitHub, which rejects it.
-    if True in doc and "on" in doc:
+    # Both spellings at once are one trigger defined twice: distinct keys to
+    # PyYAML, so the duplicate-key loader cannot see them, and a redefinition
+    # to Actions.
+    trigger_keys = _trigger_keys(doc)
+    if len(trigger_keys) > 1:
         problems.append(f"{path}: `on:` given twice (bare and quoted)")
-    elif True not in doc and "on" not in doc:
+    elif not trigger_keys:
         problems.append(f"{path}: no `on:` trigger block")
     else:
         # An empty trigger is this gate's own subject, not schema pedantry:
         # a workflow with nothing to start it never runs and never reports a
         # check, which is the silent disarm the gate exists to catch.
-        trigger = doc[True] if True in doc else doc["on"]
+        trigger = doc[trigger_keys[0]]
         if not trigger or not isinstance(trigger, (str, list, dict)):
             problems.append(f"{path}: `on:` has no triggers")
 
@@ -168,6 +197,10 @@ def check_one(path: str, doc: object) -> list[str]:
         if "uses" in job:
             if "steps" in job:
                 problems.append(f"{where}: both `uses:` and `steps:`")
+            # The called workflow picks its own runner, so a runner here is
+            # the same mutually-exclusive error as steps.
+            if "runs-on" in job:
+                problems.append(f"{where}: both `uses:` and `runs-on:`")
             if not _nonempty_str(job.get("uses")):
                 problems.append(f"{where}: `uses:` has no workflow reference")
             continue
