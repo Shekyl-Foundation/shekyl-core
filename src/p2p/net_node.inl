@@ -626,10 +626,17 @@ namespace nodetool
       else
         m_payload_handler.set_max_out_peers(proxy.zone, proxy.max_connections);
 
-      // No covert/"noise" payload is wired here — the configuration-B
-      // deletion removed it from configuration (see the `disable_noise` note
-      // in net_node.cpp). The levin machinery behind `make_noise_notify`
-      // stays as Q-11 Unit 2's substrate.
+      // No noise ARGUMENT here, and none to pass: the notifier has taken no
+      // covert payload since #515 deleted the C++ carrier, and
+      // `make_noise_notify` went with it. The carrier is Rust's
+      // (`NoiseQueues` in `shekyl-relay`), turned on inside `make_relay_zone`
+      // for an encrypted zone and only under `set_carrier_development` — a
+      // process-wide runtime opt-in that DEFAULTS OFF, so a shipped daemon
+      // still constructs every zone with the carrier dormant. The
+      // configuration-B deletion removed the old switch from configuration
+      // (see the `disable_noise` note in net_node.cpp);
+      // COVER_TRAFFIC_RESTORATION.md §3.1 is why the replacement is a
+      // development flag rather than an operator setting.
       zone.m_notifier = cryptonote::levin::notify{
         zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), proxy.zone, pad_txs, m_payload_handler.get_core()
       };

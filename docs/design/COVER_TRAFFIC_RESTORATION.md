@@ -5,23 +5,30 @@ on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
 restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
 not startable. See §2.9 for the series, §3 for what has landed.
 
-This document exists because the cover mechanism is **deliberately inert, fully
-built, and has no production caller** — which is indistinguishable, to a
-dead-code sweep or a new maintainer, from abandoned scaffolding. It is not.
+> **UPDATED 2026-08-29: the mechanism now HAS its production caller** — see
+> §3.1a. It is still **inert by default**, behind a development opt-in, so the
+> do-not-delete argument below stands unchanged in force; what changed is that
+> "no caller" is no longer the reason a caller grep comes up empty.
+
+This document exists because the cover mechanism was **deliberately inert,
+fully built, and had no production caller** — which is indistinguishable, to a
+dead-code sweep or a new maintainer, from abandoned scaffolding. It was not.
 `DAEMON_RELAY_PRIVACY.md` §42 is a standing restoration proposal with a ruled
 architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 (§42.5a/b).
 
-> **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** The absence of
-> a production caller is *the current state of a two-line configuration
-> decision* (§1.1), not evidence of abandonment. The deletion criteria that
+> **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** This was
+> written when the absence of a production caller was *the current state of a
+> two-line configuration decision* (§1.1), not evidence of abandonment. The
+> caller exists now; the rule stays, because inertness behind the opt-in still
+> makes a runtime trace look empty. The deletion criteria that
 > would actually justify removing this machinery are stated in §1.6, and none
 > of them is "grep found no callers". **§1.7 states the criteria for keeping
 > it**, pre-registered 2026-08-23 before the 17 KiB window is built.
 
 ---
 
-## 1. The audit — every component, and why each has no production caller
+## 1. The audit (2026-08-20) — every component, and why each HAD no production caller
 
 ### 1.1 The mechanism is inert at exactly TWO points
 
@@ -59,7 +66,7 @@ what that change would wake up.
 | ~~`clear_channel`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)** |
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
-| `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
+| `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call. **Was** "always false: C++ never sets the flag"; since 2026-08-27 `make_relay_zone` sets it for an ENCRYPTED zone when `set_carrier_development(true)` — a process-wide runtime opt-in **defaulting off**, so a shipped build still reads false everywhere |
 | `CRYPTONOTE_NOISE_CHANNELS` | `cryptonote_config.h` | channel count. `_MIN_DELAY` and `_DELAY_RANGE` **DELETED 2026-08-28** — zero readers, and the cadence is now `params::carrier::NOISE_MIN_DELAY_MS` / `_DELAY_JITTER_MS` in milliseconds. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
@@ -460,6 +467,13 @@ one page. Each carries its own `IMPLEMENTATION_INDEX` row.
 
 ### 2.1 The unblocked slice — and it needs NO covert enablement anywhere
 
+*(Superseded 2026-08-20 (#515) and again 2026-08-27: `make_notifier` no longer
+takes a payload size, and the notifier constructor has no noise argument at all
+— it is `notify(service, p2p, zone, pad_txs, core)`, so there is no `nullptr`
+for a production site to pass. See §1.2. What follows is the state this slice
+was planned against; its CONCLUSION held — the slice landed without enabling
+the carrier anywhere, and enablement is now the default-off runtime opt-in.)*
+
 **This is the key structural fact, and §1.5 implies it without stating it.**
 `make_notifier(noise_size, …)` takes the payload size **as a parameter**, so
 the covert gtests construct notifiers with an explicit payload and bypass the
@@ -481,9 +495,20 @@ Stages 1–3 also carry §42.5b's ownership move: phase, carrier, slot and the
 dummy payload become Rust, in **one** crossing per rule 40; strand dispatch,
 levin fragmenting and the socket write stay C++ as epee-bound.
 
-**The `noise_stem` annotation is the acceptance test.** Greening it means
+~~**The `noise_stem` annotation is the acceptance test.** Greening it means
 changing the expectations to `stem` and `1` — *not* the code. A change that
-leaves it green as written has preserved the bypass.
+leaves it green as written has preserved the bypass.~~
+
+**Superseded 2026-08-31 — the annotation is gone, and the property it named is
+met.** `noise_stem` went with the covert branch (stage 1's row), but its
+annotation OUTLIVED it: the block sat stranded above
+`levin_notify.command_max_bytes`, an unrelated test, still telling a future
+implementer that *that* test must go red when §42.3 lands. It is deleted. What
+it asked for holds — the carrier preserves the planned phase rather than
+downgrading to `local` (`originated_stays_in_zone` at the record sites), and
+one channel binds to one stem slot rather than broadcasting to all. Both are
+Rust-side now: `a_noise_carrier_does_not_change_the_phase` and the
+`noise_queue` CV-1 tests.
 
 ### 2.2 The intermediate state is a REAL done-condition, not partial completion
 
@@ -818,19 +843,21 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
 | **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
-| **§2.9 step 2 — covert executor** | **THREE PIECES AND A CROSSING, 2026-08-27 — the producer is still owed (§3.1a)** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **PARTLY BUILT 2026-08-26/27, and the remainder is named at §3.1a.** Three of the four, plus the enqueue CROSSING but not its caller: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only after `cryptonote::levin::set_carrier_development(true)`, a RUNTIME opt-in defaulting off — the compile-time `SHEKYL_CARRIER_DEVELOPMENT` macro an earlier draft used is gone, because a gate CI never builds cannot test the only configuration that runs the carrier. §3.1 is why the opt-in is a ruling and not caution. |
+| **§2.9 step 2 — covert executor** | **LANDED 2026-08-29 — the producer is wired and a real transaction rides the carrier** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **PARTLY BUILT 2026-08-26/27, and the remainder is named at §3.1a.** Three of the four, plus the enqueue CROSSING but not its caller: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only after `cryptonote::levin::set_carrier_development(true)`, a RUNTIME opt-in defaulting off — the compile-time `SHEKYL_CARRIER_DEVELOPMENT` macro an earlier draft used is gone, because a gate CI never builds cannot test the only configuration that runs the carrier. §3.1 is why the opt-in is a ruling and not caution. **CLOSED 2026-08-29 by the producer.** `dandelionpp_notify` consumes `plan_dispatch_with_refresh` and enqueues on `SHEKYL_RELAY_CARRIER_NOISE`, so the carrier carries real transactions rather than dummies alone. The swap was the small half: an enqueue is NOT a send, so `record_relayed` and the stem observation could not stay where #573 put them, and the queue gained a terminal verdict — `CarrierOutcome::{Sent,Discarded}` against a caller-minted opaque token, reported through `ShekylRelayCarrierResolvedCb`. Both arms are load-bearing: `unbind` clears a channel, so a completion-only signal would leave the pool waiting forever on a record that never fires, and a discard must read as NOT RELAYED so the origin retries on the short grid instead of waiting out 1148 s for a transaction that was never sent (§92.5c item 3, now conditional on the send having happened). §3.1a's reopening criterion is MET: `a_real_transaction_rides_the_carrier_and_records_on_arrival` drives one through the queue onto the wire and asserts both that nothing is recorded at send time and that a relay IS recorded once the carrier drains it. |
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
-| **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; the skip's condition EXPIRED** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier: C++ cannot enable noise at all. **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, on an independent ground that did discharge**: #515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere. What the expiry actually leaves owed is the step-2 caller above — **in Rust**, per `20-rust-vs-cpp-policy`, not as the C++ shim this row skipped. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
+| **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; skip DISCHARGED 2026-08-29 — after two successive grounds expired** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier, and C++ could not enable noise at all until the default-off development opt-in restored a path (§3.1). **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, and as of 2026-08-29 discharged** — though not on the ground this row last gave. That ground (#515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere) has **itself expired**: `dandelionpp_notify` consumes `plan_dispatch_with_refresh` today, so a consumer exists. What keeps the skip right is that the consumer which exists is **the Rust crossing this row prescribed, not the C++ shim it declined** — the enqueue hands one blob across, and Rust frames it, paces it, and hands the bytes back out for C++ to transport — as C++ already does for stem and fluff — per `20-rust-vs-cpp-policy`. And the item this row named as owed (the step-2 caller above, **in Rust**) is the step-2 row's **CLOSED 2026-08-29**. Two successive grounds expiring under a skip that was correct both times is the argument for recording a skip's GROUND and not just its verdict — a verdict outlives the reason that earned it, and reads as still-load-bearing once that reason is gone. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
 | §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
 | **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. **Superseded 2026-08-27 on all three counts, by the change that built the executor's caller:** `make_relay_zone` sets the flag again for an ENCRYPTED zone behind `set_carrier_development` (off by default, so `has_noise` is still false in a shipped build); the send callback transports rather than failing loudly; and its unbind sibling is **deleted**, since unbind is consumed inside Rust and C++ has no channel state to clear. |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
 
 ### 3.1 Why the switch is a DEVELOPMENT FLAG (2026-08-26)
 
-The carrier's executor, join and boundary are built and the enqueue crossing
-exists; its **producer does not** (§3.1a). What is built is reachable only
-after `cryptonote::levin::set_carrier_development(true)`, a runtime opt-in
-defaulting off.
+The carrier's executor, join, boundary, enqueue crossing **and producer** are
+built (§3.1a, landed 2026-08-29): a real transaction rides the carrier, and the
+pool is told only once the transport has accepted every window (not once a
+peer has acknowledged one — §3.1d). All of it is reachable only after
+`cryptonote::levin::set_carrier_development(true)`, a runtime opt-in defaulting
+off — so nothing pays the ~42 GB/month posture until it is armed.
 
 That opt-in is a ruling with reopening criteria, not caution, and the reason
 is that an operator switch would ship with an undefined meaning.
@@ -892,12 +919,16 @@ The flag becomes a shippable operator switch when **both** hold:
 Until both, enabling the carrier is a privacy regression rather than a
 configuration, and a switch that reads as a preference would be a footgun.
 
-### 3.1a The producer is owed, and what it costs (2026-08-27)
+### 3.1a ~~The producer is owed~~ — **LANDED 2026-08-29**, and what it cost
 
-`shekyl_relay_zone_noise_enqueue` exists and nothing calls it. A
-development-flag zone therefore emits **dummies only**: the cadence runs, the
-frames are valid, and no real transaction ever rides the carrier.
-`dandelionpp_notify` still sends stem transactions directly through
+> **This section is the record of the gap and how it was closed. Everything
+> below describes the state BEFORE 2026-08-29 unless it says otherwise; the
+> producer is built, and `dandelionpp_notify` enqueues on the carrier.**
+
+`shekyl_relay_zone_noise_enqueue` existed and nothing called it. A
+development-flag zone therefore emitted **dummies only**: the cadence ran, the
+frames were valid, and no real transaction ever rode the carrier.
+`dandelionpp_notify` still sent stem transactions directly through
 `make_payload_send_txs`.
 
 **Stated plainly because the first draft of this row said "built".** The
@@ -906,7 +937,7 @@ crossing without its caller — which is exactly the shape §92.5c item 1 was
 stuck in for weeks: a mechanism whose consumer nobody wired, recorded as
 complete because the hard part was.
 
-**The remaining work is small and its seam already exists.**
+**The remaining work looked small and its seam already existed.**
 `shekyl_relay_zone_plan_dispatch_with_refresh` returns `out_carrier` and
 `out_channel`; `dandelionpp_notify` currently calls `plan_relay`, which
 returns neither. So the producer is: swap the planning call, and on
@@ -927,9 +958,391 @@ opt-in (§3.1) now makes possible and the `#ifdef` it replaced did not: a
 compile-time gate put the only carrier-running configuration in a build CI
 never makes.
 
-**Reopening criterion:** the producer is owed by the next carrier change, and
-this row is not marked landed until a test drives a real transaction through
-the queue onto the wire.
+**CORRECTION 2026-08-29: "small" was wrong, and the reason is the pool
+record.** The planning swap really is two lines. What that draft did not ask is
+what happens to the two records the stem path fires — and both of them break on
+the covert path for the same reason.
+
+`record_relayed` and `record_stem_observation` currently fire **inside the
+success arm of `make_payload_send_txs`**, deliberately: #573 moved them there
+because `set_relayed` writes `meta.relayed`, `local_relay_base` reads exactly
+that bit to choose an origin's backoff, and a send that never happened claiming
+the long wait is a falsification. **An enqueue is not a send.** The queue
+accepts a message; the window goes out later, at a cadence tick, and a roll
+that REBINDS the channel restarts the run in flight (CV-1) — a roll on its own
+discards nothing, which `a_queued_message_survives_an_epoch_roll` pins.
+Recording at enqueue puts back
+the defect #573 removed, in a place where the gap between "accepted" and "sent"
+is not microseconds but up to a full epoch.
+
+**And the successor is not known at enqueue time either.** F-10 charges an
+observation to the peer the stem was given to. On the covert path that is the
+channel's bound peer *at send time*, and `NoiseSend::failed` clears `bound` and
+bumps the epoch, so a failed send rebinds — possibly to a different peer.
+Arming the watch at enqueue charges an observation to a peer that may never
+receive it, which is a wrong answer in F-10's tallies rather than a missing
+one.
+
+**So the producer needs a completion signal, and the queue is where it lives.**
+`NoiseSend::sent` already knows the moment a message fully drains — it is the
+`next >= message.len()` branch that pops the message. What it does not have is
+the transaction's identity, because the queue holds opaque framed bytes by
+design. Carrying the id alongside the message and reporting it on completion is
+what lets the two records fire where the send is known to have happened, which
+is the invariant #573 established and this path would otherwise be the first to
+break.
+
+**And the estimate itself is the lesson worth keeping.** *"Small — swap the
+planning call and enqueue instead of sending directly"* was written against the
+code's **shape**: one call replaced by another, at a seam that already existed.
+It never asked what the two records *mean* once the send is deferred, which is
+a question about semantics rather than structure. The next "small — just swap
+X" will be written the same way unless the difference is stated: a swap is
+small when the thing swapped in has the same completion semantics as the thing
+swapped out, and this one does not.
+
+**Not a CV-4 breach**, by the same argument that justified widening
+`NoiseSendCb`: this is an OUTPUT after the cadence has already chosen when and
+to whom. It tells the scheduler nothing.
+
+The three candidates and why two are refused:
+
+| | what the pool learns | verdict |
+| --- | --- | --- |
+| record at enqueue | "relayed" for a message that may never leave | **refused** — #573's defect, with an epoch-sized window |
+| record nothing | `relayed` stays false, so `local_relay_base` keeps MIN_RELAY_TIME and the origin re-broadcasts at 300 s by another path | **refused** — defeats the carrier |
+| **report completion** | the truth, at the moment it becomes true | **chosen** |
+
+**~~Reopening criterion~~ — MET 2026-08-29.** The criterion was *"not marked
+landed until a test drives a real transaction through the queue onto the
+wire"*, and `a_real_transaction_rides_the_carrier_and_records_on_arrival` is
+that test. It asserts both halves, because either alone is satisfiable by the
+wrong thing: nothing recorded at send time (which a vanished transaction would
+also satisfy) **and** a relay recorded once the carrier drains it (which the
+ordinary wire would also satisfy). Together they say it went by the carrier.
+
+Both bites observed red — reverting to `plan_relay` exhausts the epoch re-roll
+bound, dropping the completion record fails the second assertion — and
+re-verified after the test was restructured to re-roll, since a loop can mask
+a failure a straight-line test would show.
+
+### 3.1b Provenance is not a phase, and the type system should say so
+
+**2026-08-29, found while wiring the producer.** The resolution first recorded
+`originated_stays_in_zone(relay_method::stem, ...)`. That predicate takes the
+method the **caller asked for**, not the one the wire used: an origin asking
+for `Local` on an anonymity zone keeps `Local` however it travelled. Passing
+`Stem` would have stripped §92's pin off **every carrier-borne origination**,
+silently, on the one path where origination is the thing being protected.
+
+**Third instance of one conflation.** `Local` is *provenance* — where the
+transaction came from — and `Stem` is *phase* — where it is in the relay walk.
+They share an enum, so the compiler treats them as alternatives on one axis:
+
+| | what it was | consequence |
+| --- | --- | --- |
+| #573 | `add_tx`'s upgrade moved `Local` → `Fluff` | the origin pin stripped by its own transaction returning |
+| the covert branch | `tx_relay = local` read as a phase change | a demotion that looked like routing |
+| here | the wire's phase passed where the caller's provenance was wanted | the pin stripped off every carrier origination |
+
+**Why this one was catchable at the keyboard**, and the reason generalises: the
+predicate is *named* `originated_stays_in_zone`, so handing it something called
+`stem` reads wrong on sight. The name carried the axis the type did not.
+
+**The cutover should not rely on a name to do that.** A `RelayMethod`
+parameter accepts `Stem` happily, because on the enum's own axis that is a
+legal value. A parameter typed for *provenance* — one that only an origination
+decision can construct — would not compile here, and none of the three
+instances above would have been expressible. That is the same shape as
+`LinkSecrecy` (constructible only from a `RelayZone`, so reach and secrecy
+cannot be transposed) and as `zone_route`'s token, and it is the design note
+this finding contributes to the Rust notify cutover: **carry provenance as its
+own type rather than as a position in the phase enum.**
+
+Recorded here rather than in FOLLOWUPS because it is a design input to a round
+that has not opened, not a defect owed a fix.
+
+#### 3.1b(i) "Needs the harness" is a claim, and it should be tested first
+
+**2026-08-30.** The split-path review found two defects, and the second — the
+fluff fallback sending the batch the carrier had taken — looked unassertable.
+The record and the send were separate spans, `take_relayed` can only observe
+the record, and the one route into that fallback from a carrier epoch is a stem
+send that FAILS, which in the unit fixture tears down the very peers the fluff
+would go to. A first draft asserted on the resulting empty payload and was
+caught by its own non-vacuity guard.
+
+**So it was filed as a fourth consumer of the `t_core` arrival harness. That
+was wrong, and it was wrong in a way worth naming.** The defect had nothing to
+do with `t_core`. The record and the send were two statements sharing a
+variable, and review had just demonstrated that a variable can be changed in
+one and not the other. Passing **one batch to one call** — `fluff_and_record` —
+puts the send inside the record's assertion and closes it in place. Rule 50's
+second clause: when no check can fail, encode it so the mistake is
+unrepresentable.
+
+**The generalisable part is the order of operations.** "This needs a fixture we
+do not have" is a claim about the world, and it is cheap to make and expensive
+to hold: three consumers had already accumulated behind that one harness, each
+having re-derived the same obstacle list and moved on. Attempting the design
+change first is what distinguishes a real blocker from a reflex, and here it
+took one lambda.
+
+The harness is still owed for the consumers that genuinely need it — the
+arrival leg cannot be driven without a chain that admits real transactions.
+This is not one of them, and counting it as one would have made the queue look
+longer than the work is.
+
+### 3.1c Budget versus actual — pre-registered before the traffic exists
+
+**2026-08-29.** The ~42 GB/month posture is signed off **provisionally**, on
+the condition that it be measured once a real transaction rides the carrier —
+which the producer now makes possible for the first time. This section names
+what the measurement should show **before** anyone runs it, because the first
+reading is otherwise free to be read as either confirmation or a defect.
+
+**The arithmetic is not what is in question.** `PER_NODE_CEILING_BYTES_PER_SEC`
+is a `const` assert at exact equality: `20 480 × 4 ÷ 5 s = 16 384 B/s` holds by
+construction or the build fails. Measuring it would only re-derive it.
+
+**What is in question is whether the observed rate matches, and it will not
+match exactly.** Three named reasons, all expected:
+
+| source | direction | why |
+| --- | --- | --- |
+| jitter over a finite window | **either** | the mean is 5 000 ms; any finite sample's mean sits either side of it, which is the same property §56 requires the cadence to have |
+| unbound slots | **under** | a channel with no peer emits nothing (CV-2), so a node that has not filled its stem slots carries less than the ceiling |
+| discards and rebinds | **neither** | a restart re-sends windows, so later ticks carry retries instead of dummies — the BYTE rate is unchanged and only the useful throughput falls. Listed because it is the intuitive miscount: it belongs to a throughput reading, not a bandwidth one |
+
+**So the expected finding is: at or slightly under the ceiling, never
+meaningfully over.** The ceiling is a sustained mean at the worst posture —
+every channel bound, every zone carried — and a real node is usually in a
+lesser posture.
+
+**What would be a real defect**, stated so the reading has a bar to clear
+rather than an impression to leave:
+
+- **sustained rate above 16 384 B/s** with every channel bound. The emitter has
+  no path to exceed its own mean, so this would mean the cadence is not drawing
+  what it is documented to draw.
+- **per-circuit rate above 6 145 B/s sustained.** That is
+  `PER_CIRCUIT_PEAK_BYTES_PER_SEC`, the shortest interval; a *sustained* rate
+  at the peak means the jitter is not being applied.
+- **a rate that varies with queue depth.** This is the CV-4 breach the whole
+  separation exists to prevent, and it is the one measurement worth running
+  even if the totals look right — `cv4_the_cadence_does_not_depend_on_queue_depth`
+  gates it in Rust, but the wire is where it would be observable to an
+  adversary.
+
+**Dummies count.** A window carrying cover is the same 20 480 bytes as a window
+carrying a fragment — that is the invariant, not an accounting convenience — so
+the budget is spent whether or not anyone is transacting. A measurement taken
+on an idle node is therefore a *complete* measurement of the sustained cost,
+not a floor for it.
+
+### 3.1d What a carrier verdict of `sent` actually asserts (2026-08-31)
+
+**It asserts transport ACCEPTANCE, not delivery, and the contracts now say
+so.** Found in review: `on_noise` returns the result of
+`connections::send`, and epee's `connection<T>::send` places the bytes on the
+connection's asynchronous write queue (`m_state.data.write.queue`) and calls
+`start_write()`. The return means the write was *queued*, not that it left the
+socket and certainly not that a peer received it. A connection that fails after
+accepting the bytes never comes back through the resolution callback, so
+`CarrierOutcome::Sent` fires and the relay record and F-10 observation are
+charged anyway.
+
+**The ruling is to define the contract honestly rather than strengthen it, and
+the blocker is named.** Reporting true write completion needs a completion
+signal epee does not expose; adding one means thickening inherited C++
+(`20-rust-vs-cpp-policy`) immediately below the layer scheduled for the daemon
+Rust cutover, and even socket-write completion would not be peer receipt. The
+reopening criterion is that cutover, where the write path is Rust-owned and
+completion is expressible — carried as a `FOLLOWUPS.md` one-liner, per
+`21-reversion-clause-discipline`.
+
+**What makes this acceptable today rather than merely deferred.** The carrier
+is the STRICTEST recorder on the relay path, not the weakest. `on_fluff` never
+inspects its send result, and `fluff_and_record` records *before* sending; the
+stem arm records an origination's `local` class "whatever the transport did".
+The carrier alone checks the `send` return (`res > 0`) and falls back to fluff
+when the transport refuses. So the residual gap — an async failure after
+acceptance — is one every relay path in this file shares and none of them can
+close from here; the carrier does not widen it.
+
+**The F-10 exposure is latent.** A verdict charged to a successor that never
+received the bytes is a wrong entry in the tallies rather than a missing one,
+which is the hazard §3.1a's successor argument was written against. It has no
+consumer today: the selection tier that reads those tallies is §12.11 and is
+unbuilt, and the transport cutover lands before it. That is why this is a
+contract correction and not a redesign.
+
+**Naming.** `sent` is kept rather than renamed to `accepted`. It means here
+exactly what `send()` means everywhere in this tree, and the C and Rust homes
+each state the gap explicitly so the name cannot be read as an overclaim.
+Identifiers that asserted the stronger fact — a `delivered` send-status local,
+a `delivered_to` test binding, a test named for the peer that "received" it —
+were renamed, because a name is a claim the doc above it cannot qualify.
+
+**A vocabulary gate was considered and REJECTED (2026-08-31).** After this
+correction propagated to a dozen further sites over two review rounds, a CI
+grep forbidding "received"/"reached the wire" across the carrier files looked
+attractive. It fails both of the tests such a gate has to pass. The same words
+are TRUE two paragraphs away — a fluff peer does receive, and several correct
+sentences here are denials that must contain the word — so the check either
+fires on legitimate prose or is scoped so narrowly it cannot fire at all, which
+is `47-gate-subject-assertion`'s empty-subject failure. And the job it would do
+is "new prose must match the defined contract", which is what the contract
+homes, `a_queued_message_survives_an_epoch_roll`, and this section already do;
+policing vocabulary is not the same as policing correctness
+(`no-convention-theater-gates`). Reopen only if the claim recurs in code that
+POSTDATES this section — which would mean the homes are not being read.
+
+### 3.1e The pool can change while the carrier holds a transaction (2026-09-01)
+
+**The carrier is the first relay path with a long gap between deciding to send
+and sending.** Stem and fluff decide and transport in one call, so the txpool
+cannot move underneath them. The carrier accepts a message and emits its
+windows over the following cadence ticks — up to about a full epoch later
+(§3.1d's backlog bound). In that window the transaction can be mined and
+removed by `tx_memory_pool::take_tx`.
+
+**Applying a verdict then is not merely redundant — it CORRUPTS F-10.**
+Recording a relay against a pool entry that is gone does nothing useful, but
+arming a stem observation does something actively wrong: the watch expects a
+re-arrival from the successor, a block removal produces no arrival event, and
+the observation expires as a `Silent` charged to a node that behaved
+correctly. That is a WRONG entry in the tallies rather than a missing one —
+the same distinction the successor-at-enqueue argument turns on (§3.1a). The
+stem and fluff paths cannot reach this; the carrier widened the window by
+about six orders of magnitude, so the gate belongs to the change that widened
+it.
+
+**The gate is pool MEMBERSHIP, checked at verdict time, and it covers the
+whole application.** `i_core_events::pool_has_tx` — a read-only query
+`cryptonote::core` already implemented for fluffy-block reconstruction, using
+`relay_category::all`, because the question is "do we still hold this", not
+"in what class". Gating the whole verdict rather than only the observation
+also stops the discard arm fluffing a transaction that is already in a block,
+and moots what `set_relayed` would do against a missing entry. Pinned by
+`a_verdict_for_a_transaction_the_pool_dropped_records_nothing`.
+
+**What is NOT fixed, deliberately: the send still departs.** The gate runs when
+the verdict arrives, which is after the windows are on the wire. Cancelling
+earlier would need an enqueue-cancellation path — `NoiseQueues` has no such
+API, and `unbind` clears a whole channel, so cancelling one message would
+discard its channel-mates. **Corrected 2026-09-01: the cost is not one
+window.** The gate runs on the VERDICT, which arrives only after the message
+completes, so a transaction mined before its first carrier tick still emits
+every one of its windows — up to `MAX_FRAGMENTS` (5) × `WINDOW_BYTES`
+(20 480) ≈ **100 KiB** of cover carrying a transaction peers already hold and
+will drop. An earlier draft said "one window", which understated it by the
+fragment cap.
+
+That is still what cover traffic is for, and it is bounded per transaction
+rather than per epoch, which is why the conclusion does not change. Reopening
+criterion: a cancellation API becomes worth building if some other caller
+needs one, or if measured carrier bandwidth (§3.1c) shows mined-while-queued
+traffic is a material share of the budget — not on this argument alone.
+
+**The membership gate is not atomic with the recording, and the fix is a
+SECOND gate rather than a combined core operation (2026-09-01).**
+`pool_has_tx` releases the txpool lock before `on_transactions_relayed`
+reacquires it, so a block can be processed between them and take the entry;
+`set_relayed` then updates nothing while the observation is armed anyway —
+the same false `Silent`, through a window of microseconds instead of an epoch.
+
+Review proposed combining membership and recording into one core call that
+reports whether the entry was updated. Rejected: `on_transactions_relayed`
+takes a SPAN, so a single success flag is the wrong shape for it, and a
+carrier-only variant duplicates a widely-used notification to serve one
+caller. What the observation actually needs is cheaper — re-ask the question
+after the recording, and arm only if the answer is still yes.
+
+**That pair NARROWS the window; it does not invert the polarity, and saying
+it did was wrong (corrected 2026-09-01).** `pool_has_tx` releases the txpool
+lock before returning, so a block can take the entry between the second check
+and `record_stem` and the observation is armed for a transaction that is gone
+— the same false `Silent`. The claim that "the checks can only lose
+observations, never invent them" was a property this construction cannot
+deliver, and it was stated in the code, this section, and a test docstring.
+
+What is true is the scale, and the comparison to what sits beside it.
+Ungated, the exposure was the carrier's whole backlog — up to an epoch of
+wall-clock in which any block could take the entry. Gated once, the gap
+between the first check and `set_relayed`. Gated twice, the gap between the
+second check and the arm. **And the ordinary stem arm does not check the pool
+at all** before `record_stem_observation`, so the carrier is the only relay
+path here that narrows this even once; it does not introduce the hazard, it
+inherits it and shrinks it.
+
+Closing it needs one of two things that do not exist: the txpool cancelling
+in-flight observations when it removes a transaction, or `expire` re-asking
+membership before it counts a `Silent` — the latter being the better place,
+since the `Silent` is what does the damage and expiry is where it is decided.
+Both are new plumbing across the FFI into a layer the daemon cutover
+replaces. **Reopening criterion:** §12.11, the selection tier that consumes
+these tallies, becoming real — it is unbuilt today, so nothing reads the
+false entry — or the cutover giving Rust a pool query it can call at expiry.
+
+The first gate is not subsumed by the second: it also stops the discard arm
+fluffing a transaction already in a block, which the second runs too late to
+prevent. `a_pool_drop_during_recording_arms_no_observation` pins the arm the
+gates DO cover — the entry gone by the time the recording runs.
+
+**The wake handler guarantees `arm()` structurally, not site by site.** The
+same change that made `apply_carrier_verdicts` `noexcept` also added
+`reserve_verdicts` — which allocates — one call above it, in the same gap
+before `arm()`. Guarding fallible calls one at a time is how the second one
+got there, so the work is now inside a `try` and `arm()` is outside it: the
+next wake is scheduled whatever this one did. The timer-error throw stays
+outside, because a failed wait is not a failed unit of work and re-arming
+against a timer that has reported it cannot fire would be a spin. The
+dispatcher keeps its own `noexcept` and per-verdict catch — a different job:
+strand survival versus keeping one poisoned verdict from taking the verdicts
+behind it.
+
+**A throw during verdict application strands a forwarded stem, and retaining
+the record does not fix that (2026-09-01).** Review proposed keeping an
+extractable pending node until application succeeds. Taken literally that is
+strictly worse: nothing re-drives a verdict — the terminal outcome is already
+drained on the Rust side and never reported twice — so the retained node is
+never revisited, and the dedup scan then hides the txid from every later offer
+while leaking its blob. Stranding plus a leak, in place of stranding.
+
+The version that WOULD recover is a retry list re-driven on a later wake. It is
+rejected here, with the ground stated so a future reader can reopen it rather
+than re-derive it:
+
+- The only C++ throw source left on that path is `on_transactions_relayed`
+  itself, since the allocation we own is now made before the erase. A retry is
+  therefore a retry of the thing that just failed, under the memory pressure
+  that made it fail.
+- The class that suffers is a FORWARDED stem — a transaction this node received
+  from a peer. Failing to forward it is precisely the case Dandelion++'s
+  embargo exists for: the originator's timer fires and fluffs, so the
+  transaction reaches the network by the route the protocol already provisions
+  for a stem node that goes away. An ORIGINATION is unaffected — `relayed`
+  stays false and the pool re-offers at `MIN_RELAY_TIME`.
+- Our own node draws no embargo for it, because `set_relayed` is what draws
+  one; the entry sits until it expires from the pool. That is the honest cost,
+  and it is a liveness contribution rather than a correctness or privacy
+  failure.
+
+Reopening criterion: a second, non-allocating throw source appearing on this
+path, or the daemon Rust cutover giving the recording an error return instead
+of an exception — at which point recovery is a `Result` to handle rather than
+machinery to build.
+
+**And the verdict path must not be able to stop the strand.** `relay_wake`
+applies verdicts and then calls `arm()`, which re-arms the zone's wake timer.
+Before the producer nothing fallible sat in that gap. An exception escaping
+verdict application would skip `arm()` and stop the zone for the rest of the
+process — no fluff releases, no cadence, no epoch rolls — so
+`apply_carrier_verdicts` is `noexcept` and catches per verdict, the same trade
+every effect callback beside it already makes: a dropped relay is recoverable,
+a dead strand is not. Pinned by
+`a_throwing_verdict_does_not_stop_the_relay_strand`.
 
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 

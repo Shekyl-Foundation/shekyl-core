@@ -124,8 +124,9 @@ fn the_cap_stays_under_both_ceilings() {
     assert!(
         carrier::MAX_FRAGMENTS <= affords,
         "a {PROVISIONED_EPOCH_SECS} s epoch affords {affords} windows at the \
-         slowest cadence but the cap is {}; the remainder of a full-size \
-         message is discarded at every epoch roll (CV-1)",
+         slowest cadence but the cap is {}; a full-size message could not \
+         finish inside an epoch, and a roll that rebinds its slot would restart \
+         it from the first fragment (CV-1)",
         carrier::MAX_FRAGMENTS,
     );
 

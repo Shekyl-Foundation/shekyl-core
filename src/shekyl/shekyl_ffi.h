@@ -2975,6 +2975,7 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! sorted and de-duplicated by the zone (receive order is an observable). It
 //! becomes a single levin notification — delivered blob-by-blob it would become
 //! N notifications, leaking the batch size as a per-peer message count.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
 // ShekylRelayNoiseUnbindCb is DELETED, not kept as a souvenir (rule 15).
@@ -2991,6 +2992,7 @@ typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
 //! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
 //! connection scan. Must not throw across the FFI boundary.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
 //! Noise channel `channel` is due to send.
@@ -3031,8 +3033,75 @@ typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out
 //! never nil, since an unbound slot emits nothing (CV-2). The binding travels
 //! with the send (§20.3's inversion) rather than as a pushed slot array.
 //! `bytes` covers `len` readable bytes and is valid only for the call.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer,
                                        const std::uint8_t* bytes, std::size_t len);
+
+//! What became of a message handed to the carrier -- reported once, terminally.
+//!
+//! `token` is the value the enqueuer passed to
+//! `shekyl_relay_zone_noise_enqueue`; `sent` is true only when EVERY window of
+//! the message was ACCEPTED BY THE TRANSPORT.
+//!
+//! ACCEPTED, not acknowledged -- and the name `sent` is kept rather than
+//! renamed because it means here exactly what `send()` means everywhere in
+//! this tree. epee queues writes asynchronously: `connections::send` reports
+//! that the bytes were placed on a connection's write queue, not that they
+//! left the socket and not that a peer received them. A connection that fails
+//! after accepting them does not come back through this callback.
+//!
+//! So relay recording and the F-10 observation are charged on transport
+//! acceptance. That is the same basis every other relay path here records on,
+//! and a STRICTER one than the fluff arm: `on_fluff` never looks at its send
+//! result and `fluff_and_record` records before sending, while the carrier
+//! checks the `send` return and falls back to fluff when the transport
+//! refuses. Reporting true write completion would need a completion signal
+//! epee does not expose; it becomes expressible at the daemon transport
+//! cutover, where the write path is Rust-owned (`docs/FOLLOWUPS.md`).
+//!
+//! BOTH ARMS, AND THE FALSE ONE IS WHY THIS EXISTS. A completion signal alone
+//! leaves a caller waiting forever on a message the carrier discarded: an
+//! unbound channel clears its pending messages, so a transaction can leave the
+//! queue having never reached a peer. `sent == false` is that case, and it
+//! must be read as NOT RELAYED rather than as "not yet". The pool's `relayed`
+//! bit chooses an origin's re-broadcast backoff, and an origin given the
+//! derived interval for a discarded transaction waits ~1148 s for something
+//! that was never sent and will not be -- the swallow case that interval
+//! exists to rescue, defeated by the mechanism meant to help.
+//!
+//! WHY A COMPLETION SIGNAL AT ALL. `record_relayed` and the stem-watch
+//! observation fire where a send is KNOWN to have happened. An enqueue is not
+//! a send: the queue accepts a message and its windows go out later, at cadence
+//! ticks. Recording at enqueue claims a relay for a message that may never
+//! leave, and charges a stem observation to a peer that may never receive it --
+//! the channel rebinds on failure, so the successor is not known until the
+//! send.
+//!
+//! NOT A CV-4 BREACH, and the argument is the one that widened
+//! `ShekylRelayNoiseSendCb`. CV-4 forbids feeding the SCHEDULER
+//! traffic-dependent input; the cadence decides WHEN to emit and TO WHOM, and
+//! this reports what the cadence already did, after it did it -- downstream of
+//! both decisions, exactly like the send callback's own return. Nothing here is
+//! readable by the schedule. Stated because "a new export on the noise path" is
+//! what a reviewer will otherwise read as a breach.
+//!
+//! Must not throw across the FFI boundary.
+//! `peer` is the 16-byte connection id the message was sent to -- in the sense
+//! above, accepted by the transport for that connection -- or null on a
+//! discard. Reported rather than remembered: a channel binds to whatever
+//! its stem slot holds at send time, so the destination chosen when the
+//! transaction was enqueued may not be the one the send was bound to. Recording
+//! the enqueue-time peer would charge an F-10 observation to a node that never
+//! saw the transaction -- a wrong entry in the tallies, not a missing one.
+//!
+//! Unambiguous for a completed message because of CV-1: a rebind RESTARTS the
+//! run rather than resuming it, so every window of a message that finished
+//! went to one peer.
+//!
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll, which states
+//! the precondition once, for all four of its callbacks.
+typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
+                                             const std::uint8_t* peer);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
@@ -3250,9 +3319,9 @@ std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
 //! out_channel is the stem slot and is meaningful only when the carrier is
 //! noise (written 0 otherwise). Every out-param is written on the
 //! null-handle path so a mishandled NO_ROUTE cannot be read as a noise
-//! stem. Deliberately unused by production notify yet —
-//! COVER_TRAFFIC_RESTORATION.md §2.9 step 1; do not delete on a
-//! caller grep (§1.6).
+//! stem. `dandelionpp_notify` is its production caller as of 2026-08-29 —
+//! COVER_TRAFFIC_RESTORATION.md §3.1a. It stood unused before that, kept
+//! against a caller grep on §1.6's criteria, which still govern deletion.
 std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,
@@ -3273,10 +3342,22 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! outbound set is not passed in: `gather_outbound` is called back only when a
 //! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
 //! release never triggers the connection scan.
+//!
+//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all four of them, not only the
+//! newest. This function holds a mutable borrow of the zone for its whole
+//! body, and a second one of the carrier queue across the dispatch that
+//! delivers the effects. Calling any shekyl_relay_zone_*
+//! function on the same handle from inside gather_outbound, on_fluff,
+//! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
+//! which is undefined behaviour. Buffer whatever the callback learns and
+//! apply it after poll returns — the C++ producer did exactly this, recording
+//! a stem observation from the resolution callback, until review caught it.
+//! No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
                             ShekylRelayFluffCb on_fluff,
-                            ShekylRelayNoiseSendCb on_noise);
+                            ShekylRelayNoiseSendCb on_noise,
+                            ShekylRelayCarrierResolvedCb on_carrier_resolved);
 
 //! Hand the carrier ONE transaction to carry on `channel`; true if accepted.
 //!
@@ -3294,9 +3375,33 @@ void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void*
 //! defaults off), a framing failure, an unknown channel, or the queue's own
 //! rule (a whole number of windows, at most `carrier::MAX_FRAGMENTS` — the
 //! Rust-owned cap in `shekyl-relay-privacy`, which has no C macro mirror and
-//! deliberately so: one owner, not a constant to synchronise).
+//! deliberately so: one owner, not a constant to synchronise), or THE CHANNEL
+//! BEING FULL.
+//!
+//! That last one is the only refusal a caller can hit by doing nothing wrong,
+//! and it is the reason this list claims to be exhaustive rather than
+//! illustrative. A channel holds at most one epoch's worth of windows. That is
+//! a BACKLOG bound, not a delivery guarantee: the drain is one window per due
+//! tick, and nothing else empties the queue -- an epoch rollover redraws the
+//! stem map without touching it, so queued messages survive a roll. The cap is
+//! therefore the only thing standing between a node that stems faster than the
+//! cadence and unbounded growth, here and in the caller's token map. What it
+//! admits is delay: a message accepted behind a full channel waits up to about
+//! an epoch for the wire. A full channel means the carrier is saturated, not
+//! that the transaction is malformed -- send it by the ordinary wire, which is
+//! what the producer does.
+//! `token` is the caller's handle for this message, opaque to the carrier and
+//! returned verbatim through `ShekylRelayCarrierResolvedCb`. It is deliberately
+//! NOT a transaction hash: the queue holds framed bytes it cannot parse, which
+//! is what keeps the one-transaction rule enforceable and the size bound the
+//! enforcement point. A queue that could read the id would have a reason to
+//! look inside, and the next change would give it one.
+//!
+//! A `true` return means ACCEPTED, not sent. The message reaches the wire on
+//! later cadence ticks, and its fate arrives through the resolution callback.
 bool shekyl_relay_zone_noise_enqueue(RelayZoneHandle* handle, std::size_t channel,
-                                     const std::uint8_t* tx, std::size_t tx_len);
+                                     const std::uint8_t* tx, std::size_t tx_len,
+                                     std::uint64_t token);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    void* ctx, ShekylRelayFluffCb on_fluff);

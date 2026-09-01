@@ -83,7 +83,10 @@ public:
   virtual void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
-  bool pool_has_tx(const crypto::hash &txid) const { return false; }
+  /*! Already here for the protocol-handler shim, and now also the
+      `i_core_events` override — these fixtures never drive a carrier verdict,
+      so the stub's existing answer stands rather than being second-guessed. */
+  bool pool_has_tx(const crypto::hash &txid) const override { return false; }
   bool get_blocks(uint64_t start_offset, size_t count, std::vector<std::pair<cryptonote::blobdata, cryptonote::block>>& blocks, std::vector<cryptonote::blobdata>& txs) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const { return false; }
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
@@ -1051,6 +1054,7 @@ TEST(node_server, race_condition)
     struct core_events_t: cryptonote::i_core_events {
       uint64_t get_current_blockchain_height() const override { return {}; }
       bool is_synchronized() const override { return {}; }
+      bool pool_has_tx(const crypto::hash &) const override { return true; }
       void on_transactions_relayed(blobs_t blobs, relay_t relay, epee::net_utils::zone) override {}
       void on_stem_propagated(epee::span<const crypto::hash>) override {}
     };

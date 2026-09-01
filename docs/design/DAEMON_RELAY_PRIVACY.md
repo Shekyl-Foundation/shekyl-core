@@ -15185,6 +15185,41 @@ the answer to the question it is actually asking ("did the nudge miss?").
 `local_relay_base` carries the split, and the two 400 s test cases differ in
 `relayed` alone so the discriminant cannot drift.
 
+**A THIRD entry now wears `local` with `relayed == false`, and it arrives by a
+route neither of the other two describes.** *(2026-08-29, the carrier
+producer.)* A transaction handed to the covert carrier and then **discarded** —
+`unbind` clears a channel, so the message leaves the queue without reaching a
+peer — is recorded as nothing at all. `relayed` stays false and the entry takes
+`MIN_RELAY_TIME`.
+
+That is the right outcome and it is reached by a different argument than the
+other two, which is why it is written down rather than assumed to be covered.
+The unsent `insert_attested_tx` entry keeps the short grid because **no stem
+was ever launched**; the carrier discard keeps it because the carrier attempt
+was *abandoned before the message was ever accepted in full*, and nothing on
+the network holds the transaction either way. Same conclusion, different
+premise.
+
+*(Corrected 2026-09-01: this said "launched and then abandoned", which
+overstates what a discard implies. `unbind` drops a channel's whole backlog —
+messages behind the front were never offered to the transport at all, and only
+the front one may have had windows accepted. "Launched" is true of at most one
+of them.)*
+
+**So the 1148 s in this section is conditional on the send having happened, and
+the condition is new.** Item 3's derivation provisions for *"the stem was
+swallowed at hop 1"* — a stem that reached a peer and died there. A carrier
+discard cannot be that class: the complete transaction was never accepted by
+one transport run, so no peer can reassemble it as a valid stem. (Not the same
+as "never reached a peer" — epee reports acceptance into its write queue and
+nothing about receipt, so a partially accepted front message may well have put
+bytes on a socket. What is guaranteed is INCOMPLETE acceptance, and that is
+what makes reassembly impossible.) It must not draw that interval: waiting
+1148 s for a transaction no peer can hold is
+the swallow case inverted, with the origin doing the waiting for an event that
+cannot occur. Wherever this document says an origin re-broadcasts at 1148 s,
+read it as *an origin whose transaction was sent*.
+
 **The split is only as good as the bit, and the bit had a lying writer.**
 *(Found and fixed 2026-08-27.)* `dandelionpp_notify` called `record_relayed`
 **before** `make_payload_send_txs`, so `set_relayed` wrote `relayed = true` on
@@ -15472,7 +15507,7 @@ when §2.9 step 4 was expected to **wire** the carrier. It did not:
 | regime | what a hop costs | status |
 | --- | --- | --- |
 | **1 — ordinary encrypted transport** | one onion-to-onion traversal of a levin message on an established connection | **complete today.** D++ is live on every zone (§89), Tor is the transport, and no carrier is in the path. **Measurable now.** |
-| **2 — noise carrier** | regime 1 **plus** `fragments × cadence draw` | **does not exist end-to-end.** `NoiseQueues` has no caller. *(Corrected 2026-08-25: "until step 5" was wrong — the work does not wait on the cutover. Corrected again 2026-08-26: it is also not one call. FOUR pieces are missing — an owner for `NoiseQueues`, an enqueue path, the join for both of `Driver::poll`'s noise effects (`NoiseSend` → `take_for_send`, `NoiseUnbind` → `unbind`), and a widened `NoiseSendCb`, which today carries neither bytes out nor a send status back and so cannot resolve the non-destructive token. Three are Rust-internal; the fourth is a boundary change. **Corrected again 2026-08-27: three of those four are now BUILT — owner, join and widened callback — and the enqueue crossing exists. What remains is the crossing's PRODUCER, so a carrier zone emits dummies only and regime 2 still does not exist end to end. `COVER_TRAFFIC_RESTORATION.md` §3.1a.** `COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed "§2.9 step 2 — covert executor".)* |
+| **2 — noise carrier** | regime 1 **plus** `fragments × cadence draw` | **does not exist end-to-end.** `NoiseQueues` has no caller. *(Corrected 2026-08-25: "until step 5" was wrong — the work does not wait on the cutover. Corrected again 2026-08-26: it is also not one call. FOUR pieces are missing — an owner for `NoiseQueues`, an enqueue path, the join for both of `Driver::poll`'s noise effects (`NoiseSend` → `take_for_send`, `NoiseUnbind` → `unbind`), and a widened `NoiseSendCb`, which today carries neither bytes out nor a send status back and so cannot resolve the non-destructive token. Three are Rust-internal; the fourth is a boundary change. **Corrected again 2026-08-27: three of those four are now BUILT — owner, join and widened callback — and the enqueue crossing exists. What remains is the crossing's PRODUCER, so a carrier zone emits dummies only and regime 2 still does not exist end to end. `COVER_TRAFFIC_RESTORATION.md` §3.1a.** **SUPERSEDED 2026-08-29: the producer landed and regime 2 EXISTS end to end.** `dandelionpp_notify` consumes `plan_dispatch_with_refresh` and enqueues on the noise carrier, so a development-flag zone carries real transactions; the pool is told only when a terminal verdict says the transport accepted every window (acceptance, not receipt — `COVER_TRAFFIC_RESTORATION.md` §3.1d). `COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed "§2.9 step 2 — covert executor".)* |
 
 So regime 1 is measured and regime 2 is **arithmetic over the cadence
 constants**, not a second measurement. §91.6's rule — do not derive against a
@@ -15486,6 +15521,24 @@ carrier hop's added latency is an **input to `F′`**, never a reason to revisit
 transit **plus** the fragment/cadence term, additive, and it re-runs when the
 carrier gains a caller. A second covert-hop rule here would be a duplicate to
 synchronise.
+
+> **The caller landed 2026-08-29, so that trigger has fired — and it fires for
+> exactly one of the two quantities on this page.** Keeping them apart is the
+> point of this note.
+>
+> - **The LATENCY arithmetic above still stands as arithmetic.** Regime 2's hop
+>   is regime 1's measured transit plus the cadence term, and that sum does not
+>   become a measurement because a caller exists. §91.6's rule was about
+>   deriving against a mechanism that does not exist; the mechanism exists now,
+>   and the derivation is unchanged.
+> - **The BANDWIDTH measurement is newly owed and is a different quantity.**
+>   `COVER_TRAFFIC_RESTORATION.md` §3.1c pre-registers it: actual bytes on the
+>   wire against the per-node ceiling, with the expected divergences and the
+>   bar for a real defect named before the first reading. It is a FOLLOWUPS
+>   item and the condition on the ~42 GB/month budget's provisional sign-off.
+>
+> Conflating them would read this section as owing a re-derivation it does not
+> owe, or as discharging a measurement it never covered.
 
 ### 94.2 The five degrees of freedom, frozen
 

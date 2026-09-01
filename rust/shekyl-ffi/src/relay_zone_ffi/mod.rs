@@ -64,8 +64,8 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, NoiseQueues,
-    RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch, FluffReach,
+    NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -154,6 +154,54 @@ pub type NoiseSendCb = extern "C" fn(
     bytes: *const u8,
     len: usize,
 ) -> bool;
+
+/// What became of a message handed to the carrier — reported once, terminally.
+///
+/// `token` is the value the enqueuer minted; `sent` is true only when every
+/// window of the message was accepted by the transport — see
+/// [`shekyl_relay::CarrierOutcome`] for why that is acceptance and not
+/// acknowledgement.
+///
+/// # Both arms, and the false one is why this exists
+///
+/// A completion signal alone leaves the caller waiting forever on a message
+/// the carrier discarded (`NoiseQueues::unbind` clears a channel). `sent =
+/// false` is that case, and the caller must read it as **not relayed** rather
+/// than as "not yet": the pool's `relayed` bit chooses an origin's backoff,
+/// and an origin given the derived interval for a discarded transaction waits
+/// it out for something that was never sent.
+///
+/// # This is NOT a CV-4 breach, and the argument is the one that widened
+/// [`NoiseSendCb`]
+///
+/// CV-4 forbids feeding the SCHEDULER traffic-dependent input. The barrier is
+/// that the cadence decides *when* to emit and *to whom*; this reports what
+/// the cadence already did, after it did it — downstream of both decisions,
+/// exactly like `NoiseSend::sent` / `::failed`, which resolve a send the
+/// scheduler had already chosen. Nothing here is readable by the schedule.
+///
+/// Stated here rather than left to be re-derived, because "a new FFI export on
+/// the noise path" is what a future reviewer will read as a breach without the
+/// argument in front of them.
+///
+/// # Contract for an implementer
+///
+/// - `peer` covers **16 readable bytes** when `sent` is true, and is **null**
+///   when it is false: a discarded message has no successor to charge. Read it
+///   only on the `sent` arm, and only for the duration of the call.
+/// - `token` is the value the enqueuer minted, returned verbatim. The queue
+///   never interprets it.
+/// - **Must not unwind** across the boundary, and **must not re-enter the
+///   handle** — see [`shekyl_relay_zone_poll`], which holds `&mut` on the zone
+///   and a second borrow of the carrier queue for the whole call. Buffer what
+///   this reports and act on it after `poll` returns.
+///
+/// The C header states the same contract for a C implementer
+/// (`ShekylRelayCarrierResolvedCb` in `shekyl_ffi.h`); the two doc systems
+/// cannot reference each other, which is the boundary that earns the second
+/// copy.
+pub type CarrierResolvedCb =
+    extern "C" fn(ctx: *mut c_void, token: u64, sent: bool, peer: *const u8);
 
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
@@ -299,6 +347,7 @@ fn dispatch(
     ctx: *mut c_void,
     fluff: FluffCb,
     noise: NoiseSendCb,
+    resolved: CarrierResolvedCb,
     queues: Option<&mut NoiseQueues>,
 ) {
     let mut queues = queues;
@@ -338,18 +387,18 @@ fn dispatch(
                 // fragment; `failed` RESTARTS the channel — offset and binding
                 // cleared, epoch bumped — so a multi-window message resumes
                 // from its first fragment rather than its current one. A
-                // half-delivered message must not be finished to a different
+                // partly sent message must not be finished to a different
                 // successor, and the queue cannot know how much of it the
-                // failed send reached the wire with.
+                // failed send was accepted with.
                 let bytes = send.bytes();
-                let delivered = noise(
+                let accepted = noise(
                     ctx,
                     channel,
                     peer.as_bytes().as_ptr(),
                     bytes.as_ptr(),
                     bytes.len(),
                 );
-                if delivered {
+                if accepted {
                     send.sent(q);
                 } else {
                     send.failed(q);
@@ -375,12 +424,46 @@ fn dispatch(
             }
         }
     }
+
+    // Drained ONCE, after every effect, because both arms can produce an
+    // outcome: `sent` completes a message and `unbind` discards whatever a
+    // channel still held. Draining inside the send arm would report
+    // completions and miss discards.
+    if let Some(q) = queues {
+        for outcome in q.take_resolved() {
+            // The peer travels with the verdict because the enqueuer cannot
+            // know it: a channel binds to whatever its slot holds at send
+            // time. Null on a discard — there is no successor to charge.
+            match outcome.peer() {
+                Some(peer) => resolved(
+                    ctx,
+                    outcome.token().0,
+                    outcome.was_sent(),
+                    peer.as_bytes().as_ptr(),
+                ),
+                None => resolved(
+                    ctx,
+                    outcome.token().0,
+                    outcome.was_sent(),
+                    core::ptr::null(),
+                ),
+            }
+        }
+    }
+}
+
+/// A placeholder for the exports that hold no carrier queue, and so can
+/// resolve nothing. `force_fluff` passes `None` for the queue, so `dispatch`
+/// never reaches the drain — this exists to make that unreachability explicit
+/// rather than to be called.
+extern "C" fn noop_carrier_resolved(_ctx: *mut c_void, _token: u64, _sent: bool, _peer: *const u8) {
+    debug_assert!(false, "force_fluff resolved a carrier message");
 }
 
 /// A placeholder for the exports that cannot produce a `NoiseSend`.
 /// `force_fluff` releases batches and can produce neither covert variant;
 /// reaching this is a dispatch bug, so it asserts in debug rather than failing
-/// silently, and reports "not delivered" so no token is ever resolved by it.
+/// silently, and reports "not accepted" so no token is ever resolved by it.
 extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8, _: *const u8, _: usize) -> bool {
     debug_assert!(false, "force_fluff produced a NoiseSend effect");
     false
@@ -590,7 +673,12 @@ pub extern "C" fn shekyl_relay_zone_new(
         let Ok(dummy) = shekyl_levin::noise_notify(carrier::WINDOW_BYTES) else {
             return core::ptr::null_mut();
         };
-        let Some(q) = NoiseQueues::new(stems, dummy) else {
+        // The budget is what ONE EPOCH can deliver on a channel — a backlog
+        // bound, since nothing drains the queue at a roll. It is the only
+        // bound there is, and the caller's identity map grows behind it, so
+        // the epoch is the argument that sizes both. See `window_budget`.
+        let budget = carrier::noise_windows_in_epoch(min_epoch_secs) as usize;
+        let Some(q) = NoiseQueues::new(stems, dummy, budget) else {
             // Same refusal channel as `Zone::new` above: a null handle.
             return core::ptr::null_mut();
         };
@@ -622,11 +710,19 @@ pub extern "C" fn shekyl_relay_zone_new(
 ///   off, and the one most likely to be misread as a fragment-size violation;
 /// - serialising or framing the notification failed;
 /// - the queue refused it: no such `channel`, or the framed message is not a
-///   whole number of windows / exceeds `carrier::MAX_FRAGMENTS`.
+///   whole number of windows / exceeds `carrier::MAX_FRAGMENTS`;
+/// - **the channel is FULL** — it already holds an epoch's worth of windows.
 ///
-/// A single boolean is kept deliberately: none of these is recoverable by the
-/// caller, and a status enum would invite branching on a distinction that
-/// only matters to a developer reading a log.
+/// That last one is the only refusal reachable by doing nothing wrong. The
+/// others are caller bugs or a transaction the carrier structurally cannot
+/// take; this one means the carrier is saturated, and the answer is the
+/// ordinary wire — which is what the producer does.
+///
+/// A single boolean is still kept deliberately, but NOT because "none of
+/// these is recoverable", which is what this said before the budget existed
+/// and is no longer true. It is kept because the caller's recovery is the
+/// same for all of them: send it the ordinary way. A status enum would invite
+/// branching on a distinction that changes nothing the caller does.
 ///
 /// # One transaction per notification, made unrepresentable
 ///
@@ -654,6 +750,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
     channel: usize,
     tx: *const u8,
     tx_len: usize,
+    token: u64,
 ) -> bool {
     if handle.is_null() || tx.is_null() || tx_len == 0 {
         return false;
@@ -695,7 +792,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
     else {
         return false;
     };
-    q.enqueue(channel, framed)
+    q.enqueue(channel, framed, CarrierToken(token))
 }
 
 /// Free a zone. Null is a no-op; free exactly once.
@@ -1308,14 +1405,17 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 /// ordinary carrier rather than left untouched, so a caller cannot read a stale
 /// slot from a previous call.
 ///
-/// # This entry point deliberately has NO production caller yet
+/// # Its production caller landed 2026-08-29
 ///
-/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split lands the decision half
-/// first; the C++ covert branch is restructured to consume it in a following
-/// change (`COVER_TRAFFIC_RESTORATION.md` §2.1 stages 2–3). **Do not delete
-/// this as unused** — it is the seam that restructure lands against, and the
-/// audit at `COVER_TRAFFIC_RESTORATION.md` §1.6 states the conditions under
-/// which the cover mechanism may be removed, none of which is a caller grep.
+/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split landed the decision half
+/// first, and this entry point stood without a caller until then — kept
+/// deliberately, because the audit at `COVER_TRAFFIC_RESTORATION.md` §1.6
+/// states the conditions under which the cover mechanism may be removed and
+/// none of them is a caller grep.
+///
+/// `dandelionpp_notify` is that caller now: it consumes this plan and enqueues
+/// on `SHEKYL_RELAY_CARRIER_NOISE` instead of sending directly
+/// (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
@@ -1502,6 +1602,21 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 /// call. `gather_outbound` must honour the [`OutboundCb`] contract: on return,
 /// its pointer covers `*out_n * 16` readable bytes (or is null with `*out_n`
 /// zero), valid until this call returns, and it must not unwind.
+///
+/// **NO CALLBACK MAY RE-ENTER THIS HANDLE.** This function holds
+/// `&mut RelayZoneHandle` for its whole body — and a mutable borrow of the
+/// carrier queue across `dispatch` — while it invokes every callback. Calling
+/// any `shekyl_relay_zone_*` function on the same handle from inside one
+/// constructs a second `&mut` aliasing those live borrows, which is undefined
+/// behaviour. It applies to **all four**, not only the newest: buffer whatever
+/// the callback learns and act on it after this returns.
+///
+/// Stated on both sides of the boundary deliberately: a Rust caller reads this
+/// section, a C caller reads `shekyl_relay_zone_poll` in `shekyl_ffi.h`, and
+/// neither doc system can reference the other — the FFI boundary is the
+/// uncrossable one that earns a second copy. Both must name all four
+/// callbacks. The C++ producer did exactly this, recording a stem observation
+/// from the resolution callback, until review caught it.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,
@@ -1510,6 +1625,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_noise: NoiseSendCb,
+    on_carrier_resolved: CarrierResolvedCb,
 ) {
     if handle.is_null() {
         return;
@@ -1527,7 +1643,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_noise, h.noise.as_mut());
+    dispatch(
+        effects,
+        ctx,
+        on_fluff,
+        on_noise,
+        on_carrier_resolved,
+        h.noise.as_mut(),
+    );
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -1547,7 +1670,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_noise, None);
+    dispatch(
+        effects,
+        ctx,
+        on_fluff,
+        noop_noise,
+        noop_carrier_resolved,
+        None,
+    );
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives. No

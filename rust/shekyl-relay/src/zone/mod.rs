@@ -10,8 +10,11 @@
 //! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
 //! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
 //! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
-//! C++ is transport until step 5; it cannot enable the carrier. A
-//! transaction body is still an opaque blob here. See
+//! C++ is transport, and since the 2026-08-27 development opt-in it CAN
+//! enable the carrier — `make_relay_zone` sets the noise bit when
+//! `set_carrier_development(true)`. It remains transport only: Rust decides
+//! whether and when channels fire. A transaction body is still an opaque blob
+//! here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
@@ -117,8 +120,9 @@ pub enum ZoneNewError {
         /// The stem/channel count that was requested.
         got: usize,
     },
-    /// The epoch cannot carry a full-size message, so the message can never
-    /// arrive: CV-1 discards the in-flight remainder at every epoch roll.
+    /// The epoch cannot carry a full-size message, so the message may never
+    /// arrive: it cannot finish within one epoch, and any roll that hands its
+    /// slot to a different peer restarts it from the first fragment (CV-1).
     ///
     /// Budget is [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
@@ -144,7 +148,8 @@ impl fmt::Display for ZoneNewError {
             Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
                 f,
                 "noise epoch carries {affords} windows but a full message needs \
-                 {needs}; the remainder is discarded at every epoch roll"
+                 {needs}; a roll that rebinds the slot restarts it from the first \
+                 fragment, so it may never finish"
             ),
         }
     }
@@ -312,8 +317,9 @@ pub struct Zone {
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
     /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
-    /// double duty as its own enable flag. C++ still holds the payload buffers;
-    /// Rust owns *whether* and *when* channels fire.
+    /// double duty as its own enable flag. The payload buffers moved to
+    /// [`crate::NoiseQueues`] with the executor port, as this module's own
+    /// header says; Rust owns the buffers, *whether* and *when*.
     noise: NoiseSchedule,
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
@@ -359,8 +365,9 @@ impl Zone {
     /// that transport is a parameter, not a topology, and handing the
     /// scheduler the overlay identity would recouple the axes this type exists
     /// to keep apart. The FFI derives params, reach, and secrecy from one
-    /// discriminant at the adapter; a carrier caller, once one is built, would
-    /// do the same. None exists today — see `Self::new`'s refusal notes.
+    /// discriminant at the adapter; the carrier caller does the same — it
+    /// exists as of 2026-08-29, and hits `Self::new`'s refusal notes because
+    /// it forms the pair in Rust.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
@@ -368,8 +375,9 @@ impl Zone {
     /// compiles out in release and therefore let the mismatched zone be
     /// built in exactly the configuration that ships.
     ///
-    /// **A noise epoch must carry a full-size message** — otherwise CV-1
-    /// discards the remainder at every roll. The budget is
+    /// **A noise epoch must carry a full-size message** — otherwise it cannot
+    /// finish inside one epoch, and any roll that rebinds its slot restarts it
+    /// from the first fragment (CV-1), so it may never arrive. The budget is
     /// [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
     /// this is a refusal rather than a `const` assertion.
@@ -384,12 +392,11 @@ impl Zone {
     /// defaults off, so no SHIPPED construction hits these. Tests and
     /// development builds do.
     ///
-    /// The carrier's executor, join and boundary are built; what is still
-    /// missing is the enqueue crossing's PRODUCER — nothing calls
-    /// `shekyl_relay_zone_noise_enqueue`, so a carrier zone emits dummies
-    /// only. When that producer is built it will hit these refusals,
-    /// because it forms the pair in Rust and stops routing it through
-    /// `make_relay_zone` — which is why the checks are here and not at the
+    /// The carrier is complete as of 2026-08-29 — executor, join, boundary,
+    /// enqueue crossing and its producer — so a development-flag zone carries
+    /// real transactions rather than dummies alone. The producer hits these
+    /// refusals, because it forms the pair in Rust and does not route it
+    /// through `make_relay_zone` — which is why the checks are here and not at
     /// FFI edge. Building it is not the daemon cutover's to provide
     /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
     /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps

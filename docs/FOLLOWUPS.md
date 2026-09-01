@@ -626,6 +626,18 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
+- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
+- **Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.** The verdict-time `pool_has_tx` gate stops the record and the F-10 observation, but the verdict arrives only on completion, so a transaction mined before its first tick emits all of its windows: `MAX_FRAGMENTS` (5) × `WINDOW_BYTES` (20 480). An earlier entry said "one wasted window", understating it by the fragment cap. Named blocker: cancelling earlier needs an enqueue-cancellation API `NoiseQueues` does not have, and `unbind` clears a whole channel, so cancelling one message would discard its channel-mates. Bounded per transaction rather than per epoch, and it is cover carrying something peers already hold. Reopen if another caller needs cancellation, or if the §3.1c bandwidth measurement shows mined-while-queued traffic is a material share [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
+- **Relay: the carrier's pool gates NARROW the false-`Silent` window but cannot close it.** `pool_has_tx` releases the txpool lock before returning, so a removal between the second check and `record_stem` still arms an F-10 observation for an absent transaction. Named blocker: closing it needs the txpool to cancel in-flight observations on removal, or `StemWatch::expire` to re-ask membership before counting a `Silent` — the better place, since expiry is where the `Silent` is decided — and both are new plumbing across the FFI into the layer the daemon cutover replaces. Latent: §12.11, the tier that reads these tallies, is unbuilt. The ordinary stem arm does not check at all, so the carrier is the only path that narrows it. Reopen when §12.11 becomes real, or at the cutover [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
+- **Relay: a carrier verdict of `sent` means the transport ACCEPTED the bytes, not that they reached a peer.** `connections::send` queues an asynchronous write, so a socket failing after acceptance still resolves `CarrierOutcome::Sent` and charges the relay record and the F-10 observation. Named blocker: epee exposes no write-completion signal, and adding one thickens inherited C++ directly beneath the layer the daemon Rust cutover replaces (`20-rust-vs-cpp-policy`); socket completion would still not be peer receipt. Reopen at that cutover, where the write path is Rust-owned. Contracts state the gap today, and the exposure is latent — §12.11, the consumer of those tallies, is unbuilt [`COVER_TRAFFIC_RESTORATION.md` §3.1d](design/COVER_TRAFFIC_RESTORATION.md)
+  - Target: pre-genesis
+
 - **§56.5 ruled the cadence memoryless; the shipped law is still bounded uniform, and nothing tracked it.** Carries §57's three exits and §58.2's admission threshold `θ`, both priced at the retired 12.5 s mean [`DAEMON_RELAY_PRIVACY.md` §56.7](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
