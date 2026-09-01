@@ -183,6 +183,23 @@ pub type NoiseSendCb = extern "C" fn(
 /// Stated here rather than left to be re-derived, because "a new FFI export on
 /// the noise path" is what a future reviewer will read as a breach without the
 /// argument in front of them.
+///
+/// # Contract for an implementer
+///
+/// - `peer` covers **16 readable bytes** when `sent` is true, and is **null**
+///   when it is false: a discarded message has no successor to charge. Read it
+///   only on the `sent` arm, and only for the duration of the call.
+/// - `token` is the value the enqueuer minted, returned verbatim. The queue
+///   never interprets it.
+/// - **Must not unwind** across the boundary, and **must not re-enter the
+///   handle** — see [`shekyl_relay_zone_poll`], which holds `&mut` on the zone
+///   and a second borrow of the carrier queue for the whole call. Buffer what
+///   this reports and act on it after `poll` returns.
+///
+/// The C header states the same contract for a C implementer
+/// (`ShekylRelayCarrierResolvedCb` in `shekyl_ffi.h`); the two doc systems
+/// cannot reference each other, which is the boundary that earns the second
+/// copy.
 pub type CarrierResolvedCb =
     extern "C" fn(ctx: *mut c_void, token: u64, sent: bool, peer: *const u8);
 

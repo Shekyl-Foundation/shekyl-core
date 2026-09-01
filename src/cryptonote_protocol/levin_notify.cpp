@@ -1154,10 +1154,16 @@ namespace levin
           catch (const std::exception& e)
           {
             /* The pending record is already gone and the verdict is already
-               drained on the Rust side, so this transaction is stranded: an
-               origination falls back to the pool's own short-grid retry, but a
-               forwarded stem keeps `time_t::max()` and will not be offered
-               again. Loud and named, because nothing downstream can see it. */
+               drained on the Rust side, so nothing here can retry.
+
+               AN ORIGINATION IS FINE: `relayed` stays false, and the pool
+               re-offers it at MIN_RELAY_TIME. A FORWARDED STEM IS NOT — its
+               `last_relayed_time` is still `time_t::max()` from admission, and
+               only `set_relayed` ever replaces it, so this node will not offer
+               it again before it expires from the pool. That is a real loss
+               and it is not recoverable from here; see §3.1e for why the
+               answer is not to retain the record, and for the protocol-level
+               backstop that bounds the damage. */
             MERROR("LOST a carrier verdict for token " << v.token << ": " << e.what()
                    << " — that transaction is now unrecorded, and a forwarded "
                       "stem among them is stranded until it expires from the pool");
@@ -1283,7 +1289,32 @@ namespace levin
 
                Scanned rather than tracked in a second container: the map is
                bounded by the channel budget and a parallel index is a
-               duplicate that can disagree with it. */
+               duplicate that can disagree with it.
+
+               WHY CHECKING ONLY HERE IS ENOUGH, since this arm is the noise
+               one and the ordinary arms below never consult the map. Three
+               premises, named because each is a thing a later edit could
+               remove without touching this file:
+
+                 1. RD-4 — `!fluffing || local_origin`, in `Zone::plan_relay`.
+                    An origination plans STEM even in a fluff epoch, so a
+                    `local` re-offer always arrives HERE rather than at the
+                    fluff arm. Weaken RD-4 and a carrier-held origination can
+                    reach the wire twice.
+                 2. A forwarded stem is never re-offered while the carrier
+                    holds it: admission stamps `last_relayed_time` with
+                    `time_t::max()` and `get_relayable_transactions` skips a
+                    future stamp, so only the origination class can come back
+                    at all.
+                 3. `to_send = std::move(refused)` below. A transaction the
+                    carrier owns is dropped from the batch rather than
+                    refused, so it reaches neither the stem arm, nor the
+                    NoRoute re-plan (which uses `plan_relay` and has no
+                    carrier), nor the fluff arm.
+
+               The one state that would defeat all three is `carrier_for`
+               returning Ordinary for a STEM plan on a noise zone, which is
+               map corruption its own `debug_assert` calls impossible. */
             const auto already =
               std::find_if(zone_->carrier_pending_by_token.begin(),
                            zone_->carrier_pending_by_token.end(),

@@ -1236,6 +1236,38 @@ cover carrying a transaction peers already hold and will drop, which is
 exactly what cover traffic is for. Reopening criterion: a cancellation API
 becomes worth building if some other caller needs one — not for this.
 
+**A throw during verdict application strands a forwarded stem, and retaining
+the record does not fix that (2026-09-01).** Review proposed keeping an
+extractable pending node until application succeeds. Taken literally that is
+strictly worse: nothing re-drives a verdict — the terminal outcome is already
+drained on the Rust side and never reported twice — so the retained node is
+never revisited, and the dedup scan then hides the txid from every later offer
+while leaking its blob. Stranding plus a leak, in place of stranding.
+
+The version that WOULD recover is a retry list re-driven on a later wake. It is
+rejected here, with the ground stated so a future reader can reopen it rather
+than re-derive it:
+
+- The only C++ throw source left on that path is `on_transactions_relayed`
+  itself, since the allocation we own is now made before the erase. A retry is
+  therefore a retry of the thing that just failed, under the memory pressure
+  that made it fail.
+- The class that suffers is a FORWARDED stem — a transaction this node received
+  from a peer. Failing to forward it is precisely the case Dandelion++'s
+  embargo exists for: the originator's timer fires and fluffs, so the
+  transaction reaches the network by the route the protocol already provisions
+  for a stem node that goes away. An ORIGINATION is unaffected — `relayed`
+  stays false and the pool re-offers at `MIN_RELAY_TIME`.
+- Our own node draws no embargo for it, because `set_relayed` is what draws
+  one; the entry sits until it expires from the pool. That is the honest cost,
+  and it is a liveness contribution rather than a correctness or privacy
+  failure.
+
+Reopening criterion: a second, non-allocating throw source appearing on this
+path, or the daemon Rust cutover giving the recording an error return instead
+of an exception — at which point recovery is a `Result` to handle rather than
+machinery to build.
+
 **And the verdict path must not be able to stop the strand.** `relay_wake`
 applies verdicts and then calls `arm()`, which re-arms the zone's wake timer.
 Before the producer nothing fallible sat in that gap. An exception escaping

@@ -509,12 +509,13 @@ namespace
             about what happens when its verdict arrives. */
         bool carrier_accepts(cryptonote::levin::notify& notifier,
                              const std::vector<cryptonote::blobdata>& txs,
+                             const cryptonote::relay_method method = cryptonote::relay_method::stem,
                              const unsigned max_rolls = 64)
         {
             for (unsigned rolls = 0; rolls < max_rolls; ++rolls)
             {
                 auto context = contexts_.begin();
-                if (!notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem))
+                if (!notifier.send_txs(txs, context->get_id(), method))
                     return false;
                 io_service_.restart();
                 io_service_.poll();
@@ -3213,6 +3214,79 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
            "otherwise, and more than one means it was sent twice";
 }
 
+/*! **A successfully carried ORIGIN is recorded `local`, not `stem`.**
+
+    The class an origination keeps is not the class the wire used, and the two
+    diverge exactly here: `originated_stays_in_zone` decides what the pool is
+    told, while the carrier stems on the wire regardless. §30.5 forbids the
+    in-zone backstop reaching clearnet, and the `local` record is what keeps it
+    in zone.
+
+    Written because the SUCCESS arm of that branch had no coverage. Every other
+    carrier case sends `stem`, and the one `local` case forces a discard — so a
+    regression recording a carried origin as `stem` stayed green in all of
+    them. This arc has already produced that exact defect once, when
+    `originated_stays_in_zone` was handed the wire's method instead of the
+    caller's, which would have stripped the pin off every carrier-borne
+    origination.
+
+    What edit reds this: pass `relay_method::stem` rather than
+    `pending.requested` to `originated_stays_in_zone` in
+    `apply_one_carrier_verdict`, or drop the conditional and record `stem`. */
+TEST_F(levin_notify, a_carried_origin_is_recorded_local_and_observed)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    cryptonote::transaction tx{};
+    tx.unlock_time = 17;
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+
+    /* An ORIGINATION, which RD-4 stems even in a fluff epoch, so it reaches
+       the carrier arm the same way a forwarded stem does. */
+    ASSERT_TRUE(carrier_accepts(notifier, txs, cryptonote::relay_method::local))
+        << "the carrier never took the origination";
+
+    const std::size_t stem_before = notifier.stem_in_flight();
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+
+    ASSERT_NE(0u, events_.relayed_method_size())
+        << "the carrier never told the pool about the origination";
+    EXPECT_FALSE(events_.has_stem_txes())
+        << "a carried ORIGIN must be recorded `local`: the wire stems it, but "
+           "the pool class is what keeps the backstop in zone (§30.5), and "
+           "recording `stem` strips that pin off every carrier-borne "
+           "origination";
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local))
+        << "the pool was told about a different transaction";
+
+    EXPECT_GT(notifier.stem_in_flight(), stem_before)
+        << "an origination still stems ON THE WIRE, so its successor is still "
+           "an F-10 subject — the `local` record is a pool class, not a "
+           "statement that nothing was sent";
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
+
 /*! **A verdict for a transaction the pool has dropped records NOTHING.**
 
     The carrier is the first relay path that can accept a transaction and send
@@ -3283,9 +3357,17 @@ TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothin
     is what re-arms the wake timer. Before the producer there was nothing
     fallible in that gap; `apply_carrier_verdicts` put something there, and an
     exception escaping it would skip `arm()` and stop the zone for the rest of
-    the process — no fluff releases, no cadence, no epoch rolls. Losing one
-    verdict is recoverable and losing the timer is not, which is why the
-    dispatcher is `noexcept` and catches per verdict.
+    the process — no fluff releases, no cadence, no epoch rolls. That is why
+    the dispatcher is `noexcept` and catches per verdict.
+
+    **What this test does NOT claim.** An earlier draft said losing a verdict
+    was recoverable. It is not, for one class: a FORWARDED stem whose recording
+    threw keeps `time_t::max()` and this node will not offer it again before it
+    expires from the pool. The trade is still right — a dead strand loses every
+    transaction on the zone, not one — but the losing side is a real loss, and
+    §3.1e carries why retaining the record does not recover it. What is
+    asserted below is exactly the timer's survival, nothing about the
+    transaction that threw.
 
     The injected throw comes from `on_transactions_relayed`, which is a real
     throw site: it allocates while parsing.
