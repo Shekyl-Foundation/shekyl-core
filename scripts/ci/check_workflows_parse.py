@@ -64,7 +64,6 @@ class StrictLoader(yaml.SafeLoader):
 
 def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
     mapping: dict = {}
-    seen: set = set()
     for key_node, value_node in node.value:
         # `<<` is refused rather than modelled. Two review rounds asserted
         # opposite things about whether Actions honours merge keys, nothing
@@ -91,20 +90,25 @@ def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = Fa
                 "found a non-scalar key",
                 key_node.start_mark,
             )
-        # Duplicates are judged on the key as WRITTEN, not on the Python
-        # object it constructs to. YAML 1.1 collapses `on`, `yes` and `true`
-        # onto one boolean, so comparing constructed keys would reject
-        # `{on: a, yes: b}` — two distinct names to Actions — as a duplicate.
-        spelling = (key_node.tag, key_node.value)
-        if spelling in seen:
+        # Keys are kept as WRITTEN rather than as PyYAML constructs them.
+        # Actions reads a mapping key as text; YAML 1.1 does not, and
+        # collapses `on`, `yes` and `true` onto one boolean while making
+        # `1` equal to it. Constructing keys therefore both rejects valid
+        # documents (`{on: a, yes: b}` is two names to Actions, one to
+        # PyYAML) and loses whole entries silently (`on: push` followed by
+        # `1: schedule` leaves only the latter, so the trigger this gate
+        # validates is not the trigger that was written). Using the
+        # spelling removes that entire class rather than patching its
+        # instances, and makes bare `on:` and quoted `"on":` collide here
+        # as the one redefined key Actions sees.
+        key = key_node.value
+        if key in mapping:
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
-                f"found duplicate key {key_node.value!r}",
+                f"found duplicate key {key!r}",
                 key_node.start_mark,
             )
-        seen.add(spelling)
-        key = loader.construct_object(key_node, deep=deep)
         mapping[key] = loader.construct_object(value_node, deep=deep)
     return mapping
 
@@ -133,17 +137,6 @@ def _nonempty_str(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
-def _trigger_keys(doc: dict) -> list:
-    """The keys spelling this workflow's trigger.
-
-    Bare `on:` resolves to boolean ``True`` under YAML 1.1 and the quoted
-    form to the string. Selected by identity, not membership: Python hashes
-    ``True`` and ``1`` alike, so `True in doc` also answers yes to a document
-    whose only such key is a literal ``1:`` — a workflow with no trigger at
-    all, which is precisely what this gate must not pass.
-    """
-    return [k for k in doc if k is True or (isinstance(k, str) and k == "on")]
-
 
 def check_one(path: str, doc: object) -> list[str]:
     """Structural checks for a parsed document. Returns problem strings.
@@ -166,19 +159,16 @@ def check_one(path: str, doc: object) -> list[str]:
     # rejecting its absence would fail a workflow Actions accepts, which the
     # rule above forbids.
 
-    # Both spellings at once are one trigger defined twice: distinct keys to
-    # PyYAML, so the duplicate-key loader cannot see them, and a redefinition
-    # to Actions.
-    trigger_keys = _trigger_keys(doc)
-    if len(trigger_keys) > 1:
-        problems.append(f"{path}: `on:` given twice (bare and quoted)")
-    elif not trigger_keys:
+    # Keys arrive as written, so the trigger is `on` whether it was quoted or
+    # not, and a second spelling of it is a duplicate the loader has already
+    # refused.
+    if "on" not in doc:
         problems.append(f"{path}: no `on:` trigger block")
     else:
         # An empty trigger is this gate's own subject, not schema pedantry:
         # a workflow with nothing to start it never runs and never reports a
         # check, which is the silent disarm the gate exists to catch.
-        trigger = doc[trigger_keys[0]]
+        trigger = doc["on"]
         if not trigger or not isinstance(trigger, (str, list, dict)):
             problems.append(f"{path}: `on:` has no triggers")
 
