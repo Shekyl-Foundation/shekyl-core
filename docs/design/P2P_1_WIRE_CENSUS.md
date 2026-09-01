@@ -336,8 +336,22 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 
 | ID | Commitment | Evidence | Class | B | Disposition candidate |
 | --- | --- | --- | --- | --- | --- |
-| PWC-F1 | `network_address_old` (`ip`, `port`) has **no caller** outside `debug_utilities/object_sizes.cpp` — a pre-typed-address fossil | `p2p_protocol_defs.h:58-67`; only refs `object_sizes.cpp:91-92` | `—` | **3** | Rule 60 names pre-genesis dead-branch removal; deletion candidate for P2P-2 |
-| PWC-F2 | `connection_entry_base` / `connection_entry` has **zero callers tree-wide** — no producer, no consumer, not even the size printer. Plausibly stranded when RK-5a deleted `connection_info` / `get_connections()` | `p2p_protocol_defs.h:114-133`; tree-wide grep returns only the definition | `—` | **3** | Deletion candidate; the RK lane should confirm it is RK-5a's residue |
+| PWC-F1 | `network_address_old` (`ip`, `port`) has **no caller** outside `debug_utilities/object_sizes.cpp` — a pre-typed-address fossil. Its last real caller died in `df6179b6c` *"p2p: remove backward compatible peer list"*, a lineage-era commit | `p2p_protocol_defs.h:58-67`; only refs `object_sizes.cpp:91-92` | `—` | **3** | Rule 60 dead-branch removal. Delete the two `object_sizes.cpp` lines with it or the debug build breaks |
+| PWC-F2 | `connection_entry_base` / `connection_entry` has **zero callers tree-wide** — no producer, no consumer, not even the size printer | `p2p_protocol_defs.h:114-133`; tree-wide grep returns only the definition; last caller removed in `68ba2887c` *"p2p: remove old debug commands"* (2020-03-20) | `—` | **3** | Rule 60 dead-branch removal, **p2p-lane** work |
+
+**Provenance checked, and it refuted this census's first guess.** An earlier
+draft of PWC-F2 supposed the struct was stranded when RK-5a deleted
+`connection_info` / `get_connections()`. `git log -S` puts the last caller's
+removal at `68ba2887c` (2020-03-20) and `git show d468625e0` never mentions
+`connection_entry` at all, so **RK-5a did not strand it: both structs have
+been dead since the Monero lineage**, inherited that way and carried ever
+since. The correction matters for routing as much as for accuracy — these are
+rule-60 inherited-dead removals belonging to whoever owns
+`p2p_protocol_defs.h`, not residue of the RPC cutover, and sending them to
+the RK lane on the strength of the guess would have put them in a PR whose
+validation surface has nothing to do with them. Recorded rather than quietly
+amended, because "no callers, therefore *this* change killed it" is a
+hypothesis that needs `git log -S` before it is written down as a cause.
 | PWC-F3 | `network_config`'s KV map is **never sent** — the struct is local config (`net_node.h:313`). Latent, and it would advertise `packet_max_size = P2P_DEFAULT_PACKET_MAX_SIZE = 50 MB` while the **enforced** limit is `LEVIN_DEFAULT_MAX_PACKET_SIZE = 100 MB` — a 2× disagreement that is harmless only because nothing serializes it | `p2p_protocol_defs.h:152-170`; `cryptonote_config.h:185`; `net_node.h:388`; `levin_base.h:86` | `none` | 4 | Delete the map, or reconcile the constants — **not both left as-is** |
 | PWC-F4 | The KV map serializes 5 of `network_config`'s 8 members; `ping_connection_timeout`, `connection_timeout` and `send_peerlist_sz` are unserialized | `p2p_protocol_defs.h:154-169` | `none` | 4 | Subsumed by PWC-F3's disposition |
 
