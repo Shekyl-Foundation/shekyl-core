@@ -457,26 +457,43 @@ this be a one-way read.
 
 ---
 
-## 7. Open verification tasks — run as P2P-1 census work, not a separate errand
+## 7. Verification tasks — **ALL FIVE DISCHARGED**, run as P2P-1 census work
 
-Per steering sequencing ruling: this register lands first as a tracked doc;
-P2P-1 (the wire census, with its own archaeology leg) is the next artifact
-and absorbs the tasks below rather than deferring them further.
+> **CLOSED 2026-09-01.** Every task below was answered by the P2P-1 wire census
+> (PR #588, merged). **None is owed.** This section is retained as the record
+> of what was asked and where it was answered — a reader arriving here must not
+> re-run four census tasks because the heading once said "open". Striking task 5
+> alone would have made that worse, not better: one struck item among four
+> un-annotated ones reads as *"the rest are still open."*
 
-1. Read §12.10/§12.11 in full against PW-17's outbound/inbound tenure
-   split — confirm or falsify before it's stated as the working design.
-2. Check `drop_connections` call sites (`cryptonote_protocol_handler.inl:1538,
-   1565, 1599, 1619` — confirmed present, not yet read against the Shi et
-   al. mechanism) for exposure to the trash-record/priority-list/forced-disconnect
-   attack chain.
-3. **PW-22's reading list** (`ARCHIVAL_FIREWALL_GATE6.md` GF-7 rounds, the
-   cover-traffic-is-protocol-added ruling, the SP-T persona-transport lane,
-   the SH serving-host arc) — resolve whether the firewall covers
-   submission or only serving.
-4. Confirm whether guard-pinning as currently seeded (`ANCHOR_CONNECTIONS_COUNT
-   = 2`) needs to survive a full reconnect or only an unbroken connection —
-   decides whether PW-17's outbound-tenure hypothesis needs any
-   cross-reconnect recognition key at all.
+Per the (now spent) sequencing ruling: this register landed first as a tracked
+doc; P2P-1 absorbed the tasks below rather than deferring them further.
+
+1. ~~Read §12.10/§12.11 against PW-17's outbound/inbound tenure split.~~
+   **DONE — [`P2P_1_WIRE_CENSUS.md`](P2P_1_WIRE_CENSUS.md) §5.1.** Result is a
+   **re-point, not a confirmation**: §12.10 does not contain the tenure
+   mechanism this task assumed — it is in `DAEMON_RELAY_PRIVACY.md` §6.10 and
+   §7. Also found there: §12.11's body is superseded in part by its own two
+   banners, and `ρ` is not in §12.10 at all (see PW-25).
+2. ~~Check `drop_connections` call sites against the Shi et al. mechanism.~~
+   **DONE — census §5.2.** *(The sites are at `:1467, 1494, 1528, 1548` at the
+   census pin; the `:1538, 1565, 1599, 1619` figures this task carried had
+   already moved.)* The private-transaction arm is **structurally inapplicable**
+   (RT-9 removed `--public-node`); the D++ arm is **refused** because a
+   double-spend is a no-drop offense — but by an **inherited** guard
+   (`f7fd209ed`, upstream, 2024) that no Shekyl record has examined. The
+   graylist and whitelist sub-attacks remain **unaddressed**.
+3. ~~**PW-22's reading list** — does the firewall cover submission or only
+   serving?~~ **DONE — census §5.3.** The gap is **located and open**, and
+   narrowed to something falsifiable: production submission *does* run, through
+   the `Local` posture, and **no production caller selects the per-`P`
+   `OwnRemote` arm**. Name such a call site and the finding is refuted.
+4. ~~Confirm whether guard-pinning needs to survive a full reconnect.~~
+   **DONE — census §5.4.** It does, and already does: anchor tenure keys on
+   **address**, survives restart, but **not a store version bump** (#587's v7
+   drop takes the anchor list with it for one bootstrap). Also corrected there:
+   `first_seen` is **not** a log value — it is the `by_time` index that decides
+   which anchors take the two slots.
 5. ~~Re-verify PW-3's pattern-attribution against the NoisePQC++ table before
    any spec figure is quoted in the P2P-2 brief.~~ **DONE 2026-09-01, and the
    requirement it served is retired.** The attribution was wrong twice over —
