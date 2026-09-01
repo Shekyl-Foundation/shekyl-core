@@ -52,6 +52,37 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
 
+class StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses duplicate mapping keys.
+
+    PyYAML keeps the last value and says nothing; GitHub rejects the file.
+    Validating only the surviving value would let this gate PASS a workflow
+    Actions will not run — the precise false negative it exists to prevent,
+    and the more dangerous direction of error for a gate.
+    """
+
+
+def _construct_mapping_no_duplicates(loader: StrictLoader, node, deep: bool = False):
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_no_duplicates,
+)
+
+
 # Exactly what GitHub executes (`.yml`/`.yaml` directly under
 # .github/workflows/) plus the parked forms of the same. Suffixes, not a
 # substring: a committed editor artifact (`doc-links.yml.bak`, `...yml~`) is
@@ -76,7 +107,12 @@ def check_one(path: str, doc: object) -> list[str]:
 
     # YAML 1.1 resolves an unquoted `on:` key to the boolean True, so a
     # workflow's trigger block arrives under either key depending on quoting.
-    if True not in doc and "on" not in doc:
+    # Both forms at once are two spellings of one key: distinct to PyYAML, so
+    # the duplicate-key loader cannot see it, and a single redefined trigger
+    # to GitHub, which rejects it.
+    if True in doc and "on" in doc:
+        problems.append(f"{path}: `on:` given twice (bare and quoted)")
+    elif True not in doc and "on" not in doc:
         problems.append(f"{path}: no `on:` trigger block")
 
     jobs = doc.get("jobs")
@@ -89,8 +125,11 @@ def check_one(path: str, doc: object) -> list[str]:
         if not isinstance(job, dict):
             problems.append(f"{where}: not a mapping")
             continue
-        # A reusable-workflow call has `uses:` and no steps of its own.
+        # A reusable-workflow call has `uses:` and no steps of its own; the
+        # two are mutually exclusive to GitHub, not merely unusual together.
         if "uses" in job:
+            if "steps" in job:
+                problems.append(f"{where}: both `uses:` and `steps:`")
             continue
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
@@ -99,7 +138,13 @@ def check_one(path: str, doc: object) -> list[str]:
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 problems.append(f"{where} step {i}: not a mapping")
-            elif "uses" not in step and "run" not in step:
+                continue
+            # Exactly one of the two: GitHub rejects a step carrying both
+            # just as it rejects one carrying neither.
+            has_uses, has_run = "uses" in step, "run" in step
+            if has_uses and has_run:
+                problems.append(f"{where} step {i}: both `uses:` and `run:`")
+            elif not has_uses and not has_run:
                 problems.append(f"{where} step {i}: neither `uses:` nor `run:`")
     return problems
 
@@ -137,7 +182,7 @@ def main() -> int:
             # caught below — rather than a UnicodeDecodeError escaping as a
             # traceback that aborts the sweep before the later files.
             with open(path, "rb") as fh:
-                doc = yaml.safe_load(fh)
+                doc = yaml.load(fh, Loader=StrictLoader)
         except yaml.YAMLError as exc:
             mark = getattr(exc, "problem_mark", None)
             where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
@@ -154,9 +199,10 @@ def main() -> int:
         for problem in problems:
             print(f"  {problem}", file=sys.stderr)
         print(
-            "\nA workflow GitHub cannot parse runs zero jobs and fails no "
-            "named check, so every gate it carries goes quiet. Quote any "
-            "value containing a colon-space.",
+            "\nA workflow GitHub rejects runs zero jobs and fails no named "
+            "check, so every gate it carries goes quiet. Common causes: an "
+            "unquoted value containing a colon-space, a key defined twice, "
+            "or a job/step carrying two mutually exclusive fields.",
             file=sys.stderr,
         )
         return 1
