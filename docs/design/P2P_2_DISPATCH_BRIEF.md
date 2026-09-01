@@ -223,8 +223,8 @@ acts on the second. That splits PW-3's single requirement into three claims
 that need separate answers:
 
 **(i) No magic constant — PW-9 stands, unchanged and independently.** An 8-byte
-constant at the head of every connection answers "for what" with a single
-byte-match. Removing it is cheap and unambiguous. **But it must not be allowed
+constant at offset 0 of every connection answers "for what" with **one 8-byte
+comparison**, needing no decryption and no connection state. Removing it is cheap and unambiguous. **But it must not be allowed
 to carry an anonymity claim:** it raises the cost of *bulk passive scanning* —
 sweeping traffic for a known prefix — and does nothing against *targeted active
 probing*, which is the attack in (iii). Keep it as a hard requirement (PWD-T5),
@@ -630,13 +630,26 @@ The umbrella chat reviews the round's output before it goes to ratification.
 
 ## 7. Rider — the register's next edit
 
-**Deferral disclosed under [`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc).** These corrections are *not* postponed indefinitely, and the blocker is named:
+> **GATE CLEARED 2026-09-01 — this section is now a record, not an obligation.**
+> All four corrections landed in the register (PR #593), so **P2P-2 is no longer
+> blocked on them**: PW-3 is retired as a requirement and kept as a conceded
+> property with corrected figures, PW-3a carries the clearnet/Tor posture
+> ruling, PW-9 is scoped, PW-8's WireGuard figures are corrected at primary
+> source with option (a) re-grounded on privacy, PW-19a gains the reusable
+> prior-knowledge check, and PW-25's pointers are fixed. Swept here by the PR
+> that cleared the gate, per the index's own method note: *"the cleared-gate
+> sweep is a landing obligation of the PR that clears the gate, not of the docs
+> that name it."* Blocked-when-actually-unblocked is the expensive direction —
+> nobody re-checks a gate that says it is closed.
 
-- **Blocker:** the register is a separate document with its own validation surface and its own steering review (rule 19). Folding four corrections — one of which **retires a requirement** and adds a posture row — into a dispatch-brief PR would bury the brief under an edit that needs to be reviewed on its own terms.
+The deferral as it was disclosed at the time, retained because the reasoning is
+the record of why these did not ride in the brief's own PR:
+
+- **Blocker (discharged):** the register is a separate document with its own validation surface and its own steering review (rule 19). Folding four corrections — one of which **retires a requirement** and adds a posture row — into a dispatch-brief PR would have buried the brief under an edit needing review on its own terms.
 - **Owner:** this session.
-- **Schedule: before the P2P-2 round dispatches, and that is a hard ordering, not a preference.** The round *reads the register*. If the register still carries PW-3's padding requirement and PW-8's wrong figures when the round opens, the round inherits a retired requirement and a mis-stated ratio — which is the precise failure this brief exists to prevent. The register edit therefore lands as the next PR, ahead of dispatch.
+- **Schedule (met): before the P2P-2 round dispatches**, which was a hard ordering rather than a preference. The round *reads the register*; had it still carried PW-3's padding requirement and PW-8's wrong figures at dispatch, it would have inherited a retired requirement and a mis-stated ratio.
 
-Four corrections are owed, none of them this round's subject:
+The four corrections, **all landed**:
 
 1. **§12.11 / `ρ` citation decay.** `DAEMON_RELAY_PRIVACY.md` §12.11's body is
    **superseded in part** by two banners (the Exploit tier is deleted; the live

@@ -572,6 +572,18 @@ pattern's byte count in the P2P-2 brief; the ~14× magnitude is not what is in
 doubt, the NN-vs-XX attribution of the 192 B classical figure is. Recorded as
 PWC-X7, owner P2P-2.
 
+> **DISCHARGED 2026-09-01 — forward pointer, not a rewrite.** The finding above
+> is left as it was read at this census's pin, because that is what a pinned
+> instrument is for. What has since changed: the paper **is** in the corpus
+> (`shekyl-dev` `4cabe8ef2`; it was never in `shekyl-core`, which is what the
+> census could see), and the attribution is now resolved. It was wrong twice —
+> the source is **Fig. 4(c)**, not Fig. 6, and the `~14×` / 192 B pair belongs
+> to **XX**, while `NN` is **80 B at 33.0×** (NoisePQC++ §6.2(e), stated in
+> prose). Both are whole-handshake totals, not first-flight. **The requirement
+> those figures were gathered for is retired** — see the register's PW-3 /
+> PW-3a. So this row's own instruction, "re-read the table before quoting any
+> pattern's byte count", is satisfied and no longer owed.
+
 ---
 
 ## 6. PW-row accounting — seeds, and where the tree does not confirm them
@@ -644,7 +656,7 @@ a rejection cannot confirm a co-identity (PWC-E14).
 | PWC-X4 | PW-17's verification target is **§6.10 + §7**, not §12.10 (§5.1) |
 | PWC-X5 | PW-22's submission-vs-serving coverage gap is **located and open**. Production submission runs, through the `Local` posture; the gap is that **no production caller selects the per-`P` `OwnRemote` arm** (§5.3) |
 | PWC-X6 | Anchor tenure survives restart but **not a store version bump** (§5.4) |
-| PWC-X7 | PW-3's pattern attribution is not verifiable from the repository (§5.5) |
+| PWC-X7 | PW-3's pattern attribution was not verifiable from **this repository** at the pin (§5.5). **Discharged 2026-09-01:** the paper is in the corpus (`shekyl-dev` `4cabe8ef2`), the source is Fig. 4(c) not Fig. 6, `NN` is 80 B at 33.0× (the `~14×`/192 B pair is **XX**'s), and the requirement they served is retired — register PW-3/PW-3a |
 | PWC-X8 | §12.11's body is **superseded in part** by two banners; the live selection mechanism is a uniform draw over the non-cooled admissible set (§§52/53/54) |
 
 **Deliberately out of scope**, each with a reason rather than by omission:
