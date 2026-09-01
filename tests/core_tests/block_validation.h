@@ -89,7 +89,12 @@ struct gen_block_big_minor_version : public gen_block_accepted_base<2>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_ts_not_checked : public gen_block_accepted_base<SHEKYL_DAA_MTP_WINDOW>
+// C2-R3-Q2 (CONSENSUS_C2_R3_TIMESTAMPS.md §5): there is no bootstrap
+// carve-out — below SHEKYL_DAA_MTP_WINDOW blocks of history the window is
+// right-padded with the genesis timestamp and the median check runs from
+// block 1. Replaces gen_block_ts_not_checked, which asserted the deleted
+// carve-out (any timestamp accepted below 11 blocks of history).
+struct gen_block_ts_below_median_in_bootstrap : public gen_block_verification_base<SHEKYL_DAA_MTP_WINDOW - 1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
@@ -99,9 +104,46 @@ struct gen_block_ts_in_past : public gen_block_verification_base<SHEKYL_DAA_MTP_
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
+// C2-R3-Q1 (CONSENSUS_C2_R3_TIMESTAMPS.md §4): the MTP boundary is strict —
+// a timestamp EQUAL to the median of the previous 11 is rejected.
+struct gen_block_ts_at_median : public gen_block_verification_base<SHEKYL_DAA_MTP_WINDOW>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
 struct gen_block_ts_in_future : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
+};
+
+// C2-R3-Q3 (CONSENSUS_C2_R3_TIMESTAMPS.md §6): FTL applies at alt ADMISSION,
+// not only at promotion. Event layout: 0 genesis, 1–2 main blocks, 3 the
+// future-dated alt candidate (so invalid_block_idx == final main height == 3
+// and the inherited purged callback's height assert holds).
+struct gen_block_alt_ts_above_ftl : public gen_block_verification_base<3>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
+// C2-R3-Q1 sub-a (CONSENSUS_C2_R3_TIMESTAMPS.md §4.2a): the alt-path MTP
+// window is the NEWEST 11 timestamps, not the whole alt chain (whose even
+// lengths the inherited epee median silently averaged). Event layout:
+// 0 genesis, 1..MTP+2 main blocks (main must out-weigh the alt fork or the
+// alt chain reorgs into main and the candidate never takes the alt path),
+// then MTP+1 alt blocks forked at genesis, then the candidate at index
+// 2*MTP + 4. The candidate timestamp sits strictly above the whole-window
+// (averaged) median but below the newest-11 median, isolating the
+// window-selection axis. The purged callback's height assert cannot hold
+// here (alt events inflate indices past the main height), so this test
+// asserts through the per-event bvc check plus its own callback.
+struct gen_block_alt_ts_window_truncation : public gen_block_verification_base<2 * SHEKYL_DAA_MTP_WINDOW + 4>
+{
+  gen_block_alt_ts_window_truncation()
+  {
+    REGISTER_CALLBACK("check_alt_stored_top_unmoved", gen_block_alt_ts_window_truncation::check_alt_stored_top_unmoved);
+  }
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_alt_stored_top_unmoved(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
 };
 
 struct gen_block_invalid_prev_id : public gen_block_verification_base<1>

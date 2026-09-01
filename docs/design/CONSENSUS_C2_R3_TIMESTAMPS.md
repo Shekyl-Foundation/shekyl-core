@@ -1,10 +1,11 @@
 # C2-R3 — Timestamps design round: MTP boundary, bootstrap carve-out, alt-path FTL
 
-**Status:** OPEN — **PROPOSED, awaiting ratification (Rick).** First design
-round of the C2 program ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md)
-§10 batch R3). Three questions, three proposed rulings with wargame tables.
-Nothing below is implemented; implementation lands in this round's PR only
-after the ratification column in §8 is filled.
+**Status:** **RATIFIED 2026-09-01 (Rick)** — all three rulings signed as
+proposed (§8); implementation lands in this round's PR. First design round of
+the C2 program ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10
+batch R3). Ratification review independently re-derived every load-bearing
+claim against `dev @ 30cd547e2`; no factual corrections. The §5.1
+genesis-mint-timestamp flag was ruled a FOLLOWUPS row, not this PR's scope.
 **Pinned sha:** `30cd547e2e9146bd30d7313e644246a9794b57d3` (`dev` tip,
 2026-09-01). Every `file:line` in this doc was re-located at this pin; where a
 prior citation drifted, both numbers are recorded.
@@ -197,6 +198,10 @@ so the rewrite implements arithmetic, not a library.
 > chain (alt suffix + main prefix on the alt path), the window right-padded
 > with the genesis timestamp when fewer than 11 predecessors exist.
 > Miner templates floor their timestamp at `M + 1`.
+> The rule governs blocks at height ≥ 1: block 0 has no predecessors and
+> is pinned by the compiled genesis identity, not by this rule (its one
+> validator-side arrival is `Blockchain::init`'s locally constructed
+> genesis add on an empty store).
 
 ---
 
@@ -274,6 +279,36 @@ rule symmetry.
 
 ## 7. Implementation plan (runs only after §8 is signed; one PR with the ruling)
 
+**Execution record (2026-09-01, this PR).** The plan below was executed as
+written; the rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
+(`blockchain.cpp:5528`, declared `blockchain.h` tail), consumed by the
+vector overload (`:5569`, now FTL-bearing and const-correct), the main-path
+window builder (`:5589`, carve-out deleted, genesis padding via the rule
+fn), the alt admission site (`:2317` newest-11 truncation + `:2322` call),
+and the template floor (`:1955–1957`, `median + 1`). **Red observed first,
+all four losing legs, each for its named reason** (candidate accepted by the
+inherited code — "block verification context check failed"):
+`gen_block_ts_at_median` (Q1 boundary), `gen_block_alt_ts_window_truncation`
+(Q1 sub-a; the whole-chain averaged median g+780 accepted a g+800 candidate
+the ruled newest-11 median g+840 rejects), `gen_block_ts_below_median_in_bootstrap`
+(Q2; replaces `gen_block_ts_not_checked`, which asserted the deleted
+carve-out), `gen_block_alt_ts_above_ftl` (Q3) — while `gen_block_ts_in_past`
+and `gen_block_ts_in_future` stayed green through both phases. The Rust
+side's mutation control: `>` → `>=` in `is_above_mtp` flipped the shared
+`==` vectors red, then reverted clean; the C++ side's: `<=` → `<` in the
+rule fn flipped the same vectors red through the unit suite, then
+reverted clean.
+
+One edge the plan had not named, caught by the first green run: the
+genesis block itself traverses `check_block_timestamp` — once, when
+`Blockchain::init` adds the locally constructed genesis to an empty
+store — and an unconditional h ≥ 1 assert there kills core init. The
+ruled sentence was sharpened (§4.3): the rule governs heights ≥ 1;
+block 0 is pinned by the compiled genesis identity (a peer-supplied
+height-0 block is rejected by `handle_alternative_block`'s existing
+`block_height == 0` refusal, so the h == 0 arm is reachable only from
+init).
+
 1. **Shared boundary vectors first** (rule 30: vectors before
    implementation): `docs/test_vectors/mtp_boundary_vectors.json` — cases
    over a fixed 11-window: `median−1` / `median` (the `==` case) / `median+1`
@@ -341,9 +376,14 @@ rule symmetry.
 
 | Question | Proposed | Ratified (Rick) | Date |
 | --- | --- | --- | --- |
-| Q1 — MTP boundary | **Strict `>`**, with sub-decisions §4.2a (alt window = newest 11), §4.2b (template floor `median+1`), §4.2c (median = sorted index 5) | — | — |
-| Q2 — bootstrap carve-out | **Replace**: pad the window to 11 with the genesis timestamp; carve-out branch deleted | — | — |
-| Q3 — alt-path FTL | **Add** FTL at alt admission (same clause, same clock semantics as main) | — | — |
+| Q1 — MTP boundary | **Strict `>`**, with sub-decisions §4.2a (alt window = newest 11), §4.2b (template floor `median+1`), §4.2c (median = sorted index 5) | **Ratified as proposed**, sub-decisions a/b/c included | 2026-09-01 |
+| Q2 — bootstrap carve-out | **Replace**: pad the window to 11 with the genesis timestamp; carve-out branch deleted | **Ratified as proposed** | 2026-09-01 |
+| Q3 — alt-path FTL | **Add** FTL at alt admission (same clause, same clock semantics as main) | **Ratified as proposed** | 2026-09-01 |
+
+Ratification came with an independent re-derivation of every §1 surface at
+`dev @ 30cd547e2` (all confirmed, none corrected) and one scope ruling: the
+§5.1 genesis-mint-timestamp question lands as a FOLLOWUPS row only — it must
+not creep into this PR's diff.
 
 Ratification note (scan result, §3): **complete** — the estate chain is
 genesis-only (every peer at height 1, observed 2026-09-01); equality count 0,

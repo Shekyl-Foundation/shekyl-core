@@ -1946,10 +1946,15 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     seed_hash = get_block_id_by_height(seed_height);
   b.timestamp = time(NULL);
 
+  // Jagerman MTP patch (DAA_LWMA1.md §5.5): never issue a template the node
+  // itself would reject. The floor is median + 1 — the smallest
+  // consensus-valid value under the strict MTP boundary (C2-R3-Q1 sub-b;
+  // a template AT the median is self-rejecting under `>`); median_ts is
+  // set by the callee on every arm, including an FTL failure.
   uint64_t median_ts;
   if (!check_block_timestamp(b, median_ts))
   {
-    b.timestamp = median_ts;
+    b.timestamp = median_ts + 1;
   }
 
   CHECK_AND_ASSERT_MES(diffic, false, "difficulty overhead.");
@@ -2302,8 +2307,18 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
     bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward);
 
-    // verify that the block's timestamp is within the acceptable range
-    // (not earlier than the median of the last X blocks)
+    // C2-R3-Q1 sub-a: the ruled window is the 11 timestamps immediately
+    // preceding the candidate. build_alt_chain + complete_timestamps_vector
+    // hand back the full newest-first history (the whole alt chain, plus a
+    // main-chain top-up only when the alt part is short), so keep the
+    // newest 11 — the rule function refuses a wider window rather than
+    // medianing it the way the inherited code did.
+    if (timestamps.size() > SHEKYL_DAA_MTP_WINDOW)
+      timestamps.resize(SHEKYL_DAA_MTP_WINDOW);
+
+    // verify the block's timestamp: strictly above the window median and
+    // within the future-time limit — FTL applies at alt ADMISSION, not
+    // only at promotion (C2-R3-Q3)
     if(!check_block_timestamp(timestamps, b))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has invalid timestamp: " << b.timestamp);
@@ -5510,51 +5525,94 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
   return (adjusted_current_block_ts < median_ts ? adjusted_current_block_ts : median_ts);
 }
 //------------------------------------------------------------------
-//TODO: revisit, has changed a bit on upstream
-bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
+timestamp_rule_verdict cryptonote::shekyl_check_timestamp_rule(uint64_t candidate_ts,
+    std::vector<uint64_t> window, uint64_t genesis_ts, uint64_t local_clock,
+    uint64_t& median_out)
 {
-  LOG_PRINT_L3("Blockchain::" << __func__);
-  median_ts = epee::misc_utils::median(timestamps);
-
-  if(b.timestamp < median_ts)
+  // C2-R3 (CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01): the
+  // single owner of the consensus block-timestamp rule; both block-store
+  // admission paths (main connect and alt admission) funnel here. The Rust
+  // rewrite's twin predicates (shekyl-difficulty's is_above_mtp /
+  // is_timestamp_below_ftl) are pinned to this function by the shared
+  // vectors docs/test_vectors/MTP_BOUNDARY_V1.json.
+  if (window.size() > SHEKYL_DAA_MTP_WINDOW)
   {
-    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", less than median of last " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
-    return false;
+    // The newest-11 selection is order-dependent and therefore the
+    // caller's job (C2-R3-Q1 sub-a); a wider window is refused, never
+    // silently medianed the way the inherited alt path medianed the whole
+    // alt chain.
+    MERROR("internal error: timestamp window holds " << window.size() << " > " << SHEKYL_DAA_MTP_WINDOW << " entries");
+    return timestamp_rule_verdict::window_too_wide;
   }
 
-  return true;
+  // C2-R3-Q2: short windows are right-padded with the genesis timestamp,
+  // so the median check runs from block 1 (no bootstrap carve-out).
+  window.resize(SHEKYL_DAA_MTP_WINDOW, genesis_ts);
+  std::sort(window.begin(), window.end());
+  // C2-R3-Q1 sub-c: the median is element index 5 (0-based) of the sorted
+  // 11-element window — stated by the ruling, not inherited from
+  // epee::misc_utils::median's odd-window arm. Computed before either
+  // check so median_out is set on every verdict below; the miner-template
+  // caller reads it on the failure arm.
+  median_out = window[SHEKYL_DAA_MTP_WINDOW / 2];
+
+  if (candidate_ts > local_clock + SHEKYL_DAA_FTL_SECONDS)
+    return timestamp_rule_verdict::above_ftl;
+
+  // C2-R3-Q1: strictly greater — equality rejects.
+  if (candidate_ts <= median_out)
+    return timestamp_rule_verdict::not_above_median;
+
+  return timestamp_rule_verdict::ok;
 }
 //------------------------------------------------------------------
-// This function grabs the timestamps from the most recent <n> blocks,
-// where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
-// blocks in the blockchain, the timestamp is assumed to be valid.  If there
-// are, this function returns:
-//   true if the block's timestamp is not less than the timestamp of the
-//       median of the selected blocks
-//   false otherwise
+bool Blockchain::check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  switch (shekyl_check_timestamp_rule(b.timestamp, timestamps, m_db->get_block_timestamp(0), (uint64_t)time(NULL), median_ts))
+  {
+    case timestamp_rule_verdict::ok:
+      return true;
+    case timestamp_rule_verdict::above_ftl:
+      MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", more than " << SHEKYL_DAA_FTL_SECONDS << "s ahead of local time (LWMA-1 future-time limit)");
+      return false;
+    case timestamp_rule_verdict::not_above_median:
+      MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", not strictly above the median of the previous " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
+      return false;
+    case timestamp_rule_verdict::window_too_wide:
+    default:
+      MERROR_VER("Timestamp window construction bug for block with id: " << get_block_hash(b));
+      return false;
+  }
+}
+//------------------------------------------------------------------
 bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  if(b.timestamp > (uint64_t)time(NULL) + SHEKYL_DAA_FTL_SECONDS)
-  {
-    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", more than " << SHEKYL_DAA_FTL_SECONDS << "s ahead of local time (LWMA-1 future-time limit)");
-    return false;
-  }
 
-  const auto h = m_db->height();
+  // The window is the up-to-11 newest main-chain timestamps. Fewer than 11
+  // exist only below SHEKYL_DAA_MTP_WINDOW blocks of history, where the
+  // rule's genesis padding takes over — the median check runs from block 1;
+  // the inherited bootstrap carve-out is deleted (C2-R3-Q2).
+  const uint64_t h = m_db->height();
 
-  // if not enough blocks, no proper median yet, return true
-  if(h < SHEKYL_DAA_MTP_WINDOW)
+  // h == 0 is exactly one caller: Blockchain::init adding the locally
+  // constructed genesis block to an empty store. The C2-R3 rule governs
+  // blocks with predecessors (heights >= 1); block 0 is pinned by the
+  // compiled genesis identity, and a peer-supplied "genesis" never reaches
+  // here (handle_alternative_block rejects block_height == 0, and every
+  // other main-path add has h >= 1). Not a carve-out: there is no window
+  // to check, not a window we decline to check.
+  if (h == 0)
   {
+    median_ts = 0;
     return true;
   }
 
   std::vector<uint64_t> timestamps;
-
-  // need most recent SHEKYL_DAA_MTP_WINDOW blocks, get index of first of those
-  size_t offset = h - SHEKYL_DAA_MTP_WINDOW;
+  uint64_t offset = h > SHEKYL_DAA_MTP_WINDOW ? h - SHEKYL_DAA_MTP_WINDOW : 0;
   timestamps.reserve(h - offset);
-  for(;offset < h; ++offset)
+  for (; offset < h; ++offset)
   {
     timestamps.push_back(m_db->get_block_timestamp(offset));
   }

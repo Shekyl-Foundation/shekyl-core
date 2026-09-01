@@ -75,16 +75,22 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
   return true;
 }
 
-bool gen_block_ts_not_checked::generate(std::vector<test_event_entry>& events) const
+bool gen_block_ts_below_median_in_bootstrap::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
   REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 2);
 
+  // C2-R3-Q2: the chain holds SHEKYL_DAA_MTP_WINDOW - 1 blocks, one short of
+  // a full window; the window is right-padded with the genesis timestamp and
+  // the median check runs anyway. A timestamp an hour before genesis sits
+  // below any element of that window and must be rejected. (The inherited
+  // carve-out accepted it — this generator replaced gen_block_ts_not_checked,
+  // which asserted exactly that acceptance.)
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp - 60 * 60);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }
@@ -112,6 +118,25 @@ bool gen_block_ts_in_past::generate(std::vector<test_event_entry>& events) const
   return true;
 }
 
+bool gen_block_ts_at_median::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 1);
+
+  // C2-R3-Q1: the strict boundary itself. REWIND timestamps ascend by T per
+  // block, so chain order equals sorted order and the window's sorted
+  // index-5 element is events[SHEKYL_DAA_MTP_WINDOW / 2]'s timestamp — the
+  // exact median. Equality must be rejected (`>` , not `>=`).
+  uint64_t ts_at_median = std::get<block>(events[SHEKYL_DAA_MTP_WINDOW / 2]).timestamp;
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, ts_at_median);
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
 bool gen_block_ts_in_future::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
@@ -121,6 +146,76 @@ bool gen_block_ts_in_future::generate(std::vector<test_event_entry>& events) con
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_ts_above_ftl::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  // C2-R3-Q3: this candidate forks from blk_1 while the main tip is blk_2,
+  // so it takes handle_alternative_block; its timestamp is beyond
+  // local_clock + FTL and must be refused at admission rather than parked
+  // in the alt store until promotion re-checks it.
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, miner_account, test_generator::bf_timestamp, 0, 0, time(NULL) + 60*60 + SHEKYL_DAA_FTL_SECONDS);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_ts_window_truncation::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  // Main chain: SHEKYL_DAA_MTP_WINDOW + 2 blocks past genesis, so its
+  // cumulative difficulty (fixed at 1 per block) strictly exceeds anything
+  // the shorter alt fork below can accumulate — no reorg, the candidate
+  // stays on the alternative path.
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW + 2);
+
+  // Alt fork at genesis: SHEKYL_DAA_MTP_WINDOW + 1 blocks (one longer than
+  // the MTP window), timestamps ascending by T per block.
+  cryptonote::block alt_prev = blk_0;
+  for (size_t i = 0; i < SHEKYL_DAA_MTP_WINDOW + 1; ++i)
+  {
+    cryptonote::block blk_a;
+    generator.construct_block(blk_a, alt_prev, miner_account);
+    events.push_back(blk_a);
+    alt_prev = blk_a;
+  }
+
+  // With T = 120 the 12 alt timestamps are genesis + 120..1440. The
+  // inherited code medianed the WHOLE alt chain — epee's even-window arm
+  // averages the two middle elements: (g+720 + g+840)/2 = g+780. The ruled
+  // window is the newest 11 (g+240..g+1440), sorted index 5 = g+840. A
+  // candidate at g+800 is strictly above the inherited median (accepted
+  // before this round) and at-or-below the ruled one (rejected after) —
+  // it isolates the window-selection axis from the boundary axis.
+  block blk_bad;
+  generator.construct_block_manually(blk_bad, alt_prev, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp + 800);
+  events.push_back(blk_bad);
+
+  DO_CALLBACK(events, "check_alt_stored_top_unmoved");
+
+  return true;
+}
+
+bool gen_block_alt_ts_window_truncation::check_alt_stored_top_unmoved(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_alt_ts_window_truncation::check_alt_stored_top_unmoved");
+
+  // The well-formed alt blocks really entered the alt store — proving the
+  // candidate was evaluated on the alternative path rather than refused
+  // earlier — and neither the candidate nor the fork moved the main tip.
+  CHECK_EQ(SHEKYL_DAA_MTP_WINDOW + 1, c.get_alternative_blocks_count());
+  CHECK_EQ(SHEKYL_DAA_MTP_WINDOW + 3, c.get_current_blockchain_height());
 
   return true;
 }

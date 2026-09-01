@@ -116,8 +116,11 @@ int main(int argc, char* argv[])
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
-    GENERATE_AND_PLAY(gen_block_ts_not_checked);
+    GENERATE_AND_PLAY(gen_block_ts_below_median_in_bootstrap);
     GENERATE_AND_PLAY(gen_block_ts_in_past);
+    GENERATE_AND_PLAY(gen_block_ts_at_median);
+    GENERATE_AND_PLAY(gen_block_alt_ts_above_ftl);
+    GENERATE_AND_PLAY(gen_block_alt_ts_window_truncation);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
     GENERATE_AND_PLAY(gen_block_invalid_attestation_root);
