@@ -19,9 +19,11 @@
 ### Removed
 
 - **P2P wire: the two dead RPC-advertisement fields are gone.**
-  `rpc_port` and `rpc_credits_per_hash` were serialized in every handshake
-  (`basic_node_data`) and stored in every peerlist entry, advertising
-  capabilities the ratified RPC posture says will never exist:
+  `rpc_port` and `rpc_credits_per_hash` were members of the handshake
+  schema (`basic_node_data`) and of every peerlist entry — parsed and
+  recorded on receipt, though `KV_SERIALIZE_OPT` omitted them from honest
+  wire bytes at their permanent zero — keeping open the capability to
+  advertise what the ratified RPC posture says will never exist:
   `rpc_credits_per_hash` is Monero's RPC-payment/mining-credit system, and
   `rpc_port` advertises a public RPC endpoint over P2P — contrary to
   `RPC_TRANSPORT_POSTURE.md` RT-9, whose RT-W5 slice already deleted the
