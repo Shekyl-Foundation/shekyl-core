@@ -72,7 +72,7 @@ as the owning doc states it, not as remembered.
 | 4 | **Network-posture proxy wiring (RT-W7)** | [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) `:561`, `:480-481`; index row `RT-1…RT-9, RT-O…, RT-P…, RT-W…` | **LANDED 2026-08-23 (PR #542)** | Confirms the RPC-side posture is settled and is *not* this lane's; one loopback predicate (`listen::is_loopback_ip`) for listen and outbound |
 | 5 | **RT-lane boundary (§2.1)** | `RPC_TRANSPORT_POSTURE.md:99-114`; RT-9 `:333-373`; RT-W5 `:559` | RT-9 **RULED 2026-08-21**; RT-W5 **LANDED**, UPDATE 2026-08-31 records #587 finishing the P2P half | The scope boundary above, and the ratification PWC-B3/PWC-D7 lean on |
 | 6 | **SP-T3 Tor guard-sharing** | [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) §21.1; the `SPIKE-F-1` and `SPIKE-F-12` rows of its §2 substrate table | SPIKE-F-1 **REFUTED AS STATED**; SPIKE-F-12 **CONFIRMS ACCEPTED RESIDUAL** — guard set is per-process/datadir | One tor process ⇒ one entry-guard set ⇒ a single guard sees every stem successor. Bounds any transport row that would claim Tor restores D++ independence |
-| 7 | **P-transport / SP-T serving-loop arc** | `rust/shekyl-p-transport/src/lib.rs:134`; index rows `SP-T0…SP-T5`, `2d-2 P-isolated transport`, `BroadcastSubmitter / BroadcastPosture (SP-T4a)` | `derive_socks_user` **still at :134**, unmoved; lane **partially built, inert** (`PTorClient`/`PBlockSource` `dead_code`) | The partial answer PW-22 rests on; §7 task 3 resolved against it — see §5.3 |
+| 7 | **P-transport / SP-T serving-loop arc** | `rust/shekyl-p-transport/src/lib.rs:134`; index rows `SP-T0…SP-T5`, `2d-2 P-isolated transport`, `BroadcastSubmitter / BroadcastPosture (SP-T4a)` | `derive_socks_user` **still at :134**, unmoved; lane **partially built** — `PTorClient` is wired in production (`engine/prpc.rs` holds one and calls `blocking_post`), and the gap is a posture selection, not dead code: no production caller selects `BroadcastPosture::OwnRemote` | The partial answer PW-22 rests on; §7 task 3 resolved against it — see §5.3 |
 | 8 | **E′ transport (MS-5)** | [`V3_1_MULTISIG_RUST_ENGINE.md`](V3_1_MULTISIG_RUST_ENGINE.md) §0.5 `:310-357`, `:989-1060`; index row `MS-1…MS-8` | Round 1 **CLOSED**; MS-5 **S1 LANDED** | **Surfaced under PW-22 but out of scope here.** Every "transport blob" hit is a multisig file envelope or a consensus blob, not a p2p transport. Recorded as PWC-X2 so the next reader does not re-run the search |
 | 9 | **Carrier / cover-traffic** | [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §3.1a `:922-1028`; the index's `COVER_TRAFFIC_RESTORATION.md` build-status row | steps 1-4 landed; **step 5 BLOCKED** on a daemon/p2p cutover; #580 index stamp still says "not on `dev`" | The stamp is stale — #580 merged as `63d543103`. Recorded as PWC-X3 |
 | 10 | **Levin Rust migration (LV-)** | index row `LV-1…LV-N`; [`LV2_PORTABLE_STORAGE.md`](LV2_PORTABLE_STORAGE.md) `:153`; FOLLOWUPS `:680-681` | LV-1 landed; compression + white-noise emit **production-live**; read side and plain builders **inert until LV-3** | Defines which half of the dual stack is authoritative per row (§2.2) |
@@ -163,9 +163,16 @@ half is only structurally tested (PWC-D8).
 and the enumeration is the denominator. Rows about absent behavior (no rate
 limit, no jitter) are grounded against this frontier and nowhere else:
 
-- `net_node.inl` — **93** qualified `node_server<t_payload_net_handler>::`
-  member-function definitions (counted by definition-shaped lines; `is_peer_used`
-  is overloaded twice). The load-bearing set read for this census:
+- `net_node.inl` — **97** qualified `node_server<t_payload_net_handler>::`
+  member-function definitions over **94** distinct names; three names are
+  overloaded (`is_peer_used`, `get_incoming_connections_count`,
+  `get_outgoing_connections_count`). Counted as
+  `grep -oE 'node_server<t_payload_net_handler>::[a-zA-Z_]+\(' | wc -l` and
+  `| sort -u | wc -l`, which is stated because two earlier attempts at this
+  number disagreed: a `bool|int`-only pattern undercounts (it drops `void`,
+  `size_t`, `zone` and `peerid_type` returns), and counting
+  `template<...>` headers overcounts (nested-template definitions carry two).
+  The load-bearing set read for this census:
   `init_config:138`, `store_config:1012`,
   `do_handshake_with_peer:1059`, `do_peer_timed_sync:1153`,
   `is_peer_used:1205/1230`, `make_new_connection_from_anchor_peerlist:1438`,
@@ -177,10 +184,12 @@ limit, no jitter) are grounded against this frontier and nowhere else:
   `drop_connection:2503`, `try_ping:2510`, `try_get_support_flags:2611`,
   `handle_timed_sync:2640`, `handle_handshake:2689`, `handle_ping:2788`,
   `has_too_many_connections:3083`, `gray_peerlist_housekeeping:3108`.
-- `cryptonote_protocol_handler.inl` — **47** qualified
-  `t_cryptonote_protocol_handler<t_core>::` member-function definitions over 46
-  distinct names (`drop_connection` is overloaded), including all nine notify
-  handlers
+- `cryptonote_protocol_handler.inl` — **48** qualified
+  `t_cryptonote_protocol_handler<t_core>::` member-function definitions over
+  **46** distinct names; two names are overloaded (`drop_connection`, and
+  `get_payload_sync_data` at `:497`/`:510`, the second of which is indented
+  four spaces and is missed by a column-anchored pattern). Includes all nine
+  notify handlers
   (`:519, 533, 718, 822, 852, 967, 1019, 1785, 2485`) and the drop family
   (`drop_connection_with_score:2811`, `drop_connection:2826/2832`,
   `drop_connections:2842`, `on_connection_close:2866`).
@@ -188,8 +197,19 @@ limit, no jitter) are grounded against this frontier and nowhere else:
   **notify** entry points (`cryptonote_protocol_handler.h:90-98`) — 13, matching
   the command-id count.
 - The per-command payload cap table, `connection_context.cpp:38-72`.
-- Idle/cadence timers: `net_node.h:618-622` (5) and
-  `cryptonote_protocol_handler.h:183-186` (4).
+- Idle/cadence timers: `net_node.h:618-622` (5, all driven from
+  `idle_worker`) and `cryptonote_protocol_handler.h:183-186` (4 declared, but
+  only **3 driven** — see PWC-E4; `m_bad_peer_checker` is declared and never
+  called).
+
+**What the frontier is for.** The totals above are the enumeration's extent,
+not the evidence. An absence row rests on the **13 message-handling entry
+points** — the four invoke handlers and nine notify handlers — because those
+are the only places a per-message policy could sit, and that set is exact and
+cross-checks against the command-id count. A total function count is the
+weaker instrument: it has now been miscounted three ways (by me twice, and by
+a review that proposed 101/98 and 49/47), which is itself the argument for
+grounding absence on the entry points rather than on a headline number.
 
 ### 2.3 In-scope decisions recorded, not assumed
 
@@ -262,14 +282,15 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | --- | --- | --- | --- | --- | --- |
 | PWC-A1 | `LEVIN_SIGNATURE` is the fixed 8-byte constant `0x0101_0101_0101_2101`, first field of every bucket, connection-fatal on mismatch | `header.rs:14`, `:152-155`; wire-byte test `:189-195` | `none` | 4 | PW-9 |
 | PWC-A2 | Bucket header is exactly 33 bytes, field order and little-endianness fixed; anchored by `static_assert(sizeof(bucket_head2)==33)` and the `levin-constant-parity` CI gate | `header.rs:17`, `:134-144`; `levin_base.h` | `KAT-port` | 4 | — |
-| PWC-A3 | Exactly one protocol version is spoken (`1`); a peer's version is echoed back verbatim, never negotiated | `header.rs:20`, `:170` | `none` | 4 | — |
+| PWC-A3 | Exactly one protocol version is spoken (`1`), and it is **never negotiated and never echoed**: every emitted header hard-codes `LEVIN_PROTOCOL_VER_1`, while a *received* version is latched into sticky per-connection state used for one purpose only — deciding whether an incoming bucket counts as a response | `levin_base.cpp:63-73` (`make_header` fixes the field); `levin_protocol_handler_async.h:618` (latch), `:516` (sole read); Rust `header.rs:20`, `:121` | `none` | 4 | — |
 | PWC-A4 | Pre-handshake packet limit 256 KiB, raised to the post-handshake limit only by handshake completion | `header.rs:23`; `reader.rs:147`, `:153-169` | `pinned-not-re-derived` | 4 | — |
 | PWC-A5 | Post-handshake packet limit is 100 MB (`DEFAULT_MAX_PACKET_SIZE`), inherited, not derived from any largest-legitimate-message argument | `header.rs:27`; `levin_base.h:86` | `pinned-not-re-derived` | 4 | PW-10 |
-| PWC-A6 | **Unknown header flag bits are preserved verbatim** so decode/encode is byte-identical — a covert channel between colluding peers across an honest relay, for a protocol with one implementation | `header.rs:29-30`, `:46-50`; test `:214-229` asserts the preservation as a *requirement* | `none` | 4 | PW-11 |
+| PWC-A6 | **Unknown header flag bits are preserved verbatim by the codec** — `BucketHead` decode/encode is byte-identical for any signed header, and a test asserts that as a *requirement*, so the bits are accepted rather than rejected on ingress | `header.rs:29-30`, `:46-50`; test `:214-229` | `none` | 4 | PW-11 |
+| PWC-A6a | **The codec property does not currently constitute a relay-carried covert channel**, and the distinction is recorded so the redesign does not inherit a threat that is not there. Unknown bits reach no consumer: `BucketReader` yields `Received::{Notification,Request,…}` carrying only `command` and `payload`, with flags dropped; and the C++ relay path re-frames rather than forwards — `relay_notify_to_list` calls `finalize_notify`, which builds a fresh header via `make_header` with known flags. **What the census asserts is the ingress-acceptance surface (PWC-A6), not propagation.** The channel would become real if a future relay forwarded a received header instead of re-framing | `reader.rs:73-87` (`Received` has no flags field); `net_node.inl:2177-2206`; `levin_base.cpp:51-73` | `none` | 4 | PW-11 |
 | PWC-A7 | `return_code: i32` rides every bucket, including notifications where it is always 0 — an RPC-over-Levin affordance | `header.rs:102-103`, `:119` | `none` | 4 | PW-12 |
 | PWC-A8 | `expect_response` is carried as a raw truthy `uint8_t`, not narrowed to `bool`, so a sender's `0x02` re-encodes unchanged | `header.rs:96-99`, `:128-130` | `spec` | 1 | — |
 | PWC-A9 | Noise/fragment emit pads every message to exactly `noise_size`; fragment headers claim a full body, command `0`, B/E on first/last, middles flagless | `fragment.rs:47-127` | `KAT-port` | 4 | — |
-| PWC-A10 | Compression is zstd level 1, floor 256 B, inflate bounded by `min(packet limit, per-command limit)`; **compression precedes encryption in any future transport**, a CRIME/BREACH-class oracle that interacts with D++ padding | `compress.rs:24-32`, `:62-70` | `none` | 4 | PW-13 |
+| PWC-A10 | Compression is zstd level 1, floor 256 B, inflate bounded by `min(packet limit, per-command limit)`, applied to a whole finalized message. **Recorded as a constraint on P2P-2, not as a present defect:** there is no encryption on this wire today, so no compression-before-encryption oracle exists to census. *If* the redesign places compression below encryption, this becomes a CRIME/BREACH-class oracle that interacts with D++ padding — which is why the parameters are enumerated here rather than left for the transport round to rediscover | `compress.rs:24-32`, `:62-70` | `none` | 4 | PW-13 |
 | PWC-A11 | The reader latches on framing error (`Error::Poisoned`), and verifies the inner reassembled fragment signature the C++ `memcpy`s unchecked — both **stricter** than the oracle | `lib.rs:79-112` (divergence census entries 1-2, 5) | `spec` | 1 | — |
 
 ### 4.B p2p command schemas (1001 / 1002 / 1003 / 1007)
@@ -280,7 +301,7 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-B2 | `basic_node_data` carries exactly four fields: `network_id`, `peer_id`, `my_port`, `support_flags` | `p2p_protocol_defs.h:172-185`; `types.rs:18-27` | `none` | 4 | — |
 | PWC-B3 | `rpc_port` and `rpc_credits_per_hash` are **absent** from the handshake and from peerlist entries — deleted as contrary to RT-9's no-public-RPC-advertisement posture | #587 (`cf3b13c29`); `RPC_TRANSPORT_POSTURE.md:559` UPDATE 2026-08-31; absence confirmed at `p2p_protocol_defs.h:172-185` | `ratified` | **2** | PW-14 |
 | PWC-B4 | Handshake response carries the peerlist; timed-sync response carries it again — two peerlist-disclosure surfaces, not one | `p2p_protocol_defs.h:214`, `:246`; `commands.rs:65`, `:119` | `none` | 4 | PW-16 |
-| PWC-B5 | `support_flags` advertises `FLUFFY_BLOCKS(0x01) \| ZSTD_COMPRESSION(0x02)`; a peer reporting 0 is re-queried out-of-band via 1007 | `cryptonote_config.h:257-259`; `net_node.inl:2771-2775`, `:2611-2637` | `none` | 4 | — |
+| PWC-B5 | `support_flags` advertises `FLUFFY_BLOCKS(0x01) \| ZSTD_COMPRESSION(0x02)`; a peer reporting 0 is re-queried out-of-band via 1007. **Both halves are public-zone-only**, which the row states because it changes what an anonymity-zone peer looks like on the wire: only `public_zone` is assigned `P2P_SUPPORT_FLAGS` at init, so anonymity zones advertise `0`, and `try_get_support_flags` returns early for any non-public zone — so an anonymity peer advertises nothing and is never re-queried | `cryptonote_config.h:257-259`; `net_node.inl:145-147` (public zone only), `:2613-2614` (early return), `:2771-2775` | `none` | 4 | — |
 | PWC-B6 | Ping response echoes the responder's `peer_id`, and the back-ping caller **requires it to match** the handshake-advertised id or closes | `p2p_protocol_defs.h:280-290`; `net_node.inl:2585-2590` | `none` | 4 | PW-19 |
 | PWC-B7 | `my_port` is zeroed when `--hide-my-port` is set or the zone cannot pingback; the back-ping is skipped entirely when it is 0 | `net_node.inl:2151-2160`, `:2512-2513` | `none` | 4 | — |
 
@@ -294,7 +315,7 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-C4 | `block_complete_entry.attestation_witness` is bounded **at the codec**, not at callers, so no p2p ingress can bypass the cap; the Rust twin duplicates the constant `8 + 256*3385 = 866_568` with a `const _: () = assert!` | `cryptonote_protocol_defs.h:97-105`; `block.rs:23-25`, `:73-82` | `spec` | 1 | — |
 | PWC-C5 | `CORE_SYNC_DATA` stores `cumulative_difficulty_top64` **unconditionally on store, OPT on load** — an asymmetry both stacks must reproduce exactly | `cryptonote_protocol_defs.h:205-208`; `types.rs:52`, `:91-95` | `KAT-port` | 4 | — |
 | PWC-C6 | `pruning_seed` rides `CORE_SYNC_DATA` and every peerlist entry, and is validated on ingest against the stripe range | `cryptonote_protocol_defs.h:200`; `net_node.inl:2105` | `none` | 4 | — |
-| PWC-C7 | Per-command payload caps are a 13-entry switch; **unknown commands fall through to `size_t::max`**, leaving only the packet limit. The two 128 MB entries exceed the 100 MB packet limit by design, as their own comments note | `connection_context.cpp:38-72` | `pinned-not-re-derived` | 4 | — |
+| PWC-C7 | Per-command payload caps are a 13-entry switch; **unknown commands fall through to `size_t::max`**, leaving only the packet limit. **Three** entries are 128 MB and exceed the 100 MB packet limit by design, as their own comments note — `NOTIFY_NEW_BLOCK`, `NOTIFY_NEW_TRANSACTIONS` and `NOTIFY_RESPONSE_GET_OBJECTS`, i.e. the response path as well as the two announce paths | `connection_context.cpp:38-72`, the 128 MB arms at `:51`, `:53`, `:57` | `pinned-not-re-derived` | 4 | — |
 | PWC-C8 | `block_complete_entry` serializes `txs` two different ways — object array when `pruned`, blob array otherwise — and the unpruned load path fills `prunable_hash` with zeros | `cryptonote_protocol_defs.h:76-96`; `block.rs:92-125` | `KAT-port` | 4 | — |
 
 ### 4.D Peerlist, peer identity, persisted store
@@ -305,7 +326,7 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-D2 | The disclosed head is **anonymized**: sampled over the whole white list, shuffled, truncated to depth, `last_seen` zeroed — an explicit defence citing Cao et al. eprint 2019/411 | `net_peerlist.h:296-331` | `inherited-defensive` | 4 | PW-16 |
 | PWC-D3 | White list capped at 1000, gray at 5000, both evicting by oldest `last_seen` | `cryptonote_config.h:175-176`; `net_peerlist.h:219-232` | `pinned-not-re-derived` | 4 | — |
 | PWC-D4 | `peer_id` is a per-process random `uint64` regenerated at every start, **never persisted**; anonymity zones use the fixed sentinel `1` | `net_node.inl:147`; `net_node.h:180`, `:309` | `none` | 4 | PW-14, PW-19 |
-| PWC-D5 | The anchor list keys on `(adr, id, first_seen)` and is **persisted**, but its KV map is never sent — anchors reach the wire through no command | `p2p_protocol_defs.h:93-112`; `net_peerlist.cpp:156` | `none` | 4 | PW-18 |
+| PWC-D5 | The anchor **record** carries `(adr, id, first_seen)`, but the container's **keys are not that tuple**: `anchor_peers_indexed` has one `ordered_unique` index on `adr` and one `ordered_non_unique` index on `first_seen`, and **`id` is not indexed at all** — it is carried data. The list is persisted, and its KV map is never sent, so anchors reach the wire through no command | `p2p_protocol_defs.h:93-112` (record); `net_peerlist.h:191-199` (indices); `net_peerlist.cpp:156` (load) | `none` | 4 | PW-18 |
 | PWC-D6 | Outbound connection-continuity matching uses **address**, with `peer_id` only a secondary public-zone check — existing code already treats address as bookkeeping, distinct from trust-by-identity | `net_node.inl:1219`, `:1244` | `none` | 4 | PW-18 |
 | PWC-D7 | Persisted store version is 7 with **drop-on-load** and no migration shim; `peerlist_entry` boost version is 4 with a local `ver < 4` throw. The drop includes the anchor list, so one bootstrap runs without anchor-set eclipse resistance | `net_peerlist.cpp:53`, `:84`; `net_peerlist_boost_serialization.h:44`, `:217-224`; #587 body | `ratified` | **2** | — |
 | PWC-D8 | The dual stack's **field parity is structurally tested, not byte-pinned**: `payload_kats` asserts round-trips and the deleted-fields pin, but the C++ emitter half is covered only by the `#[ignore]`d live `dual_stack.rs` run | #587 body ("it does **not** cover the C++ emitter"); `lib.rs:44-47` | `examined-disposition` | 4 | LV-3 |
@@ -320,11 +341,12 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-E1 | Timed-sync fires on a **fixed 60 s** cadence with no jitter, to every handshaked connection at once | `cryptonote_config.h:184`; `net_node.h:618`; `net_node.inl:2023`, `:2063-2085` | `none` | 4 | PW-28 |
 | PWC-E2 | **There is no rate limit on Ping, Timed-Sync or handshake.** Verified as an absence against the enumerated frontier (§2.2b): no token bucket, no per-peer counter, no minimum interval guards any of the four invoke entry points | `net_node.h:476-479` handlers `net_node.inl:2640`, `:2689`, `:2788`, `:2164` — none consults a rate structure | `none` | 4 | PW-15 |
 | PWC-E3 | Five node-server idle timers: handshake 60 s, connections-maker 1 s, gray housekeeping 60 s, peerlist store 1800 s, incoming-connections check 3600 s — all fixed, none jittered | `net_node.h:618-622` | `pinned-not-re-derived` | 4 | PW-28 |
-| PWC-E4 | Four protocol-handler timers: idle-peer kick 8 s, standby check 100 ms, **sync search 101 s**, bad-peer check 43 s | `cryptonote_protocol_handler.h:183-186` | `pinned-not-re-derived` | 4 | — |
+| PWC-E4 | **Three** protocol-handler timers drive behavior — idle-peer kick 8 s, standby check 100 ms, **sync search 101 s** — all three driven from `on_idle` | `cryptonote_protocol_handler.h:183-185`; `.inl:1677-1683` | `pinned-not-re-derived` | 4 | — |
+| PWC-E4a | A **fourth timer is declared and never driven**: `m_bad_peer_checker` (`once_a_time_seconds<43>`) has exactly one occurrence in the tree — its declaration — and `on_idle` does not call it. A cadence constant that no code reads is not a cadence; it reads as one to anyone auditing the header, which is how a 43-second period gets carried into a redesign that never had it | `cryptonote_protocol_handler.h:186`; tree-wide grep returns the declaration only | `none` | 4 | — |
 | PWC-E5 | Idle peers are kicked at 240 s since last request (`IDLE_PEER_KICK_TIME`); peer score starts at 0 and a peer is dropped at `DROP_PEERS_ON_SCORE = -2` | `cryptonote_protocol_handler.inl:80`, `:85`, `:2715-2725` | `pinned-not-re-derived` | 4 | — |
 | PWC-E6 | Outbound budget: `WHITELIST_CONNECTIONS_PERCENT = 70` white / remainder gray, with `ANCHOR_CONNECTIONS_COUNT = 2` filled first; the default out-degree itself is **Rust-owned** via `shekyl_p2p_default_out_peers()` | `cryptonote_config.h:193-195`, `:178-183`; `net_node.inl:1828-1839` | `ratified` | **2** | PW-17 |
 | PWC-E7 | **A double-spend is a no-drop offense**: a conflicting tx sets `m_verifivation_failed` *and* `m_no_drop_offense`, and `handle_notify_new_transactions` drops only when `!m_no_drop_offense`. The check is against the **pool's** `m_spent_key_images`, so it covers a pool-held conflict, not only a chain-spent one | `tx_pool.cpp:283-293`, `:1676-1696`; `cryptonote_protocol_handler.inl:926-931`; provenance `f7fd209ed` (jeffro256, 2024-03-07) | `inherited-defensive` | 4 | §5.2 |
-| PWC-E8 | Four other tx classes are also no-drop offenses: fee-too-low, oversized `tx_extra`, non-zero unlock time, double-spend | `tx_pool.cpp:257, 267, 276, 291` | `inherited-defensive` | 4 | — |
+| PWC-E8 | **Three other** tx classes are also no-drop offenses: fee-too-low, oversized `tx_extra`, non-zero unlock time. The fourth `m_no_drop_offense` site in the file is the double-spend of PWC-E7 and is not re-counted here | `tx_pool.cpp:257`, `:267`, `:276` (double-spend at `:291` belongs to PWC-E7) | `inherited-defensive` | 4 | — |
 | PWC-E9 | `drop_connections(address)` drops **every** connection sharing a host and adds a host-fail score of 5. Four call sites, all on the block-sync path: prepare-failure, tx-parse failure, verification failure, orphaned block | `cryptonote_protocol_handler.inl:1467, 1494, 1528, 1548`, definition `:2842-2863` | `none` | 4 | §5.2 |
 | PWC-E10 | Host blocking: 10 fails before block, 24 h block time; failed-address suppression is 1 h public / 240 s anonymity-zone, the latter **derived at the p90 of measured Tor post-restart recovery** with the derivation recorded beside the constant | `cryptonote_config.h:199-255` | `ratified` | **2** | — |
 | PWC-E11 | `has_too_many_connections` caps inbound per host at `--max-connections-per-ip` (default 1) and **only on the public zone** — it returns false, i.e. permits, on every anonymity zone | `net_node.inl:3083-3105`; `net_node.cpp:179` | `examined-disposition` | 4 | — |
@@ -488,11 +510,24 @@ and no document in the reading list extends that to the serve-credit
 submission path. The submission path itself is in the clear by design
 (`blockchain.cpp:5314` reads `sc_p_id` straight off the vin). The gap is
 therefore **located and confirmed open**, and it is a *design* question for
-P2P-2, not a census finding — recorded as PWC-X5. The one thing this census
-adds: the SP-T lane is **partially built and inert** (the index's
-`2d-2 P-isolated transport` row —
-`PTorClient`/`PBlockSource` on `dev` under `dead_code`), so there is no
-production submission path to have covered it yet.
+P2P-2, not a census finding — recorded as PWC-X5.
+
+**What this census adds is a sharper boundary than "unbuilt".** Production
+submission *does* exist: `BroadcastSubmitter::local` is a production
+constructor that pre-binds `BroadcastPosture::Local`
+(`engine/transaction_submitter.rs:537-539`, above the `#[cfg(test)]` boundary
+at `:599`), and the index's own row records the lane as **Live (`Local`
+posture)** with `PerP` awaiting 2d-2. The per-`P` arm exists in `for_posture`
+(`:522`) but every selection of `BroadcastPosture::OwnRemote` in the tree is
+inside tests. There is also no `#[allow(dead_code)]` anywhere in
+`shekyl-p-transport`, and `PTorClient` is used in production by
+`engine/prpc.rs`.
+
+So the gap is **not** that submission is unbuilt — it is that the submission
+that runs goes through the `Local` posture, and **no production caller selects
+the per-persona arm**, which is precisely the arm PW-22 asks about. That is a
+narrower and falsifiable claim: name a production call site selecting
+`OwnRemote` and this row is refuted.
 
 ### 5.4 Task 4 — must guard-pinning survive a full reconnect?
 
@@ -501,10 +536,21 @@ across restarts, not within a session.**
 
 Anchors are persisted (`net_peerlist.cpp:156`), reloaded at start, and dialled
 before the general peerlist (`net_node.inl:1839`). Anchor selection
-(`:1438-1469`) keys on `pe.adr` for the used/allowed/recently-failed checks and
-carries `first_seen` purely as a log value — `is_peer_used(anchor_peerlist_
-entry)` (`:1230-1252`) matches outbound connections on `peer.adr ==
-cntxt.m_remote_address`, with `peer.id` consulted only on the public zone.
+(`:1438-1469`) keys on `pe.adr` for the used/allowed/recently-failed checks —
+`is_peer_used(anchor_peerlist_entry)` (`:1230-1252`) matches outbound
+connections on `peer.adr == cntxt.m_remote_address`, with `peer.id` consulted
+only on the public zone.
+
+**`first_seen` is not merely a log value, and the correction matters to the
+tenure question rather than being a detail.** It is the container's second
+index (`net_peerlist.h:191-199`), and `get_and_empty_anchor_peerlist`
+(`:504-517`) drains through `get<by_time>()` — i.e. in `first_seen` order —
+while `make_new_connection_from_anchor_peerlist` returns after the **first**
+candidate that connects. So `first_seen` decides *which* anchors get the two
+slots when more than two survive, even though it never participates in
+recognizing a peer. Recognition is by address; **ordering is by tenure age**,
+and a redesign that keeps the former while dropping the latter would silently
+change which peers get pinned.
 
 So the cross-reconnect recognition key PW-17 wondered about **exists today and
 is the address**, which is consistent with PW-18's rule that the recognition
@@ -596,7 +642,7 @@ a rejection cannot confirm a co-identity (PWC-E14).
 | PWC-X2 | The E′/MS-5 lane is **multisig**, not p2p transport; every "transport blob" hit is a file envelope or a consensus blob. Searched so it need not be searched again |
 | PWC-X3 | The index's `COVER_TRAFFIC_RESTORATION.md` build-status row still stamps #580 as "verified on `feat/carrier-producer`, NOT on `dev`". It merged as `63d543103`, so the stamp is stale. **Not repaired here** — that row belongs to the carrier lane, and this census enumerates rather than edits another lane's status |
 | PWC-X4 | PW-17's verification target is **§6.10 + §7**, not §12.10 (§5.1) |
-| PWC-X5 | PW-22's submission-vs-serving coverage gap is **located and open**; no production submission path exists yet (§5.3) |
+| PWC-X5 | PW-22's submission-vs-serving coverage gap is **located and open**. Production submission runs, through the `Local` posture; the gap is that **no production caller selects the per-`P` `OwnRemote` arm** (§5.3) |
 | PWC-X6 | Anchor tenure survives restart but **not a store version bump** (§5.4) |
 | PWC-X7 | PW-3's pattern attribution is not verifiable from the repository (§5.5) |
 | PWC-X8 | §12.11's body is **superseded in part** by two banners; the live selection mechanism is a uniform draw over the non-cooled admissible set (§§52/53/54) |
@@ -627,12 +673,13 @@ a rejection cannot confirm a co-identity (PWC-E14).
 
 ## 8. Totals
 
-**55 bucketed rows: 3 bucket-1, 6 bucket-2, 2 bucket-3, 44 bucket-4** — by
-group, PWC-A×11 (2/0/0/9), B×7 (0/1/0/6), C×8 (1/1/0/6), D×11 (0/1/0/10),
-E×14 (0/3/0/11), F×4 (0/0/2/2). The eight `PWC-X` cross-cutting records carry
-no bucket, so they are excluded from the totals rather than padding them.
+**57 bucketed rows: 3 bucket-1, 6 bucket-2, 2 bucket-3, 46 bucket-4** — by
+group, PWC-A×12, B×7, C×8, D×11, E×15, F×4. The eight `PWC-X` cross-cutting
+records carry no bucket, so they are excluded from the totals rather than
+padding them. (Three rows were split in from review: PWC-A6a, PWC-E4a, and the
+PWC-E4/E8 recounts — see §9.)
 
-The substantive result is the **bucket-1 + bucket-2 share: 9 of 55, 16 %.**
+The substantive result is the **bucket-1 + bucket-2 share: 9 of 57, 16 %.**
 Set against the consensus census's 101 of 171 (59 %) at the same bar, that is
 the census's one real finding about the surface as a whole — **the p2p wire is
 the least-examined surface in the tree**, and the gap is concentrated in
@@ -640,8 +687,41 @@ bucket 1: the acceptance path is 51 % Shekyl-designed-with-a-spec, this wire is
 5 %. Nearly everything here arrived with the lineage.
 
 Two qualifications, so the number is not read as more than it is. It counts
-rows, not risk — PWC-A6's covert channel and PWC-E2's absent rate limit are
-one row each, as is `expect_response`'s raw byte. And every bucket-2 row on
-this surface was ratified within the last six weeks (#587, RT-9, Q12-U2, the
-anonymity-zone retry constant, the D++ fluff bit), so the ratified fraction is
-better read as *how recently anyone looked* than as accumulated diligence.
+rows, not risk — PWC-A6's ingress-acceptance surface and PWC-E2's absent rate
+limit are one row each, as is `expect_response`'s raw byte. And every bucket-2
+row on this surface was ratified within the last six weeks (#587, RT-9,
+Q12-U2, the anonymity-zone retry constant, the D++ fluff bit), so the ratified
+fraction is better read as *how recently anyone looked* than as accumulated
+diligence.
+
+---
+
+## 9. Correction log
+
+Claims this census asserted and then withdrew, kept as a record rather than
+amended away. Every one was a statement about behavior that the tree did not
+support, which is the exact failure mode the census exists to catch in others'
+work; leaving only the corrected text would hide that the bar had to be
+applied twice.
+
+| Was asserted | Refuted by | Now |
+| --- | --- | --- |
+| `connection_entry_base` was stranded by RK-5a | `git log -S` puts the last caller's removal at `68ba2887c` (2020); `git show d468625e0` never names it | Lineage-dead, p2p-lane deletion (PWC-F2). The routing changed with the fact |
+| A peer's protocol version is echoed back verbatim | `make_header` hard-codes `LEVIN_PROTOCOL_VER_1` (`levin_base.cpp:63-73`); the received value is read once, to classify responses | PWC-A3 — fixed emitter, sticky classification. **Codec round-trip fidelity was mistaken for wire behavior** |
+| Unknown flag bits are a covert channel across an honest relay | `Received` carries no flags (`reader.rs:73-87`); `relay_notify_to_list` re-frames via `finalize_notify` | Split: PWC-A6 keeps the ingress-acceptance fact, PWC-A6a records that propagation does not follow from it. **Same error as above — a codec property promoted to a network behavior** |
+| Four protocol-handler timers | `m_bad_peer_checker` has one occurrence tree-wide, its declaration; `on_idle` drives three | PWC-E4 (three driven) + PWC-E4a (one declared, never driven) — the split turned a wrong count into a finding |
+| The anchor list keys on `(adr, id, first_seen)` | `net_peerlist.h:191-199` — `ordered_unique` on `adr`, `ordered_non_unique` on `first_seen`, `id` unindexed | PWC-D5 separates record fields from container keys |
+| `first_seen` is purely a log value | `get_and_empty_anchor_peerlist` drains `get<by_time>()` and the dial loop stops at the first success | §5.4 — recognition by address, **ordering by tenure age** |
+| Two 128 MB cap entries | Three arms at `connection_context.cpp:51, 53, 57` | PWC-C7 — the response path was omitted |
+| Four other no-drop-offense classes | The fourth site is PWC-E7's own double-spend | PWC-E8 — three others |
+| `support_flags` behavior stated as universal | Only `public_zone` is assigned them; `try_get_support_flags` returns early off-public | PWC-B5 — public-zone-only, both halves |
+| No production submission path exists | `BroadcastSubmitter::local` is a production constructor above the `#[cfg(test)]` line; no `allow(dead_code)` in `shekyl-p-transport` | §5.3 / PWC-X5 — submission runs on `Local`; the gap is the unselected per-`P` arm |
+| Behavioral frontier of 93 / 47 definitions | Both from patterns that dropped return types or indentation | 97/94 and 48/46, with the counting command stated — and absence rows re-grounded on the 13 entry points, which is the number that actually bears weight |
+
+**The pattern worth carrying into P2P-2:** four of these were the same
+mistake in different clothes — reading a *codec* or *declaration* fact as a
+*behavioral* one. A round-trip that preserves bytes is not a channel that
+carries them; a declared timer is not a cadence; a record's fields are not its
+keys. Each needs the consumer traced before the behavior is claimed, which is
+the discipline PWC-E2 already applies to absence and these rows did not apply
+to presence.

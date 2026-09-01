@@ -6,8 +6,8 @@
 
 - **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
   enumerates the peer-to-peer wire surface and the connection-management
-  behavior around it at `dev` `30cd547e2` — 55 bucketed rows, 3 b1 / 6 b2 /
-  2 b3 / 44 b4, on the same four-bucket bar and evidence-class column as the
+  behavior around it at `dev` `30cd547e2` — 57 bucketed rows, 3 b1 / 6 b2 /
+  2 b3 / 46 b4, on the same four-bucket bar and evidence-class column as the
   consensus census. Mechanical denominator (26 C++ KV maps, 72 field lines,
   22 Rust `PortableMap` twins) with a sum check whose 4-map residual is
   accounted row by row, and six named inverse spot-checks. Mints one new
