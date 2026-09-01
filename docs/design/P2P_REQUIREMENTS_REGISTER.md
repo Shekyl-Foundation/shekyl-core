@@ -1,10 +1,14 @@
 # P2P-2 requirements register
 
-**Status:** OPEN — steering-reviewed 2026-08-31; sound, spot-checked (four
+**Status:** Steering-reviewed 2026-08-31 — sound, spot-checked (four
 `drop_connections` sites and §12.10's framing independently confirmed),
 ready to land as a tracked doc. Four deltas from that review are folded in
-below (PW-3 correction, PW-22 rewrite, PW-27, PW-28). Sequencing ruling:
-this lands first with `PW-` registered in the index at
+below (PW-3 correction, PW-22 rewrite, PW-27, PW-28). **Second round folded
+2026-08-31:** §1 threat-model framing added; PW-8 ruled (option (a), PCS
+not required for gossip) with two BOLT-8 spec corrections from a
+primary-source read; PW-19a added recording the standing no-authentication
+constraint; PW-23a added as its implementation rider. Sequencing ruling:
+this lands first as its own docs PR with `PW-` registered in the index at
 birth (rule 94 §1); P2P-1 (the wire census) is the next artifact and absorbs
 §7's open tasks as census work rather than a separate errand. This is not
 the P2P-2 dispatch brief; it is the durable input the brief gets drafted
@@ -16,10 +20,8 @@ Every source claim below was read at this sha; re-verify before drafting the
 brief if `dev` has moved.
 
 **Identifier family:** `PW-` (P2P wire), checked unique against the index's
-existing families (CW/VG/SH/CT-ACT/PC/RF/SO/CR/CB/F-D/…; `P-` is distinct
-under the alphabetic-prefix-until-digit test) — no collision. Registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the landing PR
-(rule 94 §1).
+existing families (CW/VG/SH/CT-ACT/PC/RF/SO/CR/CB/F-D/…) — no collision.
+Register at birth (rule 94 §1) when this lands as a tracked doc.
 
 **Scope boundary, ratified by prior work, verified this session:**
 `RPC_TRANSPORT_POSTURE.md` §2.1 (`:99-106`) — "P2P is not RPC... RPC is
@@ -34,6 +36,41 @@ justification, not RT-4's.
 
 ## 1. Transport — hybrid-PQ Noise, working assumption
 
+**Threat model for the transport layer (framing — decides what the transport
+is and is not accountable for).** The transport's adversary is the
+**non-participant path observer**: ISP, backbone, censor, anyone on the wire
+who is not an endpoint. **The counterparty is conceded**, under the standing
+no-authentication constraint (see PW-19a): on an open gossip network anyone
+can be your peer by dialing in, and every relay sits between an origin and
+the network by construction — being "in the middle" is the job description,
+not an attack. The concession is precise, and the precision is
+load-bearing:
+
+- **Content is public by design.** Blocks, transactions, serve-credit vins
+  with `P_canonical_id` in the clear — a recording peer learns nothing here
+  that a block explorer doesn't publish. Defending this would be incoherent.
+- **Arrival metadata is not public by design.** The tuple `(transaction,
+  arriving connection, timestamp)` exists only at the relay layer, is never
+  in a block, and is the input to origination linkage. This is D++'s scope,
+  and per §12.10 it is **taxed, not eliminated** — an adversary holding a
+  share of connections gets a partial view, and the mechanism raises its
+  cost rather than closing it.
+
+Do not compress this to "recording peers see only what's public anyway" — a
+future reader who accepts that framing will ask why D++ is being paid for at
+all, and the stem-phase properties get weakened on a false premise.
+
+**Two properties drop out as non-requirements for the same reason** (both
+are properties *about the counterparty*, and the counterparty is conceded):
+**authentication** (PW-19a) and **post-compromise security** (PW-8). What
+remains as the transport's actual job, against the path observer:
+indistinguishable-from-random on the wire (PW-3, PW-9), forward secrecy
+against recorded ciphertext (PW-8 option (a)), no covert channels (PW-11),
+no linkable identifiers (PW-19). **The transport must never be asked to
+carry a privacy property that belongs to D++ or the cover-traffic layer** —
+the ProxyMark lesson pointed the other way: the layers must compose, and
+each must own its actual scope.
+
 | ID | Finding | Evidence | Status |
 | --- | --- | --- | --- |
 | PW-1 | Hybrid Noise (classical DH + ML-KEM, HFS patterns) has a generic computational security proof (fACCE model) for confidentiality/authenticity, matching or exceeding classical Noise's per-pattern proofs. | `2022539_PQC_Noise.pdf` (Angel/Dowling/Hülsing/Schwabe/Weber, CCS 2022) | Grounded — not a novel/unanalyzed composition |
@@ -43,7 +80,7 @@ justification, not RT-4's.
 | PW-5 | Static-static exchange has no direct KEM equivalent; the replacement (`skem` + key-confirmation message) costs a round trip. Directly relevant: RT-9-adjacent, operator-pinned patterns (KK/IK-family) rely on `ss`/`se`/`es`. | `2022539_PQC_Noise.pdf` §2.3 (translation recipe) | Scope the extra round-trip cost explicitly wherever a mutually-pinned pattern is used |
 | PW-6 | No standardized test-vector suite exists yet for PQNoise/hybrid patterns — NoisePQC++'s own authors generated their own deterministic vectors. | `2608.00954v1_Noise_PQC.pdf` §5.2.3 | **P2P-2 must budget minting Shekyl's own pinned hybrid-handshake KATs from scratch — no external oracle to lean on** |
 | PW-7 | Rust prior art exists (Clatter) but is narrower in scope (X25519-only classical side); worth reading for pattern-encoding decisions, not depending on (no-FFI discipline). | `2022539_PQC_Noise.pdf` §2.4.1 references | Informational |
-| PW-8 | Rekey/forward-secrecy schedule for long-lived peer-to-peer sessions (harvest-now-decrypt-later applies to session traffic, not just the handshake; the §Scope boundary puts operator-to-operator sessions on the RPC side — this row governs the adversarial P2P wire). **Framing corrected against the primary spec (steering, 2026-09-01):** BOLT-8 is not an alternative to a Noise pattern — it **is** Noise (`Noise_XK_secp256k1_ChaChaPoly_SHA256`) plus a rekey scheme layered on top, so the axis is the **rekey mechanism**, orthogonal to the pattern choice (XK/IK/NN): **(a) symmetric KDF-chain rotation** (BOLT-8: `ck′, k′ = HKDF(ck, k)`, nonce reset to 0, per-direction chains — after 1,000 **nonce increments = every 500 messages**, each message consuming two nonces, encrypted length prefix + body; zero wire bytes, invisible to a network adversary; forward secrecy via one-way HKDF; the PQ property is inherited — every rotated key descends from the hybrid handshake's ML-KEM-mixed root). **Structural limit: no post-compromise healing, and none can be added** — PCS requires entropy the attacker lacks, and a symmetric chain has none by construction, so (a) hardened for healing *becomes* (b) or (c); the options are not independently tunable. **(b) periodic full re-handshake** (WireGuard-style, ~120 s or message-count bound): fresh hybrid entropy = post-compromise recovery + refreshed PQ contribution; the cost is a handshake-shaped on-schedule event — Shekyl's hybrid ~2.4–2.8 KB vs BOLT-8's fixed 166 B (50/50/66), ≈ 15× — a PW-28-class cadence fingerprint. Mitigation is asymmetric-cheap: jitter is local policy (no wire/key-schedule/interop change) and the fixed-size padding band is already PW-3-required for the initial handshake, so (b) reuses mechanisms that must exist anyway (BOLT-8's own encrypted length prefix + fixed act sizes are the precedent shape). **(c) PQ-KEM ratchet** — research-grade (PW-4 bites); wargame control, rejected under the get-it-right posture. **Decision restated as two steps:** (1) is post-compromise security *required*, per surface? — hypothesis: PCS matters for long-lived authenticated/operator-class links but plausibly not for ephemeral-identity NN gossip peers (PW-19: connections churn, no persistent static key, and an attacker who owns the node owns more than the session keys) — the answer may split by connection role exactly as PW-17's tenure question split by direction; (2) no-PCS surfaces take (a) (free, invisible, PQ-inheriting); PCS-required surfaces take (b) with jitter + the shared PW-3 padding band. **Pattern-axis honesty note:** production rekey precedent concentrates on the authenticated static-key surface (WireGuard = IK, BOLT-8 = XK); NN-family gossip has thinner deployment history — stated for the wargame, not implied away (recommendation unchanged: anonymity justifies NN and it is the simplest pattern; and on NN sessions (b)'s re-handshake is nearly free of identity complications — no static key to re-authenticate). | Steering rounds 2026-09-01; **BOLT-8 half verified at the primary spec** (`lightning/bolts/08-transport.md`, master: `Noise_XK_secp256k1_ChaChaPoly_SHA256`; 1,000 nonce increments = 500 messages; acts 50/50/66 B; encrypted length prefix); WireGuard whitepaper (timer/message-count re-handshake) — **fetch both into the papers corpus; WireGuard bounds still to re-verify at source before the P2P-2 brief quotes figures** (PW-3's re-pin discipline) | Open — two-step decision: (1) rule whether PCS is required, per surface (split hypothesis recorded); (2) no-PCS → (a) KDF rotation; PCS → (b) re-handshake with jitter + the PW-3 fixed-size padding band; (c) stays the wargame control |
+| PW-8 | **Rekey schedule — RULED for gossip: option (a), BOLT-8-style symmetric KDF rotation. PCS is not a P2P requirement.** *Spec corrections from a primary-source read of `lightning/bolts/08-transport.md` (master): rotation fires every **500 messages**, not 1,000 — the spec rotates after 1,000 **nonce increments**, and each message consumes two nonces (encrypted length prefix + body). And BOLT-8 is not an alternative to a Noise pattern — it **is** Noise (`Noise_XK_secp256k1_ChaChaPoly_SHA256`) plus a rotation scheme, so the real axis is rekey mechanism, orthogonal to pattern choice.* **Mechanism:** `ck', k' = HKDF(ck, k)`, reset nonce to 0, per-direction (`sck`/`rck` independent). Zero wire cost, invisible to any observer, inherits the hybrid-PQ root (every rotated key descends from the ML-KEM-mixed `ck`, so HNDL/forward-secrecy survives rotation), no PW-28 interaction at all. **Why PCS is not required, on the merits rather than on cost:** PCS pays out only when an adversary obtains session keys, *loses* that capability, and the session still matters afterward. On an open gossip network the dominant adversary never attacks the session — being a peer is free, and every relay is a middle-man by construction, so stolen session keys grant a view already available by dialing in. The adversary who *does* hold keys (node owner / RCE / hypervisor) has **permanent** access, which PCS by definition cannot heal, and sees plaintext mempool and stem state regardless. Recorded-ciphertext decryption (HNDL) is **forward secrecy's** job, which (a) provides. Residual PCS-favouring cases — transient memory disclosure, live-VM-snapshot, side-channel extraction, bad handshake-time entropy — are real but narrow and each has a better-targeted answer (the Rust rewrite; co-residency avoidance; startup entropy health checks) than a periodic full re-handshake. **Options rejected, with reasons:** **(b) WireGuard-style periodic re-handshake** — buys PCS at ~2.4–2.8 KB per interval (vs BOLT-8's 166 B classical handshake: 50+50+66, ~15×) plus a cadence fingerprint requiring jitter *and* padding to suppress; not worth it for a threat whose precondition rarely holds here. **(c) KEM-ified ratchet** — PW-4 bites (Double Ratchet's asymmetric half is DH-shaped); research-grade, rejected per get-it-right-not-get-it-now. **Structural finding worth keeping:** the three options are **not independently tunable** — a symmetric KDF chain has no entropy source an attacker lacks, so "harden (a) for healing" does not converge on a modified (a); it *becomes* (b) or (c). If PCS is ever required, (a) is disqualified at the start, not after a hardening attempt. **Scope of this ruling: gossip/P2P only.** RPC has operator-controlled endpoints, no open join, genuinely sensitive plaintext, and session-key theft as the only path in — a different threat model that may warrant a different answer, and is governed by `RPC_TRANSPORT_POSTURE.md`, not here. | `lightning/bolts/08-transport.md` (master, read this session — rotation §, act sizes, encrypted length prefix); WireGuard rekey timers (**not re-verified at primary source — see note**); this session's threat wargame | **Ruled (gossip). Open only for RPC, out of scope here.** |
 
 ---
 
@@ -53,13 +90,13 @@ justification, not RT-4's.
 | --- | --- | --- | --- |
 | PW-9 (L-1) | `LEVIN_SIGNATURE` is a fixed 8-byte constant — perfect DPI signature. | `rust/shekyl-levin/src/header.rs:14`, verified this session | Open |
 | PW-10 (L-2) | `DEFAULT_MAX_PACKET_SIZE = 100 MB`, inherited not derived. | `header.rs:27` | Open — derive from largest legitimate message |
-| PW-11 (L-3) | Unknown flag bits preserved verbatim in the `Flags` type (decode/encode round-trip is byte-identical) — **a latent affordance, not an active cross-relay channel on the current path**: `classify` consumes the header into command/return-code/payload (`reader.rs:458–474`) and every outbound constructor mints a fresh header with only known flags (`message.rs:25–48`), so an application relay never forwards an inbound flag word (verified: no verbatim re-forward path in the crate). Rejecting unknown bits pre-genesis stands, justified as canonical framing plus closing the latent affordance before any future path forwards raw buckets — not as closing a live covert channel. | `header.rs:29-30`; `reader.rs:458–474`; `message.rs:25–48` | Open — reject unknown bits pre-genesis (canonical framing) |
+| PW-11 (L-3) | Unknown flag bits preserved verbatim — a covert channel between colluding peers across an honest relay, for a protocol with one implementation. | `header.rs:29-30` | Open — reject unknown bits pre-genesis |
 | PW-12 (L-4) | `return_code: i32` on every bucket — inherited RPC-over-Levin affordance leaking implementation state. | `header.rs:103` | Open |
 | PW-13 (L-5) | Compression before encryption is a CRIME/BREACH-class oracle; interacts directly with Dandelion++'s padding/size defenses. | `compress.rs:25,32` | Open — check compression is disabled wherever padding is load-bearing |
-| PW-14 (L-6) | Cross-IP identity linkage, narrowed at the tree (the L-6 carry-over was stale at this register's own pin): `rpc_port` and `rpc_credits_per_hash` are already forced to 0 on send with the RT-posture rationale in-code (`net_node.inl:2157–2163`) — the residue is the two wire *fields'* existence (redesign deletion candidates), not a live advertisement; anonymity zones announce the fixed sentinel `peer_id` (`net_node.h:115–130`, deliberately non-random, init-enforced, to prevent onion↔clearnet correlation); the live linkage surface is the **public zone's** random `peer_id` (plus `my_port` when pingback-capable) announced on handshake and ping. | `p2p_protocol_defs.h:180-196`; `net_node.inl:2150–2166`; `net_node.h:113–132` | Open — see §3 below, largely superseded by the identity-model direction |
+| PW-14 (L-6) | Persistent `peer_id`, `rpc_port` in the handshake link a node across IP changes; `rpc_port` directly contradicts RT-9's `--public-node` removal. | `p2p_protocol_defs.h:180-196` | Open — see §3 below, largely superseded by the identity-model direction |
 | PW-15 (L-7, new this session) | No rate limit on Ping/Timed-Sync/handshake messages; enables both cheap connection churn and a watermarking side channel (message-rate modulation). | `2509.10214v1_Levi_p2p.pdf` (handshake flooding, throttled Timed Sync measurements); `2607.07062v1_TOR_Deanonymizing.pdf` (ProxyMark's rate-based watermark method) | Open |
-| PW-16 | Peer-list disclosure, code-accurate at the pin: the handshake response dumps the full peerlist head (≤250, `P2P_DEFAULT_PEERS_IN_HANDSHAKE`) and populates `context.sent_addresses`; each 60-s Timed Sync samples up to 250 more and filters through that set (`net_node.inl:2662–2686`, `:2787–2789`). The filter is per-connection **dedup, not a bound** — a held-open connection cumulatively enumerates the node's peerlist across syncs, distinct entries each round. Topology-mapping aid for planning eclipse/Sybil attempts. | `2509.10214v1_Levi_p2p.pdf` §2.1 (mechanism re-grounded against the tree — the paper's "full list on every Timed Sync" describes Monero, not this tree) | Open |
-| PW-27 (formerly Survey A U-6) | `NOTIFY_NEW_BLOCK` still lives alongside `NOTIFY_NEW_FLUFFY_BLOCK` — two block-propagation paths that must agree on validation, on a chain with no fluffy-block transition to justify the legacy one, and a path the Dandelion++ zone analysis may not have covered. Re-confirmed on `dev` @ `ab3cc98e6`: both structs present. | `cryptonote_protocol_defs.h:184` (`NOTIFY_NEW_BLOCK`), `:334` (`NOTIFY_NEW_FLUFFY_BLOCK`) | Open |
+| PW-16 | Full 250-peer list disclosed on every handshake response and Timed Sync — topology-mapping aid for planning eclipse/Sybil attempts. | `2509.10214v1_Levi_p2p.pdf` §2.1 | Open |
+| PW-27 (L-6, formerly Survey A U-6) | `NOTIFY_NEW_BLOCK` still lives alongside `NOTIFY_NEW_FLUFFY_BLOCK` — two block-propagation paths that must agree on validation, on a chain with no fluffy-block transition to justify the legacy one, and a path the Dandelion++ zone analysis may not have covered. Re-confirmed on `dev` @ `ab3cc98e6`: both structs present. | `cryptonote_protocol_defs.h:184` (`NOTIFY_NEW_BLOCK`), `:334` (`NOTIFY_NEW_FLUFFY_BLOCK`) | Open |
 | PW-28 (cadence jitter, split from PW-15) | The **fixed 60-second Timed-Sync cadence itself** is a distinct fix from rate limiting (PW-15) — different fixes for different halves of the same finding. Rate limiting closes the flood; it leaves the fingerprint (Levi paper's anomaly detector works because the cadence is exactly standard). Cadence jitter closes the fingerprint; it leaves the flood open on its own. **Both are required, named separately so neither substitutes for the other.** | `2509.10214v1_Levi_p2p.pdf` §5 (Timed Sync frequency analysis); `2607.07062v1_TOR_Deanonymizing.pdf` (watermark-based method exploits absence of rate limiting) | Open — two rows' worth of work, do not fold into one fix |
 
 ---
@@ -95,16 +132,50 @@ connection-continuity bookkeeping, distinct from trust-by-identity.
 
 **PW-19 — fully-ephemeral session identity ("NN"-family Noise) is a real,
 named point in the design space** (the person steering this round's own
-proposal), not a deviation from the framework. It kills the
-**transport-layer half** of PW-14/L-6 (no static handshake key to link).
-It does **not** by itself touch the application-layer half:
-`basic_node_data.peer_id` / `my_port` are Levin message-layer fields that
-ride above any Noise pattern — deleting them (or making them per-session,
-respecting PW-14's anonymity-zone sentinel constraint) is an **explicit
-requirement of this row**, decided by the Shekyl-native message layer,
-not a side effect of choosing NN.
+proposal), not a deviation from the framework. It cleanly kills PW-14/L-6.
 Costs: identity-based banning dies (a banned peer reconnects with a fresh
 key) — **see PW-20**, the required replacement.
+
+**PW-19a — NO AUTHENTICATION BETWEEN UNKNOWN PEERS. Standing design
+constraint, ruled multiple times, not a gap and not reopenable here.**
+The moment a durable peer identity exists, it becomes an enumeration key:
+interactions cluster against it, the cluster is enumerated, and the privacy
+property is gone. `NN` is therefore not a compromise forced by a lack of
+options — it is the pattern that *matches the requirement*. This constraint
+is the same one that already killed persona-identity-as-admission-signal
+(PW-21) and address/subnet/ASN-based admission (§6.10,
+`DAEMON_RELAY_PRIVACY.md`); it has now been re-litigated at least three
+times and must not be re-opened by a future round noticing that `NN` is
+unauthenticated. **Locate and cite the original ruling's home document when
+this register lands**, so the pointer exists and the fourth re-litigation
+doesn't happen.
+
+**Consequences, recorded rather than treated as open problems:**
+- **Clearnet MITM is a conceded adversary capability.** Not a gap. On Tor
+  the question is moot — an onion address *is* a public key, so the
+  endpoint is self-authenticating.
+- **Every node is a technical man-in-the-middle by construction** — that is
+  what relaying is. There is no privileged interposer position to steal.
+- **What still holds without authentication:** *validity* is guaranteed by
+  consensus (no peer can make you accept an invalid block or tx);
+  *propagation privacy* by D++ and the relay-privacy work; *liveness* by
+  the eviction floor (PW-23). What is **conceded** is the observation
+  adversary — a node that relays correctly and records arrival metadata —
+  ruled out of scope in §12.10 and taxed rather than prevented.
+
+**PW-23a — tenure is a continuously re-earned observation, never a cached
+credential** (implementation constraint on PW-23, follows directly from
+PW-19a). Work-based selection must remain a record of *observed relay work
+on this connection*, evaluated continuously. It must never become standing
+granted to whoever occupies an endpoint. Under PW-19a an interposer can
+take over a guard slot; the design survives that precisely because tenure
+never trusted the endpoint, only the work — an interposer inherits nothing
+but the obligation to keep relaying honestly, and the eviction floor fires
+the moment it stops. **The failure mode to guard against is an
+implementation that caches a tenure score against an endpoint and skips
+re-evaluation** — a rule-47-shaped hazard (a gate whose subject has
+decayed still reads green). Falsifiable at implementation review: name the
+edit that makes the re-evaluation stop, and show a check that fails on it.
 
 **PW-20 — Sybil-resistance replacement is a required co-deliverable, not
 optional follow-on scope.** `peer_id` and the outbound-connectivity floor
