@@ -7,7 +7,15 @@ below (PW-3 correction, PW-22 rewrite, PW-27, PW-28). **Second round folded
 2026-08-31:** §1 threat-model framing added; PW-8 ruled (option (a), PCS
 not required for gossip) with two BOLT-8 spec corrections from a
 primary-source read; PW-19a added recording the standing no-authentication
-constraint; PW-23a added as its implementation rider. Sequencing ruling:
+constraint; PW-23a added as its implementation rider. **Third round:**
+PW-19a's citation task closed (three jointly-entailing rulings located and
+cited); PW-22 narrowed to a coverage gap check on the strength of the
+verified `derive_socks_user` per-persona isolation. **Fourth round:** PW-19a
+gains the `XK`/`IK`-are-inapplicable-not-rejected explanation (Noise pattern
+letters, the `K` pre-message, why authentication needs an out-of-band trust
+anchor gossip peers lack); PW-8 gains the pattern-transferability paragraph
+(`ck` rotation is framework-level and transfers to `NN`; the authentication
+context does not and is conceded). Sequencing ruling:
 this lands first as its own docs PR with `PW-` registered in the index at
 birth (rule 94 §1); P2P-1 (the wire census) is the next artifact and absorbs
 §7's open tasks as census work rather than a separate errand. This is not
@@ -80,7 +88,7 @@ each must own its actual scope.
 | PW-5 | Static-static exchange has no direct KEM equivalent; the replacement (`skem` + key-confirmation message) costs a round trip. Directly relevant: RT-9-adjacent, operator-pinned patterns (KK/IK-family) rely on `ss`/`se`/`es`. | `2022539_PQC_Noise.pdf` §2.3 (translation recipe) | Scope the extra round-trip cost explicitly wherever a mutually-pinned pattern is used |
 | PW-6 | No standardized test-vector suite exists yet for PQNoise/hybrid patterns — NoisePQC++'s own authors generated their own deterministic vectors. | `2608.00954v1_Noise_PQC.pdf` §5.2.3 | **P2P-2 must budget minting Shekyl's own pinned hybrid-handshake KATs from scratch — no external oracle to lean on** |
 | PW-7 | Rust prior art exists (Clatter) but is narrower in scope (X25519-only classical side); worth reading for pattern-encoding decisions, not depending on (no-FFI discipline). | `2022539_PQC_Noise.pdf` §2.4.1 references | Informational |
-| PW-8 | **Rekey schedule — RULED for gossip: option (a), BOLT-8-style symmetric KDF rotation. PCS is not a P2P requirement.** *Spec corrections from a primary-source read of `lightning/bolts/08-transport.md` (master): rotation fires every **500 messages**, not 1,000 — the spec rotates after 1,000 **nonce increments**, and each message consumes two nonces (encrypted length prefix + body). And BOLT-8 is not an alternative to a Noise pattern — it **is** Noise (`Noise_XK_secp256k1_ChaChaPoly_SHA256`) plus a rotation scheme, so the real axis is rekey mechanism, orthogonal to pattern choice.* **Mechanism:** `ck', k' = HKDF(ck, k)`, reset nonce to 0, per-direction (`sck`/`rck` independent). Zero wire cost, invisible to any observer, inherits the hybrid-PQ root (every rotated key descends from the ML-KEM-mixed `ck`, so HNDL/forward-secrecy survives rotation), no PW-28 interaction at all. **Why PCS is not required, on the merits rather than on cost:** PCS pays out only when an adversary obtains session keys, *loses* that capability, and the session still matters afterward. On an open gossip network the dominant adversary never attacks the session — being a peer is free, and every relay is a middle-man by construction, so stolen session keys grant a view already available by dialing in. The adversary who *does* hold keys (node owner / RCE / hypervisor) has **permanent** access, which PCS by definition cannot heal, and sees plaintext mempool and stem state regardless. Recorded-ciphertext decryption (HNDL) is **forward secrecy's** job, which (a) provides. Residual PCS-favouring cases — transient memory disclosure, live-VM-snapshot, side-channel extraction, bad handshake-time entropy — are real but narrow and each has a better-targeted answer (the Rust rewrite; co-residency avoidance; startup entropy health checks) than a periodic full re-handshake. **Options rejected, with reasons:** **(b) WireGuard-style periodic re-handshake** — buys PCS at ~2.4–2.8 KB per interval (vs BOLT-8's 166 B classical handshake: 50+50+66, ~15×) plus a cadence fingerprint requiring jitter *and* padding to suppress; not worth it for a threat whose precondition rarely holds here. **(c) KEM-ified ratchet** — PW-4 bites (Double Ratchet's asymmetric half is DH-shaped); research-grade, rejected per get-it-right-not-get-it-now. **Structural finding worth keeping:** the three options are **not independently tunable** — a symmetric KDF chain has no entropy source an attacker lacks, so "harden (a) for healing" does not converge on a modified (a); it *becomes* (b) or (c). If PCS is ever required, (a) is disqualified at the start, not after a hardening attempt. **Scope of this ruling: gossip/P2P only.** RPC has operator-controlled endpoints, no open join, genuinely sensitive plaintext, and session-key theft as the only path in — a different threat model that may warrant a different answer, and is governed by `RPC_TRANSPORT_POSTURE.md`, not here. | `lightning/bolts/08-transport.md` (master, read this session — rotation §, act sizes, encrypted length prefix); WireGuard rekey timers (**not re-verified at primary source — see note**); this session's threat wargame | **Ruled (gossip). Open only for RPC, out of scope here.** |
+| PW-8 | **Rekey schedule — RULED for gossip: option (a), BOLT-8-style symmetric KDF rotation. PCS is not a P2P requirement.** *Spec corrections from a primary-source read of `lightning/bolts/08-transport.md` (master): rotation fires every **500 messages**, not 1,000 — the spec rotates after 1,000 **nonce increments**, and each message consumes two nonces (encrypted length prefix + body). And BOLT-8 is not an alternative to a Noise pattern — it **is** Noise (`Noise_XK_secp256k1_ChaChaPoly_SHA256`) plus a rotation scheme, so the real axis is rekey mechanism, orthogonal to pattern choice.* **Mechanism:** `ck', k' = HKDF(ck, k)`, reset nonce to 0, per-direction (`sck`/`rck` independent). Zero wire cost, invisible to any observer, inherits the hybrid-PQ root (every rotated key descends from the ML-KEM-mixed `ck`, so HNDL/forward-secrecy survives rotation), no PW-28 interaction at all. **Why PCS is not required, on the merits rather than on cost:** PCS pays out only when an adversary obtains session keys, *loses* that capability, and the session still matters afterward. On an open gossip network the dominant adversary never attacks the session — being a peer is free, and every relay is a middle-man by construction, so stolen session keys grant a view already available by dialing in. The adversary who *does* hold keys (node owner / RCE / hypervisor) has **permanent** access, which PCS by definition cannot heal, and sees plaintext mempool and stem state regardless. Recorded-ciphertext decryption (HNDL) is **forward secrecy's** job, which (a) provides. Residual PCS-favouring cases — transient memory disclosure, live-VM-snapshot, side-channel extraction, bad handshake-time entropy — are real but narrow and each has a better-targeted answer (the Rust rewrite; co-residency avoidance; startup entropy health checks) than a periodic full re-handshake. **Options rejected, with reasons:** **(b) WireGuard-style periodic re-handshake** — buys PCS at ~2.4–2.8 KB per interval (vs BOLT-8's 166 B classical handshake: 50+50+66, ~15×) plus a cadence fingerprint requiring jitter *and* padding to suppress; not worth it for a threat whose precondition rarely holds here. **(c) KEM-ified ratchet** — PW-4 bites (Double Ratchet's asymmetric half is DH-shaped); research-grade, rejected per get-it-right-not-get-it-now. **Structural finding worth keeping:** the three options are **not independently tunable** — a symmetric KDF chain has no entropy source an attacker lacks, so "harden (a) for healing" does not converge on a modified (a); it *becomes* (b) or (c). If PCS is ever required, (a) is disqualified at the start, not after a hardening attempt. **Pattern-transferability, stated explicitly because this is exactly the kind of thing that gets missed unless specified.** BOLT-8 is `Noise_XK` and WireGuard is `Noise_IK` — both static-key patterns, both requiring node ids, both **incompatible with the no-node-id posture (PW-19a). Shekyl is not using either pattern.** What transfers is the *rotation mechanism*, and it transfers because it is **framework-level, not pattern-level**: every Noise handshake in every pattern maintains a chaining key `ck`, mixed with each key-agreement result and split into directional cipher keys at the end. `XK` accumulates three DH results into `ck` (two involving statics); `NN` accumulates exactly one (`ee`), plus the ML-KEM shared secret in the hybrid variant. Fewer inputs, no statics — **but `ck` exists either way**, and `ck', k' = HKDF(ck, k)` reads only `ck` and `k`, with no dependency on how `ck` was derived. It applies to `NN` verbatim. **What does NOT transfer is the security context:** BOLT-8 rotates on an authenticated channel, Shekyl would rotate on an unauthenticated one. That does not erode the property this row selects rotation for — forward secrecy against recorded ciphertext is a property about the **path observer**, who was never a participant and gains nothing from the absence of authentication (see §1's threat model). What rotation cannot do on an unauthenticated channel is protect you from your counterparty — already conceded under PW-19a, and no rekey scheme in any pattern would have helped there. **Do not read "we adopted BOLT-8's rekey" as "we adopted BOLT-8's pattern"** — the two halves have different transferability, which is why the correction that BOLT-8 *is* Noise-plus-rotation (above) is load-bearing rather than pedantic. **Scope of this ruling: gossip/P2P only.** RPC has operator-controlled endpoints, no open join, genuinely sensitive plaintext, and session-key theft as the only path in — a different threat model that may warrant a different answer, and is governed by `RPC_TRANSPORT_POSTURE.md`, not here. | `lightning/bolts/08-transport.md` (master, read this session — rotation §, act sizes, encrypted length prefix); WireGuard rekey timers (**not re-verified at primary source — see note**); this session's threat wargame | **Ruled (gossip). Open only for RPC, out of scope here.** |
 
 ---
 
@@ -146,9 +154,57 @@ is the same one that already killed persona-identity-as-admission-signal
 (PW-21) and address/subnet/ASN-based admission (§6.10,
 `DAEMON_RELAY_PRIVACY.md`); it has now been re-litigated at least three
 times and must not be re-opened by a future round noticing that `NN` is
-unauthenticated. **Locate and cite the original ruling's home document when
-this register lands**, so the pointer exists and the fourth re-litigation
-doesn't happen.
+unauthenticated. Its landed citation is below.
+
+**Why `XK`/`IK` are inapplicable, not rejected — pre-empting the predictable
+"but Lightning/WireGuard authenticate, why don't we" re-litigation.** Noise
+pattern names are two letters: initiator's static handling, then
+responder's. **N** = no static key; **K** = static **Known to the other
+party in advance**, supplied out-of-band as a *pre-message* and never sent
+on the wire; **X** = static transmitted (encrypted) during the handshake;
+**I** = static sent immediately. So the `K` in `XK` is not a mechanism that
+authenticates strangers — **it is the assumption that the parties are not
+strangers.** BOLT-8 states it directly: as a pre-message the initiator must
+know the responder's identity public key, which is never transmitted during
+the handshake; a failed act-one MAC means precisely that the initiator did
+not know it. WireGuard's `IK` is the same on the responder side — the paper
+has peers exchanging static public keys with each other a priori as their
+static identities, OpenSSH-style. In both, the prior knowledge comes from
+out-of-band configuration: a `nodeid@host:port` connection string, or a
+config file. **Authentication is by definition "this is the key I already
+expected," so it requires a trust anchor established outside the protocol.**
+A gossip peer found via discovery has none by construction. `XK`/`IK`
+therefore have a precondition Shekyl's posture forbids — they are not
+options declined on privacy grounds but patterns whose entry requirement
+does not exist here. `NN` is not the weak choice among available patterns;
+it is the only honest one, and its properties (both parties ephemeral, no
+static anywhere, nothing to enumerate) are what PW-19a *requires*, not a
+cost it imposes.
+
+**Citation — task closed.** No single landed sentence states this
+constraint; **three independent rulings jointly entail it**, which is
+stronger than one sentence and is how the row should be cited:
+1. **Scope level** — `RPC_TRANSPORT_POSTURE.md` §2.1 (`:99-106`): "The
+   peer-to-peer layer talks to strangers by construction; that is what a
+   blockchain is… RPC is operator-to-operator; P2P is adversarial by
+   design and hardened separately."
+2. **Mechanism level** — `DAEMON_RELAY_PRIVACY.md` §12.10 (`:2480`,
+   `:2498`): admission is "transport-blind (work, not identity)" — the
+   selection rule deliberately does not distinguish adversary from honest;
+   `:7396` confirms the toll is paid in work precisely so a fresh peer
+   needs no cross-session identity.
+3. **Anti-ruling level** — `Q12_D6A_PEER_DISCOVERY_RUN.md` (`:2910-2917`):
+   a stable identity announced at the p2p layer "would hand back the
+   linkage the transport layer is built to deny," with identity-as-signal
+   rejected twice (`:2979`, `:3013` — "a privacy regression wearing a…"
+   sybil-resistance and robustness argument respectively).
+
+Cite all three, with the note that the constraint is **entailed jointly** —
+scope (strangers by construction), mechanism (admission is work-not-identity),
+anti-ruling (stable identity is the hazard the transport denies) — rather
+than stated in any single sentence. That phrasing also inoculates against
+the "but no doc actually says it" form of re-litigation this row exists to
+prevent.
 
 **Consequences, recorded rather than treated as open problems:**
 - **Clearnet MITM is a conceded adversary capability.** Not a gap. On Tor
@@ -213,6 +269,18 @@ search for the "SP-T serving-loop arc" the index references), and the SH
 serving-host arc (`SH-1…SH-2`, IMPLEMENTATION_INDEX — moved serving to the
 far side of a custody boundary, may or may not also cover submission).
 **Deferred to P2P-1 as census work, not resolved here.**
+
+**Partial answer already in the tree, verified this session — narrows the
+question further.** `shekyl-p-transport::derive_socks_user`
+(`rust/shekyl-p-transport/src/lib.rs:134`) derives a per-persona SOCKS
+username by cSHAKE256 over the **full** canonical `P` id (no truncation or
+modulo, collision-resistant except with negligible probability), giving
+per-persona SOCKS stream isolation so personas do not share a circuit fate;
+`Q12_D6A_PEER_DISCOVERY_RUN.md` §10.9 pins one-P-per-wallet-on-wire. So the
+P-transport lane **already denies persona linkage at the transport layer**
+for the paths it covers. PW-22 is therefore not "is persona linkage
+defended" — it is strictly a **coverage gap check**: does that isolation
+extend to the serve-credit *submission* path, or only to the serving path?
 
 ---
 
