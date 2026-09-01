@@ -82,7 +82,7 @@ use rand_core::OsRng;
 use shekyl_archival_retention::{
     debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, settlement_epoch_at_height,
-    unbond_record_statics, unbond_vin_statics, verify_bond_post_ct_balance,
+    unbond_pre_cooldown_guards, unbond_vin_statics, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_unbond_bond_post, whole_record_last_served,
     ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
     ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
@@ -732,7 +732,7 @@ fn verify_debit_arm(
     let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
         return Err(VerifyFailure::Malformed);
     };
-    if unbond_record_statics(
+    if unbond_pre_cooldown_guards(
         &vin,
         record.bonded_total_atomic(),
         record.bad_interval_count(),

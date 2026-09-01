@@ -552,8 +552,8 @@ pub fn verify_join_market_bond_post(
     Ok(())
 }
 
-/// The Unbond guards decidable from the **record's cheap fields** — its
-/// balance and its bad-interval count — with no per-shard scan.
+/// Every Unbond guard that runs **before the release cooldown** — i.e. every
+/// guard decidable without the per-shard last-served scan.
 ///
 /// Split out for the same reason as [`unbond_vin_statics`], and to fix a
 /// sharper problem: the daemon's gather deliberately skips its per-shard scan
@@ -564,10 +564,18 @@ pub fn verify_join_market_bond_post(
 /// Running these before the belt restores the belt's meaning: reaching it now
 /// means a skip nothing explains.
 ///
+/// It holds the original sequence **including** [`unbond_vin_statics`], and
+/// that is not tidiness: an earlier revision extracted only the record-keyed
+/// guards, which moved `DebitNotFullBalance` ahead of `NotFullUnbond` for a vin
+/// invalid in both ways. `shekyl-ffi` pins that mapping and went red. A
+/// refactor that changes which error a caller sees is not a refactor, so the
+/// whole pre-cooldown block moves together and the order is preserved by
+/// construction.
+///
 /// The caller supplies `current_bonded` already unwrapped, because record
 /// ABSENCE is a different verdict on the submit path (a competing exit,
 /// classified at Phase D) than it is here.
-pub fn unbond_record_statics(
+pub fn unbond_pre_cooldown_guards(
     vin: &ArchivalBondPostVin,
     current_bonded: u64,
     record_bad_interval_count: usize,
@@ -575,6 +583,7 @@ pub fn unbond_record_statics(
     if current_bonded == 0 {
         return Err(BondPostError::NothingToUnbond);
     }
+    unbond_vin_statics(vin)?;
     // The debit removes the whole current balance (§3.2 table; §4.3 refund).
     if vin.bond_debit != current_bonded {
         return Err(BondPostError::DebitNotFullBalance);
@@ -667,9 +676,7 @@ pub fn verify_unbond_bond_post(
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
     };
-    unbond_record_statics(vin, current_bonded, record_bad_interval_count)?;
-
-    unbond_vin_statics(vin)?;
+    unbond_pre_cooldown_guards(vin, current_bonded, record_bad_interval_count)?;
 
     // Release cooldown: the grace window past the last served epoch must have
     // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).
