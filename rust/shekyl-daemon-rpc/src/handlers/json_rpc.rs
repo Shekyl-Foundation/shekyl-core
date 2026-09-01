@@ -206,6 +206,8 @@ enum NativeMethod {
     BlockHash,
     BlockHeaderByHeight,
     Block,
+    SyncInfo,
+    Connections,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -224,6 +226,8 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
             NativeMethod::BlockHeaderByHeight
         }
         "get_block" | "getblock" => NativeMethod::Block,
+        "sync_info" => NativeMethod::SyncInfo,
+        "get_connections" => NativeMethod::Connections,
         _ => return None,
     })
 }
@@ -277,6 +281,28 @@ async fn native_method(
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiChainFacts::new(core);
                 crate::methods::get_block(&facts, &request, fill_pow_hash)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::SyncInfo => {
+            // Two fact sources, one worker: `sync_info` is the only native
+            // method that reads the chain and the p2p layer, and they are
+            // not synchronised with each other — see `methods::sync_info`.
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let chain = crate::chain_facts::FfiChainFacts::new(Arc::clone(&core));
+                let p2p = crate::chain_facts::FfiP2pFacts::new(core);
+                crate::methods::sync_info(&chain, &p2p)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::Connections => {
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiP2pFacts::new(core);
+                crate::methods::get_connections(&facts)
             })
             .await;
             Some(frame_native(out))
@@ -370,20 +396,37 @@ mod tests {
         "flush_cache",
     ];
 
-    /// Every name the daemon serves natively, and the method each belongs to.
-    const SPECIFIED_NATIVE_METHODS: &[(&str, NativeMethod)] = &[
-        ("get_version", NativeMethod::Version),
-        ("get_block_count", NativeMethod::BlockCount),
-        ("getblockcount", NativeMethod::BlockCount),
-        ("on_get_block_hash", NativeMethod::BlockHash),
-        ("on_getblockhash", NativeMethod::BlockHash),
+    /// Every name the daemon serves natively, the method each belongs to,
+    /// and whether the restricted listener must refuse it.
+    ///
+    /// The third column arrived with RK-5a, which brought the first
+    /// **admin-only** native methods. Before it, every native name was public
+    /// and the test below could assert a constant; asserting a constant now
+    /// would say `sync_info` and `get_connections` are public, which is the
+    /// one thing about them that must not become true. `sync_info` lists this
+    /// node's peers and `get_connections` is the connection table — both are
+    /// the anonymity graph, so a migration that quietly made them public
+    /// would be a mission-#2 regression that no other test in this file sees.
+    const SPECIFIED_NATIVE_METHODS: &[(&str, NativeMethod, bool)] = &[
+        ("get_version", NativeMethod::Version, false),
+        ("get_block_count", NativeMethod::BlockCount, false),
+        ("getblockcount", NativeMethod::BlockCount, false),
+        ("on_get_block_hash", NativeMethod::BlockHash, false),
+        ("on_getblockhash", NativeMethod::BlockHash, false),
         (
             "get_block_header_by_height",
             NativeMethod::BlockHeaderByHeight,
+            false,
         ),
-        ("getblockheaderbyheight", NativeMethod::BlockHeaderByHeight),
-        ("get_block", NativeMethod::Block),
-        ("getblock", NativeMethod::Block),
+        (
+            "getblockheaderbyheight",
+            NativeMethod::BlockHeaderByHeight,
+            false,
+        ),
+        ("get_block", NativeMethod::Block, false),
+        ("getblock", NativeMethod::Block, false),
+        ("sync_info", NativeMethod::SyncInfo, true),
+        ("get_connections", NativeMethod::Connections, true),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -393,7 +436,7 @@ mod tests {
     /// could not do.
     #[test]
     fn native_dispatch_answers_every_alias_and_no_foreign_name() {
-        for (name, expected) in SPECIFIED_NATIVE_METHODS {
+        for (name, expected, _) in SPECIFIED_NATIVE_METHODS {
             assert_eq!(
                 native_method_for(name),
                 Some(*expected),
@@ -404,7 +447,6 @@ mod tests {
         // handler that does not exist yet.
         for name in [
             "get_info",
-            "sync_info",
             "hard_fork_info",
             "get_block_by_hash",
             "getblockcount2",
@@ -428,15 +470,26 @@ mod tests {
         assert!(!pow_hash_entitled(false, true), "not asked for, restricted");
     }
 
-    /// None of the natively-served names is admin-only, so the restricted
-    /// listener serves them too — asserted through `method_is_gated`, the
-    /// function `handle` calls, not through the list it reads.
+    /// Each native name is gated exactly as specified, and none is gated on
+    /// the unrestricted listener — asserted through `method_is_gated`, the
+    /// function `handle` calls, rather than through the list it reads.
+    ///
+    /// Both directions matter and for different reasons. A public method that
+    /// became gated is a route the wallet loses; a gated one that became
+    /// public is peer topology served to anyone who asks. Migrating a method
+    /// out of C++ moves it past this gate, so this is the assertion that
+    /// notices.
     #[test]
-    fn native_methods_are_never_gated() {
-        for (name, _) in SPECIFIED_NATIVE_METHODS {
+    fn native_methods_are_gated_exactly_as_specified() {
+        for (name, _, gated) in SPECIFIED_NATIVE_METHODS {
+            assert_eq!(
+                method_is_gated(true, name),
+                *gated,
+                "{name}: restricted-listener gating must match the specification"
+            );
             assert!(
-                !method_is_gated(true, name),
-                "{name} must answer on the restricted listener"
+                !method_is_gated(false, name),
+                "{name} must answer on the unrestricted listener"
             );
         }
     }

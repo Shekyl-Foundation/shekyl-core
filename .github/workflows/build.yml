@@ -296,13 +296,18 @@ jobs:
           # `cargo test` reports "0 passed" and exits 0 when a filter matches
           # nothing. The count assertion is what refuses that green no-op
           # (rule 47: a gate must assert its own subject exists).
-          # Two guards, run one at a time so each asserts its own "1 passed":
-          # the restricted gate through the FFI bridge, and the console's
-          # in-process arm, which RK-4c shipped broken because only the remote
-          # arm was ever exercised.
+          # Run one at a time so each asserts its own "1 passed": the
+          # restricted gate through the FFI bridge, the caps the migrated
+          # handlers apply themselves, and the console's in-process arm —
+          # which RK-4c shipped broken because only the remote arm was ever
+          # exercised. The p2p console leg carries an extra job: it is what
+          # makes `print_net_stats`' bridged `/get_limit` call safe to keep
+          # until RK-8 migrates that route (§2.1.1).
           for t in \
             engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
-            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
+            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm \
+            engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm \
+            engine::regtest_e2e::native_handlers_apply_their_own_request_caps
           do
             set +e
             cargo test -p shekyl-engine-core --lib "$t" \

@@ -271,6 +271,163 @@ void shekyl_rpc_tx_json_free(void* owner);
 int shekyl_rpc_key_images_spent(core_rpc_handle* h, const uint8_t* key_images,
     size_t count, uint8_t* out_status);
 
+// ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
+//
+// `m_p2p` cannot be doubled, so these exports are the rule's other half: the
+// thin `extern "C"` adapter is the *only* thing that touches it, and it does
+// nothing but transcribe. Every derived quantity the retired C++ handlers
+// computed inline — idle times, live time, KiB/s averages, the state name,
+// peer-id and connection-id renderings, the ipv4-only `ip`/`port` strings,
+// the block-queue overview — is computed in Rust from the raw fields below,
+// where a unit test can reach it without a network.
+
+// Process start plus the global throttle counters.
+//
+// The one export with no free-function body: five scalars with no
+// classification between them. Splitting it would produce a function whose
+// test could only restate its own inputs.
+typedef struct shekyl_rpc_net_stats_facts {
+    uint64_t start_time;         // unix seconds, the core's start
+    uint64_t total_packets_in;
+    uint64_t total_bytes_in;
+    uint64_t total_packets_out;
+    uint64_t total_bytes_out;
+} shekyl_rpc_net_stats_facts;
+
+int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out);
+
+// One live p2p connection, raw.
+//
+// `started` / `last_recv` / `last_send` are absolute unix seconds and the
+// counters are absolute totals: the *elapsed* quantities the wire carries are
+// derived in Rust against the single `now` this export reports beside the
+// list. The C++ this replaces read the clock **twice** per connection — once
+// for the idle times and again for the averages — so a connection could
+// report a `live_time` that disagreed with the divisor its own averages used.
+// One clock read for the whole snapshot makes that unrepresentable.
+typedef struct shekyl_rpc_connection_facts {
+    // `network_address::str()` — "host:port" for ipv4, the onion for tor.
+    const char*  address;
+    size_t       address_len;
+    // `network_address::host_str()` — the host alone.
+    const char*  host;
+    size_t       host_len;
+    uint64_t     peer_id;              // rendered as hex by the caller
+    uint8_t      connection_id[16];    // raw uuid; hex is the caller's job
+    uint64_t     started;              // unix seconds
+    uint64_t     last_recv;            // unix seconds; 0 if never
+    uint64_t     last_send;            // unix seconds; 0 if never
+    uint64_t     recv_count;           // bytes, absolute
+    uint64_t     send_count;           // bytes, absolute
+    // Bytes/s, raw. Crossing as `double` rather than a truncated integer for
+    // the reason every other derived value in this POD crosses raw: the
+    // truncation is a computation, `static_cast<uint64_t>` of a NaN, an
+    // infinity, a negative or an out-of-range value is undefined, and these
+    // are the outputs of a rate estimator. The caller clamps.
+    double       current_speed_down;
+    double       current_speed_up;
+    uint64_t     height;               // the peer's claimed blockchain height
+    uint32_t     support_flags;
+    uint32_t     pruning_seed;
+    uint16_t     port;                 // `network_address::port()`, 0 if none
+    uint8_t      state;                // cryptonote_connection_context::state
+    uint8_t      address_type;         // epee type id: 1 ipv4, 2 ipv6, 4 tor…
+    uint8_t      incoming;
+    uint8_t      localhost;
+    uint8_t      local_ip;
+    uint8_t      reserved[9];
+} shekyl_rpc_connection_facts;
+
+// Fills a C++-owned view of the live connections and the instant they were
+// read at; release `*out_owner` with `shekyl_rpc_connections_free`.
+int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
+    const shekyl_rpc_connection_facts** out, size_t* out_len, void** out_owner);
+void shekyl_rpc_connections_free(void* owner);
+
+// One span in the block-download queue.
+//
+// `rate` and `speed_fraction` cross as floats and are rounded by the caller.
+// The C++ rounded with `(uint32_t)(x + 0.5f)`, which is undefined for a
+// negative or out-of-range value; the Rust rounding is total, and the ×100
+// that turns `speed_fraction` into the wire's percentage goes with it.
+typedef struct shekyl_rpc_sync_span_facts {
+    const char*  remote_address;       // `network_address::str()` of the origin
+    size_t       remote_address_len;
+    uint64_t     start_block_height;
+    uint64_t     nblocks;
+    uint64_t     size;                 // bytes held for this span
+    uint8_t      connection_id[16];    // raw uuid; hex is the caller's job
+    float        rate;                 // bytes/s
+    float        speed_fraction;       // 0..1; the wire carries 100x this
+    // Whether the span's blocks have **arrived**, as opposed to being
+    // requested and still outstanding. Exported rather than inferred from
+    // `size`: the overview rendering branches on exactly this bit, and
+    // "size == 0" is a different question that happens to agree today.
+    uint8_t      filled;
+    uint8_t      reserved[7];
+} shekyl_rpc_sync_span_facts;
+
+// The p2p facts `sync_info` needs that are not connections and not the chain
+// tip: the download queue and the stripe the node wants next. Release
+// `*out_owner` with `shekyl_rpc_sync_spans_free`.
+//
+// `next_needed_pruning_stripe` is a **stripe**, not a seed — the wire field
+// it feeds is named `next_needed_pruning_seed`, which is an inherited
+// misnomer the caller carries deliberately (see the cutover doc's §7).
+int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_stripe,
+    const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner);
+void shekyl_rpc_sync_spans_free(void* owner);
+
+// One peerlist entry, white or gray.
+//
+// The three address arms differ in what `host` means — the ip string for
+// ipv4, `host_str()` for ipv6, the whole `str()` for anything else — so the
+// adapter resolves them here, where the epee type dispatch has to live, and
+// the caller has no branch left to get wrong.
+typedef struct shekyl_rpc_peer_facts {
+    const char*  host;
+    size_t       host_len;
+    uint64_t     id;
+    uint64_t     last_seen;
+    uint32_t     ip;                   // ipv4 only, octets in network order; else 0
+    uint32_t     pruning_seed;
+    uint16_t     port;                 // 0 for the address arms that carry none
+    uint8_t      white;                // 1 = white list, 0 = gray
+    // Filled unconditionally, so the `include_blocked` policy is the caller's
+    // to apply. The C++ skipped the check when the request asked to include
+    // blocked peers; this takes the host-blocked lock once per entry either
+    // way, which is the price of moving a request policy out of the facts.
+    uint8_t      blocked;
+    uint8_t      reserved[4];
+} shekyl_rpc_peer_facts;
+
+// `public_only` selects `get_public_peerlist` over `get_peerlist`; it is a
+// different p2p call, not a filter, so it cannot move to the caller. Release
+// `*out_owner` with `shekyl_rpc_peer_list_free`.
+int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
+    const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner);
+void shekyl_rpc_peer_list_free(void* owner);
+
+// ── Constants the console renders with ──────────────────────────────────────
+//
+// Neither takes a handle, and that is what makes them usable: `shekyld
+// <command>` runs this same binary against a *remote* daemon, with no core to
+// ask, so anything the renderer needs from C++ configuration has to be
+// reachable without one. They cross rather than being restated in Rust
+// because a duplicated constant is the drift this cutover deletes rather than
+// synchronizes.
+
+// The two peerlist capacities `print_peer_list_stats` reports a fraction of.
+void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
+
+// The stripe label `sync_info` prints beside a span:
+// `tools::get_pruning_seed(start_block_height, UINT64_MAX, LOG_STRIPES)`.
+// `UINT64_MAX` is the sentinel the console has always passed — it means "not
+// in the tip window", so the answer is a pure function of the height. Behind
+// it are `make_pruning_seed`'s bit layout and three `cryptonote_config.h`
+// constants, none of which gets a second definition.
+uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
@@ -278,6 +435,11 @@ void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_
 int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
 int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
+void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
+int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed);
+// The three RK-5a list PODs carry pointers, which have no seed value to fill
+// and compare, so they are pinned by layout instead — see
+// `rpc_facts_ffi_roundtrip.cpp`, as `shekyl_rpc_tx_entry` is.
 void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
 int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
 
@@ -292,17 +454,29 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 // a core_rpc_server. A facts export shaped as one opaque block would be
 // testable only through a live daemon; new exports take this shape.
 //
-// `shekyl_rpc_chain_tip` is not split this way yet: it reads
-// `is_synchronized()` off the p2p payload object, for which this tree has no
-// test double, so splitting it would move the untestable dependency rather
-// than remove it. It is covered by the live daemon check until a p2p double
-// exists (RK-5 builds one for `get_info`, which needs the same object).
+// **The seam's rule, settled in RK-5a.** A body takes what a fixture can
+// build as objects (`Blockchain&`, the pool) and everything else — the p2p
+// reads, the build-time constants — **as scalars the adapter snapshots**.
+// This is not a convenience: `m_p2p` is a concrete
+// `node_server<t_cryptonote_protocol_handler<cryptonote::core>>`, not an
+// interface, so nothing can subclass it, and the one `node_server` harness in
+// the tree (tests/unit_tests/node_server.cpp) instantiates the template on
+// `test_core` — a different type, not a double for this one. A p2p double
+// cannot be built, so the p2p facts arrive as plain integers a test supplies
+// and the thin `extern "C"` adapter is the only thing that touches `m_p2p`.
+//
+// `shekyl_rpc_chain_tip` was the one export with no fixture, written before
+// this shape existed; RK-5a retrofitted it, and it is now the smallest
+// example of the rule.
 
 #include "crypto/hash.h"
 
 namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
+
+int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
+    uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept;
 
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
     shekyl_rpc_block_hash_facts* out) noexcept;

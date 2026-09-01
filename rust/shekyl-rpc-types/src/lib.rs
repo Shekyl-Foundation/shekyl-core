@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 pub mod bin_commands;
 pub mod chain;
 pub mod hash;
+pub mod p2p;
 pub mod transactions;
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
@@ -81,6 +82,10 @@ pub use chain::{
     CORE_RPC_VERSION_MINOR,
 };
 pub use hash::{HashHex, HashHexError};
+pub use p2p::{
+    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
+    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+};
 pub use transactions::{
     GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,

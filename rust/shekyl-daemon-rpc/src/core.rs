@@ -77,6 +77,126 @@ pub enum TxSlot {
     },
 }
 
+/// One live p2p connection, copied out of the C++ view before its owner is
+/// released.
+///
+/// Raw and absolute, deliberately: the wire's elapsed times and rates are
+/// derived from these against the one `now` that came back beside the list,
+/// so a connection's reported lifetime and the divisor behind its own
+/// averages cannot come from different seconds.
+// No `Eq`: the raw speeds are `f64`, and they are raw on purpose.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectionFacts {
+    /// `network_address::str()`: "host:port" for ipv4, the onion for tor.
+    pub address: String,
+    /// `network_address::host_str()`: the host alone.
+    pub host: String,
+    pub peer_id: u64,
+    pub connection_id: [u8; 16],
+    /// Unix seconds.
+    pub started: u64,
+    pub last_recv: u64,
+    pub last_send: u64,
+    /// Bytes, absolute.
+    pub recv_count: u64,
+    pub send_count: u64,
+    /// Bytes/s, raw. Not yet an integer: `static_cast<uint64_t>` of a rate
+    /// estimator's output is undefined for a NaN, an infinity, a negative or
+    /// an out-of-range value, so the truncation happens here, clamped.
+    pub current_speed_down: f64,
+    pub current_speed_up: f64,
+    /// The peer's claimed blockchain height.
+    pub height: u64,
+    pub support_flags: u32,
+    pub pruning_seed: u32,
+    pub port: u16,
+    /// `cryptonote_connection_context::state`, unmapped — the name it renders
+    /// to is the wire projection's business.
+    pub state: u8,
+    /// epee type id: 1 ipv4, 2 ipv6, 4 tor, …
+    pub address_type: u8,
+    pub incoming: bool,
+    pub localhost: bool,
+    pub local_ip: bool,
+}
+
+/// The live connections plus the single instant they were read at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectionsSnapshot {
+    /// Unix seconds; one clock read for the whole list.
+    pub now: u64,
+    pub connections: Vec<ConnectionFacts>,
+}
+
+/// One span in the block-download queue, copied out of the C++ view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncSpanFacts {
+    /// `network_address::str()` of the span's origin.
+    pub remote_address: String,
+    pub start_block_height: u64,
+    pub nblocks: u64,
+    /// Bytes held for this span.
+    pub size: u64,
+    pub connection_id: [u8; 16],
+    /// Bytes/s.
+    pub rate: f32,
+    /// 0..1; the wire carries 100x this.
+    pub speed_fraction: f32,
+    /// Whether the span's blocks have arrived, as opposed to being requested
+    /// and still outstanding.
+    pub filled: bool,
+}
+
+/// The download queue plus the stripe this node wants next.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncSpansSnapshot {
+    /// A **stripe**, not a seed. The wire field it feeds is named
+    /// `next_needed_pruning_seed`, an inherited misnomer carried on purpose.
+    pub next_needed_pruning_stripe: u32,
+    pub spans: Vec<SyncSpanFacts>,
+}
+
+/// One peerlist entry, copied out of the C++ view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerFacts {
+    /// Already resolved per address arm by the adapter.
+    pub host: String,
+    pub id: u64,
+    pub last_seen: u64,
+    /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
+    /// returns it: the four octets in **network** order. On a little-endian
+    /// host that means 10.32.0.7 is `0x0700_200a`, which is the value in the
+    /// oracle vector beside the host string it renders to. Zero for every
+    /// non-ipv4 arm.
+    pub ip: u32,
+    pub pruning_seed: u32,
+    /// 0 for the address arms that carry none.
+    pub port: u16,
+    /// Which list it came from.
+    pub white: bool,
+    /// Whether the host is currently blocked; applying `include_blocked` is
+    /// this side's job.
+    pub blocked: bool,
+}
+
+/// Copy a C++-owned string view into an owned `String`.
+///
+/// Lossy, as the other string copies at this seam are (`block_at`'s `json`,
+/// `tx_to_json`): these are addresses and host names produced by epee's own
+/// formatters, so a non-UTF-8 byte would be a fault in the formatter rather
+/// than data a caller supplied, and there is no reply shape that could carry
+/// it faithfully anyway — the wire is JSON.
+///
+/// # Safety
+///
+/// `ptr` must be null or point to `len` readable bytes that outlive the call.
+unsafe fn borrowed_string(ptr: *const u8, len: usize) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
+}
+
 /// Project one FFI entry onto its [`TxSlot`], or `None` when `where_found`
 /// carries a discriminator the contract does not define.
 ///
@@ -234,6 +354,195 @@ impl CoreRpc {
         } else {
             Err(rc)
         }
+    }
+
+    /// Network throttle counters and the core's start time
+    /// (`shekyl_rpc_net_stats`); `Err(code)` on a non-OK return.
+    pub fn net_stats(&self) -> Result<ffi::NetStatsFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::NetStatsFactsFfi {
+            start_time: 0,
+            total_packets_in: 0,
+            total_bytes_in: 0,
+            total_packets_out: 0,
+            total_bytes_out: 0,
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_net_stats(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The live p2p connections (`shekyl_rpc_connections`), copied out of the
+    /// C++-owned view before it is released.
+    pub fn connections(&self) -> Result<ConnectionsSnapshot, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const ffi::ConnectionFactsFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut now: u64 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; the four out pointers are valid; on OK the
+        // view is valid until `shekyl_rpc_connections_free(owner)`, and every
+        // copy below is taken before that call.
+        unsafe {
+            let rc = ffi::shekyl_rpc_connections(
+                self.handle,
+                &raw mut now,
+                &raw mut rows,
+                &raw mut len,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let mut connections = Vec::with_capacity(len);
+            if !rows.is_null() {
+                for e in std::slice::from_raw_parts(rows, len) {
+                    connections.push(ConnectionFacts {
+                        address: borrowed_string(e.address, e.address_len),
+                        host: borrowed_string(e.host, e.host_len),
+                        peer_id: e.peer_id,
+                        connection_id: e.connection_id,
+                        started: e.started,
+                        last_recv: e.last_recv,
+                        last_send: e.last_send,
+                        recv_count: e.recv_count,
+                        send_count: e.send_count,
+                        current_speed_down: e.current_speed_down,
+                        current_speed_up: e.current_speed_up,
+                        height: e.height,
+                        support_flags: e.support_flags,
+                        pruning_seed: e.pruning_seed,
+                        port: e.port,
+                        state: e.state,
+                        address_type: e.address_type,
+                        incoming: e.incoming != 0,
+                        localhost: e.localhost != 0,
+                        local_ip: e.local_ip != 0,
+                    });
+                }
+            }
+            ffi::shekyl_rpc_connections_free(owner);
+            Ok(ConnectionsSnapshot { now, connections })
+        }
+    }
+
+    /// The block-download queue and the next needed pruning stripe
+    /// (`shekyl_rpc_sync_spans`), copied out before the owner is released.
+    pub fn sync_spans(&self) -> Result<SyncSpansSnapshot, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const ffi::SyncSpanFactsFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut stripe: u32 = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: as `connections` above.
+        unsafe {
+            let rc = ffi::shekyl_rpc_sync_spans(
+                self.handle,
+                &raw mut stripe,
+                &raw mut rows,
+                &raw mut len,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let mut spans = Vec::with_capacity(len);
+            if !rows.is_null() {
+                for e in std::slice::from_raw_parts(rows, len) {
+                    spans.push(SyncSpanFacts {
+                        remote_address: borrowed_string(e.remote_address, e.remote_address_len),
+                        start_block_height: e.start_block_height,
+                        nblocks: e.nblocks,
+                        size: e.size,
+                        connection_id: e.connection_id,
+                        rate: e.rate,
+                        speed_fraction: e.speed_fraction,
+                        filled: e.filled != 0,
+                    });
+                }
+            }
+            ffi::shekyl_rpc_sync_spans_free(owner);
+            Ok(SyncSpansSnapshot {
+                next_needed_pruning_stripe: stripe,
+                spans,
+            })
+        }
+    }
+
+    /// The peerlist (`shekyl_rpc_peer_list`), white entries then gray, copied
+    /// out before the owner is released.
+    pub fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: as `connections` above.
+        unsafe {
+            let rc = ffi::shekyl_rpc_peer_list(
+                self.handle,
+                u8::from(public_only),
+                &raw mut rows,
+                &raw mut len,
+                &raw mut owner,
+            );
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let mut peers = Vec::with_capacity(len);
+            if !rows.is_null() {
+                for e in std::slice::from_raw_parts(rows, len) {
+                    peers.push(PeerFacts {
+                        host: borrowed_string(e.host, e.host_len),
+                        id: e.id,
+                        last_seen: e.last_seen,
+                        ip: e.ip,
+                        pruning_seed: e.pruning_seed,
+                        port: e.port,
+                        white: e.white != 0,
+                        blocked: e.blocked != 0,
+                    });
+                }
+            }
+            ffi::shekyl_rpc_peer_list_free(owner);
+            Ok(peers)
+        }
+    }
+
+    /// The two compile-time peerlist capacities
+    /// (`shekyl_rpc_peerlist_limits`), as `(white, gray)`.
+    ///
+    /// Not restated in Rust: a duplicated constant is drift waiting to
+    /// happen, and these are p2p configuration the C++ owns.
+    pub fn peerlist_limits() -> (u32, u32) {
+        let mut white: u32 = 0;
+        let mut gray: u32 = 0;
+        // SAFETY: two valid out pointers; the export takes no handle and
+        // writes two compile-time constants.
+        unsafe { ffi::shekyl_rpc_peerlist_limits(&raw mut white, &raw mut gray) };
+        (white, gray)
+    }
+
+    /// The stripe label `sync_info` prints beside a span
+    /// (`shekyl_rpc_span_pruning_seed`).
+    ///
+    /// Handle-free, like [`Self::peerlist_limits`], and for the same reason:
+    /// `shekyld sync_info` renders against a *remote* daemon with no core to
+    /// ask, so a renderer's C++ constants must be reachable without one.
+    pub fn span_pruning_seed(start_block_height: u64) -> u32 {
+        // SAFETY: a pure function of its argument; no handle, no allocation.
+        unsafe { ffi::shekyl_rpc_span_pruning_seed(start_block_height) }
     }
 
     /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the

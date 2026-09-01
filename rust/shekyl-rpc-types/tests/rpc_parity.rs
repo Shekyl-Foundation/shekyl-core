@@ -18,10 +18,12 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    BlockHeader, GetBlockCountResponse, GetBlockHeaderByHeightResponse, GetBlockResponse,
-    GetHeightResponse, GetTransactionsRequest, GetTransactionsResponse, GetVersionResponse,
-    HardForkEntry, HashHex, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
-    RpcStatus, TxEntry, TxLocation, CORE_RPC_VERSION,
+    BlockHeader, ConnectionInfo, ConnectionState, GetBlockCountResponse,
+    GetBlockHeaderByHeightResponse, GetBlockResponse, GetConnectionsResponse, GetHeightResponse,
+    GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
+    GetTransactionsResponse, GetVersionResponse, HardForkEntry, HashHex, IsKeyImageSpentRequest,
+    IsKeyImageSpentResponse, KeyImageStatus, Peer, RpcStatus, SyncInfoPeer, SyncInfoResponse,
+    SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -777,4 +779,240 @@ fn v2_is_v1_minus_exactly_the_two_retired_members() {
         "each retired member must appear in at least one v1 vector, or its \
          removal is not actually being checked: {RETIRED:?} seen = {seen:?}"
     );
+}
+
+// ── RK-5a: the p2p seam ─────────────────────────────────────────────────────
+
+/// The `connection_info` both `get_connections` and `sync_info` carry, built
+/// from the same fixed facts the emitter used.
+fn vector_connection() -> ConnectionInfo {
+    ConnectionInfo {
+        incoming: true,
+        localhost: false,
+        local_ip: true,
+        address: "192.0.2.7:18080".to_owned(),
+        host: "192.0.2.7".to_owned(),
+        ip: "192.0.2.7".to_owned(),
+        port: "18080".to_owned(),
+        peer_id: "ee32594917a6a97e".to_owned(),
+        recv_count: 405,
+        recv_idle_time: 2,
+        send_count: 338,
+        send_idle_time: 3,
+        state: ConnectionState::Normal,
+        live_time: 4242,
+        avg_download: 11,
+        current_download: 12,
+        avg_upload: 13,
+        current_upload: 14,
+        support_flags: 3,
+        connection_id: "151c232a31383f464d545b626970777e".to_owned(),
+        height: 1_234_567,
+        pruning_seed: 384,
+        address_type: 1,
+    }
+}
+
+#[test]
+fn get_net_stats_matches_the_oracle() {
+    let built = GetNetStatsResponse {
+        status: RpcStatus::ok(),
+        start_time: 1_788_202_424,
+        total_packets_in: 101,
+        total_bytes_in: 202_020,
+        total_packets_out: 303,
+        total_bytes_out: 404_040,
+    };
+    assert_parity(include_str!("vectors/rpc/get_net_stats_v1.json"), &built);
+}
+
+#[test]
+fn get_peer_list_request_matches_the_oracle() {
+    let built = GetPeerListRequest {
+        public_only: false,
+        include_blocked: true,
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_peer_list_request_v1.json"),
+        &built,
+    );
+}
+
+/// `public_only` is the one `OPT` default in this slice that is **true**, so
+/// the defaults document is empty of members rather than carrying
+/// `public_only: true`. A mirror that defaulted it to false would emit a key
+/// the daemon never emitted and, worse, would ask for a different peerlist.
+#[test]
+fn get_peer_list_request_defaults_match_the_oracle() {
+    let built = GetPeerListRequest::default();
+    assert!(built.public_only, "the wire default is public-only");
+    assert_parity(
+        include_str!("vectors/rpc/get_peer_list_request_defaults_v1.json"),
+        &built,
+    );
+    assert_eq!(
+        parsed(include_str!(
+            "vectors/rpc/get_peer_list_request_defaults_v1.json"
+        ))
+        .as_object()
+        .expect("object")
+        .len(),
+        0,
+        "both members are optional at their defaults"
+    );
+}
+
+/// The three address arms in one document, and both `pruning_seed` states.
+#[test]
+fn get_peer_list_matches_the_oracle() {
+    let built = GetPeerListResponse {
+        status: RpcStatus::ok(),
+        white_list: vec![
+            // ipv4: `host` is the ip string the daemon rendered from `ip`.
+            Peer {
+                id: 0x1122_3344_5566_7788,
+                host: "10.32.0.7".to_owned(),
+                ip: 0x0700_200a,
+                port: 18080,
+                last_seen: 1_750_000_001,
+                pruning_seed: 0,
+            },
+            // ipv6: `host` is the bare host, `ip` stays zero, and this is the
+            // pruned entry — so `pruning_seed` appears here and nowhere else.
+            Peer {
+                id: 0x99aa_bbcc_ddee_ff00,
+                host: "2001:db8::1".to_owned(),
+                ip: 0,
+                port: 18081,
+                last_seen: 1_750_000_002,
+                pruning_seed: 384,
+            },
+        ],
+        gray_list: vec![Peer {
+            id: 0x0102_0304_0506_0708,
+            host: "abcdefghijklmnop.onion:18080".to_owned(),
+            ip: 0,
+            port: 0,
+            last_seen: 1_750_000_003,
+            pruning_seed: 0,
+        }],
+    };
+    assert_parity(include_str!("vectors/rpc/get_peer_list_v1.json"), &built);
+
+    // `ip` is a JSON *number* here. `get_connections` carries a field of the
+    // same name that is a *string*, and the pair of assertions is what keeps
+    // a future edit from unifying them.
+    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v1.json"));
+    assert!(
+        doc["white_list"][0]["ip"].is_number(),
+        "peer.ip is a number"
+    );
+}
+
+/// What an idle daemon answers: both sequences omitted, not `[]`.
+#[test]
+fn get_peer_list_empty_matches_the_oracle() {
+    let built = GetPeerListResponse {
+        status: RpcStatus::ok(),
+        white_list: Vec::new(),
+        gray_list: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_peer_list_empty_v1.json"),
+        &built,
+    );
+    let doc = parsed(include_str!("vectors/rpc/get_peer_list_empty_v1.json"));
+    let obj = doc.as_object().expect("object");
+    assert!(!obj.contains_key("white_list") && !obj.contains_key("gray_list"));
+}
+
+#[test]
+fn get_connections_matches_the_oracle() {
+    let built = GetConnectionsResponse {
+        status: RpcStatus::ok(),
+        connections: vec![vector_connection()],
+    };
+    assert_parity(include_str!("vectors/rpc/get_connections_v1.json"), &built);
+
+    let doc = parsed(include_str!("vectors/rpc/get_connections_v1.json"));
+    let entry = doc["connections"][0].as_object().expect("object");
+    // `ip` is a string here — the counterpart of the `peer.ip` assertion.
+    assert!(entry["ip"].is_string(), "connection_info.ip is a string");
+    // `ssl` is a C++ member with no `KV_SERIALIZE` row, so it never reached
+    // the wire. The emitter set it **true** on the object it captured, which
+    // is what makes this an assertion rather than a coincidence: had the
+    // field been serialized, it would be here and non-default.
+    assert!(
+        !entry.contains_key("ssl"),
+        "`ssl` was never on the wire and is not being reintroduced"
+    );
+}
+
+#[test]
+fn get_connections_empty_matches_the_oracle() {
+    let built = GetConnectionsResponse {
+        status: RpcStatus::ok(),
+        connections: Vec::new(),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_connections_empty_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn sync_info_matches_the_oracle() {
+    let built = SyncInfoResponse {
+        status: RpcStatus::ok(),
+        height: 1_234_567,
+        target_height: 1_234_600,
+        next_needed_pruning_seed: 1,
+        peers: vec![SyncInfoPeer {
+            info: vector_connection(),
+        }],
+        spans: vec![SyncSpan {
+            start_block_height: 1_234_570,
+            nblocks: 20,
+            connection_id: "151c232a31383f464d545b626970777e".to_owned(),
+            rate: 4096,
+            speed: 75,
+            size: 81920,
+            remote_address: "192.0.2.7:18080".to_owned(),
+        }],
+        overview: "[<...m_o]".to_owned(),
+    };
+    assert_parity(include_str!("vectors/rpc/sync_info_v1.json"), &built);
+
+    // The nesting is the wire's: a `sync_info` peer wraps the connection
+    // under `info`, where `get_connections` carries it directly.
+    let doc = parsed(include_str!("vectors/rpc/sync_info_v1.json"));
+    assert_eq!(
+        doc["peers"][0].as_object().expect("object").len(),
+        1,
+        "a sync_info peer has exactly the one `info` member"
+    );
+    assert_eq!(
+        doc["peers"][0]["info"],
+        parsed(&serde_json::to_string(&vector_connection()).expect("serialize"))
+    );
+}
+
+/// The idle case. `overview` is a **string** holding brackets, not an empty
+/// array — the one field in this reply where the two are easy to confuse.
+#[test]
+fn sync_info_empty_matches_the_oracle() {
+    let built = SyncInfoResponse {
+        status: RpcStatus::ok(),
+        height: 1,
+        target_height: 0,
+        next_needed_pruning_seed: 1,
+        peers: Vec::new(),
+        spans: Vec::new(),
+        overview: "[]".to_owned(),
+    };
+    assert_parity(include_str!("vectors/rpc/sync_info_empty_v1.json"), &built);
+    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v1.json"));
+    assert!(doc["overview"].is_string(), "overview is a string");
+    let obj = doc.as_object().expect("object");
+    assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
 }

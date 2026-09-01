@@ -308,36 +308,6 @@ namespace cryptonote
 
     
   //-----------------------------------------------
-  struct COMMAND_RPC_GET_NET_STATS
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t start_time;
-      uint64_t total_packets_in;
-      uint64_t total_bytes_in;
-      uint64_t total_packets_out;
-      uint64_t total_bytes_out;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(start_time)
-        KV_SERIALIZE(total_packets_in)
-        KV_SERIALIZE(total_bytes_in)
-        KV_SERIALIZE(total_packets_out)
-        KV_SERIALIZE(total_bytes_out)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   //-----------------------------------------------
   struct COMMAND_RPC_STOP_MINING
@@ -799,64 +769,7 @@ namespace cryptonote
   };
 
 
-  struct peer {
-    uint64_t id;
-    std::string host;
-    uint32_t ip;
-    uint16_t port;
-    uint64_t last_seen;
-    uint32_t pruning_seed;
 
-    peer() = default;
-
-    peer(uint64_t id, const std::string &host, uint64_t last_seen, uint32_t pruning_seed)
-      : id(id), host(host), ip(0), port(0), last_seen(last_seen), pruning_seed(pruning_seed)
-    {}
-    peer(uint64_t id, const std::string &host, uint16_t port, uint64_t last_seen, uint32_t pruning_seed)
-      : id(id), host(host), ip(0), port(port), last_seen(last_seen), pruning_seed(pruning_seed)
-    {}
-    peer(uint64_t id, uint32_t ip, uint16_t port, uint64_t last_seen, uint32_t pruning_seed)
-      : id(id), host(epee::string_tools::get_ip_string_from_int32(ip)), ip(ip), port(port), last_seen(last_seen), pruning_seed(pruning_seed)
-    {}
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(id)
-      KV_SERIALIZE(host)
-      KV_SERIALIZE(ip)
-      KV_SERIALIZE(port)
-      KV_SERIALIZE(last_seen)
-      KV_SERIALIZE_OPT(pruning_seed, (uint32_t)0)
-    END_KV_SERIALIZE_MAP()
-  };
-
-  struct COMMAND_RPC_GET_PEER_LIST
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool public_only;
-      bool include_blocked;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(public_only, true)
-        KV_SERIALIZE_OPT(include_blocked, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<peer> white_list;
-      std::vector<peer> gray_list;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(white_list)
-        KV_SERIALIZE(gray_list)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_SET_LOG_HASH_RATE
   {
@@ -1121,27 +1034,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_CONNECTIONS
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      std::list<connection_info> connections;
-      
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(connections)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_GET_BLOCK_HEADERS_RANGE
   {
@@ -1643,67 +1535,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_SYNC_INFO
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct peer
-    {
-      connection_info info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(info)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct span
-    {
-      uint64_t start_block_height;
-      uint64_t nblocks;
-      std::string connection_id;
-      uint32_t rate;
-      uint32_t speed;
-      uint64_t size;
-      std::string remote_address;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(start_block_height)
-        KV_SERIALIZE(nblocks)
-        KV_SERIALIZE(connection_id)
-        KV_SERIALIZE(rate)
-        KV_SERIALIZE(speed)
-        KV_SERIALIZE(size)
-        KV_SERIALIZE(remote_address)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t height;
-      uint64_t target_height;
-      uint32_t next_needed_pruning_seed;
-      std::list<peer> peers;
-      std::list<span> spans;
-      std::string overview;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE(target_height)
-        KV_SERIALIZE(next_needed_pruning_seed)
-        KV_SERIALIZE(peers)
-        KV_SERIALIZE(spans)
-        KV_SERIALIZE(overview)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
 
   struct COMMAND_RPC_POP_BLOCKS

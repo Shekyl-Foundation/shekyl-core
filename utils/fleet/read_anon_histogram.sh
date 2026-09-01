@@ -132,11 +132,24 @@ while read -r host port label; do
   # `/get_peer_list` is a PATH endpoint, not a json_rpc method — asking for it
   # over json_rpc returns -32601. Onion entries carry the address in `host`
   # with `ip`/`port` both 0, so `host` is the only usable key.
+  #
+  # `public_only: false` is sent EXPLICITLY, and it is load-bearing for what
+  # this script measures. It used to be implicit: the C++ bridge skipped
+  # deserialization entirely for an empty body, so a bare `curl` left the flag
+  # value-initialized to false and got the whole stored peerlist — while the
+  # same endpoint given `{}` ran the KV map, applied `OPT(public_only, true)`
+  # and answered the PUBLIC subset. One route, two questions, decided by
+  # whether the body was empty or `{}`. RK-5a removed that split (an absent
+  # body and an absent field now mean the same thing, the declared default),
+  # which would have silently narrowed this reading from stored candidates to
+  # the publicly shareable ones — the instrument changing what it counts
+  # without changing what it says. Asked for outright instead.
   out=$(timeout "$SSH_TIMEOUT" ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
      -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'
      echo '@@SPLIT@@'
-     curl -s -m 10 http://127.0.0.1:$port/get_peer_list" 2>/dev/null)
+     curl -s -m 10 http://127.0.0.1:$port/get_peer_list \
+       -H 'Content-Type: application/json' -d '{\"public_only\":false}'" 2>/dev/null)
 
   # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `get_connections` is
   # unavailable in restricted mode (-32601), and a `.get("result", {})` turns
