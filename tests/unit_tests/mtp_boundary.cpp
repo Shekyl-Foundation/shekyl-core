@@ -192,6 +192,36 @@ TEST(mtp_boundary, ftl_cases_pin_the_future_time_axis)
   }
 }
 
+// The template-edge premise, pinned on the pure rule owner: when the
+// window median sits exactly at the local FTL deadline, NO timestamp
+// satisfies both bounds — the local clock fails MTP and median + 1 fails
+// FTL. This empty constraint set is why create_block_template revalidates
+// its median + 1 bump and refuses template creation at the edge instead
+// of minting a self-rejecting template (blockchain.cpp, C2-R3-Q1 sub-b).
+// One tick later the set is non-empty again — also asserted, because the
+// refusal arm's legitimacy rests on the state being self-healing. (The
+// arm itself runs against time(NULL); its deterministic harness needs the
+// R9 clock-seam design and is recorded in the round doc, not skipped
+// silently.)
+TEST(mtp_boundary, template_edge_no_timestamp_satisfies_both_bounds)
+{
+  const uint64_t clock = 1000000;
+  const uint64_t edge_median = clock + SHEKYL_DAA_FTL_SECONDS;
+  const std::vector<uint64_t> edge_window(SHEKYL_DAA_MTP_WINDOW, edge_median);
+
+  uint64_t median = 0;
+  // The local clock itself is not above the median.
+  EXPECT_EQ(cryptonote::timestamp_rule_verdict::not_above_median,
+            cryptonote::shekyl_check_timestamp_rule(clock, edge_window, 0, clock, median));
+  EXPECT_EQ(edge_median, median);
+  // The smallest MTP-satisfying value busts FTL.
+  EXPECT_EQ(cryptonote::timestamp_rule_verdict::above_ftl,
+            cryptonote::shekyl_check_timestamp_rule(edge_median + 1, edge_window, 0, clock, median));
+  // Self-healing: one clock tick later the same bump is valid.
+  EXPECT_EQ(cryptonote::timestamp_rule_verdict::ok,
+            cryptonote::shekyl_check_timestamp_rule(edge_median + 1, edge_window, 0, clock + 1, median));
+}
+
 // A window wider than 11 is a caller bug (the newest-11 selection is the
 // caller's job, C2-R3-Q1 sub-a) and is refused loudly, never silently
 // medianed. This is the assertion that goes red if the alt path's

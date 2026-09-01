@@ -1955,6 +1955,21 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   if (!check_block_timestamp(b, median_ts))
   {
     b.timestamp = median_ts + 1;
+    // The floor does NOT license an invalid template. When the window
+    // median sits at the local FTL deadline, the constraint set
+    // {ts : ts > median AND ts <= now + FTL} is EMPTY for the current
+    // second (median + 1 busts FTL; a maximal median even wraps the +1),
+    // so revalidate the bump and refuse template creation honestly
+    // rather than hand the miner a template this node would reject. The
+    // state is at most one second wide and self-heals as the clock
+    // ticks (every stored timestamp passed FTL at its own admission, so
+    // median <= now + FTL always; equality is the only refusing case) —
+    // callers already handle false from this function and retry.
+    if (!check_block_timestamp(b, median_ts))
+    {
+      MERROR("create_block_template: no timestamp currently satisfies the C2-R3 rule (window median at the local FTL deadline); retry shortly");
+      return false;
+    }
   }
 
   CHECK_AND_ASSERT_MES(diffic, false, "difficulty overhead.");

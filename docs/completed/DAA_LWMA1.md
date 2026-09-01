@@ -1580,12 +1580,17 @@ if (!check_block_timestamp(b, median_ts))
 
 The pattern matches the Jagerman fix exactly (set to local clock,
 then bump to the smallest consensus-valid value if that would be
-rejected). **Correction note (2026-09-01):** the bump is `median_ts
-+ 1`, not the `median_ts` this section originally quoted — under the
+rejected). **Correction note (2026-09-01):** the bump is
+`median_ts + 1`, not the `median_ts` this section originally quoted — under the
 strict boundary re-ratified by C2-R3-Q1 a template *at* the median is
 one the node itself rejects; C2-R3-Q1 sub-b ruled the `+ 1` floor as
 part of the rule (the original `median_ts` form was self-consistent
-only with the non-strict comparison the refuted premise above assumed). The MTP window
+only with the non-strict comparison the refuted premise above assumed).
+The floor additionally revalidates: when the window median sits at the
+local FTL deadline no timestamp satisfies both bounds for the current
+second (an at-most-one-second, self-healing state), and template
+creation refuses loudly instead of issuing a self-rejecting template —
+see `CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3. The MTP window
 change from 60 to 11 (§9.6) preserves the patch's effectiveness;
 the patch is window-size-agnostic and works identically against
 either median size per jagerman's own commentary on the original

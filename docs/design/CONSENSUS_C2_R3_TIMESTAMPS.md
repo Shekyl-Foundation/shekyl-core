@@ -197,7 +197,11 @@ so the rewrite implements arithmetic, not a library.
 > window of the 11 timestamps immediately preceding the candidate on its own
 > chain (alt suffix + main prefix on the alt path), the window right-padded
 > with the genesis timestamp when fewer than 11 predecessors exist.
-> Miner templates floor their timestamp at `M + 1`.
+> Miner templates floor their timestamp at `M + 1`; when no timestamp
+> satisfies both bounds — `M` at the local FTL deadline, an at-most-one-
+> second self-healing state (every stored timestamp passed FTL at its own
+> admission, so `M ≤ now + 540` always) — template creation refuses
+> loudly rather than minting a template the node itself rejects.
 > The rule governs blocks at height ≥ 1: block 0 has no predecessors and
 > is pinned by the compiled genesis identity, not by this rule (its one
 > validator-side arrival is `Blockchain::init`'s locally constructed
@@ -281,10 +285,10 @@ rule symmetry.
 
 **Execution record (2026-09-01, this PR).** The plan below was executed as
 written; the rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
-(`blockchain.cpp:5528`, declared `blockchain.h` tail), consumed by the
-vector overload (`:5570`, now FTL-bearing and const-correct), the main-path
-window builder (`:5594`, carve-out deleted, genesis padding via the rule
-fn), the alt admission site (`:2317` newest-11 truncation + `:2322` call),
+(`blockchain.cpp:5568`, declared `blockchain.h` tail), consumed by the
+vector overload (`:5617`, now FTL-bearing and const-correct), the main-path
+window builder (`:5641`, carve-out deleted, genesis padding via the rule
+fn), the alt admission site (`:2332` newest-11 truncation + `:2337` call),
 and the template floor (`:1957`, `median + 1`). **Red observed first,
 all four losing legs, each for its named reason** (candidate accepted by the
 inherited code — "block verification context check failed"):
@@ -308,6 +312,29 @@ block 0 is pinned by the compiled genesis identity (a peer-supplied
 height-0 block is rejected by `handle_alternative_block`'s existing
 `block_height == 0` refusal, so the h == 0 arm is reachable only from
 init).
+
+Two review rounds (Copilot) tightened the landing further, both fixes
+evaluated on the merits rather than adopted verbatim:
+
+1. The FTL arm was rewritten to the saturating shape mirroring the Rust
+   twin (`candidate > clock && candidate − clock > FTL` ≡
+   `saturating_sub`), after a u64-boundary vector row demonstrated the
+   naive `clock + 540` deadline wraps and rejects an in-bound candidate
+   — observed red on the C++ side before the fix; Rust was already
+   saturating. Twin parity of arithmetic *shape*, not just truth table,
+   is the point: these two legs are the C3-cutover differential pair.
+2. The template floor gained the §4.3 edge-refusal clause: at
+   `M = now + 540` the constraint set is empty for the current second,
+   so `create_block_template` revalidates its `M + 1` bump and returns
+   false loudly instead of minting a self-rejecting template (rule 82 —
+   an honest refusal beats a doomed template; the state self-heals on
+   the next clock tick). The edge's existence and its self-healing are
+   pinned deterministically on the pure rule owner
+   (`template_edge_no_timestamp_satisfies_both_bounds`); the refusal
+   arm itself runs against `time(NULL)`, and its deterministic harness
+   needs the clock-seam design that census §10 batch **R9** (test seams
+   in production consensus paths) already owns — recorded here, not
+   silently skipped.
 
 1. **Shared boundary vectors first** (rule 30: vectors before
    implementation): `docs/test_vectors/MTP_BOUNDARY_V1.json` — cases
