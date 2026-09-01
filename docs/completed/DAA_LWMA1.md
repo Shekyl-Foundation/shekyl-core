@@ -1600,18 +1600,18 @@ the patch is window-size-agnostic and works identically against
 either median size per jagerman's own commentary on the original
 PR. No Phase 4 work required to add or modify the Jagerman patch.
 
-A minor doc-vs-code drift exists at the cached-template path
-(`blockchain.cpp:1540`), where the comment reads "ensures it can't
-get below the median of the last few blocks" but the code only
-guards against `< time(NULL)`. The cached template's timestamp
-was already MTP-validated when the non-cached path created it
-(lines 1650–1656 above), and the cache is invalidated on every
-new block addition (the `prev_id` check at line 1537), so the
-MTP-staleness window is bounded by template-cache lifetime
-(seconds). The drift is not load-bearing for the patch's
-correctness but the comment is misleading and should be cleaned
-up; recorded as a `FOLLOWUPS.md` item, not a Phase 4 atomic-cutover
-work item.
+A minor doc-vs-code drift existed at the cached-template path
+(`blockchain.cpp:1540` at this document's writing), where the comment
+read "ensures it can't get below the median of the last few blocks"
+but the code only guarded against `< time(NULL)`.
+**Resolved (2026-09-01, C2-R3 PR):** a cache hit now raises the
+timestamp to `now` and then **revalidates it through the C2-R3 rule
+owner** — on failure (a backward clock step can leave the cached
+timestamp beyond the current FTL deadline, the one case the raise
+cannot repair) the cache is dropped and the template is rebuilt
+through the fresh path, whose own edge refusal decides loudly. The
+misleading comment is gone with the raise-only path; no follow-up
+remains.
 
 **Disposition on header-level `±7xT` timestamp limits (zawy12
 issue #24 item 9).** zawy12 retired the header-level `+7xT` limit

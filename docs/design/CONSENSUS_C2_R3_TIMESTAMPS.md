@@ -303,11 +303,11 @@ consumes predicate + FTL sections today and gains the assembly consumer
 with the rewrite's window assembly at the C3 cutover.
 
 The rule's single C++ owner is `cryptonote::shekyl_check_timestamp_rule`
-(`blockchain.cpp:5568`, declared `blockchain.h` tail), consumed by the
-vector overload (`:5617`, now FTL-bearing and const-correct), the main-path
-window builder (`:5641`, carve-out deleted, genesis padding via the rule
-fn), the alt admission site (`:2332` newest-11 truncation + `:2337` call),
-and the template floor (`:1957`, `median + 1`). **Red observed first,
+(`blockchain.cpp:5594`, declared `blockchain.h` tail), consumed by the
+vector overload (`:5643`, now FTL-bearing and const-correct), the main-path
+window builder (`:5667`, carve-out deleted, genesis padding via the rule
+fn), the alt admission site (`:2358` newest-11 truncation + `:2363` call),
+the template floor (`:1977`, `median + 1` with the edge refusal), and the cached-template revalidation (`:1929`). **Red observed first,
 all four losing legs, each for its named reason** (candidate accepted by the
 inherited code — "block verification context check failed"):
 `gen_block_ts_at_median` (Q1 boundary), `gen_block_alt_ts_window_truncation`
@@ -331,8 +331,8 @@ height-0 block is rejected by `handle_alternative_block`'s existing
 `block_height == 0` refusal, so the h == 0 arm is reachable only from
 init).
 
-Two review rounds (Copilot) tightened the landing further, both fixes
-evaluated on the merits rather than adopted verbatim:
+Subsequent review rounds (Copilot) tightened the landing further, each
+fix evaluated on the merits rather than adopted verbatim:
 
 - The FTL arm was rewritten to the saturating shape mirroring the Rust
    twin (`candidate > clock && candidate − clock > FTL` ≡
@@ -353,6 +353,21 @@ evaluated on the merits rather than adopted verbatim:
    needs the clock-seam design that census §10 batch **R9** (test seams
    in production consensus paths) already owns — recorded here, not
    silently skipped.
+- The refusal's "at most one second, self-healing" claim was
+  subsequently qualified at every surface (§4.3, the rule-owner
+  comment, DAA §5.5): it holds under a **non-decreasing** local clock;
+  a backward step of `Δ` can hold the refusing state up to `Δ` seconds,
+  correctly, until the clock re-passes `M − 540`.
+- The **cached-template path** was the last bypass: a cache hit raised
+  the timestamp to `now` and returned without the rule (the raise
+  cannot repair a backward clock step, which can leave the cached
+  timestamp beyond the current FTL deadline — and the inherited
+  raise-only branch carried the very "ensures it can't get below the
+  median" comment DAA §5.5 had flagged as doc-vs-code drift). A cache
+  hit now revalidates through the rule owner and, on failure, drops the
+  cache and rebuilds through the fresh path, closing the drift item at
+  its root. Same `time(NULL)` testability posture as the refusal arm
+  (R9 clock-seam).
 
 1. **Shared boundary vectors first** (rule 30: vectors before
    implementation): `docs/test_vectors/MTP_BOUNDARY_V1.json` — cases

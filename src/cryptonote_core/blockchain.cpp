@@ -1911,20 +1911,40 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     // just after the block template was created
     if (miner_address == m_btc_address && m_btc_nonce == ex_nonce
       && m_btc_pool_cookie == m_tx_pool.cookie() && m_btc.prev_id == get_tail_id()) {
-      MDEBUG("Using cached template");
       const uint64_t now = time(NULL);
-      if (m_btc.timestamp < now) // ensures it can't get below the median of the last few blocks
+      if (m_btc.timestamp < now)
         m_btc.timestamp = now;
-      b = m_btc;
-      diffic = m_btc_difficulty;
-      height = m_btc_height;
-      expected_reward = m_btc_expected_reward;
-      seed_height = m_btc_seed_height;
-      seed_hash = m_btc_seed_hash;
-      return true;
+      // C2-R3: a cached template must satisfy the same rule as a fresh
+      // one. The raise-to-now above keeps the timestamp strictly above
+      // the (tip-unchanged, so identical) window median as the clock
+      // advances; what it cannot repair is a BACKWARD clock step, which
+      // can leave the cached timestamp beyond the current FTL deadline.
+      // Revalidate through the rule owner rather than hand-rolling a
+      // second copy of the bound here; on failure, drop the cache and
+      // rebuild below — the fresh path's own edge refusal then decides
+      // loudly. (This replaces the inherited raise-only path, whose
+      // "ensures it can't get below the median" comment DAA_LWMA1.md
+      // §5.5 had flagged as doc-vs-code drift.)
+      uint64_t cached_median_ts;
+      if (check_block_timestamp(m_btc, cached_median_ts))
+      {
+        MDEBUG("Using cached template");
+        b = m_btc;
+        diffic = m_btc_difficulty;
+        height = m_btc_height;
+        expected_reward = m_btc_expected_reward;
+        seed_height = m_btc_seed_height;
+        seed_hash = m_btc_seed_hash;
+        return true;
+      }
+      MDEBUG("Cached template's timestamp no longer satisfies the C2-R3 rule (backward clock step?); rebuilding");
+      invalidate_block_template_cache();
     }
-    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
-    invalidate_block_template_cache();
+    else
+    {
+      MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
+      invalidate_block_template_cache();
+    }
   }
 
   // DRS/Stage-3a: the from_block (prev_block) template path was DELETED.
