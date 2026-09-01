@@ -809,7 +809,7 @@ namespace levin
           epee::byte_slice blob{epee::span<const std::uint8_t>{bytes, len}};
           /* `res > 0`, not a bare conversion. `connections::send` returns an
              INT: 1 sent, 0 no such connection, -1 the send itself failed. A
-             direct `int -> bool` makes -1 report DELIVERED, so Rust resolves
+             direct `int -> bool` makes -1 report ACCEPTED, so Rust resolves
              the token with `sent` and the fragment is dropped for good — the
              precise failure the status return exists to prevent, inverted.
              Same check `net_node.inl` uses at its own send site. */
@@ -1007,12 +1007,29 @@ namespace levin
                                           const relay_effects::carrier_verdict& v,
                                           const std::uint64_t at_ms)
       {
-          const auto found = z.carrier_pending_by_token.find(v.token);
-          if (found == z.carrier_pending_by_token.end())
+          /* THE RECORD LEAVES THE MAP FIRST, AND `extract` IS WHY THAT IS NOT
+             A THING TO REMEMBER.
+
+             Every fallible call below — the pool query, the vector, the
+             recording — has the same failure if the entry is still in the map
+             when it throws: nothing ever revisits that token, because the
+             terminal verdict is already drained on the Rust side and is never
+             reported twice, and the dedup scan then suppresses every later
+             offer of a transaction the carrier no longer owns. An immortal
+             entry, which is worse than the stranding it replaces.
+
+             This arc reached that state three times, each by moving the erase
+             past one more fallible call and not the next. The node handle ends
+             it: `pending` owns the entry from here on, the map no longer does,
+             and the destructor runs on every path out of this function
+             including a throw. There is no ordering left to get wrong. */
+          auto node = z.carrier_pending_by_token.extract(v.token);
+          if (!node)
           {
             MERROR("carrier resolved unknown token " << v.token);
             return;
           }
+          detail::zone::carrier_pending& pending = node.mapped();
 
           /* IS THE POOL STILL HOLDING IT? The carrier is the first relay path
              that can accept a transaction and send it up to an epoch later, and
@@ -1026,35 +1043,18 @@ namespace levin
 
              Gated for the WHOLE application, not just the observation: there is
              no pool entry left to record on, and the discard arm must not fluff
-             a transaction that is already in a block. */
-          if (core && !core->pool_has_tx(found->second.txid))
+             a transaction that is already in a block.
+
+             This query is itself fallible — it reaches LMDB — which is why the
+             record is already out of the map above it. */
+          if (core && !core->pool_has_tx(pending.txid))
           {
             MDEBUG("carrier verdict for a transaction the pool no longer holds; "
                    "recording nothing and arming no observation");
-            z.carrier_pending_by_token.erase(found);
             return;
           }
 
-          detail::zone::carrier_pending pending = std::move(found->second);
-          z.carrier_pending_by_token.erase(found);
-
-          /* ERASED BEFORE THE FALLIBLE ALLOCATION, and an earlier draft had
-             this the other way round.
-
-             That draft built the vector first, reasoning that the allocation
-             we own belonged on the "recoverable side" of the erase. There is
-             no recoverable side: the terminal verdict is already drained on
-             the Rust side and is never reported twice, so the ordering only
-             chooses WHICH failure a throw produces. Allocating first produced
-             the worse one — the map entry survives, nothing ever revisits it,
-             and the dedup scan then suppresses every later offer of a
-             transaction the carrier no longer owns. Erasing first produces the
-             documented failure instead (§3.1e): the transaction is stranded,
-             loudly, and the map stays clean.
-
-             The blob is MOVED rather than copied — `pending.blob` is not read
-             again below. The vector's own one-element buffer can still throw,
-             which is the whole reason the erase is above it. */
+          /* Moved rather than copied: `pending.blob` is not read again below. */
           std::vector<blobdata> one;
           one.push_back(std::move(pending.blob));
 
@@ -1352,7 +1352,8 @@ namespace levin
                because the tokens differ. The result is the same transaction
                occupying two runs of windows and producing two stem
                observations, which double-counts it in F-10's tallies and
-               charges a second successor for a delivery that happened once.
+               charges a second successor for a send the transport accepted
+               once.
 
                Scanned rather than tracked in a second container: the map is
                bounded by the channel budget and a parallel index is a
@@ -1400,7 +1401,8 @@ namespace levin
                message and C++ has no record of it: the `emplace` allocates and
                copies a whole transaction, so under memory pressure it can
                throw AFTER the carrier has taken ownership. The message then
-               rides the carrier, is delivered, and its verdict arrives for a
+               rides the carrier, is accepted by the transport, and its
+               verdict arrives for a
                token nothing knows — logged as unknown and dropped. The pool is
                never told, so an origin re-sends at MIN_RELAY_TIME and a
                forwarded stem keeps `time_t::max()` and is stranded.

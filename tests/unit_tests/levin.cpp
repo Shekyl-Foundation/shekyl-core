@@ -156,6 +156,10 @@ namespace
         //! processed, and `set_relayed` found nothing to update.
         mutable bool drop_during_relay_ = false;
         mutable bool pool_emptied_ = false;
+        //! One-shot: `pool_has_tx` itself throws. Its production path reaches
+        //! LMDB, so this is the fallible call that runs FIRST in verdict
+        //! application — before the recording, before the allocation.
+        mutable bool throw_on_pool_check_ = false;
 
         virtual bool is_synchronized() const final
         {
@@ -175,6 +179,11 @@ namespace
 
         virtual bool pool_has_tx(const crypto::hash &txid) const override final
         {
+            if (throw_on_pool_check_)
+            {
+                throw_on_pool_check_ = false;
+                throw std::runtime_error{"injected: txpool query failed"};
+            }
             if (pool_emptied_)
                 return false;
             return std::find(gone_from_pool_.begin(), gone_from_pool_.end(), txid)
@@ -219,6 +228,9 @@ namespace
         //! the txpool race, where the gate's answer is stale by the time the
         //! recording runs.
         void drop_during_next_relay() { drop_during_relay_ = true; }
+
+        //! Make the next `pool_has_tx` throw, once.
+        void throw_on_next_pool_check() { throw_on_pool_check_ = true; }
 
         std::size_t relayed_method_size() const noexcept
         {
@@ -3446,6 +3458,92 @@ TEST_F(levin_notify, a_pool_drop_during_recording_arms_no_observation)
         receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
 
+/*! **A thrown verdict leaves no immortal pending entry.**
+
+    Every fallible call in verdict application has the same failure if the
+    pending record is still in the map when it throws: nothing revisits that
+    token — the terminal verdict is already drained on the Rust side and is
+    never reported twice — and the dedup scan then suppresses every later offer
+    of a transaction the carrier no longer owns. That is worse than the
+    stranding it replaces, because it is silent and permanent for the txid
+    rather than for one attempt.
+
+    This arc reached that state three times, each by moving the erase past one
+    more fallible call and not the next: the allocation, then the pool query.
+    The record is now held in an extracted node handle, so the map gives it up
+    before anything can throw and the destructor runs on every path out.
+
+    The oracle is a LATER OFFER, because that is what an immortal entry
+    actually costs: re-offer the same transaction after the throw, and it must
+    reach the pool again. With the entry still in the map the dedup scan drops
+    it from the batch, `to_send` empties, and nothing is ever recorded.
+
+    What edit reds this: take the record with `find` and erase it after the
+    pool query, as an earlier draft did. */
+TEST_F(levin_notify, a_thrown_verdict_leaves_no_immortal_pending_entry)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    cryptonote::transaction tx{};
+    tx.unlock_time = 23;
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+
+    ASSERT_TRUE(carrier_accepts(notifier, txs)) << "the carrier never took it";
+
+    /* The verdict arrives and the POOL QUERY throws — the first fallible call
+       in verdict application, and the one the record used to outlive. Nothing
+       is recorded, so the stop condition below never fires; the drive is
+       bounded, which is what carries the verdict through. */
+    events_.throw_on_next_pool_check();
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+    ASSERT_EQ(0u, events_.relayed_method_size())
+        << "the injected throw did not happen, so this case never reached the "
+           "state it exists to test";
+
+    // The carrier no longer owns it, so offering it again must work.
+    ASSERT_TRUE(carrier_accepts(notifier, txs))
+        << "the carrier refused a transaction it no longer holds — its pending "
+           "entry survived the throw and the dedup scan is suppressing it";
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+    EXPECT_NE(0u, events_.relayed_method_size())
+        << "a transaction whose first verdict threw is now unrelayable for the "
+           "life of the process: its token is immortal in "
+           "`carrier_pending_by_token`, so every later offer is deduplicated "
+           "away against a carrier run that no longer exists";
+
+    for (const auto method : {cryptonote::relay_method::fluff,
+                              cryptonote::relay_method::stem,
+                              cryptonote::relay_method::local})
+    {
+        if (events_.relayed_method_size() == 0)
+            break;
+        try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+    }
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
+
 /*! **A throwing verdict application does not stop the relay strand.**
 
     `relay_wake::operator()` applies the verdicts and then calls `arm()`, which
@@ -3700,10 +3798,10 @@ TEST_F(levin_notify, a_batch_the_carrier_partly_refuses_splits_without_double_co
     A token-keyed map accepts both copies happily, because the tokens differ.
     The result is the same transaction occupying two runs of windows and
     producing two stem observations — double-counted in F-10's tallies, with a
-    second successor charged for a delivery that happened once.
+    second successor charged for a send the transport accepted once.
 
     `stem_in_flight` is the oracle: it counts armed observations, so a second
-    enqueue that produced a second delivery would show as two.
+    enqueue that produced a second accepted send would show as two.
 
     What edit reds this: dropping the `carrier_pending_by_token` scan from the
     producer. */
@@ -3777,18 +3875,18 @@ TEST_F(levin_notify, a_transaction_already_in_the_carrier_is_not_enqueued_twice)
     /* Drain the carrier COMPLETELY before counting. Stopping at the first
        completion is what a first draft did, and it passed with the dedup
        removed: a second copy sits BEHIND the first in the channel, so at that
-       moment only one had been delivered and the oracle saw one either way.
+       moment only one had been accepted and the oracle saw one either way.
        The stop condition returns false so the drive runs to its bound. */
     drive_schedule(notifier, [](std::size_t) { return false; }, 24);
 
-    ASSERT_NE(0u, events_.relayed_method_size()) << "the carrier never delivered";
+    ASSERT_NE(0u, events_.relayed_method_size()) << "the carrier never sent it";
     const auto method = events_.has_stem_txes()
         ? cryptonote::relay_method::stem : cryptonote::relay_method::local;
     const auto told = events_.take_relayed(method);
     EXPECT_EQ(1u, told.size())
         << "the pool was told about the transaction " << told.size()
         << " times: a second copy rode the carrier, which double-counts it in "
-           "F-10's tallies and charges a second successor for a delivery that "
+           "F-10's tallies and charges a second successor for a send that "
            "happened once";
     for (auto& ctx : contexts_)
         ctx.process_send_queue();
