@@ -97,6 +97,15 @@ deny.
 recognising a peer *across sessions* on the wire. If one exists, this decision
 reopens; PW-19a would then have to be re-argued rather than assumed.
 
+*This falsifier is a standing challenge by construction, and that is a
+deliberate exception to §0's operational test rather than a lapse from it.* A
+**removal** decision has no measurable quantity to trip on — the honest
+reopening criterion for "X is not carried" is "show X was needed." It is not
+open-ended: the two mechanisms that currently consume the identifier are named
+in the row above (self-connection detection, the back-ping), both route to
+cluster B, and **cluster B is where this challenge is first answered.** A reader
+finding a third consumer there has met the trigger.
+
 ### PWD-I2 — peerlist disclosure is reduced, and the Shi et al. amplifiers are closed
 
 **RULED.** Disclosure stays, bounded and anonymised, **with two changes**.
@@ -320,3 +329,12 @@ dispositioned. Clusters T (~16), B (~20) and A remain.
   and the back-ping have their own answers (PWD-I1).
 - **The inherited double-spend no-drop guard** — cluster B, PWD-B7.
 - **Anything about the transport itself** — cluster T.
+
+**Carried forward to cluster B, so it is inherited rather than re-derived.**
+PWD-I2's per-connection cap turned on a defect class worth naming: *250 records
+per message with no per-connection ceiling caps the wrong quantity*, because the
+attack amortises across messages. **PWD-B1's rate limits face exactly that
+question** — a limit that bounds per-message volume while the adversary's budget
+is per-connection or per-epoch is a limit on the wrong variable, and it will
+measure green while the attack runs. Check each proposed limit against the
+quantity the adversary actually spends.
