@@ -57,8 +57,10 @@ corrections in §1.3.
 
 ## 1. Inputs
 
-Three, all at the pin. Every row is cited by id; nothing is carried on
-recollection.
+Three inputs, and **each carries its own pin** — the register and census at
+`shekyl-core` `dev` `19328a46c`, the papers corpus at `shekyl-dev`
+`4cabe8ef2` (§1.3), because they live in different repositories and drift
+independently. Every row is cited by id; nothing is carried on recollection.
 
 ### 1.1 The requirements register — `P2P_2_REQUIREMENTS_REGISTER.md`
 
@@ -91,12 +93,21 @@ scope fences here (§6), not gaps for the round to fill opportunistically.
 
 ### 1.3 The papers corpus
 
-**The corpus is complete, and it lives in the `shekyl-dev` sibling repo** —
-`docs/papers/` there, not in `shekyl-core`. **It is a local reference corpus,
-not versioned in this repository**, so the paths below are workstation-specific
-and a contributor should expect to fetch the sources themselves; every claim
-this brief draws from them is cited to a paper section so it can be checked
-against any copy. Ten items at this pin:
+**The corpus is complete, versioned, and separately pinned.** It lives in the
+`shekyl-dev` sibling repo at `docs/papers/` — not in `shekyl-core`, which is
+why the `dev` sha above does not cover it. It is **tracked git content, not a
+scratch directory**, so it pins cleanly:
+
+> **Corpus pin:** `shekyl-dev` @ `4cabe8ef2e86b2cb8f0d202549dc74dd3c28c81e`
+> (branch `dev`, verified pushed via `git ls-remote origin dev`). All ten items
+> below are tracked at that commit.
+
+An earlier draft called this "a local reference corpus, not versioned" — true
+of *this* repository and misleading everywhere else. The correction matters
+because it turns an unreproducible claim into a checkable one: **"complete" and
+"ten items" are now assertions about a named commit** rather than about one
+workstation. Every claim drawn from a paper is additionally cited to a section,
+so it survives even if a reader has a different copy. Ten items at that pin:
 
 `wireguard.pdf` · `Bolt-08-transport.md` · `2025-95-Eclipse-Attacks-p2p.pdf`
 (Shi et al., NDSS 2025) · `doubleratchet.pdf` · `2022-539_PQC_Noise.pdf` ·
@@ -302,6 +313,24 @@ the failure modes that follow when the bundled Tor cannot start
 ([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)) are that
 lane's to specify, not P2P-2's to design. Recorded here **so it is inherited
 rather than rediscovered**; see §6's fences.
+
+**The owning document is updated in this same change, not left to contradict
+this one.** [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §6.5 said Tor
+was "**not** frozen as the principal default", which this ruling reverses; two
+design documents giving opposite status to the same default is worse than
+either being stale, because whichever a reader reaches first is authoritative
+to them. Its §6.5 now carries the ruling, following the same discipline PW-26
+already imposes on Q-10 — *the document that declared the dependency records
+its discharge; do not let this be a one-way read.*
+
+**What was deliberately left open there:** §6.5's pending decision is **embed
+Arti vs. drive an external Tor gateway, and how either is surfaced in the
+wallet UI/UX.** The ruling settles the *posture*, not the *mechanism*, and that
+question stays with the Tor/P-transport lane. Also recorded at that document:
+the recommendation no longer waits on the clearnet↔Tor measurement it set up,
+because "clearnet cannot provide anonymity" is a structural result about active
+probing that no delta measurement could have produced — the measurements remain
+valid for what Tor buys against the *passive* supernode adversary.
 
 **What this closes and what it does not.** It closes (iii) — clearnet DPI
 resistance is **out of scope for anonymity**, because it is unachievable while
