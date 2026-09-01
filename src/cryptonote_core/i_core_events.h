@@ -43,6 +43,30 @@ namespace cryptonote
 
     virtual uint64_t get_current_blockchain_height() const = 0;
     virtual bool is_synchronized() const = 0;
+
+    /*! Is `txid` still held by the txpool?
+
+        Added for the noise carrier, which is the first relay path that can
+        hold a transaction for a long time before sending it. A stem or fluff
+        send is decided and performed in the same call, so the pool cannot
+        change underneath it; the carrier accepts a message and emits its
+        windows over the following cadence ticks, up to about a full epoch
+        later (`COVER_TRAFFIC_RESTORATION.md` §3.1e). In that window the
+        transaction can be mined and removed by `tx_memory_pool::take_tx`.
+
+        Applying a verdict to a transaction the pool no longer holds is not
+        merely useless: arming an F-10 stem observation for it charges the
+        successor with a `Silent` when the expected re-arrival never comes,
+        because a block removal produces no arrival event. That is a WRONG
+        entry in the tallies rather than a missing one — the same failure the
+        successor-at-enqueue argument was written against.
+
+        `relay_category::all`: the question is pool MEMBERSHIP, not relay
+        class. A transaction that is still held but has changed class is
+        still ours to record; one that is gone is gone. `core::pool_has_tx`
+        already answered exactly this question for fluffy-block
+        reconstruction and carries the same reasoning. */
+    virtual bool pool_has_tx(const crypto::hash &txid) const = 0;
     /*! \param zone The relay zone the transactions went out on.
 
         Carried alongside `tx_relay` rather than stored on the txpool entry.

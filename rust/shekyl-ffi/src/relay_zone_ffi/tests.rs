@@ -1514,8 +1514,8 @@ fn a_carrier_zone_accepts_one_framed_transaction() {
 }
 
 /// **The producer's precondition, at the boundary.** A message reports SENT
-/// across the FFI only once every window has gone out, and reports it with the
-/// token the enqueuer minted.
+/// across the FFI only once the transport has accepted every window, and
+/// reports it with the token the enqueuer minted.
 ///
 /// This is what lets `record_relayed` and the stem-watch observation fire where
 /// a send is known to have happened. Without it the C++ producer would have to

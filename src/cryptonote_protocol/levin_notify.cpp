@@ -697,7 +697,7 @@ namespace levin
       static void apply_carrier_verdicts(const std::shared_ptr<detail::zone>& zone,
                                          i_core_events* core,
                                          const std::vector<carrier_verdict>& verdicts,
-                                         std::uint64_t at_ms);
+                                         std::uint64_t at_ms) noexcept;
 
       //! Send one peer's whole batch as a single notification.
       static void on_fluff(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
@@ -972,22 +972,49 @@ namespace levin
       }
     };
 
-    void relay_effects::apply_carrier_verdicts(const std::shared_ptr<detail::zone>& zone,
-                                               i_core_events* core,
-                                               const std::vector<carrier_verdict>& verdicts,
-                                               const std::uint64_t at_ms)
+    /*! One verdict. Fallible, and called only from the `noexcept` dispatcher
+        below, which is where the reason lives. */
+    static void apply_one_carrier_verdict(const std::shared_ptr<detail::zone>& zone,
+                                          detail::zone& z,
+                                          i_core_events* core,
+                                          const relay_effects::carrier_verdict& v,
+                                          const std::uint64_t at_ms)
       {
-        if (!zone)
-          return;
-        detail::zone& z = *zone;
-        for (const carrier_verdict& v : verdicts)
-        {
           const auto found = z.carrier_pending_by_token.find(v.token);
           if (found == z.carrier_pending_by_token.end())
           {
             MERROR("carrier resolved unknown token " << v.token);
-            continue;
+            return;
           }
+
+          /* IS THE POOL STILL HOLDING IT? The carrier is the first relay path
+             that can accept a transaction and send it up to an epoch later, and
+             the pool can change underneath it — `take_tx` removes a mined
+             transaction. Applying a verdict then is not merely useless: arming
+             an F-10 observation for a transaction nobody will forward again
+             charges the successor a `Silent` when the re-arrival never comes,
+             because a block removal produces no arrival event. A WRONG entry in
+             the tallies, which is the failure the successor argument was
+             written against (§3.1e).
+
+             Gated for the WHOLE application, not just the observation: there is
+             no pool entry left to record on, and the discard arm must not fluff
+             a transaction that is already in a block. */
+          if (core && !core->pool_has_tx(found->second.txid))
+          {
+            MDEBUG("carrier verdict for a transaction the pool no longer holds; "
+                   "recording nothing and arming no observation");
+            z.carrier_pending_by_token.erase(found);
+            return;
+          }
+
+          /* Built BEFORE the record is erased. This is the allocation on this
+             path that we own, and past the erase there is nothing to recover
+             with: the terminal verdict is already drained on the Rust side, so
+             a throw after this point strands the transaction. Everything that
+             can still throw below is inside `core`. */
+          const std::vector<blobdata> one{found->second.blob};
+
           const detail::zone::carrier_pending pending = std::move(found->second);
           z.carrier_pending_by_token.erase(found);
 
@@ -1031,7 +1058,7 @@ namespace levin
             {
               MDEBUG("carrier discarded an originated transaction; leaving it "
                      "unrelayed so the origin retries on the short grid");
-              continue;
+              return;
             }
             /* RECORDED EVEN IF NO PEER TAKES IT, and that is a deliberate
                trade rather than an oversight.
@@ -1054,7 +1081,6 @@ namespace levin
                when nothing took it rather than leaving an operator to infer a
                successful fluff from a silent log. */
             MDEBUG("carrier discarded a forwarded stem; falling back to fluff");
-            const std::vector<blobdata> one{pending.blob};
             if (core)
             {
               core->on_transactions_relayed(
@@ -1066,12 +1092,11 @@ namespace levin
                        "the entry is retryable rather than stranded, and will "
                        "re-relay on the ordinary grid once a peer is available");
             }
-            continue;
+            return;
           }
 
           if (core)
           {
-            const std::vector<blobdata> one{pending.blob};
             core->on_transactions_relayed(
               epee::to_span(one),
               cryptonote::originated_stays_in_zone(pending.requested, z.nzone)
@@ -1095,6 +1120,48 @@ namespace levin
                timeline or it expires against a clock nothing else reads. */
             at_ms
           );
+      }
+
+    /*! Apply every verdict the poll collected. **`noexcept`, and that is the
+        point of the split above.**
+
+        `relay_wake::operator()` calls this and then calls `arm()`, which is
+        what re-arms the zone's wake timer. Before the producer there was
+        nothing fallible between the poll and that call; this function is what
+        put something there. An exception escaping here would skip `arm()`, and
+        the zone's relay strand would simply stop — no more fluff releases, no
+        cadence, no epoch rolls — for the whole process lifetime. Losing one
+        verdict is recoverable; losing the timer is not, which is the same
+        trade every callback above this makes and the reason they are all
+        `noexcept` with internal catches.
+
+        Per VERDICT rather than around the loop, so one poisoned entry cannot
+        take the verdicts behind it either. */
+    void relay_effects::apply_carrier_verdicts(const std::shared_ptr<detail::zone>& zone,
+                                               i_core_events* core,
+                                               const std::vector<carrier_verdict>& verdicts,
+                                               const std::uint64_t at_ms) noexcept
+      {
+        if (!zone)
+          return;
+        detail::zone& z = *zone;
+        for (const carrier_verdict& v : verdicts)
+        {
+          try
+          {
+            apply_one_carrier_verdict(zone, z, core, v, at_ms);
+          }
+          catch (const std::exception& e)
+          {
+            /* The pending record is already gone and the verdict is already
+               drained on the Rust side, so this transaction is stranded: an
+               origination falls back to the pool's own short-grid retry, but a
+               forwarded stem keeps `time_t::max()` and will not be offered
+               again. Loud and named, because nothing downstream can see it. */
+            MERROR("LOST a carrier verdict for token " << v.token << ": " << e.what()
+                   << " — that transaction is now unrecorded, and a forwarded "
+                      "stem among them is stranded until it expires from the pool");
+          }
         }
       }
 

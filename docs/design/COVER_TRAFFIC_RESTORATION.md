@@ -1198,6 +1198,54 @@ policing vocabulary is not the same as policing correctness
 (`no-convention-theater-gates`). Reopen only if the claim recurs in code that
 POSTDATES this section — which would mean the homes are not being read.
 
+### 3.1e The pool can change while the carrier holds a transaction (2026-09-01)
+
+**The carrier is the first relay path with a long gap between deciding to send
+and sending.** Stem and fluff decide and transport in one call, so the txpool
+cannot move underneath them. The carrier accepts a message and emits its
+windows over the following cadence ticks — up to about a full epoch later
+(§3.1d's backlog bound). In that window the transaction can be mined and
+removed by `tx_memory_pool::take_tx`.
+
+**Applying a verdict then is not merely redundant — it CORRUPTS F-10.**
+Recording a relay against a pool entry that is gone does nothing useful, but
+arming a stem observation does something actively wrong: the watch expects a
+re-arrival from the successor, a block removal produces no arrival event, and
+the observation expires as a `Silent` charged to a node that behaved
+correctly. That is a WRONG entry in the tallies rather than a missing one —
+the same distinction the successor-at-enqueue argument turns on (§3.1a). The
+stem and fluff paths cannot reach this; the carrier widened the window by
+about six orders of magnitude, so the gate belongs to the change that widened
+it.
+
+**The gate is pool MEMBERSHIP, checked at verdict time, and it covers the
+whole application.** `i_core_events::pool_has_tx` — a read-only query
+`cryptonote::core` already implemented for fluffy-block reconstruction, using
+`relay_category::all`, because the question is "do we still hold this", not
+"in what class". Gating the whole verdict rather than only the observation
+also stops the discard arm fluffing a transaction that is already in a block,
+and moots what `set_relayed` would do against a missing entry. Pinned by
+`a_verdict_for_a_transaction_the_pool_dropped_records_nothing`.
+
+**What is NOT fixed, deliberately: the send still departs.** The gate runs when
+the verdict arrives, which is after the windows are on the wire. Cancelling
+earlier would need an enqueue-cancellation path — `NoiseQueues` has no such
+API, and `unbind` clears a whole channel, so cancelling one message would
+discard its channel-mates. The cost of not having it is one window of wasted
+cover carrying a transaction peers already hold and will drop, which is
+exactly what cover traffic is for. Reopening criterion: a cancellation API
+becomes worth building if some other caller needs one — not for this.
+
+**And the verdict path must not be able to stop the strand.** `relay_wake`
+applies verdicts and then calls `arm()`, which re-arms the zone's wake timer.
+Before the producer nothing fallible sat in that gap. An exception escaping
+verdict application would skip `arm()` and stop the zone for the rest of the
+process — no fluff releases, no cadence, no epoch rolls — so
+`apply_carrier_verdicts` is `noexcept` and catches per verdict, the same trade
+every effect callback beside it already makes: a dropped relay is recoverable,
+a dead strand is not. Pinned by
+`a_throwing_verdict_does_not_stop_the_relay_strand`.
+
 ### 3.2 The carrier turns a 38 % shape spread into an 8× one (2026-08-26)
 
 `hop` has no shape parameter, and the carrier gives it one by fragmentation.

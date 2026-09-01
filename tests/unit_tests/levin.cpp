@@ -140,6 +140,16 @@ namespace
         //! `stem_watch_records_and_arrival_resolves`, which is what makes the
         //! forwarding leg asserted rather than inferred from the watch.
         std::vector<crypto::hash> stem_propagated_;
+        //! Txids the pool no longer holds — the mined-while-queued case the
+        //! carrier made reachable (COVER_TRAFFIC_RESTORATION.md §3.1e).
+        //! Empty by default, so every existing fixture sees a pool that still
+        //! holds everything and behaves exactly as before.
+        //! A vector, not a set: `crypto::hash` has no ordering, and this
+        //! holds at most a handful of entries in any one fixture.
+        std::vector<crypto::hash> gone_from_pool_;
+        //! One-shot fault injection for `on_transactions_relayed`, so a test
+        //! can drive the throwing path a verdict application must survive.
+        mutable bool throw_on_relay_ = false;
 
         virtual bool is_synchronized() const final
         {
@@ -157,8 +167,19 @@ namespace
                 stem_propagated_.push_back(id);
         }
 
+        virtual bool pool_has_tx(const crypto::hash &txid) const override final
+        {
+            return std::find(gone_from_pool_.begin(), gone_from_pool_.end(), txid)
+                     == gone_from_pool_.end();
+        }
+
         virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
         {
+            if (throw_on_relay_)
+            {
+                throw_on_relay_ = false;
+                throw std::runtime_error{"injected: recording failed"};
+            }
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
             for (const auto& tx : txes)
                 cached.push_back(tx);
@@ -173,6 +194,13 @@ namespace
         test_core_events()
           : relayed_()
         {}
+
+        //! The transaction left the pool — mined and taken by `take_tx`, or
+        //! expired — while the carrier still held a copy.
+        void drop_from_pool(const crypto::hash& txid) { gone_from_pool_.push_back(txid); }
+
+        //! Make the next `on_transactions_relayed` throw, once.
+        void throw_on_next_relay() { throw_on_relay_ = true; }
 
         std::size_t relayed_method_size() const noexcept
         {
@@ -465,6 +493,55 @@ namespace
                     sent += context.process_send_queue();
             }
             return sent;
+        }
+
+        /*! Drive epochs until the carrier ACCEPTS a batch, and say whether it
+            did.
+
+            Recognised the same way `a_real_transaction_rides_the_carrier_and_
+            records_on_arrival` recognises it: nothing recorded at send time,
+            which only an enqueue produces — an ordinary stem or fluff records
+            immediately. Which epoch is a stem epoch is the schedule's call, so
+            this re-rolls rather than assuming.
+
+            Shared by the verdict-path cases below, which each need a
+            transaction sitting inside the carrier before they can say anything
+            about what happens when its verdict arrives. */
+        bool carrier_accepts(cryptonote::levin::notify& notifier,
+                             const std::vector<cryptonote::blobdata>& txs,
+                             const unsigned max_rolls = 64)
+        {
+            for (unsigned rolls = 0; rolls < max_rolls; ++rolls)
+            {
+                auto context = contexts_.begin();
+                if (!notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem))
+                    return false;
+                io_service_.restart();
+                io_service_.poll();
+
+                if (events_.relayed_method_size() == 0)
+                    return true; // accepted by the carrier; the pool knows nothing yet
+
+                for (const auto method : {cryptonote::relay_method::fluff,
+                                          cryptonote::relay_method::stem,
+                                          cryptonote::relay_method::local})
+                {
+                    if (events_.relayed_method_size() == 0)
+                        break;
+                    try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+                }
+                notifier.run_fluff();
+                io_service_.restart();
+                io_service_.poll();
+                for (auto& ctx : contexts_)
+                    ctx.process_send_queue();
+                while (receiver_.notified_size())
+                    receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+                notifier.run_epoch();
+                io_service_.restart();
+                io_service_.poll();
+            }
+            return false;
         }
 
         /*! Fluff totals oracle shared by the force-driven and schedule-driven
@@ -3134,6 +3211,134 @@ TEST_F(levin_notify, a_real_transaction_rides_the_carrier_and_records_on_arrival
         << "exactly one emission must carry the transaction: zero means the "
            "carrier put only cover on the wire while the pool was told "
            "otherwise, and more than one means it was sent twice";
+}
+
+/*! **A verdict for a transaction the pool has dropped records NOTHING.**
+
+    The carrier is the first relay path that can accept a transaction and send
+    it up to an epoch later, and the pool changes underneath it: a mined
+    transaction is removed by `take_tx`. Applying the verdict then is not
+    merely redundant. Arming an F-10 observation for it charges the successor a
+    `Silent` when the expected re-arrival never comes — a block removal
+    produces no arrival event — and that is a WRONG entry in the tallies rather
+    than a missing one, which is the exact failure the successor-at-enqueue
+    argument was written against (§3.1e).
+
+    The stem and fluff paths cannot reach this: they decide and send in the
+    same call, so the window is microseconds. The carrier widened it by about
+    six orders of magnitude, which is why the gate belongs to this change.
+
+    What edit reds this: delete the `pool_has_tx` gate at the top of
+    `apply_one_carrier_verdict`. */
+TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothing)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    cryptonote::transaction tx{};
+    tx.unlock_time = 11;
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+
+    ASSERT_TRUE(carrier_accepts(notifier, txs)) << "the carrier never took it";
+
+    // It is mined and taken out of the pool while the carrier still holds it.
+    events_.drop_from_pool(cryptonote::get_transaction_hash(tx));
+
+    const std::size_t stem_before = notifier.stem_in_flight();
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+
+    EXPECT_EQ(0u, events_.relayed_method_size())
+        << "the pool no longer holds this transaction, so there is no entry to "
+           "record a relay against";
+    EXPECT_EQ(stem_before, notifier.stem_in_flight())
+        << "an F-10 observation was armed for a transaction nobody will "
+           "forward again — it expires as a Silent and charges a successor "
+           "that did nothing wrong";
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
+
+/*! **A throwing verdict application does not stop the relay strand.**
+
+    `relay_wake::operator()` applies the verdicts and then calls `arm()`, which
+    is what re-arms the wake timer. Before the producer there was nothing
+    fallible in that gap; `apply_carrier_verdicts` put something there, and an
+    exception escaping it would skip `arm()` and stop the zone for the rest of
+    the process — no fluff releases, no cadence, no epoch rolls. Losing one
+    verdict is recoverable and losing the timer is not, which is why the
+    dispatcher is `noexcept` and catches per verdict.
+
+    The injected throw comes from `on_transactions_relayed`, which is a real
+    throw site: it allocates while parsing.
+
+    What edit reds this: drop the `noexcept` and the try/catch from
+    `apply_carrier_verdicts` — the exception then escapes `poll()` and no
+    further wake is ever armed. */
+TEST_F(levin_notify, a_throwing_verdict_does_not_stop_the_relay_strand)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    cryptonote::transaction tx{};
+    tx.unlock_time = 13;
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+
+    ASSERT_TRUE(carrier_accepts(notifier, txs)) << "the carrier never took it";
+
+    // The recording throws when the verdict arrives.
+    events_.throw_on_next_relay();
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+
+    /* The timer must still be armed. A wake that produces a noise emission is
+       the observable for that: if `arm()` had been skipped, nothing would be
+       scheduled and the drive below moves no bytes at all. */
+    const std::size_t sent = drive_schedule(notifier, [](std::size_t moved) {
+        return moved != 0;
+    });
+    EXPECT_NE(0u, sent)
+        << "no further wake did anything after a verdict threw — `arm()` was "
+           "skipped, so the zone's relay strand is dead for the rest of the "
+           "process, which is a far larger loss than the verdict";
+
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
 }
 
 /*! **A batch the carrier can only partly take splits, and each half is

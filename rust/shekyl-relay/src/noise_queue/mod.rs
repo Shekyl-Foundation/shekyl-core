@@ -79,10 +79,12 @@ pub struct CarrierToken(pub u64);
 /// # Both arms exist, and the failure arm is the load-bearing one
 ///
 /// A completion signal alone is not enough. [`NoiseQueues::unbind`] clears a
-/// channel's pending messages, so a message can leave the queue having never
-/// been offered to the transport at all — and a caller waiting only for
-/// [`Self::Sent`] would wait
-/// forever on a record that will never fire. That is the unresolved-token
+/// channel's pending messages, so a message can leave the queue without ever
+/// being FULLY accepted — one behind the front was never offered at all, and
+/// the front one may be mid-run, with some windows already accepted
+/// (`a_partially_sent_message_that_is_unbound_reports_discarded`). A caller
+/// waiting only for [`Self::Sent`] would wait forever on a record that will
+/// never fire. That is the unresolved-token
 /// shape [`NoiseSend`]'s non-destructive take was designed against, one layer
 /// up, and it is why discard reports too.
 ///
@@ -507,9 +509,10 @@ impl NoiseQueues {
     ///
     /// **Every dropped message reports [`CarrierOutcome::Discarded`].** This is
     /// the failure counterpart to the completion signal, and it is not
-    /// optional: a message cleared here left the queue without reaching the
-    /// wire, and a consumer waiting only for `Sent` would wait forever on a
-    /// record that will never fire.
+    /// optional: a message cleared here left the queue without being FULLY
+    /// accepted — the front one may have had windows accepted already, which
+    /// is why this is not "never sent" — and a consumer waiting only for
+    /// `Sent` would wait forever on a record that will never fire.
     pub fn unbind(&mut self, channel: usize) {
         if let Some(q) = self.channels.get_mut(channel) {
             let dropped: Vec<CarrierToken> = q.pending.drain(..).map(|m| m.token).collect();
