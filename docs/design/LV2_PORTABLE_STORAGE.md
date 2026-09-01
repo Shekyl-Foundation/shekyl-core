@@ -208,8 +208,8 @@ headers and are load-bearing for handshake peerlists.
 
 | Type | File | Notes |
 | --- | --- | --- |
-| `basic_node_data` | `p2p_protocol_defs.h` | `network_id` is `VAL_POD_AS_BLOB`; `rpc_port` / `rpc_credits_per_hash` / `support_flags` are `OPT` |
-| `peerlist_entry` | `p2p_protocol_defs.h` | `adr` is `network_address`; `last_seen` / `pruning_seed` / `rpc_port` / `rpc_credits_per_hash` are `OPT` |
+| `basic_node_data` | `p2p_protocol_defs.h` | `network_id` is `VAL_POD_AS_BLOB`; `support_flags` is `OPT` (`rpc_port` / `rpc_credits_per_hash` deleted 2026-08-31 — dead RPC advertisement, census-1 U-5/L-6) |
+| `peerlist_entry` | `p2p_protocol_defs.h` | `adr` is `network_address`; `last_seen` / `pruning_seed` are `OPT` (`rpc_port` / `rpc_credits_per_hash` deleted 2026-08-31 — dead RPC advertisement, census-1 U-5/L-6) |
 | `COMMAND_HANDSHAKE` request / response | `p2p_protocol_defs.h` | response carries `local_peerlist_new` |
 | `COMMAND_TIMED_SYNC` request / response | `p2p_protocol_defs.h` | |
 | `COMMAND_PING` request / response | `p2p_protocol_defs.h` | request is an empty map |

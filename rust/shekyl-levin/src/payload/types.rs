@@ -23,10 +23,6 @@ pub struct BasicNodeData {
     /// Advertised p2p port.
     pub my_port: u32,
     /// `KV_SERIALIZE_OPT` default 0.
-    pub rpc_port: u16,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub rpc_credits_per_hash: u32,
-    /// `KV_SERIALIZE_OPT` default 0.
     pub support_flags: u32,
 }
 
@@ -36,13 +32,6 @@ impl PortableMap for BasicNodeData {
         section.insert("network_id", Value::Bytes(self.network_id.to_vec()));
         section.insert("peer_id", Value::UInt64(self.peer_id));
         section.insert("my_port", Value::UInt32(self.my_port));
-        get::insert_opt_u16(&mut section, "rpc_port", self.rpc_port, 0);
-        get::insert_opt_u32(
-            &mut section,
-            "rpc_credits_per_hash",
-            self.rpc_credits_per_hash,
-            0,
-        );
         get::insert_opt_u32(&mut section, "support_flags", self.support_flags, 0);
         Ok(section)
     }
@@ -52,8 +41,6 @@ impl PortableMap for BasicNodeData {
             network_id: get::blob(section, "network_id")?,
             peer_id: get::u64_val(section, "peer_id")?,
             my_port: get::u32_val(section, "my_port")?,
-            rpc_port: get::opt_u16(section, "rpc_port", 0)?,
-            rpc_credits_per_hash: get::opt_u32(section, "rpc_credits_per_hash", 0)?,
             support_flags: get::opt_u32(section, "support_flags", 0)?,
         })
     }
@@ -124,10 +111,6 @@ pub struct PeerlistEntry {
     pub last_seen: i64,
     /// `KV_SERIALIZE_OPT` default 0.
     pub pruning_seed: u32,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub rpc_port: u16,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub rpc_credits_per_hash: u32,
 }
 
 impl PortableMap for PeerlistEntry {
@@ -137,13 +120,6 @@ impl PortableMap for PeerlistEntry {
         section.insert("id", Value::UInt64(self.id));
         get::insert_opt_i64(&mut section, "last_seen", self.last_seen, 0);
         get::insert_opt_u32(&mut section, "pruning_seed", self.pruning_seed, 0);
-        get::insert_opt_u16(&mut section, "rpc_port", self.rpc_port, 0);
-        get::insert_opt_u32(
-            &mut section,
-            "rpc_credits_per_hash",
-            self.rpc_credits_per_hash,
-            0,
-        );
         Ok(section)
     }
 
@@ -153,8 +129,6 @@ impl PortableMap for PeerlistEntry {
             id: get::u64_val(section, "id")?,
             last_seen: get::opt_i64(section, "last_seen", 0)?,
             pruning_seed: get::opt_u32(section, "pruning_seed", 0)?,
-            rpc_port: get::opt_u16(section, "rpc_port", 0)?,
-            rpc_credits_per_hash: get::opt_u32(section, "rpc_credits_per_hash", 0)?,
         })
     }
 }

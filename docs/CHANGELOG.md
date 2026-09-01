@@ -18,6 +18,27 @@
 
 ### Removed
 
+- **P2P wire: the two dead RPC-advertisement fields are gone.**
+  `rpc_port` and `rpc_credits_per_hash` were serialized in every handshake
+  (`basic_node_data`) and stored in every peerlist entry, advertising
+  capabilities the ratified RPC posture says will never exist:
+  `rpc_credits_per_hash` is Monero's RPC-payment/mining-credit system, and
+  `rpc_port` advertises a public RPC endpoint over P2P — contrary to
+  `RPC_TRANSPORT_POSTURE.md` RT-9, whose RT-W5 slice already deleted the
+  RPC-side half (PR #533). Both fields are now deleted from the C++ wire
+  structs, the peerlist manager, the connection contexts, and the Rust
+  `shekyl-levin` maps in the same change, so the dual stack never disagrees;
+  a peer that still sends them is read as any other unknown field. The
+  persisted peerlist store version is bumped (v7, drop-on-load — a stale
+  cache re-bootstraps, no migration shim). The drop includes the anchor
+  list, so the first restart after upgrade rebuilds the peer view from
+  seeds and gossip without the anchor set's eclipse resistance for that one
+  bootstrap; a *downgrade* (an old binary reading a v7 store) ends in the
+  same empty-peerlist re-bootstrap, but via a load exception rather than a
+  clean version drop. Pre-genesis the wire is free to change; post-genesis
+  both fields would have been permanent (`CONSENSUS_RULE_CENSUS_1.md` U-5
+  and the `rpc_port` half of L-6).
+
 - **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
   the only capability they uniquely held.** `shekyl-blockchain-prune` had been
   inert since LMDB v6: its private version guard (`MAX_SUPPORTED_DB_VERSION =

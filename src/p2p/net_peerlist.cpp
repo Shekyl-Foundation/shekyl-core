@@ -49,7 +49,7 @@ namespace nodetool
 {
   namespace
   {
-    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 6;
+    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 7;
  
     struct by_zone
     {
@@ -77,8 +77,10 @@ namespace nodetool
     template<typename Elem, typename Archive>
     std::vector<Elem> load_peers(Archive& a, unsigned ver)
     {
-      // at v6, we drop existing peerlists, because annoying change
-      if (ver < 6)
+      // A pre-current store is dropped wholesale (the node re-bootstraps):
+      // v6 for an entry-format change, v7 for the removal of the dead
+      // rpc_port / rpc_credits_per_hash advertisement fields.
+      if (ver < CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
         return {};
 
       uint64_t size = 0;
