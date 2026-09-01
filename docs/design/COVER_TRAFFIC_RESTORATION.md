@@ -1236,6 +1236,41 @@ cover carrying a transaction peers already hold and will drop, which is
 exactly what cover traffic is for. Reopening criterion: a cancellation API
 becomes worth building if some other caller needs one — not for this.
 
+**The membership gate is not atomic with the recording, and the fix is a
+SECOND gate rather than a combined core operation (2026-09-01).**
+`pool_has_tx` releases the txpool lock before `on_transactions_relayed`
+reacquires it, so a block can be processed between them and take the entry;
+`set_relayed` then updates nothing while the observation is armed anyway —
+the same false `Silent`, through a window of microseconds instead of an epoch.
+
+Review proposed combining membership and recording into one core call that
+reports whether the entry was updated. Rejected: `on_transactions_relayed`
+takes a SPAN, so a single success flag is the wrong shape for it, and a
+carrier-only variant duplicates a widely-used notification to serve one
+caller. What the observation actually needs is cheaper — re-ask the question
+after the recording, and arm only if the answer is still yes.
+
+That pair is still not race-free, and the residual is chosen rather than
+missed: a transaction taken immediately after a `set_relayed` that DID apply
+costs a valid observation. **The checks can only lose observations, never
+invent them** — and a missing entry in F-10's tallies is recoverable in a way
+a wrong one is not (§3.1a). The first gate is not subsumed: it also stops the
+discard arm fluffing a transaction already in a block, which the second runs
+too late to prevent. Pinned by
+`a_pool_drop_during_recording_arms_no_observation`.
+
+**The wake handler guarantees `arm()` structurally, not site by site.** The
+same change that made `apply_carrier_verdicts` `noexcept` also added
+`reserve_verdicts` — which allocates — one call above it, in the same gap
+before `arm()`. Guarding fallible calls one at a time is how the second one
+got there, so the work is now inside a `try` and `arm()` is outside it: the
+next wake is scheduled whatever this one did. The timer-error throw stays
+outside, because a failed wait is not a failed unit of work and re-arming
+against a timer that has reported it cannot fire would be a spin. The
+dispatcher keeps its own `noexcept` and per-verdict catch — a different job:
+strand survival versus keeping one poisoned verdict from taking the verdicts
+behind it.
+
 **A throw during verdict application strands a forwarded stem, and retaining
 the record does not fix that (2026-09-01).** Review proposed keeping an
 extractable pending node until application succeeds. Taken literally that is

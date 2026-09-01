@@ -903,26 +903,53 @@ namespace levin
         if (error && error != boost::system::errc::operation_canceled)
           throw boost::system::system_error{error, "relay wake timer failed"};
 
-        /* The connection set is gathered lazily: `poll` calls `on_outbound`
-           back only when this wake crosses an epoch boundary and the stem map
-           must be rebuilt. A fluff-release wake — the common case — never pays
-           for the locked connection scan and median-height sort the inherited
-           fluff path also skipped. The epoch deadline stays the zone's; this
-           side answers "give me the set", never "is it time", so no copy of the
-           deadline lives here. `sink` carries `core_` because `on_outbound`
-           needs it to filter by blockchain height. */
-        const std::uint64_t at = now_ms();
-        relay_effects sink{zone_, core_};
-        sink.reserve_verdicts(*zone_);
-        shekyl_relay_zone_poll(
-          zone_->relay.get(), at,
-          std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_noise,
-          relay_effects::on_carrier_resolved
-        );
-        /* AFTER the call returns: `apply_carrier_verdicts` re-enters the zone,
-           which is only safe once Rust has released its borrow. */
-        relay_effects::apply_carrier_verdicts(zone_, core_, sink.verdicts, at);
+        /* EVERY THROW SITE IN THE WORK IS INSIDE THIS TRY, AND `arm()` IS
+           OUTSIDE IT. Whatever this wake does or fails to do, the next one is
+           scheduled: skipping `arm()` stops the zone for the rest of the
+           process — no cadence, no epoch rolls, no fluff releases — which is a
+           loss of a different order from one wake's effects.
+
+           The structural form rather than a guard on each fallible call,
+           because this arc has now put two throw sites in this gap in
+           successive changes: `apply_carrier_verdicts`, and the
+           `reserve_verdicts` below it, which allocates. Guarding sites one at
+           a time is how the second one got here.
+
+           The timer-error throw ABOVE is deliberately outside: a failed wait
+           is not a failed unit of work, and swallowing it would re-arm against
+           a timer that has already reported it cannot fire.
+
+           `apply_carrier_verdicts` keeps its own `noexcept` and per-verdict
+           catch. Different job: this guarantees the STRAND survives, that one
+           keeps a single poisoned verdict from taking the verdicts behind it. */
+        try
+        {
+          /* The connection set is gathered lazily: `poll` calls `on_outbound`
+             back only when this wake crosses an epoch boundary and the stem map
+             must be rebuilt. A fluff-release wake — the common case — never pays
+             for the locked connection scan and median-height sort the inherited
+             fluff path also skipped. The epoch deadline stays the zone's; this
+             side answers "give me the set", never "is it time", so no copy of the
+             deadline lives here. `sink` carries `core_` because `on_outbound`
+             needs it to filter by blockchain height. */
+          const std::uint64_t at = now_ms();
+          relay_effects sink{zone_, core_};
+          sink.reserve_verdicts(*zone_);
+          shekyl_relay_zone_poll(
+            zone_->relay.get(), at,
+            std::addressof(sink), relay_effects::on_outbound,
+            relay_effects::on_fluff, relay_effects::on_noise,
+            relay_effects::on_carrier_resolved
+          );
+          /* AFTER the call returns: `apply_carrier_verdicts` re-enters the zone,
+             which is only safe once Rust has released its borrow. */
+          relay_effects::apply_carrier_verdicts(zone_, core_, sink.verdicts, at);
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("relay wake work failed: " << e.what()
+                 << " — this wake's effects are lost; the timer is not");
+        }
 
         arm(std::move(zone_), core_);
       }
@@ -1008,15 +1035,28 @@ namespace levin
             return;
           }
 
-          /* Built BEFORE the record is erased. This is the allocation on this
-             path that we own, and past the erase there is nothing to recover
-             with: the terminal verdict is already drained on the Rust side, so
-             a throw after this point strands the transaction. Everything that
-             can still throw below is inside `core`. */
-          const std::vector<blobdata> one{found->second.blob};
-
-          const detail::zone::carrier_pending pending = std::move(found->second);
+          detail::zone::carrier_pending pending = std::move(found->second);
           z.carrier_pending_by_token.erase(found);
+
+          /* ERASED BEFORE THE FALLIBLE ALLOCATION, and an earlier draft had
+             this the other way round.
+
+             That draft built the vector first, reasoning that the allocation
+             we own belonged on the "recoverable side" of the erase. There is
+             no recoverable side: the terminal verdict is already drained on
+             the Rust side and is never reported twice, so the ordering only
+             chooses WHICH failure a throw produces. Allocating first produced
+             the worse one — the map entry survives, nothing ever revisits it,
+             and the dedup scan then suppresses every later offer of a
+             transaction the carrier no longer owns. Erasing first produces the
+             documented failure instead (§3.1e): the transaction is stranded,
+             loudly, and the map stays clean.
+
+             The blob is MOVED rather than copied — `pending.blob` is not read
+             again below. The vector's own one-element buffer can still throw,
+             which is the whole reason the erase is above it. */
+          std::vector<blobdata> one;
+          one.push_back(std::move(pending.blob));
 
           if (!v.sent)
           {
@@ -1103,6 +1143,33 @@ namespace levin
                 ? relay_method::local : relay_method::stem,
               z.nzone);
           }
+          /* A SECOND POOL CHECK, DOING A DIFFERENT JOB FROM THE FIRST.
+
+             `pool_has_tx` releases the txpool lock before
+             `on_transactions_relayed` reacquires it, so a block can be
+             processed in between and take the entry. `set_relayed` then does
+             nothing — and arming an observation here would be exactly the
+             false `Silent` the first gate exists to prevent, just through a
+             window of microseconds instead of an epoch.
+
+             This cannot be race-free either, and the residual is deliberate:
+             if the entry is taken immediately AFTER a `set_relayed` that did
+             apply, this skips an observation that was valid. That is the safe
+             direction, and it is the property worth having — the pair of
+             checks can only LOSE observations, never invent them, and a
+             missing entry in F-10's tallies is recoverable in a way a wrong
+             one is not (§3.1a).
+
+             The first gate is still load-bearing and not subsumed by this one:
+             it also stops the discard arm fluffing a transaction that is
+             already in a block, which this check runs too late to prevent. */
+          if (core && !core->pool_has_tx(pending.txid))
+          {
+            MDEBUG("the pool dropped this transaction while its relay was "
+                   "being recorded; arming no observation");
+            return;
+          }
+
           /* The successor is the peer the carrier SENT to, not the one
              chosen at enqueue. And the source is the transaction's own, not
              nil: `nullptr` here would mark every carrier observation as

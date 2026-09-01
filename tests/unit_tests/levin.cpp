@@ -150,6 +150,12 @@ namespace
         //! One-shot fault injection for `on_transactions_relayed`, so a test
         //! can drive the throwing path a verdict application must survive.
         mutable bool throw_on_relay_ = false;
+        //! One-shot: the pool loses the transaction WHILE its relay is being
+        //! recorded. That is what the txpool race looks like from this side —
+        //! `pool_has_tx` said yes, the lock was released, a block was
+        //! processed, and `set_relayed` found nothing to update.
+        mutable bool drop_during_relay_ = false;
+        mutable bool pool_emptied_ = false;
 
         virtual bool is_synchronized() const final
         {
@@ -169,6 +175,8 @@ namespace
 
         virtual bool pool_has_tx(const crypto::hash &txid) const override final
         {
+            if (pool_emptied_)
+                return false;
             return std::find(gone_from_pool_.begin(), gone_from_pool_.end(), txid)
                      == gone_from_pool_.end();
         }
@@ -179,6 +187,11 @@ namespace
             {
                 throw_on_relay_ = false;
                 throw std::runtime_error{"injected: recording failed"};
+            }
+            if (drop_during_relay_)
+            {
+                drop_during_relay_ = false;
+                pool_emptied_ = true;
             }
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
             for (const auto& tx : txes)
@@ -201,6 +214,11 @@ namespace
 
         //! Make the next `on_transactions_relayed` throw, once.
         void throw_on_next_relay() { throw_on_relay_ = true; }
+
+        //! The pool loses everything at the next `on_transactions_relayed` —
+        //! the txpool race, where the gate's answer is stale by the time the
+        //! recording runs.
+        void drop_during_next_relay() { drop_during_relay_ = true; }
 
         std::size_t relayed_method_size() const noexcept
         {
@@ -3345,6 +3363,83 @@ TEST_F(levin_notify, a_verdict_for_a_transaction_the_pool_dropped_records_nothin
            "forward again — it expires as a Silent and charges a successor "
            "that did nothing wrong";
 
+    for (auto& ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+}
+
+/*! **The pool losing the transaction DURING the recording arms no observation.**
+
+    The membership gate cannot be atomic with the recording: `pool_has_tx`
+    releases the txpool lock and `on_transactions_relayed` reacquires it, so a
+    block can be processed in between and take the entry. `set_relayed` then
+    updates nothing, and an observation armed afterwards is exactly the false
+    `Silent` the gate exists to prevent — through a window of microseconds
+    rather than an epoch.
+
+    So the observation is gated a second time, after the recording. The pair
+    can only LOSE observations, never invent them: a transaction taken
+    immediately after a `set_relayed` that did apply costs a valid observation,
+    which is the safe direction, because a missing entry in F-10's tallies is
+    recoverable in a way a wrong one is not.
+
+    The relay record itself is NOT re-gated — it either applied or it did not,
+    and this test asserts it was attempted, so a regression that skipped the
+    recording as well would be visible here rather than silently "passing" by
+    doing nothing.
+
+    What edit reds this: delete the second `pool_has_tx` check before
+    `shekyl_relay_zone_record_stem`. */
+TEST_F(levin_notify, a_pool_drop_during_recording_arms_no_observation)
+{
+    const bool prior = cryptonote::levin::set_carrier_development(true);
+    struct restore_t {
+        bool prior;
+        ~restore_t() { cryptonote::levin::set_carrier_development(prior); }
+    } restore{prior};
+
+    for (unsigned count = 0; count < 4; ++count)
+        add_connection(false);
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
+    auto& notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+    ASSERT_TRUE(notifier.get_status().has_noise) << "fixture: the carrier must be on";
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    cryptonote::transaction tx{};
+    tx.unlock_time = 19;
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+
+    ASSERT_TRUE(carrier_accepts(notifier, txs)) << "the carrier never took it";
+
+    /* The gate passes, and the entry is gone by the time the recording runs. */
+    events_.drop_during_next_relay();
+
+    const std::size_t stem_before = notifier.stem_in_flight();
+    drive_schedule(notifier, [this](std::size_t) {
+        return events_.relayed_method_size() != 0;
+    });
+
+    ASSERT_NE(0u, events_.relayed_method_size())
+        << "the recording was never attempted, so this case never reached the "
+           "window it exists to test";
+    EXPECT_EQ(stem_before, notifier.stem_in_flight())
+        << "an observation was armed after the pool lost the entry — "
+           "`set_relayed` updated nothing, so this charges a successor a "
+           "Silent for a transaction that will never be forwarded again";
+
+    for (const auto method : {cryptonote::relay_method::fluff,
+                              cryptonote::relay_method::stem,
+                              cryptonote::relay_method::local})
+    {
+        if (events_.relayed_method_size() == 0)
+            break;
+        try { events_.take_relayed(method); } catch (const std::logic_error&) {}
+    }
     for (auto& ctx : contexts_)
         ctx.process_send_queue();
     while (receiver_.notified_size())
