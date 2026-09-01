@@ -10,10 +10,13 @@ queue is the design-round program that answers them.
 **Pinned sha:** `ab3cc98e6eb73db2b309730ccc9853ba4ea95e7d` (`dev` tip,
 2026-08-31 — the merge commit of PR #583). Inputs were read at
 `8ba1aae3dbd1e3b03504d5d27c0471bb67f11b9d` / `0e6d340e`; `git diff
-8ba1aae3d ab3cc98e6 --name-only` shows exactly six changed files, all docs
-(the three census documents, `IMPLEMENTATION_INDEX.md`, `FOLLOWUPS.md`,
-`CHANGELOG.md`), so every code and non-census-doc `file:line` read at
-`8ba1aae3d` is byte-identical at this pin. Additionally re-read at this pin:
+8ba1aae3d ab3cc98e6 --name-only` — a diff between two pinned commits,
+immutable history that no later work (this reconciliation included) can
+change — shows exactly six changed files, all docs (the three census
+documents, at that sha still under `docs/design/`;
+`IMPLEMENTATION_INDEX.md`; `FOLLOWUPS.md`; `CHANGELOG.md`), so every code
+and non-census-doc `file:line` read at `8ba1aae3d` is byte-identical at
+this pin. Additionally re-read at this pin:
 every site a merged row **adds** relative to its CEN source (all minted and
 split rows, every RC-sourced site appended to a CEN row), every Appendix-A
 pointer folded in §8, and every pointer into the three changed non-census
