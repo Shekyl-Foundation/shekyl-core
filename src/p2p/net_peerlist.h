@@ -34,6 +34,7 @@
 // direct std equivalent.
 #pragma once
 
+#include <cstdint>
 #include <iosfwd>
 #include <iterator>
 #include <list>
@@ -56,6 +57,18 @@
 
 namespace nodetool
 {
+  // Corruption ceiling for each list in the persisted peerlist store. A
+  // legitimate store holds at most one list per network zone (public_ /
+  // i2p / tor), each trimmed to its cap — the largest is
+  // P2P_LOCAL_GRAY_PEERLIST_LIMIT; anchors are untrimmed but are the
+  // distinct outbound connections of a single run. The 4x headroom over
+  // cap * zones keeps this a corruption detector, never an operational
+  // limit: the length prefix is untrusted disk input, and past this
+  // ceiling loading it would mean a reserve() of disk-chosen magnitude at
+  // startup instead of the designed drop-and-rebootstrap.
+  constexpr std::uint64_t PEERLIST_STORE_LIST_CEILING =
+    P2P_LOCAL_GRAY_PEERLIST_LIMIT * 3 * 4;
+
   struct peerlist_types
   {
     std::vector<peerlist_entry> white;
@@ -117,7 +130,7 @@ namespace nodetool
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
     bool append_with_peer_anchor(const anchor_peerlist_entry& ple);
-    bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed, uint16_t rpc_port, uint32_t rpc_credits_per_hash);
+    bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
     bool remove_from_peer_gray(const peerlist_entry& pe);
@@ -331,7 +344,7 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed, uint16_t rpc_port, uint32_t rpc_credits_per_hash)
+  bool peerlist_manager::set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed)
   {
     TRY_ENTRY();
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
@@ -341,8 +354,6 @@ namespace nodetool
     ple.id = peer;
     ple.last_seen = time(NULL);
     ple.pruning_seed = pruning_seed;
-    ple.rpc_port = rpc_port;
-    ple.rpc_credits_per_hash = rpc_credits_per_hash;
     return append_with_peer_white(ple, true);
     CATCH_ENTRY_L0("peerlist_manager::set_peer_just_seen()", false);
   }
@@ -369,8 +380,6 @@ namespace nodetool
       peerlist_entry new_ple = ple;
       if (by_addr_it_wt->pruning_seed && ple.pruning_seed == 0) // guard against older nodes not passing pruning info around
         new_ple.pruning_seed = by_addr_it_wt->pruning_seed;
-      if (by_addr_it_wt->rpc_port && ple.rpc_port == 0) // guard against older nodes not passing RPC port around
-        new_ple.rpc_port = by_addr_it_wt->rpc_port;
       if (!trust_last_seen)
         new_ple.last_seen = by_addr_it_wt->last_seen; // do not overwrite the last seen timestamp, incoming peer lists are untrusted
       m_peers_white.replace(by_addr_it_wt, new_ple);
@@ -411,8 +420,6 @@ namespace nodetool
       peerlist_entry new_ple = ple;
       if (by_addr_it_gr->pruning_seed && ple.pruning_seed == 0) // guard against older nodes not passing pruning info around
         new_ple.pruning_seed = by_addr_it_gr->pruning_seed;
-      if (by_addr_it_gr->rpc_port && ple.rpc_port == 0) // guard against older nodes not passing RPC port around
-        new_ple.rpc_port = by_addr_it_gr->rpc_port;
       new_ple.last_seen = by_addr_it_gr->last_seen; // do not overwrite the last seen timestamp, incoming peer list are untrusted
       m_peers_gray.replace(by_addr_it_gr, new_ple);
     }

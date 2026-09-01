@@ -441,6 +441,7 @@ namespace nodetool
     size_t get_public_gray_peers_count();
     void get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
+    bool sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist);
 
     //! \return The `peer_id` announced on `zone`, or 0 if this node has no such zone.
     peerid_type get_announced_peer_id(epee::net_utils::zone zone) const;
@@ -520,8 +521,6 @@ namespace nodetool
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
     bool get_local_node_data(basic_node_data& node_data, const network_zone& zone);
     //bool get_local_handshake_data(handshake_data& hshd);
-
-    bool sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist);
 
     bool connections_maker();
     bool peer_sync_idle_maker();

@@ -33,6 +33,7 @@
 #pragma once
 
 #include <cstring>
+#include <stdexcept>
 
 #include "common/expect.h"
 #include "net/net_utils_base.h"
@@ -40,7 +41,7 @@
 #include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 
-BOOST_CLASS_VERSION(nodetool::peerlist_entry, 3)
+BOOST_CLASS_VERSION(nodetool::peerlist_entry, 4)
 
 namespace boost
 {
@@ -211,33 +212,20 @@ namespace boost
       boost::serialization::split_free(a, na, ver);
     }
 
+    // The outer archive gate (net_peerlist.cpp load_peers) drops every
+    // pre-v7 store before an entry is read, so a version below 4 should be
+    // unreachable; the throw makes that floor local to the format owner
+    // instead of trusting the gate in the other file — a v3 entry read with
+    // this body would desync the stream silently, not loudly.
     template <class Archive, class ver_type>
     inline void serialize(Archive &a,  nodetool::peerlist_entry& pl, const ver_type ver)
     {
+      if (ver < 4)
+        throw std::runtime_error("peerlist_entry version < 4: pre-v7 peerlist stores must be dropped by load_peers, not read");
       a & pl.adr;
       a & pl.id;
       a & pl.last_seen;
-      if (ver < 1)
-      {
-        if (!typename Archive::is_saving())
-          pl.pruning_seed = 0;
-        return;
-      }
       a & pl.pruning_seed;
-      if (ver < 2)
-      {
-        if (!typename Archive::is_saving())
-          pl.rpc_port = 0;
-        return;
-      }
-      a & pl.rpc_port;
-      if (ver < 3)
-      {
-        if (!typename Archive::is_saving())
-          pl.rpc_credits_per_hash = 0;
-        return;
-      }
-      a & pl.rpc_credits_per_hash;
     }
 
     template <class Archive, class ver_type>

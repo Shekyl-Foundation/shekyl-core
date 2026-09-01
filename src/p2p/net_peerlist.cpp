@@ -33,6 +33,7 @@
 #include <functional>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
@@ -49,7 +50,7 @@ namespace nodetool
 {
   namespace
   {
-    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 6;
+    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 7;
  
     struct by_zone
     {
@@ -77,13 +78,23 @@ namespace nodetool
     template<typename Elem, typename Archive>
     std::vector<Elem> load_peers(Archive& a, unsigned ver)
     {
-      // at v6, we drop existing peerlists, because annoying change
-      if (ver < 6)
+      // A pre-current store is dropped wholesale (the node re-bootstraps):
+      // v6 for an entry-format change, v7 for the removal of the dead
+      // rpc_port / rpc_credits_per_hash advertisement fields.
+      if (ver < CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
         return {};
 
       uint64_t size = 0;
       a & size;
-      
+
+      // The length prefix is untrusted disk input; past the ceiling it is
+      // corruption, not data (derivation at PEERLIST_STORE_LIST_CEILING).
+      // Throwing, not returning, abandons the whole store so the oversized
+      // list's remaining bytes cannot be misread as the next list; open()
+      // turns the throw into the default-config fallback (re-bootstrap).
+      if (size > PEERLIST_STORE_LIST_CEILING)
+        throw std::runtime_error("peerlist store list length implausible: corrupt store");
+
       Elem ple{};
 
       std::vector<Elem> elems{};

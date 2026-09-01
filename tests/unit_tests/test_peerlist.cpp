@@ -99,6 +99,29 @@ namespace
   }
 }
 
+TEST(peerlist_storage, oversized_persisted_list_is_rejected)
+{
+  // PEERLIST_STORE_LIST_CEILING is derived from the runtime per-zone caps
+  // the peerlist manager trims to (derivation at the constant's
+  // definition); store() itself serializes whatever lists it is handed and
+  // enforces nothing — which is what lets this test write an oversized
+  // store. A list beyond the ceiling therefore cannot come from a normally
+  // operating daemon, and open() must refuse it — falling back to the
+  // empty-peerlist re-bootstrap — rather than reserve() memory of
+  // disk-chosen magnitude at startup.
+  nodetool::peerlist_storage peers{};
+  nodetool::peerlist_types types{};
+  types.white.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
+  for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
+    types.white.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+
+  std::ostringstream stream{};
+  EXPECT_TRUE(peers.store(stream, types));
+
+  std::istringstream in{stream.str()};
+  EXPECT_FALSE(bool(nodetool::peerlist_storage::open(in, true)));
+}
+
 TEST(peerlist_storage, store)
 {
 

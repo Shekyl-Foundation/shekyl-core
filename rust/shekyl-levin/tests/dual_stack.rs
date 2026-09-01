@@ -360,8 +360,6 @@ fn rust_client_handshakes_with_shekyld() {
             network_id: MAINNET_NETWORK_ID,
             peer_id: our_peer_id(),
             my_port: 0,
-            rpc_port: 0,
-            rpc_credits_per_hash: 0,
             support_flags: P2P_SUPPORT_FLAGS,
         },
         payload_data: CoreSyncData {

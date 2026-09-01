@@ -53,14 +53,6 @@ pub(crate) fn opt_u8(section: &Section, key: &'static str, default: u8) -> Resul
     }
 }
 
-pub(crate) fn opt_u16(section: &Section, key: &'static str, default: u16) -> Result<u16, Error> {
-    match section.get(key) {
-        None => Ok(default),
-        Some(Value::UInt16(v)) => Ok(*v),
-        Some(_) => Err(mismatch(key, "uint16")),
-    }
-}
-
 pub(crate) fn opt_u32(section: &Section, key: &'static str, default: u32) -> Result<u32, Error> {
     match section.get(key) {
         None => Ok(default),
@@ -104,12 +96,6 @@ pub(crate) fn object<'a>(section: &'a Section, key: &'static str) -> Result<&'a 
     match require(section, key)? {
         Value::Object(inner) => Ok(inner),
         _ => Err(mismatch(key, "object")),
-    }
-}
-
-pub(crate) fn insert_opt_u16(section: &mut Section, key: &'static str, value: u16, default: u16) {
-    if value != default {
-        section.insert(key, Value::UInt16(value));
     }
 }
 

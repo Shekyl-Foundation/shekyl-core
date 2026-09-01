@@ -25,8 +25,6 @@ fn node() -> BasicNodeData {
         network_id: [0x11; 16],
         peer_id: 0x0102_0304_0506_0708,
         my_port: 18_080,
-        rpc_port: 0,
-        rpc_credits_per_hash: 0,
         support_flags: 0,
     }
 }
@@ -84,8 +82,6 @@ fn ping_response_round_trip() {
 fn opt_fields_omitted_at_default() {
     let node = node();
     let section = node.to_section().expect("section");
-    assert!(section.get("rpc_port").is_none());
-    assert!(section.get("rpc_credits_per_hash").is_none());
     assert!(section.get("support_flags").is_none());
     round_trip(&node);
 }
@@ -93,12 +89,44 @@ fn opt_fields_omitted_at_default() {
 #[test]
 fn opt_fields_present_when_nonzero() {
     let mut node = node();
-    node.rpc_port = 18_081;
     node.support_flags = 1;
     let section = node.to_section().expect("section");
-    assert!(section.get("rpc_port").is_some());
     assert!(section.get("support_flags").is_some());
     round_trip(&node);
+}
+
+/// `rpc_port` / `rpc_credits_per_hash` were deleted from `basic_node_data`
+/// and `peerlist_entry` pre-genesis (RPC is operator-to-operator, never
+/// advertised over P2P — `RPC_TRANSPORT_POSTURE.md` RT-9). This bites when
+/// either field is re-added to a Rust map (the keys reappear, or the loader
+/// picks up the inserted `18_081`/`100` and the equality fails); it does
+/// NOT cover the C++ emitter — that half is pinned only by the `#[ignore]`d
+/// `dual_stack.rs` live run.
+fn stale_rpc_keys_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
+    let mut section = value.to_section().expect("section");
+    assert!(section.get("rpc_port").is_none());
+    assert!(section.get("rpc_credits_per_hash").is_none());
+    section.insert("rpc_port", shekyl_portable_storage::Value::UInt16(18_081));
+    section.insert(
+        "rpc_credits_per_hash",
+        shekyl_portable_storage::Value::UInt32(100),
+    );
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(&T::load(&bytes).expect("load"), value);
+}
+
+#[test]
+fn deleted_rpc_advert_fields_never_written_still_readable() {
+    stale_rpc_keys_ignored(&node());
+    stale_rpc_keys_ignored(&PeerlistEntry {
+        adr: NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            port: 18_080,
+        },
+        id: 7,
+        last_seen: 0,
+        pruning_seed: 0,
+    });
 }
 
 #[test]
@@ -206,8 +234,6 @@ fn handshake_with_ipv4_peerlist_round_trip() {
             id: 7,
             last_seen: 0,
             pruning_seed: 0,
-            rpc_port: 0,
-            rpc_credits_per_hash: 0,
         }],
     };
     round_trip(&rsp);

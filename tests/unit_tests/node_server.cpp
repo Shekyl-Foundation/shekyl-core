@@ -138,6 +138,37 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
   return false;
 }
 
+TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
+{
+  // The ipv4 `ip == 0 || port == 0` drop is the sole surviving behavior of
+  // the deleted `port == rpc_port` comparison (PR #587): every honest peer
+  // advertised rpc_port 0, so undialable port-0 entries were what it
+  // actually removed. The tor port-0 entry is asserted KEPT on purpose —
+  // the check is deliberately ipv4-scoped (tor port-0 semantics are
+  // disputed; named for the P2P-1 wire census), so this test goes red on
+  // either deleting the ipv4 drop or silently widening it.
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+
+  std::vector<nodetool::peerlist_entry> peers;
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 1, 100});   // kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 2, 100});   // ip 0: dropped
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 3, 100});       // port 0: dropped
+  peers.push_back({net::tor_address::unknown(), 4, 100});                 // tor port 0: kept
+
+  ASSERT_TRUE(server.sanitize_peerlist(peers));
+
+  std::set<nodetool::peerid_type> ids;
+  for (const auto &pe : peers)
+  {
+    ids.insert(pe.id);
+    EXPECT_EQ(0, pe.last_seen); // remote-supplied timestamps are discarded
+  }
+  EXPECT_EQ((std::set<nodetool::peerid_type>{1, 4}), ids);
+}
+
 TEST(ban, add)
 {
   test_core pr_core;
