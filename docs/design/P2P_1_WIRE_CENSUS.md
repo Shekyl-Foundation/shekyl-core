@@ -157,8 +157,10 @@ half is only structurally tested (PWC-D8).
 and the enumeration is the denominator. Rows about absent behavior (no rate
 limit, no jitter) are grounded against this frontier and nowhere else:
 
-- `net_node.inl` — 54 `node_server<>::` member definitions; the load-bearing
-  set read for this census: `init_config:138`, `store_config:1012`,
+- `net_node.inl` — **93** qualified `node_server<t_payload_net_handler>::`
+  member-function definitions (counted by definition-shaped lines; `is_peer_used`
+  is overloaded twice). The load-bearing set read for this census:
+  `init_config:138`, `store_config:1012`,
   `do_handshake_with_peer:1059`, `do_peer_timed_sync:1153`,
   `is_peer_used:1205/1230`, `make_new_connection_from_anchor_peerlist:1438`,
   `connections_maker:1808`, `make_expected_connections_count:1882`,
@@ -169,8 +171,10 @@ limit, no jitter) are grounded against this frontier and nowhere else:
   `drop_connection:2503`, `try_ping:2510`, `try_get_support_flags:2611`,
   `handle_timed_sync:2640`, `handle_handshake:2689`, `handle_ping:2788`,
   `has_too_many_connections:3083`, `gray_peerlist_housekeeping:3108`.
-- `cryptonote_protocol_handler.inl` — 38 `t_cryptonote_protocol_handler<>::`
-  member definitions, including all nine notify handlers
+- `cryptonote_protocol_handler.inl` — **47** qualified
+  `t_cryptonote_protocol_handler<t_core>::` member-function definitions over 46
+  distinct names (`drop_connection` is overloaded), including all nine notify
+  handlers
   (`:519, 533, 718, 822, 852, 967, 1019, 1785, 2485`) and the drop family
   (`drop_connection_with_score:2811`, `drop_connection:2826/2832`,
   `drop_connections:2842`, `on_connection_close:2866`).
@@ -313,7 +317,7 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-E4 | Four protocol-handler timers: idle-peer kick 8 s, standby check 100 ms, **sync search 101 s**, bad-peer check 43 s | `cryptonote_protocol_handler.h:183-186` | `pinned-not-re-derived` | 4 | — |
 | PWC-E5 | Idle peers are kicked at 240 s since last request (`IDLE_PEER_KICK_TIME`); peer score starts at 0 and a peer is dropped at `DROP_PEERS_ON_SCORE = -2` | `cryptonote_protocol_handler.inl:80`, `:85`, `:2715-2725` | `pinned-not-re-derived` | 4 | — |
 | PWC-E6 | Outbound budget: `WHITELIST_CONNECTIONS_PERCENT = 70` white / remainder gray, with `ANCHOR_CONNECTIONS_COUNT = 2` filled first; the default out-degree itself is **Rust-owned** via `shekyl_p2p_default_out_peers()` | `cryptonote_config.h:193-195`, `:178-183`; `net_node.inl:1828-1839` | `ratified` | **2** | PW-17 |
-| PWC-E7 | **A double-spend is a no-drop offense**: a conflicting tx sets `m_verifivation_failed` *and* `m_no_drop_offense`, and `handle_notify_new_transactions` drops only when `!m_no_drop_offense`. The check is against the **pool's** `m_spent_key_images`, so it covers a pool-held conflict, not only a chain-spent one | `tx_pool.cpp:282-292`, `:1676-1696`; `cryptonote_protocol_handler.inl:926-931`; provenance `f7fd209ed` (jeffro256, 2024-03-07) | `inherited-defensive` | 4 | §5.2 |
+| PWC-E7 | **A double-spend is a no-drop offense**: a conflicting tx sets `m_verifivation_failed` *and* `m_no_drop_offense`, and `handle_notify_new_transactions` drops only when `!m_no_drop_offense`. The check is against the **pool's** `m_spent_key_images`, so it covers a pool-held conflict, not only a chain-spent one | `tx_pool.cpp:283-293`, `:1676-1696`; `cryptonote_protocol_handler.inl:926-931`; provenance `f7fd209ed` (jeffro256, 2024-03-07) | `inherited-defensive` | 4 | §5.2 |
 | PWC-E8 | Four other tx classes are also no-drop offenses: fee-too-low, oversized `tx_extra`, non-zero unlock time, double-spend | `tx_pool.cpp:257, 267, 276, 291` | `inherited-defensive` | 4 | — |
 | PWC-E9 | `drop_connections(address)` drops **every** connection sharing a host and adds a host-fail score of 5. Four call sites, all on the block-sync path: prepare-failure, tx-parse failure, verification failure, orphaned block | `cryptonote_protocol_handler.inl:1467, 1494, 1528, 1548`, definition `:2842-2863` | `none` | 4 | §5.2 |
 | PWC-E10 | Host blocking: 10 fails before block, 24 h block time; failed-address suppression is 1 h public / 240 s anonymity-zone, the latter **derived at the p90 of measured Tor post-restart recovery** with the derivation recorded beside the constant | `cryptonote_config.h:199-255` | `ratified` | **2** | — |
@@ -410,7 +414,7 @@ refills outbound slots from the now-poisoned whitelist.
 new_transactions` drops only on `!tvc.m_no_drop_offense`
 (`cryptonote_protocol_handler.inl:926-931`), and the pool sets
 `m_no_drop_offense = true` on exactly the double-spend path
-(`tx_pool.cpp:282-292`). The guard condition was checked rather than assumed:
+(`tx_pool.cpp:283-293`). The guard condition was checked rather than assumed:
 `have_tx_keyimges_as_spent` consults the **pool's** `m_spent_key_images`
 (`tx_pool.cpp:1676-1696`), which is the paper's case — `tx1` sitting in the
 pool when `tx2` arrives — not merely a chain-spent image.
