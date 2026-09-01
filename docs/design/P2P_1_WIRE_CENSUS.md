@@ -66,27 +66,33 @@ as the owning doc states it, not as remembered.
 
 | # | Workstream | Where | Status as stated | Bearing on this census |
 | --- | --- | --- | --- | --- |
-| 1 | **Q12-D6a peer-discovery run** | [`Q12_D6A_PEER_DISCOVERY_RUN.md`](Q12_D6A_PEER_DISCOVERY_RUN.md) `:1-35`; index `:136` | **RUN** — `{15,30,60}` sweep §§13-15 + Q12-R5 late-joiner control, 2026-08-14; §16 closes the distinctness question | Supplies the anti-ruling leg of the no-authentication constraint (`:2910-2917`, `:2979`, `:3013`) and the one-P-per-wallet-on-wire pin (§10.9) |
+| 1 | **Q12-D6a peer-discovery run** | [`Q12_D6A_PEER_DISCOVERY_RUN.md`](Q12_D6A_PEER_DISCOVERY_RUN.md) `:1-35`; index row `Q12-R1…R14` | **RUN** — `{15,30,60}` sweep §§13-15 + Q12-R5 late-joiner control, 2026-08-14; §16 closes the distinctness question | Supplies the anti-ruling leg of the no-authentication constraint (`:2910-2917`, `:2979`, `:3013`) and the one-P-per-wallet-on-wire pin (§10.9) |
 | 2 | **Q12-U1 / Q12-U2** | [`Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`](Q12_FORWARD_DELAY_AND_ZONE_FIELD.md) `:8`, `:779-780`, as-built `:793+` / `:880+` | **LANDED 2026-08-12, both in PR #459** | **Corrects the dispatch premise.** The brief that opened this census carried them as *open*; they are landed, and U2's landing is visible in the tree at `cryptonote_protocol_handler.inl:885-904`. Recorded as PWC-X1 |
 | 3 | **D++ / relay-privacy lane** | [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §6.10 `:1000-1097`, §12.10 `:2480-2542`, §12.11 `:2543-2773` | §12.10/§12.11 designed, **not built**; §12.11 carries two superseding banners (`:2545-2553`, `:2555-2574`) | Owns admission/eviction (PW-23…PW-26). §7 task 1 resolved against it — see §5.1 |
-| 4 | **Network-posture proxy wiring (RT-W7)** | [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) `:561`, `:480-481`; index `:105` | **LANDED 2026-08-23 (PR #542)** | Confirms the RPC-side posture is settled and is *not* this lane's; one loopback predicate (`listen::is_loopback_ip`) for listen and outbound |
+| 4 | **Network-posture proxy wiring (RT-W7)** | [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) `:561`, `:480-481`; index row `RT-1…RT-9, RT-O…, RT-P…, RT-W…` | **LANDED 2026-08-23 (PR #542)** | Confirms the RPC-side posture is settled and is *not* this lane's; one loopback predicate (`listen::is_loopback_ip`) for listen and outbound |
 | 5 | **RT-lane boundary (§2.1)** | `RPC_TRANSPORT_POSTURE.md:99-114`; RT-9 `:333-373`; RT-W5 `:559` | RT-9 **RULED 2026-08-21**; RT-W5 **LANDED**, UPDATE 2026-08-31 records #587 finishing the P2P half | The scope boundary above, and the ratification PWC-B3/PWC-D7 lean on |
-| 6 | **SP-T3 Tor guard-sharing** | [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) §21.1 `:1483-1515`; SPIKE-F-12 `:80` | SPIKE-F-1 **REFUTED AS STATED**; SPIKE-F-12 **CONFIRMS ACCEPTED RESIDUAL** — guard set is per-process/datadir | One tor process ⇒ one entry-guard set ⇒ a single guard sees every stem successor. Bounds any transport row that would claim Tor restores D++ independence |
-| 7 | **P-transport / SP-T serving-loop arc** | `rust/shekyl-p-transport/src/lib.rs:134`; index `:101`, `:178`, `:206` | `derive_socks_user` **still at :134**, unmoved; lane **partially built, inert** (`PTorClient`/`PBlockSource` `dead_code`) | The partial answer PW-22 rests on; §7 task 3 resolved against it — see §5.3 |
-| 8 | **E′ transport (MS-5)** | [`V3_1_MULTISIG_RUST_ENGINE.md`](V3_1_MULTISIG_RUST_ENGINE.md) §0.5 `:310-357`, `:989-1060`; index `:125` | Round 1 **CLOSED**; MS-5 **S1 LANDED** | **Surfaced under PW-22 but out of scope here.** Every "transport blob" hit is a multisig file envelope or a consensus blob, not a p2p transport. Recorded as PWC-X2 so the next reader does not re-run the search |
-| 9 | **Carrier / cover-traffic** | [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §3.1a `:922-1028`; index `:242` | steps 1-4 landed; **step 5 BLOCKED** on a daemon/p2p cutover; #580 index stamp still says "not on `dev`" | The stamp is now stale — #580 merged as `63d543103`. Recorded as PWC-X3 |
-| 10 | **Levin Rust migration (LV-)** | index `:140`; [`LV2_PORTABLE_STORAGE.md`](LV2_PORTABLE_STORAGE.md) `:153`; FOLLOWUPS `:680-681` | LV-1 landed; compression + white-noise emit **production-live**; read side and plain builders **inert until LV-3** | Defines which half of the dual stack is authoritative per row (§2.2) |
+| 6 | **SP-T3 Tor guard-sharing** | [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) §21.1; the `SPIKE-F-1` and `SPIKE-F-12` rows of its §2 substrate table | SPIKE-F-1 **REFUTED AS STATED**; SPIKE-F-12 **CONFIRMS ACCEPTED RESIDUAL** — guard set is per-process/datadir | One tor process ⇒ one entry-guard set ⇒ a single guard sees every stem successor. Bounds any transport row that would claim Tor restores D++ independence |
+| 7 | **P-transport / SP-T serving-loop arc** | `rust/shekyl-p-transport/src/lib.rs:134`; index rows `SP-T0…SP-T5`, `2d-2 P-isolated transport`, `BroadcastSubmitter / BroadcastPosture (SP-T4a)` | `derive_socks_user` **still at :134**, unmoved; lane **partially built, inert** (`PTorClient`/`PBlockSource` `dead_code`) | The partial answer PW-22 rests on; §7 task 3 resolved against it — see §5.3 |
+| 8 | **E′ transport (MS-5)** | [`V3_1_MULTISIG_RUST_ENGINE.md`](V3_1_MULTISIG_RUST_ENGINE.md) §0.5 `:310-357`, `:989-1060`; index row `MS-1…MS-8` | Round 1 **CLOSED**; MS-5 **S1 LANDED** | **Surfaced under PW-22 but out of scope here.** Every "transport blob" hit is a multisig file envelope or a consensus blob, not a p2p transport. Recorded as PWC-X2 so the next reader does not re-run the search |
+| 9 | **Carrier / cover-traffic** | [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §3.1a `:922-1028`; the index's `COVER_TRAFFIC_RESTORATION.md` build-status row | steps 1-4 landed; **step 5 BLOCKED** on a daemon/p2p cutover; #580 index stamp still says "not on `dev`" | The stamp is stale — #580 merged as `63d543103`. Recorded as PWC-X3 |
+| 10 | **Levin Rust migration (LV-)** | index row `LV-1…LV-N`; [`LV2_PORTABLE_STORAGE.md`](LV2_PORTABLE_STORAGE.md) `:153`; FOLLOWUPS `:680-681` | LV-1 landed; compression + white-noise emit **production-live**; read side and plain builders **inert until LV-3** | Defines which half of the dual stack is authoritative per row (§2.2) |
 
 **Two locate-level defects found during the sweep**, both inside
 enumerate-don't-fix as *registration hygiene* rather than design changes, and
 both fixed in this PR because the index is load-bearing (rule 94):
 
-- `IMPLEMENTATION_INDEX.md:144` links `P2P_REQUIREMENTS_REGISTER.md`; the file
-  on disk is `P2P_2_REQUIREMENTS_REGISTER.md` (renamed in `30cd547e2`).
-  **Broken link.**
-- `SP_T3_SKELETON_MEASUREMENT.md:4` defers its landing status to
-  `IMPLEMENTATION_INDEX.md`, but no index row mentions the spike.
-  **Dangling status pointer.**
+- **Broken link — repaired in this PR.** At the pin, the index's `PW-1…PW-28`
+  row linked `P2P_REQUIREMENTS_REGISTER.md`, a path the `30cd547e2` rename had
+  left dangling; the file on disk is `P2P_2_REQUIREMENTS_REGISTER.md`. That
+  row now links the real file and records the repair.
+- **Dangling status pointer — repaired in this PR.** At the pin,
+  `SP_T3_SKELETON_MEASUREMENT.md`'s status line deferred to
+  `IMPLEMENTATION_INDEX.md`, which carries no row for that spike. Its status
+  is now stated in its own doc, where the spike's findings live.
+
+Both are written in the past tense against the pin deliberately: this document
+outlives the PR that carries it, and a reader who lands here after merge must
+not be told the tree is still broken.
 
 ---
 
@@ -469,7 +475,8 @@ submission path. The submission path itself is in the clear by design
 (`blockchain.cpp:5314` reads `sc_p_id` straight off the vin). The gap is
 therefore **located and confirmed open**, and it is a *design* question for
 P2P-2, not a census finding — recorded as PWC-X5. The one thing this census
-adds: the SP-T lane is **partially built and inert** (index `:178` —
+adds: the SP-T lane is **partially built and inert** (the index's
+`2d-2 P-isolated transport` row —
 `PTorClient`/`PBlockSource` on `dev` under `dead_code`), so there is no
 production submission path to have covered it yet.
 
@@ -573,7 +580,7 @@ a rejection cannot confirm a co-identity (PWC-E14).
 | --- | --- |
 | PWC-X1 | Q12-U1/U2 are **LANDED (PR #459)**, not open as the dispatch brief assumed; U2 is visible at `cryptonote_protocol_handler.inl:885-926` |
 | PWC-X2 | The E′/MS-5 lane is **multisig**, not p2p transport; every "transport blob" hit is a file envelope or a consensus blob. Searched so it need not be searched again |
-| PWC-X3 | `IMPLEMENTATION_INDEX.md:242` still stamps #580 as "verified on `feat/carrier-producer`, NOT on `dev`". It merged as `63d543103`; the stamp is stale |
+| PWC-X3 | The index's `COVER_TRAFFIC_RESTORATION.md` build-status row still stamps #580 as "verified on `feat/carrier-producer`, NOT on `dev`". It merged as `63d543103`, so the stamp is stale. **Not repaired here** — that row belongs to the carrier lane, and this census enumerates rather than edits another lane's status |
 | PWC-X4 | PW-17's verification target is **§6.10 + §7**, not §12.10 (§5.1) |
 | PWC-X5 | PW-22's submission-vs-serving coverage gap is **located and open**; no production submission path exists yet (§5.3) |
 | PWC-X6 | Anchor tenure survives restart but **not a store version bump** (§5.4) |

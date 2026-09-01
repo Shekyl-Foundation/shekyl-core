@@ -2,7 +2,9 @@
 
 
 **Status:** measurement spike, opened 2026-08-03. SPIKE-F-1 **REFUTED AS
-STATED** (`:79`); SPIKE-F-12 **CONFIRMS AN ACCEPTED RESIDUAL** (`:80`) — the
+STATED**; SPIKE-F-12 **CONFIRMS AN ACCEPTED RESIDUAL** (both in the §2
+substrate table, cited by id rather than line because this block's own
+insertion moves every line below it) — the
 tor entry-guard set is per-process/datadir, so one tor process means one guard
 set sees every stem successor (§21.1). **Status corrected 2026-09-01:** this
 line deferred to [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md), which

@@ -680,13 +680,13 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
-- **P2P wire census bucket-3 residue — two dead wire structs [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) PWC-F1, PWC-F2
+- **Two dead p2p wire structs survive with no callers (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide; `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **P2P wire census — `network_config`'s never-sent KV map advertises a packet limit the transport does not enforce (50 MB vs 100 MB) [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) PWC-F3
+- **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **P2P wire census — Shi et al. (NDSS 2025) graylist and whitelist sub-attacks unaddressed; the double-spend arm is refused only by an inherited, never-examined guard [`docs/design/P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md) §5.2, PWC-E7
+- **Shi et al. (NDSS 2025) graylist and whitelist sub-attacks are unaddressed, and the double-spend arm is refused only by an inherited, never-examined guard.** The guard is upstream Monero's `f7fd209ed`; Shekyl has no record examining it, so a rewrite re-deriving tx ingest drops it silently. PWC-E7, §5.2 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
