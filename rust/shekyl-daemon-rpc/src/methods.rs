@@ -647,12 +647,6 @@ const BYTES_PER_KIB: u64 = 1024;
 /// unbounded loop faithfully would be reproducing the defect.
 const MAX_OVERVIEW_GAP: u64 = 128;
 
-/// Lowercase hex of a raw uuid, as `epee::string_tools::pod_to_hex` renders
-/// it — no dashes.
-fn hex16(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Round half up, totally.
 ///
 /// The C++ wrote `(uint32_t)(x + 0.5f)`, which is **undefined** when the
@@ -673,6 +667,36 @@ fn round_half_up(value: f32) -> u32 {
         u32::MAX
     } else {
         rounded as u32
+    }
+}
+
+/// Bytes per second as whole KiB per second, totally.
+///
+/// The C++ divided a `double` by 1024 and let the implicit conversion to
+/// `uint64_t` truncate. That conversion is **undefined** for a NaN, an
+/// infinity, a negative or a value past the integer range, and the input is a
+/// rate estimator's output — the same hazard [`round_half_up`] exists for,
+/// one field away. The division happens in floating point, as it did, so the
+/// answer is `trunc(bytes_per_second / 1024)` and not
+/// `trunc(bytes_per_second) / 1024`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the clamp above the cast is what makes it total"
+)]
+fn kib_per_second(bytes_per_second: f64) -> u64 {
+    /// `u64::MAX` as the nearest `f64`. Written as a literal rather than
+    /// `u64::MAX as f64`, which is itself a lossy cast: the exact value is
+    /// 2^64, one past the range, so `>=` here is the right boundary.
+    const OUT_OF_RANGE: f64 = 18_446_744_073_709_551_616.0;
+    if !bytes_per_second.is_finite() || bytes_per_second <= 0.0 {
+        return 0;
+    }
+    let kib = (bytes_per_second / 1024.0).floor();
+    if kib >= OUT_OF_RANGE {
+        u64::MAX
+    } else {
+        kib as u64
     }
 }
 
@@ -721,15 +745,18 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         } else {
             c.recv_count / live_time / BYTES_PER_KIB
         },
-        current_download: c.current_speed_down / BYTES_PER_KIB,
+        current_download: kib_per_second(c.current_speed_down),
         avg_upload: if live_time == 0 {
             0
         } else {
             c.send_count / live_time / BYTES_PER_KIB
         },
-        current_upload: c.current_speed_up / BYTES_PER_KIB,
+        current_upload: kib_per_second(c.current_speed_up),
         support_flags: c.support_flags,
-        connection_id: hex16(&c.connection_id),
+        // `hex::encode` is lowercase and undashed, which is exactly what
+        // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
+        // the encoder this file already uses four times over.
+        connection_id: hex::encode(c.connection_id),
         height: c.height,
         pruning_seed: c.pruning_seed,
         address_type: c.address_type,
@@ -878,7 +905,7 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
             .map(|s| SyncSpan {
                 start_block_height: s.start_block_height,
                 nblocks: s.nblocks,
-                connection_id: hex16(&s.connection_id),
+                connection_id: hex::encode(s.connection_id),
                 rate: round_half_up(s.rate),
                 // 0..1 on the queue, a percentage on the wire.
                 speed: round_half_up(s.speed_fraction * 100.0),
@@ -1774,8 +1801,8 @@ pub(crate) mod tests {
             // truncating divisions.
             recv_count: 600 * 2048,
             send_count: 600 * 1024,
-            current_speed_down: 4096,
-            current_speed_up: 2048,
+            current_speed_down: 4096.0,
+            current_speed_up: 2048.0,
             height: 1_234_567,
             support_flags: 3,
             pruning_seed: 384,
@@ -1956,6 +1983,26 @@ pub(crate) mod tests {
         assert!(
             !facts.asked_public_only.load(Ordering::SeqCst),
             "public_only reaches the facts call, which chooses a different p2p read"
+        );
+    }
+
+    /// The conversion the C++ made with an undefined cast.
+    #[test]
+    fn a_connection_speed_becomes_whole_kib_totally() {
+        assert_eq!(kib_per_second(0.0), 0);
+        assert_eq!(kib_per_second(1023.9), 0, "truncates, not rounds");
+        assert_eq!(kib_per_second(1024.0), 1);
+        assert_eq!(kib_per_second(4096.0), 4);
+        // The division is in floating point, as the C++ did it, so this is
+        // `trunc(x / 1024)` and not `trunc(x) / 1024`.
+        assert_eq!(kib_per_second(2047.9), 1);
+        assert_eq!(kib_per_second(-1.0), 0, "negative is clamped, not cast");
+        assert_eq!(kib_per_second(f64::NAN), 0);
+        assert_eq!(kib_per_second(f64::INFINITY), 0, "not finite");
+        assert_eq!(
+            kib_per_second(1e30),
+            u64::MAX,
+            "saturates rather than wraps"
         );
     }
 

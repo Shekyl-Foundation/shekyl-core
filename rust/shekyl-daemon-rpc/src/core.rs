@@ -84,7 +84,8 @@ pub enum TxSlot {
 /// derived from these against the one `now` that came back beside the list,
 /// so a connection's reported lifetime and the divisor behind its own
 /// averages cannot come from different seconds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// No `Eq`: the raw speeds are `f64`, and they are raw on purpose.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionFacts {
     /// `network_address::str()`: "host:port" for ipv4, the onion for tor.
     pub address: String,
@@ -99,9 +100,11 @@ pub struct ConnectionFacts {
     /// Bytes, absolute.
     pub recv_count: u64,
     pub send_count: u64,
-    /// Bytes/s.
-    pub current_speed_down: u64,
-    pub current_speed_up: u64,
+    /// Bytes/s, raw. Not yet an integer: `static_cast<uint64_t>` of a rate
+    /// estimator's output is undefined for a NaN, an infinity, a negative or
+    /// an out-of-range value, so the truncation happens here, clamped.
+    pub current_speed_down: f64,
+    pub current_speed_up: f64,
     /// The peer's claimed blockchain height.
     pub height: u64,
     pub support_flags: u32,
@@ -118,7 +121,7 @@ pub struct ConnectionFacts {
 }
 
 /// The live connections plus the single instant they were read at.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionsSnapshot {
     /// Unix seconds; one clock read for the whole list.
     pub now: u64,

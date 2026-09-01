@@ -53,8 +53,8 @@
   connection, so a connection's reported `live_time` could disagree with the
   divisor behind its own `avg_download`; elapsed times now saturate instead
   of wrapping into centuries when a clock moves backwards; the download
-  `rate` is rounded totally rather than through a cast that is undefined for a
-  negative or out-of-range float; and `sync_info`'s queue overview no longer
+  `rate` and each connection's current speeds are converted totally rather than
+  through casts that are undefined for a negative or out-of-range float; and `sync_info`'s queue overview no longer
   sizes its gap run from peer-advertised heights without a ceiling. Also
   removed: `print_cn`'s **SSL column**, which had no wire field behind it and
   therefore always printed `no` — p2p SSL is disabled by construction, so it

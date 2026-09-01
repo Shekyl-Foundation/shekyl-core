@@ -483,9 +483,9 @@ pub struct ConnectionFactsFfi {
     /// Bytes, absolute.
     pub recv_count: u64,
     pub send_count: u64,
-    /// Bytes/s.
-    pub current_speed_down: u64,
-    pub current_speed_up: u64,
+    /// Bytes/s, raw — the clamp to an integer is this side's job.
+    pub current_speed_down: f64,
+    pub current_speed_up: f64,
     /// The peer's claimed blockchain height.
     pub height: u64,
     pub support_flags: u32,

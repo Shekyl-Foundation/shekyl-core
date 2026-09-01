@@ -794,7 +794,17 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
     } else {
         time_interval(now.saturating_sub(peer.last_seen))
     };
-    let addr = format!("{}:{}", peer.host, peer.port);
+    // `host` means three different things across the address arms, and only
+    // two of them leave a port to append. On the third — tor, i2p — `host` is
+    // the whole `network_address::str()`, which *already ends in a port*, and
+    // `port` is 0; the C++ appended anyway and printed
+    // `abcdefghijklmnop.onion:18080:0`. An inherited rendering, not a
+    // regression, and corrected here rather than carried (rule 16).
+    let addr = if peer.port == 0 {
+        peer.host.clone()
+    } else {
+        format!("{}:{}", peer.host, peer.port)
+    };
     format!(
         "{prefix:<10} {:016x} {addr:<25} {:<4x} {elapsed}",
         peer.id, peer.pruning_seed
@@ -1959,6 +1969,35 @@ mod tests {
         assert!(
             render_peer("gray", &seen, 1_750_000_000).contains("d1.h1.m1.s1"),
             "a seen peer carries its interval"
+        );
+    }
+
+    /// The three address arms, rendered.
+    ///
+    /// The tor arm is the one the C++ got wrong: its `host` is the whole
+    /// `str()`, port included, and its `port` is 0, so appending produced
+    /// `…onion:18080:0`.
+    #[test]
+    fn a_peer_address_gains_a_port_only_when_it_has_one() {
+        let peer = |host: &str, port: u16| shekyl_rpc_types::Peer {
+            id: 1,
+            host: host.to_owned(),
+            ip: 0,
+            port,
+            last_seen: 1_750_000_000,
+            pruning_seed: 0,
+        };
+        let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p, 1_750_000_000);
+
+        assert!(line(&peer("10.32.0.7", 18080)).contains("10.32.0.7:18080"));
+        assert!(line(&peer("2001:db8::1", 18081)).contains("2001:db8::1:18081"));
+
+        let tor = line(&peer("abcdefghijklmnop.onion:18080", 0));
+        assert!(tor.contains("abcdefghijklmnop.onion:18080"), "{tor}");
+        assert!(
+            !tor.contains(":18080:0"),
+            "the port must not be appended to an address that already carries \
+             one; got:\n{tor}"
         );
     }
 

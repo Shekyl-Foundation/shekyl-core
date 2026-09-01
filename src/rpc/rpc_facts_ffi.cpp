@@ -1060,8 +1060,8 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.last_send = static_cast<uint64_t>(ctx.m_last_send);
       e.recv_count = ctx.m_recv_cnt;
       e.send_count = ctx.m_send_cnt;
-      e.current_speed_down = static_cast<uint64_t>(ctx.m_current_speed_down);
-      e.current_speed_up = static_cast<uint64_t>(ctx.m_current_speed_up);
+      e.current_speed_down = ctx.m_current_speed_down;
+      e.current_speed_up = ctx.m_current_speed_up;
       e.height = ctx.m_remote_blockchain_height;
       e.support_flags = support_flags;
       e.pruning_seed = ctx.m_pruning_seed;

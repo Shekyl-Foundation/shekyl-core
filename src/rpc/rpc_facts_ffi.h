@@ -319,8 +319,13 @@ typedef struct shekyl_rpc_connection_facts {
     uint64_t     last_send;            // unix seconds; 0 if never
     uint64_t     recv_count;           // bytes, absolute
     uint64_t     send_count;           // bytes, absolute
-    uint64_t     current_speed_down;   // bytes/s, truncated from the double
-    uint64_t     current_speed_up;     // bytes/s, truncated from the double
+    // Bytes/s, raw. Crossing as `double` rather than a truncated integer for
+    // the reason every other derived value in this POD crosses raw: the
+    // truncation is a computation, `static_cast<uint64_t>` of a NaN, an
+    // infinity, a negative or an out-of-range value is undefined, and these
+    // are the outputs of a rate estimator. The caller clamps.
+    double       current_speed_down;
+    double       current_speed_up;
     uint64_t     height;               // the peer's claimed blockchain height
     uint32_t     support_flags;
     uint32_t     pruning_seed;
