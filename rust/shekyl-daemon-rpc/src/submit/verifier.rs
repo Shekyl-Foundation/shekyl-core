@@ -82,8 +82,8 @@ use rand_core::OsRng;
 use shekyl_archival_retention::{
     debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, settlement_epoch_at_height,
-    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_unbond_bond_post,
-    whole_record_last_served, ArchivalBondPostVin, BondPostError,
+    unbond_vin_statics, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin, BondPostError,
     BondPostKind as RetentionBondPostKind, BondTerm, ClaimantBondRecord, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, RewardCommit, ShardSet,
@@ -1152,7 +1152,7 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     if pqc_auths.is_empty() || pqc_auths.len() != parsed.tx.prefix.inputs.len() {
         return Err(VerifyFailure::Malformed);
     }
-    let Some((index, _)) = parsed.bond_post() else {
+    let Some((index, bond)) = parsed.bond_post() else {
         return Err(VerifyFailure::Malformed);
     };
     let payload_hashes = parsed.tx.pqc_signing_payload_hashes();
@@ -1162,5 +1162,21 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     let (Some(auth), Some(payload_hash)) = (pqc_auths.get(index), payload_hashes.get(index)) else {
         return Err(VerifyFailure::Malformed);
     };
-    verify_pqc_auth_slot(auth, payload_hash)
+    verify_pqc_auth_slot(auth, payload_hash)?;
+
+    // The vin-only half of UB9, run here for the same reason possession is:
+    // it needs no daemon fact, and the gather it precedes performs a
+    // lock-held per-shard scan. Possession alone does not stop a cold-key
+    // holder minting fresh signatures over a vin these guards already doom —
+    // each forged txid is unknown, so the gather's identity clause never
+    // fires for it. The shared consensus function, never a local restatement:
+    // the block path runs the identical checks inside
+    // `verify_unbond_bond_post`, in the same order.
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
+        return Err(VerifyFailure::Malformed);
+    };
+    if unbond_vin_statics(&vin).is_err() {
+        return Err(VerifyFailure::Malformed);
+    }
+    Ok(())
 }

@@ -552,6 +552,46 @@ pub fn verify_join_market_bond_post(
     Ok(())
 }
 
+/// The Unbond guards that need **only the vin** — no record, no chain state.
+///
+/// Split out of [`verify_unbond_bond_post`] so the daemon's submit pre-gate can
+/// run them *before* it asks for the §8.7.1.1 fact bundle. That gather performs
+/// a per-shard last-served scan under the pool and blockchain locks, and for a
+/// `CompleteTree` record its cost tracks the frozen-segment count, so any guard
+/// that can refuse without it should refuse first: a caller holding the cold
+/// key can otherwise mint fresh signatures over a vin these checks already
+/// doom, and buy that scan once per forged txid.
+///
+/// Extracted rather than restated. A second copy of a consensus guard living in
+/// the RPC crate is the drift this codebase spends its gates preventing; here
+/// the block path and the submit pre-gate call the same function, and the order
+/// inside `verify_unbond_bond_post` is unchanged.
+pub fn unbond_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+    if vin.bond_credit != 0 {
+        return Err(BondPostError::UnbondCreditNonzero);
+    }
+
+    // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
+    let floor = bond_floor(&vin.holdings);
+    // A full Unbond ends at the canonical empty holdings, whose floor is 0. But
+    // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
+    // so a floor-0 descriptor that still carries shards is not an exit — reject it
+    // rather than let it masquerade as empty. (Join rejects floor-0 outright as
+    // `BondFloorZero`; Unbond cannot, because the empty end-state is legitimately
+    // floor 0, so it guards the non-empty case explicitly.)
+    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
+        return Err(BondPostError::UnbondHoldingsNotEmpty);
+    }
+    if vin.bonded_total_atomic != floor {
+        return Err(BondPostError::UnbondFloorMismatch);
+    }
+    // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
+    if vin.bonded_total_atomic != 0 {
+        return Err(BondPostError::NotFullUnbond);
+    }
+    Ok(())
+}
+
 /// Verify `Unbond` bond-post semantics — a full record release (gate-4 §3.2/§3.4/
 /// §3.5/§4.3; `PHASE_2B_FSM_RETOOL.md` P2B-8).
 ///
@@ -595,28 +635,7 @@ pub fn verify_unbond_bond_post(
         return Err(BondPostError::NothingToUnbond);
     }
 
-    if vin.bond_credit != 0 {
-        return Err(BondPostError::UnbondCreditNonzero);
-    }
-
-    // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    let floor = bond_floor(&vin.holdings);
-    // A full Unbond ends at the canonical empty holdings, whose floor is 0. But
-    // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
-    // so a floor-0 descriptor that still carries shards is not an exit — reject it
-    // rather than let it masquerade as empty. (Join rejects floor-0 outright as
-    // `BondFloorZero`; Unbond cannot, because the empty end-state is legitimately
-    // floor 0, so it guards the non-empty case explicitly.)
-    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
-        return Err(BondPostError::UnbondHoldingsNotEmpty);
-    }
-    if vin.bonded_total_atomic != floor {
-        return Err(BondPostError::UnbondFloorMismatch);
-    }
-    // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
-    if vin.bonded_total_atomic != 0 {
-        return Err(BondPostError::NotFullUnbond);
-    }
+    unbond_vin_statics(vin)?;
 
     // The debit removes the whole current balance (§3.2 table; §4.3 refund).
     if vin.bond_debit != current_bonded {

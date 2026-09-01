@@ -883,9 +883,11 @@ TEST(daemon_submit_shims, the_matching_debit_key_buys_the_scan)
   ShimFixture fx;
   fx.db->bond_record_present = true;
   fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
-  // Balance and debit both 0 here, so clause 3 (state) is satisfied and does
-  // not mask the thing under test.
-  fx.db->unbond_bonded_total = 0;
+  // A NONZERO balance with a matching debit. 0/0 also "matches", but a
+  // zero balance is an exited record whose exit can never verify
+  // (UB9 NothingToUnbond), so the gate skips it -- this test would then be
+  // measuring that skip instead of the scan it exists to pin.
+  fx.db->unbond_bonded_total = 750'000'000;
 
   const SubmitTx s = fx.make_tx(1, 1);
   shekyl_submit_facts_ffi facts;
@@ -894,7 +896,8 @@ TEST(daemon_submit_shims, the_matching_debit_key_buys_the_scan)
   const crypto::hash p_id{};
   const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
   ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
-      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key),
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key,
+      /*bond_debit=*/750'000'000),
     SHEKYL_SUBMIT_OK);
   ASSERT_NE(handle, nullptr);
 
@@ -922,7 +925,10 @@ TEST(daemon_submit_shims, a_broadcast_resubmit_does_not_buy_the_scan)
   ShimFixture fx;
   fx.db->bond_record_present = true;
   fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
-  fx.db->unbond_bonded_total = 0;
+  // A SCANNABLE state: nonzero balance, matching debit, room in the interval
+  // log. Otherwise a state clause skips the scan and this test would pass (or
+  // fail) on that instead of on the identity clause it is named for.
+  fx.db->unbond_bonded_total = 750'000'000;
 
   SubmitTx s = fx.make_tx(0, 0);
   shekyl_submit_facts_ffi fresh;
@@ -938,7 +944,8 @@ TEST(daemon_submit_shims, a_broadcast_resubmit_does_not_buy_the_scan)
   const crypto::hash p_id{};
   const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
   ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
-      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key), SHEKYL_SUBMIT_OK);
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key,
+      /*bond_debit=*/750'000'000), SHEKYL_SUBMIT_OK);
   ASSERT_NE(handle, nullptr);
   ASSERT_EQ(facts.in_pool_broadcast, 1)
     << "fixture must reach the broadcast state, or this asserts nothing";
@@ -963,7 +970,10 @@ TEST(daemon_submit_shims, an_embargoed_resubmit_still_buys_the_scan)
   ShimFixture fx;
   fx.db->bond_record_present = true;
   fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
-  fx.db->unbond_bonded_total = 0;
+  // A SCANNABLE state: nonzero balance, matching debit, room in the interval
+  // log. Otherwise a state clause skips the scan and this test would pass (or
+  // fail) on that instead of on the identity clause it is named for.
+  fx.db->unbond_bonded_total = 750'000'000;
 
   SubmitTx s = fx.make_tx(0, 0);
   shekyl_submit_facts_ffi fresh;
@@ -976,7 +986,8 @@ TEST(daemon_submit_shims, an_embargoed_resubmit_still_buys_the_scan)
   const crypto::hash p_id{};
   const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
   ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
-      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key), SHEKYL_SUBMIT_OK);
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key,
+      /*bond_debit=*/750'000'000), SHEKYL_SUBMIT_OK);
   ASSERT_NE(handle, nullptr);
   ASSERT_EQ(facts.in_pool, 1) << "fixture must be pooled";
   ASSERT_EQ(facts.in_pool_broadcast, 0)
@@ -1026,6 +1037,72 @@ TEST(daemon_submit_shims, a_debit_that_no_longer_matches_the_balance_skips_the_s
   EXPECT_EQ(view->record.last_served_scan_skipped, 1);
   EXPECT_EQ(view->record.bonded_total_atomic, 500'000'000u)
     << "the cheap facts still ride along: Rust runs UB2/UB9 on them";
+  shekyl_submit_unbond_facts_free(handle);
+}
+
+TEST(daemon_submit_shims, an_exited_zero_balance_record_does_not_buy_the_scan)
+{
+  // The cheapest replay of the family, because its attacker has nothing left
+  // to lose. An exit preserves the row -- zero balance, bond_spend_pk intact --
+  // so identity never fires (each forged txid is new) and the pin still passes.
+  // A zero bond_debit "matches" a zero balance, so the debit clause passes too.
+  // UB9 refuses it as NothingToUnbond regardless, which is exactly why the scan
+  // must not run: nothing it returns can change that answer.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  fx.db->unbond_bonded_total = 0;
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  const crypto::hash p_id{};
+  const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key,
+      /*bond_debit=*/0), SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None)
+    << "an exited record's unverifiable exit must not buy the lock-held scan";
+  const shekyl_submit_unbond_facts_ffi* view =
+    shekyl_submit_unbond_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->record.last_served_scan_skipped, 1);
+  shekyl_submit_unbond_facts_free(handle);
+}
+
+TEST(daemon_submit_shims, a_full_interval_log_does_not_buy_the_scan)
+{
+  // Same family: a full bad-interval log leaves no room for the connect's
+  // interval-close, so UB9 refuses as IntervalLogFull before it ever consults
+  // the cooldown the scan feeds. The count only grows, so this cannot become
+  // stale in the permissive direction.
+  ShimFixture fx;
+  fx.db->bond_record_present = true;
+  fx.db->unbond_bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  fx.db->unbond_bonded_total = 750'000'000;
+  fx.db->unbond_bad_interval_count =
+    shekyl::db::ArchivalBondValue::kMaxBadIntervals;
+
+  const SubmitTx s = fx.make_tx(1, 1);
+  shekyl_submit_facts_ffi facts;
+  uint8_t ki_conflict = 0;
+  shekyl_submit_unbond_facts_handle* handle = nullptr;
+  const crypto::hash p_id{};
+  const std::vector<uint8_t> right_key(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xCD);
+  ASSERT_EQ(fx.snapshot(s, facts, ki_conflict, &p_id,
+      SHEKYL_SUBMIT_BOND_PROBE_UNBOND, &handle, &right_key,
+      /*bond_debit=*/750'000'000), SHEKYL_SUBMIT_OK);
+  ASSERT_NE(handle, nullptr);
+
+  EXPECT_EQ(fx.db->last_served_call, SubmitTestDB::LastServedCall::None)
+    << "an unconnectable exit must not buy the lock-held scan";
+  const shekyl_submit_unbond_facts_ffi* view =
+    shekyl_submit_unbond_facts_view(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->record.last_served_scan_skipped, 1);
   shekyl_submit_unbond_facts_free(handle);
 }
 

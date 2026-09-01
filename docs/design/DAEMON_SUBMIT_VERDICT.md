@@ -1470,11 +1470,32 @@ finding arrived three times — key equality, then possession, then replay — a
 each revision authenticated something other than the event that triggers the
 work. What the gate must hold is:
 
-> **The per-shard scan runs at most once per (identity, state):** an *unknown*
-> txid, **and** a `bond_debit` matching the live balance.
+> **The scan is the LAST thing UB9 needs, so every guard that precedes it
+> gates it.** The gather runs the per-shard scan only for an *unknown* txid
+> whose record state could still reach UB9's cooldown check.
 
-The two clauses are the two skips in `fill_unbond_facts_locked`, and each
-closes a replay the previous revision left open:
+That is a rule, not a list, and it is deliberately phrased that way: three
+earlier revisions each added the one clause the latest finding named, and a
+fourth finding then arrived for a case the list did not cover. Reading
+`verify_unbond_bond_post` top-down settles the question — **`release_cooldown_elapsed`
+is the only consumer of the scan**, so each guard above it can refuse without
+it, and every such guard belongs in front of the gather:
+
+| UB9 guard | Decidable from | Enforced before the scan by |
+| --- | --- | --- |
+| `RecordMissing` | the probe | the gather's absent-record early return |
+| `NothingToUnbond` (balance 0) | a cheap record read | gather skip clause |
+| `UnbondCreditNonzero`, `UnbondHoldingsNotEmpty`, `UnbondFloorMismatch`, `NotFullUnbond` | the **vin alone** | `unbond_vin_statics`, run in the UB0 pre-gate |
+| `DebitNotFullBalance` | a cheap record read | gather skip clause |
+| `IntervalLogFull` | a cheap record read | gather skip clause |
+| `CooldownNotElapsed` | **the scan** | — this is what the scan is *for* |
+
+The vin-only guards are the shared consensus function, not a restatement: the
+block path runs the identical checks inside `verify_unbond_bond_post`, in the
+same order. A second copy in the RPC crate is the drift this codebase spends
+its gates preventing.
+
+Each clause closes a replay a previous revision left open:
 
 * **Identity.** A broadcast Unbond's bytes are public and its signature stays
   valid forever, so anyone could resubmit them; UB0 passes, and the engine's
@@ -1484,7 +1505,15 @@ closes a replay the previous revision left open:
   in-pool but not broadcast, and a foreign caller is shown only
   `in_pool_broadcast` (§3.1), so it does *not* early-return and genuinely needs
   the scan.
-* **State.** A broadcast Unbond invalidated by later state motion — a slash, a
+* **State — an exited record.** This is the cheapest replay of the family,
+  because its attacker has nothing left to lose. An exit *preserves the row*
+  with a zero balance and an intact `bond_spend_pk`, so identity never fires
+  (each forged txid is new) and the pin still passes; a zero `bond_debit`
+  "matches" a zero balance, so the debit clause passed too. UB9 refuses it as
+  `NothingToUnbond` whatever the scan returns. Note the exit does **not** prune
+  the record's serve-credit rows, so the scan it was buying is still the full
+  chain-growing one.
+* **State — a moved balance.** A broadcast Unbond invalidated by later state motion — a slash, a
   competing exit — is neither in-pool nor in-chain, so the identity clause
   never fires for it, and the exited row keeps its `bond_spend_pk`, so UB3
   still passes. `bond_debit` is fixed in the signed bytes and UB9 requires it

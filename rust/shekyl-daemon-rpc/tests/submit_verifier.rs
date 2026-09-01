@@ -1374,6 +1374,12 @@ enum UnbondAuthKey {
     /// a key the attacker actually holds. The gather's cheap pin compares
     /// the two public keys and passes; only a signature check refuses it.
     BondSpendKeyForgedSignature,
+    /// A VALID signature by the record's own key over a vin UB9's static
+    /// guards already doom (`bond_credit != 0` ⇒ `UnbondCreditNonzero`).
+    /// Possession passes, so only the pre-gate's vin-statics half refuses it
+    /// before the gather — and every forged txid is unknown, so the identity
+    /// clause never fires for this shape.
+    VinStaticsDoomed,
 }
 
 /// The settlement epochs the fixture's facts sit in. Chosen so the cooldown
@@ -1511,7 +1517,9 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         kind: BondPostKind::Other(shekyl_archival_retention::BondPostKind::Unbond as u8),
         holdings: Holdings::ShardSetCompact(Vec::new()),
         bonded_total_atomic: 0,
-        bond_credit: 0,
+        // UB9 requires 0 here; the doomed variant sets 1 so the static guards
+        // refuse a transaction that is otherwise perfectly signed.
+        bond_credit: u64::from(auth_key == UnbondAuthKey::VinStaticsDoomed),
         bond_debit: record_bonded_total,
     }));
     let extra_inputs = vec![prefix_bond_input];
@@ -1544,9 +1552,9 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     let slot_pk = match auth_key {
         // The forged variant PRESENTS the record's key — that is what makes
         // the gather's public-key pin pass it.
-        UnbondAuthKey::BondSpend | UnbondAuthKey::BondSpendKeyForgedSignature => {
-            bond_spend_pk.clone()
-        }
+        UnbondAuthKey::BondSpend
+        | UnbondAuthKey::BondSpendKeyForgedSignature
+        | UnbondAuthKey::VinStaticsDoomed => bond_spend_pk.clone(),
         UnbondAuthKey::Identity => identity_pk.clone(),
     };
     let mut wire_input = WireEncodeInput {
@@ -1583,7 +1591,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
-        UnbondAuthKey::BondSpend => &p_keys.bond_spend_sk,
+        UnbondAuthKey::BondSpend | UnbondAuthKey::VinStaticsDoomed => &p_keys.bond_spend_sk,
         // `Identity` presents this key and signs with it — a VALID signature
         // by the wrong signer. The forged variant presents `bond_spend_pk`
         // and signs with this one, so its signature cannot verify against the
@@ -1998,6 +2006,42 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
         shim.commit_count(),
         0,
         "a refused submission commits nothing"
+    );
+}
+
+#[test]
+fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
+    // The pre-gate's vin-only half. Possession alone does not stop a cold-key
+    // holder minting fresh signatures over a vin UB9's static guards already
+    // doom: every forged txid is unknown, so the gather's identity clause never
+    // fires for it, and each replay would buy the lock-held per-shard scan.
+    //
+    // This transaction is VALIDLY signed by the record's own key — only the
+    // statics refuse it — so a gather that ran would be doing provably useless
+    // work under both locks.
+    let doomed = build_unbond_fixture(UnbondAuthKey::VinStaticsDoomed);
+    let (_, bond) = doomed.parsed.bond_post().expect("fixture carries the vin");
+    assert_eq!(
+        bond.bond_credit, 1,
+        "fixture must carry the doomed vin, or this asserts nothing"
+    );
+    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    let verdict = engine
+        .submit(&doomed.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert_eq!(
+        verdict,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::Malformed
+        },
+        "UB9's static guards refuse a nonzero bond_credit on an Unbond"
+    );
+    assert_eq!(
+        shim.snapshot_count(),
+        0,
+        "the vin-statics pre-gate must refuse BEFORE the fact gather: no \
+         snapshot means no lock-held per-shard scan"
     );
 }
 

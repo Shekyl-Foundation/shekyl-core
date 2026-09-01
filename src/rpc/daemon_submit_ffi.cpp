@@ -274,7 +274,25 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   const bool skip_scan =
     identity_known
     || pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK
-    || record.bonded_total_atomic != bond_debit;
+    // Each state clause below mirrors ONE UB9 guard that sits BEFORE the
+    // cooldown check -- the only thing the scan feeds. If a guard that
+    // precedes the cooldown must refuse, the scan's contents cannot change
+    // the answer, so gathering them is pure lock-held waste.
+    //   UB9 `NothingToUnbond`: an EXITED record keeps its row (balance 0) and
+    //   its bond_spend_pk, so identity and the pin both pass for it -- and its
+    //   cold-key holder has no collateral left to lose, which is what makes
+    //   this the cheapest replay of the three. `bond_debit == 0` matches a
+    //   zero balance, so without this clause the pair 0/0 sails through.
+    || record.bonded_total_atomic == 0
+    //   UB9 `DebitNotFullBalance`: the debit is fixed in the signed bytes.
+    || record.bonded_total_atomic != bond_debit
+    //   UB9 `IntervalLogFull`: a full log leaves no room for the connect's
+    //   interval-close, so the exit is unconnectable and therefore
+    //   unverifiable. The count only grows, so this cannot become stale in
+    //   the permissive direction. Work gate only -- a drift against the Rust
+    //   MAX_BOND_BAD_INTERVALS would cost a skipped or a wasted scan, never a
+    //   different verdict, because Rust re-runs the real guard.
+    || record.bad_intervals.size() >= shekyl::db::ArchivalBondValue::kMaxBadIntervals;
 
   shekyl_submit_unbond_record_ffi& out = handle.view.record;
   out.bonded_total_atomic = record.bonded_total_atomic;

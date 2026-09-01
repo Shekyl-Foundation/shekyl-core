@@ -98,9 +98,9 @@ pub use bond_floor::{
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
-    bond_post_block_unique, bond_post_funding_floor_met, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
-    verify_unbond_bond_post, BondPostError,
+    bond_post_block_unique, bond_post_funding_floor_met, unbond_vin_statics,
+    verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
+    verify_rebond_bond_post, verify_unbond_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
