@@ -76,7 +76,7 @@ All `PW-` rows, including the 2026-09-01 implementation-path round:
   *provenance, not authority*. A genesis-frozen wire cannot take authority from
   a draft marked unstable. This is a **round deliverable**, not a background
   note: the spec must contain the token sequence, `ck` derivation and KEM
-  placement as its own normative text (§2.1, D-T4). *Not* a padding band — see
+  placement as its own normative text (§2.1, PWD-T4). *Not* a padding band — see
   §1.4, which re-derives PW-3 and finds the band does not defend.
 - **PW-7d** — **snow as a test-only differential partner** for the classical
   half of the KAT suite: a **rule-17 wargame option parked for P2P-3**, not a
@@ -92,8 +92,11 @@ scope fences here (§6), not gaps for the round to fill opportunistically.
 ### 1.3 The papers corpus
 
 **The corpus is complete, and it lives in the `shekyl-dev` sibling repo** —
-`~/shekyl/shekyl-dev/docs/papers/`, not in `shekyl-core` and not in the
-Nextcloud document trees. Ten items at this pin:
+`docs/papers/` there, not in `shekyl-core`. **It is a local reference corpus,
+not versioned in this repository**, so the paths below are workstation-specific
+and a contributor should expect to fetch the sources themselves; every claim
+this brief draws from them is cited to a paper section so it can be checked
+against any copy. Ten items at this pin:
 
 `wireguard.pdf` · `Bolt-08-transport.md` · `2025-95-Eclipse-Attacks-p2p.pdf`
 (Shi et al., NDSS 2025) · `doubleratchet.pdf` · `2022-539_PQC_Noise.pdf` ·
@@ -163,6 +166,18 @@ bar read:
 | **NN** — Shekyl's pattern | **80 B** | **33.0×** (≈ 2.6 KB) |
 | XX | 192 B | 14.4× |
 
+**These are whole-handshake totals, both directions — not first-flight
+figures**, and the distinction matters to what a classifier keys on. Fig. 4(c)'s
+y-axis is *"Total Bytes Exchanged"*, and HFS deliberately splits the KEM
+material across two messages: `e1` carries the initiator's secondary ephemeral
+ML-KEM public key (1184 B) and `ekem1` carries the responder's encapsulation
+ciphertext (1088 B). So the **first message** is roughly `e` + `e1` ≈ 1.2 KB and
+the second roughly `e` + `ekem1` + tag ≈ 1.1 KB; the ≈2.6 KB is their sum plus
+framing. A passive classifier bucketing on the opening message sees ~1.2 KB, not
+~2.6 KB. Nothing in §1.4's conclusion turns on which is used — both are
+constants — but a spec that quotes the total as a first-flight size would be
+wrong by about 2×.
+
 So the register's "~14× classical→hybrid" is **XX's** figure and its 192 B is
 **XX's** baseline. PW-3 suspected exactly this ("extracted adjacent to the NN
 pattern's row, not confirmed against XX") and was correct. **For the NN-family
@@ -170,7 +185,7 @@ gossip lane the multiplier is 33.0×, not ~14×** — more than double what the
 register records, because NN's classical baseline is the smallest of the four
 and the KEM material is a constant added to it.
 
-**D-T2 stays load-bearing, but the ratio is the wrong lens — and the round
+**PWD-T2 stays load-bearing, but the ratio is the wrong lens — and the round
 must not inherit the alarm.** 33× is striking as a *ratio* and unremarkable as
 an *absolute*, because Shekyl's baseline is enormous by cryptocurrency
 standards; that is what FCMP++ plus hybrid PQC costs. Measured against what
@@ -178,7 +193,7 @@ this system already moves (all verified at the pin):
 
 | | bytes | source |
 | --- | --- | --- |
-| Hybrid `NN` handshake, first flight | ≈ 2,600 (inferred) | §1.4 above — D-T2 to pin |
+| Hybrid `NN` handshake, **whole handshake, both directions** | ≈ 2,600 (inferred) | §1.4 above — PWD-T2 to pin |
 | **Carrier window** — the padding quantum already in production design | **20,480** | `params/carrier.rs` `WINDOW_BYTES` |
 | Structural max transaction (8-in/16-out at `MAX_TREE_DEPTH`) | 97,964–97,969; **98,046** with the Levin envelope | `carrier.rs`, `MAX_FRAGMENTS` derivation |
 | PQC hybrid single key, **per input** | 1,996 | `cryptonote_config.h` `PQC_HYBRID_SINGLE_KEY_LEN` |
@@ -188,7 +203,7 @@ and smaller than the PQC key material of a two-input transaction before a
 single proof, output or signature byte is counted.
 
 **But the cost framing is not the question, and PW-3's answer does not survive
-examination. D-T2 must not pin a band.**
+examination. PWD-T2 must not pin a band.**
 
 The handshake's *existence* was never hideable: a TCP SYN, then bytes, then a
 session, is visible at the packet layer. **The asset is protocol identity** —
@@ -201,7 +216,7 @@ constant at the head of every connection answers "for what" with a single
 byte-match. Removing it is cheap and unambiguous. **But it must not be allowed
 to carry an anonymity claim:** it raises the cost of *bulk passive scanning* —
 sweeping traffic for a known prefix — and does nothing against *targeted active
-probing*, which is the attack in (iii). Keep it as a hard requirement (D-T5),
+probing*, which is the attack in (iii). Keep it as a hard requirement (PWD-T5),
 stated for what it buys.
 
 **(ii) The size fingerprint cannot be padded away, and padding would
@@ -216,7 +231,7 @@ verified at our own source:
   There is no variance for padding to remove — padding changes *what the
   constant is*, not *whether one exists*.
 - **A constant is precisely what a classifier wants.** "Every connection whose
-  first flight is exactly N bytes is Shekyl" is a perfect signature. PW-3's
+  first message is exactly N bytes is Shekyl" is a perfect signature. PW-3's
   phrasing — a band "independent of pattern/KEM in use" — was written to stop
   an observer distinguishing *between configurations*. **Shekyl ships one
   configuration.** There are no configurations to tell apart, so the
@@ -273,7 +288,7 @@ rather than *identification*.
 that lane lands.** This is consistent with what is already in the tree: the
 Q12-D6a ruling records that a node "routes clearnet, which exposes its IP as a
 relay source", and rejects reading (a) precisely because "the operator who
-configured Tor to avoid IP exposure still gets it.
+configured Tor to avoid IP exposure still gets it".
 
 **That half of the ruling is a product commitment, and it binds a lane this
 round does not own.** "Installed default" is a UX obligation, not just a
@@ -286,7 +301,7 @@ users will actually run. It reaches the **Tor / P-transport lane** as
 the failure modes that follow when the bundled Tor cannot start
 ([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)) are that
 lane's to specify, not P2P-2's to design. Recorded here **so it is inherited
-rather than rediscovered**; see §6's fences."
+rather than rediscovered**; see §6's fences.
 
 **What this closes and what it does not.** It closes (iii) — clearnet DPI
 resistance is **out of scope for anonymity**, because it is unachievable while
@@ -319,17 +334,16 @@ disposes of probe-resistant transports, admission whitelists, and — as here �
 handshake obfuscation, without needing to re-derive the argument each time from
 whatever figure prompted it.
 
-**Why this had to be caught before D-T2 and not after.** Pinning a band would
+**Why this had to be caught before PWD-T2 and not after.** Pinning a band would
 encode a defence that does not defend, and it would then read as green forever
 — a rule-47-shaped outcome, from a requirement the register itself wrote. A
 padded flight is exactly as classifiable as an unpadded one; the only thing the
 band changes is the number in the classifier's rule.
 
-**The scope question this raises belongs to Rick, and this brief does not
-assume either way:** *is clearnet DPI resistance in scope for Shekyl at all?*
-If it is, it needs its own round with a real mechanism, not a padding
-requirement. If it is not, the fingerprint is conceded and D-T2 reduces to (i)
-plus the concession record. **The round must not settle that by picking a
+**That scope question is RULED, not open** — see (iii) below. Clearnet DPI
+resistance is out of scope for anonymity because it is unachievable while
+accepting inbound connections; the fingerprint is conceded and PWD-T2 reduces to
+(i) plus the concession record. **The round must not reopen it by picking a
 band.**
 
 Two notes retained from the cost analysis, now serving a narrower purpose:
@@ -343,7 +357,7 @@ is a literal the test could agree with by construction."* `WINDOW_BYTES`' doc
 notes the inherited 3 KiB window "was a Monero cadence artifact" with no
 derivation; that is the failure mode any pinned constant must avoid.
 
-**Template for D-T2, and the round should be pointed at it explicitly.**
+**Template for PWD-T2, and the round should be pointed at it explicitly.**
 `rust/shekyl-relay-privacy/src/params/carrier.rs` is a working example of
 exactly this deliverable: a size constant with its derivation written out
 (`MAX_FRAGMENTS = ceil(S_max / WINDOW_BYTES) = ceil(98_046 / 20_480) = 5`), the
@@ -389,7 +403,7 @@ rather than scaling with time. So the tenure mechanism **materially reduces
 PW-3's exposure frequency** — a peer relationship lasting hours amortises one
 flight to nothing. That composition was invisible while the two rows were
 reasoned about separately, and for once it runs in the helpful direction. It is
-noted on D-I3.
+noted on PWD-I3.
 
 **What it does not do is rescue padding.** An earlier statement of this
 analysis closed with "padding is still required"; **that is retracted by §1.4**
@@ -431,14 +445,14 @@ remains is to make them concrete and normative.
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| D-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
-| D-T2 | **PW-3 is retired as written — do NOT pin a padding band.** §1.4: the flight is already constant-size, so a band relabels the constant; and clearnet protocol identity is undefendable against active probing, which no passive defence touches. **RULED (Rick, 2026-09-01): clearnet gives confidentiality and integrity, not anonymity; anonymity is Tor's, and Tor is the recommended/default transport.** The round records the concession and its impossibility argument — it does not re-derive a band | PW-3 as retired in §1.4; PW-19a; `carrier.rs` is the template for any constant the round *does* pin |
-| D-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset — **zero bytes on the wire**, both sides deriving from state they already hold | PW-8 (ruled; carry the §0(b) correction **and the §1.5 privacy rationale**) |
-| D-T4 | **`e1`/`ekem1` semantics written normatively in this document**, `noise_hfs_spec` cited as provenance only | **PW-7c** |
-| D-T5 | Wire prefix: what replaces `LEVIN_SIGNATURE`'s fixed 8 bytes | PWC-A1, PW-9 |
-| D-T6 | Packet limits derived from largest legitimate message, replacing two inherited and disagreeing constants | PWC-A5, PWC-F3, PW-10 |
-| D-T7 | Whether compression survives, and if so its position relative to encryption | PWC-A10 (recorded as **conditional**, not a present defect), PW-13 |
-| D-T8 | KAT strategy — Shekyl mints its own; **PW-7d's differential-partner option is recorded, not decided** | PW-6, PW-7d |
+| PWD-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
+| PWD-T2 | **PW-3 is retired as written — do NOT pin a padding band.** §1.4: the flight is already constant-size, so a band relabels the constant; and clearnet protocol identity is undefendable against active probing, which no passive defence touches. **RULED (Rick, 2026-09-01): clearnet gives confidentiality and integrity, not anonymity; anonymity is Tor's, and Tor is the recommended/default transport.** The round records the concession and its impossibility argument — it does not re-derive a band | PW-3 as retired in §1.4; PW-19a; `carrier.rs` is the template for any constant the round *does* pin |
+| PWD-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset — **zero bytes on the wire**, both sides deriving from state they already hold | PW-8 (ruled; carry the §0(b) correction **and the §1.5 privacy rationale**) |
+| PWD-T4 | **`e1`/`ekem1` semantics written normatively in `SHEKYL_P2P_PROTOCOL.md`** — the round's deliverable, not this brief — with `noise_hfs_spec` cited as provenance only | **PW-7c** |
+| PWD-T5 | Wire prefix: what replaces `LEVIN_SIGNATURE`'s fixed 8 bytes | PWC-A1, PW-9 |
+| PWD-T6 | Packet limits derived from largest legitimate message, replacing two inherited and disagreeing constants | PWC-A5, PWC-F3, PW-10 |
+| PWD-T7 | Whether compression survives, and if so its position relative to encryption | PWC-A10 (recorded as **conditional**, not a present defect), PW-13 |
+| PWD-T8 | KAT strategy — Shekyl mints its own; **PW-7d's differential-partner option is recorded, not decided** | PW-6, PW-7d |
 
 ### 2.2 Cluster B — behavioral commitments
 
@@ -447,35 +461,35 @@ bucket-4 mass lives here.
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| D-B1 | Rate limiting on handshake / timed-sync / ping — currently **absent** | PWC-E2, PW-15 |
-| D-B2 | Cadence jitter — currently **absent**; a distinct fix from D-B1, and neither substitutes for the other | PWC-E1, PWC-E3, PW-28 |
-| D-B3 | Per-command caps: derive them, and decide the unknown-command fallthrough that currently reaches `size_t::max` | PWC-C7 |
-| D-B4 | Unknown flag bits: reject at ingress, or keep accepting | PWC-A6 / **PWC-A6a** (the codec accepts them; no relay carries them today) |
-| D-B5 | `return_code` on notifications — inherited RPC-over-Levin affordance | PWC-A7, PW-12 |
-| D-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
-| D-B7 | Drop semantics: `drop_connections`-by-host, the score floor, and whether the **inherited** no-drop-offense set is adopted deliberately | PWC-E7, PWC-E8, PWC-E9 |
-| D-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |
+| PWD-B1 | Rate limiting on handshake / timed-sync / ping — currently **absent** | PWC-E2, PW-15 |
+| PWD-B2 | Cadence jitter — currently **absent**; a distinct fix from PWD-B1, and neither substitutes for the other | PWC-E1, PWC-E3, PW-28 |
+| PWD-B3 | Per-command caps: derive them, and decide the unknown-command fallthrough that currently reaches `size_t::max` | PWC-C7 |
+| PWD-B4 | Unknown flag bits: reject at ingress, or keep accepting | PWC-A6 / **PWC-A6a** (the codec accepts them; no relay carries them today) |
+| PWD-B5 | `return_code` on notifications — inherited RPC-over-Levin affordance | PWC-A7, PW-12 |
+| PWD-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
+| PWD-B7 | Drop semantics: `drop_connections`-by-host, the score floor, and whether the **inherited** no-drop-offense set is adopted deliberately | PWC-E7, PWC-E8, PWC-E9 |
+| PWD-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |
 
 ### 2.3 Cluster I — identity and Sybil resistance
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| D-I1 | Session identity: fully ephemeral, no durable peer id on the wire | PW-19, PW-19a, PWC-D4 |
-| D-I2 | Peerlist disclosure: size, anonymisation, and whether both handshake and timed-sync carry it | PWC-D1, PWC-D2, PWC-B4, PW-16 |
-| D-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, §5.4 |
-| D-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
-| D-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
-| D-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | §5.2, PWC-D3, PWC-D10, PWC-D11 |
+| PWD-I1 | Session identity: fully ephemeral, no durable peer id on the wire | PW-19, PW-19a, PWC-D4 |
+| PWD-I2 | Peerlist disclosure: size, anonymisation, and whether both handshake and timed-sync carry it | PWC-D1, PWC-D2, PWC-B4, PW-16 |
+| PWD-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, `P2P_1_WIRE_CENSUS.md` §5.4 |
+| PWD-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
+| PWD-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
+| PWD-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | §5.2, PWC-D3, PWC-D10, PWC-D11 |
 
 ### 2.4 Cluster A — the archival submission-path gap
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| D-A1 | Does the archival firewall / P-transport design cover the **serve-credit submission** path, or only serving? | PW-22, PWC-X5 |
+| PWD-A1 | Does the archival firewall / P-transport design cover the **serve-credit submission** path, or only serving? | PW-22, PWC-X5 |
 
 The census narrowed this from "is there a leak" to a falsifiable claim:
 production submission runs through the `Local` posture, and **no production
-caller selects the per-`P` `OwnRemote` arm**. Name such a call site and D-A1 is
+caller selects the per-`P` `OwnRemote` arm**. Name such a call site and PWD-A1 is
 refuted. Required reading, carried from the register unchanged:
 `ARCHIVAL_FIREWALL_GATE6.md`'s GF-7 rounds (including the finding that cover
 parameter `r` is cover-blind, which **stands** — only the instrument was made
@@ -584,17 +598,22 @@ The umbrella chat reviews the round's output before it goes to ratification.
 
 ---
 
-## 7. Rider — the register's first touch
+## 7. Rider — the register's next edit
 
-Two corrections ride the register's next edit, neither of them this round's
-subject but both owed:
+**Deferral disclosed under [`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc).** These corrections are *not* postponed indefinitely, and the blocker is named:
+
+- **Blocker:** the register is a separate document with its own validation surface and its own steering review (rule 19). Folding four corrections — one of which **retires a requirement** and adds a posture row — into a dispatch-brief PR would bury the brief under an edit that needs to be reviewed on its own terms.
+- **Owner:** this session.
+- **Schedule: before the P2P-2 round dispatches, and that is a hard ordering, not a preference.** The round *reads the register*. If the register still carries PW-3's padding requirement and PW-8's wrong figures when the round opens, the round inherits a retired requirement and a mis-stated ratio — which is the precise failure this brief exists to prevent. The register edit therefore lands as the next PR, ahead of dispatch.
+
+Four corrections are owed, none of them this round's subject:
 
 1. **§12.11 / `ρ` citation decay.** `DAEMON_RELAY_PRIVACY.md` §12.11's body is
    **superseded in part** by two banners (the Exploit tier is deleted; the live
    mechanism is a uniform random draw over the non-cooled admissible set,
    §§52/53/54). And `ρ` is **not mentioned in §12.10 at all** — its canonical
-   statement is §13.5. PW-25's claim survives; its pointer does not. D-I4 and
-   D-I5 must read the live text, not the superseded body.
+   statement is §13.5. PW-25's claim survives; its pointer does not. PWD-I4 and
+   PWD-I5 must read the live text, not the superseded body.
 2. **PW-8's WireGuard figures** — §0(b) and §1.3. The ruling stands; the
    ratio, the pattern name and the jitter claim do not. Add §1.5's zero-wire-
    bytes rationale as the **privacy** ground for option (a): (b) would
