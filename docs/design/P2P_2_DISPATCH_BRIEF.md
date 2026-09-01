@@ -196,10 +196,13 @@ not "an encrypted connection was opened" but "a handshake *for what*." A censor
 acts on the second. That splits PW-3's single requirement into three claims
 that need separate answers:
 
-**(i) No magic constant — PW-9 stands, unchanged.** An 8-byte constant at the
-head of every connection answers "for what" with a single byte-match. Removing
-it is cheap, unambiguous, and independent of everything below. Keep it as a
-hard requirement (D-T5).
+**(i) No magic constant — PW-9 stands, unchanged and independently.** An 8-byte
+constant at the head of every connection answers "for what" with a single
+byte-match. Removing it is cheap and unambiguous. **But it must not be allowed
+to carry an anonymity claim:** it raises the cost of *bulk passive scanning* —
+sweeping traffic for a known prefix — and does nothing against *targeted active
+probing*, which is the attack in (iii). Keep it as a hard requirement (D-T5),
+stated for what it buys.
 
 **(ii) The size fingerprint cannot be padded away, and padding would
 manufacture the signature it claims to remove.** Two reasons, the first
@@ -224,13 +227,84 @@ What the 33× told us is that the flight is *distinctive* (2.6 KB where classica
 `NN` is 80 B). It never told us padding fixes that. Turning a distinctive
 constant into a differently-sized constant is relabeling, not obfuscation.
 
-**(iii) Genuine size-unidentifiability is a different mechanism with an
-existing owner.** It requires mimicry (look like TLS) or full randomisation of
-the flow's shape — the obfs4 / Shadowsocks problem, an ongoing arms race and a
-far larger commitment than a padding line item. That work has a home already:
-the Tor / pluggable-transport lane. The honest disposition is to **concede the
-clearnet size fingerprint as a property, with a named owner elsewhere**, the
-same way clearnet MITM is conceded under PW-19a.
+**(iii) On clearnet, protocol identity is undefendable by construction — and
+this is a ruling, not an open scope question.**
+
+The decisive argument is not about traffic shape at all: **on clearnet your IP
+is known, so anyone may dial your node and see whether it completes a Shekyl
+handshake. If it handshakes, it is Shekyl.** No passive obfuscation touches
+this, because the adversary is not observing — they are *participating*. Even a
+perfect padding or mimicry scheme is defeated by a single connection attempt.
+
+**It composes directly with PW-19a, and that is what makes it structural rather
+than a cost trade.** The no-authentication constraint means anyone can be your
+peer by dialing in; that is the design of an open gossip network, not a
+weakness in it. But a node cannot simultaneously **accept connections from
+strangers** and **conceal that it accepts them**. The two are the same fact
+viewed from opposite ends.
+
+This also disposes of the pluggable-transport escape. obfs4 and Shadowsocks
+fight active probing with **authentication tokens the prober cannot produce** —
+only a peer holding a pre-shared secret gets a response. That is precisely the
+out-of-band prior knowledge PW-19a forbids. So probe-resistant clearnet gossip
+is not merely expensive; **it is incompatible with the no-authentication
+invariant.** Mimicry would make Shekyl traffic *look* like TLS to a passive
+observer and would still answer a prober.
+
+**A second, independent impossibility, and it is worse: discoverability.** A
+public gossip network must have dialable peers — nodes advertise addresses so
+strangers can reach them. The adversary therefore does not even need to guess
+which IPs to probe: **the protocol hands them the target list.** Levin
+volunteers up to 250 peer entries per handshake and again per timed-sync
+(PWC-D1, PWC-B4, PW-16), so one honest connection yields a candidate set.
+Discoverability and clearnet node anonymity are mutually exclusive for the same
+reason a phone book defeats an unlisted number — and note this leg survives
+even if the probe leg were somehow answered, because it attacks *enumeration*
+rather than *identification*.
+
+**Ruling (Rick, 2026-09-01) — the posture, restated:**
+
+| | clearnet | Tor |
+| --- | --- | --- |
+| **Encryption** — confidentiality and integrity against the path observer | **yes**, and it is the transport's job | yes |
+| **Anonymity** — concealing that this IP runs a Shekyl node | **no. You are not anonymous as a node.** | **yes(ish)** — the onion address replaces the IP, and *is* a public key, so the endpoint is self-authenticating (PW-19a's own consequence) |
+
+**Therefore Tor is the recommended transport, and the installed default once
+that lane lands.** This is consistent with what is already in the tree: the
+Q12-D6a ruling records that a node "routes clearnet, which exposes its IP as a
+relay source", and rejects reading (a) precisely because "the operator who
+configured Tor to avoid IP exposure still gets it."
+
+**What this closes and what it does not.** It closes (iii) — clearnet DPI
+resistance is **out of scope for anonymity**, because it is unachievable while
+accepting inbound connections, and the answer to "I need my node hidden" is Tor
+rather than a better clearnet disguise. It does **not** weaken encryption on
+clearnet, which defends a different asset against a different adversary and
+stays a hard requirement. And it does not make the Tor lane a place to do
+better clearnet obfuscation: the Tor lane is the *alternative to* clearnet, not
+a wrapper that rescues it.
+
+**It reopens nothing.** §12.10's admission rules were already transport-blind;
+PW-19a already conceded the counterparty. This adds the third leg to a stance
+that was two-thirds built: **the path observer gets confidentiality on
+clearnet, the prober is conceded there, and anonymity is relocated to the
+transport that can actually deliver it.**
+
+**The check that stops this being re-derived.** PW-19a's own text records the
+no-authentication constraint as having been re-litigated at least three times —
+it killed persona-identity-as-admission-signal (PW-21) and address/subnet/ASN
+admission (§6.10), and Q12-D6a rejected identity-as-signal twice more. The
+padding requirement is the next instance of the same shape, and the pattern is
+consistent enough to state as a test:
+
+> **Any mechanism that would let a node distinguish a legitimate peer from a
+> prober requires prior knowledge of that peer, and prior knowledge is
+> forbidden by PW-19a.**
+
+Check a proposed mechanism against that sentence *before* costing it. It
+disposes of probe-resistant transports, admission whitelists, and — as here —
+handshake obfuscation, without needing to re-derive the argument each time from
+whatever figure prompted it.
 
 **Why this had to be caught before D-T2 and not after.** Pinning a band would
 encode a defence that does not defend, and it would then read as green forever
@@ -345,7 +419,7 @@ remains is to make them concrete and normative.
 | id | Decision | Grounded in |
 | --- | --- | --- |
 | D-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
-| D-T2 | **Re-derive PW-3 from the asset, and do NOT pin a padding band.** §1.4 shows the flight is already constant-size by construction, so a band changes the constant without removing the signature. Split into: (i) no magic constant → D-T5; (ii) the clearnet size fingerprint **conceded**, with the Tor / pluggable-transport lane named as owner; (iii) whether clearnet DPI resistance is in scope at all — **a scope question for Rick, not for this round to settle by picking a band** | PW-3 as re-derived in §1.4; `carrier.rs` is the template for any constant the round *does* pin |
+| D-T2 | **PW-3 is retired as written — do NOT pin a padding band.** §1.4: the flight is already constant-size, so a band relabels the constant; and clearnet protocol identity is undefendable against active probing, which no passive defence touches. **RULED (Rick, 2026-09-01): clearnet gives confidentiality and integrity, not anonymity; anonymity is Tor's, and Tor is the recommended/default transport.** The round records the concession and its impossibility argument — it does not re-derive a band | PW-3 as retired in §1.4; PW-19a; `carrier.rs` is the template for any constant the round *does* pin |
 | D-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset — **zero bytes on the wire**, both sides deriving from state they already hold | PW-8 (ruled; carry the §0(b) correction **and the §1.5 privacy rationale**) |
 | D-T4 | **`e1`/`ekem1` semantics written normatively in this document**, `noise_hfs_spec` cited as provenance only | **PW-7c** |
 | D-T5 | Wire prefix: what replaces `LEVIN_SIGNATURE`'s fixed 8 bytes | PWC-A1, PW-9 |
@@ -505,7 +579,25 @@ subject but both owed:
    statement is §13.5. PW-25's claim survives; its pointer does not. D-I4 and
    D-I5 must read the live text, not the superseded body.
 2. **PW-8's WireGuard figures** — §0(b) and §1.3. The ruling stands; the
-   ratio, the pattern name and the jitter claim do not.
+   ratio, the pattern name and the jitter claim do not. Add §1.5's zero-wire-
+   bytes rationale as the **privacy** ground for option (a): (b) would
+   re-emit the classifiable flight on a schedule, which is PW-28 arriving by a
+   second route.
+3. **PW-3 retired as written, and a new posture row.** Three edits:
+   - **PW-3** — replace the padding requirement with a **conceded-property**
+     statement: clearnet node identity is not defendable against active
+     probing; padding cannot fix it; obfuscation-token mechanisms are
+     unavailable under PW-19a; anonymity is owned by the Tor lane. **Keep the
+     33.0× / 80 B figures as recorded fact** — they are true, they simply do
+     not imply the requirement that was derived from them.
+   - **PW-9** — survives independently, but must not carry an anonymity claim.
+     It raises the cost of bulk passive scanning; it does nothing against
+     targeted probing.
+   - **New posture row** — the clearnet/Tor split as a ruling *with its
+     impossibility argument attached*, so a future round cannot re-derive
+     "we should pad the handshake" from a fresh reading of the multiplier.
+     Carry §1.4's PW-19a check verbatim into that row; it is the reusable
+     part.
 
 ---
 
