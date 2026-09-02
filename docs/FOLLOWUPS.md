@@ -693,7 +693,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **Implement PWD-I2's three ruled rules in the tree, and examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream) that a rewrite would otherwise drop silently.** PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
+- **Implement PWD-I2's first two ruled rules — outbound-only peerlist acceptance and the 250-record per-connection ceiling — and examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream) that a rewrite would otherwise drop silently.** The third rule (white-list writer invariant) is queued separately below. PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis
 
 - **p2p lane: route `net_node.inl:2766` from `append_with_peer_white` to `append_with_peer_gray`**, so an inbound peer that answers a back-ping no longer inserts itself into the white list; `gray_peerlist_housekeeping` then promotes it only after an outbound dial succeeds. Behavioural — PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2

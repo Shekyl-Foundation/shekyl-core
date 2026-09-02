@@ -269,8 +269,20 @@ IPs — is paid in **one inbound connection each**, and the per-connection recor
 ceiling above never applies, because no record is sent.
 
 **The corrective rule is stated over the asset, not over a path**, which is why
-it covers a writer the earlier wording could not reach. The white list's writers
-enumerate to **five**, and all five are covered:
+it covers a writer the earlier wording could not reach.
+
+**The inventory below is the third attempt, and the first two were short — the
+reason is methodological and is recorded because it generalises.** The first
+listed four entries, the second five; both enumerated **callers of
+`append_with_peer_white`** rather than **writers of `m_peers_white`**, which are
+different sets. Sweeping the accessor cannot see a path that writes the
+container directly, and `peerlist_manager::init` does exactly that — through the
+`by_addr` **index view** (`m_peers_white.get<by_addr>()`), so even a sweep of the
+bare member name misses it unless index views are included. **Enumerate the
+state, not the setter, and include its index views.**
+
+So the honest structure is **two insertion paths**, one of which has five
+callers:
 
 | Writer | Direction | Under the rule |
 | --- | --- | --- |
@@ -279,6 +291,36 @@ enumerate to **five**, and all five are covered:
 | `net_node.inl:1175` → `set_peer_just_seen` | Outbound timed-sync, already `!m_is_income`-guarded | **Kept** — unchanged |
 | **`init():864-865`** — `m_command_line_peers` | **Neither: local operator configuration, before any connection exists** | **Kept as a named exemption** — see below |
 | **`handle_handshake:2766`** | **Inbound, by construction** | **Changed: routed to `append_with_peer_gray`** |
+
+**Insertion path 2 — `peerlist_manager::init`, the persisted restore**
+(`net_peerlist.cpp:272-284`), which repopulates `m_peers_white` from the
+on-disk store via `add_peers` and bypasses `append_with_peer_white` entirely.
+
+**This one carries an obligation the other does not, and it is a real hazard
+rather than a bookkeeping note.** The invariant is a property of *how an entry
+got into the white list*, and the store does not record that. **Entries written
+by the old inbound back-ping path survive an upgrade and would hold white-list
+membership no outbound dial ever earned** — the fix would ship while the
+violation persisted in every existing datadir, and nothing would signal it.
+
+> **Ruled: on first load after the store bump, persisted white-list entries are
+> reclassified to gray; the anchor and gray lists are unaffected.**
+
+Reclassification rather than deletion, because the addresses are still good
+discovery data — what is not inherited is the *trust*. Every reclassified entry
+re-earns white through `gray_peerlist_housekeeping`'s outbound dial, which is
+the same route this decision requires of everything else, so the store converges
+to a state the invariant describes instead of being asserted to already be in
+one. **Precedent and mechanism both exist:** #587's store bump already drops the
+anchor list on first load after upgrade, and this is the same shape one list
+over.
+
+**This is a persisted-state semantic change, so it takes a version-constant bump
+under [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)** —
+without one, an upgraded node cannot distinguish a pre-fix store from a post-fix
+one, and the reclassification has no trigger to fire on. **P2P-3 owns the bump
+and the migration; the rule is stated here because it is a property of the
+invariant, not of the implementation.**
 
 **The fourth row was missing from the first version of this table, and its
 absence is the sharpest evidence for §1's third check that this round
@@ -444,11 +486,28 @@ decisions own it. This is a route with an owner and a mechanism, not a deferral:
 if cluster B cannot bound outbound re-selection, this concession becomes an open
 residual and PWD-I6's ② closure is re-argued.
 
-**Falsifier.** Accepting records only on outbound-initiated connections is
-expected to leave peer discovery viable at the deployed out-degree. **Reopen if a fleet run shows
-median time-to-`MIN_PROVISIONED_OUT_PEERS` on a cold node exceeding the current
-figure by more than 2×** — the Q12-D6a rig is the instrument, and that is a
-recognisable trigger rather than a judgement call.
+**Falsifier.** Accepting records only on outbound-initiated connections, and
+capping accepted records per connection, are expected to leave peer discovery
+viable at the deployed out-degree. **Reopen if a fleet run shows median
+time-to-`MIN_PROVISIONED_OUT_PEERS` on a cold node exceeding one hour** — the
+Q12-D6a rig is the instrument.
+
+**The threshold is absolute, and an earlier version made it a ratio it could not
+resolve.** It read *"exceeding the current figure by more than 2×"* while never
+stating the current figure, and Q12-D6a defines no such baseline — so a future
+reader could not recognise the trigger without re-deriving the decision, which
+is precisely what §0's fourth requirement forbids. **A ratio against an
+unrecorded baseline is not a falsifier**; it reads like one because it contains a
+number.
+
+One hour is grounded in the **user-facing** failure rather than in a benchmark,
+which is what makes it statable without a measurement: a node that cannot reach
+its outbound floor within an hour of a cold start is a defect under
+[`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc) *whatever*
+the previous code did. **When Q12-D6a next runs it should record the measured
+baseline**, at which point a tighter ratio trigger can replace this ceiling —
+but the ceiling stands on its own until then, rather than deferring to a figure
+that does not exist.
 
 ### PWD-I3 — tenure is recognised by address, never serialized, and ordered by `first_seen`
 
@@ -469,6 +528,13 @@ mechanism.
   connection (PWD-I4) — effectively which single anchor is kept.** An earlier
   draft said "which anchors take the two slots"; that inherited the 2-slot
   premise the same review withdrew.
+
+| Option | Adversary / channel it answers | Verdict |
+| --- | --- | --- |
+| **Recognise tenure by address (`peer.adr`)** — status quo | The re-rolling adversary that discards an identity to shed a bad record, over reconnection | **Adopted.** It is the only candidate that survives a restart, which is the whole job: tenure that resets on reconnect is not tenure. Costs what §6.10 already concedes — absent on Tor, cheap to rotate on clearnet |
+| Recognise by `peer_id` | The same adversary | **Refused.** `peer_id` is per-process random and never persisted (PWC-D4), so it cannot recognise anything *across* restarts — it would silently degrade to session-scoped bookkeeping while reading as tenure |
+| Mint a durable node identity for tenure | Sybil-resistance-by-identity | **Refused — PW-19a**, and PW-20 records that `peer_id` was never a Sybil defence. It is an enumeration key; §1's first check disposes of it without costing |
+| Carry no tenure at all | — | **Refused.** Anchors are the anti-eclipse seed: a node with no memory of who it trusted refills entirely from the current peerlist, which is the state Shi §III-C engineers |
 
 **The constraint this decision must not lose (`DAEMON_RELAY_PRIVACY.md` §39, F-8).** `forget`-on-close
 resets tallies at **connection** granularity, so the convergence condition is
@@ -638,6 +704,12 @@ otherwise have to rediscover — reading either source alone specifies the wrong
 thing, silently. Deferring the obligation with the number would put the
 reconciliation in the same box as the thing it exists to protect.
 
+| Option | Adversary / channel it answers | Verdict |
+| --- | --- | --- |
+| **Specify the obligation and its reconciliation now; gate discharge on PWD-I4** | Not an adversary — the failure mode is a **silent mis-specification** by a future closer reading one source of two | **Adopted.** The reconciliation is decidable today and is exactly what would otherwise be rediscovered, in a case where either source alone specifies the wrong thing *without erroring* |
+| Defer the whole row with PWD-I4 | The same | **Refused.** It files the reconciliation in the same box as the number the reconciliation exists to protect — the closer who needs it is the one who would not receive it |
+| Record only "write the closure back", content unspecified | The same | **Refused — this is the PW-26 failure verbatim**, a dependency declared in one direction and never discharged: *"do not let this be a one-way read."* An obligation with no content is not one |
+
 **The closure must carry this reconciliation, because reading either source
 alone specifies the wrong thing and both failures are silent:**
 
@@ -698,6 +770,16 @@ disposition. A row cannot close a sub-attack while
 deferring the mechanism that sub-attack uses. PWD-I2's third rule is what closes
 it, and PWC-D11's disposition changes accordingly.
 
+**No option table, and that is the honest disposition rather than an omission.**
+The brief requires a wargame table per decision because a decision has an option
+space; **this row makes no independent choice.** Its content is entirely *"are
+sub-attacks ① and ② closed by rules ruled elsewhere, and which ones"* — a
+verification, not a selection. The options, adversaries and verdicts live in
+PWD-I2's table, which is where a reader must go to argue with them; reproducing
+them here would be the restatement this row's next paragraph exists to forbid,
+and would create a second copy to drift. **The one thing this row does decide —
+that the closure is real — is falsifiable below.**
+
 **This row points at those rules rather than restating them, deliberately.**
 Prose restating a contract is a defect generator, and this sentence proved it:
 an earlier version paraphrased PWD-I2, then survived the correction that turned
@@ -720,9 +802,14 @@ is the test in both cases, and the Q12-D6a rig can run it.
   outbound-only-acceptance rule.**
 - **②** — **Reopen if a fleet run shows an inbound-only adversary occupying
   white-list entries under the white-list writer invariant.** The measured
-  quantity is *white-list entries held by peers this node never dialled*, whose
-  target value is **zero**: the invariant makes any non-zero reading a defect,
-  not a threshold judgement.
+  quantity is *white-list entries held by **network-derived** peers this node
+  never dialled*, whose target value is **zero**: the invariant makes any
+  non-zero reading a defect, not a threshold judgement. **"Network-derived" is
+  load-bearing and excludes the two permitted non-dial paths** — operator
+  `--add-peer` entries, which are placed in white before this node dials them,
+  and not-yet-reclassified entries on a pre-bump store. Without that scoping the
+  metric would report a violation for any fleet using `--add-peer`, i.e. it
+  would falsify the ruling on nodes that are conforming to it.
 
 **A third falsifier, on the producer side — and it exists because the reason
 first given for omitting it was false.** PWD-I2's own falsifier measures the
@@ -754,7 +841,7 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | Row | Disposition | Where |
 | --- | --- | --- |
 | PWC-D1 (250-entry disclosure) | **Absorbed** | PWD-I2 |
-| PWC-D2 (anonymised head) | **Ruled** — kept; it is a real defence and survives the disclosure restriction | PWD-I2 |
+| PWC-D2 (anonymised head) | **Ruled** — kept unchanged; it is a real defence, and PWD-I2 restricts *acceptance* rather than disclosure, so nothing in this cluster constrains it | PWD-I2 |
 | PWC-D3 (1000/5000 caps) | **Absorbed** | PWD-I2 (the per-connection cap is the fix; the list caps are not) |
 | PWC-D4 (`peer_id` per-process random) | **Ruled** | PWD-I1 |
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
