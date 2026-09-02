@@ -14815,12 +14815,21 @@ public infrastructure whose onion is discoverable anyway.
 > **The I2P mention is a specification constraint, not a list.** The zone
 > abstraction must stay genuinely N-ary: no path assuming exactly two zones, no
 > `F′` derivation hardcoding a two-element `min`, no selection branching on
-> `is_tor` rather than on zone *properties*. **Checked at source. The routing
-> holds; the provisioning does not, and the correction matters more than the
-> claim it replaces.** `broadcast_all_zones` genuinely iterates
-> (`net_node.inl:2465`, with a `std::next(...) == end()` last-element test, not
-> a pair), and no `is_tor` branch or two-zone assumption exists in the zone
-> selection paths.
+> `is_tor` rather than on zone *properties*. **Checked at source, and the check was
+> too broad — it is corrected below rather than left standing.**
+> `broadcast_all_zones` genuinely iterates (`net_node.inl:2465`, with a
+> `std::next(...) == end()` last-element test, not a pair), and no `is_tor`
+> branch exists. **But "no two-zone assumption exists in the zone selection
+> paths" is false**, and the claim is now scoped to **broadcast routing**, which
+> is what was actually verified.
+>
+> **Correction 2026-09-02 — originated anonymity-zone selection is bounded at
+> `tor` and would ignore a later zone.** The picker
+> (`net_node.inl:2316-2362`) pins the order with `static_assert`s
+> (`public_ = 1 < i2p = 2 < tor = 3`), documents *"with both, i2p wins when
+> noise-filled, else outbound, then tor"*, and its second pass breaks on
+> `if (enet::zone::tor < network->first) break; // unknown network`. **A fourth
+> zone enumerated above `tor` is never selected for originated traffic.**
 >
 > **Correction, 2026-09-01.** An earlier version of this block asserted that
 > worst-zone provisioning is "a fold over zones, not a two-element `min`."
@@ -14834,7 +14843,8 @@ public infrastructure whose onion is discoverable anyway.
 > to pick"*), but it is **one constant standing in for all zones**, not an
 > N-ary computation.
 >
-> **Two places a new zone touches code, and they fail in opposite ways.** This
+> **Three places a new zone touches code, and they fail in three different ways
+> — loud, silent-on-a-privacy-path, and silent-on-a-derivation.** This
 > is the practical content of the N-ary constraint, so it is recorded rather
 > than left to be rediscovered:
 >
@@ -14842,7 +14852,14 @@ public infrastructure whose onion is discoverable anyway.
 >    `i2p` share an arm and `default:` falls through to
 >    `throw std::logic_error{"Bad zone given to get_seed_nodes"}`. A third zone
 >    **requires editing it and fails loudly.** Not a defect; a signpost.
-> 2. **`fluff_return_ms`** — a third zone is simply **not represented**, and
+> 2. **Originated anonymity-zone selection** (`net_node.inl:2316-2362`) — a
+>    zone enumerated above `tor` is **silently skipped** by the `break` on
+>    `zone::tor < network->first`. Unlike `get_seed_nodes` this one does **not**
+>    fail loudly: originated traffic simply never selects the new zone, and the
+>    section's own *"fail closed"* logic then applies to a zone set that quietly
+>    excludes it. **This is a privacy path, which makes silence the worst
+>    property it could have.**
+> 3. **`fluff_return_ms`** — a third zone is simply **not represented**, and
 >    **nothing signals that.** The constant stays at Tor-C's p90. If a new zone
 >    were *slower* than Tor, `F′` would be silently **under**-provisioned — and
 >    this section's own argument establishes that as the unsafe direction:
@@ -14913,7 +14930,7 @@ decisions none of which was made for it:**
 >
 > **Nothing about A changes.** The leg is currently satisfied by the sentinel and
 > will be satisfied by the field's absence; it is never unsatisfied in between,
-> because P2P-3 removes the field on both zones at once.
+> because P2P-3 removes the field on **every** zone at once — it is a common wire field, not a per-zone one.
 
 The third is the one that closes it. On an `OutboundOnly` zone the fluff loop
 skips every peer whose direction is inbound, so for an adversary `A` to receive

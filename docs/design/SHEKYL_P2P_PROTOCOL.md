@@ -284,6 +284,25 @@ when session state is something this node **observes directly**. A boolean named
 for its job cannot be zero-by-accident, cannot collide, and states its meaning at
 every read site — three properties the overloaded identifier had none of.
 
+**Job 5's consumers cross a subsystem boundary, and the first enumeration of it
+stopped at the p2p layer.** `for_each_connection` (`net_node.inl:155-160`)
+forwards `cntx.peer_id` as a **parameter** into every cryptonote-layer callback,
+and two of them read it as the same boolean:
+
+- `cryptonote_protocol_handler.inl:1725` — `if (!peer_id || context.m_is_income)`,
+  excluding pre-handshake peers from **sync-search**.
+- `:2659-2660` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+  with the tree's own comment: *"peer_id also filters out connections before
+  handshake"*.
+
+**With the field gone both read zero and exclude *every* peer** — sync-search and
+block relay stop network-wide, in a subsystem the identity sweep never touched.
+So the replacement is **not** merely a local flag: **`for_each_connection`'s
+signature carries the value across the p2p/cryptonote boundary**, and migrating
+job 5 means changing that signature to pass `handshake_complete` (or having the
+callbacks read it from the context). P2P-3 owns the signature change; it is
+named here because a local-flag ruling alone would not have implied it.
+
 **Job 6 was found in the same review as job 5, on a third frontier: outbound
 selection.** `tried_peers` is a set of `peerid_type`; with the field gone it has
 no key and the loop would re-try a failed candidate in the same pass. **Its
@@ -466,10 +485,13 @@ review.
   zone, over a short window. It is small, bounded, and **local**, which is the
   direction PW-18 already wants; an identifier avoids the state by publishing
   the value instead, which is the trade being reversed.
-- **The same-host cap costs a legitimate multi-node host.** Two honest nodes
-  behind one IP will together receive at most one outbound slot from any given
-  peer. Real, small, and the same concession the white list already makes
-  silently via `evict_host_from_peerlist`.
+- **The same-host cap costs a legitimate multi-node host.** Honest nodes sharing
+  an IP compete for one per-host allowance, so at a cap of `1` two of them
+  together receive a single outbound slot from any given peer. **The concession
+  scales with whatever value PWD-B9 sets; it is stated against the invariant,
+  not against a number this row does not own.** Real, small, and the same
+  concession the white list already makes silently via
+  `evict_host_from_peerlist`.
 - **The cap sits near `DAEMON_RELAY_PRIVACY.md` §6.10's exclusion, and the
   distinction is argued rather than assumed.** §6.10 ruled the address family
   out — *"on clearnet it lies (Sybils spread across subnets cheaply, and
@@ -484,8 +506,13 @@ review.
   **What does carry over is the second half of §6.10's objection**, and it is
   conceded above: honest users behind shared NAT are affected. They are not
   *punished* — no inference is drawn about them — but they are **bounded**, and
-  the bound is the same one an adversary gets. **Its value is an eclipse bound,
-  so it is set with PWD-I4's sub-round, not before it.**
+  the bound is the same one an adversary gets. **What cluster I rules is that the bound
+  exists and is keyed on the address; the numeric cap is PWD-B9's, informed by
+  PWD-I4's eclipse bound.** An earlier draft stated the cap four different ways
+  across this document — fixed at one slot in the concession above, deferred to
+  PWD-I4 here, assigned to PWD-B9 in the routing table, and called both "ruled"
+  and "not decided here" in PWD-I2 — leaving P2P-3 with no unambiguous number.
+  **One invariant, ruled here; one value, owned by PWD-B9.**
 - **Within-session and within-zone correlation remain**, unchanged: a peer is
   trivially correlatable across the connections *it* dialled. Cross-session and
   cross-zone linkage is the asset, and that is what removal denies.
@@ -719,8 +746,9 @@ eviction** — `append_with_peer_gray` (`net_peerlist.h:398-427`) has none, unli
 all 5,000 gray entries **without sending a single peerlist record**, bypassing
 both rules above and falsifying PWD-I6.
 
-> **Ruled: gray occupancy is bounded per host, by the same address-based cap
-> PWD-B9 applies to outbound slots.**
+> **Ruled here: gray occupancy is bounded *per host*, by the same address-based
+> mechanism that bounds outbound slots. The *invariant* is cluster I's; the
+> *number* is PWD-B9's.**
 
 **This closes a gap that predates the deletion rather than one the deletion
 invented** — gray has always been unbounded per host, including via the
@@ -791,7 +819,9 @@ Oldest-first uses **only local state** — insertion order, which no peer can
 forge — and converts the unbounded geometric wait into a bounded FIFO one, since
 housekeeping evicts an entry whose dial fails and the queue therefore drains.
 Combined with the per-host occupancy bound, a flooder cannot hold the head of
-the queue either. Recorded as input to **PWD-B1/PWD-B9**, not decided here.
+the queue either. Recorded as input to **PWD-B1/PWD-B9**, which own the draw order and the cap's
+value respectively. *(The per-host **invariant** is ruled above; only its number
+and the draw order remain open.)*
 
 **Zone scope:** this writer is `zone.m_can_pingback`-gated, so the defect and
 the fix are **public-zone only**.
@@ -1274,9 +1304,13 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
 | PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
-**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅ *(PWC-D11 moved
-deferred → ruled when the white-list writer invariant was adopted; the count of
-rows is unchanged.)*
+**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅
+
+*Row-movement history, kept as history rather than as a second disposition:*
+PWC-D11 began **deferred**, moved to **ruled** when PWD-I2's white-list writer
+invariant was adopted, and is now ruled **via PWD-B10's deletion** of the
+back-ping — the mechanism it asked about no longer exists. The row count never
+changed. The table above is the disposition; this note is only how it got there.
 *(PWC-D11 moved absorbed → deferred in review: PWD-I1 leaves the back-ping to
 cluster B, so PWD-I2 could not have absorbed it. The total is unchanged; the
 claim about what this cluster ruled is not.)*
