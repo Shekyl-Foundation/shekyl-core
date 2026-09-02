@@ -72,33 +72,63 @@ EOF
 )
 
 # Collect live hits: comment-stripped, statements joined, whitespace
-# normalized, one "file<TAB>text" per matched physical construct. The join
-# means a branch wrapped across lines is still one hit (the same reason the
-# debit gate joins statements: clang-format wraps at 100 columns and a
-# wrapped copy is the LIKELY evasion, accidental or not). The span from
-# `if (` to the nettype comparison is a non-greedy ANY (not `[^)]*`): a
-# compound condition like `if (feature_enabled() && m_nettype == MAINNET)`
-# closes a paren before the comparison, and the first-`)`-stops form was
-# blind to it (caught by review, round 3). Statement fragments are already
-# [;{}]-split, so the any-span cannot leak across statements.
+# normalized BEFORE matching, one "file<TAB>text" per matched construct.
+# The join means a branch wrapped across lines is still one hit; fragments
+# are [;{}]-split so the non-greedy any-span cannot leak across statements
+# (a compound condition like `if (feature_enabled() && m_nettype == MAINNET)`
+# closes a paren before the comparison -- the first-`)`-stops form was blind
+# to it). The match is OPERAND-INDEPENDENT: any comparison against a public
+# network constant, on either side of `==`/`!=`, under any variable name --
+# `if (network == MAINNET)` through a local alias is the same rot as
+# `if (m_nettype == MAINNET)`, and the reversed spelling needs no separate
+# unjoined pass (its old separate scan missed wrapped forms). `if ?\(`
+# covers the no-space `if(` style. (Round-4 review hardening.)
+#
+# Collection failures are LOUD, not empty (rule 46/47): a stripper failure
+# on any file fails the gate (an unreadable file is not a match-less file),
+# and every fence directory must enumerate at least one source file -- an
+# empty fence means the surface being asserted about is gone, which is a
+# gate error, never a PASS.
 hits_file=$(mktemp)
 for d in "${FENCE[@]}"; do
+  files=$(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
+  if [ -z "$files" ]; then
+    echo "FAIL: fence directory '$d' enumerates no source files -- the"
+    echo "      surface this gate asserts about is missing (rule 47)."
+    fail=1
+    continue
+  fi
   while IFS= read -r f; do
-    python3 "$here/strip_c_comments.py" "$f" \
-      | tr '\n' ' ' \
-      | sed 's:[;{}]:&\n:g' \
-      | rg -o '(else )?if \([^\n]*?(m_nettype|nettype) *[!=]= *(MAINNET|TESTNET|STAGENET)[^\n]*' \
-      | sed -e 's/  */ /g' -e "s:^:${f}\t:" >> "$hits_file" || true
-  done < <(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
+    if ! body=$(python3 "$here/strip_c_comments.py" "$f"); then
+      echo "FAIL: comment stripper failed on '$f' -- an unreadable file is"
+      echo "      not a match-less file; refusing to treat it as clean."
+      fail=1
+      continue
+    fi
+    printf '%s' "$body" \
+      | tr '\n\t' '  ' \
+      | sed -e 's/  */ /g' -e 's:[;{}]:&\n:g' \
+      | rg -o '(else )?if ?\([^\n]*?((MAINNET|TESTNET|STAGENET) *[!=]=|[!=]= *(MAINNET|TESTNET|STAGENET))[^\n]*' \
+      | sed "s:^:${f}\t:" >> "$hits_file" || true
+  done <<< "$files"
 done
 
-# Also catch the reversed spelling (MAINNET == nettype) separately -- the
-# main pattern anchors on the member name first and would miss it.
+# switch-on-nettype is the remaining spelling of network-keyed control flow;
+# none exists in the fence today, so it is a plain forbidden-pattern arm
+# (an instance would need the same rule-71 SS2 ratification as a branch).
+# Operand-independent like the if-arm: a `case MAINNET:` label convicts the
+# switch regardless of what variable name the head scrutinizes.
 for d in "${FENCE[@]}"; do
   while IFS= read -r f; do
-    python3 "$here/strip_c_comments.py" "$f" \
-      | rg -n '(MAINNET|TESTNET|STAGENET) *[!=]= *(m_)?nettype' \
-      | sed "s:^:${f}\t(reversed) :" >> "$hits_file" || true
+    if ! body=$(python3 "$here/strip_c_comments.py" "$f"); then
+      continue  # already failed above
+    fi
+    sw=$(printf '%s' "$body" | rg -c 'switch *\( *(m_)?nettype|case *(MAINNET|TESTNET|STAGENET) *:' || true)
+    if [ "${sw:-0}" -ge 1 ]; then
+      echo "FAIL: switch on nettype in '$f' -- network-keyed control flow"
+      echo "      by another spelling (rule 71); ratify or parameterize."
+      fail=1
+    fi
   done < <(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
 done
 

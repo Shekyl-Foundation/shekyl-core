@@ -6254,8 +6254,9 @@ leave:
           vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
         if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
         {
-          // check_tx_inputs already parsed this blob; a failure here means the
-          // per-tx pass was skipped (checkpoint fast path) — fail closed.
+          // check_tx_inputs already parsed this blob unconditionally; a
+          // failure here is an internal inconsistency between two parses of
+          // the same bytes — fail closed.
           MERROR_VER("Block " << id << " has an unparseable archival emission vin");
           bvc.m_verifivation_failed = true;
           return_txs_to_pool();

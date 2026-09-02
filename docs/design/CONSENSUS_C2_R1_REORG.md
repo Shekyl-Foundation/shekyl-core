@@ -270,7 +270,27 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   worked example (born in #594, merged into this branch mid-round)
   described the mechanism in present tense — converted to a
   past-tense record with the deletion noted. Operational docs are
-  sweep scope; only round-record mentions are exempt.
+  sweep scope; only round-record mentions are exempt. **Fourth
+  review-round corrections:** (i) the matcher became fully
+  spelling-independent — `if ?\(` covers the no-space style, the
+  comparison matches a public constant on either operand side under ANY
+  variable name (an alias like `if (network == MAINNET)` is the same
+  rot), the separate unjoined reversed-spelling scan was absorbed into
+  the one statement-joined scan (its old form missed wrapped reversed
+  branches), and a `switch`/`case MAINNET:` arm closes the last
+  spelling; (ii) collection failures became LOUD — a stripper failure
+  on any file fails the gate (an unreadable file is not a match-less
+  file) and an empty fence directory is a gate error, never a PASS
+  (rule 46/47); six more planted evasions observed red (no-space,
+  aliased operand, wrapped reversed, switch, aliased switch, unreadable
+  file) — every enforcement arm has now been observed red at least
+  once; (iii) three code comments still described the retired CEN-G8
+  arm in present tense (`blockchain.cpp` emission-vin fail-closed note,
+  `shekyl_ffi.h` debit-pin selector note, `debit_auth.rs` module doc) —
+  reworded to state the live constraint with the belt as past
+  provenance; a mechanism-prose sweep across `src/` + `rust/` found no
+  fourth instance (the `blockchain_db.h` "fast-sync resumption" hit is
+  the curve-tree checkpoint family, a different mechanism).
 - **A fourth residue class the symbol sweep structurally cannot see:**
   fourteen test call sites passed the removed trailing parameter
   *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,
