@@ -221,9 +221,21 @@ ordering is about latency, not volume.)
 
 **RULED — and amended 2026-09-02, reversing this row's original verdict.** The
 transport carries **no peer identity, durable or ephemeral**. `peer_id` is
-removed from `basic_node_data` and `id` is removed from `peerlist_entry`. A
-per-process identifier is **retained internally** for connection tracking and
-rotation, and is never serialized to any surface.
+removed from `basic_node_data`, and `id` is removed from `peerlist_entry` **and
+from `anchor_peerlist_entry`**.
+
+**`m_peer_id` is removed entirely, and an earlier version of this ruling was
+wrong to keep it.** It said a per-process identifier is *"retained internally for
+connection tracking and rotation"*; **the tree does not support that.** Every
+use is accounted for: generation (`net_node.inl:147`), the four self-comparisons
+(`:1114`, `:1213`, `:1238`, `:2720`), wire emission (`:2153`), anonymity-zone
+self-insertion into the gossiped list (`:2670`), the ping echo (`:2792`, deleted
+with the back-ping), and a getter whose own comment says it exists *"so the
+invariant in `init` has something a test can observe"* (`:2983`). **Connection
+tracking already runs on `m_connection_id`** — 18 uses in `net_node.inl`. Once
+the jobs below are replaced there is **no consumer left**, so retaining it would
+instruct P2P-3 to preserve dead identity state: the `inherited-defensive`
+failure committed forward rather than inherited.
 
 **This row previously adopted the status quo** — keep the per-process random
 `peer_id` — on the reasoning that its wire *durability* was already nil, with
@@ -248,6 +260,7 @@ a standing challenge nobody runs is decoration.
 | 2 | `is_peer_used` `:1213`, `:1238` | Don't dial an address whose stored id is my own | **Same job as #1, earlier.** Pure optimisation — losing it costs one wasted dial that #1 catches a moment later |
 | 3 | `is_peer_used` `:1219`, `:1244` | Duplicate-connection avoidance | **Replaced by an address-based same-host outbound cap** — see below; the cap is *stronger* than the id |
 | 4 | `:2585` / `:2792` | Back-ping: is this address the node that handshaked me? | **Deleted, not replaced** — its only job was gating whitelist promotion of an inbound peer, which PWD-I2 has already forbidden. Consumer inventory run below |
+| **6** | `net_node.inl:1636`, `:1688-1691` | **Outbound retry set** — `make_new_connection_from_peerlist` keys `tried_peers` on `peer.id` so a failed candidate is not re-tried within a pass | **Replaced by an address-keyed retry set.** The address is what a dial targets; the id was standing in for it |
 | **5** | `net_node.h:271`, `:2708-2712`, `:2072-2075` | **Handshake-complete sentinel** — `context.peer_id` starts at `0` and is read as a boolean: reject a second handshake, and *"do idle sync only with handshaked connections"* | **Replaced by an explicit local session-state flag.** Nothing here needs a *value*, only the fact that a handshake completed — which this node **observed** |
 
 **Job 5 was missing from the first version of this table, and its absence is the
@@ -271,8 +284,19 @@ when session state is something this node **observes directly**. A boolean named
 for its job cannot be zero-by-accident, cannot collide, and states its meaning at
 every read site — three properties the overloaded identifier had none of.
 
-Jobs 1–4 are public-zone-gated; **job 5 is not** — it runs on every zone, which
-is why its replacement is not optional on any of them. **On anonymity zones the identifier does no work
+**Job 6 was found in the same review as job 5, on a third frontier: outbound
+selection.** `tried_peers` is a set of `peerid_type`; with the field gone it has
+no key and the loop would re-try a failed candidate in the same pass. **Its
+replacement is the fourth check again** — the address is what a dial targets, so
+keying the set on it is both the fix and the more honest expression of what the
+set was always doing.
+
+Jobs 1–4 are public-zone-gated; **jobs 5 and 6 are not** — they run on every
+zone, so their replacements are not optional on any of them.
+
+**Six jobs, found across four sweeps, and the rising count is itself the
+record.** Identity, connection-state, outbound-selection and persisted-schema
+are four different frontiers; each sweep saw one and could not see the next. **On anonymity zones the identifier does no work
 at all**: self-detection is already a plain address comparison against
 `m_our_address` (`net_node.inl:1291`, `:1697` — *"It's ourselves, obviously don't
 take that"*), which is correct because a node on an anonymity network
@@ -485,9 +509,19 @@ review.
   identifier must not leak here either.** When the field leaves the wire this
   struct member loses its source and is removed; `connection_id`, already
   present and locally generated, is the correct operator-facing handle.
+- **`anchor_peerlist_entry.id` is persisted too, and also loses its source**
+  (`p2p_protocol_defs.h:97,102,108` — in both the KV map and the binary
+  serializer), populated from the handshake id at `net_node.inl:1358` and read by
+  the anchor overload of `is_peer_used`. **Removed with the others**, which
+  PWD-I3 already makes safe: anchor recognition is address-keyed and *"nothing
+  about tenure reaches the wire"*. An earlier sweep named only
+  `peerlist_entry.id` — **persisted schema is the fourth frontier, and it was
+  swept last.**
 - **`peerlist_entry.id` is persisted**, so its removal is a stored-format change.
-  It rides **the same rule-42 version bump** as PWD-I2's white→gray
-  reclassification: **one bump, two migrations.**
+  It rides **the same rule-42 version bump** as PWD-I2's store reset —
+  **one bump, and no migration on either side of it**, since the bump drops the
+  store rather than converting it. That is what makes carrying both changes on
+  one bump free: neither needs a reader for the old schema.
 
 #### Routing — named owners, because a cluster is not an owner
 
@@ -651,9 +685,10 @@ re-acquired from seeds in the ordinary way.
 **This is a persisted-state semantic change, so it takes a version-constant bump
 under [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)** —
 without one, an upgraded node cannot distinguish a pre-fix store from a post-fix
-one, and the reclassification has no trigger to fire on. **P2P-3 owns the bump
-and the migration; the rule is stated here because it is a property of the
-invariant, not of the implementation.**
+one and the drop has no trigger to fire on. **P2P-3 owns the bump. There is no
+migration to own** — the bump *is* the operation, and its effect is a wholesale
+reset of the persisted peerlist. The rule is stated here because it is a
+property of the invariant, not of the implementation.
 
 **The fourth row was missing from the first version of this table, and its
 absence is the sharpest evidence for §1's third check that this round
@@ -675,16 +710,43 @@ and must not be widened to anything network-derived** — an operator-supplied
 address is trusted because the operator supplied it, not because it was
 supplied out-of-band.
 
+**The deletion of the back-ping creates a new gray writer, and it must be
+bounded in this decision rather than downstream.** With the back-ping gone an
+inbound peer's advertised `my_port` is unverified until housekeeping dials it,
+and **gray is keyed by full address including port** with **no same-host
+eviction** — `append_with_peer_gray` (`net_peerlist.h:398-427`) has none, unlike
+`append_with_peer_white`. So one IP could reconnect with varying ports and fill
+all 5,000 gray entries **without sending a single peerlist record**, bypassing
+both rules above and falsifying PWD-I6.
+
+> **Ruled: gray occupancy is bounded per host, by the same address-based cap
+> PWD-B9 applies to outbound slots.**
+
+**This closes a gap that predates the deletion rather than one the deletion
+invented** — gray has always been unbounded per host, including via the
+peerlist-record path; the reroute merely makes it reachable without records.
+Bounding occupancy is preferred to re-introducing reachability validation
+(which is the back-ping) because it is **address-based and local**: §1's fourth
+check, and it needs nothing from the peer. **The two rules above bound records
+per connection; this one bounds *entries per host*, which is the quantity the
+record cap never constrained.**
+
 **The rule is not a new mechanism — the tree already implements it on the gray
 path, and that is the evidence this reroute costs nothing.**
 `gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
 at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
 white via `set_peer_just_seen` only if that outbound handshake succeeds —
-evicting it from gray if it fails. So a back-ping-verified inbound peer keeps
-its whole route to white-list membership; **only the free pass is removed**, and
-it is replaced by the verification every other candidate already passes. A
-back-ping proves *reachability*, which qualifies a peer for the **dial pool**,
-not for the trusted list.
+evicting it from gray if it fails. So an inbound peer keeps its whole route to
+white-list membership; **only the free pass is removed**, and it is replaced by
+the verification every other candidate already passes.
+
+**Under the final ruling the peer is not verified at all when it enters gray** —
+PWD-B10 deletes the back-ping, so its advertised port stands unchecked until
+housekeeping dials it. That is the correct place for the check: **the outbound
+dial is the verification**, and doing it lazily costs one failed dial where the
+back-ping cost a whole extra connection and round trip to learn the same thing
+eagerly. What qualifies a peer for the **dial pool** is being a candidate; what
+qualifies it for the trusted list is a dial *we* made and *we* watched succeed.
 
 **Gray needs no equivalent change, and this was checked rather than assumed.**
 `append_with_peer_gray` has **exactly one caller**, `merge_peerlist`
@@ -716,10 +778,20 @@ benefit is denying an adversary the ability to place itself in a victim's white
 list at will. A slow-to-be-advertised honest listener is a liveness
 inconvenience that resolves itself on the first successful outbound dial from
 anyone; a freely-writable white list is an eclipse primitive. **Cluster B should
-consider a prioritised gray draw for back-ping-verified entries** — it would
-recover most of the latency without weakening the invariant, since the promotion
-would still require the outbound dial. Recorded as input to PWD-B1, not decided
-here.
+consider an **oldest-first gray draw** in place of the uniform random one.**
+
+**An earlier version proposed prioritising "back-ping-verified" entries, and
+that class will not exist** once PWD-B10 deletes the back-ping; prioritising
+*directly-inserted inbound* entries instead would prioritise exactly the
+attacker-controlled unverified ports the occupancy bound above exists to
+contain. **A remedy keyed on any signal the peer influences is an amplifier, not
+a fix.**
+
+Oldest-first uses **only local state** — insertion order, which no peer can
+forge — and converts the unbounded geometric wait into a bounded FIFO one, since
+housekeeping evicts an entry whose dial fails and the queue therefore drains.
+Combined with the per-host occupancy bound, a flooder cannot hold the head of
+the queue either. Recorded as input to **PWD-B1/PWD-B9**, not decided here.
 
 **Zone scope:** this writer is `zone.m_can_pingback`-gated, so the defect and
 the fix are **public-zone only**.
@@ -736,9 +808,20 @@ than it appeared when that sub-round was scoped.
 value is not a decision, and the security claim depends on the value: a ceiling
 of 1000 still lets one connection cycle the entire white list.
 
-> **One connection may contribute at most `P2P_DEFAULT_PEERS_IN_HANDSHAKE`
+> **One connection may contribute at most `P2P_MAX_PEERS_IN_HANDSHAKE`
 > (250) accepted records in total, counted across handshake *and* timed-sync
 > for the lifetime of that connection.**
+
+**The constant is the *acceptance* one, and an earlier version named the
+producer's.** `handle_remote_peerlist` enforces the per-message limit with
+`P2P_MAX_PEERS_IN_HANDSHAKE` (`net_node.inl:2123`), while
+`P2P_DEFAULT_PEERS_IN_HANDSHAKE` is what *this node discloses*
+(`get_peerlist_head`'s depth, `send_peerlist_sz`). **They are both 250 today and
+are independent constants** (`cryptonote_config.h:186-187`), so a ceiling
+inheriting the producer default would silently stop matching the acceptance cap
+the moment either moved. **If both survive the rewrite, a gate must assert they
+are equal** — otherwise the inheritance this ceiling relies on is a coincidence,
+not a derivation.
 
 **The derivation this ceiling first carried was wrong, and the tree refutes it
 directly.** It argued that 250 is already *the most a peer may disclose in one
@@ -1143,7 +1226,11 @@ is the test in both cases, and the Q12-D6a rig can run it.
   non-zero reading a defect, not a threshold judgement. **"Network-derived" is
   load-bearing and excludes the two permitted non-dial paths** — operator
   `--add-peer` entries, which are placed in white before this node dials them,
-  and not-yet-reclassified entries on a pre-bump store. Without that scoping the
+  and nothing else — an earlier version also exempted "not-yet-reclassified
+  entries on a pre-bump store", which **cannot exist** now that the bump drops
+  the store wholesale, and which would have made the falsifier appear to
+  tolerate network-derived white entries the design says are impossible. Without
+  the operator scoping the
   metric would report a violation for any fleet using `--add-peer`, i.e. it
   would falsify the ruling on nodes that are conforming to it.
 
@@ -1179,7 +1266,7 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D1 (250-entry disclosure) | **Absorbed** | PWD-I2 |
 | PWC-D2 (anonymised head) | **Ruled** — kept unchanged; it is a real defence, and PWD-I2 restricts *acceptance* rather than disclosure, so nothing in this cluster constrains it | PWD-I2 |
 | PWC-D3 (1000/5000 caps) | **Absorbed** | PWD-I2 (the per-connection cap is the fix; the list caps are not) |
-| PWC-D4 (`peer_id` per-process random) | **Ruled — and the verdict was reversed on amendment**: the field is removed from the wire entirely, not kept-but-ephemeral. An internal identifier is retained, never serialized | PWD-I1 |
+| PWC-D4 (`peer_id` per-process random) | **Ruled — verdict reversed on amendment, twice.** The field is removed from the wire entirely, not kept-but-ephemeral; and `m_peer_id` itself is **removed**, not retained internally, because the enumeration found no non-wire consumer — connection tracking already runs on `m_connection_id` | PWD-I1 |
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
