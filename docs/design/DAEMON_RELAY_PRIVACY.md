@@ -12606,7 +12606,7 @@ what §65 named: `hop` states a *direction* and no *statistic*, so a central
 estimate sits where the policy demands a tail one. **The operational claim is
 that the constant needs to roughly double, not move an order.**
 
-### 74.2 Initial sync: the fast path exists and is compiled in
+### 74.2 Initial sync: the fast path existed and has since been deleted
 
 > **Superseded 2026-09-02 (C2-R1a,
 > [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3):** the

@@ -148,9 +148,14 @@ pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 /// a reused token is as extractable as a per-session one, and is worth *more*
 /// once extracted, so "per-connection" is not the boundary.
 /// It is safe on this path today for one specific reason: p2p payloads are
-/// blocks and transactions — **public consensus data with no per-connection
-/// secret in them**. The safety is a property of the *message set*, not of
-/// the compressor, so it stops holding the moment the message set changes.
+/// blocks and transactions — **public consensus data, carrying no confidential
+/// value of any kind**. Not "no per-connection secret": that scoping is the one
+/// the paragraph above disowns, and it would leave a node-local static or a
+/// reused token outside the claim. The blobs do contain ciphertexts, and those
+/// are public by design — the invariant is about values whose *disclosure*
+/// matters, not values that happen to be encrypted. The safety is a property of
+/// the *message set*, not of the compressor, so it stops holding the moment the
+/// message set changes.
 ///
 /// If a message would carry **any** confidential value — session key, node-local
 /// secret, reused token, anything whose disclosure matters — **do not compress
