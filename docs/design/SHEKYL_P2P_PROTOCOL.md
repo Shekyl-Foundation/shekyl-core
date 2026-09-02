@@ -57,6 +57,31 @@ now killed four): *any mechanism that would let a node distinguish a legitimate
 peer from a prober requires prior knowledge of that peer, and prior knowledge is
 forbidden.* Test a proposal against that sentence **before** costing it.
 
+**The second check, named after this round hit its second instance —
+*inherited defences that advertise more than the code delivers*.**
+
+> **A constant naming a defence is a claim about code, not a description of it.
+> Before crediting the number, trace the path that consumes it.**
+
+Two instances, both inherited, both flattering the defence, both of which would
+pass a review that reads only the constant:
+
+- **`ANCHOR_CONNECTIONS_COUNT = 2`** advertises two anchor-backed outbound
+  slots. The dial path delivers **one** and destroys the rest of the persisted
+  set on first use (PWD-I4). Found only because a review challenged the figure
+  rather than the reasoning.
+- **`PER_BLOCK_CHECKPOINT`** is default-on (`CMakeLists.txt:470`,
+  `set(PER_BLOCK_CHECKPOINT 1)`), but every consumer guards on
+  `blockchain_height < m_blocks_hash_check.size()` — with an empty hash corpus
+  the fast check never fires, so the defence is compiled in and inert.
+
+The census's **`inherited-defensive`** evidence class was minted for exactly
+this row type: *a defence the tree carries by lineage with no Shekyl record
+examining it.* This check is how such a row is **found** rather than how it is
+labelled once found. The failure direction is always the same — the constant
+overstates — because a constant that understated would have been noticed by
+whoever needed the capability.
+
 ---
 
 ## 2. Cluster I — identity and Sybil resistance
