@@ -148,6 +148,19 @@ impl FactsFault {
 }
 
 /// The facts the chain-tip / version handlers consume.
+///
+/// **Why a trait with one implementation.** It earns its keep today, before
+/// any second impl exists: it is the seam that makes handler logic testable
+/// without standing up a `core_rpc_server` over a live chain, which is what
+/// keeps the unit tests fast enough to run per-assertion and the regtest
+/// harness reserved for what genuinely needs a daemon. That is the whole
+/// reason the handler tests in `methods` can exist at all.
+///
+/// It is *also* where a Rust store would plug in when DRS-E lands (RK-D7),
+/// and the deletion register schedules the FFI shims for that moment — but
+/// that is the second reason, not the first. Stated the other way round, a
+/// one-impl trait reads as speculative generality to a rule-15 pass, against
+/// a program that is not yet scoped.
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
     fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
@@ -159,7 +172,7 @@ pub trait ChainFacts: Send + Sync {
     /// restricted-listener rule — and computing it is the expensive part.
     fn block_header_at(
         &self,
-        height: BlockHeight,
+        at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
     /// A whole block, named either way. Absence is data ([`BlockAt::block`]
@@ -342,12 +355,16 @@ impl ChainFacts for FfiChainFacts {
 
     fn block_header_at(
         &self,
-        height: BlockHeight,
+        at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault> {
+        let (hash, height) = match at {
+            BlockLookup::Hash(h) => (Some(h), 0),
+            BlockLookup::Height(h) => (None, h.to_raw()),
+        };
         let pod = self
             .core
-            .block_header_at(height.to_raw(), fill_pow_hash)
+            .block_header_at(hash.as_ref(), height, fill_pow_hash)
             .map_err(FactsFault::from_code)?;
         let chain_height = BlockHeight::from_raw(pod.chain_height);
         if pod.found == 0 {

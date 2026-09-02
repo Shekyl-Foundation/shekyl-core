@@ -374,7 +374,10 @@ pub fn get_block_header_by_height(
     height: u64,
     fill_pow_hash: bool,
 ) -> Result<GetBlockHeaderByHeightResponse, RpcFault> {
-    let at = match facts.block_header_at(BlockHeight::from_raw(height), fill_pow_hash) {
+    let at = match facts.block_header_at(
+        BlockLookup::Height(BlockHeight::from_raw(height)),
+        fill_pow_hash,
+    ) {
         Ok(at) => at,
         Err(FactsFault::Inconsistent) => {
             return Err(RpcFault::Refused(RpcRefusal {
@@ -961,6 +964,10 @@ pub(crate) mod tests {
         pub asked_height: AtomicU64,
         /// The header the fake chain holds at every in-range height.
         pub header: BlockHeaderFacts,
+        /// When set, the hash arm answers an **alt** block declaring this
+        /// height — the state only a hash lookup can reach, and the one the
+        /// height arm's bound makes unrepresentable.
+        pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
         /// The hash `block_at` was asked for, when it was asked by hash.
@@ -1030,25 +1037,61 @@ pub(crate) mod tests {
 
         fn block_header_at(
             &self,
-            height: BlockHeight,
+            at: BlockLookup,
             fill_pow_hash: bool,
         ) -> Result<BlockHeaderAt, FactsFault> {
-            self.asked_height.store(height.to_raw(), Ordering::Relaxed);
             self.asked_pow.store(fill_pow_hash, Ordering::Relaxed);
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            // Same bound the shim applies, so a handler that forwarded the
-            // wrong height is visible here too.
-            let header = (height.to_raw() < self.hash_chain_height).then(|| {
-                let mut h = self.header.clone();
-                h.height = height;
-                h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
-                h
-            });
+            let chain_height = BlockHeight::from_raw(self.hash_chain_height);
+            // Same two-arm shape as `block_at`, because it answers the same
+            // question. **This is a fake chain's own shape, not a copy of the
+            // shim's rule** — the fake chain has a height and nothing above it,
+            // which is true of any chain. It is deliberately not described as
+            // "the bound the shim applies": a double that claims to mirror a
+            // rule has to be kept in sync to mean anything, and what the
+            // handler actually owes is asserted directly from `asked_height` /
+            // `asked_hash` instead.
+            let height = match at {
+                BlockLookup::Hash(hash) => {
+                    *self.asked_hash.lock().expect("not poisoned") = Some(hash);
+                    if hash != patterned_hash().to_bytes() {
+                        return Ok(BlockHeaderAt {
+                            header: None,
+                            chain_height,
+                        });
+                    }
+                    // A hash reaches blocks off the main chain, so the height
+                    // is the block's own and can sit anywhere — including at
+                    // or past the tip, which is the input the height arm
+                    // cannot express and the widening made reachable.
+                    self.alt_declared_height.unwrap_or(self.header.height)
+                }
+                BlockLookup::Height(height) => {
+                    self.asked_height.store(height.to_raw(), Ordering::Relaxed);
+                    if height.to_raw() >= self.hash_chain_height {
+                        return Ok(BlockHeaderAt {
+                            header: None,
+                            chain_height,
+                        });
+                    }
+                    height
+                }
+            };
+            let mut h = self.header.clone();
+            h.height = height;
+            h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
+            // Only the alt case overrides it. `sample_header()` carries the
+            // value the RK-3 oracle vector was captured with, and clobbering
+            // that on the height arm made this fake disagree with the vector
+            // it exists to reproduce.
+            if self.alt_declared_height.is_some() && matches!(at, BlockLookup::Hash(_)) {
+                h.orphan_status = true;
+            }
             Ok(BlockHeaderAt {
-                header,
-                chain_height: BlockHeight::from_raw(self.hash_chain_height),
+                header: Some(h),
+                chain_height,
             })
         }
     }
@@ -1078,6 +1121,7 @@ pub(crate) mod tests {
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
             header: sample_header(),
+            alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
@@ -1348,6 +1392,7 @@ pub(crate) mod tests {
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
             header: sample_header(),
+            alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,

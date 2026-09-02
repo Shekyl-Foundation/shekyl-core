@@ -27,7 +27,17 @@ method*, so a later shape change to it cannot be re-captured and must be argued
 from the `_v1` / `_v2` pair instead (see
 `v2_is_v1_minus_exactly_the_two_retired_members`, which does exactly that for
 RK-4c's two). That is a per-method fact, not a date: a slice whose structs are
-still standing can and must still capture. **Never hand-edit a vector.** A wire
+still standing can and must still capture.
+
+**"Cannot be re-captured" is not "must not be changed."** Byte-exactness with
+epee was never a requirement — every consumer of this daemon is first-party
+and ships with it, so the vectors exist to prove a *deliberate* shape change
+is the only change, not to freeze the shape. RK-5b is the worked example: it
+changes `get_block_header_by_hash` on purpose (a deleted request field, a
+per-element found discriminator, a refusal where there was a silent blank) and
+carries `CORE_RPC_VERSION` 3.26 for it. A later slice reading only the
+paragraph above could inherit the constraint backwards and treat an
+un-recapturable method as frozen; it is not. **Never hand-edit a vector.** A wire
 change is a decision with a `CORE_RPC_VERSION` bump, recorded in the design
 doc, and gets a new `_v2` file beside the old one.
 

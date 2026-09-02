@@ -157,8 +157,8 @@ int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
 // `fill_block_header_response` (which the header methods still in C++ keep
 // using): one lock, the bound, the block, and every field the wire's header
 // carries.
-int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
-  bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept
+int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
+  uint64_t height, bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept
 {
   if (!out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
@@ -175,19 +175,70 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       const std::lock_guard<cryptonote::Blockchain> guard(bc);
       const uint64_t chain_height = bc.get_current_blockchain_height();
       out->chain_height = chain_height;
-      if (height >= chain_height)
-        return SHEKYL_RPC_FACTS_OK;  // past the tip: data, not a fault
 
-      const crypto::hash id = bc.get_block_id_by_height(height);
-      // Either failure means the store reported a height it cannot produce the
-      // block for — the same data-integrity fault `block_hash_at` reports, and
-      // the condition the C++ handler answered "can't get block by height" to.
-      if (id == crypto::null_hash || !bc.get_block_by_hash(id, blk))
+      crypto::hash id = crypto::null_hash;
+      bool orphan = false;
+      if (block_hash)
       {
-        MERROR("block header facts: chain height " << chain_height
-          << " but no block at in-range height " << height);
-        std::memset(out, 0, sizeof(*out));
-        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        // By hash. A hash this chain does not hold is a legitimate query
+        // outcome, not a fault — the caller asked about a block that may not
+        // exist. The C++ handler this replaces answered INTERNAL_ERROR here,
+        // which made a reorg between `get_alternate_chains` and this call
+        // look like a daemon fault to the console.
+        id = *block_hash;
+        if (!bc.get_block_by_hash(id, blk, &orphan))
+          return SHEKYL_RPC_FACTS_OK;
+      }
+      else
+      {
+        if (height >= chain_height)
+          return SHEKYL_RPC_FACTS_OK;  // past the tip: data, not a fault
+
+        id = bc.get_block_id_by_height(height);
+        // Either failure means the store reported a height it cannot produce
+        // the block for — the same data-integrity fault `block_hash_at`
+        // reports, and the condition the C++ handler answered "can't get
+        // block by height" to.
+        if (id == crypto::null_hash || !bc.get_block_by_hash(id, blk))
+        {
+          MERROR("block header facts: chain height " << chain_height
+            << " but no block at in-range height " << height);
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+      }
+
+      // On the hash path the height is not the caller's — it comes from the
+      // coinbase, as `block_at` takes it, and every height-keyed field below
+      // is then read at THAT height (RK-D8; §7 2026-08-23).
+      if (block_hash)
+      {
+        if (blk.miner_tx.vin.size() != 1
+          || !std::holds_alternative<cryptonote::txin_gen>(blk.miner_tx.vin.front()))
+        {
+          MERROR("block header facts: coinbase of block " << id
+            << " is not a single txin_gen");
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        height = std::get<cryptonote::txin_gen>(blk.miner_tx.vin.front()).height;
+        // **The guard the height path never needed.** Reached by height, the
+        // bound above makes `height < chain_height` true by construction and
+        // `depth` cannot underflow. Reached by hash, the coinbase names its
+        // own height and can name one this chain has not reached — an alt
+        // block extending past the tip is exactly that — so `depth` would
+        // wrap to near 2^64 before the height-keyed reads below threw.
+        // `block_at` already guards this; widening the selector is what makes
+        // the guard load-bearing here too, and omitting it would have been a
+        // silent underflow reachable from a single RPC argument.
+        if (height >= chain_height)
+        {
+          MERROR("block header facts: block " << id << " claims coinbase height "
+            << height << " at chain height " << chain_height
+            << "; no coherent header can be built");
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+        }
       }
 
       std::memcpy(out->hash, id.data, sizeof(out->hash));
@@ -225,8 +276,9 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       out->nonce = blk.nonce;
       out->major_version = blk.major_version;
       out->minor_version = blk.minor_version;
-      // Reached by height, so never an alt block.
-      out->orphan_status = 0;
+      // Only the hash path can reach a block off the main chain; the height
+      // path resolves through `get_block_id_by_height` and so never can.
+      out->orphan_status = orphan ? 1 : 0;
       out->found = 1;
 
       // The long hash is computed after this scope, but its RandomX seed is
@@ -1323,13 +1375,17 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     h->rpc->get_core().get_blockchain_storage(), height, out);
 }
 
-int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
-  uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out)
+int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
+  uint64_t height, uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
+  crypto::hash id;
+  if (block_hash)
+    std::memcpy(id.data, block_hash, sizeof(id.data));
   return daemon_rpc_facts::block_header_at(
-    h->rpc->get_core().get_blockchain_storage(), height, fill_pow_hash != 0, out);
+    h->rpc->get_core().get_blockchain_storage(), block_hash ? &id : nullptr,
+    height, fill_pow_hash != 0, out);
 }
 
 int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,

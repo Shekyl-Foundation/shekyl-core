@@ -801,6 +801,7 @@ extern "C" {
     ) -> i32;
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
+        block_hash: *const u8,
         height: u64,
         fill_pow_hash: u8,
         out: *mut BlockHeaderFactsFfi,
@@ -1104,6 +1105,7 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_header_at(
         _h: *mut CoreRpcHandle,
+        _block_hash: *const u8,
         _height: u64,
         _fill_pow_hash: u8,
         _out: *mut BlockHeaderFactsFfi,

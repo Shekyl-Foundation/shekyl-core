@@ -329,10 +329,15 @@ impl CoreRpc {
         }
     }
 
-    /// The block-header projection at `height` (`shekyl_rpc_block_header_at`);
-    /// `Err(code)` on a non-OK return.
+    /// The block-header projection, by hash or by height
+    /// (`shekyl_rpc_block_header_at`); `Err(code)` on a non-OK return.
+    ///
+    /// `block_hash` selects the lookup, exactly as [`Self::block_at`]'s does.
+    /// A hash reaches alt blocks, so `orphan_status` is a real value on that
+    /// path and a constant on the other.
     pub fn block_header_at(
         &self,
+        block_hash: Option<&[u8; 32]>,
         height: u64,
         fill_pow_hash: bool,
     ) -> Result<ffi::BlockHeaderFactsFfi, i32> {
@@ -340,10 +345,12 @@ impl CoreRpc {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut pod = ffi::BlockHeaderFactsFfi::zeroed();
-        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        // SAFETY: live handle; `pod` is a valid out pointer; `block_hash`, when
+        // given, points at 32 readable bytes that outlive the call.
         let rc = unsafe {
             ffi::shekyl_rpc_block_header_at(
                 self.handle,
+                block_hash.map_or(std::ptr::null(), |h| h.as_ptr()),
                 height,
                 u8::from(fill_pow_hash),
                 &raw mut pod,

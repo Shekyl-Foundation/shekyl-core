@@ -98,15 +98,36 @@ typedef struct shekyl_rpc_block_header_facts {
     uint8_t  minor_version;
     uint8_t  orphan_status;
     uint8_t  pow_hash_filled;
-    uint8_t  found;               // 0 iff height >= chain_height (past the tip)
+    // 0 means no such block. Reached by height that is `height >=
+    // chain_height`, or an in-range height the store cannot produce; reached
+    // by hash it is a hash this chain does not hold. Both are legitimate
+    // query outcomes and the caller knows which it asked for — the same
+    // classification `shekyl_rpc_block_at` states.
+    uint8_t  found;
     uint8_t  reserved[7];
 } shekyl_rpc_block_header_facts;
 
+// The header projection alone, by hash or by height (RK-3; the hash selector
+// is RK-5b's).
+//
+// `block_hash` selects the lookup exactly as `shekyl_rpc_block_at`'s does: 32
+// bytes to reach a block by hash — which may be an alt block, so
+// `out->orphan_status` is then a real value rather than the constant it is on
+// the height path — or NULL to reach the block at `height`.
+//
+// **Header-only on purpose.** `shekyl_rpc_block_at` answers the same question
+// and more, but it allocates its payloads before a caller can decline them,
+// so a header-only reader would pay a block-blob copy and an
+// `obj_to_json_str` render per block — and that `json` is already queued for
+// deletion (see the payload struct below), so reading headers through it
+// would add a consumer to a field on its way out. This export also has no
+// owner to release, so there is no lifetime for a caller to get wrong.
+//
 // `fill_pow_hash` is the caller's request AND its right to ask (the
 // restricted listener never sets it): computing the long hash is the
 // expensive part of this call and is skipped unless asked.
-int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
-    uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out);
+int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
+    uint64_t height, uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out);
 
 // The variable-length half of a block's facts (RK-3b): the three payloads
 // whose size the caller cannot know in advance. Allocated by C++, owned by
@@ -130,9 +151,10 @@ typedef struct shekyl_rpc_block_payload {
 // A whole block, by hash or by height (RK-3b).
 //
 // `block_hash` selects the lookup: 32 bytes to reach a block by hash — which
-// may be an alt block, so `out_header->orphan_status` is a real value here
-// and not the constant it is for `shekyl_rpc_block_header_at` — or NULL to
-// reach the block at `height`.
+// may be an alt block, so `out_header->orphan_status` is a real value — or
+// NULL to reach the block at `height`. `shekyl_rpc_block_header_at` takes the
+// same selector and answers the header half of this question without the
+// payloads.
 //
 // `out_header->found == 0` means no such block, and `chain_height` is set
 // either way: past the tip and an unknown hash are both legitimate query
@@ -429,6 +451,21 @@ void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
 uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height);
 
 // Layout-twin test hooks (no production callers; see the roundtrip test).
+//
+// **Their value rests on these definitions and their Rust counterparts being
+// independently hand-written.** The pair fills every field from a seed and
+// compares by `memcmp`, so it pins offsets, widths and the seed convention
+// across the ABI — and it can only do that while the two sides are two
+// definitions. Nothing generates them today (bindgen is used once in this
+// tree, for `valgrind-requests` in `shekyl-engine-state`, nowhere near this
+// header), so the risk is not live; but the day a generator is pointed at
+// this file, the roundtrip goes green comparing one definition against
+// itself and stops asserting anything. One comment is proportionate to that;
+// a test would not be, since it cannot observe its own provenance.
+//
+// Note also what they do NOT pin: `found` is field 23 to a seeded filler, so
+// the pair fixes where the byte lives, never *when* it should be zero. A
+// conditional has no input here to be conditional on. Layout, not behaviour.
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
 void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
@@ -481,8 +518,8 @@ int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
     shekyl_rpc_block_hash_facts* out) noexcept;
 
-int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
-    bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
+int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
+    uint64_t height, bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept;
 
 int tx_output_indices(cryptonote::Blockchain& bc, const crypto::hash& txid,
     const uint64_t** out, size_t* out_len, uint8_t* out_found, void** out_owner) noexcept;
