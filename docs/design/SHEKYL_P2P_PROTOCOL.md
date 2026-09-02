@@ -1734,11 +1734,20 @@ forbids falsifies the derivation directly.
 here is specific rather than general.** That attack needs **a secret and
 attacker-influenced data compressed in the same context**, so the adversary can
 observe ciphertext length while varying its own input. **p2p payloads are blocks
-and transactions — public consensus data.** There is no per-connection secret in
-a compression context, so there is nothing for a length oracle to extract.
+and transactions — public consensus data.** There is **no confidential value of
+any kind** in a compression context, so there is nothing for a length oracle to
+extract.
 
 > **The invariant, stated so it can be checked rather than assumed: no message
-> containing per-connection secret material is ever compressed.**
+> containing secret or otherwise confidential material — *of any lifetime* — is
+> ever compressed.**
+
+**"Per-connection" was an earlier and narrower wording, and the narrowing had no
+justification behind it.** CRIME/BREACH turns on a secret being compressed
+beside attacker-influenced data; **the secret's lifetime is irrelevant to the
+attack**. A node-local static value or a reused token is as extractable as a
+session key and is worth *more* once extracted, because it does not expire with
+the connection. The invariant is scoped to **confidentiality**, not to lifetime.
 
 That is true today because no such message exists. **It is written as an
 invariant rather than an observation because the property is a fact about the
@@ -1773,8 +1782,8 @@ which the noise/padding path (PWC-A9) masks where it applies and does not mask
 elsewhere. This is arrival metadata, which §1.5 assigns to D++, taxed not
 eliminated.
 
-**Falsifier.** **Reopen if any message is specified that carries per-connection
-secret material** — the invariant's own trigger, recognisable by inspection of a
+**Falsifier.** **Reopen if any message is specified that carries confidential
+material of any kind** — the invariant's own trigger, recognisable by inspection of a
 new command rather than by measurement.
 
 ### PWD-T8 — Shekyl mints its own KATs, and pins both handshake directions
