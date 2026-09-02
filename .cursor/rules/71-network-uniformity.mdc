@@ -1,0 +1,96 @@
+---
+description: Network type selects data, never control flow, on the consensus/validation surface. Apply when adding or reviewing any code that branches on nettype (MAINNET/TESTNET/STAGENET/FAKECHAIN) in cryptonote_core/, checkpoints/, blockchain_db/, or their Rust successors — and when designing test-network seams.
+globs:
+  - src/cryptonote_core/**
+  - src/checkpoints/**
+  - src/blockchain_db/**
+  - rust/**
+---
+
+# Network uniformity: nettype selects data, never control flow
+
+**On the consensus/validation surface, the network type may select
+*parameters*, never *code paths*. One validator function, parameterized
+by network data (genesis hash, hard-fork schedule, checkpoint source,
+magic bytes, ports) — never a per-nettype branch inside the validator
+itself.** (Ruled by Rick, 2026-09-02, during C2-R1; ratified as a
+standing rule for the consensus lane and inherited by every later
+round.)
+
+## Why
+
+Test networks exist so a push to mainnet is rehearsed before it is
+real. That works only if testnet *runs the same logic* as mainnet with
+different data. The moment `nettype` selects a code path,
+**"testnet passed" stops meaning "this logic is correct" and starts
+meaning "the logic testnet happens to run is correct"** — a different,
+weaker, and silently-diverging claim. The two networks stop being
+tests of each other and become analogs that must be kept in sync or
+rot.
+
+## Where this has already bitten (verified at source, C2-R1)
+
+Both checkpoint mechanisms in the inherited tree had the same shape —
+`if (nettype == MAINNET) { do the real thing }` with nothing in the
+`else`:
+
+- **The per-block-checkpoint fast-sync path** (deleted, C2-R1a): its
+  trust-root check was `if (m_nettype == MAINNET)`, so mainnet
+  sha-verified the compiled blob while testnet/stagenet loaded it with
+  **zero verification** — the mechanism's own safety check had no
+  pre-production rehearsal surface.
+- **The operator-override checkpoint path** (re-homed by C2-R1b): the
+  *entire* init block — including `set_checkpoints_file_path` — sat
+  inside `if (m_nettype == MAINNET)` (`cryptonote_core.cpp:332`), so
+  off mainnet `m_checkpoints_path` stayed `""` and the JSON loader
+  silently no-opped. The checkpoint-forced-rollback mechanism was
+  **unreachable by construction** on the very networks where an
+  operator would rehearse it.
+
+The general failure is not "mainnet and testnet have different data" —
+different genesis, magic bytes, and difficulty targets are necessary
+and fine. It is nettype selecting a code path instead of a parameter.
+
+## The rule
+
+1. **Default: data, not control flow.** Per-network differences live
+   in one parameter table (a `NetworkParams`-shaped source), consumed
+   by shared code. `nettype == X` deciding *what data to load* is
+   compliant; `nettype == X` deciding *whether a check runs* is not.
+2. **A real behavioral divergence must be named, ratified, and loud —
+   it can never just fall out of an `if`.** If mainnet genuinely needs
+   a check that another network cannot run, that is a design decision:
+   it gets a ruling with its own falsifier, and the mechanism must be
+   *armed explicitly, pinned, and loud* — the `SEEDHASH_EPOCH`
+   override is the house pattern (must be armed, records its schedule
+   in the datadir and refuses to reopen under a different one, warns
+   loudly that its blocks validate only among nodes running the same
+   override; `blockchain.cpp:644–653`). What is forbidden is
+   divergence that announces nothing — the silent skip
+   (`CEN-B5`'s FAKECHAIN root-check skip is the counter-example this
+   rule exists to retire; census batch R9 owns that family and
+   inherits this rule rather than re-deriving it).
+3. **Enforcement is two-sided.** The negative side: the
+   `check_network_uniformity.sh` gate flags any *new* public-nettype
+   equality branch in the fenced directories against an annotated
+   allowlist (rule 47 shape — every allowlist entry names its
+   disposition and its owner). The positive side (stronger, owed by
+   the round that touches the surface): the same validator tests run
+   against **all** network parameter sets — a parameterized suite
+   proves there is nothing to branch on, where the gate only catches
+   someone adding a branch.
+4. **The allowlist shrinks, never grows silently.** Adding an
+   allowlist entry is a claim you defend: it requires either the rule
+   2 ratification trail or a named migration owner. Data-selection
+   written as branches (the hard-fork table selection) is allowlisted
+   as migration debt toward the parameter table, not blessed as a
+   pattern.
+
+## Relationship to other rules
+
+Rule 16 (inherited code is not inherited architecture) explains how
+these branches got here; this rule governs what may replace them.
+Rule 21 supplies the ratification form for a deliberate divergence.
+Rule 47 supplies the gate discipline. Rule 60's deletion mandate is
+how most instances die — both checkpoint instances were resolved by
+deletion or re-homing, not by synchronizing the branches.

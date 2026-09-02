@@ -1,12 +1,16 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a proposed, awaiting Rick's ratification (2026-09-02).**
+**Status:** **OPEN — R1a RULED and executed (2026-09-02); R1b next.**
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
-rows). Steering (shekyl-core-00) adopted the three-sub-round structure and
-approved the R1a proposal for ratification 2026-09-02; nothing below §4 is
-ruled yet. On R1c's close this document moves to `docs/completed/` as the
-round's ruling record (rule 95).
+rows). Steering (shekyl-core-00) adopted the three-sub-round structure
+2026-09-02; Rick ratified **both** R1a lines the same day — C2-R1a-Q1
+(delete the mechanism) and the CEN-G8 retirement (put to him separately as
+the first retirement of a ratified bucket-1 row) — and the implementation
+landed in the R1a PR. Rule 71 (network uniformity) was minted the same day
+at Rick's direction (§4a) and R1b cites it rather than re-deriving it.
+Nothing in §4/§5 is ruled yet. On R1c's close this document moves to
+`docs/completed/` as the round's ruling record (rule 95).
 **Pinned sha:** `bf317111f3412b548173bafda72f19e1bd1a7a0e` (`dev` tip,
 2026-09-02 — the C2-R3 merge). Every `file:line` in this doc was located at
 this pin; where a census citation drifted, both numbers are recorded.
@@ -37,7 +41,7 @@ regrouping 2026-09-02:
 
 | Sub-round | Rows | The decision | Status |
 | --- | --- | --- | --- |
-| **R1a** | CEN-E3, CEN-E4 (2) | Does the compiled-hash fast path — a consensus skip of PoW and FCMP — exist at all? Separable: rule 60-shaped existence question with its own examined-disposition record ([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §74.2 left it "a shipping decision nobody has taken") | **Proposed (§3), awaiting ratification** |
+| **R1a** | CEN-E3, CEN-E4 (2) | Does the compiled-hash fast path — a consensus skip of PoW and FCMP — exist at all? Separable: rule 60-shaped existence question with its own examined-disposition record ([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §74.2 left it "a shipping decision nobody has taken") | **RULED 2026-09-02, executed (§3, §3.8)** |
 | **R1b** | CEN-K5, K6, K7, K8, D5, D6, E1, E2, E5 (9) | What decides the best chain — the difficulty arm, the checkpoint-forced arm, the depth question, and every override surface that can command a rollback — as one contract | Scoped (§4) |
 | **R1c** | CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4 (9) | What alt admission must verify, what the unvalidated alt store costs, and the acceptance topology around it | Scoped (§5) |
 
@@ -81,9 +85,9 @@ load-bearing ones 2026-09-02.
 
 ---
 
-## 3. R1a proposed ruling (C2-R1a-Q1) — awaiting ratification
+## 3. R1a ruling (C2-R1a-Q1) — RATIFIED 2026-09-02
 
-**Ruling proposed: delete the per-block-checkpoint fast-sync mechanism
+**Ruling (ratified as proposed): delete the per-block-checkpoint fast-sync mechanism
 entirely.** No replacement, no dormant retention. CEN-E3 and CEN-E4 become
 `ruled-removed`; the reopening criterion below governs reintroduction.
 
@@ -189,7 +193,66 @@ its CMake). Census: E3/E4/G8 rows + §3/§3.1 counts in the same edit.
 
 R1a rules **2** of R1's 20 (E3 `ruled-removed`, E4 `ruled-removed`); CEN-G8
 retired as an absorbed out-of-batch consequence with its own ratification
-line (§3.1). 18 rows remain: R1b (9) + R1c (9). Sum: 2 + 9 + 9 = 20 ✓.
+line (§3.1), Rick-approved verbatim. 18 rows remain: R1b (9) + R1c (9).
+Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
+(sum 171 preserved; reproduce with the census §3 command block).
+
+### 3.8 Execution record
+
+- Deletion executed exactly per §3.6 plus three additions found in
+  execution: the `src/CMakeLists.txt` `if(PER_BLOCK_CHECKPOINT)` wrapper
+  (caught by the full-inventory sweep after the body was deleted), the
+  three mock-interface stubs in `tests/unit_tests/node_server.cpp`
+  (:100/:104/:105 — found by Rick and steering's re-sweep; build-surface
+  dependencies, not coverage), and the `--blocksdat` output mode of
+  `shekyl-blockchain-export` (`blocksdat_file.{cpp,h}`) — the *generator*
+  of the deleted mechanism's data blob, dead with its consumer.
+- **Sweep discipline (steering's correction, adopted):** the original
+  "zero test references" claim had grepped a 3-term *sample* of the symbol
+  set — an absence claim scoped to a sample proves nothing about the set.
+  The landed verification sweeps **every §3.6 inventory symbol** (16
+  terms) across `src/ tests/ utils/ contrib/ cmake/ CMakeLists.txt
+  Makefile` and the four sibling repos, unpiped exit codes, totals stated:
+  repo = 1 hit (the CMake wrapper straggler, then fixed to 0), siblings =
+  0 hits (exit 1).
+- `should_ask_for_pruned_data` collapses to an unconditional `false` —
+  behavior-preserving twice over (the deleted `is_within` check already
+  forced false, and no Shekyl node holds a pruning seed); the pruned-span
+  request machinery it gated keeps its other consumers untouched.
+- The `NOTIFY_RESPONSE_CHAIN_ENTRY` handler's `prevalidate_block_hashes`
+  call site collapses to nothing: its two live effects (empty-ids,
+  weights-size mismatch) are both already enforced by earlier guards in
+  the same handler (`:2509`, `:2521`).
+- `check_debit_auth_single_source.sh`: the required "block fast-check
+  debit" arm removed (three sites remain); gate re-run green — the
+  retirement's blast radius reached the gate that certified the belt.
+- Rule 71's gate `scripts/ci/check_network_uniformity.sh` landed wired
+  into `ci/grep-gates`, allowlist seeded with the 6 surviving public-
+  nettype branches (annotated with owners), and **bitten in both
+  directions before trust**: a planted `if (m_nettype == MAINNET)` in
+  scope went red (unlisted-hit arm), a mutated allowlisted branch went
+  red (stale-entry arm), restore green.
+- **A fourth residue class the symbol sweep structurally cannot see:**
+  fourteen test call sites passed the removed trailing parameter
+  *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,
+  `chaingen.cpp`, `output_distribution.cpp`, `scaling_2021.cpp`,
+  `daemon_submit_shims.cpp`, `txpool_ref_age.cpp`, `pruning.cpp`,
+  `economics_b5_fee_coinbase.cpp`, `txpool_relay_timers.cpp`,
+  `archival_bond_post_integration.cpp`, `rpc_facts_shims.cpp`,
+  `long_term_block_weight.cpp`; `core->init(vm, nullptr, nullptr)` ×3 in
+  `node_server.cpp`) — a bare `NULL` names no symbol, so no
+  inventory-term grep can find it. For a signature change the **compile
+  is the authoritative sweep**; the symbol sweep covers only named
+  references. Both were run; each caught what the other cannot. Two of
+  the fourteen additionally hid from intermediate filtered greps behind
+  a macro line-continuation backslash and a dot-call spelling — the
+  authoritative form was one *unfiltered* pattern over the whole tree
+  with the total stated (6 hits: 3 already-valid, 2 real, 1 in-signature
+  default).
+- Acceptance evidence per §3.3: full C++ build (BUILD_TESTS=ON) + ctest
+  across the deletion (results recorded in the PR). First ctest attempt
+  reported "No tests were found" with exit 0 — a vacuous green refused on
+  rule 47's bar; the suite was rebuilt with tests enabled and re-run.
 
 ---
 
@@ -197,6 +260,63 @@ line (§3.1). 18 rows remain: R1b (9) + R1c (9). Sum: 2 + 9 + 9 = 20 ✓.
 
 Rows: CEN-K5, K6, K7, K8, D5, D6, E1, E2, E5. Ground facts already banked at
 the pin, to be built on (each verified at source; hypotheses marked):
+
+### 4a. Addendum (Rick, 2026-09-02): the second checkpoint mechanism also
+forks on nettype — grounded at source
+
+There are at least two separate checkpoint mechanisms in this tree, and
+both fork on nettype in ways that make testnet unable to validate mainnet.
+The first was CEN-E3/E4 (§2 row 6: the trust-root check was
+`if (m_nettype == MAINNET)`, so testnet/stagenet loaded the compiled table
+with zero verification) — deleted by §3, so moot. The second is **live and
+is R1b's subject**:
+
+- `cryptonote_core.cpp:332` wraps the **entire** operator-checkpoint init
+  block — `init_default_checkpoints`, `set_checkpoints`, **and**
+  `set_checkpoints_file_path` — in `if (m_nettype == MAINNET)`. Off
+  mainnet, `m_checkpoints_path` stays `""`,
+  `boost::filesystem::exists("")` is false, and the JSON loader
+  (`checkpoints.cpp:195`) silently no-ops. **The operator-override path —
+  the exact mechanism whose forced-rollback semantics R1b rules (CEN-K6's
+  checkpoint arm, E2, E5) — is unreachable by construction on testnet and
+  stagenet.** As the code stands, a checkpoint-forced-switch ruling would
+  ship with no network on which an operator could rehearse it before
+  touching mainnet.
+- `checkpoints.cpp:181–193` (`init_default_checkpoints`) has per-network
+  early-return arms — currently all no-ops (zero compiled checkpoints),
+  i.e. structurally divergent, behaviorally identical: the shape that
+  rots.
+
+The generalization is **rule 71** (minted 2026-09-02 at Rick's direction,
+this PR): nettype selects data, never control flow, on the
+consensus/validation surface; a real behavioral divergence must be named,
+ratified, and loud — it can never just fall out of an `if`. The failure
+mode: once nettype selects a code path, "testnet passed" degrades from
+"this logic is correct" to "the logic testnet happens to run is correct".
+Enforcement landed with the rule (§3.8): the grep gate over
+`cryptonote_core/ + checkpoints/ + blockchain_db/`, allowlist seeded at 6
+and annotated. R1b therefore owes, citing rule 71 rather than re-deriving
+it:
+
+1. **E2/K6/E5 re-homing:** decide whether the operator-override wiring
+   goes uniform across all three public networks. Rick's stated instinct:
+   yes, unconditionally — an operator should be able to rehearse a
+   checkpoint override on testnet before ever touching it on mainnet, and
+   pre-genesis there is no cost. The wargame prices the trust surface
+   uniformly (E5's `pt.first − 2` rollback then exists on every network).
+2. **The positive check (steering's addition):** the grep gate only
+   catches *new* branches; the stronger corollary is that the same
+   validator tests run against **all** network parameter sets — a
+   parameterized cross-params suite proves there is nothing to branch on.
+   R1b proposes it for the surface it touches.
+3. The unpopulatable difficulty-checkpoint twin (`m_difficulty_points`,
+   §4 item 5) is ruled in the same package.
+
+FAKECHAIN's silent consensus skips (CEN-B5's root check, the CTTypeNull
+waiver) are the same class and are **batch R9's subject**; R9 inherits
+rule 71's named-ratified-and-loud exception discipline (the
+`SEEDHASH_EPOCH` override is the compliant counter-pattern: armed,
+datadir-pinned, loud) rather than re-deriving the principle.
 
 1. **The pop machinery has four writers**, and any depth ruling must cover
    all of them: (i) `switch_to_alternative_blockchain` (`:1430–1437`);
@@ -277,4 +397,9 @@ rules already have owners), nothing new crosses.
 - 2026-09-02 — R1a proposal reviewed by steering; load-bearing claims
   independently re-verified; approved for ratification with one fix (the
   reopening trigger pointed at a tolerance that does not exist — replaced
-  with the §3.5 interim absolute). Awaiting Rick.
+  with the §3.5 interim absolute).
+- 2026-09-02 — Rick ratified C2-R1a-Q1 and the CEN-G8 retirement (both
+  explicit); raised the two-checkpoint-mechanisms finding (§4a) and
+  directed the network-uniformity principle be minted as a standing rule
+  first (rule 71) with R1b citing it; implementation + rule + gate landed
+  in the R1a PR (execution record §3.8).

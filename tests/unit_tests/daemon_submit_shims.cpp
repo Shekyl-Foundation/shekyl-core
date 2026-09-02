@@ -289,7 +289,7 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1, nullptr);
+  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
 }
 
 // Structurally parseable FCMP++ tx (same shape as txpool_ref_age.cpp's).

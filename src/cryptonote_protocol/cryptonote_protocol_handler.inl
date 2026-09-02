@@ -1983,25 +1983,14 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::should_ask_for_pruned_data(cryptonote_connection_context& context, uint64_t first_block_height, uint64_t nblocks, bool check_block_weights) const
   {
-    if (!m_sync_pruned_blocks)
-      return false;
-    if (!m_core.is_within_compiled_block_hash_area(first_block_height + nblocks - 1))
-      return false;
-    const uint32_t local_stripe = tools::get_pruning_stripe(m_core.get_blockchain_pruning_seed());
-    if (local_stripe == 0)
-      return false;
-    // don't request pre-bulletprooof pruned blocks, we can't reconstruct their weight (yet)
-    static const uint64_t bp_fork_height = m_core.get_earliest_ideal_height_for_version(HF_VERSION_SMALLER_BP + 1);
-    if (first_block_height < bp_fork_height)
-      return false;
-    // assumes the span size is less or equal to the stripe size
-    bool full_data_needed = tools::get_pruning_stripe(first_block_height, context.m_remote_blockchain_height, CRYPTONOTE_PRUNING_LOG_STRIPES) == local_stripe
-        || tools::get_pruning_stripe(first_block_height + nblocks - 1, context.m_remote_blockchain_height, CRYPTONOTE_PRUNING_LOG_STRIPES) == local_stripe;
-    if (full_data_needed)
-      return false;
-    if (check_block_weights && !m_core.has_block_weights(first_block_height, nblocks))
-      return false;
-    return true;
+    // Requesting pruned spans depended on the per-block-checkpoint weight
+    // table for the weights of blocks it would never fully receive; that
+    // mechanism is deleted (C2-R1a), so pruned spans are never requested --
+    // which is also what this predicate always answered while the table was
+    // empty. A pruned-daemon mode is a separate, post-genesis, node-local
+    // design (TJ sequencing round); wiring it needs a weight source first.
+    (void)context; (void)first_block_height; (void)nblocks; (void)check_block_weights;
+    return false;
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -2402,7 +2391,7 @@ skip:
   {
     bool val_expected = false;
     uint64_t current_blockchain_height = m_core.get_current_blockchain_height();
-    if(!m_core.is_within_compiled_block_hash_area(current_blockchain_height) && m_synchronized.compare_exchange_strong(val_expected, true))
+    if(m_synchronized.compare_exchange_strong(val_expected, true))
     {
       if ((current_blockchain_height > m_sync_start_height) && (m_sync_spans_downloaded > 0))
       {
@@ -2548,21 +2537,12 @@ skip:
       return 1;
     }
 
-    uint64_t n_use_blocks = m_core.prevalidate_block_hashes(arg.start_height, arg.m_block_ids, arg.m_block_weights);
-    if (n_use_blocks == 0 || n_use_blocks + HASH_OF_HASHES_STEP <= arg.m_block_ids.size())
-    {
-      LOG_ERROR_CCONTEXT("Most blocks are invalid, dropping connection");
-      drop_connection(context, true, false);
-      return 1;
-    }
-
     context.m_expected_heights_start = arg.start_height;
 
     context.m_expected_heights.clear();
     context.m_expected_heights.reserve(arg.m_block_ids.size());
     context.m_needed_objects.clear();
     context.m_needed_objects.reserve(arg.m_block_ids.size());
-    uint64_t added = 0;
     std::unordered_set<crypto::hash> blocks_found;
     bool expect_unknown = false;
     for (size_t i = 0; i < arg.m_block_ids.size(); ++i)
@@ -2630,10 +2610,7 @@ skip:
       const uint64_t block_weight = arg.m_block_weights.empty() ? 0 : arg.m_block_weights[i];
       context.m_expected_heights.push_back(arg.m_block_ids[i]);
       context.m_needed_objects.push_back(std::make_pair(arg.m_block_ids[i], block_weight));
-      if (++added == n_use_blocks)
-        break;
     }
-    context.m_last_response_height -= arg.m_block_ids.size() - n_use_blocks;
 
     if (!request_missing_objects(context, false))
     {

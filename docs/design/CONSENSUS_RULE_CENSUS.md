@@ -138,17 +138,20 @@ every changed row.
 | Rules (rows in §4) | **171** |
 | — consensus-flagged | 162 |
 | — policy-flagged | 9 |
-| Bucket 1 (Shekyl-specific, spec'd) | 87 |
+| Bucket 1 (Shekyl-specific, spec'd) | 86 |
 | Bucket 2 (inherited, ratified on record) | 16 |
-| Bucket 3 (inherited, recorded deletion disposition) | 2 |
-| Bucket 4 (inherited, not ratified — classes recorded) | 66 |
+| Bucket 3 (deletion disposition recorded or executed) | 5 |
+| Bucket 4 (inherited, not ratified — classes recorded) | 64 |
 
-Sum check: `87 + 16 + 2 + 66 = 171 = 162 + 9`. Merged set = 161 CEN rows
+Sum check: `86 + 16 + 5 + 64 = 171 = 162 + 9`. Merged set = 161 CEN rows
 + 8 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`) + 2 split
-(`CEN-D1b, F14b`). Bucket-4 class split: 6 `examined-disposition`
-+ 2 `KAT-port` + 3 `pinned-not-re-derived` + 55 `none` = 66 (the C1-era
+(`CEN-D1b, F14b`). Bucket-4 class split: 5 `examined-disposition`
++ 2 `KAT-port` + 3 `pinned-not-re-derived` + 54 `none` = 64 (the C1-era
 split additionally held 1 `ratified-premise-refuted` + 56 `none`;
-C2-R3 ruled CEN-C2 and CEN-C3 into bucket 2, class `ratified` — §7.15).
+C2-R3 ruled CEN-C2 and CEN-C3 into bucket 2, class `ratified` — §7.15;
+C2-R1a ruled CEN-E3/E4 removed-and-executed and retired the bucket-1
+belt CEN-G8, all three now bucket 3 — the bucket-3 label widens to cover
+executed removals, incl. the first retired Shekyl-authored row).
 
 Reproducible counts (run against this file):
 
@@ -168,16 +171,16 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | B header / version / attestation / root | 7 | 2 | 1 | 0 | 4 | 0 |
 | C timestamps | 3 | 1 | 2 | 0 | 0 | 0 |
 | D PoW / difficulty | 8 | 4 | 0 | 0 | 4 | 0 |
-| E checkpoints / fast-sync | 5 | 0 | 0 | 0 | 5 | 0 |
+| E checkpoints / fast-sync | 5 | 0 | 0 | 2 | 3 | 0 |
 | F miner tx / emission | 22 | 13 | 3 | 0 | 6 | 0 |
-| G block body (connect) | 14 | 8 | 0 | 0 | 6 | 0 |
+| G block body (connect) | 14 | 7 | 0 | 1 | 6 | 0 |
 | H tx non-input consensus | 24 | 9 | 5 | 1 | 9 | 0 |
 | I FCMP++ inputs / PQC | 18 | 14 | 4 | 0 | 0 | 0 |
 | J archival tx families | 26 | 26 | 0 | 0 | 0 | 0 |
 | K reorg / alt chains | 11 | 1 | 0 | 0 | 10 | 0 |
 | L storage layer | 15 | 6 | 0 | 1 | 8 | 0 |
 | M mempool admission | 11 | 2 | 1 | 0 | 8 | 9 |
-| **Total** | **171** | **87** | **16** | **2** | **66** | **9** |
+| **Total** | **171** | **86** | **16** | **5** | **64** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 
@@ -291,7 +294,7 @@ split.
 
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CEN-D1 | The block's PoW longhash must satisfy the difficulty target (`check_hash(pow, diff)` must pass); FFI failure rejects. **Skipped** when CEN-E3's compiled-hash `fast_check` holds; the alt path runs it at alt difficulty (CEN-D5) | 5818 (main) / 2347 (alt) | C | 1 | spec | PoW-gate design: [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md); difficulty values: [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) | RC-24 ⇒ split across this row and CEN-D1b: the *gate* is Shekyl design; the *comparison form* is D1b |
+| CEN-D1 | The block's PoW longhash must satisfy the difficulty target (`check_hash(pow, diff)` must pass); FFI failure rejects. the alt path runs it at alt difficulty (CEN-D5); the former CEN-E3 `fast_check` skip is deleted (C2-R1a) | 5818 (main) / 2347 (alt) | C | 1 | spec | PoW-gate design: [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md); difficulty values: [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) | RC-24 ⇒ split across this row and CEN-D1b: the *gate* is Shekyl design; the *comparison form* is D1b |
 | CEN-D1b | The acceptance comparison is `hash · difficulty < 2^256` with the 32-byte hash read as a 256-bit little-endian integer — implemented in Rust (`shekyl_difficulty_check_hash`; the inherited 64/128-bit fast/slow split was deleted in the port, proven equivalent over a differential corpus) | src/cryptonote_basic/difficulty.cpp:52–86 (marshaling wrapper + contract comment); rust/shekyl-difficulty (`check_hash`); vectors rust/shekyl-difficulty/tests/check_hash_vectors.rs | C | 4 | KAT-port | vectors + the port record (difficulty.cpp:52–58 comment) | Split from CEN-D1 in C1 (RC-24's bucket-2 reading vs CEN's §5 residue note). The comparison is sealed by vectors, not ratified: whether 2^256-target semantics are right-for-Shekyl was never separately ruled |
 | CEN-D2 | The longhash function is RandomX v2 via Rust FFI unconditionally (height/version ignored); on FFI failure the hash is forced to `0xff…` so it can never meet a target (fail closed; alt path pre-seeds `0xff…`) | cryptonote_tx_utils.cpp:748/:766; src/crypto/pow_registry.cpp:6; fail-closed :784–794; alt pre-seed blockchain.cpp:2325–2326 | C | 1 | spec | [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) ("C JIT for mining, Rust interpreter for verification — permanent") | RC-22 (hash half), RC-23 ⇒ merged |
 | CEN-D3 | RandomX seed block: epoch 2048 with lag 64 — `seedheight(h) = 0 for h ≤ 2112, else (h−65) & ~2047`; seed hash is the block id at that height (alt path: resolved along the alt chain when the seed height is on it). The `SEEDHASH_EPOCH_*` env override is refused on public networks (fakechain-only lever, init-time) | rust/shekyl-pow-randomx/src/seed_epoch.rs:109; blockchain.cpp:6493, 2327–2345; env refusal 640–643 | C | 1 | spec | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823 (seed-epoch schedule spec — note it lives here, not in `RANDOMX_V2_PLAN.md` or `SPEC_ANCHORS.md`); [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) :171, :201 (non-tunable) | RC-22 (seed half), RC-25, RC-27 ⇒ merged |
@@ -306,8 +309,8 @@ split.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | CEN-E1 | In the checkpoint zone, the block id at a checkpointed height must equal the hardcoded/JSON-loaded checkpoint hash | 5829–5837 (main); 2315 (alt; a checkpoint match forces the reorg, 2481) | C | 4 | none | — (steering-verified at the tree: `src/checkpoints/checkpoints.cpp` ships **zero** compiled-in checkpoints — `init_default_checkpoints` :181–193 is empty on all three networks, the single `ADD_CHECKPOINT` :223 is the JSON-loader loop, and no DNS-checkpoint machinery exists in the file; the only trace of the inherited practice is [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md) :73's procedure line) | RC-16 ⇒ merged. Mechanism live, data vacuous — a trust mechanism no design round has examined |
 | CEN-E2 | An alternative block at or below the last checkpoint preceding the current height is refused (`is_alternative_block_allowed`) | 2233; src/checkpoints/checkpoints.cpp:137 | C | 4 | none | — | RC-135 ⇒ merged. Vacuously permissive today (no checkpoints) |
-| CEN-E3 | Compiled-in per-block hash list (`m_blocks_hash_check`, `PER_BLOCK_CHECKPOINT=1` by default): inside its range a block's id must equal the compiled hash, and PoW, pool-supplement NIC and per-tx input checks are **skipped** (`fast_check`); pruned-block weights come from the same table | 5786–5804, 5855, 6037, 6073–6081; loader 7544; CMake default | C | 4 | examined-disposition | [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) :12574–12589 — the relay round examined the skip and left it open: "a shipping decision nobody has taken" | RC-15 ⇒ merged. A populated table is a consensus skip of PoW and FCMP; the GF-1 belt (CEN-G8) exists because of this. FOLLOWUPS row repointed here |
-| CEN-E4 | `check_tx_inputs` (pool wrapper) returns success unchecked when `kept_by_block` and the chain is below the hash-check size | 3246–3254 | C | 4 | none | — | RC-96 ⇒ merged. Mempool path into a checkpointed block |
+| CEN-E3 | **Removed (C2-R1a, ratified 2026-09-02, executed same PR).** Was: compiled-in per-block hash list (`m_blocks_hash_check`, `PER_BLOCK_CHECKPOINT=1` by default) — inside its range a block's id had to equal the compiled hash, and PoW, pool-supplement NIC and per-tx input checks were **skipped** (`fast_check`); pruned-block weights came from the same table | deleted (mechanism, loader, p2p expansion, `--fast-block-sync`, `src/blocks/`, generator) | C | 3 | — | [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3 (ruling, wargame, reopening criterion — DRP §74.2's "unmade shipping decision" is made: not shipped) | RC-15 ⇒ merged. Every arm was unreachable with the shipped zero-byte data; mainnet's loader pin was stale-impossible; testnet/stagenet loaded unverified — rule 71's defining instance |
+| CEN-E4 | **Removed (C2-R1a, ratified 2026-09-02, executed same PR).** Was: `check_tx_inputs` (pool wrapper) returned success unchecked when `kept_by_block` and the chain was below the hash-check size | deleted (same selector as CEN-E3's table; arm unreachable with the shipped empty table) | C | 3 | — | [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3 | RC-96 ⇒ merged |
 | CEN-E5 | Loading a checkpoint JSON file can add checkpoints at runtime (`--enforce-dns-checkpointing`-era mechanism reduced to file load) — operator-supplied consensus pins | src/checkpoints/checkpoints.cpp:195–229; `update_checkpoints` 6699 | C | 4 | none | — | |
 
 ### 4.F Miner transaction (structure and emission)
@@ -349,7 +352,7 @@ split.
 | CEN-G6 | Weight-limit frozen bounds: long-term window 100 000 blocks, short-term surge ×50 | 6580, 6593; constants cryptonote_config.h | C | 4 | pinned-not-re-derived | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §10 :803 (block-level bounds table — a freeze, not a derivation) | Demoted from CEN's bucket 2 under the §2 bar: the freeze record exists; no examination of the ×50 or the window value does. §10 R2 |
 | CEN-G6b | Weight-limit remainder: effective median = clamp(short-term median, long-term effective median, 50×long-term), floored at the 300 000-byte penalty-free zone (`…FULL_REWARD_ZONE_V5`); **limit = 2 × median**; long-term weight = weight clamped to [median·10/17, median·1.7]. `get_min_block_weight(version)` ignores its version argument and always returns the V5 zone | 6440, 6568–6607, 6548–6566, 1809–1870; vestigial version arg cryptonote_basic_impl.cpp:81–85 | C | 4 | none | — | RC-133, RC-181 ⇒ merged. The V5 reward-zone value's arbitration was explicitly punted "to the economics doc" (`GENESIS_TX_WIRE_FORMAT.md` :806–811, the "fossil flag") and never landed anywhere — no economics doc, decision-log entry, or (pre-#584) FOLLOWUPS row received it; 300 000 is consumed as given at [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) :130 and decision log :4686. The 1.7× clamps ride along unexamined. FOLLOWUPS row (owner: this doc). §10 R2. The reward-side 2·median rejection is CEN-F14 |
 | CEN-G7 | No two serve-credit vins in one block may carry the same (P, shard, E) — checked across txs against the `ArchivalPairEpochKey` byte encoding | 6102–6131 | C | 1 | spec | [`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`](../completed/ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) D-SC-C; PC-D4 non-widening rationale at the site | RC-113 ⇒ merged. Mirrored in Rust `serve_credit_block_unique` |
-| CEN-G8 | Under the compiled-hash fast path, a debit-side bond post (bond_debit > 0) must still authorize against the record's committed `bond_spend_pk` (the GF-1 theft-shaped belt); credit arms stay checkpoint-trusted | 6162–6204 | C | 1 | spec | GF-1: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6 :799; [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5 | exists because CEN-E3 skips per-tx verify |
+| CEN-G8 | **Retired (C2-R1a, ratified 2026-09-02 — the first retired bucket-1 row).** Was: under the compiled-hash fast path, a debit-side bond post (bond_debit > 0) had to authorize against the record's committed `bond_spend_pk` (the GF-1 theft-shaped belt). Jobs enumerated and covered: the belt existed only because CEN-E3 skipped per-tx verify; with the fast path deleted, `check_archival_bond_post_input` (the primary pin, CEN-J13) is unconditional at block connect | deleted with its selector (`fast_check`); `check_debit_auth_single_source.sh` updated to three required sites | C | 3 | — | [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3.1; GF-1: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6; [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5 | belt's one job subsumed by the now-unconditional primary |
 | CEN-G9 | No two emission claims in one block may name the same (P, E) pair (Rust `shekyl_emission_block_claims_unique` over 40-byte P‖epoch_le entries) | 6210–6252 | C | 1 | spec | [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md) §6.2 layer 2 | RC-130 ⇒ merged. Serve-credit + Unbond same-P same-block deliberately NOT rejected (ratified 2026-07-12, site comment 6147–6152) |
 | CEN-G10 | At most one bond post per P per block (Rust `shekyl_archival_bond_post_block_unique`) | 6253–6261 | C | 1 | spec | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 | RC-123 ⇒ merged |
 | CEN-G11 | Per non-genesis block, staker inflow (staker emission leg + staker fee-pool share) is accrued to `archival_budget_accrual`, and the destroyed fee share is burn-recorded; operands are exactly `validate_miner_transaction`'s — `compute_emission_split(base_reward, height, genesis_ng_height)` :6347 and `compute_fee_burn(fee_summary, tx_volume_avg, already_generated_coins, frozen_segment_count)` :6350; **neither takes a version** | 6282–6356, 6447–6460; tripwire `scripts/ci/check_archival_reward_gates.sh` | C | 1 | spec | [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) §2.2 (F-B1a/c; tripwire records F-B1b as RETIRED) | RC-131, RC-132 ⇒ merged. Consensus state write, not a check. The comment at :6293–6306 still narrates the retired `bl.major_version` operand — stale, contradicted by the calls below it (§7) |
@@ -435,7 +438,7 @@ Bond post (per tx; whole-tx shape CEN-H21; spend-subset FCMP verify shares CEN-I
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | CEN-J11 | Hybrid pubkey length canonical (`PQC_HYBRID_SINGLE_KEY_LEN`); `p_canonical_id` must recompute from it | 4808–4826 | C | 1 | spec | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | RC-117 ⇒ merged |
 | CEN-J12 | `bond_spend_pk` coupling: JoinMarket must commit one (canonical length); every other kind must not carry one | 5115–5128, 4838, 4906, 5054 | C | 1 | spec | gate-4 §9.11 | RC-118 ⇒ split across CEN-J12/J13 |
-| CEN-J13 | Debit arms (Unbond, HoldingsUpdate-drop, and the fast-path belt CEN-G8) authorize only against the record's **committed** `bond_spend_pk`; credit arms (JoinMarket, HU-add, Rebond) authorize with the identity key `P_pubkey` (HU-add auth key must equal `P_pubkey`) | 4850, 4968, 4957–4962, 5099–5104, 5203–5210 | C | 1 | spec | GF-1: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6 :799 (RESOLVED 2026-06-16); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5 :419 | RC-122 ⇒ merged |
+| CEN-J13 | Debit arms (Unbond, HoldingsUpdate-drop; the fast-path belt CEN-G8 retired with its mechanism, C2-R1a) authorize only against the record's **committed** `bond_spend_pk`; credit arms (JoinMarket, HU-add, Rebond) authorize with the identity key `P_pubkey` (HU-add auth key must equal `P_pubkey`) | 4850, 4968, 4957–4962, 5099–5104, 5203–5210 | C | 1 | spec | GF-1: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6 :799 (RESOLVED 2026-06-16); [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5 :419 | RC-122 ⇒ merged |
 | CEN-J14 | JoinMarket semantics (Rust `shekyl_archival_verify_join_market_bond_post`): kind/shard-set shape, no debit, credit == bonded_total == bond_floor(holdings), record must not already exist | 5130–5148 | C | 1 | spec | gate-4 §3.5; floor from `config/consensus_constants.json` `archival_bond_floor_atomic` | RC-121 ⇒ split across CEN-J14/J16/J17/J18. DB-side p_id uniqueness is NOT a constraint (flag-0 put) — verify is sole enforcement (CEN-L14) |
 | CEN-J15 | JoinMarket admission viability (D3/R3): per-shard r_market + freeze-height/presence facts at parent height must pass `shekyl_archival_check_bond_admission`; drops deliberately ungated | 5150–5201 | C | 1 | spec | [`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`](../completed/ARCHIVAL_SIM_ECONOMICS_VERDICT.md); `shekyl-archival-retention::admission` | |
 | CEN-J16 | Unbond semantics (Rust): full exit only (debit == record total, post-total 0, empty holdings), release cooldown elapsed from the P2B-8 last-served anchors, slash settlement current through the anchor | 4832–4897 | C | 1 | spec | gate-4 §3.5 debit path; `config/consensus_constants.json` `release_cooldown_epochs` | |
@@ -578,10 +581,11 @@ walking the live function will meet them. Rule-60 material throughout.
 3. **Fees are pure relay policy** — a block may include a zero-fee tx
    (CEN-M3 `kept_by_block` exempt); serve-credit txs rely on this
    (CEN-M11). Whether a consensus fee floor is wanted is R2 material.
-4. **Checkpoint machinery is live with empty data** (CEN-E1/E2/E5) and the
-   compiled-hash fast path skips PoW + FCMP when populated (CEN-E3,
-   examined and explicitly left open). The GF-1 belt (CEN-G8) exists
-   because of that skip. (§10 R1.)
+4. **Checkpoint machinery is live with empty data** (CEN-E1/E2/E5); the
+   compiled-hash fast path that skipped PoW + FCMP when populated
+   (CEN-E3) was **deleted by C2-R1a** (2026-09-02) together with the
+   GF-1 belt (CEN-G8) that existed because of the skip. (§10 R1;
+   [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3.)
 5. **The reorg acceptance design has no examined-decision record
    anywhere** — steering searched decision log, docs/design, docs/completed
    (terms: reorg, alternative chain, alt block, switch_to_alternative,
@@ -923,7 +927,7 @@ the bucket-3/4 rows at C1 close (counts sum to 70).
 | Batch | Rows (count) | Stake at genesis if unruled |
 | --- | --- | --- |
 | **R3 — Timestamps** — **RULED 2026-09-01** ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md): Q1 strict `>` + newest-11 alt window + `median+1` template floor, Q2 genesis-padding replaces the carve-out, Q3 FTL at alt admission; CEN-C2/C3 → bucket 2, §7.15) | CEN-C2, C3 (2) + CEN-C1's alt-FTL placement note | The MTP boundary shipped three-way split (strict ratified spec / non-strict live C++ / strict unwired Rust predicate) — a consensus-forking discrepancy the rewrite would have had to *choose* silently; LWMA-1's security assumptions rest on timestamp validation. Was flagged for an early ruling + a boundary test (adjudicated ground already in CEN-C2) |
-| **R1 — Reorg / alt-chain + checkpoints + topology** | CEN-K1–K10, E1–E5, A1, A2, A4, D5, D6 (20) | The fork-choice rule (strictly-greater + checkpoint-forced), the prevalidate-only alt-admission subset (§3.5), checkpoint trust surfaces (incl. the PoW/FCMP-skipping compiled-hash path), and reorg semantics across staking-epoch boundaries — none examined on record (§6.5) — freeze as the permanent reorg contract of a chain whose archival state is epoch-scoped |
+| **R1 — Reorg / alt-chain + checkpoints + topology** — **RUNNING** ([`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md); three decision-grouped sub-rounds 2+9+9; **R1a RULED 2026-09-02**: CEN-E3/E4 removed-and-executed, CEN-G8 retired, rule 71 minted with its grep gate; census-wide line re-anchor deferred to R1c close, owner: this round) | CEN-K1–K10, E1–E5, A1, A2, A4, D5, D6 (20) | The fork-choice rule (strictly-greater + checkpoint-forced), the prevalidate-only alt-admission subset (§3.5), checkpoint trust surfaces (incl. the PoW/FCMP-skipping compiled-hash path), and reorg semantics across staking-epoch boundaries — none examined on record (§6.5) — freeze as the permanent reorg contract of a chain whose archival state is epoch-scoped |
 | **R2 — Block-weight / reward-zone / fee constants** | CEN-G6, G6b, F14b, H1, H3, M3, M4, M10 (8) | The 300 000 reward zone (an explicitly punted "fossil flag" arbitration), the 1.7× clamps, ×50 surge, the ArticMine penalty curve, the 1 MB tx cap, and every fee-formula constant fossilize as Shekyl economics without ever having been derived for Shekyl |
 | **R4 — Header identity + hardfork collapse** | CEN-B2, B3, B6, B7, A5, A6, A7, H23 (8) | The wire-identity binding (no explicit merkle field — B6) and the inert voting machinery freeze; **the V4 lattice-only activation question must be answered by design, per rules 75/21 — recorded here, deliberately not answered**: collapse-vs-redesign of the hardfork subsystem is exactly that question's mechanism half |
 | **R5 — Coinbase + tx structural residue (incl. bucket-3 executions)** | CEN-F1, F5, F6, F7, F12, H4, H8, H9, H10, G1, G2, G3, G5 + H24, L15 (15) | The coinbase contract (pinned-not-re-derived unlock window 60, the load-bearing-dead decomposed arm a naive Rust port would implement as live), the structural belts, and the rule-60 deletions (H24, L15) become permanent — dead branches are the cheapest deletion pre-genesis and a port hazard forever after |

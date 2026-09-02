@@ -286,11 +286,10 @@ namespace cryptonote
       *
       * @param vm command line parameters
       * @param test_options configuration options for testing
-      * @param get_checkpoints if set, will be called to get checkpoints data, must return checkpoints data pointer and size or nullptr if there ain't any checkpoints for specific network type
       *
       * @return false if one of the init steps fails, otherwise true
       */
-     bool init(const boost::program_options::variables_map& vm, const test_options *test_options = NULL, const GetCheckpointsCallback& get_checkpoints = nullptr);
+     bool init(const boost::program_options::variables_map& vm, const test_options *test_options = NULL);
 
      /**
       * @copydoc Blockchain::reset_and_set_genesis_block
@@ -763,13 +762,6 @@ namespace cryptonote
      network_type get_nettype() const { return m_nettype; };
 
      /**
-      * @brief check a set of hashes against the precompiled hash set
-      *
-      * @return number of usable blocks
-      */
-     uint64_t prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights);
-
-     /**
       * @brief get free disk space on the blockchain partition
       *
       * @return free space in bytes
@@ -812,18 +804,6 @@ namespace cryptonote
       * @return true on success, false otherwise
       */
      bool check_blockchain_pruning();
-
-     /**
-      * @brief checks whether a given block height is included in the precompiled block hash area
-      *
-      * @param height the height to check for
-      */
-     bool is_within_compiled_block_hash_area(uint64_t height) const;
-
-     /**
-      * @brief checks whether block weights are known for the given range
-      */
-     bool has_block_weights(uint64_t height, uint64_t nblocks) const;
 
      /**
       * @brief flushes the invalid block cache

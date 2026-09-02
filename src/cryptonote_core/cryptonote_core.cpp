@@ -140,11 +140,6 @@ namespace cryptonote
   , "Sleep time in ms, defaults to 0 (off), used to debug before/after locking mutex. Values 100 to 1000 are good for tests."
   , 0
   };
-  static const command_line::arg_descriptor<uint64_t> arg_fast_block_sync = {
-    "fast-block-sync"
-  , "Sync up most of the way by using embedded, known block hashes."
-  , 1
-  };
   static const command_line::arg_descriptor<uint64_t> arg_prep_blocks_threads = {
     "prep-blocks-threads"
   , "Max number of threads to use when preparing block hashes in groups."
@@ -296,7 +291,6 @@ namespace cryptonote
     command_line::add_arg(desc, arg_keep_fakechain);
     command_line::add_arg(desc, arg_fixed_difficulty);
     command_line::add_arg(desc, arg_prep_blocks_threads);
-    command_line::add_arg(desc, arg_fast_block_sync);
     command_line::add_arg(desc, arg_show_time_stats);
     command_line::add_arg(desc, arg_block_sync_size);
     command_line::add_arg(desc, arg_fluffy_blocks);
@@ -415,7 +409,7 @@ namespace cryptonote
     return m_blockchain_storage.get_alternative_blocks_count();
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options, const GetCheckpointsCallback& get_checkpoints/* = nullptr */)
+  bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options)
   {
     start_time = std::time(nullptr);
 
@@ -429,7 +423,6 @@ namespace cryptonote
 
     std::string db_sync_mode = command_line::get_arg(vm, cryptonote::arg_db_sync_mode);
     bool db_salvage = command_line::get_arg(vm, cryptonote::arg_db_salvage) != 0;
-    bool fast_sync = command_line::get_arg(vm, arg_fast_block_sync) != 0;
     uint64_t blocks_threads = command_line::get_arg(vm, arg_prep_blocks_threads);
     size_t max_txpool_weight = command_line::get_arg(vm, arg_max_txpool_weight);
     bool prune_blockchain = command_line::get_arg(vm, arg_prune_blockchain);
@@ -574,7 +567,7 @@ namespace cryptonote
     }
 
     m_blockchain_storage.set_user_options(blocks_threads,
-        sync_on_blocks, sync_threshold, sync_mode, fast_sync);
+        sync_on_blocks, sync_threshold, sync_mode);
 
     try
     {
@@ -625,7 +618,7 @@ namespace cryptonote
       0
     };
     const difficulty_type fixed_difficulty = command_line::get_arg(vm, arg_fixed_difficulty);
-    r = m_blockchain_storage.init(db.release(), m_nettype, m_offline, regtest ? &regtest_test_options : test_options, fixed_difficulty, get_checkpoints);
+    r = m_blockchain_storage.init(db.release(), m_nettype, m_offline, regtest ? &regtest_test_options : test_options, fixed_difficulty);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
 
     r = m_mempool.init(max_txpool_weight, m_nettype == FAKECHAIN);
@@ -1733,11 +1726,6 @@ namespace cryptonote
     return m_target_blockchain_height;
   }
   //-----------------------------------------------------------------------------------------------
-  uint64_t core::prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights)
-  {
-    return get_blockchain_storage().prevalidate_block_hashes(height, hashes, weights);
-  }
-  //-----------------------------------------------------------------------------------------------
   uint64_t core::get_free_space() const
   {
     boost::filesystem::path path(m_config_folder);
@@ -1753,16 +1741,6 @@ namespace cryptonote
   bool core::prune_blockchain(uint32_t pruning_seed)
   {
     return get_blockchain_storage().prune_blockchain(pruning_seed);
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::is_within_compiled_block_hash_area(uint64_t height) const
-  {
-    return get_blockchain_storage().is_within_compiled_block_hash_area(height);
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::has_block_weights(uint64_t height, uint64_t nblocks) const
-  {
-    return get_blockchain_storage().has_block_weights(height, nblocks);
   }
   //-----------------------------------------------------------------------------------------------
   std::time_t core::get_start_time() const

@@ -12589,6 +12589,14 @@ that the constant needs to roughly double, not move an order.**
 
 ### 74.2 Initial sync: the fast path exists and is compiled in
 
+> **Superseded 2026-09-02 (C2-R1a,
+> [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3):** the
+> per-block-checkpoint fast path this section found was **deleted** — the
+> "unmade shipping decision" is made: not shipped. The reopening criterion
+> (a named design round; interim trigger 72 h initial sync on the rule-76
+> floor device) carries this section's concern forward; the analysis below
+> is kept as the record it was.
+
 The concern: historical transactions arriving in blocks were never in this
 node's pool, so `can_skip_fcmp = found_tx_in_pool && …` is **false** for them
 and the block path pays full verification. At 127 ms, one year at 20k tx/day
