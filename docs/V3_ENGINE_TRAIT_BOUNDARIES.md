@@ -5405,7 +5405,7 @@ Round 4a closure (the ground truth)
     │      §10.2.1 Stage 1 baseline (V3.0; gates Stage 1 PR review)
     │      §10.2.2 Stage 4 cost characterization (depends on §10.1.2)
     │
-    ├──► §10.3 V3.1 / V3.2 expansion axis  (governed by §2 trait surfaces, §2 preamble visibility)
+    ├──► §10.3 Expansion after the Stage-1 surface (historical labels V3.1 / V3.2; governed by §2 trait surfaces, §2 preamble visibility)
     │      §10.3.1 Multisig support (V3.1)
     │         └──► §10.3.2 Multi-engine server (V3.1+)
     │                 └──► §10.3.3 JSON-RPC server cutover (landed; traits stay pub(crate))

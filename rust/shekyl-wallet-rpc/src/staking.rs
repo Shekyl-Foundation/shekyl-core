@@ -236,7 +236,7 @@ pub(crate) fn ledger_snapshot_with_staking<T>(
     };
     // Guard dropped above (non-reentrant lock): the session-adoption flag
     // takes its own brief ledger read, then the sealed-file staking read.
-    let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
+    let recovery_pending_reopen = engine.stake().staking_recovery_pending_reopen();
     let staking = degrade_or_loud(read_view_with_snapshot(
         engine,
         staking_enabled,

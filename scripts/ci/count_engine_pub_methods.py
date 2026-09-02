@@ -7,8 +7,8 @@
 # Count `pub` (not pub(crate)) inherent methods on Engine. Used by
 # check_engine_decomposition.sh METHODS_CEILING. Prints one integer.
 # Optional ENGINE_DIR as argv[1]; --list prints path:line name;
-# --self-test runs the where-clause / façade / cfg(test)-mod negative
-# controls.
+# --self-test runs the where-clause / façade / cfg(test)-mod / noise
+# / path-to-Engine / test-filename negative controls.
 
 from __future__ import annotations
 
@@ -17,15 +17,126 @@ import re
 import sys
 import tempfile
 
-# `pub` + any sequence of fn qualifiers, then `fn`. `pub(crate)` /
-# `pub(super)` do not match: they have `(` immediately after `pub`.
+# Applied to *masked* source (strings/comments stripped to spaces), so
+# `extern "C"` is `extern` plus spaces, not a quoted ABI token.
+# `pub(crate)` / `pub(super)` do not match: they have `(` immediately after `pub`.
 FN_PUB = re.compile(
-    r"^(\s+)pub\s+(?:(?:const|async|unsafe|extern\s+\"[^\"]+\")\s+)*"
+    r"^(\s+)pub\s+(?:(?:const|async|unsafe|extern)\s+)*"
     r"fn\s+(\w+)\s*[\(<]"
 )
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]")
 # `mod foo`, `pub mod foo`, `pub(crate) mod foo`, `pub(in crate::engine) mod foo`.
 MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+")
+# Raw strings: r"…" / r#"…"# / br#"…"# / cr#"…"#. Must run before ordinary strings.
+_RAW_STR = re.compile(r"(?:[bc])?r(#*)\"")
+# Inherent Self is a path ending in `Engine` (`Engine`, `super::Engine`,
+# `crate::Engine`, `crate::engine::Engine`). `Wrapper<Engine<S>>` does not
+# match: match is anchored at the Self type, not a substring search.
+_ENGINE_SELF = re.compile(
+    r"(?:(?:r#)?[A-Za-z_][\w]*::)*Engine(?:\s*<|\s*\{|\s*$)"
+)
+
+
+def mask_rust_noise(src: str) -> str:
+    """Replace comments, strings, and char literals with spaces (keep newlines).
+
+    Brace depth for `#[cfg(test)] mod` skip and inherent-impl scan must not
+    see `{` / `}` inside `//`, `/* */`, `"…"`, raw strings, or `'{'`. A lexer
+    here is the freeze's subject: syn/rustc would be a new CI dependency for
+    a counter that has to run in grep-gates. Length is preserved so `--list`
+    line numbers still match the file.
+    """
+    n = len(src)
+    out = [" "] * n
+    i = 0
+    while i < n:
+        if src[i] == "\n":
+            out[i] = "\n"
+            i += 1
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            if j < 0:
+                break
+            out[j] = "\n"
+            i = j + 1
+            continue
+        if src.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < n and depth:
+                if src[i] == "\n":
+                    out[i] = "\n"
+                    i += 1
+                elif src.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif src.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            continue
+        raw = _RAW_STR.match(src, i)
+        if raw:
+            hashes = raw.group(1)
+            i = raw.end()
+            closer = '"' + hashes
+            j = src.find(closer, i)
+            if j < 0:
+                while i < n:
+                    if src[i] == "\n":
+                        out[i] = "\n"
+                    i += 1
+                break
+            while i < j:
+                if src[i] == "\n":
+                    out[i] = "\n"
+                i += 1
+            i = j + len(closer)
+            continue
+        if src.startswith(('b"', 'c"', '"'), i):
+            if src[i] in "bc":
+                i += 1
+            i += 1  # opening quote
+            while i < n:
+                if src[i] == "\n":
+                    out[i] = "\n"
+                    i += 1
+                elif src[i] == "\\":
+                    i += 2
+                    if i > n:
+                        i = n
+                elif src[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if src.startswith("b'", i) or src[i] == "'":
+            if src.startswith("b'", i):
+                i += 2
+            else:
+                i += 1
+            if i < n and src[i] == "\\":
+                i += 2
+                if i < n and src[i] == "'":
+                    i += 1
+                continue
+            if i + 1 < n and src[i + 1] == "'":
+                i += 2
+                continue
+            # Lifetime `'a` / `'static` — no braces; skip the ident.
+            while i < n and (src[i].isalnum() or src[i] == "_"):
+                i += 1
+            continue
+        out[i] = src[i]
+        i += 1
+    return "".join(out)
+
+
+def brace_delta(s: str) -> int:
+    return s.count("{") - s.count("}")
 
 
 def skip_balanced(s: str, start: int, open_ch: str, close_ch: str) -> int | None:
@@ -46,6 +157,26 @@ def skip_balanced(s: str, start: int, open_ch: str, close_ch: str) -> int | None
     return None
 
 
+def is_test_source(fname: str) -> bool:
+    """Skip dedicated test modules, not any file whose name contains `test`.
+
+    `attestation.rs` / `contest.rs` are production. Live engine test files
+    are `*_tests.rs`, `test_*.rs` (`test_support.rs`, `test_fixtures.rs`),
+    `*_fixtures.rs`, and the explicit `regtest_e2e.rs` (the name is the
+    harness, not a substring accident).
+    """
+    base = os.path.basename(fname)
+    if base == "regtest_e2e.rs":
+        return True
+    if base.startswith("test_"):
+        return True
+    if base.endswith("_tests.rs") or base.endswith("_test.rs"):
+        return True
+    if base.endswith("_fixtures.rs"):
+        return True
+    return False
+
+
 def strip_cfg_test_modules(lines: list[str]) -> list[str]:
     out: list[str] = []
     i = 0
@@ -56,8 +187,7 @@ def strip_cfg_test_modules(lines: list[str]) -> list[str]:
             while j < n and (lines[j].strip() == "" or lines[j].lstrip().startswith("#[")):
                 j += 1
             if j < n and MOD.match(lines[j]):
-                code = lines[j].split("//", 1)[0]
-                if "{" not in code:
+                if "{" not in lines[j]:
                     # Out-of-line: `mod foo;` — skip the decl, not the next
                     # production `pub use { ... }` (or anything else with braces).
                     i = j + 1
@@ -66,7 +196,7 @@ def strip_cfg_test_modules(lines: list[str]) -> list[str]:
                 started = False
                 k = j
                 while k < n:
-                    depth += lines[k].count("{") - lines[k].count("}")
+                    depth += brace_delta(lines[k])
                     if "{" in lines[k]:
                         started = True
                     k += 1
@@ -100,14 +230,12 @@ def impl_self_is_engine(header: str) -> bool:
         while i < len(compact) and compact[i].isspace():
             i += 1
     rest = compact[i:]
-    return bool(
-        re.match(r"(?:super::|crate::engine::)?Engine(?:\s*<|\s*\{|\s*$)", rest)
-    )
+    return bool(_ENGINE_SELF.match(rest))
 
 
 def count_in_file(path: str, rel: str, listing: bool) -> list[str]:
-    raw = open(path, encoding="utf-8").read().splitlines(True)
-    lines = strip_cfg_test_modules(raw)
+    raw = open(path, encoding="utf-8").read()
+    lines = strip_cfg_test_modules(mask_rust_noise(raw).splitlines(True))
     found: list[str] = []
     i = 0
     while i < len(lines):
@@ -133,7 +261,7 @@ def count_in_file(path: str, rel: str, listing: bool) -> list[str]:
                     m = FN_PUB.match(lines[j])
                     if m:
                         found.append(f"{rel}:{j + 1} {m.group(2)}")
-                    depth += lines[j].count("{") - lines[j].count("}")
+                    depth += brace_delta(lines[j])
                     j += 1
                     if depth <= 0:
                         break
@@ -159,12 +287,19 @@ def self_test() -> None:
     methods count as Engine); treat `Engine<` as a substring match
     (`Wrapper<Engine<S>>` counts); count `pub(crate)` or `impl Trait for
     Engine`; stop stripping `#[cfg(test)] mod`; brace-scan past
-    `mod foo;` into production `pub use { ... }`; ignore `pub const fn`.
+    `mod foo;` into production `pub use { ... }`; ignore `pub const fn`;
+    count `{`/`}` in comments or `'{'` (impl body ends early / test-mod
+    skip eats production); refuse `crate::Engine`; skip any filename
+    containing the substring `test` (`attestation.rs`).
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
     assert impl_self_is_engine("impl<S, D> Engine<S, D> {")
     assert impl_self_is_engine("impl Engine {")
     assert impl_self_is_engine("impl<S: Into<Option<u8>>> Engine<S> {")
+    assert impl_self_is_engine("impl crate::Engine {")
+    assert impl_self_is_engine("impl crate::Engine<S> {")
+    assert impl_self_is_engine("impl crate::engine::Engine {")
+    assert impl_self_is_engine("impl super::Engine {")
     assert not impl_self_is_engine("impl Foo for Engine<S> {")
     assert not impl_self_is_engine(
         "impl StakeFacade<'_, S>\nwhere Engine<S, D>: Send\n{"
@@ -226,6 +361,10 @@ mod inline_crate {
         pub fn also_only_in_tests(&self) {}
     }
 }
+
+impl crate::Engine {
+    pub fn via_crate_reexport(&self) {}
+}
 """
     )
     assert set(names) == {
@@ -237,11 +376,66 @@ mod inline_crate {
         "nested_generics",
         "keep",
         "after_out_of_line_mod",
+        "via_crate_reexport",
     }, names
     assert "only_in_tests" not in names
     assert "also_only_in_tests" not in names
     assert "staking_read_view" not in names
     assert "hidden" not in names
+
+    # rustdoc `}` must not close the inherent impl (later pub fn would bypass).
+    names = method_names_in_source(
+        """
+impl Engine {
+    /// }
+    pub fn still_counted(&self) {}
+}
+"""
+    )
+    assert names == ["still_counted"], names
+
+    # Unmatched `{` in a cfg(test) comment must not swallow the next production impl.
+    names = method_names_in_source(
+        """
+#[cfg(test)]
+mod tests {
+    // {
+    impl Engine {
+        pub fn test_only(&self) {}
+    }
+}
+impl Engine {
+    pub fn production(&self) {}
+}
+"""
+    )
+    assert "test_only" not in names
+    assert "production" in names
+
+    # Char-literal `{` must not keep the impl scan running into the next type.
+    names = method_names_in_source(
+        """
+impl Engine {
+    pub fn before(&self) {}
+    const BRACE: char = '{';
+    pub fn after(&self) {}
+}
+impl StakeFacade {
+    pub fn not_engine(&self) {}
+}
+"""
+    )
+    assert names == ["before", "after"], names
+
+    assert is_test_source("merge_tests.rs")
+    assert is_test_source("test_support.rs")
+    assert is_test_source("test_fixtures.rs")
+    assert is_test_source("stake_engine/test_fixtures.rs")
+    assert is_test_source("regtest_e2e.rs")
+    assert not is_test_source("attestation.rs")
+    assert not is_test_source("contest.rs")
+    assert not is_test_source("stake_facade.rs")
+    assert not is_test_source("tx_weight_kat.rs")
 
 
 def main() -> None:
@@ -266,7 +460,7 @@ def main() -> None:
         for fname in sorted(files):
             if not fname.endswith(".rs"):
                 continue
-            if "test" in fname:
+            if is_test_source(fname):
                 continue
             path = os.path.join(dirpath, fname)
             rel = os.path.relpath(path, engine_dir)

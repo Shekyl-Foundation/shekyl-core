@@ -1,7 +1,7 @@
 # Engine composition: making it less of a monolith
 
+**Status:** LIVING CONTRACT. Last verified 2026-09-02 (StakeFacade product door + `METHODS_CEILING` count freeze). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status.
 | Field | Value |
 |-------|--------|
 | **Date** | 2026-07-19 (StakeFacade + inherent-API freeze: 2026-09-02) |
@@ -357,5 +357,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | Living design + partial enforcement (transfer extract + ownership pin + StakeFacade + `METHODS_CEILING`) |
+| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + `METHODS_CEILING`; last verified 2026-09-02) |
 | **Follow-up** | Optional: `TransferCtx` / `TransferFacade` / `ScanFacade` when product needs them; `StakeWorkflow` rename |

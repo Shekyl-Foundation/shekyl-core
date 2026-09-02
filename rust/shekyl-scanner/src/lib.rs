@@ -10,9 +10,12 @@
 //! This crate provides output scanning with Shekyl-native extensions:
 //! - FCMP++ as the sole transaction proof type
 //! - Hybrid PQC key derivation via KEM decapsulation (tag 0x06)
-//! - Staking output detection and balance tracking
 //! - PQC key rederivation and verification (tag 0x07)
 //! - FCMP++ curve-tree path precomputation
+//!
+//! Staking classification and accounting live in `shekyl-engine-core`
+//! (`StakeFacade` / sealed pscan), not in this crate. `TransferDetails` does
+//! not carry stake fields.
 //!
 //! Runtime-state types (`TransferDetails`, `LedgerBlock`, …) are owned by
 //! [`shekyl_engine_state`]; this crate re-exports them and adds scanner-only
