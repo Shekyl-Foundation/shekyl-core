@@ -328,12 +328,35 @@ bucket-only rule, redb faithfully reproducing that omission would score as a
 hold:**
 
 1. the rule is **ratified on record** (census bucket 1 or 2), **and**
-2. **no divergence between that ratified spec and the C++ implementation is on
-   record** for the row.
+2. the row carries an **affirmative conformance record** — someone checked that
+   the C++ implements the spec it was ratified against, and wrote the result
+   down.
 
-A row failing (2) goes on the register below: the digest is a **regression**
-instrument for it until the divergence is closed or the spec is re-ratified
-against actual behavior.
+**Condition 2 is deliberately affirmative, and this is a correction of the first
+attempt at it.** CSR-3a originally stated it negatively — *no recorded
+divergence* — which is **fail-open**: the register is explicitly not proven
+complete, so absence from it means **unreviewed**, not conformant, and an
+unexamined bucket-1/2 row would have collected correctness-oracle status by
+default. That is the same laundering hazard one level up: instead of a bucket
+standing in for conformance, an *unfinished search* would have. Under a
+countermand that ruled this implementation defective, the default must fail
+closed.
+
+**Three states, not two:**
+
+| State | Meaning | Digest is |
+| --- | --- | --- |
+| **CHECKED-CONFORMANT** | affirmative record that the C++ meets its ratified spec | a **correctness oracle** (with condition 1) |
+| **DIVERGENT** | on the register below | **regression only** |
+| **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
+
+**Today the CHECKED-CONFORMANT set is empty.** No row has an affirmative
+conformance record, so *no* row is currently a correctness oracle — the digest
+is a regression instrument across the board until **DRS-P0d** produces those
+records. That reads as a strong claim, and it is the honest consequence of the
+countermand: ruling an implementation defective and then treating it as a
+correctness oracle for everything nobody has looked at yet is the contradiction
+CSR-3a exists to remove. Populating the set is P0d's work, per row, on record.
 
 | Row | Divergence | Status |
 | --- | --- | --- |
@@ -466,7 +489,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
-| **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** no recorded spec-vs-implementation divergence; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete | §5.4, §5.4.1 |
+| **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** an **affirmative** conformance record; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete. **Corrected again the same day:** the condition was first written negatively (*no recorded divergence*), which is fail-open against an incomplete register — absence means unreviewed, not conformant. Three states now (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default regression-only, and the checked set is currently **empty** pending DRS-P0d | §5.4, §5.4.1 |
 
 ---
 
@@ -477,5 +500,5 @@ no cross-reference; the census's R8 batch and the daemon store's schema design
 are one decision, and the 2026-09-01 countermand retires the decompose-in-place
 posture, empties the D2 reopen bridges, and demotes the C++ from trusted oracle
 to a differential reference for rules that are **both** ratified on record **and**
-free of a recorded spec-vs-implementation divergence — a bucket is not a
-conformance claim (CSR-3a).**
+carrying an affirmative conformance record — a bucket is not a conformance
+claim, and an unfinished search is not one either (CSR-3a).**

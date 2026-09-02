@@ -12,9 +12,11 @@
   the two partition the same six C++ files on orthogonal cuts and had **zero**
   cross-references in either direction. Consensus-relevant effects: the C++ is
   demoted from *trusted* oracle to a differential reference for rules that are
-  **both** ratified on record **and** free of a recorded spec-vs-implementation
-  divergence (a **conformance-exception register**, seeded with CEN-L11, whose
-  ratified spec the implementation does not meet); **heed retired** as an
+  **both** ratified on record **and** carrying an **affirmative conformance
+  record** — absence of a recorded divergence means *unreviewed*, not conformant,
+  so the checked set is **empty** until DRS-P0d populates it (a
+  **conformance-exception register** holds the known divergences, seeded with
+  CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
   intermediate engine (DEL-007), **redb stands**. Design-round detail — the
   CSR-1…CSR-5 rulings, the 18-row store map, and the arithmetic corrections —
   stays in the owning document per

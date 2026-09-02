@@ -10,10 +10,12 @@ but not sufficient.** A bucket records that a rule is *specified and ratified*,
 never that the C++ *implements* the spec it was ratified against. CEN-L11 is the
 counterexample — bucket 1, ratified, and its implementation silently omits an
 accepted output from the curve tree. Oracle status therefore requires **both**
-ratification **and** no recorded spec-vs-implementation divergence; rows failing
-the second go on the **conformance-exception register** in
-[`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1,
-where the digest is regression evidence only). Bucket-4 rows record questions, never answers; the §10
+ratification **and** an **affirmative conformance record** for the row — a check
+that the C++ implements the spec it was ratified against. **Absence of a recorded
+divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
+regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
+§5.4.1 for the three states and the exception register; the checked-conformant
+set is currently empty pending DRS-P0d). Bucket-4 rows record questions, never answers; the §10
 queue is the design-round program that answers them.
 **Pinned sha:** `ab3cc98e6eb73db2b309730ccc9853ba4ea95e7d` (`dev` tip,
 2026-08-31 — the merge commit of PR #583). Inputs were read at

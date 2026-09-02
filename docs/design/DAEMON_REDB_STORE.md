@@ -34,9 +34,11 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
 > clause is propagated into A2 / D11 / E2 — the digest is an oracle only where a
-> rule is **both** ratified **and** free of a recorded spec-vs-implementation
-> divergence; bucket-3/4 rows and the **conformance-exception register**
-> (**CSR-3a**, seeded with CEN-L11) get a *regression* instrument) and
+> rule is **both** ratified **and** carries an **affirmative conformance record**
+> — absence of a recorded divergence means *unreviewed*, not conformant, and the
+> checked set is currently **empty** pending DRS-P0d, so the digest is a
+> *regression* instrument across the board today (**CSR-3a**; register seeded
+> with CEN-L11)) and
 > **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
 > **CSR-2** are ruled and recorded in the reconciliation; **CSR-5** is ruled in
 > direction only, with no queue slot fixed.
@@ -105,7 +107,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | # | Shekyl is better when … | Mission | Lands by |
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
-| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND not on the conformance-exception register** (CSR-3 / CSR-3a). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over any register row or bucket-3/4 row the digest is regression evidence, and must be reported as that | Security | DRS-P0 → C |
+| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over any register row or bucket-3/4 row the digest is regression evidence, and must be reported as that | Security | DRS-P0 → C |
 | **A3** | Known durable-state **warts** are call-graph-traced; default **FIX-IN-CPP-FIRST** (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
@@ -145,7 +147,7 @@ engine swap without A1–A3.
 | **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with FIX-IN-CPP-FIRST default. | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
-| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — the rule is ratified on record **and** no spec-vs-implementation divergence is recorded for it. Bucket-3/4 rows, and bucket-1/2 rows on the **conformance-exception register** (seeded with CEN-L11), get a **regression** instrument, not a correctness one. |
+| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set is **empty today** — DRS-P0d populates it per row. |
 
 ### 1.1 Schedule honesty
 
@@ -421,7 +423,7 @@ replay (E-6).
 | Phase | Digest role |
 | --- | --- |
 | **DRS-P0 / DRS-C** | Build digest **against LMDB**. Oracle for decomposition: byte-identical before/after each extraction. Discovers “canonical logical state” definition DRS-D8 re-encodes. |
-| **DRS-E2** | Same harness already exercised; redb must match LMDB digests **for ratified, conformance-clean rules** (CSR-3 / CSR-3a). First use is **not** validating an unexercised harness against a new engine. A match on a bucket-3/4 row — or on a conformance-exception row such as CEN-L11 — records behavioral parity with an implementation ruled defective, never correctness. **E2 must consult the register before asserting any parity claim as correctness.** |
+| **DRS-E2** | Same harness already exercised; redb must match LMDB digests; a match is **correctness** evidence only for rows that are ratified **and** carry an affirmative conformance record (CSR-3 / CSR-3a) — which is **no row today**. First use is **not** validating an unexercised harness against a new engine. A match on a bucket-3/4 row — or on a conformance-exception row such as CEN-L11 — records behavioral parity with an implementation ruled defective, never correctness. **E2 must consult the register before asserting any parity claim as correctness.** |
 
 No existing `state_hash` / `db_digest` in tree — greenfield; **when** is the
 variable, not **whether**.
@@ -503,7 +505,7 @@ flowchart TD
   C[DRS-C decompose blockchain.cpp LMDB + digest oracle]
   D0[DRS-0 redb schema accumulators reconstructible state privacy durability]
   E1[DRS-E1 shekyl-chain-store]
-  E2[DRS-E2 redb matches LMDB digests ratified and conformance-clean]
+  E2[DRS-E2 redb matches LMDB digests correctness only if conformance-checked]
   E3[DRS-E3 curve storage only]
   E4[DRS-E4 archival cursor surface delete gather shell]
   E5[DRS-E5 pool alt prune]
@@ -810,7 +812,8 @@ the trigger (#507) and was missed there.
 | **2026-09-01** | **Sequencing (Rick):** testnet is gated on this work + consensus + the wallet (~90%); genesis is downstream of testnet. **D2-R1's 2027-04-01 trigger therefore measures against a milestone that cannot arrive early.** **Re-anchored the same day (CSR-2, ratified):** the trigger moves off the calendar to the **testnet-gate event** — R8 dispatched + consensus rewrite complete + wallet complete — because a new fixed date would carry the old one's failure mode. PC-1 re-pointed the trigger; this re-prices and then replaces the bridge it points at |
 | **2026-09-01** | **heed retired** (DEL-007) — no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero. **D6 unchanged: redb stands.** **D4 substantially discharged** (bandwidth constraint, wallet ~90%) |
 | **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same six files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
-| **2026-09-02** | **CSR-3 corrected on review (CSR-3a).** The oracle scope propagated on 2026-09-01 was **ratification-only**, and CEN-L11 disproves it: bucket 1, ratified spec (`CURVE_TREE_CLIENT.md`, `FCMP_PLUS_PLUS.md`), implementation silently omits an accepted output from the curve tree (`blockchain_db.cpp:570–576`, no verify-time twin). A bucket says a rule is *ratified*, never that the C++ *implements* it. **A2 / D11 / E2 and the §7 flowchart label now require both ratification and no recorded spec-vs-implementation divergence**; rows failing the second go on the conformance-exception register ([`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1, seeded with CEN-L11, **not proven complete**). **E2 must consult the register before asserting any parity claim as correctness.** The census header was extended in the same change so the specification input does not retain the unsafe rule |
+| **2026-09-02** | **CSR-3 corrected on review (CSR-3a).** The oracle scope propagated on 2026-09-01 was **ratification-only**, and CEN-L11 disproves it: bucket 1, ratified spec (`CURVE_TREE_CLIENT.md`, `FCMP_PLUS_PLUS.md`), implementation silently omits an accepted output from the curve tree (`blockchain_db.cpp:570–576`, no verify-time twin). A bucket says a rule is *ratified*, never that the C++ *implements* it. **A2 / D11 / E2 and the §7 flowchart label now require both ratification and no recorded spec-vs-implementation divergence** — **that second condition was inverted to an affirmative one later the same day; see the next row. This entry records the first formulation and is deliberately not rewritten.** Rows failing it go on the conformance-exception register ([`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1, seeded with CEN-L11, **not proven complete**). **E2 must consult the register before asserting any parity claim as correctness.** The census header was extended in the same change so the specification input does not retain the unsafe rule |
+| **2026-09-02** | **CSR-3a condition inverted to fail closed (same-day correction).** The conformance condition was first written negatively — *not on the exception register* — which is unsafe while that register is explicitly incomplete: absence means **unreviewed**, not conformant, so an unexamined bucket-1/2 row would have taken correctness-oracle status by default. Now **affirmative**: three states (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default **regression-only**, and the checked-conformant set is **empty today** — DRS-P0d populates it per row, on record. A2 / D11 / E2 and the §7 label updated; census header likewise |
 
 ---
 
