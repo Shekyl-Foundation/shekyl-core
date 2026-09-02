@@ -71,8 +71,6 @@ further changes to the interface.
   - [ ] Update README.md with new fork table entry (or recommended Shekyl version)
   - [ ] Update contrib/gitian/README.md so that the instructions reflect the current version
   - [ ] Update src/checkpoints/checkpoints.cpp with a recent hardcoded checkpoint
-  - [ ] Update src/blocks/checkpoints.dat with ./shekyl-blockchain-export (or equivalent) --output-file checkpoints.dat --block-stop <recent block height> --blocksdat
-  - [ ] Update expected_block_hashes_hash in src/cryptonote_core/blockchain.cpp with checkpoints.dat sha256 hash
 - [ ] Testnet forked
 - [ ] Testnet testing/verification
   - [ ] Run deterministic tuple check across seed nodes:

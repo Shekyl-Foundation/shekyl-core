@@ -298,7 +298,7 @@ TEST(tx_data_pruning, confirmed_prune_runs_both_phases)
     std::make_pair((uint8_t)0, (uint64_t)0),
   };
   const cryptonote::test_options opts = { hard_forks, 0 };
-  ASSERT_TRUE(bap.bc.init(db, cryptonote::FAKECHAIN, true, &opts, 0, NULL));
+  ASSERT_TRUE(bap.bc.init(db, cryptonote::FAKECHAIN, true, &opts, 0));
   ASSERT_TRUE(bap.bc.prune_blockchain());
   EXPECT_EQ(1u, db->stripe_calls);
   EXPECT_EQ(1u, db->tx_data_calls);

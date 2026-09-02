@@ -97,12 +97,9 @@ public:
   uint8_t get_hard_fork_version(uint64_t height) const { return 0; }
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
-  uint64_t prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights) { return 0; }
   bool pad_transactions() { return false; }
   uint32_t get_blockchain_pruning_seed() const { return 0; }
   bool prune_blockchain(uint32_t pruning_seed = 0) { return true; }
-  bool is_within_compiled_block_hash_area(uint64_t height) const { return false; }
-  bool has_block_weights(uint64_t height, uint64_t nblocks) const { return false; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -838,7 +835,7 @@ TEST(cryptonote_protocol_handler, race_condition)
 
   {
     daemon.main.core = core_ptr(new core_t(nullptr));
-    daemon.main.core->init(daemon.main.options, nullptr, nullptr);
+    daemon.main.core->init(daemon.main.options, nullptr);
     daemon.main.net_node.core_protocol = daemon.main.core_protocol = core_protocol_ptr(new core_protocol_t(
       *daemon.main.core, &daemon.main.net_node, {}
     ));
@@ -911,7 +908,7 @@ TEST(cryptonote_protocol_handler, race_condition)
 
   {
     daemon.main.core = core_ptr(new core_t(nullptr));
-    daemon.main.core->init(daemon.main.options, nullptr, nullptr);
+    daemon.main.core->init(daemon.main.options, nullptr);
     daemon.main.net_node.core_protocol = daemon.main.core_protocol = core_protocol_ptr(new core_protocol_t(
       *daemon.main.core, &daemon.main.net_node, {}
     ));
@@ -921,7 +918,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     daemon.main.net_node.shared_state = daemon.main.shared_state = std::make_shared<shared_state_t>();
     daemon.main.shared_state->set_handler(&daemon.main.net_node);
     daemon.alt.core = core_ptr(new core_t(nullptr));
-    daemon.alt.core->init(daemon.alt.options, nullptr, nullptr);
+    daemon.alt.core->init(daemon.alt.options, nullptr);
     daemon.alt.net_node.core_protocol = daemon.alt.core_protocol = core_protocol_ptr(new core_protocol_t(
       *daemon.alt.core, &daemon.alt.net_node, {}
     ));

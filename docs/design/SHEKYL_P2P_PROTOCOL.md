@@ -73,10 +73,12 @@ pass a review that reads only the constant:
   reasoning. *"At most one" is the honest form and this line said "one" through
   two rounds: the overstatement the check exists to catch reappeared in the
   check's own statement of it.*
-- **`PER_BLOCK_CHECKPOINT`** is default-on (`CMakeLists.txt:470`,
-  `set(PER_BLOCK_CHECKPOINT 1)`), but every consumer guards on
+- **`PER_BLOCK_CHECKPOINT`** was default-on (`set(PER_BLOCK_CHECKPOINT 1)`
+  at its pin), but every consumer guarded on
   `blockchain_height < m_blocks_hash_check.size()` — with an empty hash corpus
-  the fast check never fires, so the defence is compiled in and inert.
+  the fast check never fired, so the defence was compiled in and inert.
+  *(The check's verdict was terminal: C2-R1a deleted the whole mechanism
+  2026-09-02 — an inert inherited defence is not kept, it is ruled on.)*
 
 The census's **`inherited-defensive`** evidence class was minted for exactly
 this row type: *a defence the tree carries by lineage with no Shekyl record
