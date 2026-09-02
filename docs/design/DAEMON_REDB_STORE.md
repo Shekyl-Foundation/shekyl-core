@@ -1,6 +1,9 @@
 # Daemon chain store — redb at genesis (Path B)
 
-**Status:** Design **open for execution of DRS-P0 / DRS-BENCH / DRS-C** after
+**Status:** Design **open for execution of DRS-P0 / DRS-BENCH**, and of **DRS-C
+as analysis only** (CSR-4, 2026-09-01 — DRS-C does **not** ship as C++ refactor
+PRs; the surface partition is the scoping/review unit for the Rust rewrite).
+After
 Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), a
 **gap-close pass** (success criteria, surface map, concurrency, P0 multi-PR,
 D2-reopen as first-class good, D10 mandatory reconstructible, IBD floor
@@ -112,7 +115,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over any register row or bucket-3/4 row the digest is regression evidence, and must be reported as that | Security | DRS-P0 → C |
-| **A3** | Known durable-state **warts** are call-graph-traced; default **FIX-IN-CPP-FIRST** (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
+| **A3** | Known durable-state **warts** are call-graph-traced; default **RECORD-AND-SPECIFY** (countermand 2026-09-01; FIX-IN-CPP only where the defect blocks the C++ from serving as an interim oracle for a *ratified, conformance-checked* row) (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
 | **A6** | **IBD wall time** meets the §1.3 floor (full-node viability → density → remote-node privacy) | Privacy | DRS-BENCH / DRS-0 |
@@ -148,7 +151,7 @@ engine swap without A1–A3.
 | **DRS-D5** | **Decompose first (C++ / LMDB), engine swap second.** | One variable at a time (R-4). **Rationale retired 2026-09-01** by the countermand; the mechanism survives as analysis only (CSR-4) — the decomposition is a scoping cut for the rewrite, not a sequence of shipped C++ PRs. |
 | **DRS-D6** | **Engine preference = redb, not heed** until **DRS-BENCH** says otherwise. | Pure Rust preference. Genesis-load-bearing only after **§7.4 resource/privacy measures** + IBD floor — **not** raw ops/sec vs LMDB. |
 | **DRS-D7** | LMDB logical oracle / dual-backend **shadow** only during engine-swap. | One authoritative writer per env. |
-| **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with FIX-IN-CPP-FIRST default. | §6.4. |
+| **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with **RECORD-AND-SPECIFY** default (inverted 2026-09-01 by the countermand; was FIX-IN-CPP-FIRST). | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
 | **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set is **empty today** — DRS-P0d populates it per row. |
@@ -169,7 +172,7 @@ calendar backstop for the case where C never starts that clock.
 
 | ID | Trigger | Bridge (**concrete**) |
 | --- | --- | --- |
-| **D2-R1** | **DRS-C** not closed by **2027-04-01** — *re-pointed 2026-08-21 (PC-1)*: the original trigger, “wallet rewrite Phase 5 not closed by 2027-04-01”, can no longer fire (Phase 5 closed 2026-08-19, #507) | **Ship genesis-on-LMDB** with Tier A as far as landed (minimum A1–A2–A8; A9 as C progressed). DRS-E\* post-genesis. |
+| **D2-R1** | **RE-ANCHORED 2026-09-02 (CSR-2): the trigger is the **testnet-gate event**, not a date** — its three legs are R8 dispatched, consensus rewrite complete, wallet complete. *History: PC-1 (2026-08-21) re-pointed the original wallet-Phase-5 trigger at “DRS-C not closed by 2027-04-01”; that date measured against a milestone that cannot arrive early, since testnet gates on this work and genesis is downstream of testnet.* | **The genesis-on-LMDB bridge is RETIRED** (countermand, 2026-09-01 — it ships the C++ ruled unshippable). A reopen now means **testnet slips**, recorded as a schedule outcome; Tier A remains required either way. |
 | **D2-R2** | **DRS-C closed**, but **DRS-E2** not green within **6 months** of C close | Same: genesis-on-LMDB + Tier A; E\* post-genesis |
 | **D2-R3** | **DRS-BENCH** fails §1.3 IBD floor (or resource DoS bounds) after one mitigation cycle | Reopen D6 / stay LMDB; Tier A still required |
 
@@ -427,7 +430,7 @@ replay (E-6).
 | Phase | Digest role |
 | --- | --- |
 | **DRS-P0 / DRS-C** | Build digest **against LMDB**. Oracle for decomposition: byte-identical before/after each extraction. Discovers “canonical logical state” definition DRS-D8 re-encodes. |
-| **DRS-E2** | Same harness already exercised; redb must match LMDB digests; a match is **correctness** evidence only for rows that are ratified **and** carry an affirmative conformance record (CSR-3 / CSR-3a) — which is **no row today**. First use is **not** validating an unexercised harness against a new engine. A match on a bucket-3/4 row — or on a conformance-exception row such as CEN-L11 — records behavioral parity with an implementation ruled defective, never correctness. **E2 must consult the register before asserting any parity claim as correctness.** |
+| **DRS-E2** | Same harness already exercised. **The acceptance condition is per conformance state (CSR-3a), not blanket digest identity** — changing only the *label* on a match would have left the unsafe gate in place, since blanket identity requires redb to reproduce CEN-L11's silent omission in order to pass. **CHECKED-CONFORMANT:** digest identity **required**, and a match *is* correctness evidence. **DIVERGENT:** identity is **not** the pass condition — the row needs an explicitly reviewed expected-divergence (or a replacement KAT/oracle asserting the corrected behavior); reproducing the defect **fails**. **UNREVIEWED (the default):** identity may be *observed* as regression signal but grants **no** correctness acceptance, and no row may be promoted out of this state without a **DRS-P0f** record. Today every row is UNREVIEWED, so E2 currently gates on regression only. |
 
 No existing `state_hash` / `db_digest` in tree — greenfield; **when** is the
 variable, not **whether**.
@@ -467,7 +470,7 @@ named exclusion. **No silent sampling.**
 
 | Class | Meaning | Artifacts |
 | --- | --- | --- |
-| **FIX-IN-CPP-FIRST** (**default**) | Fix under LMDB in P0/C; existing suite (+ digest) validates; **no** divergence when digests compare engines | Fix commit; register row **Closed** before harness depends on it |
+| **RECORD-AND-SPECIFY** (**default since 2026-09-01**) | Characterise the wart precisely enough that the Rust implementation gets it right; do **not** patch C++ scheduled for deletion (rules 20 + 15). Register row carries the specification, not a fix commit | Fix commit; register row **Closed** before harness depends on it |
 | **REPLICATE** | Must match C++ including wart (only if FIX impossible without unacceptable pre-cutover churn) | Digest includes warted semantics; KAT |
 | **DIVERGE-INTENTIONALLY** | Intentional semantic change at engine swap | Named digest exclusion + **replacement KAT**; weakens total coverage — **reserve** |
 
@@ -564,11 +567,12 @@ flowchart TD
 | --- | --- | --- | --- |
 | **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms); **DRS-CI** bidirectional gates | Mental model |
 | **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency | Apply/pop design; E2 pop_block |
-| **P0c** | Wart register + **cheap FIX-IN-CPP** | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
+| **P0c** | Wart register — **RECORD-AND-SPECIFY** (inverted 2026-09-01; was “cheap FIX-IN-CPP”) | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
 | **P0d** | Digest v0 | Core chain + spent keys + curve root **minimum**; **must expand archival journals before S-ARCH / DRS-E archival port** (A-1 composes with blind min oracle — see §7.1.1) | C oracle; logical-state definition |
 | **P0e** | Digest totality | Full table inventory / named exclusions | E2 |
+| **P0f** | **Conformance register** (new, 2026-09-02, CSR-3a) | Per-row: does the C++ **implement** the spec its census row was ratified against? Record the verdict **and its evidence** — CHECKED-CONFORMANT or DIVERGENT — into the register in [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1. Rows never reviewed stay **UNREVIEWED** by construction. **This is the only artifact that can promote a row to correctness-oracle status**; without it E2's CHECKED-CONFORMANT arm is permanently empty | **E2 correctness acceptance** |
 
-**“DRS-0 blocked on P0”** = **P0a–P0d** (P0e may trail with named exclusions).
+**“DRS-0 blocked on P0”** = **P0a–P0d** (P0e may trail with named exclusions; **P0f** gates E2's *correctness* arm, not DRS-0).
 
 #### 7.1.1 Digest coverage gate (A-1 composition)
 
@@ -636,7 +640,7 @@ IBD floor from DRS-0).
 - [ ] **§0.1 A1–A10** all green
 - [ ] DRS-P0a–P0d complete (multi-PR envelope §7.1)
 - [ ] DRS-C progressed with digest-stable extractions; surface map §3.5 updated
-- [ ] Divergence register: no open FIX-IN-CPP-FIRST; no unaudited DIVERGE
+- [ ] Divergence register: every row RECORD-AND-SPECIFY-complete (or an explicitly justified FIX-IN-CPP); no unaudited DIVERGE
 - [ ] DRS-BENCH suite green vs §1.3 floors; durability config on artifact
 - [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory)
 - [ ] Writer/reader concurrency rules (§3.6) implemented and tested
@@ -846,7 +850,7 @@ Verified against `blockchain_db.cpp` / `db_lmdb.cpp` / headers. These are
 ### 17.2 Net effect on P0 (sharper than original)
 
 - **P0b cheaper:** mostly **transcription** of height bases, partial order, txn assertions already in `pop_block` / LMDB.
-- **P0c three cheap FIX-IN-CPP rows:** pure-virtual (done), drain `TreePosition`, range-scan probes.
+- **P0c three wart rows** (RECORD-AND-SPECIFY since the countermand; the first was already fixed before it): pure-virtual (done), drain `TreePosition`, range-scan probes.
 - **A-1 first regardless of DRS:** first P0c PR when coding opens — branch off `dev`, PR, merge.
 
 ---

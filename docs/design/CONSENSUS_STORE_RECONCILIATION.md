@@ -88,7 +88,8 @@ posture, and predates the countermand:
 > outset**.
 
 DRS-C's surface partition is a cut through that interleaving. It is still a
-useful *analytical* cut (§5.4); it was never a seam along which the C++ could
+useful *analytical* cut (§5.1, where CSR-4 rules it analysis-only); it was
+never a seam along which the C++ could
 be safely half-replaced.
 
 ---
@@ -307,7 +308,7 @@ breath as ruling it defective. The digest **survives with changed status**:
 | For **bucket-1/2** rules (**103** live; 101 at C1 close) **that the C++ is known to implement conformantly** | oracle | **oracle — unchanged.** Shekyl-spec'd or ratified-inherited, and the census closes them |
 | For **bucket-1/2** rules on the **conformance-exception register** (§5.4.1) | oracle | **not an oracle.** The spec is ratified; *this implementation* is known not to meet it |
 | For **bucket-3/4** rules (**68** live; 70 at C1 close) | oracle | **not an oracle.** A digest match proves the rewrite reproduced *behavior*, defects included |
-| As a **regression** instrument | — | **strengthened.** Over DRS-TLB-generated corpora it detects unintended change during extraction, which is all §6.2 ever needed |
+| As a **regression** instrument | — | **strengthened.** Over DRS-TLB-generated corpora it detects unintended change during extraction, which is all [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §6.2 ("Totality at linear cost") ever needed |
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
 
@@ -358,9 +359,23 @@ countermand: ruling an implementation defective and then treating it as a
 correctness oracle for everything nobody has looked at yet is the contradiction
 CSR-3a exists to remove. Populating the set is P0d's work, per row, on record.
 
-| Row | Divergence | Status |
-| --- | --- | --- |
-| **CEN-L11** | Leaf-**construct** verdict unchecked; a false return at `blockchain_db.cpp:570–576` (and the `continue` arms :562–565) silently omits an accepted output from the tree — a deterministic, permanently unspendable output. Live FOLLOWUPS row | **REGRESSION-ONLY.** A digest match records reproduction of the omission, never conformance |
+**The register lists REVIEWED rows only, in either outcome.** Absence from it is
+not an entry and not a claim — it *is* the UNREVIEWED state, which keeps the
+table finite (it never has to enumerate 171 rows) while keeping the default
+closed.
+
+| Row | Conformance state | Evidence | Digest acceptance |
+| --- | --- | --- | --- |
+| **CEN-L11** | **DIVERGENT** | Leaf-**construct** verdict unchecked: a false return at `blockchain_db.cpp:570–576` (and the `continue` arms :562–565) silently omits an accepted output from the tree — deterministic, permanently unspendable, no verify-time twin. Live FOLLOWUPS row | Identity is **not** the pass condition. Needs a reviewed expected-divergence or a replacement KAT asserting the corrected behavior; **reproducing the omission fails** |
+| *(no CHECKED-CONFORMANT rows yet)* | — | — | **DRS-P0f** produces these; until it runs, E2's correctness arm is empty |
+
+**Who produces the affirmative records: `DRS-P0f`** (minted 2026-09-02 in the
+DRS P0 envelope). This closes a gap this document opened: CSR-3a required E2 to
+consult a CHECKED-CONFORMANT set while **no scheduled artifact produced one** —
+P0d's deliverable is Digest v0, and §5.5 said P0d/P0e survive unchanged. An
+obligation with no producer is a dangling requirement, which under rules 15/16
+is exactly the tech debt this program is supposed to avoid. P0f is that
+producer, and it is the **only** way a row leaves UNREVIEWED.
 
 **Examined and excluded:** **CEN-L12** — its notes record that the spec's
 `staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
@@ -387,7 +402,8 @@ fidelity to a defect, and must say so.
 ### 5.5 DRS-P0 — survives, rationale inverted
 
 P0a (inventory + CI), P0b (atomicity/journals), P0d/P0e (digest) survive
-unchanged: they are evidence-gathering, and the rewrite needs that evidence
+unchanged, and **P0f is added** (§5.4.1 — the per-row conformance register,
+without which E2's correctness arm has no producer): they are evidence-gathering, and the rewrite needs that evidence
 more than a patch-in-place programme did.
 
 **P0c inverts.** Its default is FIX-IN-CPP-FIRST; under the countermand the
@@ -490,6 +506,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
 | **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** an **affirmative** conformance record; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete. **Corrected again the same day:** the condition was first written negatively (*no recorded divergence*), which is fail-open against an incomplete register — absence means unreviewed, not conformant. Three states now (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default regression-only, and the checked set is currently **empty** pending DRS-P0d | §5.4, §5.4.1 |
+| **2026-09-02** | **The countermand was recorded but not applied to DRS's live instructions**, and CSR-3a's obligation had no producer. Both fixed: DRS's status line, D2-R1's trigger/bridge, the §6.4 divergence-class default, A3, D8, P0c, the genesis checklist and §17.2 now carry the ruled state (dated history preserved); **DRS-P0f minted** as the per-row conformance register that populates CHECKED-CONFORMANT; and **DRS-E2's acceptance condition is now per-state** — blanket digest identity would have required redb to reproduce CEN-L11's defect to pass | §5.4.1, §5.5 |
 
 ---
 
