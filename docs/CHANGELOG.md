@@ -4,6 +4,21 @@
 
 ### Added
 
+- **DRS-P0f slice 1 — the conformance register's first verdicts.** The register
+  that gates DRS-E2's correctness arm is no longer empty. Reviewed at
+  `6bc2de8f2`: **CEN-H5 CHECKED-CONFORMANT** (the vin whitelist — three
+  enforcement sites agreeing with the ratified spec and with each other, relay
+  coverage via `check_tx_semantic` and connect coverage via the double-spend
+  visitor plus the unconditional DB backstop); **CEN-L12 DIVERGENT**, coupled to
+  CEN-L11 — its maturity arithmetic conforms exactly (60/10, `unlock_time`
+  absent, staked arm retired) but the spec's *universality* clause fails while
+  L11's unchecked construct verdict can silently drop an accepted output, so
+  **L12 cannot be promoted while L11 stands**. Consensus-relevant because
+  correctness-oracle status now attaches per row: a digest match on CEN-H5 is
+  correctness evidence; everywhere else it remains regression evidence only.
+  Detail in [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  §5.4.1.
+
 - **Daemon C++ is not a base — a complete rewrite gates release (countermand,
   2026-09-01).** Recorded with its blast radius across `DRS-*` and its
   row-level census map in
@@ -14,7 +29,7 @@
   demoted from *trusted* oracle to a differential reference for rules that are
   **both** ratified on record **and** carrying an **affirmative conformance
   record** — absence of a recorded divergence means *unreviewed*, not conformant,
-  so the checked set is **empty** until **DRS-P0f** (the per-row conformance review, minted here) populates it (a
+  so the checked set was empty until **DRS-P0f** (the per-row conformance review, minted here) began populating it (a
   **conformance-exception register** holds the known divergences, seeded with
   CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
   intermediate engine (DEL-007), **redb stands**. Design-round detail — the
