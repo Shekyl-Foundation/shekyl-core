@@ -87,8 +87,9 @@ pub(crate) async fn staking_info(
 /// Compute the authoritative view from an already-held engine read guard.
 ///
 /// The staking RPC methods' single call site of
-/// [`Engine::staking_read_view`](shekyl_engine_core::Engine::staking_read_view),
-/// so the off-the-worker discipline and the error mapping below have one home
+/// [`StakeFacade::staking_read_view`](shekyl_engine_core::StakeFacade::staking_read_view)
+/// (product door; the Engine inherent still owns the body). The
+/// off-the-worker discipline and the error mapping below have one home
 /// rather than a copy per caller.
 ///
 /// **Do not call this while a [`shekyl_engine_core::LedgerReadGuard`] is

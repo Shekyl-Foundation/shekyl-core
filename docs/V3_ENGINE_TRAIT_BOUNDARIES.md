@@ -5408,7 +5408,7 @@ Round 4a closure (the ground truth)
     ├──► §10.3 V3.1 / V3.2 expansion axis  (governed by §2 trait surfaces, §2 preamble visibility)
     │      §10.3.1 Multisig support (V3.1)
     │         └──► §10.3.2 Multi-engine server (V3.1+)
-    │                 └──► §10.3.3 JSON-RPC server cutover (V3.2; promotes pub(crate)→pub)
+    │                 └──► §10.3.3 JSON-RPC server cutover (landed; traits stay pub(crate))
     │
     ├──► §10.4 V3.x enhancement axis  (governed by §2.7, §2.8, §3.4, §7)
     │      §10.4.1 Adaptive-burn observation feeding (design hook on §10.1.2)
@@ -5720,10 +5720,11 @@ strategy (restart costs).
 
 Three entries in version-sequential order. V3.1's multisig
 adds structural complexity to two traits; V3.1+ multi-engine
-server changes the assumed engine-per-process model; V3.2's
-JSON-RPC cutover promotes the trait visibility per §2
-preamble. Sequential dependencies: each entry depends on the
-prior settling.
+server changes the assumed engine-per-process model; the
+JSON-RPC cutover **landed** without promoting traits to `pub`
+(§2 preamble; reopen only on the criterion there). Sequential
+dependencies: remaining entries still depend on the prior
+settling.
 
 #### 10.3.1 Multisig support (target: pre-genesis; protocol name V3.1)
 

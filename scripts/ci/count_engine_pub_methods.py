@@ -7,7 +7,8 @@
 # Count `pub` (not pub(crate)) inherent methods on Engine. Used by
 # check_engine_decomposition.sh METHODS_CEILING. Prints one integer.
 # Optional ENGINE_DIR as argv[1]; --list prints path:line name;
-# --self-test runs the where-clause / façade negative controls.
+# --self-test runs the where-clause / façade / cfg(test)-mod negative
+# controls.
 
 from __future__ import annotations
 
@@ -16,9 +17,33 @@ import re
 import sys
 import tempfile
 
-FN_PUB = re.compile(r"^(\s+)pub\s+(?:async\s+)?fn\s+(\w+)\s*[\(<]")
+# `pub` + any sequence of fn qualifiers, then `fn`. `pub(crate)` /
+# `pub(super)` do not match: they have `(` immediately after `pub`.
+FN_PUB = re.compile(
+    r"^(\s+)pub\s+(?:(?:const|async|unsafe|extern\s+\"[^\"]+\")\s+)*"
+    r"fn\s+(\w+)\s*[\(<]"
+)
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]")
-MOD = re.compile(r"^\s*(?:pub\s+)?mod\s+\w+")
+# `mod foo`, `pub mod foo`, `pub(crate) mod foo`, `pub(in crate::engine) mod foo`.
+MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+")
+
+
+def skip_balanced(s: str, start: int, open_ch: str, close_ch: str) -> int | None:
+    """Index just after the matching closer, or None if unbalanced."""
+    if start >= len(s) or s[start] != open_ch:
+        return start
+    depth = 0
+    i = start
+    while i < len(s):
+        c = s[i]
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
 
 
 def strip_cfg_test_modules(lines: list[str]) -> list[str]:
@@ -31,6 +56,12 @@ def strip_cfg_test_modules(lines: list[str]) -> list[str]:
             while j < n and (lines[j].strip() == "" or lines[j].lstrip().startswith("#[")):
                 j += 1
             if j < n and MOD.match(lines[j]):
+                code = lines[j].split("//", 1)[0]
+                if "{" not in code:
+                    # Out-of-line: `mod foo;` — skip the decl, not the next
+                    # production `pub use { ... }` (or anything else with braces).
+                    i = j + 1
+                    continue
                 depth = 0
                 started = False
                 k = j
@@ -55,13 +86,22 @@ def impl_self_is_engine(header: str) -> bool:
     compact = re.split(r"\bwhere\b", compact, maxsplit=1)[0]
     if re.search(r"\bfor\s+Engine\b", compact):
         return False
-    # Self type only — not `Engine<` as a generic argument of some other type
-    # (`impl Wrapper<Engine<S>>`).
+    m = re.search(r"\bimpl\b", compact)
+    if not m:
+        return False
+    i = m.end()
+    while i < len(compact) and compact[i].isspace():
+        i += 1
+    if i < len(compact) and compact[i] == "<":
+        nxt = skip_balanced(compact, i, "<", ">")
+        if nxt is None:
+            return False
+        i = nxt
+        while i < len(compact) and compact[i].isspace():
+            i += 1
+    rest = compact[i:]
     return bool(
-        re.search(
-            r"\bimpl(?:<[^>]*>)?\s+(?:super::|crate::engine::)?Engine(?:\s*<|\s*\{|\s*$)",
-            compact,
-        )
+        re.match(r"(?:super::|crate::engine::)?Engine(?:\s*<|\s*\{|\s*$)", rest)
     )
 
 
@@ -100,8 +140,6 @@ def count_in_file(path: str, rel: str, listing: bool) -> list[str]:
                 i = j
                 continue
         i += 1
-    if listing:
-        return found
     return found
 
 
@@ -120,11 +158,13 @@ def self_test() -> None:
     Named edits that make this red: drop the `where`-strip (StakeFacade
     methods count as Engine); treat `Engine<` as a substring match
     (`Wrapper<Engine<S>>` counts); count `pub(crate)` or `impl Trait for
-    Engine`; stop stripping `#[cfg(test)] mod`.
+    Engine`; stop stripping `#[cfg(test)] mod`; brace-scan past
+    `mod foo;` into production `pub use { ... }`; ignore `pub const fn`.
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
     assert impl_self_is_engine("impl<S, D> Engine<S, D> {")
     assert impl_self_is_engine("impl Engine {")
+    assert impl_self_is_engine("impl<S: Into<Option<u8>>> Engine<S> {")
     assert not impl_self_is_engine("impl Foo for Engine<S> {")
     assert not impl_self_is_engine(
         "impl StakeFacade<'_, S>\nwhere Engine<S, D>: Send\n{"
@@ -136,7 +176,14 @@ def self_test() -> None:
 impl<S, D> Engine<S, D> {
     pub fn stake(&self) {}
     pub async fn stake_in(&self) {}
+    pub const fn capacity(&self) {}
+    pub unsafe fn poke(&self) {}
+    pub extern "C" fn abi(&self) {}
     pub(crate) fn hidden(&self) {}
+}
+
+impl<S: Into<Option<u8>>> Engine<S> {
+    pub fn nested_generics(&self) {}
 }
 
 impl<'a, S> StakeFacade<'a, S>
@@ -161,9 +208,40 @@ mod tests {
         pub fn only_in_tests(&self) {}
     }
 }
+
+#[cfg(test)]
+pub(crate) mod synthetic_tree;
+
+pub use leftover::{
+    ProductionItem,
+};
+
+impl Engine {
+    pub fn after_out_of_line_mod(&self) {}
+}
+
+#[cfg(test)]
+mod inline_crate {
+    impl Engine {
+        pub fn also_only_in_tests(&self) {}
+    }
+}
 """
     )
-    assert set(names) == {"keep", "stake", "stake_in"}, names
+    assert set(names) == {
+        "stake",
+        "stake_in",
+        "capacity",
+        "poke",
+        "abi",
+        "nested_generics",
+        "keep",
+        "after_out_of_line_mod",
+    }, names
+    assert "only_in_tests" not in names
+    assert "also_only_in_tests" not in names
+    assert "staking_read_view" not in names
+    assert "hidden" not in names
 
 
 def main() -> None:
