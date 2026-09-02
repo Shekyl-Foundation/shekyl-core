@@ -156,7 +156,7 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   // fixed_difficulty=1 keeps init off the real difficulty algorithm, which
   // would read block data this DB does not fabricate.
-  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1, nullptr);
+  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
 }
 
 crypto::hash make_txid(uint8_t fill)

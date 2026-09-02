@@ -39,7 +39,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/thread/thread.hpp>
 
-#include "blocks/blocks.h"
 #include "common/password.h"
 #include "common/util.h"
 #include "cryptonote_basic/events.h"
@@ -137,12 +136,7 @@ struct t_internals {
   {
     // === core ===
     MGINFO("Initializing core...");
-#if defined(PER_BLOCK_CHECKPOINT)
-    cryptonote::GetCheckpointsCallback const & get_checkpoints = blocks::GetCheckpointsData;
-#else
-    cryptonote::GetCheckpointsCallback const & get_checkpoints = nullptr;
-#endif
-    if (!core.init(vm, nullptr, get_checkpoints))
+    if (!core.init(vm, nullptr))
     {
       throw std::runtime_error("Failed to initialize core");
     }

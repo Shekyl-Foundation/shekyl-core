@@ -6,10 +6,11 @@ other in either direction. Records the **2026-09-01 countermand** (§0) and its
 blast radius across both programs' binding decisions.
 
 **Pinned:** `dev` @ `47bfa66c3` (the merge of PR #593) for the row-level reads;
-**re-verified at `bf317111f`** (the merge of PR #592) when C2-R3 landed mid-work.
-The census's buckets moved under this document — CEN-C2/C3 were ruled and
-promoted to bucket 2, so the live split is **87 / 16 / 2 / 66** where C1 close
-recorded 87 / 14 / 2 / 68. The **18-row store-enforced set and its 7 / 1 / 10
+**re-verified at `bf317111f`** (PR #592, C2-R3) and again at **`4b9807c5e`**
+(PR #596, C2-R1) — the census has been re-bucketed twice under this document.
+C1 close recorded 87 / 14 / 2 / 68; C2-R3 promoted CEN-C2/C3 to bucket 2
+(87 / 16 / 2 / 66); C2-R1 then moved three more rows to bucket 3, so the live
+split is **86 / 16 / 5 / 64** (total still 171). The **18-row store-enforced set and its 7 / 1 / 10
 bucket split are unchanged** (re-derived mechanically at the later sha); every
 aggregate below is stated in whichever denominator it belongs to.
 
@@ -70,7 +71,7 @@ ruling cites evidence rather than sentiment:
 | **§6 finding 2** | The **unlock_time triple-divergence**: one field that is consensus-legal (CEN-H16), relay-illegal (CEN-M5), and semantically inert (CEN-L12), with no single owner. |
 | **§6 finding 5** | The **reorg acceptance design has no examined-decision record anywhere** — steering searched the decision log, `docs/design`, and `docs/completed`. |
 | **§6 finding 8** | FAKECHAIN/regtest levers are **compiled into consensus paths** (CEN-I2, CEN-B5, CEN-D7, CEN-D3). |
-| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**68** live after C2-R3 ruled CEN-C2/C3); most of the inherited consensus surface has no specification other than its own source. |
+| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**69** live after C2-R3 and C2-R1: 5 bucket-3 + 64 bucket-4); most of the inherited consensus surface has no specification other than its own source. |
 
 The counterweight the census also records (Survey A O-4) stands and is not
 disturbed: the bucket-1/2 surfaces — DAA, economics KATs, FCMP++/PQC, archival
@@ -310,9 +311,9 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 | | Before | After |
 | --- | --- | --- |
-| For **bucket-1/2** rules (**103** live; 101 at C1 close) **that the C++ is known to implement conformantly** | oracle | **oracle — unchanged.** Shekyl-spec'd or ratified-inherited, and the census closes them |
+| For **bucket-1/2** rules (**102** live at `4b9807c5e`; 101 at C1 close) **that carry an affirmative conformance record** | oracle | **oracle — unchanged.** Shekyl-spec'd or ratified-inherited, and the census closes them |
 | For **bucket-1/2** rules on the **conformance-exception register** (§5.4.1) | oracle | **not an oracle.** The spec is ratified; *this implementation* is known not to meet it |
-| For **bucket-3/4** rules (**68** live; 70 at C1 close) | oracle | **not an oracle.** A digest match proves the rewrite reproduced *behavior*, defects included |
+| For **bucket-3/4** rules (**69** live at `4b9807c5e`; 70 at C1 close) | oracle | **not an oracle.** A digest match proves the rewrite reproduced *behavior*, defects included |
 | As a **regression** instrument | — | **strengthened.** Over DRS-TLB-generated corpora it detects unintended change during extraction, which is all [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §6.2 ("Totality at linear cost") ever needed |
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
@@ -518,6 +519,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | C2-R1 (reorg/alt) landed (PR #596) during this slice; census re-bucketed again to **86 / 16 / 5 / 64** (three rows to bucket 3 — the deleted per-block-checkpoint fast path). **CEN-H5, CEN-L11 and CEN-L12 re-verified as still bucket 1 at `4b9807c5e`**, so the P0f verdicts stand | header, §5.4 |
 | **2026-09-02** | **DRS-P0f slice 1 — the register's first verdicts.** Reviewed at `6bc2de8f2`: **CEN-H5 → CHECKED-CONFORMANT** (three sites agree with the spec and each other; relay coverage via `check_tx_semantic`, connect coverage via the visitor and the unconditional DB backstop). **CEN-L12 → DIVERGENT**, coupled to CEN-L11: its maturity arithmetic conforms exactly, but the spec's *universality* clause fails because L11's unchecked construct verdict can drop an accepted output before it is made pending — **L12 cannot be promoted while L11 stands**, a coupling the census recorded as two independent rows. Scope reviewed: connect + relay; pop/revert is P0b's. **Census pointer drift found:** CEN-H5's site 2 is cited `blockchain.cpp:3162–3168` but the double-spend visitor is at `:3232–3258` at this sha — C2-R3's commits moved the file after the census pin `ab3cc98e6` | §5.4.1 |
 | **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** an **affirmative** conformance record; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete. **Corrected again the same day:** the condition was first written negatively (*no recorded divergence*), which is fail-open against an incomplete register — absence means unreviewed, not conformant. Three states now (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default regression-only, and the checked set is currently **empty** pending DRS-P0d | §5.4, §5.4.1 |
 | **2026-09-02** | **The countermand was recorded but not applied to DRS's live instructions**, and CSR-3a's obligation had no producer. Both fixed: DRS's status line, D2-R1's trigger/bridge, the §6.4 divergence-class default, A3, D8, P0c, the genesis checklist and §17.2 now carry the ruled state (dated history preserved); **DRS-P0f minted** as the per-row conformance register that populates CHECKED-CONFORMANT; and **DRS-E2's acceptance condition is now per-state** — blanket digest identity would have required redb to reproduce CEN-L11's defect to pass | §5.4.1, §5.5 |

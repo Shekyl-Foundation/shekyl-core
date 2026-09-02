@@ -459,12 +459,9 @@ shekyl-blockchain-export --output-file blockchain.raw
 # Export a specific block range
 shekyl-blockchain-export --block-start 0 --block-stop 500000
 
-# Export as blocks.dat format
-shekyl-blockchain-export --blocksdat --output-file blocks.dat
 ```
 
-Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`,
-`--blocksdat`.
+Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`.
 
 ### `shekyl-blockchain-usage`
 

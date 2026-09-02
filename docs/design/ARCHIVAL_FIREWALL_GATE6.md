@@ -796,6 +796,14 @@ doc); its Gate-6 consequence is that the previously **one-time** firewall
 events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
 drain, GF-10 within-epoch timing).
 
+**GF-1 fast-path belt (CEN-G8) — RETIRED 2026-09-02 (C2-R1a, ratified by Rick).** The
+block-level re-pin that re-ran this section's debit authorization under the per-block-checkpoint
+fast path was deleted with that mechanism ([`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md)
+§3.1): with `fast_check` gone, per-tx verify — which reaches the same shared
+`debit_auth_pin` — is unconditional at block connect, so the belt's one job is covered by the
+primary. The identity-only invariant below is untouched; only the duplicate enforcement site is
+gone.
+
 **GF-1-carve — RESOLVED 2026-06-16 (dedicated bond-spend key; gate-4 §3.5 step 5 / §4.1 / §3.4.1).**
 The analysis below stands as the *why*; the disposition is no longer open. Gate-4 now commits a
 dedicated `bond_spend_pk` at `JoinMarket` and verifies `bond_debit` paths against it, so the

@@ -40,7 +40,6 @@
 #include "misc_log_ex.h"
 #include "bootstrap_file.h"
 #include "bootstrap_serialization.h"
-#include "blocks/blocks.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "serialization/binary_utils.h" // dump_binary(), parse_binary()
 #include "serialization/json_utils.h" // dump_json()
@@ -131,26 +130,6 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
     return 0;
   if (!force && blocks.size() < db_batch_size)
     return 0;
-
-  // wait till we can verify a full HOH without extra, for speed
-  uint64_t new_height = core.get_blockchain_storage().get_db().height() + blocks.size();
-  if (!force && new_height % HASH_OF_HASHES_STEP)
-    return 0;
-
-  std::vector<crypto::hash> hashes;
-  for (const auto &b: blocks)
-  {
-    cryptonote::block block;
-    if (!parse_and_validate_block_from_blob(b.block, block))
-    {
-      MERROR("Failed to parse block: "
-          << epee::string_tools::buff_to_hex_nodelimer(b.block));
-      core.cleanup_handle_incoming_blocks();
-      return 1;
-    }
-    hashes.push_back(cryptonote::get_block_hash(block));
-  }
-  core.prevalidate_block_hashes(core.get_blockchain_storage().get_db().height(), hashes, {});
 
   std::vector<block> pblocks;
   if (!core.prepare_handle_incoming_blocks(blocks, pblocks))
@@ -790,12 +769,7 @@ int main(int argc, char* argv[])
   try
   {
 
-#if defined(PER_BLOCK_CHECKPOINT)
-  const GetCheckpointsCallback& get_checkpoints = blocks::GetCheckpointsData;
-#else
-  const GetCheckpointsCallback& get_checkpoints = nullptr;
-#endif
-  if (!core.init(vm, nullptr, get_checkpoints))
+  if (!core.init(vm, nullptr))
   {
     std::cerr << "Failed to initialize core" << ENDL;
     return 1;
