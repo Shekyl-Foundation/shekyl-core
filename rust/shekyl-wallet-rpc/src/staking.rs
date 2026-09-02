@@ -5,11 +5,14 @@
 
 //! Staking read-only JSON-RPC methods (WI-RPC-1).
 //!
-//! Pure projections of [`Engine::staking_read_view`], the one authoritative
-//! aggregation over the sealed pscan / pending-post records — never the
-//! `bonded_slots` hint. All three methods are read-only (`&self` under the
-//! engine read guard). Staking *actions* (unstake, claim) are out of scope:
-//! they need Engine surfacing first.
+//! Pure projections of [`shekyl_engine_core::Engine::stake`] /
+//! [`shekyl_engine_core::StakeFacade::staking_read_view`], the one
+//! authoritative aggregation over the sealed pscan / pending-post records —
+//! never the `bonded_slots` hint. All three methods are read-only (`&self`
+//! under the engine read guard). The façade is always a view, so non-stakers
+//! get honest zeros rather than a missing-handle error. Staking *actions*
+//! (unstake, claim) are out of scope: they land on
+//! [`shekyl_engine_core::StakeFacade`] when reachable.
 //!
 //! `get_balance` / `get_wallet_info` snapshot-then-read through
 //! [`ledger_snapshot_with_staking`] — nested `ledger.read()` under a live
@@ -114,10 +117,7 @@ pub(crate) fn read_view_under_guard(
     engine: &Engine<SoloSigner>,
 ) -> Result<StakingReadView, WalletRpcError> {
     map_staking_read(tokio::task::block_in_place(|| {
-        engine
-            .stake()
-            .map(|s| s.staking_read_view())
-            .unwrap_or_else(|| engine.staking_read_view())
+        engine.stake().staking_read_view()
     }))
 }
 
@@ -143,10 +143,7 @@ fn read_view_with_snapshot(
     tokio::task::block_in_place(|| {
         engine
             .stake()
-            .map(|s| s.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen))
-            .unwrap_or_else(|| {
-                engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
-            })
+            .staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     })
 }
 

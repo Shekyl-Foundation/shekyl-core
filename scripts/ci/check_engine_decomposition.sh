@@ -113,6 +113,11 @@ if [ ! -f "${COUNT_PY}" ]; then
   note "METHODS_CEILING has no subject without scripts/ci/count_engine_pub_methods.py."
   exit 2
 fi
+if ! python3 "${COUNT_PY}" --self-test >/dev/null; then
+  echo "FATAL: ${COUNT_PY} --self-test failed."
+  note "METHODS_CEILING cannot freeze a counter that mis-attributes StakeFacade / where Engine<...> impls."
+  exit 2
+fi
 if [ "${METHODS_CEILING}" -eq 0 ] || [ "${METHODS_BAND}" -eq 0 ]; then
   echo "FATAL: METHODS_CEILING/METHODS_BAND missing or zero in ${CONF}"
   note "The inherent-API freeze is not optional; restore both keys."

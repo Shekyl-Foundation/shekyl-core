@@ -86,11 +86,7 @@ pub(crate) async fn stake_in(
     // so one `stake_in` would hang the whole read surface — for exclusivity
     // that binds nothing (`Engine::stake_in` is `&self`).
     let engine = shared.read().await;
-    let pending = engine
-        .stake()
-        .ok_or(shekyl_engine_core::StakeInError::NotStaking)?
-        .stake_in(amount)
-        .await?;
+    let pending = engine.stake().stake_in(amount).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize stake_in: {e}")))

@@ -5,11 +5,19 @@
 
 //! Product-surface door for staking: [`Engine::stake`] → [`StakeFacade`].
 //!
-//! Bodies stay in the existing workflow modules (`principal_stake`,
-//! `bond_orchestrator`, `drain_*`, `pscan`, serving). This type is the
-//! **ownership cut**: new staking / drain / claim behavior lands here, not
-//! as a new inherent `Engine::` method (`ENGINE_COMPOSITION_DECOMPOSITION.md`).
-//! `unstake` / Unbond dispatch is not a product method yet.
+//! This type is the **ownership cut** for new staking / drain / claim
+//! behavior (`ENGINE_COMPOSITION_DECOMPOSITION.md`). Bodies of methods that
+//! already existed on [`Engine`] stay in those workflow modules
+//! (`principal_stake`, `bond_orchestrator`, `drain_*`, `pscan`, serving);
+//! this façade **forwards** to them so GUI/CLI keep compiling against the
+//! inherent names. New verbs land here first, not as a new inherent
+//! `Engine::` method.
+//!
+//! [`Engine::stake`] is always a view — including for non-stakers.
+//! Handle-gated verbs (`stake_in`) still fail closed inside the body
+//! (`StakeInError::NotStaking`). [`Engine::has_stake_engine`] is the
+//! predicate for a resident actor. `unstake` / Unbond dispatch is not a
+//! product method yet.
 
 use std::sync::Arc;
 
@@ -30,12 +38,13 @@ use super::traits::{
 };
 use super::{Engine, EngineSignerKind, LocalLedger, LocalRefresh};
 
-/// Borrow of an [`Engine`] that has a resident [`super::stake_engine::StakeEngineHandle`].
+/// Borrow of an [`Engine`] for the staking product surface.
 ///
-/// [`Engine::stake`] returns `None` when this wallet is not a staker. Read
-/// methods that are valid for non-stakers (`staking_read_view`) stay callable
-/// on `Engine` directly; prefer this type when the caller already knows it is
-/// in the staking product surface.
+/// Always constructible ([`Engine::stake`]). Read methods that are valid
+/// for non-stakers (`staking_read_view`) are callable here; handle-gated
+/// verbs refuse with their existing error types when no
+/// [`super::stake_engine::StakeEngineHandle`] is resident.
+#[derive(Clone, Copy)]
 #[allow(private_bounds)] // same Engine-trait privacy posture as `Engine` itself
 pub struct StakeFacade<'a, S, D, L, E, R, P, F>
 where
@@ -61,10 +70,6 @@ where
     P: PendingTxEngine,
     F: PersistenceEngine,
 {
-    pub(crate) fn for_engine(engine: &'a Engine<S, D, L, E, R, P, F>) -> Option<Self> {
-        engine.has_stake_engine().then_some(Self { engine })
-    }
-
     /// Fund the active persona (`Engine::stake_in`).
     pub async fn stake_in(&self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
         self.engine.stake_in(amount).await
@@ -80,7 +85,8 @@ where
     R: RefreshEngine,
     P: PendingTxEngine,
 {
-    /// Authoritative staking read (WI-RPC-1).
+    /// Authoritative staking read (WI-RPC-1). Valid for non-stakers
+    /// (honest zeros).
     pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
         self.engine.staking_read_view()
     }
@@ -173,11 +179,76 @@ where
     P: PendingTxEngine,
     F: PersistenceEngine,
 {
-    /// Product-surface door for staking. `None` if no
-    /// [`StakeEngine`](super::stake_engine::StakeEngine) is resident. New
-    /// staking behavior lands on [`StakeFacade`], not as a new inherent
-    /// `Engine` method.
-    pub fn stake(&self) -> Option<StakeFacade<'_, S, D, L, E, R, P, F>> {
-        StakeFacade::for_engine(self)
+    /// Product-surface door for staking. Always a view — including when no
+    /// [`StakeEngine`](super::stake_engine::StakeEngine) is resident.
+    /// [`Self::has_stake_engine`] is the handle predicate. New staking
+    /// behavior lands on [`StakeFacade`], not as a new inherent `Engine`
+    /// method.
+    ///
+    /// Homonym: the crate-private field `stake` is the
+    /// [`super::stake_engine::StakeEngineHandle`]; this method is the façade.
+    pub fn stake(&self) -> StakeFacade<'_, S, D, L, E, R, P, F> {
+        StakeFacade { engine: self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::test_support::{non_staker_engine, staker_engine};
+    use crate::engine::StakedBalance;
+    use shekyl_units::AtomicUnits;
+
+    const SEED: u8 = 11;
+
+    /// This bites against gating `Engine::stake()` on a resident handle
+    /// (so non-staker `staking_info` / `get_staked_balance` would fail
+    /// closed). It does NOT cover a corrupt-seal fail-closed path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stake_view_serves_honest_zeros_on_a_non_staker() {
+        let (_tmp, engine) = non_staker_engine(SEED);
+        assert!(
+            !engine.has_stake_engine(),
+            "the handle predicate is independent of the view"
+        );
+        let via_facade = engine
+            .stake()
+            .staking_read_view()
+            .expect("a non-staker read is honest zeros, not NotStaking");
+        let via_engine = engine
+            .staking_read_view()
+            .expect("inherent read remains the same answer");
+        assert_eq!(via_facade, via_engine);
+        assert!(!via_facade.staking_enabled);
+        assert_eq!(via_facade.balance, StakedBalance::ZERO);
+        assert!(via_facade.outputs.is_empty());
+        assert!(via_facade.pscan_synced_height.is_none());
+        assert!(!via_facade.recovery_pending_reopen);
+    }
+
+    /// This bites against a façade `stake_in` that skipped the handle check.
+    /// It does NOT cover the active-persona funding path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stake_in_via_facade_on_a_non_staker_is_not_staking() {
+        let (_tmp, engine) = non_staker_engine(SEED);
+        let err = engine
+            .stake()
+            .stake_in(AtomicUnits::from_raw(50_000))
+            .await
+            .expect_err("a non-staker cannot stake_in");
+        assert!(matches!(err, StakeInError::NotStaking), "got {err:?}");
+    }
+
+    /// This bites against `has_stake_engine` drifting from the resident
+    /// handle. It does NOT cover first-stake assembly.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn staker_view_and_handle_predicate_agree() {
+        let (_tmp, engine) = staker_engine(3, SEED);
+        assert!(engine.has_stake_engine());
+        let view = engine
+            .stake()
+            .staking_read_view()
+            .expect("a staker read is the same door");
+        assert!(view.staking_enabled);
     }
 }

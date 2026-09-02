@@ -862,18 +862,18 @@ pub struct Engine<
     /// that has staked (`StakingBlock::staking_enabled`); `None` for the
     /// overwhelming majority of wallets, which derive and hold no personas.
     ///
+    /// Homonym: `self.stake` is this field; [`Engine::stake`](Self::stake) is
+    /// the product façade (always a view — [`Self::has_stake_engine`] is the
+    /// handle predicate).
+    ///
     /// Spawned in [`assemble`](Self::assemble) over the derive-forward set —
     /// `{persisted bonded slots} ∪ {p_slot ..= p_slot + lookahead}` — derived
     /// there while the master seed is transiently borrowed, so the seed never
     /// reaches the actor and is dropped at the caller exactly as in the
     /// non-staker path. The actor's `Drop` (last handle clone) stops it and
     /// wipes the held bundles (`ZeroizeOnDrop`), mirroring `key`.
-    //
-    // Read on a production path now, so it carries no suppression. Its other
-    // load-bearing role is ownership: spawning the actor at open for stakers
-    // and wiping the bundles at close. The JoinMarket bond request that mints
-    // a `PersonaHandle` and consumes a `PersistedBondTicket` still lands in
-    // 2c-2b.
+    // Ownership: spawn-at-open / wipe-at-close. JoinMarket PersonaHandle +
+    // PersistedBondTicket still lands in 2c-2b.
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
@@ -1090,9 +1090,9 @@ impl<
     }
 
     /// Whether a StakeEngine actor is resident (a staker open, or an
-    /// open-with-first-stake-intent). The embedder-facing predicate the
-    /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
-    /// needed; deliberately a bool — the handle itself stays crate-private.
+    /// open-with-first-stake-intent). Embedder-facing handle predicate
+    /// (SA-R1-a intent reopen); [`Self::stake`] is a view either way.
+    /// Deliberately a bool — the handle itself stays crate-private.
     pub fn has_stake_engine(&self) -> bool {
         self.stake.is_some()
     }
