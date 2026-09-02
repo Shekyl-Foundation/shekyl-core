@@ -18,6 +18,30 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 **Identifier family:** `DRS-*` · **Crate name:** **`shekyl-chain-store`**
 (pinned, DRS-R-19).
 
+> **COUNTERMAND 2026-09-01 — read before acting on any decision below.**
+> Rick ruled that the inherited C++ is **not a base**: its glitches and
+> irregularities are proven bad enough that a complete rewrite gates release.
+> This retires **DRS-D5**'s decompose-in-place rationale, empties the three
+> **DRS-D2** reopen bridges (they resolve to "ship genesis-on-LMDB", which is
+> both unavailable and now unshippable), inverts **DRS-P0c**'s FIX-IN-CPP-FIRST
+> default, and demotes the C++ from *trusted* oracle to a differential
+> reference **for rules ratified on record only** — which invalidates the
+> unhedged "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
+> **heed is retired** (no chain data exists, so format compatibility is worth
+> zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
+> Blast radius, the row-level census map, and the work items are in
+> [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
+> (`CSR-*`). Individual decision cells below are **not** rewritten in place —
+> the countermand is recorded once, here and in §15, per rule 95.
+
+> **Cross-reference (CSR-6).** This program shares its subject files with the
+> all-Rust consensus rewrite: [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md)
+> (`CEN-*`) enumerates **171** consensus rules, **18** of which are enforced
+> inside `src/blockchain_db/` — the store DRS-E1 replaces. Its **§10 R8
+> batch ("storage-layer enforcement placement")** is the same decision as this
+> document's schema/surface design, and **R8 is the ruling instrument**
+> (CSR-1); §3.5's surface map is its input, not a competing authority.
+
 ### Substrate inventory (code-anchored)
 
 | Fact | Measurement |
@@ -697,6 +721,7 @@ Blocks (and required blobs) live in the most format-stable representation
 | DEL-004 | liblmdb in default `shekyld` | D2 closed path | Planned |
 | DEL-005 | Schema phantoms / missing seven | DRS-P0 | Open |
 | DEL-006 | V4 heed-as-destination without pointer | Docs | Closed |
+| DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no chain data exists on any network; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
 
 ---
 
@@ -762,6 +787,10 @@ the trigger (#507) and was missed there.
 | 2026-07-27 | **DRS-D3 hardening:** opposed threat models (not overhead); three layers (encodings shared / store+API separate); D3c cross-store KAT; D3d no shared redb-helpers. **DRS-D9:** strict durability free at block cadence. **DRS-BENCH:** retire throughput column; resource/privacy/IBD/pop only; in-tree artifacts + durability label required |
 | 2026-07-27 | **Gap-close:** §0.1 Tier A/B success criteria (mission-ordered); §1.5 D2-reopen first-class good; D10 reconstructible **mandatory** for D2-closed; §1.3 IBD floor sketch (H=100k, ≤1.25× LMDB); §3.5 97-method surface map; §3.6 writer/reader concurrency; §7.1 P0 multi-PR envelope P0a–P0d |
 | 2026-07-27 | **Substrate findings A-1…A-6**: dispositions §17; P0b/P0c concrete rows; A-1/A-3/A-5 are **FIX-IN-CPP candidates for feature-branch PRs** (not applied on `dev` in the design session) |
+| **2026-09-01** | **COUNTERMAND (Rick).** The inherited C++ is not a base; a complete rewrite gates release. D5 rationale retired; D2 bridges emptied; §1.5 Tier-A-LMDB-genesis outcome off the menu; P0c default inverted to RECORD-AND-SPECIFY; A2/D11/E2 "trusted digest" demoted to *ratified rules only*. Evidence on record: CEN-L11 (silent unspendable output), CEN-B3 (discarded hardfork verdict), CEN-L1 (dead pre-DB double-spend check), CEN-L14 (five uniqueness rules with no DB constraint), census §6 findings 2/5/8/10/11. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §0 |
+| **2026-09-01** | **Sequencing (Rick):** testnet is gated on this work + consensus + the wallet (~90%); genesis is downstream of testnet. **D2-R1's 2027-04-01 trigger therefore measures against a milestone that cannot arrive early** — re-anchoring owed (CSR-2). PC-1 re-pointed the trigger; this re-prices the bridge it points at |
+| **2026-09-01** | **heed retired** (DEL-007) — no database entry exists on any network, so format compatibility is worth zero. **D6 unchanged: redb stands.** **D4 substantially discharged** (bandwidth constraint, wallet ~90%) |
+| **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same four files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
 | 2026-08-21 | **Post-close pin PC-1:** D2-R1 re-pointed from “wallet Phase 5 not closed by 2027-04-01” (unreachable since #507 closed Phase 5 on 2026-08-19) to “**DRS-C** not closed by 2027-04-01”; bridge unchanged. Retiring it outright would have left D2 with no calendar backstop (R2 is relative to C close, R3 is a BENCH outcome) — the reopen-by-subtraction shape R2-8 rejected. §1.1 restated accordingly |
 
 ---

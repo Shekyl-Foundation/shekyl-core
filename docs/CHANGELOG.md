@@ -4,6 +4,32 @@
 
 ### Added
 
+- **Consensus rewrite ↔ daemon chain store reconciliation (`CSR-`).**
+  `docs/design/CONSENSUS_STORE_RECONCILIATION.md` reconciles two design
+  programs that partition the same four C++ files on orthogonal cuts —
+  `CONSENSUS_RULE_CENSUS.md` by rule (171 rows), `DAEMON_REDB_STORE.md` by DB
+  call surface (97 `m_db->` methods) — and which referenced each other **zero
+  times in either direction** before this change. **18 census rows are enforced
+  inside `src/blockchain_db/`** (7 bucket-1, 1 bucket-3, 10 bucket-4), mapped
+  row-by-row onto the DRS-C surfaces; the census's **§10 R8 batch is the same
+  decision as the store's schema design** (CSR-1 rules R8 the instrument, the
+  surface map its input).
+
+  Records the **2026-09-01 countermand (Rick)**: the inherited C++ is not a
+  base — its glitches and irregularities are proven bad enough that a complete
+  rewrite gates release. Consensus-relevant consequences: **DRS-D5**'s
+  decompose-in-place rationale retired; the three **DRS-D2** reopen bridges
+  ("ship genesis-on-LMDB") have no referent, since testnet is gated on this
+  work and genesis is downstream of testnet; **DRS-P0c** inverted from
+  FIX-IN-CPP-FIRST to RECORD-AND-SPECIFY; and the C++ demoted from *trusted*
+  oracle to a differential reference **for rules ratified on record only**,
+  which invalidates the unhedged "trusted LMDB digest" phrasing in DRS-A2 /
+  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — no chain data
+  exists on any network, so format compatibility is worth zero); **redb stands**
+  (DRS-D6 unchanged); **DRS-D4 substantially discharged** (wallet ~90%).
+  CSR-1…CSR-5 are proposals awaiting ruling; no consensus rule, queue order, or
+  schema is decided.
+
 - **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
   enumerates the peer-to-peer wire surface and the connection-management
   behavior around it at `dev` `30cd547e2` — 57 bucketed rows, 3 b1 / 6 b2 /

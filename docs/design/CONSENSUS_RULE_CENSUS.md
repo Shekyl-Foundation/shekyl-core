@@ -37,6 +37,18 @@ retained as the independent-walk records): the two superseded walks moved to
 ([`CONSENSUS_RULE_CENSUS_1.md`](CONSENSUS_RULE_CENSUS_1.md)) stays in
 `docs/design/` as a mixed doc — its census content is closed but its §6
 L-items are owned open residue.
+**Cross-reference (CSR-6, added 2026-09-01).** The daemon chain-store program
+([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md), `DRS-*`) partitions the same
+files this census enumerates — by **DB call surface** where this census cuts by
+**rule** — and until 2026-09-01 neither document referenced the other.
+**18 rows here are enforced inside `src/blockchain_db/`** (7 bucket-1, 1
+bucket-3, 10 bucket-4), and **§10's R8 batch is the same decision as that
+program's schema design**: R8 is the ruling instrument, the DRS surface map its
+input (CSR-1). Rick's **2026-09-01 countermand** — the inherited C++ is not a
+base; a complete rewrite gates release — vindicates this census's oracle clause
+unchanged and propagates it outward. Map, blast radius and work items:
+[`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md).
+
 Survey A's L-items (Levin/p2p wire) are **out of the consensus census**:
 requirements input to the P2P protocol redesign lane (ruled 2026-08-31);
 their accounting rows in §9 point there.
