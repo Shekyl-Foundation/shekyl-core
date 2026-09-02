@@ -1745,7 +1745,27 @@ The set, minimally:
    even when both secrets are present — the failure PWD-T1's ordering exists to
    prevent, which no message-level vector would catch.
 3. **A prologue-mismatch vector** proving a wrong `network_id` fails to complete
-   rather than being compared.
+   rather than being compared — and it is a **different kind of test from the
+   others, which changes what it must assert.**
+
+   A negative-path vector normally proves *an error branch behaves correctly*.
+   This one proves **there is no error branch**: a wrong network does not reach
+   a comparison that returns a "wrong network" result, it produces a transcript
+   whose AEAD does not verify — the same failure as any corrupted byte.
+   **A branch that cannot be reached is a branch that cannot be implemented
+   wrong**, which is the whole reason PWD-T1 binds the value instead of checking
+   it.
+
+   > **So the assertion is *indistinguishability*, not a return code: a
+   > wrong-`network_id` handshake must fail in the same undifferentiated way as
+   > random bytes.**
+
+   That is also a security property and not only a tidiness one. **If a
+   wrong-network failure were distinguishable from a corrupted one, the
+   difference would be an oracle** — a prober could separate "you are Shekyl on
+   another network" from "you are not Shekyl", which is exactly the class of
+   distinction PW-19a refuses to hand out. A vector asserting a specific error
+   code would have *locked in* that oracle while appearing to test the feature.
 4. **A rekey vector** — `ck'`/`k'` after one rekey in each direction.
 
 **PW-7d's differential-partner option is recorded, not decided.** Running a
