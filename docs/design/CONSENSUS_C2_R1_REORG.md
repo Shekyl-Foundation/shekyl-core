@@ -1,6 +1,6 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a RULED and executed (2026-09-02); R1b next.**
+**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b proposed (§4b), awaiting steering review, then Rick.**
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
@@ -338,25 +338,30 @@ The first was CEN-E3/E4 (§2 row 6: the trust-root check was
 with zero verification) — deleted by §3, so moot. The second is **live and
 is R1b's subject**:
 
-- `cryptonote_core.cpp:332` wraps the **entire** operator-checkpoint init
-  block — `init_default_checkpoints`, `set_checkpoints`, **and**
+- **The lead exhibit — `cryptonote_core.cpp:254`** (found by the R1a
+  Copilot round; two steering reads of the same function had missed it,
+  both having started below its opening guard):
+  `core::update_checkpoints()` opens with
+  `if (m_nettype != MAINNET) return true;` — note the **`return
+  true`**. Off mainnet the periodic reload does not merely skip, it
+  reports **success**: a caller cannot distinguish "checkpoints
+  updated" from "not applicable here", so any future code branching on
+  that return inherits a lie. Not a silent skip — a **silent false
+  positive**, the rot shape producing an affirmative wrong answer.
+  This is the *periodic* path (called from the protocol handler on
+  incoming blocks, 600 s throttle), so re-homing only the init block
+  would still leave live checkpoint reload mainnet-only; the
+  uniform-wiring decision must take **both** sites. Its tail calls
+  `graceful_exit()` on a failed reload — priced in Q2b. An
+  **inequality** spelling, which is also why the gate matches `[!=]=`,
+  not `==` alone.
+- `cryptonote_core.cpp:326` (was `:332` at the §4 pin; drifted by the
+  R1a deletion) wraps the **entire** operator-checkpoint init block —
+  `init_default_checkpoints`, `set_checkpoints`, **and**
   `set_checkpoints_file_path` — in `if (m_nettype == MAINNET)`. Off
   mainnet, `m_checkpoints_path` stays `""`,
   `boost::filesystem::exists("")` is false, and the JSON loader
   (`checkpoints.cpp:195`) silently no-ops.
-- The mechanism has a **third wiring site, independent of the init
-  block** (found by the R1a Copilot round — my first read of the
-  function started below its opening guard):
-  `core::update_checkpoints()` opens with
-  `if (m_nettype != MAINNET) return true;`
-  (`cryptonote_core.cpp:254`), and it is the *periodic* path — called
-  from the protocol handler on incoming blocks, 600 s throttle. So
-  re-homing only the init block would still leave live checkpoint
-  reload mainnet-only; the uniform-wiring decision must take **both**
-  sites (and note the guard's tail: a failed reload calls
-  `graceful_exit()` — "bring down the house" — which the wargame prices
-  on every network once the guard goes). An **inequality** spelling,
-  which is also why the gate matches `[!=]=`, not `==` alone.
   **The operator-override path —
   the exact mechanism whose forced-rollback semantics R1b rules (CEN-K6's
   checkpoint arm, E2, E5) — is unreachable by construction on testnet and
@@ -456,6 +461,202 @@ makes the shim thicker than the rule — the anti-target); K5/K7 orchestration;
 K8 ratify-and-keep (deleting the field would change the persisted
 `alt_block_data_t` layout — rule 42 fence).
 
+## 4b. R1b proposed rulings — awaiting steering review, then Rick
+
+**Section pin: `4b9807c5e`** (dev tip = the R1a merge; §1–§4 sites are at
+the header pin `bf317111f`, and where a §4 site drifted both numbers are
+recorded in place). Rows ruled here: CEN-K5, K6, K7, K8, D5, D6 (Q1) +
+CEN-E1, E2, E5 (Q2) = 9; with R1a's 2 and R1c's 9: 2+9+9 = 20 ✓. Each
+ruled sentence is stated exactly once, here; census rows will point at
+this section rather than restating it (the R1a review cycle grew on
+restated claims).
+
+### C2-R1b-Q1 — the fork-choice and depth contract (K5, K6, K7, K8, D5, D6)
+
+**Q1a (fork choice, ratifying the inherited shape with its rationale
+stated).** The best chain is decided at alt admission by **strictly
+greater cumulative difficulty — equality keeps the incumbent**
+(`blockchain.cpp:2562`); an operator-checkpoint match on the alt chain
+**forces** the switch regardless of difficulty (`:2550`). Promotion
+re-validates every block through the full main-chain path; any failure
+rolls back to the pre-switch chain and discards the failing suffix
+(K5, `:1399`). Demotion asymmetry ratified as **intentional mechanism,
+not accident**: a difficulty-triggered switch re-admits demoted blocks
+as alts (K7), but a checkpoint-forced switch **discards** them
+(`discard_disconnected_chain = true`) — because a checkpoint-forced
+switch can promote a *lighter* chain, and re-admitting the heavier
+demoted chain as an alt would let it immediately re-trigger a
+difficulty switch back: the discard is the flip-flop terminator. K8
+(alt `already_generated_coins` approximation) is **ratified-and-kept**:
+by construction, documented at site, nothing consensus-bearing reads
+it, and deleting the field would change the persisted
+`alt_block_data_t` layout (rule 42 fence). CEN-K5b (bucket 1) is named
+and preserved: the witness capture-before-pop / re-supply-at-promote
+ordering is untouched by everything ruled here.
+
+*Falsifier (Q1a):* reopen on evidence of an attack that exploits the
+admission-before-full-validation ordering at a cost promotion's
+re-validation does not contain — R1c's cheap-fork wargame seeds are the
+watch-list; a confirmed sub-51% forced-reorg cycle reopens this ruling,
+not just R1c's.
+
+**Q1b (crossings — rule 20/71, joining the established
+`shekyl-difficulty` family).** The fork-choice comparison crosses to
+Rust: a pure `shekyl-difficulty` predicate over the two cumulative
+difficulties (u128 as the FFI's existing two-u64 halves) plus the
+checkpoint-match flag, exported beside `shekyl_difficulty_check_hash` /
+`lwma1_next`; the C++ switch machinery consumes its verdict
+(orchestration stays). CEN-D5's window **selection arithmetic** — the
+stop/count/start-offset derivation and the exactly-N+1-above-threshold
+invariant (`:1557` region) — crosses as a pure window-assembly
+function; the DB fetches stay C++ (a thicker crossing would put LMDB
+reads behind the FFI: the anti-target). CEN-D6's zero-difficulty
+reject is ratified as the marshaling belt it is: the C++ call sites
+keep the guard on the FFI result (both sites), because a
+sentinel-eating shim is exactly what rule 46 forbids. **CEN-E1 does
+NOT cross — a decision, not a deferral** (rule 22): the checkpoint set
+is a `std::map` filled by an epee JSON loader — glue and state under
+rule 20's "C++ if all of" — and its predicate is a hash equality with
+no derivation content; crossing only the equality makes the shim
+thicker than the rule. The rule content crosses if and when the
+checkpoint set itself moves into the Rust store — named owner: the DRS
+program / census batch R8.
+
+*Falsifier (Q1b):* the crossings land red-first with shared vectors per
+the R3 pattern; the E1 no-crossing decision reopens automatically when
+DRS/R8 moves checkpoint state across the boundary.
+
+**Q1c (the depth ruling — the batch's centre).** Ground, verified at
+source this round: the four pop writers all traverse one landing point
+(`BlockchainDB::pop_block`); the revert journals are **never pruned**;
+the retention prune (fired *inside the consensus epoch-close hook*,
+`db_lmdb.cpp:8446`, so **every node prunes identically at the same
+heights**) deletes serve-credit rows, frozen epoch aggregates, accrual
+rows and witnesses below `tip − W` settlement epochs, and those
+deletions are **un-journaled**. Failure shapes enumerated: the
+bond-record reverts throw FATAL on a missing subject (loud); the
+serve-credit bit removal is `MDB_NOTFOUND`-tolerant; and past the
+prune horizon the corrupting arm is real — a pop crossing into a
+partially-pruned epoch re-derives budget/Σwork/R_market on re-close
+from accrual rows that no longer exist, **silently wrong**. So today's
+depth ladder is: `[0, 720]` engine envelope; `(720, ~W·SEB ≈ 260k)`
+DB-survivable and loud; beyond the horizon, **silent consensus-state
+corruption**.
+
+**Ruled: a pop deeper than the archival retention horizon is refused,
+loudly, at the landing point.** `BlockchainDB::pop_block` refuses to
+pop a block below `tip_at_pop_start − REORG_HARD_HORIZON`, where
+`REORG_HARD_HORIZON` is **derived from the same constant source as the
+retention prune** (one source — deriving it independently would mint
+the drift twin this program keeps deleting), minus a named slack. The
+refusal is a hard error: the reorg/rollback/RPC caller fails with a
+message naming the horizon and the remedy (resync), never a silent
+partial state. This is **not a fork-choice rule and introduces no new
+subjectivity**: the capability loss already exists, network-uniform,
+because the prune runs in consensus lockstep — the ruling converts an
+existing silent-corruption arm into a loud refusal. The
+weak-subjectivity axis, priced: a fresh-syncing node follows the
+heaviest chain regardless of any horizon; an attacker able to build a
+heavier secret chain longer than ~260k blocks (≈ a year of work above
+the honest chain's rate) defeats every non-checkpoint defense in any
+design; what changes is only that an established node presented with
+such a chain **halts for operator action instead of corrupting**. The
+`ARCHIVAL_REORG_DEPTH_BLOCKS = 720` constant stays an **engine
+envelope, not consensus** — and its `segment.rs:20` duplicate
+collapses to the single source or names its owner in the same change
+(delete-the-duplicate).
+
+*Falsifier (Q1c):* the horizon refusal reopens if a node class with
+un-pruned archival state is ever minted (deep reverts become
+reconstructible), or if the retention design decouples the prune from
+the epoch-close hook — either change re-derives this ruling's premise.
+
+### C2-R1b-Q2 — the operator-checkpoint trust surfaces (E1, E2, E5)
+
+**Q2a (existence + uniform wiring).** The operator-checkpoint
+mechanism — `<datadir>/checkpoints.json` → the points map → E1's zone
+equality, E2's alt-height floor, and K6's forced-switch arm — is
+**kept**, as the operator's emergency-recovery instrument within the
+Q1c horizon, and **wired uniformly across all three public networks**
+per rule 71: both nettype sites (`:254`, `:326`) are deleted, so every
+network loads the file at init and reloads on the 600 s path. An
+operator can rehearse a checkpoint override on testnet before ever
+touching mainnet — §4a's unreachable-by-construction defect closes.
+The gate's allowlist shrinks by two entries in the same change
+(8 → 6). Scope fence: this re-homes the **checkpoint mechanism only**;
+the hard-fork table selection stays the allowlist's named migration
+debt toward the parameter table.
+
+*Falsifier (Q2a):* any future per-network divergence in this mechanism
+requires rule 71 §2's named-ratified-loud form; the gate enforces the
+default.
+
+**Q2b (conflict semantics, ratified separately — rule 82).** Two
+distinct conflicts, two distinct verdicts, both ratified explicitly:
+(i) **JSON-internal conflict** (same height, different hash) →
+`graceful_exit()` = `raise(SIGTERM)`: the daemon **fail-stops**. Kept:
+a node holding two contradictory pins for one height has no safe
+direction, and datadir write access is already LMDB-corruption
+-equivalent — the file adds operator *authority*, not attacker
+*access* — so the kill-switch framing adds no new threat position;
+the rule-82 obligation is that the exit path names the file, height,
+and both hashes before dying (verified or added at build).
+(ii) **chain conflict** (a loaded checkpoint contradicts the local
+chain) → the `pt.first − 2` rollback rides the pop machinery and is
+therefore **subject to Q1c's horizon refusal**: an operator checkpoint
+deeper than the horizon cannot force a beyond-horizon rollback — the
+daemon refuses loudly and the remedy is resync. Stated here because
+the two rulings compose: E5 hands every network's operator a pop
+trigger, and Q1c bounds what any pop — operator-commanded included —
+may do.
+
+*Falsifier (Q2b):* the fail-stop reopens on operational evidence of
+accidental-conflict kills (a named telemetry signal, not a vibe);
+the rollback interaction reopens with Q1c.
+
+**Q2c (the difficulty-checkpoint twin — delete).** `m_difficulty_points`
+is **unpopulatable** (the JSON schema carries height+hash only; the
+3-arg `add_checkpoint` is its sole writer and nothing calls it with a
+difficulty) and its two consumers are an init drift-check that is
+structurally dead (empty map ⇒ `{true, 0}` ⇒ the arm never fires) and
+a periodic on-idle recalculation whose empty-map default degenerates
+to **a full-chain difficulty recompute from height 0 every interval**
+— live wasted work inherited by accident. Ruled: delete the twin
+(map, 3-arg parameter, `check_difficulty_checkpoints`,
+`get_difficulty_points`) and retire-or-rescope the recalculation
+machinery after enumerating its jobs at build time (a drift-healing
+job, if wanted, needs a design with a real trigger, not an empty-map
+accident). Behavior-preserving except the removal of the accidental
+periodic recompute, which is measured and stated in the build PR.
+
+*Falsifier (Q2c):* difficulty pins may return only via a design round
+that names their trust root and populator — the R1a reopening form.
+
+### Q1/Q2 wargame
+
+Asset: the node's chain-selection integrity and its epoch-scoped
+archival state. Writers of the pop surface: the switch, the operator
+checkpoint rollback, the RPC/console `pop_blocks`, the offline
+importer — all covered at the one landing point (Q1c); the E5 file is
+the one operator-authority input (Q2b).
+
+| Adversary | Channel | Today | Under the rulings | Direction check |
+| --- | --- | --- | --- | --- |
+| Majority-hash attacker, shallow (< horizon) | heavier alt chain | switch fires; promotion re-validates; rollback contains invalid bodies | unchanged — Q1a ratifies; cost floor is real PoW above the honest tip | countermeasure (promotion re-validation) sits on the attacker's path; residual churn cost is R1c's subject |
+| Majority-hash attacker, deep (> horizon) | heavier secret chain, ~year-scale | pop traverses; epoch re-derivation **silently wrong** | loud refusal at the landing point; operator resyncs | faces the write path all four writers share; converts corruption to halt; no new subjectivity (prune is already consensus-uniform) |
+| Operator error: conflicting JSON | datadir file | SIGTERM (undocumented) | same, ratified + named-output obligation (rule 82) | fail-stop on ambiguous pins is the safe direction; authority-not-access priced |
+| Malware with datadir write | checkpoint file | could pin a false chain or kill the node | unchanged — datadir write is already LMDB-corruption-equivalent; no new position | the file adds no access an attacker lacks; refusing to ship the mechanism would not remove the position |
+| Checkpoint-forced lighter chain | operator pin + K6 arm | switch + discard of heavier demoted chain | ratified with rationale: discard is the flip-flop terminator | the discard faces the oscillation, which is the actual failure mode |
+| Testnet operator rehearsing recovery | checkpoints.json on testnet | **structurally impossible** (`:254`/`:326`) | first-class on every network | the rehearsal gap was the rule-71 lead exhibit; closing it is the point |
+
+**Positive check (steering's addition, owed at build):** the
+checkpoint-mechanism tests run against **all three** public
+`NetworkParams` — the cross-params suite proves there is nothing left
+to branch on, where the grep gate only catches someone adding a
+branch.
+
+---
+
 ## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
 
 Rows: CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4. Banked wargame seeds:
@@ -485,3 +686,21 @@ rules already have owners), nothing new crosses.
   directed the network-uniformity principle be minted as a standing rule
   first (rule 71) with R1b citing it; implementation + rule + gate landed
   in the R1a PR (execution record §3.8).
+- 2026-09-02 — R1a merged by Rick (#596 → `4b9807c5e`; 56 files,
+  +924/−1012 vs its dev parent) after five Copilot rounds (§3.8 carries
+  each round's corrections); branch archive-tagged
+  (`archive/c2-r1a-checkpoint-fastsync-2026-09-02`) and deleted, lane
+  moved to `wt-c2r1b`/`feat/c2-r1b-fork-choice`. Steering sharpened
+  §4a's lead exhibit: `:254`'s `return true` is a silent **false
+  positive**, not a skip.
+- 2026-09-02 — §4b proposed: Q1a fork-choice ratification with the
+  discard-asymmetry rationale, Q1b crossings (fork-choice predicate +
+  D5 selection arithmetic to `shekyl-difficulty`; E1 ruled no-crossing
+  with DRS/R8 as named owner), Q1c the horizon refusal at the pop
+  landing point (grounded on the enumerated failure shapes: loud
+  bond-record FATALs, tolerant bit-removal, silent budget re-derivation
+  past the prune horizon), Q2a uniform wiring (both sites, all
+  networks), Q2b the two conflict semantics ratified separately
+  (SIGTERM fail-stop; rollback subject to Q1c), Q2c the
+  difficulty-twin deletion (with the accidental periodic full-chain
+  recompute enumerated).
