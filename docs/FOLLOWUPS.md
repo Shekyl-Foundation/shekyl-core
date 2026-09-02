@@ -687,9 +687,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
   - Target: pre-genesis
 
-- **~~Relay lane: the propagation-graph default has a second cost (§12.10's re-entry floor tends to zero on an anonymity network)~~ — CLOSED 2026-09-01: the Tor-only-by-default option was declined, so the cost is per-zone rather than network-wide; both costs and the 2026-09-02 rationale correction are recorded in the owning doc.** Retained one release as the record of what the decline avoided — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
-  - Target: pre-genesis
-
 - **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 

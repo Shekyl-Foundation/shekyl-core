@@ -270,14 +270,35 @@ ceiling above never applies, because no record is sent.
 
 **The corrective rule is stated over the asset, not over a path**, which is why
 it covers a writer the earlier wording could not reach. The white list's writers
-enumerate to four, and all four are now covered:
+enumerate to **five**, and all five are covered:
 
 | Writer | Direction | Under the rule |
 | --- | --- | --- |
 | `try_to_connect_and_handshake_with_new_peer:1353` | Outbound dial we chose | **Kept** — this is the rule's licensed case |
-| `gray_peerlist_housekeeping:3135` → `set_peer_just_seen` | Outbound dial we chose, after `check_connection_and_handshake_with_peer` succeeds | **Kept** — see below; it is the rule's existing implementation |
+| `gray_peerlist_housekeeping:3135` → `set_peer_just_seen` | Outbound dial we chose, after `check_connection_and_handshake_with_peer` succeeds | **Kept** — it is the rule's existing implementation |
 | `net_node.inl:1175` → `set_peer_just_seen` | Outbound timed-sync, already `!m_is_income`-guarded | **Kept** — unchanged |
+| **`init():864-865`** — `m_command_line_peers` | **Neither: local operator configuration, before any connection exists** | **Kept as a named exemption** — see below |
 | **`handle_handshake:2766`** | **Inbound, by construction** | **Changed: routed to `append_with_peer_gray`** |
+
+**The fourth row was missing from the first version of this table, and its
+absence is the sharpest evidence for §1's third check that this round
+produced.** The check's own operational form says *enumerate the asset's writers
+and show each is covered* — **the enumeration is the load-bearing half** — and
+the first enumeration listed four of five. The reviewer found the fifth by doing
+exactly what the form prescribes. A rule stated over an asset is only as good as
+the writer inventory behind it, and an inventory is a claim that must be
+re-derived from the tree, never recalled.
+
+**Ruling on the operator-configured writer: exempt, and the exemption is
+narrow.** `--add-peer` entries are inserted by the node's **own operator, from
+local configuration, before the network exists** — there is no remote party in
+the path, so this writer is not a channel any adversary can reach, and the
+invariant's purpose (deny a *remote* party the ability to insert itself) is
+untouched. Requiring an outbound handshake first would also break the bootstrap
+case the flag exists for. **The exemption is scoped to locally-configured input
+and must not be widened to anything network-derived** — an operator-supplied
+address is trusted because the operator supplied it, not because it was
+supplied out-of-band.
 
 **The rule is not a new mechanism — the tree already implements it on the gray
 path, and that is the evidence this reroute costs nothing.**
@@ -295,13 +316,38 @@ not for the trusted list.
 (`net_peerlist.h:246-256`) — the ingestion path the first rule already covers.
 The asymmetry was real and confined to the white list.
 
-**Conceded — this reroute has a cost, on the producer side.** Disclosure samples
-the white list only (`get_peerlist_head`), so a node reachable *only* inbound
-stops being advertised to third parties until some peer draws it from gray and
-dials it successfully. The latency is bounded by the housekeeping cadence — one
-random draw per zone per 60 s — not open-ended, but it is a real change to how
-quickly a new listener propagates. **Zone scope:** this writer is
-`zone.m_can_pingback`-gated, so the defect and the fix are **public-zone only**.
+**Conceded — this reroute has a real cost on the producer side, and an earlier
+version of this paragraph understated it with a bound that is not one.**
+Disclosure samples the white list only (`get_peerlist_head`), so a node
+reachable *only* inbound stops being advertised to third parties until some peer
+draws it from gray and dials it successfully.
+
+That paragraph said the latency is "bounded by the housekeeping cadence — one
+random draw per zone per 60 s — not open-ended." **The cadence bounds how often
+*a* draw happens, not how long *a given entry* waits, and the difference is
+large.** `get_random_gray_peer` selects uniformly at random from the gray list,
+so for a list of `G` entries the wait for any particular entry is geometric with
+`p = 1/G`: **expected `G` draws, i.e. `G` minutes — about 83 hours at the
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.** And
+`gray_peerlist_housekeeping` can skip a cycle entirely: it returns early when
+`m_offline` or when `m_exclusive_peers` is non-empty, and `continue`s per zone
+when the payload handler needs new sync connections or the zone has no
+connector. **Producer-side latency is therefore unbounded, and is conceded as
+unbounded.**
+
+**This does not change the ruling, and the reason is asymmetry of consequence.**
+The cost falls on *advertisement* of a node that is reachable only inbound; the
+benefit is denying an adversary the ability to place itself in a victim's white
+list at will. A slow-to-be-advertised honest listener is a liveness
+inconvenience that resolves itself on the first successful outbound dial from
+anyone; a freely-writable white list is an eclipse primitive. **Cluster B should
+consider a prioritised gray draw for back-ping-verified entries** — it would
+recover most of the latency without weakening the invariant, since the promotion
+would still require the outbound dial. Recorded as input to PWD-B1, not decided
+here.
+
+**Zone scope:** this writer is `zone.m_can_pingback`-gated, so the defect and
+the fix are **public-zone only**.
 
 **This is a behavioural change to inherited code, not a documentation
 correction**, and it changes white/gray composition and therefore dial
@@ -319,14 +365,37 @@ of 1000 still lets one connection cycle the entire white list.
 > (250) accepted records in total, counted across handshake *and* timed-sync
 > for the lifetime of that connection.**
 
-The derivation, so a later reader can check it rather than trust it: 250 is
-already *the most a peer may disclose in one message*, and **a second
-disclosure from the same peer adds no discovery value the first could not have
-supplied** — it is the same peer's view of the network, re-sent. So one
-message's worth is the whole of what a connection can honestly contribute, and
-anything beyond it is amortisation, which is exactly the attack. The ceiling
-therefore **inherits an existing constant instead of minting a new one**, which
-also means it cannot drift away from the per-message cap.
+**The derivation this ceiling first carried was wrong, and the tree refutes it
+directly.** It argued that 250 is already *the most a peer may disclose in one
+message* and that **"a second disclosure from the same peer adds no discovery
+value the first could not have supplied"** — the same peer's view, re-sent. Two
+mechanisms make that false:
+
+- **`get_peerlist_head` re-samples the whole white list on every call.** With
+  `anonymize` set it takes `pick_depth = m_peers_white.size()`, shuffles with
+  `crypto::random_device`, then resizes to `depth`
+  (`net_peerlist.h:294-330`). Each call is a **fresh random 250-subset of up to
+  1,000 entries**, not a repeat of the first.
+- **Timed-sync explicitly filters what it already sent** —
+  `if (!context.sent_addresses.insert(pe.adr).second) continue;`
+  (`net_node.inl:2674-2681`). The protocol deliberately makes later responses
+  carry *new* addresses, which is the opposite of the premise, and its existence
+  is evidence the original designers expected repeat disclosures to be
+  informative.
+
+So a peer can honestly contribute up to its **whole white list** — 1,000 records
+across four messages — and capping at 250 for the connection's lifetime **costs
+real discovery**: at most a quarter of any one peer's view.
+
+**The ceiling is kept, restated honestly as a policy choice with its cost
+named.** 250 is the security-relevant quantity because it is the point beyond
+which additional records are *amortisation over a single connection*, which is
+precisely Shi §III-A's mechanism; the value **inherits the existing per-message
+constant instead of minting a new one**, so it cannot drift away from the
+per-message cap. What it is *not* is free: it trades a quarter-view of each peer
+for a 20-connection floor on filling the graylist. **The steady-state discovery
+cost is the falsifier's subject below**, and if a fleet run shows cold-start
+discovery degrading past that trigger, the ceiling is the parameter to move.
 
 Against the attack: the graylist holds 5000, so filling it **by peerlist
 ingestion** now costs **20 distinct connections** rather than one connection
@@ -550,11 +619,24 @@ trust, or those are brought into scope. **If a later cluster produces a decision
 that depends on a numeric `g_max`, that dependency is itself a finding and this
 deferral is void.**
 
-### PWD-I5 — Q-10 closure is written back into `DAEMON_RELAY_PRIVACY.md`
+### PWD-I5 — the Q-10 write-back *obligation* is specified now; its discharge is gated on PWD-I4
 
 **RULED** as an obligation on whoever closes Q-10, discharging PW-26's
 requirement that the document declaring a dependency records its discharge —
 *"do not let this be a one-way read."*
+
+**What is ruled here is the obligation and its content, not the write-back.**
+An earlier heading read as though the closure had happened; it has not, and it
+cannot yet. `DAEMON_RELAY_PRIVACY.md:37-40` still records `ρ` as
+*underspecified, blocked on Q-10*, and **PWD-I4 defers `g_max`** — so the
+discharge is gated on that sub-round. This PR's edit to that document resolves
+the propagation-graph question in §91, which is a different open item.
+
+**It is nonetheless ruled rather than deferred with PWD-I4, deliberately.** The
+reconciliation below is decidable *now* and is exactly what a later closer would
+otherwise have to rediscover — reading either source alone specifies the wrong
+thing, silently. Deferring the obligation with the number would put the
+reconciliation in the same box as the thing it exists to protect.
 
 **The closure must carry this reconciliation, because reading either source
 alone specifies the wrong thing and both failures are silent:**
@@ -608,8 +690,11 @@ amortisation the whitelist attack needs." **Sub-attack ② needs no
 amortisation**: it inserts itself once per IP over an inbound connection and
 sends no peerlist record, so a ceiling counted in *records* never binds it. The
 contradiction was visible **inside this row** — the disposition table below
-defers **PWC-D11, the back-ping gate to the white list**, to cluster B, and
-PWC-D11 is precisely ②'s channel. A row cannot close a sub-attack while
+**deferred** *PWC-D11, the back-ping gate to the white list*, to cluster B while
+the prose closed ②, and PWC-D11 is precisely ②'s channel. **That table now rules
+PWC-D11's destination**, which is what removed the contradiction; this paragraph
+records the state it corrected, in the past tense, and the table is the current
+disposition. A row cannot close a sub-attack while
 deferring the mechanism that sub-attack uses. PWD-I2's third rule is what closes
 it, and PWC-D11's disposition changes accordingly.
 
@@ -639,14 +724,26 @@ is the test in both cases, and the Q12-D6a rig can run it.
   target value is **zero**: the invariant makes any non-zero reading a defect,
   not a threshold judgement.
 
-**A note the ② falsifier's instrument needs.** PWD-I2's own falsifier measures
-the **consumer** side — a cold node's time to `MIN_PROVISIONED_OUT_PEERS` — and
+**A third falsifier, on the producer side — and it exists because the reason
+first given for omitting it was false.** PWD-I2's own falsifier measures the
+**consumer** side — a cold node's time to `MIN_PROVISIONED_OUT_PEERS` — while
 the reroute's conceded cost is on the **producer** side, where an inbound-only
-listener waits to be advertised. The consumer-side trigger does not observe
-that, and it is not extended to, because the producer-side latency is
-**analytically bounded** by the 60 s housekeeping cadence rather than being an
-open question a fleet run would settle. If that cadence ever becomes a tuned
-parameter, this note is where the gap reopens.
+listener waits to be advertised. An earlier version of this note declined to
+extend the instrument on the grounds that producer-side latency was
+*"analytically bounded by the 60 s housekeeping cadence."* **It is not bounded
+at all**: the cadence governs how often *a* random draw occurs, not how long a
+*given* gray entry waits, which is geometric with `p = 1/G` — expected `G`
+minutes, ~83 hours at the 5,000 cap — and the housekeeping can skip cycles
+entirely (PWD-I2 carries the derivation and the early-return conditions).
+
+- **Producer side** — **Reopen if a fleet run shows median time-to-first-
+  advertisement for an inbound-only reachable node exceeding one hour**, measured
+  as the interval from its first accepted inbound handshake to its first
+  appearance in a third party's disclosed peerlist. The Q12-D6a rig is the
+  instrument. **This trigger is expected to fire**, which is why it is written as
+  a measurement rather than a hope: cluster B's prioritised-gray-draw option is
+  the intended remedy, and this falsifier is what tells it how much latency there
+  is to recover.
 
 ---
 
