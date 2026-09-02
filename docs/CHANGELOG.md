@@ -14,7 +14,7 @@
   demoted from *trusted* oracle to a differential reference for rules that are
   **both** ratified on record **and** carrying an **affirmative conformance
   record** — absence of a recorded divergence means *unreviewed*, not conformant,
-  so the checked set is **empty** until DRS-P0d populates it (a
+  so the checked set is **empty** until **DRS-P0f** (the per-row conformance review, minted here) populates it (a
   **conformance-exception register** holds the known divergences, seeded with
   CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
   intermediate engine (DEL-007), **redb stands**. Design-round detail — the

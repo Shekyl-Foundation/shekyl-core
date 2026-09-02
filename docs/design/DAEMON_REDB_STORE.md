@@ -25,8 +25,11 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > Rick ruled that the inherited C++ is **not a base**: its glitches and
 > irregularities are proven bad enough that a complete rewrite gates release.
 > This retires **DRS-D5**'s decompose-in-place rationale, empties the three
-> **DRS-D2** reopen bridges (they resolve to "ship genesis-on-LMDB", which is
-> both unavailable and now unshippable), inverts **DRS-P0c**'s FIX-IN-CPP-FIRST
+> **DRS-D2** reopen bridges of **D2-R1 and D2-R2** (both resolved to "ship
+> genesis-on-LMDB", which is unavailable on sequencing and unshippable under the
+> countermand — a reopen now means *testnet slips*); **D2-R3 survives** as an
+> engine question, but its "stay LMDB" arm now means a **Rust** store over LMDB,
+> never retaining the C++, inverts **DRS-P0c**'s FIX-IN-CPP-FIRST
 > default, and demotes the C++ from *trusted* oracle to a differential
 > reference for rules that are **both** ratified on record **and** carry an
 > **affirmative conformance record** (**CSR-3a**). Two things are insufficient:
@@ -36,14 +39,14 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > divergence*, which means **unreviewed**, not conformant, because the exception
 > register is explicitly incomplete. Three states: CHECKED-CONFORMANT (oracle),
 > DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
-> the checked set is **empty today** pending DRS-P0d. This invalidates the unhedged
+> the checked set is **empty today** pending **DRS-P0f** (the conformance register; *not* P0d, which is Digest v0). This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
 > clause is propagated into A2 / D11 / E2 — the digest is an oracle only where a
 > rule is **both** ratified **and** carries an **affirmative conformance record**
 > — absence of a recorded divergence means *unreviewed*, not conformant, and the
-> checked set is currently **empty** pending DRS-P0d, so the digest is a
+> checked set is currently **empty** pending **DRS-P0f**, so the digest is a
 > *regression* instrument across the board today (**CSR-3a**; register seeded
 > with CEN-L11)) and
 > **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
@@ -98,10 +101,13 @@ Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 *cost* is unmeasured and **must not** load-bearing-justify Path B (R2-4 / R-14).
 
 **Program:** re-census LMDB truth **and** build a layout-independent **state
-digest against LMDB** → decompose `blockchain.cpp` with that digest as oracle
-→ redb-native `shekyl-chain-store` behind stable surfaces → redb-only genesis
-**or** first-class genesis-on-LMDB under DRS-D2 reopen (§1.2, §1.5) with the
-quality program already landed.
+digest against LMDB** → **partition `blockchain.cpp` analytically** with that
+digest as regression oracle (DRS-C is **analysis-only** since CSR-4; the surfaces
+scope Rust rewrite increments, they are not C++ refactor PRs) → redb-native
+`shekyl-chain-store` behind stable surfaces → **redb-only genesis**.
+**The genesis-on-LMDB alternative is retired** by the 2026-09-01 countermand: it
+ships the C++ ruled unshippable. Its former text is kept in §1.5 and §8.2 as
+dated history only.
 
 ### 0.1 Success criteria — “Shekyl is better when …”
 
@@ -114,7 +120,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | # | Shekyl is better when … | Mission | Lands by |
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
-| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over any register row or bucket-3/4 row the digest is regression evidence, and must be reported as that | Security | DRS-P0 → C |
+| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence) | Security | DRS-P0 → C |
 | **A3** | Known durable-state **warts** are call-graph-traced; default **RECORD-AND-SPECIFY** (countermand 2026-09-01; FIX-IN-CPP only where the defect blocks the C++ from serving as an interim oracle for a *ratified, conformance-checked* row) (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
@@ -154,16 +160,17 @@ engine swap without A1–A3.
 | **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with **RECORD-AND-SPECIFY** default (inverted 2026-09-01 by the countermand; was FIX-IN-CPP-FIRST). | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
-| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set is **empty today** — DRS-P0d populates it per row. |
+| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set is **empty today** — **DRS-P0f** populates it per row (P0d is Digest v0 and cannot). |
 
 ### 1.1 Schedule honesty
 
 Genesis under D2-closed = full DRS-E\* (Tier A+B). The wallet rewrite is no
 longer on this path: Phase 5 closed 2026-08-19 (#507, `a9dc5e4db` —
 `src/wallet/` deleted), so the chain store is the long pole of the daemon
-cutover, not a co-runner behind the wallet. Under D2-reopen = **Tier A on
-LMDB** is the genesis product; redb is non-blocking post-genesis. DRS-C is
-unparked technically so D2-R2’s clock can start when C closes; D2-R1 is the
+cutover, not a co-runner behind the wallet. **Superseded 2026-09-01:** the former “under D2-reopen, Tier A on LMDB is the
+genesis product” reading is retired with the bridge itself — a reopen now means
+**testnet slips**, not a different genesis product. DRS-C is unparked as
+**analysis** so D2-R2’s clock can start when C closes; D2-R1 is the
 calendar backstop for the case where C never starts that clock.
 
 ### 1.2 DRS-D2 reopen criteria
@@ -172,9 +179,9 @@ calendar backstop for the case where C never starts that clock.
 
 | ID | Trigger | Bridge (**concrete**) |
 | --- | --- | --- |
-| **D2-R1** | **RE-ANCHORED 2026-09-02 (CSR-2): the trigger is the **testnet-gate event**, not a date** — its three legs are R8 dispatched, consensus rewrite complete, wallet complete. *History: PC-1 (2026-08-21) re-pointed the original wallet-Phase-5 trigger at “DRS-C not closed by 2027-04-01”; that date measured against a milestone that cannot arrive early, since testnet gates on this work and genesis is downstream of testnet.* | **The genesis-on-LMDB bridge is RETIRED** (countermand, 2026-09-01 — it ships the C++ ruled unshippable). A reopen now means **testnet slips**, recorded as a schedule outcome; Tier A remains required either way. |
-| **D2-R2** | **DRS-C closed**, but **DRS-E2** not green within **6 months** of C close | Same: genesis-on-LMDB + Tier A; E\* post-genesis |
-| **D2-R3** | **DRS-BENCH** fails §1.3 IBD floor (or resource DoS bounds) after one mitigation cycle | Reopen D6 / stay LMDB; Tier A still required |
+| **D2-R1** | **RE-ANCHORED 2026-09-01 (CSR-2): the trigger is the **testnet-gate event**, not a date** — its three legs are R8 dispatched, consensus rewrite complete, wallet complete. *History: PC-1 (2026-08-21) re-pointed the original wallet-Phase-5 trigger at “DRS-C not closed by 2027-04-01”; that date measured against a milestone that cannot arrive early, since testnet gates on this work and genesis is downstream of testnet.* | **The genesis-on-LMDB bridge is RETIRED** (countermand, 2026-09-01 — it ships the C++ ruled unshippable). A reopen now means **testnet slips**, recorded as a schedule outcome; Tier A remains required either way. |
+| **D2-R2** | **DRS-C closed**, but **DRS-E2** not green within **6 months** of C close | **Bridge retired 2026-09-01** (same reason as D2-R1: it ships the C++ ruled unshippable). Firing now means **testnet slips**; Tier A still required, E\* still the destination |
+| **D2-R3** | **DRS-BENCH** fails §1.3 IBD floor (or resource DoS bounds) after one mitigation cycle | **Reopen D6** — this one survives, because it is an *engine* question, not a ship-the-C++ question. But “stay LMDB” now means **a Rust store over LMDB via the rewrite**, never retaining the C++ implementation; Tier A still required |
 
 Reopen = decision-log + index update. Never silent.
 
@@ -187,7 +194,13 @@ the item that is now the long pole, with the same date and the same bridge.
 The date is the genesis-schedule backstop, not a wallet-specific estimate,
 and is unchanged.
 
-### 1.5 D2-reopen is a first-class good path
+### 1.5 D2-reopen is a first-class good path — **RETIRED 2026-09-01, kept as dated history**
+
+> **This section is no longer a live path.** The countermand ruled the inherited
+> C++ unshippable, so “Tier-A LMDB genesis” is not an available outcome: a D2
+> reopen means **testnet slips**, not a different genesis product. The text below
+> records the posture as it stood before 2026-09-01 and is deliberately not
+> rewritten.
 
 Under one decision-maker, **Tier A + LMDB at genesis** may be the *rational*
 outcome. The project **must not** thrash to finish redb for optics.
@@ -470,7 +483,8 @@ named exclusion. **No silent sampling.**
 
 | Class | Meaning | Artifacts |
 | --- | --- | --- |
-| **RECORD-AND-SPECIFY** (**default since 2026-09-01**) | Characterise the wart precisely enough that the Rust implementation gets it right; do **not** patch C++ scheduled for deletion (rules 20 + 15). Register row carries the specification, not a fix commit | Fix commit; register row **Closed** before harness depends on it |
+| **RECORD-AND-SPECIFY** (**default since 2026-09-01**) | Characterise the wart precisely enough that the Rust implementation gets it right; do **not** patch C++ scheduled for deletion (rules 20 + 15) | **Specification record** in the register (behaviour, call graph, intended Rust semantics); row **Closed** when the spec is complete, not when C++ changes |
+| **FIX-IN-CPP** (narrow exception) | Patch the C++ **only** where the defect blocks it from serving as an interim oracle for a *ratified, conformance-checked* row, or where leaving it risks fund safety before the rewrite lands | Fix commit **plus** the specification record; justification naming which row the fix unblocks |
 | **REPLICATE** | Must match C++ including wart (only if FIX impossible without unacceptable pre-cutover churn) | Digest includes warted semantics; KAT |
 | **DIVERGE-INTENTIONALLY** | Intentional semantic change at engine swap | Named digest exclusion + **replacement KAT**; weakens total coverage — **reserve** |
 
@@ -509,7 +523,7 @@ flowchart TD
   CI[DRS-CI bidirectional schema/audit/digest gates]
   TLB[DRS-TLB TestLedgerBuilder]
   W[Wallet rewrite bandwidth DRS-D4]
-  C[DRS-C decompose blockchain.cpp LMDB + digest oracle]
+  C[DRS-C analysis-only surface partition + digest oracle]
   D0[DRS-0 redb schema accumulators reconstructible state privacy durability]
   E1[DRS-E1 shekyl-chain-store]
   E2[DRS-E2 redb matches LMDB digests correctness only if conformance-checked]
@@ -550,7 +564,7 @@ flowchart TD
 | **DRS-P0** | **One pass, four (+digest) outputs** — see §7.1 | **Now** | Blocks DRS-0. Independent value. Escalation ladder §7.2. |
 | **DRS-CI** | Bidirectional inventory gates (§9) | With P0 | Makes R-1 class unrepresentable (E-3). |
 | **DRS-TLB** | TestLedgerBuilder design+impl | Standalone | Critical path E2/B. |
-| **DRS-C** | Decompose `blockchain.cpp`; digest-identical extractions | When **bandwidth** allows | Unparked technically (E-5). Starts D2-R2 clock on close. |
+| **DRS-C** | **Analysis only (CSR-4):** partition `blockchain.cpp` into named surfaces to scope Rust rewrite increments; digest-stable, **no C++ refactor PRs** | When **bandwidth** allows | Unparked technically (E-5). Starts D2-R2 clock on close. |
 | **DRS-0** | redb map from censused inventory; accumulators (R2-6); reconstructible-derived-state (E-6); privacy; durability; IBD floor; format policy | After P0; informed by BENCH | |
 | **DRS-E1…E5** | Store, digests-on-redb, curve storage, archival **cursor/delete-shell**, pool/utils | After 0 + C preferred | E4 ≠ 1:1 rehost (E-7) |
 | **DRS-MAT** | Wallet Phase 6a / Track-2 as **LMDB×redb CI matrix** from first redb read path | During shadow | Continuous discharge (E-8), not a late phase |
@@ -638,8 +652,8 @@ IBD floor from DRS-0).
 ### 8.1 DRS-D2 **closed** (redb-only genesis) — Tier A + B
 
 - [ ] **§0.1 A1–A10** all green
-- [ ] DRS-P0a–P0d complete (multi-PR envelope §7.1)
-- [ ] DRS-C progressed with digest-stable extractions; surface map §3.5 updated
+- [ ] DRS-P0a–P0d complete (multi-PR envelope §7.1); **P0f** conformance register populated for every row E2 claims as correctness
+- [ ] DRS-C progressed as **analysis** (CSR-4): surface map §3.5 updated and used to scope Rust rewrite increments — **not** C++ refactor PRs; digest stability checked per CSR-3a's per-state acceptance
 - [ ] Divergence register: every row RECORD-AND-SPECIFY-complete (or an explicitly justified FIX-IN-CPP); no unaudited DIVERGE
 - [ ] DRS-BENCH suite green vs §1.3 floors; durability config on artifact
 - [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory)
@@ -651,7 +665,11 @@ IBD floor from DRS-0).
 - [ ] Deletion register empty; production `shekyld` does not link liblmdb
 - [ ] **§0.1 B1–B3** met (Path B / no permanent façade)
 
-### 8.2 DRS-D2 **reopened** (Tier-A LMDB genesis) — **first-class success**
+### 8.2 DRS-D2 **reopened** — **RETIRED 2026-09-01, kept as dated history**
+
+> **Not a live checklist.** “Tier-A LMDB genesis” is off the menu under the
+> countermand; a reopen means testnet slips. Preserved unrewritten because it
+> records what the programme committed to before that ruling.
 
 **Required (do not shame):**
 
@@ -821,7 +839,7 @@ the trigger (#507) and was missed there.
 | **2026-09-01** | **heed retired** (DEL-007) — no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero. **D6 unchanged: redb stands.** **D4 substantially discharged** (bandwidth constraint, wallet ~90%) |
 | **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same six files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
 | **2026-09-02** | **CSR-3 corrected on review (CSR-3a).** The oracle scope propagated on 2026-09-01 was **ratification-only**, and CEN-L11 disproves it: bucket 1, ratified spec (`CURVE_TREE_CLIENT.md`, `FCMP_PLUS_PLUS.md`), implementation silently omits an accepted output from the curve tree (`blockchain_db.cpp:570–576`, no verify-time twin). A bucket says a rule is *ratified*, never that the C++ *implements* it. **A2 / D11 / E2 and the §7 flowchart label now require both ratification and no recorded spec-vs-implementation divergence** — **that second condition was inverted to an affirmative one later the same day; see the next row. This entry records the first formulation and is deliberately not rewritten.** Rows failing it go on the conformance-exception register ([`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1, seeded with CEN-L11, **not proven complete**). **E2 must consult the register before asserting any parity claim as correctness.** The census header was extended in the same change so the specification input does not retain the unsafe rule |
-| **2026-09-02** | **CSR-3a condition inverted to fail closed (same-day correction).** The conformance condition was first written negatively — *not on the exception register* — which is unsafe while that register is explicitly incomplete: absence means **unreviewed**, not conformant, so an unexamined bucket-1/2 row would have taken correctness-oracle status by default. Now **affirmative**: three states (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default **regression-only**, and the checked-conformant set is **empty today** — DRS-P0d populates it per row, on record. A2 / D11 / E2 and the §7 label updated; census header likewise |
+| **2026-09-02** | **CSR-3a condition inverted to fail closed (same-day correction).** The conformance condition was first written negatively — *not on the exception register* — which is unsafe while that register is explicitly incomplete: absence means **unreviewed**, not conformant, so an unexamined bucket-1/2 row would have taken correctness-oracle status by default. Now **affirmative**: three states (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default **regression-only**, and the checked-conformant set is **empty today** — **DRS-P0f** populates it per row, on record (corrected the same day: this entry first said P0d, which is Digest v0). A2 / D11 / E2 and the §7 label updated; census header likewise |
 
 ---
 
@@ -861,4 +879,4 @@ Verified against `blockchain_db.cpp` / `db_lmdb.cpp` / headers. These are
 warts, explicit durability, resource/privacy bounds, encoding KATs,
 decomposed surfaces) on whatever engine ships; prefer reconstructible
 `shekyl-chain-store` (redb) for Tier B only when that quality bar is met —
-and treat Tier-A LMDB genesis as success if D2 reopens.**
+**The Tier-A-LMDB-genesis outcome is retired** (countermand 2026-09-01): a D2 reopen means testnet slips, not a different genesis product.**

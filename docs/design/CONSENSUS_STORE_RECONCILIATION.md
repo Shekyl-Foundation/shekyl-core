@@ -234,6 +234,11 @@ partition is how the rewrite is scoped and reviewed. `DAEMON_REDB_STORE.md`
 All three triggers bridge to the same place: *"ship genesis-on-LMDB; DRS-E\*
 post-genesis."* Two independent reasons that is now unavailable:
 
+**Scope note (2026-09-02):** this retires the bridges of **D2-R1 and D2-R2**.
+**D2-R3 survives** — it is an *engine* trigger (BENCH failing the IBD floor),
+not a ship-the-C++ trigger — but its "stay LMDB" arm now means a **Rust** store
+over LMDB via the rewrite, never retaining the C++ implementation.
+
 1. **Sequencing** (Rick, 2026-09-01): testnet is gated on this work plus
    consensus plus the wallet. Genesis is downstream of testnet. A milestone
    downstream of the work cannot arrive before it, so "genesis ships on LMDB"
@@ -353,11 +358,13 @@ closed.
 
 **Today the CHECKED-CONFORMANT set is empty.** No row has an affirmative
 conformance record, so *no* row is currently a correctness oracle — the digest
-is a regression instrument across the board until **DRS-P0d** produces those
+is a regression instrument across the board until **DRS-P0f** produces those
 records. That reads as a strong claim, and it is the honest consequence of the
 countermand: ruling an implementation defective and then treating it as a
 correctness oracle for everything nobody has looked at yet is the contradiction
-CSR-3a exists to remove. Populating the set is P0d's work, per row, on record.
+CSR-3a exists to remove. Populating the set is **DRS-P0f**'s work, per row, on
+record — a deliverable minted for exactly this, because P0d is Digest v0 and
+cannot produce a conformance verdict.
 
 **The register lists REVIEWED rows only, in either outcome.** Absence from it is
 not an entry and not a claim — it *is* the UNREVIEWED state, which keeps the
@@ -385,8 +392,8 @@ spec clause is not an implementation divergence.
 **The register is NOT proven complete, and must not be read as such.** It was
 seeded by examining this document's 18 store-enforced rows plus a keyword sweep
 of bucket-1/2 rows census-wide; a keyword sweep cannot establish absence.
-**Obligation (CSR-3a):** determining the full set is a **DRS-P0d / census** job —
-P0d's digest definition and DRS-E2's parity claims must consult this register
+**Obligation (CSR-3a):** determining the full set is a **DRS-P0f / census** job —
+P0f's conformance review and DRS-E2's parity claims must consult this register
 and extend it, and no parity claim may assert *correctness* for a bucket-1/2 row
 until that row has been checked against it. Rows enter the register from either
 side: a census round finding a divergence, or P0's wart pass finding one.
@@ -486,7 +493,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
 | **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
-| **CSR-3a** | The **conformance-exception register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN, seeded** — CEN-L11 confirmed; CEN-L12 examined and excluded. **Not proven complete**; DRS-P0d and the census own extending it, and E2 must consult it before calling any match correctness |
+| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN, seeded** — CEN-L11 confirmed DIVERGENT; CEN-L12 examined and excluded; no CHECKED-CONFORMANT rows yet. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
