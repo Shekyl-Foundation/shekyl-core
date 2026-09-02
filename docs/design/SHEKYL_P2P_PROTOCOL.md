@@ -144,9 +144,28 @@ citing Cao et al.), refused wholesale if any entry is from another zone
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
 | Status quo | — | **Refused.** Shi et al. §III-A fills the 5000-entry FIFO graylist from *timed-sync responses* alone; §III-B cycles 1000 IPs through the white list |
-| **Restrict peerlist disclosure to outbound-initiated exchanges** | The graylist-filling adversary, over inbound connections it opened | **Adopted** — the paper's own §VII-A countermeasure, and it removes the channel rather than rate-limiting it |
+| **Accept peerlist records only on connections *this node initiated outbound*** | The graylist-filling adversary, over inbound connections it opened | **Adopted — and note this is *receiver-side*.** An earlier draft adopted the mirror of this (restricting what we *disclose*) and **it defends nothing**: see the correction below |
 | **Cap records accepted per connection, not just per message** | The same adversary, amortising across many messages | **Adopted, and the ceiling is derived below** — 250/message with no per-connection ceiling is a cap on the wrong quantity |
 | Stop disclosing entirely | Topology mapping | **Refused** — peer discovery on an open gossip network needs it; and PW-3a records that discoverability is *structurally* incompatible with clearnet node anonymity anyway, so paying liveness for a property that cannot be bought is a bad trade |
+
+**Correction — the first version of this rule pointed the wrong way, and would
+have shipped a countermeasure that defends nothing.** It said "restrict peerlist
+**disclosure** to outbound-initiated exchanges," which changes what this node
+*sends*. The attack does not consume what we send. Traced at the pin:
+`peer_sync_idle_maker` (`net_node.inl:2063-2085`) iterates **every** handshaked
+connection with no `m_is_income` filter, so the victim sends a timed-sync
+*request* over the attacker's inbound connection; the attacker answers with a
+response carrying 250 trash records; and the victim **accepts** them via
+`handle_remote_peerlist` (`:1169`). **The poisoning channel is what we accept on
+a connection the attacker opened, not what we disclose.** Restricting disclosure
+leaves it fully open, and would additionally have cost peer discovery for
+nothing.
+
+The directional asymmetry is already established in that exact function, which
+is what the rule should have followed: `set_peer_just_seen` at `:1175` is
+guarded by `if(!context.m_is_income)` — whitelist *promotion* is already
+outbound-only. **This rule extends the same guard to peerlist
+*acceptance*.**
 
 **The per-connection ceiling, derived rather than picked.** A cap without a
 value is not a decision, and the security claim depends on the value: a ceiling
@@ -178,8 +197,8 @@ amortisation per connection; it does not bound an adversary willing to open
 many connections** — that is `has_too_many_connections`' job, and it is
 public-zone-only (PWC-E11), which cluster B owns.
 
-**Falsifier.** Restricting disclosure to outbound exchanges is expected to leave
-peer discovery viable at the deployed out-degree. **Reopen if a fleet run shows
+**Falsifier.** Accepting records only on outbound-initiated connections is
+expected to leave peer discovery viable at the deployed out-degree. **Reopen if a fleet run shows
 median time-to-`MIN_PROVISIONED_OUT_PEERS` on a cold node exceeding the current
 figure by more than 2×** — the Q12-D6a rig is the instrument, and that is a
 recognisable trigger rather than a judgement call.
@@ -198,8 +217,11 @@ mechanism.
   persisted and its KV map is never sent (PWC-D5).
 - **`first_seen` is an ordering input, not a log value** — it is the container's
   `by_time` index, and `get_and_empty_anchor_peerlist` drains through it while
-  the dial loop stops at the first success, so it decides *which* anchors take
-  the two slots.
+  the dial loop stops at the first success. **It therefore decides which anchor
+  is tried first, and — given the dial path yields at most one anchor-backed
+  connection (PWD-I4) — effectively which single anchor is kept.** An earlier
+  draft said "which anchors take the two slots"; that inherited the 2-slot
+  premise the same review withdrew.
 
 **The constraint this decision must not lose (`DAEMON_RELAY_PRIVACY.md` §39, F-8).** `forget`-on-close
 resets tallies at **connection** granularity, so the convergence condition is
@@ -286,9 +308,10 @@ deferral from anything with a freeze date.
   (`net_node.inl:1438-1470`) `return true`s after the **first** successful
   dial; and only that one peer is re-inserted, by `append_with_peer_anchor` at
   `net_node.inl:1361` on successful handshake. The rest of the local vector
-  goes out of scope. **So on a cold restart the node gets exactly one
-  anchor-backed connection, and every other persisted anchor is silently
-  destroyed** — the second loop iteration sees only the peer it just connected
+  goes out of scope. **So on a cold restart the node gets *at most* one
+  anchor-backed connection — zero if every persisted anchor fails to
+  handshake — and every other persisted anchor is silently destroyed either
+  way**, because the container was cleared before any dial was attempted — the second loop iteration sees only the peer it just connected
   to, `is_peer_used` is true, and the loop ends.
 
   The anchor set does regrow, because every successful outbound connect calls
@@ -397,7 +420,8 @@ sub-attack ③'s two arms are already answered (private-transaction arm
 structurally inapplicable since RT-9 removed `--public-node`; D++ arm refused
 because a double-spend is a no-drop offense), while **sub-attacks ① and ②
 remained unaddressed**. PWD-I2's two changes close both: restricting disclosure
-to outbound-initiated exchanges removes the graylist-filling channel, and a
+records only on outbound-initiated connections removes the graylist-filling
+channel at the point the attack actually uses, and a
 per-connection acceptance cap removes the amortisation the whitelist attack
 needs.
 
@@ -408,7 +432,7 @@ no Shekyl record has examined it. **A rewrite that re-derives the tx-ingest path
 from the census would drop it silently.** Cluster B owns that as PWD-B7.
 
 **Falsifier.** **Reopen if a fleet run reproduces graylist saturation under the
-restricted-disclosure rule** — the paper's own attack is the test, and the
+outbound-only-acceptance rule** — the paper's own attack is the test, and the
 Q12-D6a rig can run it.
 
 ---
