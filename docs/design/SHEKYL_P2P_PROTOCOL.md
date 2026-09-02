@@ -1,6 +1,6 @@
 # Shekyl P2P protocol — normative specification
 
-**Status:** IN PROGRESS — **cluster I (identity and Sybil resistance) delivered
+**Status:** OPEN — **P2P-2 design round; cluster I (identity and Sybil resistance) delivered
 for ratification; clusters T, B and A not yet drafted.** Produced by the P2P-2
 design round dispatched on
 [`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md). Ratification is Rick's,
@@ -248,8 +248,31 @@ a standing challenge nobody runs is decoration.
 | 2 | `is_peer_used` `:1213`, `:1238` | Don't dial an address whose stored id is my own | **Same job as #1, earlier.** Pure optimisation — losing it costs one wasted dial that #1 catches a moment later |
 | 3 | `is_peer_used` `:1219`, `:1244` | Duplicate-connection avoidance | **Replaced by an address-based same-host outbound cap** — see below; the cap is *stronger* than the id |
 | 4 | `:2585` / `:2792` | Back-ping: is this address the node that handshaked me? | **Deleted, not replaced** — its only job was gating whitelist promotion of an inbound peer, which PWD-I2 has already forbidden. Consumer inventory run below |
+| **5** | `net_node.h:271`, `:2708-2712`, `:2072-2075` | **Handshake-complete sentinel** — `context.peer_id` starts at `0` and is read as a boolean: reject a second handshake, and *"do idle sync only with handshaked connections"* | **Replaced by an explicit local session-state flag.** Nothing here needs a *value*, only the fact that a handshake completed — which this node **observed** |
 
-All four are public-zone-gated. **On anonymity zones the identifier does no work
+**Job 5 was missing from the first version of this table, and its absence is the
+fourth instance of §1's fifth check — on the check's own round.** The
+enumeration was run over the **identity** frontier: peerlist entries, handshake
+fields, dial selection. `context.peer_id`'s use as a **connection-state**
+sentinel is on a different frontier entirely, and nothing in the identity sweep
+could reach it. **Had the field been removed as first ruled, every connection
+would sit at `peer_id == 0`**: the double-handshake guard would never fire, and
+`peer_sync_idle_maker` would exclude **every** peer from timed sync — a
+network-wide liveness failure, not a degradation.
+
+> **Ruled: the connection context carries an explicit `handshake_complete` flag,
+> set locally when the handshake completes. Never on the wire.** Routed to
+> **PWD-T1** with the nonce.
+
+**This is the fourth check making the design better rather than merely
+smaller.** An identifier doubling as a sentinel is the *assertion* pattern one
+level in: the value's presence is being read as a claim about session state,
+when session state is something this node **observes directly**. A boolean named
+for its job cannot be zero-by-accident, cannot collide, and states its meaning at
+every read site — three properties the overloaded identifier had none of.
+
+Jobs 1–4 are public-zone-gated; **job 5 is not** — it runs on every zone, which
+is why its replacement is not optional on any of them. **On anonymity zones the identifier does no work
 at all**: self-detection is already a plain address comparison against
 `m_our_address` (`net_node.inl:1291`, `:1697` — *"It's ourselves, obviously don't
 take that"*), which is correct because a node on an anonymity network
@@ -408,7 +431,7 @@ review.
 
 | Option | Adversary / channel it answers | Verdict |
 | --- | --- | --- |
-| **No identifier on the wire; nonce + same-host cap + session challenge** | The peerlist-scraping observer correlating `(address, id)` pairs network-wide, and across zones | **Adopted.** No job requires the field; two are nonce-shaped, one is better served by an address cap, one is *weakened* by the exposure |
+| **No identifier on the wire; nonce + same-host cap + local session-state flag, and the back-ping deleted outright** | The peerlist-scraping observer correlating `(address, id)` pairs network-wide, and across zones | **Adopted.** No job requires the field; two are nonce-shaped, one is better served by an address cap, one is *weakened* by the exposure |
 | Keep per-process random `peer_id` (the original verdict) | Self-connection and duplicate detection, locally | **Refused on amendment.** It is a node-scoped identifier broadcast to every peer and propagated in peerlists, bought with an occasional avoided dial. **That trade does not survive being written down** |
 | Remove from `peerlist_entry`, keep in the encrypted handshake | The gossip-scraping observer only | **Refused as insufficient, though it is the safe fallback.** It closes the network-wide surface and preserves #3 exactly; it is recorded here because if the same-host cap proves unworkable in cluster B, **this is the position to retreat to** rather than reinstating gossip exposure |
 | Durable node id | Sybil-resistance-by-identity | **Refused — PW-19a**, unchanged from the original verdict |
@@ -599,17 +622,31 @@ by the old inbound back-ping path survive an upgrade and would hold white-list
 membership no outbound dial ever earned** — the fix would ship while the
 violation persisted in every existing datadir, and nothing would signal it.
 
-> **Ruled: on first load after the store bump, persisted white-list entries are
-> reclassified to gray; the anchor and gray lists are unaffected.**
+> **Ruled: the store-version bump drops the persisted peerlist wholesale, and
+> the node re-bootstraps from seeds. No reclassification.**
 
-Reclassification rather than deletion, because the addresses are still good
-discovery data — what is not inherited is the *trust*. Every reclassified entry
-re-earns white through `gray_peerlist_housekeeping`'s outbound dial, which is
-the same route this decision requires of everything else, so the store converges
-to a state the invariant describes instead of being asserted to already be in
-one. **Precedent and mechanism both exist:** #587's store bump already drops the
-anchor list on first load after upgrade, and this is the same shape one list
-over.
+**An earlier version of this ruling said white entries are "reclassified to
+gray, anchor and gray unaffected", and cited #587 as precedent. Both halves were
+wrong, and the second is what made the first look achievable.** `load_peers`
+(`net_peerlist.cpp:79-85`) returns `{}` for **any** pre-current version, before
+reading a single list — its own comment says *"A pre-current store is dropped
+wholesale (the node re-bootstraps)."* #587 is precedent for **exactly that
+mechanism**, not for a selective migration one list over. Selective
+reclassification would need a **new backward-compatible reader for v7**, and
+without one the ruling as written would have silently become a full peerlist
+reset anyway — arriving as a surprise rather than as a decision.
+
+**The drop is adopted rather than the reader, and pre-genesis is why.** Building
+format-migration machinery on a persisted path, to preserve a peerlist across a
+single upgrade, on a chain with no long-lived stores, is precisely the debt
+[`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) says not
+to take on. **The invariant is then satisfied by construction — the list is
+empty — rather than by a migration whose correctness would itself need
+gating.**
+
+**Conceded:** one cold bootstrap at upgrade, on the existing and already-tested
+path. The discovery data that reclassification would have preserved is
+re-acquired from seeds in the ordinary way.
 
 **This is a persisted-state semantic change, so it takes a version-constant bump
 under [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)** —
@@ -1148,7 +1185,7 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
 | PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
-| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* is **answered: the back-ping is deleted**, its only consumer having been the promotion PWD-I2 forbids. **PWD-B10** carries the deletion and `COMMAND_PING`'s removal.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
+| PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
 **Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅ *(PWC-D11 moved
 deferred → ruled when the white-list writer invariant was adopted; the count of

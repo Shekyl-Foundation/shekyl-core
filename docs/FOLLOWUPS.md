@@ -690,13 +690,13 @@ Default. Lands before genesis if it should exist at launch.
 - **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **Implement PWD-I2's first two ruled rules — outbound-only peerlist acceptance and the 250-record per-connection ceiling — and examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream) that a rewrite would otherwise drop silently.** The third rule (white-list writer invariant) is queued separately below. PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
+- **Implement PWD-I2's first two ruled rules — outbound-only peerlist acceptance and the 250-record per-connection ceiling — and examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream) that a rewrite would otherwise drop silently.** The third rule (white-list writer invariant) lands with the back-ping deletion and the store bump in the row below, which is one composable change. PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis
 
 - **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
   - Target: pre-genesis
 
-- **p2p lane: route `net_node.inl:2766` from `append_with_peer_white` to `append_with_peer_gray`**, so an inbound peer that answers a back-ping no longer inserts itself into the white list; `gray_peerlist_housekeeping` then promotes it only after an outbound dial succeeds. Behavioural — PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2
+- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into **gray** after handshake, and bump the peerlist store version (which drops the persisted list).** The three are one outcome, not three items: `net_node.inl:2766` sits *inside* the `try_ping` callback that the deletion removes, so a standalone "reroute :2766" would be erased by it, and without the bump old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B10
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)

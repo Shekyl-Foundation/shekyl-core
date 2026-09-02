@@ -14890,6 +14890,8 @@ decisions none of which was made for it:**
 | decision | made for | effect here |
 | --- | --- | --- |
 | `ANON_ZONE_SENTINEL_PEER_ID = 1` | stop passive IP↔onion correlation via the handshake field | inbound anon peers carry no distinguishing id |
+| `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
+| `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
 
 > **Superseded in design 2026-09-02, and this composition gets *stronger*, not
 > weaker — but the text above becomes false and must be re-grounded when the
@@ -14912,8 +14914,6 @@ decisions none of which was made for it:**
 > **Nothing about A changes.** The leg is currently satisfied by the sentinel and
 > will be satisfied by the field's absence; it is never unsatisfied in between,
 > because P2P-3 removes the field on both zones at once.
-| `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
-| `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
 
 The third is the one that closes it. On an `OutboundOnly` zone the fluff loop
 skips every peer whose direction is inbound, so for an adversary `A` to receive

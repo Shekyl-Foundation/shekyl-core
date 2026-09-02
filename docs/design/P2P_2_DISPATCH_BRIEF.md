@@ -506,12 +506,12 @@ bucket-4 mass lives here.
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| PWD-I1 | Session identity: fully ephemeral, no durable peer id on the wire | PW-19, PW-19a, PWC-D4 |
-| PWD-I2 | Peerlist disclosure: size, anonymisation, and whether both handshake and timed-sync carry it | PWC-D1, PWC-D2, PWC-B4, PW-16 |
-| PWD-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, `P2P_1_WIRE_CENSUS.md` §5.4 |
-| PWD-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
-| PWD-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
-| PWD-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-D3, PWC-D10, PWC-D11 |
+| PWD-I1 | Session identity — **DELIVERED, and the verdict reversed on amendment (2026-09-02): no peer identifier on the wire at all.** `peer_id` leaves `basic_node_data`, `id` leaves `peerlist_entry`; five jobs replaced by a zone-scoped nonce, an address-based same-host cap (PWD-B9), a local `handshake_complete` flag, and deletion of the back-ping (PWD-B10) | PW-19, PW-19a, PWC-D4 |
+| PWD-I2 | **DELIVERED.** Peerlist *acceptance* is restricted (disclosure is retained unchanged): outbound-only acceptance, a 250-record per-connection ceiling, and a white-list writer invariant closing Shi §III-B | PWC-D1, PWC-D2, PWC-D3, PWC-D10, PW-16 |
+| PWD-I3 | **DELIVERED.** Tenure is address-keyed, never serialized, ordered by `first_seen` — which decides which *single* anchor is kept, the multi-slot premise having been withdrawn | PWC-D5, PWC-D6, PW-17, PW-18 |
+| PWD-I4 | **DEFERRED to its own sub-round with blockers named** — `ρ`/`g_max` is not specified here; it must derive against the *fixed* anchor and white/gray behaviour, not the current one | PW-25, PWC-E6, Q-10 |
+| PWD-I5 | **DELIVERED as an obligation, not a closure** — the Q-10 write-back into `DAEMON_RELAY_PRIVACY.md` is specified now; its *discharge* is gated on PWD-I4 | PW-26, §12.10, §7 |
+| PWD-I6 | **DELIVERED.** Shi ① and ② are closed by PWD-I2's three rules; the inherited double-spend no-drop guard is recorded as the one residue, owned by PWD-B7 | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-E7 |
 
 ### 2.4 Cluster A — the archival submission-path gap
 

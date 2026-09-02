@@ -206,13 +206,17 @@ pub enum FluffReach {
     /// `basic_node_data` and from `peerlist_entry` — so once P2P-3 lands, the
     /// clause naming the sentinel names a constant that no longer exists.
     ///
-    /// **Point 2 survives and strengthens.** It needs the adversary to hold no
-    /// distinguishing identifier on the direction that carries the emit; the
-    /// sentinel supplies that today by pinning the value to `1` on anonymity
-    /// zones, and the field's absence supplies it afterwards on *every* zone,
-    /// unconditionally. The leg is never unsatisfied in between. **When the
+    /// **Point 2 survives, and the claim stays scoped to anonymity zones.** It
+    /// needs the adversary to hold no distinguishing identifier on the
+    /// direction that carries the emit. The sentinel supplies **one half** of
+    /// that today by pinning the value to `1`; `tor_address::unknown()` on
+    /// inbound supplies the other, and **only the first half is superseded**.
+    /// Removing the field does not extend Point 2 to clearnet: a clearnet
+    /// counterparty still holds the connection's IP address, and this spec
+    /// concedes that clearnet gives confidentiality and integrity, not
+    /// anonymity (PW-3a). The leg is never unsatisfied in between. **When the
     /// field is removed, rewrite the clause to cite the absence rather than the
-    /// constant** — the argument gets shorter, not weaker.
+    /// constant** — the argument gets shorter, not wider.
     OutboundOnly,
 }
 

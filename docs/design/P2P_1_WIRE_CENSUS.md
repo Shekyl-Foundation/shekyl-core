@@ -298,14 +298,14 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | ID | Commitment | Evidence | Class | B | Seeds |
 | --- | --- | --- | --- | --- | --- |
 | PWC-B1 | Four p2p commands exist: 1001 handshake, 1002 timed-sync, 1003 ping, 1007 support-flags. **1004-1006 are unallocated** — an absence, verified by the gap in the ID sequence at both stacks | `p2p_protocol_defs.h:196, 232, 267, 299`; `commands.rs:18-24` | `none` | 4 | — |
-
-> **Ruled 2026-09-02 — `SHEKYL_P2P_PROTOCOL.md` PWD-I1/PWD-B10: 1003 `COMMAND_PING` is deleted, so three commands survive, not four.** Its only invoker was `try_ping`, whose one caller gated the inbound whitelist promotion PWD-I2 forbids. The command did not need its own argument; it fell when its consumer did.
 | PWC-B2 | `basic_node_data` carries exactly four fields: `network_id`, `peer_id`, `my_port`, `support_flags` | `p2p_protocol_defs.h:172-185`; `types.rs:18-27` | `none` | 4 | — |
 | PWC-B3 | `rpc_port` and `rpc_credits_per_hash` are **absent** from the handshake and from peerlist entries — deleted as contrary to RT-9's no-public-RPC-advertisement posture | #587 (`cf3b13c29`); `RPC_TRANSPORT_POSTURE.md:559` UPDATE 2026-08-31; absence confirmed at `p2p_protocol_defs.h:172-185` | `ratified` | **2** | PW-14 |
 | PWC-B4 | Handshake response carries the peerlist; timed-sync response carries it again — two peerlist-disclosure surfaces, not one | `p2p_protocol_defs.h:214`, `:246`; `commands.rs:65`, `:119` | `none` | 4 | PW-16 |
 | PWC-B5 | `support_flags` advertises `FLUFFY_BLOCKS(0x01) \| ZSTD_COMPRESSION(0x02)`; a peer reporting 0 is re-queried out-of-band via 1007. **Both halves are public-zone-only**, which the row states because it changes what an anonymity-zone peer looks like on the wire: only `public_zone` is assigned `P2P_SUPPORT_FLAGS` at init, so anonymity zones advertise `0`, and `try_get_support_flags` returns early for any non-public zone — so an anonymity peer advertises nothing and is never re-queried | `cryptonote_config.h:257-259`; `net_node.inl:145-147` (public zone only), `:2613-2614` (early return), `:2771-2775` | `none` | 4 | — |
 | PWC-B6 | Ping response echoes the responder's `peer_id`, and the back-ping caller **requires it to match** the handshake-advertised id or closes | `p2p_protocol_defs.h:280-290`; `net_node.inl:2585-2590` | `none` | 4 | PW-19 |
 | PWC-B7 | `my_port` is zeroed when `--hide-my-port` is set or the zone cannot pingback; the back-ping is skipped entirely when it is 0 | `net_node.inl:2151-2160`, `:2512-2513` | `none` | 4 | — |
+
+> **Ruled 2026-09-02 — `SHEKYL_P2P_PROTOCOL.md` PWD-I1/PWD-B10: 1003 `COMMAND_PING` is deleted, so three commands survive, not four.** Its only invoker was `try_ping`, whose one caller gated the inbound whitelist promotion PWD-I2 forbids. The command did not need its own argument; it fell when its consumer did.
 
 ### 4.C cryptonote notify schemas (2001-2010)
 
