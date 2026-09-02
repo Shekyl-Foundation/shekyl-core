@@ -24,9 +24,11 @@
   FIX-IN-CPP-FIRST to RECORD-AND-SPECIFY; and the C++ demoted from *trusted*
   oracle to a differential reference **for rules ratified on record only**,
   which invalidates the unhedged "trusted LMDB digest" phrasing in DRS-A2 /
-  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — every peer is at
-  height 1, genesis only, and a genesis-only datadir is disposable, so on-disk
-  format compatibility is worth zero); **redb stands**
+  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — no block has been
+  mined on any network, and the height-1 genesis block is regenerated
+  deterministically from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so
+  there is no persisted state to preserve and on-disk format compatibility is
+  worth zero); **redb stands**
   (DRS-D6 unchanged); **DRS-D4 substantially discharged** (wallet ~90%).
   CSR-1…CSR-5 are proposals awaiting ruling; no consensus rule, queue order, or
   schema is decided. C2-R3 landed mid-work (PR #592), re-bucketing the census to

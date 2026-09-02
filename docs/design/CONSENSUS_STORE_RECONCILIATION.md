@@ -266,12 +266,15 @@ a schedule outcome, never a return to shipping the C++.
 
 redb stands. **heed is retired by Rick's own argument, not by BENCH:** its sole
 advantage over redb is on-disk format compatibility with the C++ LMDB, and
-**not a single block has been mined on any network**: every peer reports height
-1 — genesis only (observed 2026-09-01,
+**not a single block has been mined on any network**. Every peer is at height 1
+(observed 2026-09-01,
 [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md)),
-so the only persisted rows are the genesis block's, and a genesis-only datadir is
-disposable by delete-and-resync (the V10/V11 precedent). Format compatibility
-with a datadir that is thrown away on the next schema bump is worth zero. Format compatibility with a corpus that does not exist
+and that genesis block is **regenerated deterministically** from the
+`GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the
+store is empty (`blockchain.cpp:513`) — in any engine, at trivial cost. The
+genesis rows are a *derived artifact of a repo constant*, not state: they carry
+no information the source tree does not already hold. So there is nothing on
+disk to preserve, and on-disk format compatibility is worth zero. Format compatibility with a corpus that does not exist
 is worth zero, and LMDB→heed→redb is two switchovers to reach where one gets
 you. This retires the caution recorded against a Rust-orchestrator-first path
 (the 15 `mdb_set_compare`/`mdb_set_dupsort` comparators at
@@ -399,7 +402,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-07-26 | Storage split: wallet redb, daemon LMDB; reopened for consensus machinery only | superseded in part by 2026-09-01 |
 | 2026-08-30/31 | Census precedes rewrite; C++ is a differential oracle only for rules ratified on record | stands, and now propagates to DRS (§5.4) |
 | 2026-09-01 | Testnet is gated on this work + consensus + wallet; genesis downstream of testnet | Rick, §5.2 |
-| 2026-09-01 | heed retired: no **non-genesis** chain data exists on any network — every peer reports height 1, genesis only (observed 2026-09-01, `CONSENSUS_C2_R3_TIMESTAMPS.md` §136/§511), and a genesis-only datadir is disposable by delete-and-resync, so format compatibility is worth zero | Rick, §5.3 |
+| 2026-09-01 | heed retired: no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
