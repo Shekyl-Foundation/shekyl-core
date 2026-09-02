@@ -82,6 +82,62 @@ labelled once found. The failure direction is always the same — the constant
 overstates — because a constant that understated would have been noticed by
 whoever needed the capability.
 
+**The third check, and unlike the first two it interrogates *our own* output
+rather than the tree's — *a countermeasure must sit on the path the attacker's
+action traverses*.**
+
+> **Name the attacker's action; name the code path that action traverses; show
+> the countermeasure sits on that path.** Three steps, each mechanically
+> answerable, run *before* costing the countermeasure or arguing its merits.
+
+It exists because everything else this round checks is a property of an
+artifact's **form** — sum checks, falsifier presence, named blockers, evidence
+pointers, option tables with adversary columns. **Every one of those reads green
+on a countermeasure pointed backwards.** That is rule 47 turned on the review
+process itself: a gate whose subject is *"is this well-formed"* cannot see
+whether the mechanism faces the attack.
+
+Two instances, both in PWD-I2, and the second was found only by running the
+check deliberately on already-approved text:
+
+- **The peerlist rule was adopted sender-side.** The attacker's action is
+  *sending* trash records; the path is `handle_remote_peerlist`; the approved
+  rule restricted what this node **discloses**. Caught in review, corrected
+  receiver-side.
+- **The white-list rule did not cover the second writer.** The attacker's
+  action in Shi §III-B is *connecting inbound and answering a back-ping*; the
+  path is `handle_handshake` (`net_node.inl:2766`), not
+  `handle_remote_peerlist`; the adopted rule spoke of "peerlist **records**"
+  and that path inserts no record. **Sub-attack ② was declared closed by a rule
+  that never touched its channel** — and PWD-I6's own disposition table said so
+  in the next screenful, deferring PWC-D11 (*the back-ping gate to the white
+  list*) to cluster B while the prose above it called ② closed.
+
+**The generalisable lesson is in that second one.** The census had described the
+mechanism **correctly** — §5.2 records ② as *"1,000 IPs cycled as inbound
+connections"* — and the countermeasure still missed it, because a correct
+description and a correctly-aimed defence are independent properties. **Reading
+the attack right is not evidence of having answered it.**
+
+**The two failures are a pair, and the pair yields the standing form.** Both
+countermeasures were scoped to *a named code path*; both defended that path and
+nothing else. **A countermeasure scoped to a code path defends that path. A
+countermeasure scoped to an invariant over the protected asset defends the
+asset.** The first reads better in review — it is concrete, and it names
+something greppable — which is exactly why it survives: it fails only when a
+*second* writer exists, and nothing in its own statement can reveal one.
+
+> **Standing form for every countermeasure decision in clusters T, B and A:
+> state the invariant over the protected asset, then enumerate the asset's
+> writers and show each is covered.**
+
+The enumeration is the load-bearing half, and it is what makes the coverage
+claim **falsifiable rather than assumed** — a reader can grep for writers and
+find one the decision missed. PWD-I2's corrected rule is written in that form
+for exactly this reason: *the white list may only be written for connections
+this node initiated* constrains the asset, so it covers both existing writers
+and any future one, where "peerlist records" covered one of two.
+
 ---
 
 ## 2. Cluster I — identity and Sybil resistance
@@ -133,7 +189,7 @@ finding a third consumer there has met the trigger.
 
 ### PWD-I2 — peerlist disclosure is reduced, and the Shi et al. amplifiers are closed
 
-**RULED.** Disclosure stays, bounded and anonymised, **with two changes**.
+**RULED.** Disclosure stays, bounded and anonymised, **with three changes**.
 
 The current shape (all verified): up to 250 entries per message (PWC-D1),
 disclosed on **both** handshake and timed-sync (PWC-B4), sampled over the whole
@@ -146,6 +202,7 @@ citing Cao et al.), refused wholesale if any entry is from another zone
 | Status quo | — | **Refused.** Shi et al. §III-A fills the 5000-entry FIFO graylist from *timed-sync responses* alone; §III-B cycles 1000 IPs through the white list |
 | **Accept peerlist records only on connections *this node initiated outbound*** | The graylist-filling adversary, over inbound connections it opened | **Adopted — and note this is *receiver-side*.** An earlier draft adopted the mirror of this (restricting what we *disclose*) and **it defends nothing**: see the correction below |
 | **Cap records accepted per connection, not just per message** | The same adversary, amortising across many messages | **Adopted, and the ceiling is derived below** — 250/message with no per-connection ceiling is a cap on the wrong quantity |
+| **The white list may be written only for connections *this node initiated*** | Shi §III-B's whitelist adversary, which inserts **itself** on an inbound connection and never sends a peerlist record at all | **Adopted — this is the rule that actually closes ②**, and the two rules above do not. See the second correction below |
 | Stop disclosing entirely | Topology mapping | **Refused** — peer discovery on an open gossip network needs it; and PW-3a records that discoverability is *structurally* incompatible with clearnet node anonymity anyway, so paying liveness for a property that cannot be bought is a bad trade |
 
 **Correction — the first version of this rule pointed the wrong way, and would
@@ -167,6 +224,81 @@ guarded by `if(!context.m_is_income)` — whitelist *promotion* is already
 outbound-only. **This rule extends the same guard to peerlist
 *acceptance*.**
 
+**Second correction — the same review question, asked once more, found a second
+writer, and it is the one sub-attack ② actually uses.** The two rules above are
+both scoped to *peerlist records*. **The white list has a writer that inserts no
+record**, and the first version of this decision therefore closed ① while
+leaving ② untouched — then PWD-I6 declared both closed.
+
+The path, verified end to end:
+
+- `handle_handshake` is **guarded to inbound connections only** — `if(!context.m_is_income)` drops
+  and adds a host-fail (`net_node.inl:2700-2706`). Everything below it runs
+  *exclusively* on connections the attacker opened.
+- On a successful back-ping it writes the **counterparty itself** into the white
+  list — `append_with_peer_white(pe)` (`net_node.inl:2766`) — **bypassing gray
+  entirely**, gated only on the attacker's self-declared `my_port` and its own
+  reachability.
+- `pe.last_seen` is stamped `now` immediately above (`:2762-2764`).
+- `evict_host_from_peerlist` (`net_peerlist.cpp:305-308`) filters on
+  `is_same_host`, so occupancy is capped **per IP, at one** — and **not per
+  subnet**; `is_host_allowed` rejects only loopback and local
+  (`net_peerlist.h:282-292`), and subnet blocking is a manual operator ban list,
+  not an automatic diversity cap.
+- `trim_white_peerlist` (`net_peerlist.h:226-231`) erases
+  `sorted_index.begin()` on the **`by_time`** index — **the oldest `last_seen`
+  first**. Entries stamped `now` sort to the back; the honest peers seen longest
+  ago are erased.
+
+**That is Shi §III-B unmodified**: connect inbound → answer the back-ping → land
+in white with a maximal timestamp → repeat until the 1000-entry cap
+(`cryptonote_config.h:175`) trims the honest set out. The paper's cost — 1,000
+IPs — is paid in **one inbound connection each**, and the per-connection record
+ceiling above never applies, because no record is sent.
+
+**The corrective rule is stated over the asset, not over a path**, which is why
+it covers a writer the earlier wording could not reach. The white list's writers
+enumerate to four, and all four are now covered:
+
+| Writer | Direction | Under the rule |
+| --- | --- | --- |
+| `try_to_connect_and_handshake_with_new_peer:1353` | Outbound dial we chose | **Kept** — this is the rule's licensed case |
+| `gray_peerlist_housekeeping:3135` → `set_peer_just_seen` | Outbound dial we chose, after `check_connection_and_handshake_with_peer` succeeds | **Kept** — see below; it is the rule's existing implementation |
+| `net_node.inl:1175` → `set_peer_just_seen` | Outbound timed-sync, already `!m_is_income`-guarded | **Kept** — unchanged |
+| **`handle_handshake:2766`** | **Inbound, by construction** | **Changed: routed to `append_with_peer_gray`** |
+
+**The rule is not a new mechanism — the tree already implements it on the gray
+path, and that is the evidence this reroute costs nothing.**
+`gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
+at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
+white via `set_peer_just_seen` only if that outbound handshake succeeds —
+evicting it from gray if it fails. So a back-ping-verified inbound peer keeps
+its whole route to white-list membership; **only the free pass is removed**, and
+it is replaced by the verification every other candidate already passes. A
+back-ping proves *reachability*, which qualifies a peer for the **dial pool**,
+not for the trusted list.
+
+**Gray needs no equivalent change, and this was checked rather than assumed.**
+`append_with_peer_gray` has **exactly one caller**, `merge_peerlist`
+(`net_peerlist.h:246-256`) — the ingestion path the first rule already covers.
+The asymmetry was real and confined to the white list.
+
+**Conceded — this reroute has a cost, on the producer side.** Disclosure samples
+the white list only (`get_peerlist_head`), so a node reachable *only* inbound
+stops being advertised to third parties until some peer draws it from gray and
+dials it successfully. The latency is bounded by the housekeeping cadence — one
+random draw per zone per 60 s — not open-ended, but it is a real change to how
+quickly a new listener propagates. **Zone scope:** this writer is
+`zone.m_can_pingback`-gated, so the defect and the fix are **public-zone only**.
+
+**This is a behavioural change to inherited code, not a documentation
+correction**, and it changes white/gray composition and therefore dial
+composition after a restart. **PWD-I4's sub-round must derive against the fixed
+behaviour, not the current one** — the anchor finding recorded there means
+persisted anchors yield one connection and the remainder refills from ordinary
+draws, so white/gray composition is more load-bearing for the eclipse posture
+than it appeared when that sub-round was scoped.
+
 **The per-connection ceiling, derived rather than picked.** A cap without a
 value is not a decision, and the security claim depends on the value: a ceiling
 of 1000 still lets one connection cycle the entire white list.
@@ -184,11 +316,19 @@ anything beyond it is amortisation, which is exactly the attack. The ceiling
 therefore **inherits an existing constant instead of minting a new one**, which
 also means it cannot drift away from the per-message cap.
 
-Against the attack: the white list holds 1000 and the graylist 5000, so filling
-either now costs **4 and 20 distinct connections respectively** rather than one
-connection sending repeatedly — and each of those connections must be
-separately established, which is the cost the paper's attack was designed to
-avoid paying.
+Against the attack: the graylist holds 5000, so filling it **by peerlist
+ingestion** now costs **20 distinct connections** rather than one connection
+sending repeatedly — and each must be separately established, which is the cost
+the paper's attack was designed to avoid paying.
+
+**This ceiling does not price the white list, and an earlier version of this
+paragraph claimed it did** — it read *"filling either now costs 4 and 20
+distinct connections respectively."* The 4 was arithmetic on the wrong channel:
+1000 ÷ 250. **Sub-attack ② inserts no peerlist records**, so no per-connection
+record ceiling binds it; its cost is set by the *third* rule above, and it is
+**1,000 distinct IPs each completing an outbound dial we chose to make** — not
+250 records × 4 connections. The figure is corrected rather than recomputed
+because the quantity it counted was never the one that bounds ②.
 
 **Conceded.** Topology mapping by a patient participant. PW-3a's discoverability
 leg means an adversary can enumerate candidates regardless; these changes raise
@@ -419,10 +559,21 @@ reconciliation above, and it is a ruling a future reader can recognise.
 sub-attack ③'s two arms are already answered (private-transaction arm
 structurally inapplicable since RT-9 removed `--public-node`; D++ arm refused
 because a double-spend is a no-drop offense), while **sub-attacks ① and ②
-remained unaddressed**. **PWD-I2's two adopted rules close both** — its
-outbound-only *acceptance* rule removes the graylist-filling channel at the
-point the attack actually uses, and its per-connection ceiling removes the
-amortisation the whitelist attack needs.
+remained unaddressed**. **PWD-I2's three adopted rules close both** — its
+outbound-only *acceptance* rule and per-connection ceiling remove the
+graylist-filling channel at the point the attack actually uses, and its
+**white-list writer invariant** removes ②'s channel.
+
+**Correction — this row previously closed ② by the wrong rule, and contradicted
+its own table doing it.** It said the per-connection ceiling "removes the
+amortisation the whitelist attack needs." **Sub-attack ② needs no
+amortisation**: it inserts itself once per IP over an inbound connection and
+sends no peerlist record, so a ceiling counted in *records* never binds it. The
+contradiction was visible **inside this row** — the disposition table below
+defers **PWC-D11, the back-ping gate to the white list**, to cluster B, and
+PWC-D11 is precisely ②'s channel. A row cannot close a sub-attack while
+deferring the mechanism that sub-attack uses. PWD-I2's third rule is what closes
+it, and PWC-D11's disposition changes accordingly.
 
 **This row points at those rules rather than restating them, deliberately.**
 Prose restating a contract is a defect generator, and this sentence proved it:
@@ -438,9 +589,26 @@ double-spend no-drop guard is **inherited** — `f7fd209ed`, upstream Monero,
 no Shekyl record has examined it. **A rewrite that re-derives the tx-ingest path
 from the census would drop it silently.** Cluster B owns that as PWD-B7.
 
-**Falsifier.** **Reopen if a fleet run reproduces graylist saturation under the
-outbound-only-acceptance rule** — the paper's own attack is the test, and the
-Q12-D6a rig can run it.
+**Falsifier — one per sub-attack, because the two are now closed by different
+rules and a single trigger would test only one of them.** The paper's own attack
+is the test in both cases, and the Q12-D6a rig can run it.
+
+- **①** — **Reopen if a fleet run reproduces graylist saturation under the
+  outbound-only-acceptance rule.**
+- **②** — **Reopen if a fleet run shows an inbound-only adversary occupying
+  white-list entries under the white-list writer invariant.** The measured
+  quantity is *white-list entries held by peers this node never dialled*, whose
+  target value is **zero**: the invariant makes any non-zero reading a defect,
+  not a threshold judgement.
+
+**A note the ② falsifier's instrument needs.** PWD-I2's own falsifier measures
+the **consumer** side — a cold node's time to `MIN_PROVISIONED_OUT_PEERS` — and
+the reroute's conceded cost is on the **producer** side, where an inbound-only
+listener waits to be advertised. The consumer-side trigger does not observe
+that, and it is not extended to, because the producer-side latency is
+**analytically bounded** by the 60 s housekeeping cadence rather than being an
+open question a fleet run would settle. If that cadence ever becomes a tuned
+parameter, this note is where the gap reopens.
 
 ---
 
@@ -459,9 +627,11 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
 | PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
-| PWC-D11 (back-ping gate to white list) | **Deferred — named blocker: cluster B owns the back-ping.** PWD-I1 explicitly leaves the back-ping and its `peer_id` dependency to cluster B, and PWD-I2 bounds *how many records are accepted* without deciding whether the gate itself is kept. Counting it absorbed would have implied a commitment this cluster did not rule | cluster B |
+| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* stays cluster B's.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
 
-**Sum check: 5 ruled + 2 absorbed + 3 deferred = 10.** ✅
+**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅ *(PWC-D11 moved
+deferred → ruled when the white-list writer invariant was adopted; the count of
+rows is unchanged.)*
 *(PWC-D11 moved absorbed → deferred in review: PWD-I1 leaves the back-ping to
 cluster B, so PWD-I2 could not have absorbed it. The total is unchanged; the
 claim about what this cluster ruled is not.)*

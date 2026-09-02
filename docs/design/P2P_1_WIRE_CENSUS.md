@@ -476,6 +476,17 @@ Three residues stay open and are not closed by the above:
    the whitelist re-entry path is the back-ping (PWC-D11). The paper's
    countermeasures (§VII-A) — restrict timed-sync peerlists to outbound
    connections, or cap records per connection — are **unimplemented here**.
+
+   > **Dispositioned 2026-09-02 — PWD-I2 (`SHEKYL_P2P_PROTOCOL.md`), three
+   > rules; the tree is still as described above.** Recorded here because this
+   > paragraph names ②'s channel correctly and the first version of that ruling
+   > still missed it: **both countermeasures listed above are scoped to
+   > *records*, and ② sends none** — its channel is the back-ping insert
+   > (PWC-D11), which puts the connecting peer into the white list directly.
+   > That framing is the likely provenance of the error, so anyone implementing
+   > ②'s fix should read §VII-A at source rather than this paraphrase. PWD-I2's
+   > third rule is stated over the **asset** — *the white list may be written
+   > only for connections this node initiated* — for that reason.
 2. **`update_sync_search()`'s 101 s random non-anchor disconnect**, which the
    paper names as an independent connection-dropping lever (§II-D3), is present
    at this pin as `m_sync_search_checker` (PWC-E4).

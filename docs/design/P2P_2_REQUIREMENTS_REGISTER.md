@@ -498,7 +498,11 @@ doc; P2P-1 absorbed the tasks below rather than deferring them further.
    (RT-9 removed `--public-node`); the D++ arm is **refused** because a
    double-spend is a no-drop offense — but by an **inherited** guard
    (`f7fd209ed`, upstream, 2024) that no Shekyl record has examined. The
-   graylist and whitelist sub-attacks remain **unaddressed**.
+   graylist and whitelist sub-attacks remain **unaddressed**. **Ruled
+   2026-09-02 — PWD-I2's three rules (`SHEKYL_P2P_PROTOCOL.md`) close both; the
+   tree change is a FOLLOWUPS row.** ② needed a rule stated over the *asset*
+   rather than over peerlist records, because its channel — the back-ping
+   insert at `net_node.inl:2766` (PWC-D11) — sends no record.
 3. ~~**PW-22's reading list** — does the firewall cover submission or only
    serving?~~ **DONE — census §5.3.** The gap is **located and open**, and
    narrowed to something falsifiable: production submission *does* run, through
