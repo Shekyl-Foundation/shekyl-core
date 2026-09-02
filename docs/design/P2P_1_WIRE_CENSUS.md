@@ -298,6 +298,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | ID | Commitment | Evidence | Class | B | Seeds |
 | --- | --- | --- | --- | --- | --- |
 | PWC-B1 | Four p2p commands exist: 1001 handshake, 1002 timed-sync, 1003 ping, 1007 support-flags. **1004-1006 are unallocated** — an absence, verified by the gap in the ID sequence at both stacks | `p2p_protocol_defs.h:196, 232, 267, 299`; `commands.rs:18-24` | `none` | 4 | — |
+
+> **Ruled 2026-09-02 — `SHEKYL_P2P_PROTOCOL.md` PWD-I1/PWD-B10: 1003 `COMMAND_PING` is deleted, so three commands survive, not four.** Its only invoker was `try_ping`, whose one caller gated the inbound whitelist promotion PWD-I2 forbids. The command did not need its own argument; it fell when its consumer did.
 | PWC-B2 | `basic_node_data` carries exactly four fields: `network_id`, `peer_id`, `my_port`, `support_flags` | `p2p_protocol_defs.h:172-185`; `types.rs:18-27` | `none` | 4 | — |
 | PWC-B3 | `rpc_port` and `rpc_credits_per_hash` are **absent** from the handshake and from peerlist entries — deleted as contrary to RT-9's no-public-RPC-advertisement posture | #587 (`cf3b13c29`); `RPC_TRANSPORT_POSTURE.md:559` UPDATE 2026-08-31; absence confirmed at `p2p_protocol_defs.h:172-185` | `ratified` | **2** | PW-14 |
 | PWC-B4 | Handshake response carries the peerlist; timed-sync response carries it again — two peerlist-disclosure surfaces, not one | `p2p_protocol_defs.h:214`, `:246`; `commands.rs:65`, `:119` | `none` | 4 | PW-16 |

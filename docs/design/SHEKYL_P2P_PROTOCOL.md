@@ -85,6 +85,34 @@ labelled once found. The failure direction is always the same — the constant
 overstates — because a constant that understated would have been noticed by
 whoever needed the capability.
 
+**The fourth check, and it is a *disposal* rule like the first rather than a
+review step — *prefer a mechanism whose input is your own observation to one
+whose input is the peer's claim*.** (Rick, 2026-09-02.)
+
+> **Claims require verification; verification requires identity; identity is
+> forbidden by PW-19a. Observations require nothing.**
+
+That chain is why the inherited p2p keeps needing guards for its guards. It asks
+*"is this peer the same node as that one?"* — a question about **identity**,
+which here is self-asserted, unverifiable, public once gossiped, and forbidden as
+durable state. So `peer_id` needs `is_same_host` to stop replay, and the
+back-ping needs a `peer_id` echo to stop substitution, and each patch is a better
+way to verify a claim that should never have been made.
+
+**The consciously designed question is *"is my own outbound pool
+over-concentrated?"*** — a property of state this node already holds. No
+cooperation, no claimed value, nothing to spoof.
+
+**This is the reframe `DAEMON_RELAY_PRIVACY.md` §12.10 already performed one
+layer up** — *"bounding pool-share `g` was bounding the wrong quantity"* —
+restated at the connection layer. The project has made this move before and it
+held.
+
+It disposes of a family the way PW-19a's check does: **PWD-I1's four jobs, and
+with them `peer_id`, `peerlist_entry.id`, the back-ping and `COMMAND_PING`.**
+Applied *before* costing a proposal, it is cheaper than any of the four rounds of
+patching it replaces.
+
 **The third check, and unlike the first two it interrogates *our own* output
 rather than the tree's — *a countermeasure must sit on the path the attacker's
 action traverses*.**
@@ -181,7 +209,7 @@ a standing challenge nobody runs is decoration.
 | 1 | `:1114`, `:2718-2725` | Self-connection detection at handshake | **A handshake nonce does it.** Emit random `N`; a handshake arriving with an `N` you recently emitted is you |
 | 2 | `is_peer_used` `:1213`, `:1238` | Don't dial an address whose stored id is my own | **Same job as #1, earlier.** Pure optimisation — losing it costs one wasted dial that #1 catches a moment later |
 | 3 | `is_peer_used` `:1219`, `:1244` | Duplicate-connection avoidance | **Replaced by an address-based same-host outbound cap** — see below; the cap is *stronger* than the id |
-| 4 | `:2585` / `:2792` | Back-ping: is this address the node that handshaked me? | **Replaced by a challenge over the encrypted session.** The id is a *published constant*; a challenge is not |
+| 4 | `:2585` / `:2792` | Back-ping: is this address the node that handshaked me? | **Deleted, not replaced** — its only job was gating whitelist promotion of an inbound peer, which PWD-I2 has already forbidden. Consumer inventory run below |
 
 All four are public-zone-gated. **On anonymity zones the identifier does no work
 at all**: self-detection is already a plain address comparison against
@@ -241,6 +269,71 @@ replacement and one adversary IP gossiped at N ports can occupy several outbound
 slots through gray draws. **The cap is therefore not optional cleanup; it is the
 condition under which removing the field is safe.**
 
+#### The back-ping dissolves — consumer inventory, run rather than assumed
+
+**The hypothesis was that the back-ping has no job left once PWD-I2 forbids
+inbound whitelist promotion. It survives the inventory**, and the inventory was
+run by the method the previous two rounds got wrong: enumerate what *consumes*
+the mechanism, then check the state each consumer writes.
+
+- **`try_ping` has exactly one caller** — `net_node.inl:2746`, inside
+  `handle_handshake`, and its callback does one thing: `append_with_peer_white`.
+- **`try_ping` writes no state of its own.** It opens a throwaway connection,
+  invokes `COMMAND_PING`, checks `rsp.status` and the `peer_id` echo, and fires
+  the callback. Delete the callback's job and nothing else observes it.
+- **The only claim it verifies is `my_port`.** The IP is *observed* from the
+  connection, never asserted — so a peer can lie about its own port and nothing
+  else.
+- **A wrong port now costs one failed dial.** Under PWD-I2 the inbound peer
+  lands in **gray**, and `gray_peerlist_housekeeping` evicts an entry whose dial
+  fails. The back-ping spends an extra TCP connection and a protocol round trip
+  to learn eagerly what the ordinary dial establishes for free.
+- **And a bad gray entry cannot propagate.** `get_peerlist_head` reads
+  `m_peers_white` only (`net_peerlist.h:295-330`) and has exactly two callers,
+  both on the wire path (`net_node.inl:2658` timed-sync, `:2778` handshake).
+  **Nothing in gray is ever disclosed**, so an unverified entry poisons no
+  peer's view but our own, for one dial.
+
+> **Ruled: the back-ping is deleted. `COMMAND_PING` (1003) is deleted with it.**
+
+**The command falls because the back-ping was its only user** — `try_ping` is
+the sole invoker outside `tests/unit_tests/levin.cpp:2690`, and
+`connection_context.cpp:46` merely carries its size limit. **Four p2p commands
+become three** (PWC-B1).
+
+**PWC-D11 dissolves rather than being decided.** It asked whether the back-ping
+gate is kept; the gate's only purpose was a promotion that no longer happens.
+**This is the shape worth noticing: the fix upstream removed the reason the
+downstream question existed**, which is why it resolves to deletion and not to
+the challenge protocol an earlier version of this decision proposed. **PWD-B10
+inherits deletion as its answer**, not a design task.
+
+#### Self-detection does *not* dissolve, and the reason is a finding
+
+The same reframe invites folding self-connection into concentration — your own
+address is one host, a cap already bounds it to one slot, so tolerate it. **That
+does not hold, and the check is at the relay layer rather than the p2p one.**
+
+`get_out_connections` (`levin_notify.cpp:232-233`) selects stem candidates on
+`!context.m_is_income && context.m_remote_blockchain_height >= blockchain_height`
+— **no self-exclusion**. An undetected self-connection is therefore an eligible
+**stem peer**, and stemming to yourself advances the transaction nowhere: with
+`STEMS = 2` a single self-edge **silently halves stem width** and leaves the
+embargo to fire. That is a D++ propagation and timing consequence, not a wasted
+slot, so **self-detection stays a real mechanism.**
+
+**On the local socket-pair check** (a process connecting to itself holds both
+endpoints, so one connection's local `address:port` mirrors another's remote):
+**mechanically available but not a replacement.** The local endpoint is reachable
+at the socket layer — `connection_basic::socket().local_endpoint()` is already
+read at `abstract_tcp_server2.inl:1098-1099` — but is **not surfaced in the
+connection context** the p2p layer iterates, so it would need plumbing. More
+decisively, it **fails exactly where the identifier was needed**: on a NAT'd node
+dialling its own *public* address, the local endpoint is the private address and
+the mirror never matches. It covers the public-address node, which is the case
+that least needed help. **Recorded as a possible optimisation for PWD-T1, not as
+the mechanism** — the nonce covers both cases and the socket check covers one.
+
 #### The nonce must be zone-scoped, and this is a requirement on cluster T
 
 **The inherited design carries a warning that the nonce would otherwise
@@ -280,6 +373,22 @@ review.
   behind one IP will together receive at most one outbound slot from any given
   peer. Real, small, and the same concession the white list already makes
   silently via `evict_host_from_peerlist`.
+- **The cap sits near `DAEMON_RELAY_PRIVACY.md` §6.10's exclusion, and the
+  distinction is argued rather than assumed.** §6.10 ruled the address family
+  out — *"on clearnet it lies (Sybils spread across subnets cheaply, and
+  subnet-diversity heuristics quietly punish legitimate home users)"* — **as an
+  *admission* basis.** A cap is a third job, distinct from both admission and
+  from PWD-I3's continuity bookkeeping: **it makes no judgement about the peer
+  at all.** A diversity *heuristic* infers trustworthiness from an address, which
+  the address cannot support; a cap bounds **this node's own pool** and applies
+  the identical bound whoever is on the other end. Nothing is scored, nobody is
+  ranked, and the input is local state rather than a claim — §1's fourth check
+  is precisely what separates them.
+  **What does carry over is the second half of §6.10's objection**, and it is
+  conceded above: honest users behind shared NAT are affected. They are not
+  *punished* — no inference is drawn about them — but they are **bounded**, and
+  the bound is the same one an adversary gets. **Its value is an eclipse bound,
+  so it is set with PWD-I4's sub-round, not before it.**
 - **Within-session and within-zone correlation remain**, unchanged: a peer is
   trivially correlatable across the connections *it* dialled. Cross-session and
   cross-zone linkage is the asset, and that is what removal denies.
@@ -316,7 +425,7 @@ brief rather than something to leave as "cluster B owns it."**
 | --- | --- |
 | Zone-scoped handshake nonce | **PWD-T1** (it is a handshake token). **This amendment must land before T1 is drafted** |
 | Same-host outbound cap | **PWD-B9 — new row**, outbound connection diversity. No existing B row covers outbound selection: B1 is command rate limiting, B7 is *drop* semantics by host |
-| Back-ping challenge, and whether the back-ping survives | **PWD-B10 — new row.** PWC-D11 was deferred "to cluster B" with no B row naming it |
+| ~~Back-ping challenge~~ — **answered here: deleted**, with `COMMAND_PING` | **PWD-B10** carries the deletion and the command's removal from the wire surface (PWC-B1), not a design task |
 
 **Falsifier.** The original standing challenge has been executed and answered, so
 it is replaced by one with a measurable subject. **Reopen if any mechanism in
@@ -989,7 +1098,7 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
 | PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
-| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* is now owned by **PWD-B10**, a row created for it because no cluster-B row previously named the back-ping.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
+| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* is **answered: the back-ping is deleted**, its only consumer having been the promotion PWD-I2 forbids. **PWD-B10** carries the deletion and `COMMAND_PING`'s removal.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
 
 **Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅ *(PWC-D11 moved
 deferred → ruled when the white-list writer invariant was adopted; the count of
