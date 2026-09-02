@@ -5,7 +5,18 @@ reconciliation pass (2026-08-31) over three independent enumerations of the
 same surface plus one steering-side evidence-archaeology payload. This is the
 specification input for the all-Rust consensus rewrite (ruled 2026-08-30/31:
 census precedes rewrite; C++ is a differential-test oracle only for rules
-ratified on record). Bucket-4 rows record questions, never answers; the §10
+ratified on record — **extended 2026-09-02 (CSR-3a): ratification is necessary
+but not sufficient.** A bucket records that a rule is *specified and ratified*,
+never that the C++ *implements* the spec it was ratified against. CEN-L11 is the
+counterexample — bucket 1, ratified, and its implementation silently omits an
+accepted output from the curve tree. Oracle status therefore requires **both**
+ratification **and** an **affirmative conformance record** for the row — a check
+that the C++ implements the spec it was ratified against. **Absence of a recorded
+divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
+regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
+§5.4.1 for the three states and the exception register; the checked-conformant
+set is currently empty pending **DRS-P0f**, the per-row conformance review — *not*
+P0d, which is Digest v0). Bucket-4 rows record questions, never answers; the §10
 queue is the design-round program that answers them.
 **Pinned sha:** `ab3cc98e6eb73db2b309730ccc9853ba4ea95e7d` (`dev` tip,
 2026-08-31 — the merge commit of PR #583). Inputs were read at
@@ -37,6 +48,20 @@ retained as the independent-walk records): the two superseded walks moved to
 ([`CONSENSUS_RULE_CENSUS_1.md`](CONSENSUS_RULE_CENSUS_1.md)) stays in
 `docs/design/` as a mixed doc — its census content is closed but its §6
 L-items are owned open residue.
+**Cross-reference (CSR-6, added 2026-09-01).** The daemon chain-store program
+([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md), `DRS-*`) partitions the same
+files this census enumerates — by **DB call surface** where this census cuts by
+**rule** — and until 2026-09-01 neither document referenced the other.
+**18 rows here are enforced inside `src/blockchain_db/`** (7 bucket-1, 1
+bucket-3, 10 bucket-4), and **§10's R8 batch is the same decision as that
+program's schema design**: R8 is the ruling instrument, the DRS surface map its
+input (CSR-1). Rick's **2026-09-01 countermand** — the inherited C++ is not a
+base; a complete rewrite gates release — vindicates this census's oracle clause
+and propagates it outward. **The clause was then extended, not merely
+propagated (CSR-3a, 2026-09-02):** CEN-L11 showed ratification alone is
+insufficient, so the header above now carries the conformance condition too. Map, blast radius and work items:
+[`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md).
+
 Survey A's L-items (Levin/p2p wire) are **out of the consensus census**:
 requirements input to the P2P protocol redesign lane (ruled 2026-08-31);
 their accounting rows in §9 point there.
