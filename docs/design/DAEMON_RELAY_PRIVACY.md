@@ -14786,20 +14786,47 @@ public infrastructure whose onion is discoverable anyway.
 > **The I2P mention is a specification constraint, not a list.** The zone
 > abstraction must stay genuinely N-ary: no path assuming exactly two zones, no
 > `F′` derivation hardcoding a two-element `min`, no selection branching on
-> `is_tor` rather than on zone *properties*. **Checked at source rather than
-> assumed, and it holds:** `broadcast_all_zones` iterates
+> `is_tor` rather than on zone *properties*. **Checked at source. The routing
+> holds; the provisioning does not, and the correction matters more than the
+> claim it replaces.** `broadcast_all_zones` genuinely iterates
 > (`net_node.inl:2465`, with a `std::next(...) == end()` last-element test, not
-> a pair); worst-zone provisioning is a fold over zones
-> (`shekyl-relay-privacy/src/params.rs:356`), not a two-element `min`; and no
-> `is_tor` branch or two-zone assumption exists in the zone paths.
+> a pair), and no `is_tor` branch or two-zone assumption exists in the zone
+> selection paths.
 >
-> **One place a new zone touches code, recorded so the next person adding one
-> knows where to look:** `get_seed_nodes` (`net_node.inl:775-786`) enumerates
-> zones in a `switch` where `tor` and `i2p` share an arm and `default:` falls
-> through to `throw std::logic_error{"Bad zone given to get_seed_nodes"}`. A
-> third zone therefore **requires editing it** — but it fails **loudly** rather
-> than being silently mistreated, which is the safe shape. Not a defect; a
-> signpost.
+> **Correction, 2026-09-01.** An earlier version of this block asserted that
+> worst-zone provisioning is "a fold over zones, not a two-element `min`."
+> **That was wrong, and it was asserted from a comment rather than from the
+> code.** `fluff_return_ms: 3_250` (`params.rs:381`) is a **hardcoded scalar**
+> chosen by hand as the worse of two measured zones — clearnet ~1250 ms,
+> Tor-C ~3250 ms — and every consumer reads that single value
+> (`derive.rs:157`, `:394`, `:618`; `conformance/reshape.rs:44`). There is no
+> runtime fold. The design is deliberate and its reasoning is sound (*"a fluff
+> wave returns over whatever network the node is on, so there is no per-zone F
+> to pick"*), but it is **one constant standing in for all zones**, not an
+> N-ary computation.
+>
+> **Two places a new zone touches code, and they fail in opposite ways.** This
+> is the practical content of the N-ary constraint, so it is recorded rather
+> than left to be rediscovered:
+>
+> 1. **`get_seed_nodes`** (`net_node.inl:775-786`) — a `switch` where `tor` and
+>    `i2p` share an arm and `default:` falls through to
+>    `throw std::logic_error{"Bad zone given to get_seed_nodes"}`. A third zone
+>    **requires editing it and fails loudly.** Not a defect; a signpost.
+> 2. **`fluff_return_ms`** — a third zone is simply **not represented**, and
+>    **nothing signals that.** The constant stays at Tor-C's p90. If a new zone
+>    were *slower* than Tor, `F′` would be silently **under**-provisioned — and
+>    this section's own argument establishes that as the unsafe direction:
+>    over-estimating `F` lengthens the embargo, *reducing* the §6.7 prefix-fire
+>    leak and costing only black-hole recovery latency ("privacy-safe on both
+>    axes"), so under-estimating is what costs privacy.
+>
+> **Owed to the lane that owns this constant, not to P2P-2:** adding a zone
+> slower than Tor requires re-deriving `fluff_return_ms`, and there is no gate
+> that notices. A derivation check asserting the constant equals the max over
+> *measured* zones would convert the silent failure into a loud one — the same
+> shape `carrier.rs` already uses, where `tests/carrier_window.rs` asserts the
+> derivation rather than the value.
 
 A fluff is broadcast across every configured zone. `F′` remains **process-wide
 at the worst zone** per §89.2 — and under A the worst zone is the anonymity
