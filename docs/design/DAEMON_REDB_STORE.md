@@ -25,11 +25,15 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > **DRS-D2** reopen bridges (they resolve to "ship genesis-on-LMDB", which is
 > both unavailable and now unshippable), inverts **DRS-P0c**'s FIX-IN-CPP-FIRST
 > default, and demotes the C++ from *trusted* oracle to a differential
-> reference for rules that are **both** ratified on record **and** free of a
-> recorded spec-vs-implementation divergence (**CSR-3a** — ratification alone is
-> *not* sufficient: CEN-L11 is bucket-1 ratified with an implementation that
+> reference for rules that are **both** ratified on record **and** carry an
+> **affirmative conformance record** (**CSR-3a**). Two things are insufficient:
+> ratification alone — CEN-L11 is bucket-1 ratified with an implementation that
 > silently omits an accepted output, so a bucket-only rule would score
-> reproducing that defect as correctness). This invalidates the unhedged
+> reproducing that defect as correctness — and *absence of a recorded
+> divergence*, which means **unreviewed**, not conformant, because the exception
+> register is explicitly incomplete. Three states: CHECKED-CONFORMANT (oracle),
+> DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
+> the checked set is **empty today** pending DRS-P0d. This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
