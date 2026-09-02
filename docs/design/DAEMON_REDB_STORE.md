@@ -27,8 +27,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > default, and demotes the C++ from *trusted* oracle to a differential
 > reference **for rules ratified on record only** — which invalidates the
 > unhedged "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
-> **heed is retired** (no chain data exists, so format compatibility is worth
-> zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
+> **heed is retired** (no **non-genesis** chain data exists on any network — every peer reports height 1, genesis only (observed 2026-09-01, `CONSENSUS_C2_R3_TIMESTAMPS.md` §136/§511), and a genesis-only datadir is disposable by delete-and-resync, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
 > clause is propagated into A2 / D11 / E2 — the digest is an oracle for the
 > census's bucket-1/2 rules and a *regression* instrument for bucket-3/4) and
@@ -734,7 +733,7 @@ Blocks (and required blobs) live in the most format-stable representation
 | DEL-004 | liblmdb in default `shekyld` | D2 closed path | Planned |
 | DEL-005 | Schema phantoms / missing seven | DRS-P0 | Open |
 | DEL-006 | V4 heed-as-destination without pointer | Docs | Closed |
-| DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no chain data exists on any network; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
+| DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no **non-genesis** chain data exists on any network — every peer reports height 1, genesis only (observed 2026-09-01, `CONSENSUS_C2_R3_TIMESTAMPS.md` §136/§511), and a genesis-only datadir is disposable by delete-and-resync; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
 
 ---
 
@@ -803,8 +802,8 @@ the trigger (#507) and was missed there.
 | 2026-08-21 | **Post-close pin PC-1:** D2-R1 re-pointed from “wallet Phase 5 not closed by 2027-04-01” (unreachable since #507 closed Phase 5 on 2026-08-19) to “**DRS-C** not closed by 2027-04-01”; bridge unchanged. Retiring it outright would have left D2 with no calendar backstop (R2 is relative to C close, R3 is a BENCH outcome) — the reopen-by-subtraction shape R2-8 rejected. §1.1 restated accordingly |
 | **2026-09-01** | **COUNTERMAND (Rick).** The inherited C++ is not a base; a complete rewrite gates release. D5 rationale retired; D2 bridges emptied; §1.5 Tier-A-LMDB-genesis outcome off the menu; P0c default inverted to RECORD-AND-SPECIFY; A2/D11/E2 "trusted digest" demoted to *ratified rules only*. Evidence on record: CEN-L11 (silent unspendable output), CEN-B3 (discarded hardfork verdict), CEN-L1 (dead pre-DB double-spend check), CEN-L14 (five uniqueness rules with no DB constraint), census §6 findings 2/5/8/10/11. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §0 |
 | **2026-09-01** | **Sequencing (Rick):** testnet is gated on this work + consensus + the wallet (~90%); genesis is downstream of testnet. **D2-R1's 2027-04-01 trigger therefore measures against a milestone that cannot arrive early** — re-anchoring owed (CSR-2). PC-1 re-pointed the trigger; this re-prices the bridge it points at |
-| **2026-09-01** | **heed retired** (DEL-007) — no database entry exists on any network, so format compatibility is worth zero. **D6 unchanged: redb stands.** **D4 substantially discharged** (bandwidth constraint, wallet ~90%) |
-| **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same four files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
+| **2026-09-01** | **heed retired** (DEL-007) — no **non-genesis** chain data exists on any network — every peer reports height 1, genesis only (observed 2026-09-01, `CONSENSUS_C2_R3_TIMESTAMPS.md` §136/§511), and a genesis-only datadir is disposable by delete-and-resync, so format compatibility is worth zero. **D6 unchanged: redb stands.** **D4 substantially discharged** (bandwidth constraint, wallet ~90%) |
+| **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same six files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
 
 ---
 

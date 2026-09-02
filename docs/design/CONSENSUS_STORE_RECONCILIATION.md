@@ -1,6 +1,6 @@
 # Consensus rewrite ↔ daemon chain store — reconciliation
 
-**Status:** OPEN. Reconciles two design programs that target the same four
+**Status:** OPEN. Reconciles two design programs that target the same six
 C++ files on orthogonal cuts and, until this document, did not reference each
 other in either direction. Records the **2026-09-01 countermand** (§0) and its
 blast radius across both programs' binding decisions.
@@ -161,8 +161,11 @@ is ruled.
 | CEN-L12 | 1 | Deferred-insertion maturity **is** the spend-maturity rule (60/10) | **S-CURVE** | ratified; third leg of the unlock_time divergence |
 | CEN-L15 | 3 | Dead Monero-v4 RCT accumulation arm on the write path | S-CHAIN-W | delete, do not port |
 
-**Surface load:** S-ARCH carries 6 of the 18 (5 ratified), S-CHAIN-W 7,
-S-CURVE 2, S-OUT-KI 2, S-ALT 1. DRS's own note that archival *drivers* live
+**Surface load** (recomputed from the table above; CEN-L1 and CEN-L3 each map to
+two surfaces and are counted under both, so the column sums to 20, not 18):
+**S-CHAIN-W 8** (1 ratified), **S-ARCH 5** (4 ratified), **S-OUT-KI 2**,
+**S-CURVE 2** (both ratified), **S-TX 1**, **S-ALT 1**, and CEN-L13
+cross-surface. DRS's own note that archival *drivers* live
 inside `BlockchainLMDB` (§3.5, "not in the 97 but adjacent") is confirmed
 row-by-row here.
 
@@ -263,8 +266,12 @@ a schedule outcome, never a return to shipping the C++.
 
 redb stands. **heed is retired by Rick's own argument, not by BENCH:** its sole
 advantage over redb is on-disk format compatibility with the C++ LMDB, and
-there is **not a single database entry on any network** — no mined block, no
-datadir worth preserving. Format compatibility with a corpus that does not exist
+**not a single block has been mined on any network**: every peer reports height
+1 — genesis only (observed 2026-09-01,
+[`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md)),
+so the only persisted rows are the genesis block's, and a genesis-only datadir is
+disposable by delete-and-resync (the V10/V11 precedent). Format compatibility
+with a datadir that is thrown away on the next schema bump is worth zero. Format compatibility with a corpus that does not exist
 is worth zero, and LMDB→heed→redb is two switchovers to reach where one gets
 you. This retires the caution recorded against a Rust-orchestrator-first path
 (the 15 `mdb_set_compare`/`mdb_set_dupsort` comparators at
@@ -392,7 +399,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-07-26 | Storage split: wallet redb, daemon LMDB; reopened for consensus machinery only | superseded in part by 2026-09-01 |
 | 2026-08-30/31 | Census precedes rewrite; C++ is a differential oracle only for rules ratified on record | stands, and now propagates to DRS (§5.4) |
 | 2026-09-01 | Testnet is gated on this work + consensus + wallet; genesis downstream of testnet | Rick, §5.2 |
-| 2026-09-01 | heed retired: no chain data exists, so format compatibility is worth zero | Rick, §5.3 |
+| 2026-09-01 | heed retired: no **non-genesis** chain data exists on any network — every peer reports height 1, genesis only (observed 2026-09-01, `CONSENSUS_C2_R3_TIMESTAMPS.md` §136/§511), and a genesis-only datadir is disposable by delete-and-resync, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
@@ -401,7 +408,7 @@ this; it adds a second population (the store's schema) with the same shape.
 
 ## 10. One-sentence summary
 
-**Two programs were partitioning the same four files along different axes with
+**Two programs were partitioning the same six files along different axes with
 no cross-reference; the census's R8 batch and the daemon store's schema design
 are one decision, and the 2026-09-01 countermand retires the decompose-in-place
 posture, empties the D2 reopen bridges, and demotes the C++ from trusted oracle

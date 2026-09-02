@@ -6,7 +6,7 @@
 
 - **Consensus rewrite ↔ daemon chain store reconciliation (`CSR-`).**
   `docs/design/CONSENSUS_STORE_RECONCILIATION.md` reconciles two design
-  programs that partition the same four C++ files on orthogonal cuts —
+  programs that partition the same six C++ files on orthogonal cuts —
   `CONSENSUS_RULE_CENSUS.md` by rule (171 rows), `DAEMON_REDB_STORE.md` by DB
   call surface (97 `m_db->` methods) — and which referenced each other **zero
   times in either direction** before this change. **18 census rows are enforced
@@ -24,8 +24,9 @@
   FIX-IN-CPP-FIRST to RECORD-AND-SPECIFY; and the C++ demoted from *trusted*
   oracle to a differential reference **for rules ratified on record only**,
   which invalidates the unhedged "trusted LMDB digest" phrasing in DRS-A2 /
-  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — no chain data
-  exists on any network, so format compatibility is worth zero); **redb stands**
+  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — every peer is at
+  height 1, genesis only, and a genesis-only datadir is disposable, so on-disk
+  format compatibility is worth zero); **redb stands**
   (DRS-D6 unchanged); **DRS-D4 substantially discharged** (wallet ~90%).
   CSR-1…CSR-5 are proposals awaiting ruling; no consensus rule, queue order, or
   schema is decided. C2-R3 landed mid-work (PR #592), re-bucketing the census to
