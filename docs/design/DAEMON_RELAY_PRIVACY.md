@@ -14756,6 +14756,51 @@ public infrastructure whose onion is discoverable anyway.
 > statements being read as contradicting each other when they are about
 > different things. §92.6 quotes this sentence and inherits the same reading.
 
+> **ANSWERED 2026-09-01 (Rick) — the question the note above posed, resolved in
+> the document that asked it.** **The propagation graph stays flexible and
+> N-ary: clearnet *and* Tor *and* I2P, etc. The default does not move to
+> Tor-only.** §91.2's sentence needs no reversal — it was right.
+>
+> **The reasoning, which matters more than the verdict, and it was already in
+> §91.2's own next paragraph.** A dual-stack node's return is a **`min` over
+> the graphs it runs**; a Tor-only node's return is the anonymity graph alone.
+> Under Design A a fluff traverses *every* configured zone, so a node running
+> both takes clearnet's `50` transit assumption as a **floor** instead of
+> eating the anonymity graph's `1625` as a **ceiling**. Forcing Tor-only would
+> throw that `min` away **and buy nothing in privacy**, because the *transport*
+> default (Tor recommended and installed — `P2P_2_REQUIREMENTS_REGISTER.md`
+> PW-3a) already steers privacy-seeking nodes onto Tor. A flexible graph is
+> strictly better on propagation at no privacy cost.
+>
+> **It resolves an open cost rather than inheriting it.** P2P-2 raised a second
+> cost of moving the graph default (`SHEKYL_P2P_PROTOCOL.md` PWD-I3): §12.10's
+> eviction floor is bounded partly by **re-entry cost**, and on an anonymity
+> network both halves of that tend to zero — §33.5's free key-minting and F-8's
+> reconnect-rather-than-mint — so §6.10's explicitly *economic* deterrent is
+> what would evaporate. **That was a cost of the option now declined.** With a
+> mixed graph it stops being a network-wide property and becomes a **per-zone**
+> one: clearnet retains whatever re-entry cost address-keyed tenure provides,
+> and Q-10's `g_max` sub-round reasons about **both regimes** rather than being
+> handed the worst as a fait accompli.
+>
+> **The I2P mention is a specification constraint, not a list.** The zone
+> abstraction must stay genuinely N-ary: no path assuming exactly two zones, no
+> `F′` derivation hardcoding a two-element `min`, no selection branching on
+> `is_tor` rather than on zone *properties*. **Checked at source rather than
+> assumed, and it holds:** `broadcast_all_zones` iterates
+> (`net_node.inl:2465`, with a `std::next(...) == end()` last-element test, not
+> a pair); worst-zone provisioning is a fold over zones
+> (`shekyl-relay-privacy/src/params.rs:356`), not a two-element `min`; and no
+> `is_tor` branch or two-zone assumption exists in the zone paths.
+>
+> **One place a new zone touches code, recorded so the next person adding one
+> knows where to look:** `get_seed_nodes` (`net_node.inl:775-786`) enumerates
+> zones in a `switch` where `tor` and `i2p` share an arm and `default:` falls
+> through to `throw std::logic_error{"Bad zone given to get_seed_nodes"}`. A
+> third zone therefore **requires editing it** — but it fails **loudly** rather
+> than being silently mistreated, which is the safe shape. Not a defect; a
+> signpost.
+
 A fluff is broadcast across every configured zone. `F′` remains **process-wide
 at the worst zone** per §89.2 — and under A the worst zone is the anonymity
 graph, because `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's

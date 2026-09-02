@@ -175,18 +175,22 @@ re-entry cost tend toward zero.
 (PW-3a: Tor recommended and installed) and **does not** by itself put the
 network on Tor — a node with Tor installed and default-on still runs a clearnet
 zone; that is dual-network, and its clearnet peers retain a non-free identity
-cost. The effect becomes *total* only under a **Tor-only propagation-graph
-default**, and **that question is open and belongs to the relay lane**
-(`DAEMON_RELAY_PRIVACY.md` §91.2 and the disambiguation note beneath it). An
-earlier draft here wrote "defaulting the network onto Tor" as though the graph
-default had moved; it has not.
+cost. The effect would become *total* only under a **Tor-only propagation-graph
+default** — and **that option has now been declined** (Rick, 2026-09-01,
+recorded at `DAEMON_RELAY_PRIVACY.md` §91.2): the graph stays flexible and
+N-ary, clearnet *and* Tor *and* I2P. An earlier draft here wrote "defaulting
+the network onto Tor" as though the graph default had moved; it never did.
 
-**So this is input to the relay lane's decision, not a cluster-I premise.** It
-sits alongside that section's own quantified cost — `F′` is process-wide at the
-worst zone, `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's `50`,
-and a Tor-only node has no clearnet graph to take the *min* over — as the
-**second cost** of moving the graph default. Both costs, one decision, one
-owner. **No decision in this cluster reasons from it.**
+**This was a cost of the declined option, and the decline resolves it.** It
+was recorded as the **second cost** of moving the graph default, beside that
+section's own quantified first cost — `F′` process-wide at the worst zone,
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's `50`, with no
+clearnet graph to take the *min* over. With the graph left flexible, the
+weakness **stops being network-wide and becomes per-zone**: clearnet retains
+whatever re-entry cost address-keyed tenure provides. **PWD-I4's sub-round
+therefore reasons about both regimes rather than being handed the worst one**,
+which is a materially easier problem than the one this paragraph first
+described. **No decision in this cluster reasons from it.**
 
 **Falsifier.** **Reopen if measured mean outbound connection lifetime falls
 below the warm-up any admission mechanism requires** — F-8's own condition,
@@ -244,10 +248,11 @@ exist when it was taken.** If the eviction floor's re-entry-cost bound is
 **transport-dependent** (§33.5: key-minting is free on an anonymity network;
 F-8: the adversary reconnects rather than mints), then a `g_max` derived before
 the default-transport question settles would be **derived against the wrong
-transport**. This holds whichever way the relay lane rules: the **transport**
-default is ruled (PW-3a) while the **propagation-graph** default is open, so a
-`g_max` derived now would be derived against a posture that is still moving.
-The open question strengthens the deferral rather than weakening it.
+transport**. Both postures are now settled — the **transport** default is Tor
+(PW-3a) and the **propagation graph** stays flexible and N-ary (§91.2, ruled
+2026-09-01) — so the sub-round inherits a *stable* target. What it must carry
+is that re-entry cost is now a **per-zone** quantity rather than a single
+network-wide one, and both regimes have to be reasoned about.
 
 **An obligation the sub-round inherits from that, to be argued rather than
 assumed.** §6.10 deters *"the budget-constrained passive observer, by
