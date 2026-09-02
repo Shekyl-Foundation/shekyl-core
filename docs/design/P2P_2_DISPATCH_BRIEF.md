@@ -475,7 +475,7 @@ remains is to make them concrete and normative.
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| PWD-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed | PW-1, PW-2, PW-7b |
+| PWD-T1 | The exact handshake: token sequence, `ck` derivation, where the ML-KEM shared secret is mixed — **and the zone-scoped self-detection nonce**, required by PWD-I1's amendment (2026-09-02) which removes `peer_id` from the wire. **Two bindings from that row, both of which change how T1 must be written:** the nonce windows are **per zone** and comparison is within-zone only (`handle_handshake:2719` warns that a cross-zone comparison lets an attacker read the rejection as a clearnet/Tor co-identity confirmation); and the nonce is **load-bearing for D++ stem width, with a silent failure mode** — an undetected self-edge is an eligible stem candidate (`levin_notify.cpp:232-233`, no self-exclusion) and at `STEMS = 2` halves effective stem width, so T1's falsifier must trip on **stem width**, not connection count | PW-1, PW-2, PW-7b, **PWD-I1** |
 | PWD-T2 | **PW-3 is retired as written — do NOT pin a padding band.** §1.4: the flight is already constant-size, so a band relabels the constant; and clearnet protocol identity is undefendable against active probing, which no passive defence touches. **RULED (Rick, 2026-09-01): clearnet gives confidentiality and integrity, not anonymity; anonymity is Tor's, and Tor is the recommended/default transport.** The round records the concession and its impossibility argument — it does not re-derive a band | PW-3 as retired in §1.4; PW-19a; `carrier.rs` is the template for any constant the round *does* pin |
 | PWD-T3 | Rekey: BOLT-8-style `ck', k' = HKDF(ck, k)`, per-direction, nonce reset — **zero bytes on the wire**, both sides deriving from state they already hold | PW-8 (ruled; carry the §0(b) correction **and the §1.5 privacy rationale**) |
 | PWD-T4 | **`e1`/`ekem1` semantics written normatively in `SHEKYL_P2P_PROTOCOL.md`** — the round's deliverable, not this brief — with `noise_hfs_spec` cited as provenance only | **PW-7c** |
@@ -499,17 +499,20 @@ bucket-4 mass lives here.
 | PWD-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
 | PWD-B7 | Drop semantics: `drop_connections`-by-host, the score floor, and whether the **inherited** no-drop-offense set is adopted deliberately | PWC-E7, PWC-E8, PWC-E9 |
 | PWD-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |
+| **PWD-B9** | **Outbound connection diversity: a same-host cap on outbound slots.** Added 2026-09-02 by PWD-I1's amendment, which removes `peer_id` from the wire and needs this as the replacement for id-based duplicate avoidance. **No pre-existing B row covered outbound selection** — B1 is command rate limiting, B7 is *drop* semantics — so routing to "cluster B" had no owner. Note the list asymmetry it must handle: the white list already holds one entry per host via `evict_host_from_peerlist`; the **gray list does not**, so the amplifier runs through gray draws | PWD-I1, PWC-E11, `net_peerlist.h:374` |
+| **PWD-B10** | **Delete the back-ping and `COMMAND_PING` (1003) from the wire surface.** Added 2026-09-02 and **answered the same day by PWD-I1's consumer inventory**, so this row carries an execution, not an open design question: `try_ping` has one caller whose callback is the whitelist promotion PWD-I2 forbids, and `try_ping` is `COMMAND_PING`'s only invoker. Four p2p commands become three | PWC-D11, PWD-I1, PWD-I2 |
+| **PWD-B11** | **`sanitize_peerlist`'s IPv4-only port-0 handling, and the disputed tor port-0 semantics** (`tor_address::unknown()` *is* port 0, so the sanitiser's rule cannot be applied uniformly). Added 2026-09-02 because PWC-D9 was deferred to "cluster B" with no row naming it — this document's own rule is that a cluster is not an owner | PWC-D9, #587 |
 
 ### 2.3 Cluster I — identity and Sybil resistance
 
 | id | Decision | Grounded in |
 | --- | --- | --- |
-| PWD-I1 | Session identity: fully ephemeral, no durable peer id on the wire | PW-19, PW-19a, PWC-D4 |
-| PWD-I2 | Peerlist disclosure: size, anonymisation, and whether both handshake and timed-sync carry it | PWC-D1, PWC-D2, PWC-B4, PW-16 |
-| PWD-I3 | Tenure recognition: address-keyed, never a wire field; **and the `first_seen` ordering that decides which anchors take the slots**. Composes with PW-3: stable tenure **amortises handshake exposure** (§1.5) | PW-17, PW-18, PWC-D5, `P2P_1_WIRE_CENSUS.md` §5.4 |
-| PWD-I4 | **Specify `ρ` / `g_max`** — the work-based admission and eviction mechanism | PW-23, PW-25 |
-| PWD-I5 | **Close Q-10 across documents**: update `DAEMON_RELAY_PRIVACY.md` itself to record the resolution | **PW-26** — a one-way read is not closure |
-| PWD-I6 | The Shi et al. residue: graylist and whitelist sub-attacks, both **unaddressed** | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-D3, PWC-D10, PWC-D11 |
+| PWD-I1 | Session identity — **DELIVERED, and the verdict reversed on amendment (2026-09-02): no peer identifier on the wire at all.** `peer_id` leaves `basic_node_data`, `id` leaves `peerlist_entry`; five jobs replaced by a zone-scoped nonce, an address-based same-host cap (PWD-B9), a local `handshake_complete` flag, and deletion of the back-ping (PWD-B10) | PW-19, PW-19a, PWC-D4 |
+| PWD-I2 | **DELIVERED.** Peerlist *acceptance* is restricted (disclosure is retained unchanged): outbound-only acceptance, a 250-record per-connection ceiling, and a white-list writer invariant closing Shi §III-B | PWC-D1, PWC-D2, PWC-D3, PWC-D10, PW-16 |
+| PWD-I3 | **DELIVERED.** Tenure is address-keyed, never serialized, ordered by `first_seen` — which decides which *single* anchor is kept, the multi-slot premise having been withdrawn | PWC-D5, PWC-D6, PW-17, PW-18 |
+| PWD-I4 | **DEFERRED to its own sub-round with blockers named** — `ρ`/`g_max` is not specified here; it must derive against the *fixed* anchor and white/gray behaviour, not the current one | PW-25, PWC-E6, Q-10 |
+| PWD-I5 | **DELIVERED as an obligation, not a closure** — the Q-10 write-back into `DAEMON_RELAY_PRIVACY.md` is specified now; its *discharge* is gated on PWD-I4 | PW-26, §12.10, §7 |
+| PWD-I6 | **DELIVERED.** Shi ① and ② are closed by PWD-I2's three rules; the inherited double-spend no-drop guard is recorded as the one residue, owned by PWD-B7 | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-E7 |
 
 ### 2.4 Cluster A — the archival submission-path gap
 

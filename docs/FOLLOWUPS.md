@@ -676,13 +676,34 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
+- **p2p lane: fix the anchor dial path so it fills `ANCHOR_CONNECTIONS_COUNT` slots instead of destroying the persisted anchor set on first use** — it currently yields at most one anchor-backed connection (zero if every anchor fails), which caps Q-10's `k` at 1. Full trace and the `g_max` consequence in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4
+  - Target: pre-genesis
+
+- **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
+  - Target: pre-genesis
+
 - **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
 - **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **Shi et al. (NDSS 2025) graylist and whitelist sub-attacks are unaddressed, and the double-spend arm is refused only by an inherited, never-examined guard.** The guard is upstream Monero's `f7fd209ed`; Shekyl has no record examining it, so a rewrite re-deriving tx ingest drops it silently. PWC-E7, §5.2 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
+- **Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.** The white-list writer invariant lands with the back-ping deletion and store bump in the row below, which is one composable change. PWC-D1/D3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2
+  - Target: pre-genesis
+
+- **Examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream Monero) and decide it deliberately, so a rewrite re-deriving tx ingest does not drop it silently.** Separate validation surface from the peerlist work above, per [`19-validation-surface-discipline`](../.cursor/rules/19-validation-surface-discipline.mdc). PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-B7
+  - Target: pre-genesis
+
+- **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
+  - Target: pre-genesis
+
+- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
+  - Target: pre-genesis
+
+- **Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.** Blocker: the tor port-0 semantics are disputed (named by #587, not invented here). PWC-D9 — [`P2P_2_DISPATCH_BRIEF.md`](design/P2P_2_DISPATCH_BRIEF.md) PWD-B11
+  - Target: pre-genesis
+
+- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into **gray** after handshake, bound gray occupancy per host, and bump the peerlist store version (which drops the persisted list).** The four are one outcome: `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; and without the bump, old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)

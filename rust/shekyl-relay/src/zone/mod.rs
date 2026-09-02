@@ -199,6 +199,24 @@ pub enum FluffReach {
     /// widening the reach to inbound peers would hand an active marker the
     /// attribution it currently cannot obtain. Do not relax it without
     /// reopening §91.4.
+    ///
+    /// **`ANON_ZONE_SENTINEL_PEER_ID` is superseded in design (2026-09-02,
+    /// `SHEKYL_P2P_PROTOCOL.md` PWD-I1) and the citation above outlives it.**
+    /// That decision removes `peer_id` from the wire entirely — from
+    /// `basic_node_data` and from `peerlist_entry` — so once P2P-3 lands, the
+    /// clause naming the sentinel names a constant that no longer exists.
+    ///
+    /// **Point 2 survives, and the claim stays scoped to anonymity zones.** It
+    /// needs the adversary to hold no distinguishing identifier on the
+    /// direction that carries the emit. The sentinel supplies **one half** of
+    /// that today by pinning the value to `1`; `tor_address::unknown()` on
+    /// inbound supplies the other, and **only the first half is superseded**.
+    /// Removing the field does not extend Point 2 to clearnet: a clearnet
+    /// counterparty still holds the connection's IP address, and this spec
+    /// concedes that clearnet gives confidentiality and integrity, not
+    /// anonymity (PW-3a). The leg is never unsatisfied in between. **When the
+    /// field is removed, rewrite the clause to cite the absence rather than the
+    /// constant** — the argument gets shorter, not wider.
     OutboundOnly,
 }
 

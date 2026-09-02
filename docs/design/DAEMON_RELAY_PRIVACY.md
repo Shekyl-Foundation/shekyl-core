@@ -1409,7 +1409,24 @@ instruments for both are built or scoped. What remains is the *arguments*:
      within it — preserves per-epoch selection entropy while closing the pool
      re-roll, the probable sweet spot) or *over* it (the successor itself pinned
      across epochs)? Different `g_max`, different privacy profile; needs the analysis.
-  2. **The anchor relationship.** Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
+  2. **The anchor relationship.**
+
+     > **Factual correction 2026-09-02 — the premise below overstates what the
+     > dial path delivers, and the correction is owed here rather than only in
+     > the p2p round.** `SHEKYL_P2P_PROTOCOL.md` PWD-I4 establishes that
+     > `get_and_empty_anchor_peerlist` copies **every** persisted anchor into a
+     > caller-local vector and then clears the container, while
+     > `make_new_connection_from_anchor_peerlist` returns after the **first**
+     > successful dial and only that peer is re-inserted. **A cold restart
+     > therefore yields at most *one* anchor-backed connection — zero if every
+     > anchor fails to handshake — and destroys the rest of the persisted set.**
+     > So "the 2 anchor slots are filled first" (§below) and `= 2` throughout
+     > this section describe the **configured** count, not the delivered one.
+     > **Only the numeric `g_max` seal stays deferred; this factual premise is
+     > corrected now**, because Q-10's *"≥ k slots are anchor-backed and thus not
+     > re-rollable"* framing reads `k = 2` and the tree gives `k = 1` at best.
+
+     Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
      [`get_and_empty_anchor_peerlist`](../../src/p2p/net_peerlist.h#L497), restart-
      persistent, `first_seen`-indexed, filled at
      [net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) are **already a partial
@@ -2369,8 +2386,10 @@ stem-eligible pool — the mechanism behind the `anchors = 2 ∥ STEMS = 2` haza
 **G-4 — anchor admission is *any* successful outbound handshake — no behavioural
 criterion.** `append_with_peer_anchor`
 ([net_node.inl:1347](../../src/p2p/net_node.inl#L1347)) is called on **every**
-successful outbound handshake, unconditionally; on reconnect the 2 anchor slots are
-filled *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)), then white
+successful outbound handshake, unconditionally; on reconnect the anchor slots are
+attempted *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) — **at
+most one of the configured 2 is actually filled, per the correction in §12.11's
+item 2** — then white
 (~70 %), then grey. So anchors are a **weak persistent pin populated by any
 accepted peer**, not a behavioural-floor pin.
 
@@ -14764,6 +14783,124 @@ public infrastructure whose onion is discoverable anyway.
 > statements being read as contradicting each other when they are about
 > different things. §92.6 quotes this sentence and inherits the same reading.
 
+> **ANSWERED 2026-09-01 (Rick) — the question the note above posed, resolved in
+> the document that asked it.** **The propagation graph stays flexible and
+> N-ary: clearnet *and* Tor *and* I2P, etc. The default does not move to
+> Tor-only.** §91.2's sentence needs no reversal — it was right.
+>
+> **The reasoning, which matters more than the verdict, and it was already in
+> §91.2's own next paragraph.** A dual-stack node's return is a **`min` over
+> the graphs it runs**; a Tor-only node's return is the anonymity graph alone.
+> Under Design A a fluff traverses *every* configured zone, so a node running
+> both takes clearnet's `50` transit assumption as a **floor** instead of
+> eating the anonymity graph's `1625` as a **ceiling**.
+>
+> **Correction 2026-09-02 — the ruling stands; its stated rationale did not,
+> and the error was in this document's own direction.** An earlier version said
+> forcing Tor-only would *"buy nothing in privacy, because the transport default
+> already steers privacy-seeking nodes onto Tor,"* and concluded *"a flexible
+> graph is strictly better on propagation at no privacy cost."* **§92.6 of this
+> same document says the opposite and says it twice**: a Tor-only originator
+> *"has no clearnet peers to be silent in front of"* so it does not leak §92.5's
+> absence signal **under any disarm branch**, and §91.4's emit-attribution
+> composition is the second mechanism — *"two independent mechanisms where
+> Tor-only is **strictly stronger** rather than merely equivalent."*
+>
+> **The transport default does not deliver either of them.** A node with Tor
+> installed and default-on *while still running a clearnet zone* is dual-network
+> by §91.2's own disambiguation, and a dual-network node **has** clearnet peers
+> to be silent in front of. §92.6's benefit belongs to the node that runs **no
+> clearnet zone at all** — precisely the posture the transport default does not
+> produce. Crediting the transport default with the graph posture's property is
+> the same over-read this section's disambiguation note was written to prevent,
+> arriving from the other side.
+>
+> **So the cost is real and is priced, not denied.** Declining Tor-only-by-default
+> keeps §92.5's absence-signal leak and §91.4's emit-attribution channel live for
+> **dual-stack nodes**, at the two magnitudes §92.6 and §91.6 already quantify.
+> The ruling is nonetheless unchanged, for a reason that does not require the
+> cost to be zero: **the posture stays available per node.** A node that wants
+> §92.6's strictly-stronger property configures Tor-only and gets it, paying the
+> anonymity zone's embargo (§91.6). Making it the *default* would impose that
+> embargo on every node — including those with no threat model that needs it —
+> and would throw the `min` away network-wide. **The privacy the default declines
+> is recoverable by the node that wants it; the propagation the default keeps is
+> not recoverable by anyone once the graph is uniform.** That asymmetry is the
+> argument, and it survives the cost being non-zero.
+>
+> **It resolves an open cost rather than inheriting it.** P2P-2 raised a second
+> cost of moving the graph default (`SHEKYL_P2P_PROTOCOL.md` PWD-I3): §12.10's
+> eviction floor is bounded partly by **re-entry cost**, and on an anonymity
+> network both halves of that tend to zero — §33.5's free key-minting and F-8's
+> reconnect-rather-than-mint — so §6.10's explicitly *economic* deterrent is
+> what would evaporate. **That was a cost of the option now declined.** With a
+> mixed graph it stops being a network-wide property and becomes a **per-zone**
+> one: clearnet retains whatever re-entry cost address-keyed tenure provides,
+> and Q-10's `g_max` sub-round reasons about **both regimes** rather than being
+> handed the worst as a fait accompli.
+>
+> **The I2P mention is a specification constraint, not a list.** The zone
+> abstraction must stay genuinely N-ary: no path assuming exactly two zones, no
+> `F′` derivation hardcoding a two-element `min`, no selection branching on
+> `is_tor` rather than on zone *properties*. **Checked at source, and the check was
+> too broad — it is corrected below rather than left standing.**
+> `broadcast_all_zones` genuinely iterates (`net_node.inl:2465`, with a
+> `std::next(...) == end()` last-element test, not a pair), and no `is_tor`
+> branch exists. **But "no two-zone assumption exists in the zone selection
+> paths" is false**, and the claim is now scoped to **broadcast routing**, which
+> is what was actually verified.
+>
+> **Correction 2026-09-02 — originated anonymity-zone selection is bounded at
+> `tor` and would ignore a later zone.** The picker
+> (`net_node.inl:2316-2362`) pins the order with `static_assert`s
+> (`public_ = 1 < i2p = 2 < tor = 3`), documents *"with both, i2p wins when
+> noise-filled, else outbound, then tor"*, and its second pass breaks on
+> `if (enet::zone::tor < network->first) break; // unknown network`. **A fourth
+> zone enumerated above `tor` is never selected for originated traffic.**
+>
+> **Correction, 2026-09-01.** An earlier version of this block asserted that
+> worst-zone provisioning is "a fold over zones, not a two-element `min`."
+> **That was wrong, and it was asserted from a comment rather than from the
+> code.** `fluff_return_ms: 3_250` (`params.rs:381`) is a **hardcoded scalar**
+> chosen by hand as the worse of two measured zones — clearnet ~1250 ms,
+> Tor-C ~3250 ms — and every consumer reads that single value
+> (`derive.rs:157`, `:394`, `:618`; `conformance/reshape.rs:44`). There is no
+> runtime fold. The design is deliberate and its reasoning is sound (*"a fluff
+> wave returns over whatever network the node is on, so there is no per-zone F
+> to pick"*), but it is **one constant standing in for all zones**, not an
+> N-ary computation.
+>
+> **Three places a new zone touches code, and they fail in three different ways
+> — loud, silent-on-a-privacy-path, and silent-on-a-derivation.** This
+> is the practical content of the N-ary constraint, so it is recorded rather
+> than left to be rediscovered:
+>
+> 1. **`get_seed_nodes`** (`net_node.inl:775-786`) — a `switch` where `tor` and
+>    `i2p` share an arm and `default:` falls through to
+>    `throw std::logic_error{"Bad zone given to get_seed_nodes"}`. A third zone
+>    **requires editing it and fails loudly.** Not a defect; a signpost.
+> 2. **Originated anonymity-zone selection** (`net_node.inl:2316-2362`) — a
+>    zone enumerated above `tor` is **silently skipped** by the `break` on
+>    `zone::tor < network->first`. Unlike `get_seed_nodes` this one does **not**
+>    fail loudly: originated traffic simply never selects the new zone, and the
+>    section's own *"fail closed"* logic then applies to a zone set that quietly
+>    excludes it. **This is a privacy path, which makes silence the worst
+>    property it could have.**
+> 3. **`fluff_return_ms`** — a third zone is simply **not represented**, and
+>    **nothing signals that.** The constant stays at Tor-C's p90. If a new zone
+>    were *slower* than Tor, `F′` would be silently **under**-provisioned — and
+>    this section's own argument establishes that as the unsafe direction:
+>    over-estimating `F` lengthens the embargo, *reducing* the §6.7 prefix-fire
+>    leak and costing only black-hole recovery latency ("privacy-safe on both
+>    axes"), so under-estimating is what costs privacy.
+>
+> **Owed to the lane that owns this constant, not to P2P-2:** adding a zone
+> slower than Tor requires re-deriving `fluff_return_ms`, and there is no gate
+> that notices. A derivation check asserting the constant equals the max over
+> *measured* zones would convert the silent failure into a loud one — the same
+> shape `carrier.rs` already uses, where `tests/carrier_window.rs` asserts the
+> derivation rather than the value.
+
 A fluff is broadcast across every configured zone. `F′` remains **process-wide
 at the worst zone** per §89.2 — and under A the worst zone is the anonymity
 graph, because `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's
@@ -14799,6 +14936,28 @@ decisions none of which was made for it:**
 | `ANON_ZONE_SENTINEL_PEER_ID = 1` | stop passive IP↔onion correlation via the handshake field | inbound anon peers carry no distinguishing id |
 | `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
 | `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
+
+> **Superseded in design 2026-09-02, and this composition gets *stronger*, not
+> weaker — but the text above becomes false and must be re-grounded when the
+> change lands.** `SHEKYL_P2P_PROTOCOL.md` PWD-I1 removes `peer_id` from the
+> wire entirely: from `basic_node_data` **and** from `peerlist_entry`. The first
+> leg of this composition then reads *"inbound anon peers carry no
+> distinguishing id"* for a **stronger** reason — there is no id field at all,
+> on any zone, rather than one pinned to a constant on this one — and the
+> sentinel constant it names no longer exists to cite.
+>
+> **Why this is recorded here rather than left to the implementer.** This
+> section states the composition is a **precondition of Design A**, so a reader
+> checking whether A still holds will come to this table. If P2P-3 removes the
+> field and this row still names `ANON_ZONE_SENTINEL_PEER_ID = 1`, the check
+> resolves against a mechanism that is gone, and the honest answer — *the leg is
+> now unconditional* — is unavailable from the text. The same note is owed to
+> `rust/shekyl-relay/src/zone/mod.rs`, whose §91.4 argument cites the sentinel
+> by name.
+>
+> **Nothing about A changes.** The leg is currently satisfied by the sentinel and
+> will be satisfied by the field's absence; it is never unsatisfied in between,
+> because P2P-3 removes the field on **every** zone at once — it is a common wire field, not a per-zone one.
 
 The third is the one that closes it. On an `OutboundOnly` zone the fluff loop
 skips every peer whose direction is inbound, so for an adversary `A` to receive
