@@ -185,6 +185,13 @@ CEN-B3 and CEN-K3 (the two store-enforcing bucket-4 rows R8 does not carry)
 are the rule set; the DRS surface column in §3 is how R8's output is handed
 to the store design.
 
+**CSR-1 does not re-batch anything.** CEN-B3 is batched in R4 and CEN-K3 in R1,
+and §10's membership is exhaustive and sum-checked (70 = 68 + 2); moving them
+would break that sum. They stay where they are — the store design **consumes
+their rulings from R1/R4 wherever those land**. R8 remains 8 rows. What CSR-1
+establishes is only which instrument *rules* a store-enforced rule, not which
+batch carries it.
+
 ---
 
 ## 5. Consequences for the DRS decisions
