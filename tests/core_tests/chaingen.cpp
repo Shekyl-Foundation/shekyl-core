@@ -222,7 +222,7 @@ static std::unique_ptr<cryptonote::Blockchain> init_blockchain(const std::vector
     bdb->add_block(*blk, 1, 1, 1, 0, 0, blk_hash);
   }
 
-  bool r = blockchain->init(bdb, nettype, true, test_options, 2, nullptr);
+  bool r = blockchain->init(bdb, nettype, true, test_options, 2);
   CHECK_AND_ASSERT_THROW_MES(r, "could not init blockchain from events");
   return bc;
 }

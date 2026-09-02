@@ -189,8 +189,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Tx version min/max is written twice and disagrees in form.** `ver_non_input_consensus` dispatches on `HF_VERSION_DYNAMIC_FEE` / `SHEKYL_NG` (`tx_verification_utils.cpp:55–78`); `check_tx_inputs` hardcodes 3..3 (`blockchain.cpp:3493–3506`). Live bounds match because every `HF_VERSION_*` is 1. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-H2 / CEN-I3 (were RC-68 / RC-82).
   - Target: pre-genesis
 
-- **`PER_BLOCK_CHECKPOINT` is compiled on and can skip PoW and FCMP.** CMake default `PER_BLOCK_CHECKPOINT=1`; a populated `m_blocks_hash_check` row skips `check_hash` and `check_tx_inputs` (`blockchain.cpp:5786–5805`, `:3246–3253`). Empty table ⇒ inert; a populated one is a consensus skip. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-E3 / CEN-E4 (were RC-15 / RC-96); C2 batch R1.
-  - Target: pre-genesis
 
 - **The pool admits duplicate archival unique-keys that only fail at connect.** Serve-credit `(P,s,E)`, bond-post-per-P, and emission `(P,E)` uniqueness are block-connect rules (`blockchain.cpp:6102–6261`), not `add_tx`. Two conflicting txs can sit in the mempool; a block that includes both is rejected. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G7 / CEN-G10 / CEN-G9 (were RC-113 / RC-123 / RC-130).
   - Target: pre-genesis
@@ -703,6 +701,9 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Size the Levin bucket header's length field once PWD-B3 sets the per-command caps.** Blocker: the header field cannot be sized before the caps it must express; PWC-A2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6, PWD-B3
+  - Target: pre-genesis
+
+- **Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.** `DAEMON_RELAY_PRIVACY.md` §-at-12622 concluded *"the 11-day figure is the worst case"* because the checkpoint skip rescued historical blocks; `fast_check` and `m_blocks_hash_check` no longer occur in `blockchain.cpp`, so the un-checkpointed case is now the only case. Blocker: the replacement figure needs a measurement, not an argument. Rule 76 — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
 - **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5

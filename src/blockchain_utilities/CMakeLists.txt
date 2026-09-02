@@ -29,12 +29,10 @@
 set(blockchain_import_sources
   blockchain_import.cpp
   bootstrap_file.cpp
-  blocksdat_file.cpp
   )
 
 set(blockchain_import_private_headers
   bootstrap_file.h
-  blocksdat_file.h
   bootstrap_serialization.h
   )
 
@@ -44,12 +42,10 @@ monero_private_headers(blockchain_import
 set(blockchain_export_sources
   blockchain_export.cpp
   bootstrap_file.cpp
-  blocksdat_file.cpp
   )
 
 set(blockchain_export_private_headers
   bootstrap_file.h
-  blocksdat_file.h
   bootstrap_serialization.h
   )
 
@@ -118,8 +114,7 @@ target_link_libraries(blockchain_import
     ${Boost_SYSTEM_LIBRARY}
     ${Boost_THREAD_LIBRARY}
     ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    ${Blocks})
+    ${EXTRA_LIBRARIES})
 
 set_property(TARGET blockchain_import
 	PROPERTY

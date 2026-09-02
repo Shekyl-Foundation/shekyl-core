@@ -209,7 +209,7 @@ namespace
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_timestamps_and_difficulties_height(0), m_reset_timestamps_and_difficulties_height(true), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
-  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
+  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_hash(crypto::null_hash),
@@ -397,7 +397,7 @@ uint64_t Blockchain::get_current_blockchain_height() const
 //------------------------------------------------------------------
 //FIXME: possibly move this into the constructor, to avoid accidentally
 //       dereferencing a null BlockchainDB pointer
-bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty, const GetCheckpointsCallback& get_checkpoints/* = nullptr*/)
+bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -547,11 +547,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   m_async_work_idle = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_async_service.get_executor());
   // we only need 1
   m_async_pool.create_thread(boost::bind(&boost::asio::io_context::run, &m_async_service));
-
-#if defined(PER_BLOCK_CHECKPOINT)
-  if (m_nettype != FAKECHAIN)
-    load_compiled_in_block_hashes(get_checkpoints);
-#endif
 
   MINFO("Blockchain initialized. last block: " << m_db->height() - 1 << ", " << epee::misc_utils::get_time_interval_string(timestamp_diff) << " time ago, current difficulty: " << get_difficulty_for_next_block());
 
@@ -3317,16 +3312,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-#if defined(PER_BLOCK_CHECKPOINT)
-  // check if we're doing per-block checkpointing
-  if (m_db->height() < m_blocks_hash_check.size() && kept_by_block)
-  {
-    max_used_block_id = null_hash;
-    max_used_block_height = 0;
-    return true;
-  }
-#endif
-
   TIME_MEASURE_START(a);
   bool res = check_tx_inputs(tx, tvc, &max_used_block_height);
   TIME_MEASURE_FINISH(a);
@@ -5903,28 +5888,6 @@ leave:
   // be a parameter?
   // validate proof_of_work versus difficulty target
   bool precomputed = false;
-  bool fast_check = false;
-#if defined(PER_BLOCK_CHECKPOINT)
-  if (blockchain_height < m_blocks_hash_check.size())
-  {
-    const auto &expected_hash = m_blocks_hash_check[blockchain_height].first;
-    if (expected_hash != crypto::null_hash)
-    {
-      if (memcmp(&id, &expected_hash, sizeof(hash)) != 0)
-      {
-        MERROR_VER("Block with id is INVALID: " << id << ", expected " << expected_hash);
-        bvc.m_verifivation_failed = true;
-        goto leave;
-      }
-      fast_check = true;
-    }
-    else
-    {
-      MCINFO("verify", "No pre-validated hash at height " << blockchain_height << ", verifying fully");
-    }
-  }
-#endif
-  if (!fast_check)
   {
     auto it = m_blocks_longhash_table.find(id);
     if (it != m_blocks_longhash_table.end())
@@ -5971,10 +5934,7 @@ leave:
     goto leave;
   }
 
-  // verify all non-input consensus rules for txs inside the pool supplement (if not inside checkpoint zone)
-#if defined(PER_BLOCK_CHECKPOINT)
-  if (!fast_check)
-#endif
+  // verify all non-input consensus rules for txs inside the pool supplement
   {
     tx_verification_context tvc{};
     // If fail non-input consensus rule checking...
@@ -6154,9 +6114,6 @@ leave:
     t_dblspnd += dd;
     TIME_MEASURE_START(cc);
 
-#if defined(PER_BLOCK_CHECKPOINT)
-    if (!fast_check)
-#endif
     {
       // If this tx came from the mempool and is FCMP++, the proof was already
       // LOAD-BEARING FOR THE EMBARGO, not only for throughput: `hop` is
@@ -6190,15 +6147,12 @@ leave:
     cumulative_block_weight += tx_weight;
   }
 
-  // if we were syncing pruned blocks
+  // A pruned block has no weight source (the per-block-checkpoint weight
+  // table was the only substitute; deleted, C2-R1a): reject.
   if (n_pruned > 0)
   {
-    if (blockchain_height >= m_blocks_hash_check.size() || m_blocks_hash_check[blockchain_height].second == 0)
-    {
-      MERROR("Block at " << blockchain_height << " is pruned, but we do not have a weight for it");
-      goto leave;
-    }
-    cumulative_block_weight = m_blocks_hash_check[blockchain_height].second;
+    MERROR("Block at " << blockchain_height << " is pruned, but we do not have a weight for it");
+    goto leave;
   }
 
   // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
@@ -6283,58 +6237,6 @@ leave:
         if (std::holds_alternative<txin_archival_bond_post>(vin))
         {
           const auto& bond = std::get<txin_archival_bond_post>(vin);
-          // GF-1 fail-closed belt (gate-4 §3.5 step 5), block-level: the
-          // per-tx debit-auth pin lives in check_archival_bond_post_input,
-          // which the per-block-checkpoint fast path skips — without this arm
-          // a fast-syncing node would connect an unauthorized debit that a
-          // fully-verifying node rejects (consensus split), and the removed
-          // connect-time FATAL guard is not a substitute (it crashed the
-          // node instead of rejecting the block). The GF-1 wire+record
-          // sub-increment swapped the arm's pre-GF-1 blanket rejection to the
-          // real authorization: re-pin the vin's pqc auth key against the
-          // record's COMMITTED bond_spend_pk (fail closed on a missing
-          // record, a keyless pre-GF-1 record, or a missing auth slot) --
-          // through the SHARED pin, never a local re-spelling of it. Only
-          // the theft-shaped check is re-run here; the debit's semantic legs
-          // (cooldown, watermark, floor) stay checkpoint-trusted under the
-          // fast path like every other skipped per-tx check.
-          //
-          // The selector is the GF-1 selector itself — bond_debit > 0, NOT
-          // "kind != JoinMarket": HoldingsUpdate-add is a credit arm whose
-          // legitimate pqc auth is the IDENTITY key (per-tx verify pins
-          // auth == hybrid_public_key), so keying the belt on the post kind
-          // would reject every valid HoldingsUpdate-add block under fast
-          // sync while fully-verifying nodes accept it — a network split.
-          // Credits stay checkpoint-trusted here exactly as JoinMarket does.
-          if (fast_check && bond.bond_debit > 0)
-          {
-            // The predicate is `archival_debit_auth_pin` -- the SAME function
-            // the per-tx path and the Rust submit battery reach, not a
-            // re-spelling of it. It WAS spelled inline here until 2026-08-29,
-            // which made this arm a third copy of the one check whose entire
-            // purpose is that fast-syncing and fully-verifying nodes agree:
-            // a drift between the copies produces exactly the consensus split
-            // the comment above says this arm exists to prevent.
-            shekyl::db::ArchivalBondValue record{};
-            // A missing record leaves `record` default-constructed, so its
-            // empty bond_spend_pk drives the pin's "commits no key" arm --
-            // the same fail-closed answer the inline `have_record &&` gave.
-            (void)m_db->get_archival_bond_value(bond.p_canonical_id, record);
-            const bool slot_present = vin_idx < btx.pqc_auths.size();
-            if (!slot_present
-                || !archival_debit_auth_pin(record,
-                     btx.pqc_auths[vin_idx].hybrid_public_key,
-                     "block fast-check debit"))
-            {
-              MERROR_VER("Block " << id << " rejected: debit-side archival bond post at "
-                "vin " << vin_idx << " (kind " << static_cast<unsigned>(bond.post_kind)
-                << ") failed the debit-auth pin"
-                << (slot_present ? "" : " (no pqc auth slot for the vin)"));
-              bvc.m_verifivation_failed = true;
-              return_txs_to_pool();
-              return false;
-            }
-          }
           const size_t off = bond_post_ids.size();
           bond_post_ids.resize(off + 32);
           memcpy(bond_post_ids.data() + off, bond.p_canonical_id.data, 32);
@@ -6352,8 +6254,9 @@ leave:
           vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
         if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
         {
-          // check_tx_inputs already parsed this blob; a failure here means the
-          // per-tx pass was skipped (checkpoint fast path) — fail closed.
+          // check_tx_inputs already parsed this blob unconditionally; a
+          // failure here is an internal inconsistency between two parses of
+          // the same bytes — fail closed.
           MERROR_VER("Block " << id << " has an unparseable archival emission vin");
           bvc.m_verifivation_failed = true;
           return_txs_to_pool();
@@ -6920,14 +6823,6 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
   m_blocks_longhash_table.clear();
   m_scan_table.clear();
 
-  // when we're well clear of the precomputed hashes, free the memory
-  if (!m_blocks_hash_check.empty() && m_db->height() > m_blocks_hash_check.size() + 4096)
-  {
-    MINFO("Dumping block hashes, we're now 4k past " << m_blocks_hash_check.size());
-    m_blocks_hash_check.clear();
-    m_blocks_hash_check.shrink_to_fit();
-  }
-
   CRITICAL_REGION_END();
   m_tx_pool.unlock();
 
@@ -6951,138 +6846,6 @@ void Blockchain::output_scan_worker(const uint64_t amount, const std::vector<uin
   {
 
   }
-}
-
-uint64_t Blockchain::prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights)
-{
-  // new: . . . . . X X X X X . . . . . .
-  // pre: A A A A B B B B C C C C D D D D
-
-  CHECK_AND_ASSERT_MES(weights.empty() || weights.size() == hashes.size(), 0, "Unexpected weights size");
-
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  // easy case: height >= hashes
-  if (height >= m_blocks_hash_of_hashes.size() * HASH_OF_HASHES_STEP)
-    return hashes.size();
-
-  // if we're getting old blocks, we might have jettisoned the hashes already
-  if (m_blocks_hash_check.empty())
-    return hashes.size();
-
-  // find hashes encompassing those block
-  size_t first_index = height / HASH_OF_HASHES_STEP;
-  size_t last_index = (height + hashes.size() - 1) / HASH_OF_HASHES_STEP;
-  MDEBUG("Blocks " << height << " - " << (height + hashes.size() - 1) << " start at " << first_index << " and end at " << last_index);
-
-  // case of not enough to calculate even a single hash
-  if (first_index == last_index && hashes.size() < HASH_OF_HASHES_STEP && (height + hashes.size()) % HASH_OF_HASHES_STEP)
-    return hashes.size();
-
-  // build hashes vector to hash hashes together
-  std::vector<crypto::hash> data_hashes;
-  std::vector<uint64_t> data_weights;
-  data_hashes.reserve(hashes.size() + HASH_OF_HASHES_STEP - 1); // may be a bit too much
-  if (!weights.empty())
-    data_weights.reserve(data_hashes.size());
-
-  // we expect height to be either equal or a bit below db height
-  bool disconnected = (height > m_db->height());
-  size_t pop;
-  if (disconnected && height % HASH_OF_HASHES_STEP)
-  {
-    ++first_index;
-    pop = HASH_OF_HASHES_STEP - height % HASH_OF_HASHES_STEP;
-  }
-  else
-  {
-    // we might need some already in the chain for the first part of the first hash
-    for (uint64_t h = first_index * HASH_OF_HASHES_STEP; h < height; ++h)
-    {
-      data_hashes.push_back(m_db->get_block_hash_from_height(h));
-      if (!weights.empty())
-        data_weights.push_back(m_db->get_block_weight(h));
-    }
-    pop = 0;
-  }
-
-  // push the data to check
-  for (size_t i = 0; i < hashes.size(); ++i)
-  {
-    if (pop)
-      --pop;
-    else
-    {
-      data_hashes.push_back(hashes[i]);
-      if (!weights.empty())
-        data_weights.push_back(weights[i]);
-    }
-  }
-
-  // hash and check
-  uint64_t usable = first_index * HASH_OF_HASHES_STEP - height; // may start negative, but unsigned under/overflow is not UB
-  for (size_t n = first_index; n <= last_index; ++n)
-  {
-    if (n < m_blocks_hash_of_hashes.size())
-    {
-      // if the last index isn't fully filled, we can't tell if valid
-      if (data_hashes.size() < (n - first_index) * HASH_OF_HASHES_STEP + HASH_OF_HASHES_STEP)
-        break;
-
-      crypto::hash hash;
-      cn_fast_hash(data_hashes.data() + (n - first_index) * HASH_OF_HASHES_STEP, HASH_OF_HASHES_STEP * sizeof(crypto::hash), hash);
-      bool valid = hash == m_blocks_hash_of_hashes[n].first;
-      if (valid && !weights.empty())
-      {
-        cn_fast_hash(data_weights.data() + (n - first_index) * HASH_OF_HASHES_STEP, HASH_OF_HASHES_STEP * sizeof(uint64_t), hash);
-        valid &= hash == m_blocks_hash_of_hashes[n].second;
-      }
-
-      // add to the known hashes array
-      if (!valid)
-      {
-        MDEBUG("invalid hash for blocks " << n * HASH_OF_HASHES_STEP << " - " << (n * HASH_OF_HASHES_STEP + HASH_OF_HASHES_STEP - 1));
-        break;
-      }
-
-      size_t end = n * HASH_OF_HASHES_STEP + HASH_OF_HASHES_STEP;
-      for (size_t i = n * HASH_OF_HASHES_STEP; i < end; ++i)
-      {
-        CHECK_AND_ASSERT_MES(m_blocks_hash_check[i].first == crypto::null_hash || m_blocks_hash_check[i].first == data_hashes[i - first_index * HASH_OF_HASHES_STEP],
-            0, "Consistency failure in m_blocks_hash_check construction");
-        m_blocks_hash_check[i].first = data_hashes[i - first_index * HASH_OF_HASHES_STEP];
-        if (!weights.empty())
-        {
-          CHECK_AND_ASSERT_MES(m_blocks_hash_check[i].second == 0 || m_blocks_hash_check[i].second == data_weights[i - first_index * HASH_OF_HASHES_STEP],
-              0, "Consistency failure in m_blocks_hash_check construction");
-          m_blocks_hash_check[i].second = data_weights[i - first_index * HASH_OF_HASHES_STEP];
-        }
-      }
-      usable += HASH_OF_HASHES_STEP;
-    }
-    else
-    {
-      // if after the end of the precomputed blocks, accept anything
-      usable += HASH_OF_HASHES_STEP;
-      if (usable > hashes.size())
-        usable = hashes.size();
-    }
-  }
-  MDEBUG("usable: " << usable << " / " << hashes.size());
-  CHECK_AND_ASSERT_MES(usable < std::numeric_limits<uint64_t>::max() / 2, 0, "usable is negative");
-  return usable;
-}
-
-bool Blockchain::has_block_weights(uint64_t height, uint64_t nblocks) const
-{
-  CHECK_AND_ASSERT_MES(nblocks > 0, false, "nblocks is 0");
-  uint64_t last_block_height = height + nblocks - 1;
-  if (last_block_height >= m_blocks_hash_check.size())
-    return false;
-  for (uint64_t h = height; h <= last_block_height; ++h)
-    if (m_blocks_hash_check[h].second == 0)
-      return false;
-  return true;
 }
 
 //------------------------------------------------------------------
@@ -7147,8 +6910,6 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   m_batch_success = true;
 
   const uint64_t height = m_db->height();
-  if ((height + blocks_entry.size()) < m_blocks_hash_check.size())
-    return true;
 
   bool blocks_exist = false;
   tools::threadpool& tpool = tools::threadpool::getInstanceForCompute();
@@ -7524,7 +7285,7 @@ bool Blockchain::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_c
   return m_db->txpool_tx_matches_category(tx_hash, category);
 }
 
-void Blockchain::set_user_options(uint64_t maxthreads, bool sync_on_blocks, uint64_t sync_threshold, blockchain_db_sync_mode sync_mode, bool fast_sync)
+void Blockchain::set_user_options(uint64_t maxthreads, bool sync_on_blocks, uint64_t sync_threshold, blockchain_db_sync_mode sync_mode)
 {
   if (sync_mode == db_defaultsync)
   {
@@ -7532,7 +7293,6 @@ void Blockchain::set_user_options(uint64_t maxthreads, bool sync_on_blocks, uint
     sync_mode = db_async;
   }
   m_db_sync_mode = sync_mode;
-  m_fast_sync = fast_sync;
   m_db_sync_on_blocks = sync_on_blocks;
   m_db_sync_threshold = sync_threshold;
   m_max_prepare_blocks_threads = maxthreads;
@@ -7670,108 +7430,6 @@ std::vector<std::pair<Blockchain::block_extended_info,std::vector<crypto::hash>>
 void Blockchain::cancel()
 {
   m_cancel = true;
-}
-
-#if defined(PER_BLOCK_CHECKPOINT)
-static const char expected_block_hashes_hash[] = "06c61040ace2d58086f1f8f0c0a78881a71c88f2814307b19f881ef92680f6e0";
-void Blockchain::load_compiled_in_block_hashes(const GetCheckpointsCallback& get_checkpoints)
-{
-  if (get_checkpoints == nullptr || !m_fast_sync)
-  {
-    return;
-  }
-  const epee::span<const unsigned char> &checkpoints = get_checkpoints(m_nettype);
-  if (!checkpoints.empty())
-  {
-    MINFO("Loading precomputed blocks (" << checkpoints.size() << " bytes)");
-    if (m_nettype == MAINNET)
-    {
-      // first check hash
-      crypto::hash hash;
-      if (!tools::sha256sum(checkpoints.data(), checkpoints.size(), hash))
-      {
-        MERROR("Failed to hash precomputed blocks data");
-        return;
-      }
-      MINFO("precomputed blocks hash: " << hash << ", expected " << expected_block_hashes_hash);
-      cryptonote::blobdata expected_hash_data;
-      if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(expected_block_hashes_hash), expected_hash_data) || expected_hash_data.size() != sizeof(crypto::hash))
-      {
-        MERROR("Failed to parse expected block hashes hash");
-        return;
-      }
-      const crypto::hash expected_hash = *reinterpret_cast<const crypto::hash*>(expected_hash_data.data());
-      if (hash != expected_hash)
-      {
-        MERROR("Block hash data does not match expected hash");
-        return;
-      }
-    }
-
-    if (checkpoints.size() > 4)
-    {
-      const unsigned char *p = checkpoints.data();
-      const uint32_t nblocks = *p | ((*(p+1))<<8) | ((*(p+2))<<16) | ((*(p+3))<<24);
-      if (nblocks > (std::numeric_limits<uint32_t>::max() - 4) / sizeof(hash))
-      {
-        MERROR("Block hash data is too large");
-        return;
-      }
-      const size_t size_needed = 4 + nblocks * (sizeof(crypto::hash) * 2);
-      if(checkpoints.size() != size_needed)
-      {
-        MERROR("Failed to load hashes - unexpected data size");
-        return;
-      }
-      else if(nblocks > 0 && nblocks > (m_db->height() + HASH_OF_HASHES_STEP - 1) / HASH_OF_HASHES_STEP)
-      {
-        p += sizeof(uint32_t);
-        m_blocks_hash_of_hashes.reserve(nblocks);
-        for (uint32_t i = 0; i < nblocks; i++)
-        {
-          crypto::hash hash_hashes, hash_weights;
-          memcpy(hash_hashes.data, p, sizeof(hash_hashes.data));
-          p += sizeof(hash_hashes.data);
-          memcpy(hash_weights.data, p, sizeof(hash_weights.data));
-          p += sizeof(hash_weights.data);
-          m_blocks_hash_of_hashes.push_back(std::make_pair(hash_hashes, hash_weights));
-        }
-        m_blocks_hash_check.resize(m_blocks_hash_of_hashes.size() * HASH_OF_HASHES_STEP, std::make_pair(crypto::null_hash, 0));
-        MINFO(nblocks << " block hashes loaded");
-
-        // FIXME: clear tx_pool because the process might have been
-        // terminated and caused it to store txs kept by blocks.
-        // The core will not call check_tx_inputs(..) for these
-        // transactions in this case. Consequently, the sanity check
-        // for tx hashes will fail in handle_block_to_main_chain(..)
-        CRITICAL_REGION_LOCAL(m_tx_pool);
-
-        std::vector<transaction> txs;
-        m_tx_pool.get_transactions(txs, true);
-
-        size_t tx_weight;
-        uint64_t fee;
-        bool relayed, do_not_relay, double_spend_seen, pruned;
-        transaction pool_tx;
-        blobdata txblob;
-        for(const transaction &tx : txs)
-        {
-          crypto::hash tx_hash = get_transaction_hash(tx);
-          m_tx_pool.take_tx(tx_hash, pool_tx, txblob, tx_weight, fee, relayed, do_not_relay, double_spend_seen, pruned);
-        }
-      }
-    }
-  }
-}
-#endif
-
-bool Blockchain::is_within_compiled_block_hash_area(uint64_t height) const
-{
-#if defined(PER_BLOCK_CHECKPOINT)
-  return height < m_blocks_hash_of_hashes.size() * HASH_OF_HASHES_STEP;
-#else
-  return false;
-#endif
 }
 
 void Blockchain::lock()

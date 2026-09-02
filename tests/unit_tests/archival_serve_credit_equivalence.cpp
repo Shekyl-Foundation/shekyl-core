@@ -566,7 +566,7 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
+  if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0))
     throw std::runtime_error("Blockchain::init failed");
 
   // PC-D3: the verifier's block. Taken from the gate-2 substrate, which is

@@ -4,6 +4,42 @@
 
 ### Added
 
+- **Rule 71 (network uniformity) + its CI gate.** On the
+  consensus/validation surface, nettype selects data, never control flow;
+  a real behavioral divergence must be named, ratified, and loud
+  (`.cursor/rules/71-network-uniformity.mdc`, minted at Rick's direction
+  during C2-R1a — both inherited checkpoint mechanisms had the
+  `if (nettype == MAINNET) { do the real thing }` shape).
+  `scripts/ci/check_network_uniformity.sh` (wired into `ci/grep-gates`)
+  flags any new public-nettype equality or inequality branch in
+  `cryptonote_core/ + checkpoints/ + blockchain_db/` against an annotated
+  8-entry allowlist enforced as a bijection (a copy-pasted duplicate of
+  an allowlisted branch fails the total). Matching is spelling- and
+  operand-independent (either comparison direction, any variable name,
+  `if(`/`if (`, wrapped lines, compound conditions, `switch`/`case`),
+  and collection failures are loud (a stripper failure or an empty
+  fence directory fails the gate rather than reading as no-match).
+  Every enforcement arm was observed red on a planted evasion before
+  landing.
+
+- **Daemon C++ is not a base — a complete rewrite gates release (countermand,
+  2026-09-01).** Recorded with its blast radius across `DRS-*` and its
+  row-level census map in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  (`CSR-`), which also reconciles that program with the consensus rewrite —
+  the two partition the same six C++ files on orthogonal cuts and had **zero**
+  cross-references in either direction. Consensus-relevant effects: the C++ is
+  demoted from *trusted* oracle to a differential reference for rules that are
+  **both** ratified on record **and** carrying an **affirmative conformance
+  record** — absence of a recorded divergence means *unreviewed*, not conformant,
+  so the checked set is **empty** until **DRS-P0f** (the per-row conformance review, minted here) populates it (a
+  **conformance-exception register** holds the known divergences, seeded with
+  CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
+  intermediate engine (DEL-007), **redb stands**. Design-round detail — the
+  CSR-1…CSR-5 rulings, the 18-row store map, and the arithmetic corrections —
+  stays in the owning document per
+  [`95-documentation-lifecycle`](../.cursor/rules/95-documentation-lifecycle.mdc).
+
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing
   named check, so the gates it carries go quiet — that is how one unquoted
@@ -52,6 +88,22 @@
   ruling: census precedes rewrite). Docs only; no behavior change.
 
 ### Removed
+
+- **The per-block-checkpoint fast-sync mechanism (consensus)** — C2-R1a,
+  ratified 2026-09-02
+  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §3).
+  Deleted whole: the compiled-in hash-of-hashes table and its loader
+  (mainnet's pin was a stale inherited constant no Shekyl blob could match;
+  testnet/stagenet blobs loaded with no verification), the four
+  `fast_check` arms in block connect (PoW skip, pool-supplement NIC skip,
+  per-tx input/FCMP skip, and the CEN-G8 GF-1 belt — retired, its job
+  subsumed by the now-unconditional per-tx pin), the `kept_by_block`
+  early-success wrapper arm (CEN-E4), the p2p hash-chunk expansion and
+  pruned-span weight gating, `--fast-block-sync`, `src/blocks/` (three
+  zero-byte `.dat` blobs), and `shekyl-blockchain-export --blocksdat`
+  (the blob generator). Behavior-preserving: every arm was unreachable
+  with the shipped empty data. Census: CEN-E3/E4/G8 → bucket 3, counts
+  86/16/5/64.
 
 - **P2P wire: the two dead RPC-advertisement fields are gone.**
   `rpc_port` and `rpc_credits_per_hash` were members of the handshake

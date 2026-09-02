@@ -84,15 +84,6 @@ namespace cryptonote
     db_nosync //!< Leave syncing up to the backing db (safest, but slowest because of disk I/O)
   };
 
-  /** 
-   * @brief Callback routine that returns checkpoints data for specific network type
-   * 
-   * @param network network type
-   * 
-   * @return checkpoints data, empty span if there ain't any checkpoints for specific network type
-   */
-  typedef std::function<const epee::span<const unsigned char>(cryptonote::network_type network)> GetCheckpointsCallback;
-
   typedef boost::function<void(std::vector<txpool_event>)> TxpoolNotifyCallback;
   typedef boost::function<void(uint64_t /* height */, epee::span<const block> /* blocks */)> BlockNotifyCallback;
   typedef boost::function<void(uint8_t /* major_version */, uint64_t /* height */, const crypto::hash& /* prev_id */, const crypto::hash& /* seed_hash */, difficulty_type /* diff */, uint64_t /* median_weight */, uint64_t /* already_generated_coins */, const std::vector<tx_block_template_backlog_entry>& /* tx_backlog */)> MinerNotifyCallback;
@@ -135,11 +126,10 @@ namespace cryptonote
      * @param offline true if running offline, else false
      * @param test_options test parameters
      * @param fixed_difficulty fixed difficulty for testing purposes; 0 means disabled
-     * @param get_checkpoints if set, will be called to get checkpoints data
      *
      * @return true on success, false if any initialization steps fail
      */
-    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0, const GetCheckpointsCallback& get_checkpoints = nullptr);
+    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
 
     /**
      * @brief Initialize the Blockchain state
@@ -811,10 +801,9 @@ namespace cryptonote
      * @param sync_on_blocks whether to sync based on blocks or bytes
      * @param sync_threshold number of blocks/bytes to cache before syncing to database
      * @param sync_mode the ::blockchain_db_sync_mode to use
-     * @param fast_sync sync using built-in block hashes as trusted
      */
     void set_user_options(uint64_t maxthreads, bool sync_on_blocks, uint64_t sync_threshold,
-        blockchain_db_sync_mode sync_mode, bool fast_sync);
+        blockchain_db_sync_mode sync_mode);
 
     /**
      * @brief sets a txpool notify object to call for every new tx used to add a new block
@@ -1070,8 +1059,6 @@ namespace cryptonote
     bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata_ref*)>, bool include_blob = false, relay_category tx_category = relay_category::broadcasted) const;
     bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
 
-    bool is_within_compiled_block_hash_area() const { return is_within_compiled_block_hash_area(m_db->height()); }
-    uint64_t prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights);
     uint32_t get_blockchain_pruning_seed() const { return m_db->get_blockchain_pruning_seed(); }
     bool prune_blockchain(uint32_t pruning_seed = 0);
     bool update_blockchain_pruning();
@@ -1093,21 +1080,6 @@ namespace cryptonote
      * @param nblocks number of blocks to be removed
      */
     void pop_blocks(uint64_t nblocks);
-
-    /**
-     * @brief checks whether a given block height is included in the precompiled block hash area
-     *
-     * @param height the height to check for
-     */
-    bool is_within_compiled_block_hash_area(uint64_t height) const;
-
-    /**
-     * @brief checks whether we have known weights for the given block heights
-     *
-     * @param height the start height to check for
-     * @param nblocks how many blocks to check from that height
-     */
-    bool has_block_weights(uint64_t height, uint64_t nblocks) const;
 
     /**
      * @brief flush the invalid blocks set
@@ -1232,12 +1204,7 @@ namespace cryptonote
     std::unordered_map<crypto::hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>> m_scan_table;
     std::unordered_map<crypto::hash, crypto::hash> m_blocks_longhash_table;
 
-    // Keccak hashes for each block and for fast pow checking
-    std::vector<std::pair<crypto::hash, crypto::hash>> m_blocks_hash_of_hashes;
-    std::vector<std::pair<crypto::hash, uint64_t>> m_blocks_hash_check;
-
     blockchain_db_sync_mode m_db_sync_mode;
-    bool m_fast_sync;
     bool m_show_time_stats;
     bool m_db_default_sync;
     bool m_db_sync_on_blocks;
@@ -1710,17 +1677,6 @@ namespace cryptonote
      * @return false if a double spend was detected, otherwise true
      */
     bool check_for_double_spend(const transaction& tx, key_images_container& keys_this_block) const;
-
-    /**
-     * @brief loads block hashes from compiled-in data set
-     *
-     * A (possibly empty) set of block hashes can be compiled into the
-     * monero daemon binary.  This function loads those hashes into
-     * a useful state.
-     * 
-     * @param get_checkpoints if set, will be called to get checkpoints data
-     */
-    void load_compiled_in_block_hashes(const GetCheckpointsCallback& get_checkpoints);
 
     /**
      * @brief invalidates any cached block template
