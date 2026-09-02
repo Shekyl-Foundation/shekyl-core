@@ -85,34 +85,6 @@ labelled once found. The failure direction is always the same — the constant
 overstates — because a constant that understated would have been noticed by
 whoever needed the capability.
 
-**The fourth check, and it is a *disposal* rule like the first rather than a
-review step — *prefer a mechanism whose input is your own observation to one
-whose input is the peer's claim*.** (Rick, 2026-09-02.)
-
-> **Claims require verification; verification requires identity; identity is
-> forbidden by PW-19a. Observations require nothing.**
-
-That chain is why the inherited p2p keeps needing guards for its guards. It asks
-*"is this peer the same node as that one?"* — a question about **identity**,
-which here is self-asserted, unverifiable, public once gossiped, and forbidden as
-durable state. So `peer_id` needs `is_same_host` to stop replay, and the
-back-ping needs a `peer_id` echo to stop substitution, and each patch is a better
-way to verify a claim that should never have been made.
-
-**The consciously designed question is *"is my own outbound pool
-over-concentrated?"*** — a property of state this node already holds. No
-cooperation, no claimed value, nothing to spoof.
-
-**This is the reframe `DAEMON_RELAY_PRIVACY.md` §12.10 already performed one
-layer up** — *"bounding pool-share `g` was bounding the wrong quantity"* —
-restated at the connection layer. The project has made this move before and it
-held.
-
-It disposes of a family the way PW-19a's check does: **PWD-I1's four jobs, and
-with them `peer_id`, `peerlist_entry.id`, the back-ping and `COMMAND_PING`.**
-Applied *before* costing a proposal, it is cheaper than any of the four rounds of
-patching it replaces.
-
 **The third check, and unlike the first two it interrogates *our own* output
 rather than the tree's — *a countermeasure must sit on the path the attacker's
 action traverses*.**
@@ -169,13 +141,79 @@ for exactly this reason: *the white list may only be written for connections
 this node initiated* constrains the asset, so it covers both existing writers
 and any future one, where "peerlist records" covered one of two.
 
+**The fourth check, and it is a *disposal* rule like the first rather than a
+review step — *prefer a mechanism whose input is your own observation to one
+whose input is the peer's claim*.** (Rick, 2026-09-02.)
+
+> **Claims require verification; verification requires identity; identity is
+> forbidden by PW-19a. Observations require nothing.**
+
+That chain is why the inherited p2p keeps needing guards for its guards. It asks
+*"is this peer the same node as that one?"* — a question about **identity**,
+which here is self-asserted, unverifiable, public once gossiped, and forbidden as
+durable state. So `peer_id` needs `is_same_host` to stop replay, and the
+back-ping needs a `peer_id` echo to stop substitution, and each patch is a better
+way to verify a claim that should never have been made.
+
+**The consciously designed question is *"is my own outbound pool
+over-concentrated?"*** — a property of state this node already holds. No
+cooperation, no claimed value, nothing to spoof.
+
+**This is the reframe `DAEMON_RELAY_PRIVACY.md` §12.10 already performed one
+layer up** — *"bounding pool-share `g` was bounding the wrong quantity"* —
+restated at the connection layer. The project has made this move before and it
+held.
+
+It disposes of a family the way PW-19a's check does: **PWD-I1's four jobs, and
+with them `peer_id`, `peerlist_entry.id`, the back-ping and `COMMAND_PING`.**
+Applied *before* costing a proposal, it is cheaper than any of the four rounds of
+patching it replaces.
+
+**The fifth check, and it is the one this round earned hardest — *a coverage
+claim is only as wide as the frontier it enumerates, and the frontier is almost
+always narrower than the claim*.** (Rick, 2026-09-02, naming it a class after the
+third instance.)
+
+> **Before asserting that something is covered, complete or unnecessary, state
+> the frontier you enumerated — and check whether the claim is about a wider
+> one.**
+
+**Three instances in this cluster, failing at successively larger scope**, which
+is why it is a class rather than a recurrence:
+
+| Frontier enumerated | Frontier the claim was about | Result |
+| --- | --- | --- |
+| Callers of `append_with_peer_white` (**the setter**) | Writers of `m_peers_white` (**the state**) | Missed the persisted restore, which writes the container directly and through an index view |
+| Writers of one **path** | Writers of the **asset** | Missed `handle_handshake`'s insert; sub-attack ② declared closed by a rule that never touched its channel |
+| Consumers within the **p2p layer** | Consumers in the **system** | Nearly deleted self-detection, which the **relay** layer depends on without saying so |
+
+**The third is the sharpest, because the reasoning that produced it was
+correct.** The observation-over-assertion reframe killed the back-ping rightly
+and would have killed self-detection wrongly — *identical argument, opposite
+verdicts* — and the only thing separating them was a **cross-subsystem consumer
+check**. So:
+
+> **A reframe that finds a mechanism unnecessary has only checked the layer it
+> reasoned about.** Before deleting, enumerate consumers in the *other*
+> subsystems; a p2p-layer "costs one slot" was a relay-layer propagation defect
+> (PWD-I1, stem selection).
+
+**The four checks above all answer *"is this right?"*. This one answers *"is
+this complete?"*** — and unlike the others it cannot be run by reading the
+artifact at all, only by going back to the tree with a wider question. That is
+why it is last, and why it is the one most easily skipped.
+
 ---
 
 ## 2. Cluster I — identity and Sybil resistance
 
-Delivered first because **PWD-I5's cross-document closure needs the relay
-lane**, so it carries the longest external latency and should run in parallel
-with the remaining clusters rather than after them. (The *disposition* load runs
+Delivered first because **PWD-I5's cross-document obligation is scoped against
+the relay lane**, so it carries the longest external latency and should run in
+parallel with the remaining clusters rather than after them. *(It is the
+**obligation** that is scoped there; there is no closure yet — the write-back is
+gated on PWD-I4. An earlier wording said "closure", which is where PWD-I5's own
+heading drifted from: the ordering rationale was written before the row's scope
+was settled, and then the row was named to match the argument.)* (The *disposition* load runs
 the other way — cluster B carries ~20 bucket-4 rows to cluster I's 10 — so this
 ordering is about latency, not volume.)
 
@@ -334,6 +372,18 @@ the mirror never matches. It covers the public-address node, which is the case
 that least needed help. **Recorded as a possible optimisation for PWD-T1, not as
 the mechanism** — the nonce covers both cases and the socket check covers one.
 
+> **Binding on PWD-T1: the clearnet nonce is load-bearing for D++ stem width,
+> not for slot hygiene, and its failure mode is silent.** A nonce that is wrong,
+> or whose per-zone window is too short to cover the handshake round trip, does
+> not produce a wasted dial — it produces an **undetected self-edge**, which at
+> `STEMS = 2` halves effective stem width and leaves the embargo to fire. **The
+> p2p-layer symptom is the invisible one**, so PWD-T1 must state this and must
+> carry a falsifier that trips on **stem width**, not on connection count:
+> *reopen if measured effective stem width falls below `STEMS` on a node whose
+> connection count is nominal* — the relay lane's own stem observation
+> (`shekyl-relay` `stem_width()`, `record_stem`) is the instrument, and a
+> connection-count trigger would read green throughout.
+
 #### The nonce must be zone-scoped, and this is a requirement on cluster T
 
 **The inherited design carries a warning that the nonce would otherwise
@@ -423,7 +473,7 @@ brief rather than something to leave as "cluster B owns it."**
 
 | Replacement | Owner |
 | --- | --- |
-| Zone-scoped handshake nonce | **PWD-T1** (it is a handshake token). **This amendment must land before T1 is drafted** |
+| Zone-scoped handshake nonce | **PWD-T1** (it is a handshake token). **This amendment must land before T1 is drafted**, and T1 must carry the stem-width consequence below — the nonce is not slot hygiene |
 | Same-host outbound cap | **PWD-B9 — new row**, outbound connection diversity. No existing B row covers outbound selection: B1 is command rate limiting, B7 is *drop* semantics by host |
 | ~~Back-ping challenge~~ — **answered here: deleted**, with `COMMAND_PING` | **PWD-B10** carries the deletion and the command's removal from the wire surface (PWC-B1), not a design task |
 
