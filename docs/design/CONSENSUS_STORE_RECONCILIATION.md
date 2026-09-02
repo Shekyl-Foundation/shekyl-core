@@ -30,7 +30,8 @@ the two programs overlap, records the countermand, and lists the decisions each
 program must now re-take. Ratification is Rick's, per item — **CSR-1…CSR-5 were
 ruled 2026-09-01** (§8); CSR-3 and CSR-4 are applied in
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) in the same PR. **No consensus
-rule, queue order, or schema is decided by any of them.**
+rule and no schema is decided by any of them; the only queue effect is CSR-5's
+relative ordering (R8 earlier than R6) — no fixed slot.**
 
 ---
 
@@ -299,9 +300,54 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 | | Before | After |
 | --- | --- | --- |
-| For **bucket-1/2** rules (**103** live; 101 at C1 close) | oracle | **oracle — unchanged.** These are Shekyl-spec'd or ratified-inherited; the census closes them |
-| For **bucket-3/4** rules (**68** live; 70 at C1 close) | oracle | **not an oracle.** A digest match here proves the rewrite reproduced *behavior*, including CEN-L11's silent omission |
+| For **bucket-1/2** rules (**103** live; 101 at C1 close) **that the C++ is known to implement conformantly** | oracle | **oracle — unchanged.** Shekyl-spec'd or ratified-inherited, and the census closes them |
+| For **bucket-1/2** rules on the **conformance-exception register** (§5.4.1) | oracle | **not an oracle.** The spec is ratified; *this implementation* is known not to meet it |
+| For **bucket-3/4** rules (**68** live; 70 at C1 close) | oracle | **not an oracle.** A digest match proves the rewrite reproduced *behavior*, defects included |
 | As a **regression** instrument | — | **strengthened.** Over DRS-TLB-generated corpora it detects unintended change during extraction, which is all §6.2 ever needed |
+
+#### 5.4.1 The conformance-exception register (CSR-3a)
+
+**A bucket is not a conformance claim.** The census's buckets say whether a
+rule is *specified and ratified on record* — they say nothing about whether the
+C++ **implements** the spec it was ratified against. Those are different axes,
+and collapsing them is how a defect gets laundered into correctness evidence.
+
+**CEN-L11 is the proof that the bucket-only rule is unsound**, and this document
+already carried the counterexample two sections above its own rule: it is
+**bucket 1** (ratified spec — [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md),
+[`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md)) *and* its implementation silently
+omits an accepted output from the curve tree, with no verify-time twin. Under a
+bucket-only rule, redb faithfully reproducing that omission would score as a
+**correctness match**. It is the exact opposite.
+
+**Corrected rule — the C++ is a correctness oracle for a rule only when both
+hold:**
+
+1. the rule is **ratified on record** (census bucket 1 or 2), **and**
+2. **no divergence between that ratified spec and the C++ implementation is on
+   record** for the row.
+
+A row failing (2) goes on the register below: the digest is a **regression**
+instrument for it until the divergence is closed or the spec is re-ratified
+against actual behavior.
+
+| Row | Divergence | Status |
+| --- | --- | --- |
+| **CEN-L11** | Leaf-**construct** verdict unchecked; a false return at `blockchain_db.cpp:570–576` (and the `continue` arms :562–565) silently omits an accepted output from the tree — a deterministic, permanently unspendable output. Live FOLLOWUPS row | **REGRESSION-ONLY.** A digest match records reproduction of the omission, never conformance |
+
+**Examined and excluded:** **CEN-L12** — its notes record that the spec's
+`staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
+is **claim-era and retired**, so the *live* spec and the code agree. A retired
+spec clause is not an implementation divergence.
+
+**The register is NOT proven complete, and must not be read as such.** It was
+seeded by examining this document's 18 store-enforced rows plus a keyword sweep
+of bucket-1/2 rows census-wide; a keyword sweep cannot establish absence.
+**Obligation (CSR-3a):** determining the full set is a **DRS-P0d / census** job —
+P0d's digest definition and DRS-E2's parity claims must consult this register
+and extend it, and no parity claim may assert *correctness* for a bucket-1/2 row
+until that row has been checked against it. Rows enter the register from either
+side: a census round finding a divergence, or P0's wart pass finding one.
 
 **CSR-3:** propagate the census's oracle clause into DRS-A2/D11/E2 verbatim.
 A "digest-identical extraction" claim over a bucket-4 rule is a statement about
@@ -373,7 +419,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | Not decided | Owner |
 | --- | --- |
 | Any consensus rule's content or placement | census §10 batches (R8 for the store rows) |
-| The C2 queue order | census ruling |
+| The C2 queue order — **except** CSR-5's relative ordering (R8 before R6); the slot is not fixed | census ruling |
 | Whether DRS-C ships as C++ PRs or is analysis only | CSR-4, Rick |
 | The new D2 calendar anchor | CSR-2, Rick |
 | redb schema design | DRS-0 / DRS-E1, after R8 |
@@ -387,7 +433,8 @@ this; it adds a second population (the store's schema) with the same shape.
 | --- | --- | --- | --- |
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
-| **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** in this PR — A2, D11, E2 and the §7 flowchart label now scope the digest by bucket |
+| **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
+| **CSR-3a** | The **conformance-exception register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN, seeded** — CEN-L11 confirmed; CEN-L12 examined and excluded. **Not proven complete**; DRS-P0d and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
@@ -404,6 +451,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-09-01 | Testnet is gated on this work + consensus + wallet; genesis downstream of testnet | Rick, §5.2 |
 | 2026-09-01 | heed retired: no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
+| **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** no recorded spec-vs-implementation divergence; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete | §5.4, §5.4.1 |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
 

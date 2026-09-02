@@ -4,50 +4,21 @@
 
 ### Added
 
-- **Consensus rewrite ↔ daemon chain store reconciliation (`CSR-`).**
-  `docs/design/CONSENSUS_STORE_RECONCILIATION.md` reconciles two design
-  programs that partition the same six C++ files on orthogonal cuts —
-  `CONSENSUS_RULE_CENSUS.md` by rule (171 rows), `DAEMON_REDB_STORE.md` by DB
-  call surface (97 `m_db->` methods) — and which referenced each other **zero
-  times in either direction** before this change. **18 census rows are enforced
-  inside `src/blockchain_db/`** (7 bucket-1, 1 bucket-3, 10 bucket-4), mapped
-  row-by-row onto the DRS-C surfaces; the census's **§10 R8 batch is the same
-  decision as the store's schema design** (CSR-1 rules R8 the instrument, the
-  surface map its input).
-
-  Records the **2026-09-01 countermand (Rick)**: the inherited C++ is not a
-  base — its glitches and irregularities are proven bad enough that a complete
-  rewrite gates release. Consensus-relevant consequences: **DRS-D5**'s
-  decompose-in-place rationale retired; the three **DRS-D2** reopen bridges
-  ("ship genesis-on-LMDB") have no referent, since testnet is gated on this
-  work and genesis is downstream of testnet; **DRS-P0c** inverted from
-  FIX-IN-CPP-FIRST to RECORD-AND-SPECIFY; and the C++ demoted from *trusted*
-  oracle to a differential reference **for rules ratified on record only**,
-  which invalidates the unhedged "trusted LMDB digest" phrasing in DRS-A2 /
-  D11 / E2. **heed retired** as an intermediate engine (DEL-007 — no block has been
-  mined on any network, and the height-1 genesis block is regenerated
-  deterministically from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so
-  there is no persisted state to preserve and on-disk format compatibility is
-  worth zero); **redb stands**
-  (DRS-D6 unchanged); **DRS-D4 substantially discharged** (wallet ~90%).
-  CSR-1…CSR-5 are proposals awaiting ruling; no consensus rule, queue order, or
-  schema is decided. C2-R3 landed mid-work (PR #592), re-bucketing the census to
-  87/16/2/66; the 18-row store-enforced set and its 7/1/10 split were re-derived
-  mechanically at `bf317111f` and are unchanged.
-
-  **CSR-1…CSR-5 ruled 2026-09-01.** CSR-1 ratified (R8 is the ruling instrument
-  for store-enforced rules; the DRS surface map is its input). CSR-2 ratified
-  with a replacement anchor — D2-R1 moves off its calendar date to the
-  **testnet-gate event** (R8 dispatched + consensus rewrite complete + wallet
-  complete), because a new fixed date carries the same failure mode as the old
-  one. **CSR-3 ratified and applied:** DRS-A2/D11/E2 and the §7 flowchart label
-  now scope the state digest by census bucket — an oracle for bucket-1/2 rules,
-  a regression instrument for bucket-3/4, where a match records parity with an
-  implementation ruled defective and never correctness. **CSR-4 ruled
-  analysis-only:** DRS-C does not ship as C++ refactor PRs (rule 20 and rule 15
-  refuse bandwidth spent improving a file scheduled for replacement); §3.5's PR
-  shape is amended and DRS-D5's cell annotated. CSR-5 direction-ruled (R8 earlier
-  than R6) with no queue slot fixed.
+- **Daemon C++ is not a base — a complete rewrite gates release (countermand,
+  2026-09-01).** Recorded with its blast radius across `DRS-*` and its
+  row-level census map in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  (`CSR-`), which also reconciles that program with the consensus rewrite —
+  the two partition the same six C++ files on orthogonal cuts and had **zero**
+  cross-references in either direction. Consensus-relevant effects: the C++ is
+  demoted from *trusted* oracle to a differential reference for rules that are
+  **both** ratified on record **and** free of a recorded spec-vs-implementation
+  divergence (a **conformance-exception register**, seeded with CEN-L11, whose
+  ratified spec the implementation does not meet); **heed retired** as an
+  intermediate engine (DEL-007), **redb stands**. Design-round detail — the
+  CSR-1…CSR-5 rulings, the 18-row store map, and the arithmetic corrections —
+  stays in the owning document per
+  [`95-documentation-lifecycle`](../.cursor/rules/95-documentation-lifecycle.mdc).
 
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing
