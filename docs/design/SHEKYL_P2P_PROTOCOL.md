@@ -120,12 +120,38 @@ citing Cao et al.), refused wholesale if any entry is from another zone
 | --- | --- | --- |
 | Status quo | — | **Refused.** Shi et al. §III-A fills the 5000-entry FIFO graylist from *timed-sync responses* alone; §III-B cycles 1000 IPs through the white list |
 | **Restrict peerlist disclosure to outbound-initiated exchanges** | The graylist-filling adversary, over inbound connections it opened | **Adopted** — the paper's own §VII-A countermeasure, and it removes the channel rather than rate-limiting it |
-| **Cap records accepted per connection, not just per message** | The same adversary, amortising across many messages | **Adopted** — 250/message with no per-connection ceiling is a cap on the wrong quantity |
+| **Cap records accepted per connection, not just per message** | The same adversary, amortising across many messages | **Adopted, and the ceiling is derived below** — 250/message with no per-connection ceiling is a cap on the wrong quantity |
 | Stop disclosing entirely | Topology mapping | **Refused** — peer discovery on an open gossip network needs it; and PW-3a records that discoverability is *structurally* incompatible with clearnet node anonymity anyway, so paying liveness for a property that cannot be bought is a bad trade |
+
+**The per-connection ceiling, derived rather than picked.** A cap without a
+value is not a decision, and the security claim depends on the value: a ceiling
+of 1000 still lets one connection cycle the entire white list.
+
+> **One connection may contribute at most `P2P_DEFAULT_PEERS_IN_HANDSHAKE`
+> (250) accepted records in total, counted across handshake *and* timed-sync
+> for the lifetime of that connection.**
+
+The derivation, so a later reader can check it rather than trust it: 250 is
+already *the most a peer may disclose in one message*, and **a second
+disclosure from the same peer adds no discovery value the first could not have
+supplied** — it is the same peer's view of the network, re-sent. So one
+message's worth is the whole of what a connection can honestly contribute, and
+anything beyond it is amortisation, which is exactly the attack. The ceiling
+therefore **inherits an existing constant instead of minting a new one**, which
+also means it cannot drift away from the per-message cap.
+
+Against the attack: the white list holds 1000 and the graylist 5000, so filling
+either now costs **4 and 20 distinct connections respectively** rather than one
+connection sending repeatedly — and each of those connections must be
+separately established, which is the cost the paper's attack was designed to
+avoid paying.
 
 **Conceded.** Topology mapping by a patient participant. PW-3a's discoverability
 leg means an adversary can enumerate candidates regardless; these changes raise
-the *cost and rate*, and do not claim to close it.
+the *cost and rate*, and do not claim to close it. **The ceiling bounds
+amortisation per connection; it does not bound an adversary willing to open
+many connections** — that is `has_too_many_connections`' job, and it is
+public-zone-only (PWC-E11), which cluster B owns.
 
 **Falsifier.** Restricting disclosure to outbound exchanges is expected to leave
 peer discovery viable at the deployed out-degree. **Reopen if a fleet run shows
@@ -150,7 +176,7 @@ mechanism.
   the dial loop stops at the first success, so it decides *which* anchors take
   the two slots.
 
-**The constraint this decision must not lose (§39, F-8).** `forget`-on-close
+**The constraint this decision must not lose (`DAEMON_RELAY_PRIVACY.md` §39, F-8).** `forget`-on-close
 resets tallies at **connection** granularity, so the convergence condition is
 `warm-up ≪ mean outbound connection lifetime` — strictly stronger than the
 process-uptime form, and it subsumes it. Its consequence is sharper still: *an
@@ -224,10 +250,37 @@ deferral from anything with a freeze date.
   coupling as the non-obvious constraint and cites `dandelionpp.cpp:144,160` —
   **that file no longer exists**; the logic is in
   `rust/shekyl-relay-privacy/src/conformance/selection.rs`.
-- **The load-bearing question, already answered numerically here:**
-  `P2P_DEFAULT_OUT_PEERS = 12` against `ANCHOR_CONNECTIONS_COUNT = 2`, so **2
-  of 12 outbound slots are anchor-backed and 10 are fresh-drawable**, with
-  `connections_maker` refilling anchors first, then white, then gray.
+- **The load-bearing question — and the answer is NOT the one the constants
+  suggest.** An earlier draft here recorded "2 of 12 outbound slots are
+  anchor-backed" from `ANCHOR_CONNECTIONS_COUNT = 2` against
+  `P2P_DEFAULT_OUT_PEERS = 12`. **That figure is withdrawn: it does not survive
+  reading the dial path.** Traced at the pin:
+  `get_and_empty_anchor_peerlist` (`net_peerlist.h:504-522`) copies **every**
+  persisted anchor into a caller-local vector and then **clears the
+  container**; `make_new_connection_from_anchor_peerlist`
+  (`net_node.inl:1438-1470`) `return true`s after the **first** successful
+  dial; and only that one peer is re-inserted, by `append_with_peer_anchor` at
+  `net_node.inl:1361` on successful handshake. The rest of the local vector
+  goes out of scope. **So on a cold restart the node gets exactly one
+  anchor-backed connection, and every other persisted anchor is silently
+  destroyed** — the second loop iteration sees only the peer it just connected
+  to, `is_peer_used` is true, and the loop ends.
+
+  The anchor set does regrow, because every successful outbound connect calls
+  the same re-insertion — but that means **post-restart "anchors" are mostly
+  fresh draws, not the persisted trusted set the defence assumes.** §7's
+  question was *"how much of the origin's stem-eligible outbound is
+  anchor-backed versus fresh-drawable"*, and the honest answer is **at most 1
+  of 12 at restart, decaying to a set repopulated from ordinary draws** — not
+  2. The sub-round must **measure this rather than inherit a constant**; a
+  bound of the form §7 wants (*"≥ k slots are anchor-backed and thus not
+  re-rollable"*) has `k = 1` at best, and the pool it draws from is destroyed
+  on first use.
+
+  **Recorded as a defect of the inherited code, not a parameter choice.** It is
+  the anti-eclipse defence being materially weaker than its constant advertises,
+  which is precisely the direction that flatters the defence — and it was found
+  only because a review challenged the figure rather than the reasoning.
 - **Two documents describe complementary halves** — see PWD-I5.
 - **The defence shape is pre-narrowed** (§6.10): behavioural floor plus
   guard-pinning; the address/subnet/ASN family is ruled out on both transports.
@@ -350,9 +403,12 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
 | PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
-| PWC-D11 (back-ping gate to white list) | **Absorbed** | PWD-I2 |
+| PWC-D11 (back-ping gate to white list) | **Deferred — named blocker: cluster B owns the back-ping.** PWD-I1 explicitly leaves the back-ping and its `peer_id` dependency to cluster B, and PWD-I2 bounds *how many records are accepted* without deciding whether the gate itself is kept. Counting it absorbed would have implied a commitment this cluster did not rule | cluster B |
 
-**Sum check: 5 ruled + 3 absorbed + 2 deferred = 10.** ✅
+**Sum check: 5 ruled + 2 absorbed + 3 deferred = 10.** ✅
+*(PWC-D11 moved absorbed → deferred in review: PWD-I1 leaves the back-ping to
+cluster B, so PWD-I2 could not have absorbed it. The total is unchanged; the
+claim about what this cluster ruled is not.)*
 
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
