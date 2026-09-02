@@ -46,7 +46,7 @@
 //!   Phase 2d.
 //! - **A god-object `Engine` with hundreds of public members.** Every
 //!   [`Engine`] member's mutability and locking discipline is explicit;
-//!   the type is *composition*, not *inheritance*.
+//!   the type is *composition*, not *inheritance*. Staking product API is [`Engine::stake`] / [`stake_facade::StakeFacade`].
 //! - **Background-sync as a wallet-internal feature.** Refresh is
 //!   `tokio::spawn`'d by the caller; cancellation is RAII via
 //!   `RefreshHandle` (lands in a follow-up commit).
@@ -364,6 +364,7 @@ pub(crate) mod signing_assembly;
 /// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
 /// into the lifecycle.
 pub(crate) mod stake_engine;
+pub mod stake_facade;
 /// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
 /// `PersistedBondTicket` persist-before-use typestate and its sole producer
 /// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the

@@ -635,18 +635,18 @@ preserve:
    existing methods may not change signature without a new design
    round.
 
-**Visibility (Round 4a — Item 13 pin).** The seven traits ship
-**`pub(crate)` until JSON-RPC server cutover** (V3.2 per
-`docs/FOLLOWUPS.md`'s `wallet_rpc_server` Rust migration
-target). The traits are internal contracts of `shekyl-engine-core`
-that consumers (the wallet binaries, the `shekyl-wallet-rpc`
-JSON-RPC server) reach via `Engine<S>`'s inherent methods, not
-via direct trait dispatch. `pub(crate)` keeps the trait surfaces
-*internally* reviewable while the implementations stabilize and
-the JSON-RPC contract solidifies; promoting to `pub` happens
-when a downstream consumer — the JSON-RPC server, an embedding
-library, or a non-CLI binary — needs to dispatch through trait
-references rather than `Engine<S>` calls.
+**Visibility (Round 4a — Item 13 pin; re-anchored 2026-09-02).** The
+seven traits ship **`pub(crate)`**. The original trigger was JSON-RPC
+server cutover (historical V3.2 label; that cutover landed with Phase 5,
+2026-08-19, #507). The trigger fired; the rejection is **re-anchored**,
+not delayed: consumers (the wallet binaries, `shekyl-wallet-rpc`) reach
+functionality via `Engine<S>`'s inherent methods and workflow façades
+(`Engine::stake()`), not via direct trait dispatch. There is no V3.1 /
+V3.2 / V3.x train (`docs/FOLLOWUPS.md`).
+
+**Reopen** (rule 21) when a second in-tree production crate must
+construct a workflow without `Engine` (not tests). Promotion to `pub`
+is additive and does not require trait-surface changes.
 
 This visibility decision shapes the test boundary (§6). With
 `pub(crate)` traits, integration tests against fully-mocked
@@ -660,9 +660,10 @@ fully-mocked `Engine<SoloSigner, MockKey, …>` live in-crate.
 
 Promoting traits to `pub` later is *additive* and does not
 require trait-surface changes — only visibility relaxation. The
-Round 4a pin is "`pub(crate)` for V3.0; revisable to `pub` at
-V3.2 alongside `wallet_rpc_server` Rust migration"; future
-rounds adjust visibility, not surface.
+Round 4a pin was "`pub(crate)` until JSON-RPC cutover"; that
+cutover landed, and the pin is now the product-surface choice
+above (Engine / façades, not trait dispatch) until the reopen
+criterion fires. Future rounds adjust visibility, not surface.
 
 The `Mock*` implementors are `pub(crate)` for the same reason:
 they're test-only support, not consumer-facing types.
@@ -5797,25 +5798,30 @@ multisig state); V3.0 ship.
 
 #### 10.3.3 JSON-RPC server cutover (target: pre-genesis)
 
-*Description.* The `wallet_rpc_server` Rust migration per
-`docs/FOLLOWUPS.md` V3.2 target. At cutover, the seven
-traits promote from `pub(crate)` (per §2 preamble Item 13)
-to `pub`; the trait surface becomes part of the public API.
-Promotion is additive and does not require trait-surface
-changes — only visibility relaxation — but it changes the
-test-boundary discipline (per §6, integration tests against
-`Mock*` implementors no longer need to live in-crate).
+*Description.* The C++ `wallet_rpc_server` → Rust
+`shekyl-wallet-rpc` cutover **landed** (Phase 5, 2026-08-19,
+#507). The seven traits did **not** promote to `pub` at that
+cutover: §2's visibility pin was re-anchored (2026-09-02) as
+a product-surface choice — consumers use `Engine` / workflow
+façades, not trait dispatch.
 
-*Trigger.* "V3.2 `wallet_rpc_server` Rust migration phase
-begins." (External — owned by V3.2 release planning per
-`docs/FOLLOWUPS.md`.)
+*Residue.* Trait `pub` promotion remains additive and is
+gated on the §2 reopen criterion (a second in-tree production
+crate that must construct a workflow without `Engine`). Until
+then, `Mock*` integration tests stay in-crate per §6.
+
+*Trigger (original, discharged).* "JSON-RPC server Rust
+migration begins." Discharged by Phase 5.
+
+*Trigger (re-anchored).* A second production crate needs trait
+dispatch without `Engine`.
 
 *Structural cross-reference.* §2 preamble visibility pin
-(Round 4a Item 13); §6 test boundary; `docs/FOLLOWUPS.md`
-V3.2 entry.
+(Round 4a Item 13, re-anchored 2026-09-02); §6 test boundary;
+[`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
 
 *Dependencies.* §10.3.1 multisig and §10.3.2 multi-engine
-server (both feed into the public API surface); V3.0 ship.
+server (both feed into the public API surface).
 
 ### 10.4 Later enhancements
 

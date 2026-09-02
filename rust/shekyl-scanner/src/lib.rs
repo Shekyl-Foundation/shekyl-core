@@ -7,15 +7,20 @@
 
 //! Transaction scanner for the Shekyl protocol.
 //!
-//! This crate provides output scanning with Shekyl-specific extensions:
+//! This crate provides output scanning with Shekyl-native extensions:
 //! - FCMP++ as the sole transaction proof type
 //! - Hybrid PQC key derivation via KEM decapsulation (tag 0x06)
 //! - Staking output detection and balance tracking
 //! - PQC key rederivation and verification (tag 0x07)
 //! - FCMP++ curve-tree path precomputation
 //!
-//! The scanner core is adapted from the monero-oxide wallet library,
-//! extended to handle Shekyl's 3-key HKDF model and staking economy.
+//! Runtime-state types (`TransferDetails`, `LedgerBlock`, …) are owned by
+//! [`shekyl_engine_state`]; this crate re-exports them and adds scanner-only
+//! extension traits. Further scanner work is Shekyl-native — do not add
+//! oxide-shaped APIs.
+//!
+//! Historical note: the original scan loop was adapted from monero-oxide
+//! wallet code. That is lineage, not the present architecture.
 //!
 //! ### Runtime-state types
 //!

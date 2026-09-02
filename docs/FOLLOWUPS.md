@@ -50,7 +50,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
+- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** When that verb becomes reachable it lands on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), not as `Engine::unstake`. [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
 - **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); the submit fact set landed, so what it now needs is the engine dispatch seam.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)

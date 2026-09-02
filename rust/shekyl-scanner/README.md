@@ -5,8 +5,10 @@ support.
 
 ## Overview
 
-This crate provides output scanning functionality adapted from the
-monero-oxide wallet library, extended with Shekyl-specific features:
+This crate provides output scanning. Types it scans *into* live in
+`shekyl-engine-state`; this crate re-exports them and adds scanner-only
+extension traits. Further work here is Shekyl-native (FCMP++, hybrid PQC,
+archival staking detection) — do not add oxide-shaped APIs.
 
 - **FCMP++**: Only `CTTypeFcmpPlusPlusPqc` transactions (no legacy ring
   signatures, no decoy selection)
@@ -14,13 +16,14 @@ monero-oxide wallet library, extended with Shekyl-specific features:
   with view-tag pre-filtering for fast output rejection
 - **PQC extra field parsing**: Parses tx_extra tag 0x06 (KEM ciphertext)
   and 0x07 (FCMP++ leaf hashes)
-- **Staking detection**: Identifies staked outputs with tier and lock period
+- **Staking detection**: Identifies archival-bond / `P`-pool outputs on the
+  scan path (no Monero-era stake tier or lock period)
 - **Balance breakdown**: Staking-aware balance computation (total, unlocked,
-  timelocked, staked matured/locked, frozen)
+  timelocked, staked, frozen)
 
 The scanner is a pure scanning library: block fetch, daemon polling,
 reorg handling, and wallet-state mutation are owned by
-`shekyl-engine-core::Engine::refresh` (Phase 2a snapshot-merge driver).
+`shekyl-engine-core::Engine::refresh`.
 
 ## Architecture
 

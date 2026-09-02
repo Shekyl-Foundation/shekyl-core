@@ -113,7 +113,12 @@ pub(crate) async fn staking_info(
 pub(crate) fn read_view_under_guard(
     engine: &Engine<SoloSigner>,
 ) -> Result<StakingReadView, WalletRpcError> {
-    map_staking_read(tokio::task::block_in_place(|| engine.staking_read_view()))
+    map_staking_read(tokio::task::block_in_place(|| {
+        engine
+            .stake()
+            .map(|s| s.staking_read_view())
+            .unwrap_or_else(|| engine.staking_read_view())
+    }))
 }
 
 /// Like [`read_view_under_guard`], but uses a caller-supplied ledger
@@ -136,7 +141,12 @@ fn read_view_with_snapshot(
     recovery_pending_reopen: bool,
 ) -> Result<StakingReadView, shekyl_engine_core::StakingReadError> {
     tokio::task::block_in_place(|| {
-        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
+        engine
+            .stake()
+            .map(|s| s.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen))
+            .unwrap_or_else(|| {
+                engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
+            })
     })
 }
 

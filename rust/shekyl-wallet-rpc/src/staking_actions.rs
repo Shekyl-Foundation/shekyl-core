@@ -24,7 +24,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{DrainBalanceReadError, DrainOutcome, Engine};
+use shekyl_engine_core::{DrainBalanceReadError, DrainOutcome, StakeFacade};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
@@ -86,7 +86,11 @@ pub(crate) async fn stake_in(
     // so one `stake_in` would hang the whole read surface — for exclusivity
     // that binds nothing (`Engine::stake_in` is `&self`).
     let engine = shared.read().await;
-    let pending = engine.stake_in(amount).await?;
+    let pending = engine
+        .stake()
+        .ok_or(shekyl_engine_core::StakeInError::NotStaking)?
+        .stake_in(amount)
+        .await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize stake_in: {e}")))
@@ -107,7 +111,7 @@ pub(crate) async fn get_drain_balance(
     let _p: GetDrainBalanceParams = parse_optional_object(params, "get_drain_balance")?;
 
     let shared = require_open_engine(tenants).await?;
-    let result = drain_balance_result(Engine::drain_balance_aggregate(shared).await)?;
+    let result = drain_balance_result(StakeFacade::drain_balance_aggregate(shared).await)?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_drain_balance: {e}")))
 }
@@ -167,7 +171,7 @@ pub(crate) async fn drain(
     }
 
     let shared = require_open_engine(tenants).await?;
-    let outcome = Engine::drain_to_principal(shared, payment).await?;
+    let outcome = StakeFacade::drain_to_principal(shared, payment).await?;
     let result = drain_result(&outcome);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize drain: {e}")))

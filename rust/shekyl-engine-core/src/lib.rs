@@ -54,6 +54,7 @@ pub use shekyl_standoff::COVER_RUNG_ATOMIC;
 pub use engine::stake_engine::serving::{
     ServingHandle, ServingPosture, ServingStartError, TorConfigError,
 };
+pub use engine::stake_facade::StakeFacade;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
 /// The tor-posture producer, re-exported so an embedder can spawn the
