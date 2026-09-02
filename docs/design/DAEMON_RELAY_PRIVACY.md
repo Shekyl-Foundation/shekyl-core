@@ -14890,6 +14890,28 @@ decisions none of which was made for it:**
 | decision | made for | effect here |
 | --- | --- | --- |
 | `ANON_ZONE_SENTINEL_PEER_ID = 1` | stop passive IP↔onion correlation via the handshake field | inbound anon peers carry no distinguishing id |
+
+> **Superseded in design 2026-09-02, and this composition gets *stronger*, not
+> weaker — but the text above becomes false and must be re-grounded when the
+> change lands.** `SHEKYL_P2P_PROTOCOL.md` PWD-I1 removes `peer_id` from the
+> wire entirely: from `basic_node_data` **and** from `peerlist_entry`. The first
+> leg of this composition then reads *"inbound anon peers carry no
+> distinguishing id"* for a **stronger** reason — there is no id field at all,
+> on any zone, rather than one pinned to a constant on this one — and the
+> sentinel constant it names no longer exists to cite.
+>
+> **Why this is recorded here rather than left to the implementer.** This
+> section states the composition is a **precondition of Design A**, so a reader
+> checking whether A still holds will come to this table. If P2P-3 removes the
+> field and this row still names `ANON_ZONE_SENTINEL_PEER_ID = 1`, the check
+> resolves against a mechanism that is gone, and the honest answer — *the leg is
+> now unconditional* — is unavailable from the text. The same note is owed to
+> `rust/shekyl-relay/src/zone/mod.rs`, whose §91.4 argument cites the sentinel
+> by name.
+>
+> **Nothing about A changes.** The leg is currently satisfied by the sentinel and
+> will be satisfied by the field's absence; it is never unsatisfied in between,
+> because P2P-3 removes the field on both zones at once.
 | `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
 | `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
 

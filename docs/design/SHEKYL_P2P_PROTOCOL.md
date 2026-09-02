@@ -151,44 +151,181 @@ with the remaining clusters rather than after them. (The *disposition* load runs
 the other way — cluster B carries ~20 bucket-4 rows to cluster I's 10 — so this
 ordering is about latency, not volume.)
 
-### PWD-I1 — session identity is fully ephemeral; no durable identifier on the wire
+### PWD-I1 — no peer identifier on the wire at all; the four jobs it served are replaced
 
-**RULED.** The transport carries **no durable peer identity**. `NN` has no
-static keys, and nothing above the transport may reintroduce one.
+**RULED — and amended 2026-09-02, reversing this row's original verdict.** The
+transport carries **no peer identity, durable or ephemeral**. `peer_id` is
+removed from `basic_node_data` and `id` is removed from `peerlist_entry`. A
+per-process identifier is **retained internally** for connection tracking and
+rotation, and is never serialized to any surface.
 
-At the tree, `peer_id` is already a per-process random `uint64` regenerated at
-every start and **never persisted** (PWC-D4), with anonymity zones pinned to the
-sentinel `1`. So the wire's *durability* is already nil; what this decision
-settles is that it stays nil and that the remaining `peer_id` uses are justified
-individually rather than inherited.
+**This row previously adopted the status quo** — keep the per-process random
+`peer_id` — on the reasoning that its wire *durability* was already nil, with
+each surviving use to be justified later in cluster B. **That deferral is what
+the amendment removes.** The justification exercise was run (Rick, 2026-09-02)
+and **no consumer survived it**, which is precisely the trigger this row's own
+falsifier named.
+
+**The falsifier fired, in this decision's disfavour, and that is recorded rather
+than quietly rewritten.** It read: *"Name a mechanism the protocol requires that
+cannot work without recognising a peer across sessions on the wire. If one
+exists, this decision reopens."* The enumeration below is that challenge
+executed. Four mechanisms read the identifier; none of them needs it **on the
+wire**. A falsifier that fires and flips its decision is the artifact working —
+a standing challenge nobody runs is decoration.
+
+#### The four jobs, enumerated at the tree
+
+| # | Site | What it decides | Why the wire field is not required |
+| --- | --- | --- | --- |
+| 1 | `:1114`, `:2718-2725` | Self-connection detection at handshake | **A handshake nonce does it.** Emit random `N`; a handshake arriving with an `N` you recently emitted is you |
+| 2 | `is_peer_used` `:1213`, `:1238` | Don't dial an address whose stored id is my own | **Same job as #1, earlier.** Pure optimisation — losing it costs one wasted dial that #1 catches a moment later |
+| 3 | `is_peer_used` `:1219`, `:1244` | Duplicate-connection avoidance | **Replaced by an address-based same-host outbound cap** — see below; the cap is *stronger* than the id |
+| 4 | `:2585` / `:2792` | Back-ping: is this address the node that handshaked me? | **Replaced by a challenge over the encrypted session.** The id is a *published constant*; a challenge is not |
+
+All four are public-zone-gated. **On anonymity zones the identifier does no work
+at all**: self-detection is already a plain address comparison against
+`m_our_address` (`net_node.inl:1291`, `:1697` — *"It's ourselves, obviously don't
+take that"*), which is correct because a node on an anonymity network
+definitionally knows its own address, having generated the keypair. The
+`peer_id` half of the split exists **only** because a clearnet node behind NAT
+cannot learn its public address.
+
+> **The rule-16 shape in its purest form: the identifier exists because the
+> session did not.** A single value serves an internal connection-tracking role
+> and is announced on the wire as a side effect (`node_data.peer_id =
+> zone.m_config.m_peer_id`, `:2153`), so the internal need appears to license the
+> external exposure. They were never separable in the inherited design because
+> there was no encrypted session to do the internal job. Once there is one, the
+> internal job is the channel's and the wire field is residue.
+
+#### The one job that is not nonce-shaped, and the correction it forced
+
+**#3 is not subsumed by its own guard, and an earlier version of this amendment
+said it was.** The condition is
+
+```
+(is_public && cntxt.peer_id == peer.id && peer.adr.is_same_host(cntxt.m_remote_address))
+|| (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address)
+```
+
+and `is_same_host` is `ip() == other.ip()` (`net_utils_base.h:83-84`) — **port-blind**.
+So the second disjunct, which requires *exact* address equality and considers
+only outbound connections, does **not** cover the first: disjunct A catches **the
+same node at a different port on the same host**, and **a host we already hold an
+inbound connection from**. The `is_same_host` conjunct is not redundant either —
+it is what stops a remote party suppressing your dials by replaying a `peer_id`
+it read out of gossip. **That guard exists because the identifier is public**,
+which is a cost of the exposure, not an argument for it.
+
+**But #3 needs the identifier at *connection* time, not at *selection* time**, and
+that is what makes it removable. Losing it costs the pre-dial check, not the
+detection.
+
+**The replacement is not an identifier — it is an address-based same-host cap on
+outbound slots**, and it is strictly stronger than what `peer_id` delivers:
+
+- The id bounds the **multi-port** case and does **nothing** against multi-IP.
+  A cap bounds multi-port identically and is the same shape as the outbound
+  selection mechanism the residual in PWD-I2 already routes to.
+- It needs no claimed value, so there is nothing to spoof and the `is_same_host`
+  conjunct's job disappears with it.
+
+**The amplifier this closes is real, and it lives in the gray list
+specifically.** `append_with_peer_white` calls `evict_host_from_peerlist`
+(`net_peerlist.h:374`), so the **white list already holds at most one entry per
+host**. `append_with_peer_gray` has **no such call** — verified, zero
+occurrences in the function — so **gray may hold many entries for one IP at
+different ports**, bounded only by the 5,000 total. Remove `peer_id` with no
+replacement and one adversary IP gossiped at N ports can occupy several outbound
+slots through gray draws. **The cap is therefore not optional cleanup; it is the
+condition under which removing the field is safe.**
+
+#### The nonce must be zone-scoped, and this is a requirement on cluster T
+
+**The inherited design carries a warning that the nonce would otherwise
+re-create verbatim.** `handle_handshake` (`:2719`) says: *"test only the remote
+end's zone, otherwise an attacker could connect to you on clearnet and pass in a
+tor connection's peer id, and deduce the two are the same if you reject it."*
+
+A naive nonce reproduces exactly this: you dial an attacker over Tor, the nonce
+travels inside that session, the attacker presents it on an inbound **clearnet**
+connection to a suspected IP, and **your self-detection firing is the
+confirmation**. The drop is the oracle.
+
+> **Required: per-zone emitted-nonce windows; self-detection compares only
+> within the zone the handshake arrived on.**
+
+Within-zone correlation is already conceded below. **This is stated here rather
+than left to PWD-T1 because a countermeasure designed without it would be
+pointed the wrong way** — §1's third check, applied forward instead of in
+review.
+
+#### Options
 
 | Option | Adversary / channel it answers | Verdict |
 | --- | --- | --- |
-| **Keep per-process random `peer_id`** (status quo) | Self-connection detection and back-ping correlation, on the local node | **Adopted**, but each surviving use must be justified in cluster B — an identifier with no stated job is a linkage surface waiting for one |
-| Durable node id | Would answer Sybil-resistance-by-identity | **Refused** — PW-19a; it is an enumeration key, and PW-20 records that `peer_id` was *never* a Sybil defence |
-| No identifier at all | — | **Not adopted here**: self-detection (PWC-E14) and the back-ping (PWC-D11) currently consume it. Deleting it is a cluster-B question once those two have their own answers |
+| **No identifier on the wire; nonce + same-host cap + session challenge** | The peerlist-scraping observer correlating `(address, id)` pairs network-wide, and across zones | **Adopted.** No job requires the field; two are nonce-shaped, one is better served by an address cap, one is *weakened* by the exposure |
+| Keep per-process random `peer_id` (the original verdict) | Self-connection and duplicate detection, locally | **Refused on amendment.** It is a node-scoped identifier broadcast to every peer and propagated in peerlists, bought with an occasional avoided dial. **That trade does not survive being written down** |
+| Remove from `peerlist_entry`, keep in the encrypted handshake | The gossip-scraping observer only | **Refused as insufficient, though it is the safe fallback.** It closes the network-wide surface and preserves #3 exactly; it is recorded here because if the same-host cap proves unworkable in cluster B, **this is the position to retreat to** rather than reinstating gossip exposure |
+| Durable node id | Sybil-resistance-by-identity | **Refused — PW-19a**, unchanged from the original verdict |
 
-**Conceded.** Within a single session a peer is trivially correlatable across
-its own connections — it dialled them. Session-scoped correlation is not the
-asset; cross-session linkage is, and that is what ephemerality denies.
+#### Conceded
 
-**Deliberately preserved:** self-connection detection is **public-zone only**
-(PWC-E14), so a rejection cannot confirm a clearnet/Tor co-identity. Any
-redesign must keep that asymmetry or it hands back the linkage PW-19a exists to
-deny.
+- **The nonce needs state the identifier did not** — recently-emitted values per
+  zone, over a short window. It is small, bounded, and **local**, which is the
+  direction PW-18 already wants; an identifier avoids the state by publishing
+  the value instead, which is the trade being reversed.
+- **The same-host cap costs a legitimate multi-node host.** Two honest nodes
+  behind one IP will together receive at most one outbound slot from any given
+  peer. Real, small, and the same concession the white list already makes
+  silently via `evict_host_from_peerlist`.
+- **Within-session and within-zone correlation remain**, unchanged: a peer is
+  trivially correlatable across the connections *it* dialled. Cross-session and
+  cross-zone linkage is the asset, and that is what removal denies.
 
-**Falsifier.** Name a mechanism the protocol requires that cannot work without
-recognising a peer *across sessions* on the wire. If one exists, this decision
-reopens; PW-19a would then have to be re-argued rather than assumed.
+#### What this supersedes, and the surfaces it must be swept across
 
-*This falsifier is a standing challenge by construction, and that is a
-deliberate exception to §0's operational test rather than a lapse from it.* A
-**removal** decision has no measurable quantity to trip on — the honest
-reopening criterion for "X is not carried" is "show X was needed." It is not
-open-ended: the two mechanisms that currently consume the identifier are named
-in the row above (self-connection detection, the back-ping), both route to
-cluster B, and **cluster B is where this challenge is first answered.** A reader
-finding a third consumer there has met the trigger.
+- **`ANON_ZONE_SENTINEL_PEER_ID = 1`** (`net_node.h:180`) is **superseded, not
+  retired for cause**: no identifier is strictly stronger than an identifier
+  pinned to a constant. **`DAEMON_RELAY_PRIVACY.md` §91.4's unlinkability
+  composition names the sentinel as one of three composed decisions**, and
+  `rust/shekyl-relay/src/zone/mod.rs:190-199` builds a load-bearing argument on
+  it. **Both must be re-grounded on "no identifier on the wire" rather than left
+  citing a retired mechanism** — the composition gets stronger, but the text
+  that states it becomes false.
+- **There is a *third* disclosure surface, and it is the one the enumeration
+  nearly missed.** `shekyl_rpc_connection_facts.peer_id`
+  (`src/rpc/rpc_facts_ffi.h:315`, populated at `rpc_facts_ffi.cpp:1050-1056`)
+  exposes the **peer's announced id** through `get_connections`. Gossip,
+  handshake and RPC are three surfaces, and Rick's finding is precisely that an
+  internal need licensed external exposure — so **the retained internal
+  identifier must not leak here either.** When the field leaves the wire this
+  struct member loses its source and is removed; `connection_id`, already
+  present and locally generated, is the correct operator-facing handle.
+- **`peerlist_entry.id` is persisted**, so its removal is a stored-format change.
+  It rides **the same rule-42 version bump** as PWD-I2's white→gray
+  reclassification: **one bump, two migrations.**
+
+#### Routing — named owners, because a cluster is not an owner
+
+**Two of these have no owning row today, and that is a gap in the dispatch
+brief rather than something to leave as "cluster B owns it."**
+
+| Replacement | Owner |
+| --- | --- |
+| Zone-scoped handshake nonce | **PWD-T1** (it is a handshake token). **This amendment must land before T1 is drafted** |
+| Same-host outbound cap | **PWD-B9 — new row**, outbound connection diversity. No existing B row covers outbound selection: B1 is command rate limiting, B7 is *drop* semantics by host |
+| Back-ping challenge, and whether the back-ping survives | **PWD-B10 — new row.** PWC-D11 was deferred "to cluster B" with no B row naming it |
+
+**Falsifier.** The original standing challenge has been executed and answered, so
+it is replaced by one with a measurable subject. **Reopen if any mechanism in
+clusters T, B or A is specified that requires recognising a peer across
+connections without an address**, or **if a fleet run shows outbound peer
+diversity — distinct hosts per node's outbound set — falling below the diversity
+achieved with `peer_id`-based dedup**, which the Q12-D6a rig can measure on both
+configurations. The second is the one that would indict the same-host cap
+specifically, and it is the replacement carrying the most new risk.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
@@ -516,7 +653,10 @@ mechanism.
 
 - **Recognition key is the address.** Outbound continuity already matches on
   `peer.adr == cntxt.m_remote_address`, with `peer_id` only a secondary
-  public-zone check (PWC-D6). The address family was ruled out as an *admission*
+  public-zone check (PWC-D6) — **and that secondary check disappears entirely
+  under PWD-I1's amendment**, which strengthens this ruling rather than
+  disturbing it: continuity was already address-keyed, and removing the
+  identifier leaves the address as the sole key it already effectively was. The address family was ruled out as an *admission*
   basis (§6.10 — absent on Tor, lying on clearnet); it is **not** ruled out as
   *continuity bookkeeping*, and those are different jobs.
 - **Nothing about tenure reaches the wire** (PW-18). The anchor list is
@@ -843,13 +983,13 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D1 (250-entry disclosure) | **Absorbed** | PWD-I2 |
 | PWC-D2 (anonymised head) | **Ruled** — kept unchanged; it is a real defence, and PWD-I2 restricts *acceptance* rather than disclosure, so nothing in this cluster constrains it | PWD-I2 |
 | PWC-D3 (1000/5000 caps) | **Absorbed** | PWD-I2 (the per-connection cap is the fix; the list caps are not) |
-| PWC-D4 (`peer_id` per-process random) | **Ruled** | PWD-I1 |
+| PWC-D4 (`peer_id` per-process random) | **Ruled — and the verdict was reversed on amendment**: the field is removed from the wire entirely, not kept-but-ephemeral. An internal identifier is retained, never serialized | PWD-I1 |
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
 | PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
-| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* stays cluster B's.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
+| PWC-D11 (back-ping gate to white list) | **Ruled — the gate's *destination* is decided here; its *retention* is now owned by **PWD-B10**, a row created for it because no cluster-B row previously named the back-ping.** A back-ping-verified inbound peer lands in **gray**, not white. This is a Sybil-resistance commitment and therefore cluster I's, and it had to be ruled here because it is sub-attack ②'s only channel — the earlier deferral was what let PWD-I6 close ② against a rule that never reached it. **Still cluster B's, unchanged:** whether the back-ping mechanism is kept at all, and its `peer_id` dependency (PWD-I1) | PWD-I2 (third rule); retention → cluster B |
 
 **Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅ *(PWC-D11 moved
 deferred → ruled when the white-list writer invariant was adopted; the count of
@@ -869,8 +1009,14 @@ dispositioned. Clusters T (~16), B (~20) and A remain.
 ## 4. What cluster I does not decide
 
 - **`ρ` / `g_max`** — PWD-I4, deferred with the blocker named.
-- **Whether `peer_id` is deleted outright** — cluster B, once self-detection
-  and the back-ping have their own answers (PWD-I1).
+- **~~Whether `peer_id` is deleted outright~~ — DECIDED 2026-09-02 by PWD-I1's
+  amendment: it is removed from the wire.** This line previously deferred it to
+  cluster B *"once self-detection and the back-ping have their own answers"* —
+  the enumeration showed that ordering was backwards. Neither replacement needed
+  the identifier to be settled first; each of the four jobs was answerable on its
+  own, and it was the **deferral** that made the field look load-bearing. What
+  genuinely remains with cluster B is the two replacements, now owned by named
+  rows: **PWD-B9** (same-host outbound cap) and **PWD-B10** (the back-ping).
 - **The inherited double-spend no-drop guard** — cluster B, PWD-B7.
 - **Anything about the transport itself** — cluster T.
 

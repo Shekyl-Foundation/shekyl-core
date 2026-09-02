@@ -499,6 +499,8 @@ bucket-4 mass lives here.
 | PWD-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
 | PWD-B7 | Drop semantics: `drop_connections`-by-host, the score floor, and whether the **inherited** no-drop-offense set is adopted deliberately | PWC-E7, PWC-E8, PWC-E9 |
 | PWD-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |
+| **PWD-B9** | **Outbound connection diversity: a same-host cap on outbound slots.** Added 2026-09-02 by PWD-I1's amendment, which removes `peer_id` from the wire and needs this as the replacement for id-based duplicate avoidance. **No pre-existing B row covered outbound selection** — B1 is command rate limiting, B7 is *drop* semantics — so routing to "cluster B" had no owner. Note the list asymmetry it must handle: the white list already holds one entry per host via `evict_host_from_peerlist`; the **gray list does not**, so the amplifier runs through gray draws | PWD-I1, PWC-E11, `net_peerlist.h:374` |
+| **PWD-B10** | **The back-ping: whether it survives, and its replacement by a challenge over the encrypted session.** Added 2026-09-02. PWC-D11 was deferred "to cluster B" with no B row naming it; PWD-I2 ruled the back-ping's *destination* (gray, not white) and PWD-I1 removes the published constant it currently compares against | PWC-D11, PWD-I1, PWD-I2 |
 
 ### 2.3 Cluster I — identity and Sybil resistance
 
