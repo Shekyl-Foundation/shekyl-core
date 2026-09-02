@@ -1483,11 +1483,56 @@ Noise_NNhfs:
   <- e, ee, ekem1
 ```
 
-**Message 1 is 1216 bytes** — `e` (32, X25519 ephemeral) + `e1` (1184,
-`ML_KEM_768_EK_LEN`). **Message 2 is 1120 bytes** — `e` (32) + `ekem1` (1088,
-`ML_KEM_768_CT_LEN`). Both figures are **derived from our own constants**
-(`shekyl-crypto-pq/src/kem.rs:24,30`), not quoted from a benchmark: PW-3's
-correction history is exactly why.
+#### Wire sizes, term by term
+
+**An earlier version gave 1216 and 1120 and was wrong in both**: it counted
+tokens and omitted the AEAD tags Noise adds once a key exists, and omitted the
+self-detection nonce this same row requires. **PWD-T6 turns these into hard
+receive limits and PWD-T8 into KAT lengths, so an incomplete figure here is a
+specification that rejects and mis-tests its own handshake.** The brief already
+had it right — *"the second roughly `e` + `ekem1` + **tag**"*.
+
+**The composition rule is Noise's, stated so each term is checkable rather than
+asserted:** `EncryptAndHash` **only hashes** while no key is established, and
+**encrypts and appends a 16-byte Poly1305 tag** once one is. In `NNhfs` the key
+appears at `ee`, in message 2.
+
+| Message 1 (initiator → responder) | Bytes |
+| --- | --- |
+| `e` — X25519 ephemeral, plaintext | 32 |
+| `e1` — ML-KEM-768 encapsulation key (`ML_KEM_768_EK_LEN`), plaintext | 1184 |
+| payload — the **self-detection nonce `N`** (below), plaintext: no key yet, so **no tag** | 32 |
+| **total** | **1248** |
+
+| Message 2 (responder → initiator) | Bytes |
+| --- | --- |
+| `e` — X25519 ephemeral, plaintext (written before `ee`) | 32 |
+| `ekem1` — ML-KEM-768 ciphertext (`ML_KEM_768_CT_LEN`), **encrypted after `ee`** | 1088 |
+| `ekem1` AEAD tag | 16 |
+| empty payload, encrypted — tag only | 16 |
+| **total** | **1152** |
+
+Both totals are **sums of named terms derived from our own constants**
+(`shekyl-crypto-pq/src/kem.rs:24,30`), never quoted from a benchmark — PW-3's
+correction history is exactly why the terms are shown rather than the totals
+alone. **A reader who disagrees with a total can now say which term is wrong**,
+and PWD-T8's vector 1 pins both.
+
+> **These three rows move together: the token layout here, PWD-T6's
+> pre-handshake limit, and PWD-T8's vector 1. Changing any one without the
+> others produces a node that rejects its own handshake.**
+
+#### The prologue's byte encoding
+
+`MixHash` consumes bytes, so a normative wire contract must say *which* bytes.
+
+> **The prologue is exactly the 16 raw bytes of `network_id`, in RFC-4122 field
+> order as stored. No length prefix, no delimiter, no text encoding.**
+
+Without this, two conforming implementations can share a network id and derive
+**different transcript hashes** — and the failure is the one PWD-T8's vector 3
+makes indistinguishable from an attack, so it would present as "the other node
+is on a different network" with no way to tell a bug from a stranger.
 
 **Chaining-key derivation, and the order is the hybrid claim.** `ck` is
 initialised from the protocol name, then:
@@ -1521,6 +1566,15 @@ field leaves `basic_node_data` with the others.
 `N` is emitted in message 1; a handshake arriving with an `N` this node recently
 emitted **is** this node.
 
+> **`N` is 32 bytes of CSPRNG output, carried as message 1's payload, in the
+> clear.**
+
+**In the clear is correct, not a concession:** message 1 has no key yet, so
+Noise cannot encrypt it, and `N` carries nothing secret — it is a value whose
+*only* job is to be recognised by the node that emitted it. 32 bytes matches
+`e`'s width so the flight introduces no novel field size, and makes collision
+across any plausible emission window unreachable.
+
 > **Nonce windows are per zone, and comparison is within-zone only.**
 
 `handle_handshake:2719` already warns why: *"an attacker could connect to you on
@@ -1552,8 +1606,8 @@ green throughout.
 for a padding band to hide handshake identity. **It is retired**, and the
 argument is recorded rather than re-litigated:
 
-- **The flight is already constant-size** — 1216 and 1120 bytes, fixed by the
-  token layout. A band would relabel a constant.
+- **The flight is already constant-size** — 1248 and 1152 bytes, fixed by the
+  token layout (PWD-T1). A band would relabel a constant.
 - **Clearnet protocol identity is undefendable against active probing** (PW-3a).
   A passive defence cannot buy a property an active prober takes anyway.
 - **Anonymity is Tor's** (§1.6), and Tor is the recommended and installed
@@ -1634,6 +1688,16 @@ that may move.
   shared secret from encapsulation; the initiator obtains it by decapsulating
   with the private key it kept from message 1.
 - **Mixing order is `ee` then the KEM secret**, per PWD-T1.
+- **`e1` is written plaintext and hashed** — message 1 has no key, so
+  `EncryptAndHash` degenerates to `MixHash`, and **no tag is emitted**.
+- **`ekem1` is encrypted *and* hashed** — the key exists after `ee`, so
+  `EncryptAndHash` applies in full and **appends a 16-byte Poly1305 tag**,
+  which is a wire term and is counted in PWD-T1's message-2 total.
+- **Transcript state**: each token is hashed **in the order written**, so
+  message 2's hash covers `e` before `ekem1`'s ciphertext. **PWD-T8's vector 2
+  pins the chaining key after each mix step precisely because this ordering is
+  invisible in the message bytes** — two implementations can emit identical
+  wire bytes and hold different transcript state.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -1671,19 +1735,42 @@ amended in the register accordingly.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Keep an 8-byte prefix, derived from `network_id`** | The connection flooder — junk connections consuming buffer and CPU before rejection | **Adopted.** Rejection at 8 bytes rather than after a 1216-byte first flight and a KEM decapsulation; and it separates networks at the cheapest possible layer, which the prologue also does but only later |
+| **Keep an 8-byte prefix, derived from `network_id`** | **Non-adversarial noise** — port scanners, cross-protocol probes, misdirected clients | **Adopted, on that adversary only.** Rejection at 8 bytes rather than after a 1248-byte first flight and a KEM decapsulation, and network separation at the cheapest layer |
 | Drop it; the fixed-size first flight is self-framing | The same | **Refused on cost.** Correct in principle — a wrong prefix fails the AEAD anyway — but it moves rejection from an 8-byte compare to a full flight plus asymmetric crypto, which is an amplification factor a flooder chooses |
 | Keep the inherited fixed constant | — | **Refused.** It is a Monero-lineage value with no Shekyl meaning; deriving from `network_id` costs the same and does a second job |
 
-**Conceded, and named rather than buried:** a stable per-network prefix **is** a
-DPI fingerprint. We are choosing it knowingly, for the DoS property, having
-already conceded the anonymity it costs (PW-3a). **That is the honest shape of
-this decision** — PW-9's original framing would have had us delete it for a
-property we cannot have anyway, and lose the cheap rejection with it.
+**Conceded — and the first version of this row overclaimed the benefit, which
+matters more than the cost it correctly named.**
 
-**Falsifier.** **Reopen if measured junk-connection cost with the prefix removed
-is within 2× of cost with it present**, on the Q12-D6a rig — the whole adopted
-rationale is a cost ratio, so it is falsifiable by measuring that ratio.
+**The prefix does *not* defend against an adaptive flooder, and this row
+previously implied it did.** The value is derived from `network_id`, which is
+public; **an attacker simply prepends the correct eight bytes** and reaches the
+same buffering and KEM path at negligible extra cost. A deterministic,
+publicly-derivable prefix **cannot** impose work on an adversary willing to
+compute it — that is true of any such prefix, not a flaw in this one.
+
+**So the adopted benefit is narrower than "DoS defence": it rejects
+non-adversarial noise cheaply.** Port scanners, cross-protocol probes and
+misdirected clients are a real and constant load on a public port, and they are
+rejected at 8 bytes instead of at 1248 plus a decapsulation. That is worth
+having; it is not resource-exhaustion protection.
+
+> **Adaptive resource exhaustion is PWD-B1's (connection rate limiting) and
+> PWD-B9's (per-host caps). Those impose cost on an attacker; a magic prefix
+> never can.** Routed there rather than left implied here.
+
+**And the cost is unchanged and still knowingly paid:** a stable per-network
+prefix **is** a DPI fingerprint, accepted because PW-3a already concedes clearnet
+protocol identity. **PW-9's original framing would have had us delete it for an
+anonymity property we cannot have anyway; this row's first draft made the
+opposite error and credited it with a security property it cannot have either.**
+
+**Falsifier.** **Reopen if measured *non-adversarial* junk-connection cost with
+the prefix removed is within 2× of cost with it present**, on the Q12-D6a rig.
+The adopted rationale is a cost ratio **against unsolicited noise**, so that is
+the traffic the measurement must use — **measuring it against an adaptive
+flooder would show no benefit and would be testing a claim this row no longer
+makes.**
 
 ### PWD-T6 — packet limits are derived, and the pre-handshake limit collapses
 
@@ -1691,7 +1778,7 @@ rationale is a cost ratio, so it is falsifiable by measuring that ratio.
 
 | Limit | Value | Derivation |
 | --- | --- | --- |
-| **Pre-handshake** | **exactly one first flight** (1216 B initiator, 1120 B responder) | Before the handshake completes, the *only* legal message is the handshake, and it is fixed-size. Anything larger is not a slow peer, it is not a peer |
+| **Pre-handshake** | **exactly one first flight** — **1248 B** initiator, **1152 B** responder, per PWD-T1's term-by-term tables | Before the handshake completes, the *only* legal message is the handshake, and it is fixed-size. Anything larger is not a slow peer, it is not a peer |
 | **Post-handshake** | the largest legitimate message, from PWD-B3's per-command caps | Derived from what the protocol can legitimately send, not from a round number |
 | **Post-decompression** | the plaintext ceiling, above the post-handshake limit | `compress.rs:64-68` states why: bounding the compressor's *input* by the wire limit would reject exactly the payloads compression exists to bring under it |
 
@@ -1802,8 +1889,10 @@ and the crate already carries the shape (`shekyl-levin/tests/oracle_kats.rs`,
 The set, minimally — **five vectors**, and the rule they are built on is stated
 after them because it governs every vector added later:
 
-1. **Both handshake messages, byte-exact**, from pinned ephemerals — 1216 and
-   1120 bytes, which also pins `e1`/`ekem1` **against being swapped** (PWD-T4).
+1. **Both handshake messages, byte-exact**, from pinned ephemerals — **1248 and
+   1152 bytes**, per PWD-T1's term-by-term tables. This also pins `e1`/`ekem1`
+   **against being swapped** (PWD-T4), since their lengths differ, **and pins
+   the tags**, which is the term the first draft of PWD-T1 omitted.
 2. **The chaining key after each mix step**, so a wrong mixing *order* fails
    even when both secrets are present — the failure PWD-T1's ordering exists to
    prevent, which no message-level vector would catch.
