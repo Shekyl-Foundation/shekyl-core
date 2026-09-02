@@ -29,6 +29,12 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > unhedged "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no chain data exists, so format compatibility is worth
 > zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
+> **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
+> clause is propagated into A2 / D11 / E2 — the digest is an oracle for the
+> census's bucket-1/2 rules and a *regression* instrument for bucket-3/4) and
+> **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
+> **CSR-2** are ruled and recorded in the reconciliation; **CSR-5** is ruled in
+> direction only, with no queue slot fixed.
 > Blast radius, the row-level census map, and the work items are in
 > [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 > (`CSR-*`). Individual decision cells below are **not** rewritten in place —
@@ -94,7 +100,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | # | Shekyl is better when … | Mission | Lands by |
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
-| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle | Security | DRS-P0 → C |
+| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record only** (CSR-3); over a bucket-3/4 census row a digest match proves fidelity to the C++'s *behavior*, defects included, and must be reported as that | Security | DRS-P0 → C |
 | **A3** | Known durable-state **warts** are call-graph-traced; default **FIX-IN-CPP-FIRST** (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
@@ -128,13 +134,13 @@ engine swap without A1–A3.
 | **DRS-D3c** | **Cross-store KAT corpus** is mandatory: given output index *N* on a fixture chain, daemon tree position + leaf bytes **byte-equal** wallet LeafStore. Both stores run it. | Price of non-unification; makes separate schemas *safe* rather than merely separate. |
 | **DRS-D3d** | **No shared `redb-helpers` crate** (or equivalent dependency edge). Idioms (schema_version cell, commit-consuming txn, error taxonomy) are a **written pattern** each store implements. | Shared helpers are the unification vector: start as `open_or_create`, end as shared codecs. Rhyme by convention, not by dep. |
 | **DRS-D4** | Wallet rewrite owns **reviewer/decision-maker bandwidth** first. | **Not** a technical “C++ cannot move until wallet Phase N.” **DRS-P0, DRS-BENCH, and DRS-C may proceed** when bandwidth allows; engine-swap (DRS-E*) stays behind wallet priority. Stated constraint = **reviewer bandwidth**, mitigable by surface-at-a-time PRs (E-5). |
-| **DRS-D5** | **Decompose first (C++ / LMDB), engine swap second.** | One variable at a time (R-4). |
+| **DRS-D5** | **Decompose first (C++ / LMDB), engine swap second.** | One variable at a time (R-4). **Rationale retired 2026-09-01** by the countermand; the mechanism survives as analysis only (CSR-4) — the decomposition is a scoping cut for the rewrite, not a sequence of shipped C++ PRs. |
 | **DRS-D6** | **Engine preference = redb, not heed** until **DRS-BENCH** says otherwise. | Pure Rust preference. Genesis-load-bearing only after **§7.4 resource/privacy measures** + IBD floor — **not** raw ops/sec vs LMDB. |
 | **DRS-D7** | LMDB logical oracle / dual-backend **shadow** only during engine-swap. | One authoritative writer per env. |
 | **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with FIX-IN-CPP-FIRST default. | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
-| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; trusted harness before redb. |
+| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3):** oracle for the census's bucket-1/2 rules; for bucket-3/4 rows it is a **regression** instrument, not a correctness one — the C++ is a differential reference only for rules ratified on record. |
 
 ### 1.1 Schedule honesty
 
@@ -323,8 +329,15 @@ launch under D2-reopen.
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
 
-**DRS-C PR shape:** one surface (or S-TXN+one) per PR; digest identity before/
-after; no engine change.
+**DRS-C PR shape — amended 2026-09-01 (CSR-4 ruled: analysis-only).** DRS-C does
+**not** ship as C++ refactor PRs. Rule 20 and
+[`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) both
+refuse review bandwidth spent improving a file scheduled for wholesale
+replacement, and P0c's RECORD-AND-SPECIFY inversion already commits to that
+logic. The surface partition is retained as the **scoping and review unit for
+the Rust rewrite** — one surface per rewrite increment, digest identity checked
+per §6 and CSR-3's bucket scope. (Superseded: "one surface (or S-TXN+one) per
+PR; digest identity before/after; no engine change.")
 
 ### 3.6 Writer / reader concurrency (process model)
 
@@ -403,7 +416,7 @@ replay (E-6).
 | Phase | Digest role |
 | --- | --- |
 | **DRS-P0 / DRS-C** | Build digest **against LMDB**. Oracle for decomposition: byte-identical before/after each extraction. Discovers “canonical logical state” definition DRS-D8 re-encodes. |
-| **DRS-E2** | Same harness already trusted; redb must match LMDB digests. First use is **not** validating an untrusted harness against a new engine. |
+| **DRS-E2** | Same harness already exercised; redb must match LMDB digests **for ratified rules** (CSR-3). First use is **not** validating an unexercised harness against a new engine. A match on a bucket-3/4 row records behavioral parity with an implementation ruled defective — never correctness. |
 
 No existing `state_hash` / `db_digest` in tree — greenfield; **when** is the
 variable, not **whether**.
@@ -485,7 +498,7 @@ flowchart TD
   C[DRS-C decompose blockchain.cpp LMDB + digest oracle]
   D0[DRS-0 redb schema accumulators reconstructible state privacy durability]
   E1[DRS-E1 shekyl-chain-store]
-  E2[DRS-E2 redb matches trusted LMDB digests]
+  E2[DRS-E2 redb matches LMDB digests for ratified rules]
   E3[DRS-E3 curve storage only]
   E4[DRS-E4 archival cursor surface delete gather shell]
   E5[DRS-E5 pool alt prune]

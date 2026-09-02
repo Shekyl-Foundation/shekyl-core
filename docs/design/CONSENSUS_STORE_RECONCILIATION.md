@@ -27,7 +27,10 @@ registered family under alphabetic-until-digit: distinct from `CB-`, `CEN-`,
 
 **This document rules nothing about consensus content.** It establishes where
 the two programs overlap, records the countermand, and lists the decisions each
-program must now re-take. Ratification is Rick's, per item.
+program must now re-take. Ratification is Rick's, per item — **CSR-1…CSR-5 were
+ruled 2026-09-01** (§8); CSR-3 and CSR-4 are applied in
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) in the same PR. **No consensus
+rule, queue order, or schema is decided by any of them.**
 
 ---
 
@@ -209,9 +212,17 @@ batch carries it.
 basis is "one variable at a time (R-4)" — a debugging-attribution argument, not
 a migration argument, so the countermand does not touch its logic. What it
 touches is the *premise* that a C++ decomposition is worth landing as
-production code. Under a complete rewrite, DRS-C's value is **analytical** —
-the surface partition is how the rewrite is scoped and reviewed — not a
-sequence of C++ refactor PRs that ship. See CSR-4.
+production code.
+
+**CSR-4 ruling (Rick, 2026-09-01): DRS-C is analysis-only.** It does not ship as
+C++ refactor PRs. This is close to forced by decisions already taken rather than
+a fresh call — rule 20 (Rust-first) and
+[`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) both
+argue against spending review bandwidth improving a file the countermand just
+scheduled for wholesale replacement, and §5.5's P0c inversion already commits
+this document to the same logic. DRS-C's value is **analytical**: the surface
+partition is how the rewrite is scoped and reviewed. `DAEMON_REDB_STORE.md`
+§3.5's "one surface per PR" shape is amended accordingly.
 
 ### 5.2 DRS-D2 — the reopen bridges have no referent
 
@@ -229,7 +240,24 @@ post-genesis."* Two independent reasons that is now unavailable:
 
 §1.5's "Tier-A LMDB genesis is a first-class success, not a scar" is off the
 menu for the same two reasons. **D2-R1's 2027-04-01 date now measures against a
-milestone that cannot arrive early** and needs re-anchoring (CSR-2).
+milestone that cannot arrive early.**
+
+**CSR-2 ruling (Rick, 2026-09-01) — re-anchor to an event, not a new date.**
+Emptying an anchor without replacing it is half a ruling, and it gets
+rediscovered later as a gap; a *new fixed date* would carry the same failure
+mode as the old one. D2-R1 is therefore re-anchored to **testnet-gate
+completion**, whose three legs are named and independently observable:
+
+| Leg | Complete when |
+| --- | --- |
+| **R8 dispatched** | the census has ruled the storage-layer placement rows (CSR-1) |
+| **Consensus rewrite complete** | the all-Rust consensus port has retired the C++ reference for every ratified rule |
+| **Wallet complete** | the remaining ~10% of the wallet rewrite lands |
+
+An event-based trigger cannot be outrun by its own subject the way the calendar
+one was. What it bridges *to* is unchanged by this ruling and is not a technical
+fallback: under the countermand a D2 reopen means **testnet slips**, recorded as
+a schedule outcome, never a return to shipping the C++.
 
 ### 5.3 DRS-D6 — engine choice: closed, and heed is dead
 
@@ -304,12 +332,22 @@ vindicates, and §5.4 propagates it outward rather than revising it.
 R8's output was previously "input to the rewrite" in the abstract. It is now
 the **specification input to the Rust chain store's schema and write path**
 (`shekyl-chain-store`, DRS-E1). R8 should not be scheduled behind batches that
-do not block store design; §10's proposed order runs R3 → R1 → R2 → R4 → R5 →
-**R8** → R6 → R7 → R9, placing six batches ahead of the one the store waits on.
+do not block store design. §10's proposed order runs R3 → R1 → R2 → R4 → R5 →
+**R8** → R6 → R7 → R9 — **five** batches ahead of the one the store waits on,
+not six as this document first stated (Rick, 2026-09-01; the miscount was
+independent of any sha and is corrected here rather than silently). With **R3
+now ruled and landed** (PR #592), the batches still *unruled* ahead of R8 are
+**R1, R2, R4, R5 — four**.
 
-**CSR-5:** re-price R8's queue position against the store's critical path.
-This document does not re-order the queue — that is a census ruling — but
-records that R8's position was set before it had a named downstream consumer.
+**CSR-5 (partially ruled 2026-09-01, no slot locked).** R8's position was set
+before it had a named downstream consumer, and it now has one that no other
+batch ahead of it has: **DRS-E1's schema design cannot start until R8 rules**.
+Direction ratified — R8 moves earlier than R6. **The specific slot is
+deliberately not fixed here:** the count that motivated it was wrong twice over
+(miscounted at five-as-six, then overtaken when R3 landed), and locking a number
+against a moving denominator buys a second correction pass. Recompute against
+`dev` at dispatch time; this document does not re-order the queue, which is a
+census ruling.
 
 ### 6.3 The pre-genesis deadline is unchanged and now doubly load-bearing
 
@@ -337,11 +375,11 @@ this; it adds a second population (the store's schema) with the same shape.
 
 | ID | Item | Blocks | Status |
 | --- | --- | --- | --- |
-| **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **Proposed** |
-| **CSR-2** | Re-anchor D2-R1's calendar trigger — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **Proposed** |
-| **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2; restate "trusted digest" per bucket (§5.4) | every parity claim | **Proposed** |
-| **CSR-4** | Rule whether DRS-C ships as C++ refactor PRs or becomes rewrite-scoping analysis (§5.1) | DRS-C PR shape | **Proposed** |
-| **CSR-5** | Re-price R8's position in the §10 queue against the store critical path (§6.2) | R8 dispatch | **Proposed** |
+| **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
+| **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
+| **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** in this PR — A2, D11, E2 and the §7 flowchart label now scope the digest by bucket |
+| **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
+| **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
 | **CSR-7** | Record heed as a closed line beside DEL-006 (§5.3) | prevents re-proposal | **Landed with this PR** |
 
@@ -357,6 +395,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-09-01 | heed retired: no chain data exists, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
+| **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
 
 ---
 

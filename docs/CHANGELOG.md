@@ -32,6 +32,20 @@
   87/16/2/66; the 18-row store-enforced set and its 7/1/10 split were re-derived
   mechanically at `bf317111f` and are unchanged.
 
+  **CSR-1…CSR-5 ruled 2026-09-01.** CSR-1 ratified (R8 is the ruling instrument
+  for store-enforced rules; the DRS surface map is its input). CSR-2 ratified
+  with a replacement anchor — D2-R1 moves off its calendar date to the
+  **testnet-gate event** (R8 dispatched + consensus rewrite complete + wallet
+  complete), because a new fixed date carries the same failure mode as the old
+  one. **CSR-3 ratified and applied:** DRS-A2/D11/E2 and the §7 flowchart label
+  now scope the state digest by census bucket — an oracle for bucket-1/2 rules,
+  a regression instrument for bucket-3/4, where a match records parity with an
+  implementation ruled defective and never correctness. **CSR-4 ruled
+  analysis-only:** DRS-C does not ship as C++ refactor PRs (rule 20 and rule 15
+  refuse bandwidth spent improving a file scheduled for replacement); §3.5's PR
+  shape is amended and DRS-D5's cell annotated. CSR-5 direction-ruled (R8 earlier
+  than R6) with no queue slot fixed.
+
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing
   named check, so the gates it carries go quiet — that is how one unquoted
