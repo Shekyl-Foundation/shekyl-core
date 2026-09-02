@@ -305,6 +305,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-B6 | Ping response echoes the responder's `peer_id`, and the back-ping caller **requires it to match** the handshake-advertised id or closes | `p2p_protocol_defs.h:280-290`; `net_node.inl:2585-2590` | `none` | 4 | PW-19 |
 | PWC-B7 | `my_port` is zeroed when `--hide-my-port` is set or the zone cannot pingback; the back-ping is skipped entirely when it is 0 | `net_node.inl:2151-2160`, `:2512-2513` | `none` | 4 | — |
 
+> **Ruled 2026-09-02 — `SHEKYL_P2P_PROTOCOL.md` PWD-I1/PWD-B10: 1003 `COMMAND_PING` is deleted, so three commands survive, not four.** Its only invoker was `try_ping`, whose one caller gated the inbound whitelist promotion PWD-I2 forbids. The command did not need its own argument; it fell when its consumer did.
+
 ### 4.C cryptonote notify schemas (2001-2010)
 
 | ID | Commitment | Evidence | Class | B | Seeds |
@@ -476,6 +478,17 @@ Three residues stay open and are not closed by the above:
    the whitelist re-entry path is the back-ping (PWC-D11). The paper's
    countermeasures (§VII-A) — restrict timed-sync peerlists to outbound
    connections, or cap records per connection — are **unimplemented here**.
+
+   > **Dispositioned 2026-09-02 — PWD-I2 (`SHEKYL_P2P_PROTOCOL.md`), three
+   > rules; the tree is still as described above.** Recorded here because this
+   > paragraph names ②'s channel correctly and the first version of that ruling
+   > still missed it: **both countermeasures listed above are scoped to
+   > *records*, and ② sends none** — its channel is the back-ping insert
+   > (PWC-D11), which puts the connecting peer into the white list directly.
+   > That framing is the likely provenance of the error, so anyone implementing
+   > ②'s fix should read §VII-A at source rather than this paraphrase. PWD-I2's
+   > third rule is stated over the **asset** — *the white list may be written
+   > only for connections this node initiated* — for that reason.
 2. **`update_sync_search()`'s 101 s random non-anchor disconnect**, which the
    paper names as an independent connection-dropping lever (§II-D3), is present
    at this pin as `m_sync_search_checker` (PWC-E4).
@@ -556,6 +569,17 @@ So the cross-reconnect recognition key PW-17 wondered about **exists today and
 is the address**, which is consistent with PW-18's rule that the recognition
 key is never a wire field: nothing about anchor tenure is serialized to a peer.
 `ANCHOR_CONNECTIONS_COUNT = 2` is the seed count, not a tenure duration.
+
+> **Corrected 2026-09-02 — the constant is the *configured* seed count, and the
+> dial path does not deliver it.** `get_and_empty_anchor_peerlist` drains every
+> persisted anchor into a caller-local vector and clears the container;
+> `make_new_connection_from_anchor_peerlist` returns after the **first**
+> successful dial, and only that peer is re-inserted. A cold restart therefore
+> gets **at most one** anchor-backed connection — zero if every anchor fails to
+> handshake — and loses the rest of the persisted set. PWC-E6's `= 2` above
+> reads the same way and carries the same correction. Recorded as
+> `inherited-defensive`; owned by `SHEKYL_P2P_PROTOCOL.md` PWD-I4 and a
+> FOLLOWUPS row.
 
 The caveat that matters for P2P-2: **#587's store bump drops the anchor list
 on first load after upgrade**, so anchor tenure does not survive a store
