@@ -1799,7 +1799,8 @@ and the crate already carries the shape (`shekyl-levin/tests/oracle_kats.rs`,
 | Differential test against a second implementation (PW-7d) | A **shared misreading** of Noise, which self-minted vectors cannot catch | **Recorded, not decided.** It is the one thing our own vectors structurally cannot do; it becomes available when a second implementation exists, which is this row's falsifier |
 | Rely on interop testing alone | The same | **Refused.** Two nodes built from one codebase agreeing proves the codebase self-consistent, not correct — `a-seal-is-not-coverage` in wire form |
 
-The set, minimally:
+The set, minimally — **five vectors**, and the rule they are built on is stated
+after them because it governs every vector added later:
 
 1. **Both handshake messages, byte-exact**, from pinned ephemerals — 1216 and
    1120 bytes, which also pins `e1`/`ekem1` **against being swapped** (PWD-T4).
@@ -1828,7 +1829,29 @@ The set, minimally:
    another network" from "you are not Shekyl", which is exactly the class of
    distinction PW-19a refuses to hand out. A vector asserting a specific error
    code would have *locked in* that oracle while appearing to test the feature.
-4. **A rekey vector** — `ck'`/`k'` after one rekey in each direction.
+4. **A suite/version-mismatch vector**, asserting the same indistinguishability
+   as (3). **The protocol name is a binding too**, mixed into `ck` at
+   initialisation — which is exactly why PWC-A3 can refuse version negotiation
+   rather than specifying it. A peer speaking a different suite therefore fails
+   the same way a wrong network does, and the vector must pin that it fails
+   *identically*, not that it reports a version error.
+5. **A rekey vector** — `ck'`/`k'` after one rekey in each direction.
+
+> **The rule the set is built on, stated generally because it will outlive these
+> five vectors: for any value moved into a *binding*, the vector asserts
+> *indistinguishability*, never a discriminated failure.**
+
+**Otherwise the test reintroduces exactly what the binding removed.** The third
+rung of §1's fourth check buys "there is no error path left to implement wrong";
+a vector demanding an error code **requires** an implementation to build one,
+and to make it distinguishable — quietly restoring the discrimination while
+reading as a thorough negative-path test. **A test can put back what a design
+decision took out, and this is the shape in which it does so.**
+
+Two values are bound today — `network_id` (the prologue) and the protocol name
+(the suite) — so the rule has two instances immediately. **Any future binding
+inherits it without further argument**, which is the reason to state it as a
+rule here rather than as a note on vector 3.
 
 **PW-7d's differential-partner option is recorded, not decided.** Running a
 second implementation as a cross-check is valuable and is *not* what this row
