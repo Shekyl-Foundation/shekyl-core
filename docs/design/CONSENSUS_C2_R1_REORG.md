@@ -249,7 +249,28 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   `cryptonote_core.cpp:254`) was invisible to the gate *and* missing
   from §4a's ground. Matcher widened to `[!=]=` (both scans), the guard
   allowlisted as the E5 mechanism's third wiring site (count 7→8), and
-  a planted inequality branch bitten red before trust.
+  a planted inequality branch bitten red before trust. **Third
+  review-round corrections:** (i) the matcher's `[^)]*` span stopped at
+  the first `)`, so a compound condition
+  (`if (feature_enabled() && m_nettype == MAINNET)`) evaded it —
+  widened to a non-greedy statement-bounded span and a planted compound
+  branch bitten red (the gate's fifth observed-red direction); (ii) the
+  §3.1 claim "the gate-6 and gate-4 docs receive closure notes" had
+  landed no notes — both closure notes now exist
+  ([`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6,
+  [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5) —
+  a status claim written before its act, caught by review; (iii) the
+  inventory sweep had excluded `docs/` wholesale, but three OPERATIONAL
+  docs carried live instructions for the deleted mechanism
+  (`USER_GUIDE.md` advertised `--fast-block-sync`,
+  `RELEASE_CHECKLIST.md` required generating `checkpoints.dat` and
+  updating the deleted hash constant, `EXECUTABLES.md` documented
+  `--blocksdat`) — all removed; the same targeted docs sweep also
+  caught a **fourth** site review missed: `SHEKYL_P2P_PROTOCOL.md`'s
+  worked example (born in #594, merged into this branch mid-round)
+  described the mechanism in present tense — converted to a
+  past-tense record with the deletion noted. Operational docs are
+  sweep scope; only round-record mentions are exempt.
 - **A fourth residue class the symbol sweep structurally cannot see:**
   fourteen test call sites passed the removed trailing parameter
   *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,

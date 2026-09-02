@@ -14,8 +14,9 @@
   flags any new public-nettype equality or inequality branch in
   `cryptonote_core/ + checkpoints/ + blockchain_db/` against an annotated
   8-entry allowlist enforced as a bijection (a copy-pasted duplicate of
-  an allowlisted branch fails the total); bitten red in four directions
-  before landing.
+  an allowlisted branch fails the total); compound conditions matched
+  (the span is statement-bounded, not first-paren-bounded); bitten red
+  in five directions before landing.
 
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing

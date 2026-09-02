@@ -418,7 +418,10 @@ reversion clause).
    state (holdings is the *resulting* set — empty for full `Unbond`; see the debit-path note below).
 5. **Bond-vin authorization (GF-1, gate-6 §9.6)** — the `pqc_auths[]` entry aligned with the
    bond vin verifies against the **dedicated bond-spend key on debit paths** and the **identity
-   key on credit paths**:
+   key on credit paths**. *(The block-level fast-path re-pin of this step — census CEN-G8 — was
+   retired 2026-09-02 with the per-block-checkpoint mechanism, C2-R1a: per-tx verify is now
+   unconditional at block connect, so this step's per-tx enforcement is the sole and always-on
+   site; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3.1.)*:
    - `bond_debit > 0` (`Unbond`, `HoldingsUpdate` drop) → verify against the record's committed
      `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
      authorize a debit (identity-only invariant).

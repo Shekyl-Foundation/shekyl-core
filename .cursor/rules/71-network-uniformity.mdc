@@ -39,7 +39,7 @@ Both checkpoint mechanisms in the inherited tree had the same shape —
   sha-verified the compiled blob while testnet/stagenet loaded it with
   **zero verification** — the mechanism's own safety check had no
   pre-production rehearsal surface.
-- **The operator-override checkpoint path** (re-homed by C2-R1b): the
+- **The operator-override checkpoint path** (to be re-homed by C2-R1b, which cites this rule): the
   *entire* init block — including `set_checkpoints_file_path` — sat
   inside `if (m_nettype == MAINNET)` (`cryptonote_core.cpp:332`), so
   off mainnet `m_checkpoints_path` stayed `""` and the JSON loader
@@ -72,8 +72,10 @@ and fine. It is nettype selecting a code path instead of a parameter.
    inherits this rule rather than re-deriving it).
 3. **Enforcement is two-sided.** The negative side: the
    `check_network_uniformity.sh` gate flags any *new* public-nettype
-   equality branch in the fenced directories against an annotated
-   allowlist (rule 47 shape — every allowlist entry names its
+   equality **or inequality** branch in the fenced directories against
+   an annotated allowlist (`!= MAINNET` guards control flow exactly as
+   `== MAINNET` does — the live `update_checkpoints` guard is the
+   worked instance) (rule 47 shape — every allowlist entry names its
    disposition and its owner). The positive side (stronger, owed by
    the round that touches the surface): the same validator tests run
    against **all** network parameter sets — a parameterized suite

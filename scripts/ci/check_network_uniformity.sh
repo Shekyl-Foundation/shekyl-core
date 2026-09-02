@@ -75,14 +75,19 @@ EOF
 # normalized, one "file<TAB>text" per matched physical construct. The join
 # means a branch wrapped across lines is still one hit (the same reason the
 # debit gate joins statements: clang-format wraps at 100 columns and a
-# wrapped copy is the LIKELY evasion, accidental or not).
+# wrapped copy is the LIKELY evasion, accidental or not). The span from
+# `if (` to the nettype comparison is a non-greedy ANY (not `[^)]*`): a
+# compound condition like `if (feature_enabled() && m_nettype == MAINNET)`
+# closes a paren before the comparison, and the first-`)`-stops form was
+# blind to it (caught by review, round 3). Statement fragments are already
+# [;{}]-split, so the any-span cannot leak across statements.
 hits_file=$(mktemp)
 for d in "${FENCE[@]}"; do
   while IFS= read -r f; do
     python3 "$here/strip_c_comments.py" "$f" \
       | tr '\n' ' ' \
       | sed 's:[;{}]:&\n:g' \
-      | rg -o '(else )?if \([^)]*(m_nettype|nettype) *[!=]= *(MAINNET|TESTNET|STAGENET)[^)]*\)[^\n]*' \
+      | rg -o '(else )?if \([^\n]*?(m_nettype|nettype) *[!=]= *(MAINNET|TESTNET|STAGENET)[^\n]*' \
       | sed -e 's/  */ /g' -e "s:^:${f}\t:" >> "$hits_file" || true
   done < <(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
 done
