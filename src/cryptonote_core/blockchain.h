@@ -1289,6 +1289,15 @@ namespace cryptonote
     uint64_t m_btc_seed_height;
     bool m_btc_valid;
 
+    //! Block 0's timestamp — the C2-R3 padding value. Written by exactly
+    //! the two paths that (re)install block 0: Blockchain::init and
+    //! reset_and_set_genesis_block (reorgs never touch block 0, so it is
+    //! otherwise immutable). The timestamp-rule shim passes it to the FFI
+    //! unconditionally so the pad-or-not decision lives wholly in the
+    //! Rust rule owner (no duplicated short-window threshold on this side
+    //! of the boundary).
+    uint64_t m_genesis_timestamp;
+
 
     bool m_batch_success;
 
@@ -1602,18 +1611,17 @@ namespace cryptonote
     bool add_block_as_invalid(const block_extended_info& bei, const crypto::hash& h);
 
     /**
-     * @brief checks a block's timestamp
+     * @brief checks a block's timestamp against the main chain (C2-R3 rule)
      *
-     * This function grabs the timestamps from the most recent <n> blocks,
-     * where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
-     * blocks in the blockchain, the timestamp is assumed to be valid.  If there
-     * are, this function returns:
-     *   true if the block's timestamp is not less than the timestamp of the
-     *       median of the selected blocks
-     *   false otherwise
+     * Builds the window of the up-to-11 newest main-chain timestamps and
+     * applies the Rust rule (`shekyl_difficulty_check_timestamp_rule`,
+     * the FFI over shekyl-difficulty's `check_timestamp_rule`):
+     * strict MTP + FTL, with short windows genesis-padded so the rule
+     * runs from block 1 — there is no bootstrap carve-out.
      *
      * @param b the block to be checked
-     * @param median_ts return-by-reference the median of timestamps
+     * @param median_ts return-by-reference the window median (always set;
+     *   the miner-template caller reads it on the failure arm)
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
@@ -1621,18 +1629,21 @@ namespace cryptonote
     bool check_block_timestamp(const block& b) const { uint64_t median_ts; return check_block_timestamp(b, median_ts); }
 
     /**
-     * @brief checks a block's timestamp
+     * @brief checks a block's timestamp against a caller-built window (C2-R3 rule)
      *
-     * If the block is not more recent than the median of the recent
-     * timestamps passed here, it is considered invalid.
+     * Marshals into `shekyl_difficulty_check_timestamp_rule` — FTL
+     * included, so what the
+     * main path refuses, alt admission refuses too (C2-R3-Q3).
      *
-     * @param timestamps a list of the most recent timestamps to check against
+     * @param timestamps the <= 11 timestamps immediately preceding the
+     *   candidate, any order (callers with deeper history keep the newest
+     *   11 — C2-R3-Q1 sub-a); not mutated
      * @param b the block to be checked
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
+    bool check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
+    bool check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
 
     /**
      * @brief verifies a block's archival attestation (ARCHIVAL_CREDIT_WIRE.md §3-§4)
@@ -1733,4 +1744,5 @@ namespace cryptonote
      */
     void send_miner_notifications(uint64_t height, const crypto::hash &seed_hash, const crypto::hash &prev_id, uint64_t already_generated_coins);
   };
+
 }  // namespace cryptonote
