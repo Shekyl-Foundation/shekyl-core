@@ -15,6 +15,14 @@ package first. **Nothing here is implemented — implementation is P2P-3.**
 **Identifier family:** `PWD-` (P2P wire decision), registered at birth in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
+**Section-reference convention.** `§N` **with no document named** is a section
+of **this** document. A section of another document is always named —
+`DAEMON_RELAY_PRIVACY.md §12.10`, `the census §5.2`, `the brief §3`. *Where a
+bare `§6.x`/`§7`/`§12.x`/`§13.x`/`§33.x`/`§54.x`/`§91.x` appears in cluster I's
+prose it is `DAEMON_RELAY_PRIVACY.md`'s* — those numbers do not exist here, and
+this line is the resolution for a reader who arrives at a section directly
+rather than reading forward.
+
 ---
 
 ## 0. How a decision is stated here
@@ -256,8 +264,9 @@ transport carries **no peer identity, durable or ephemeral**: the specified
 > An earlier wording said the fields *"are removed"*, which is operation voice
 > and reads as executed — and at the time of ratification the tree still carried
 > every one of them (`p2p_protocol_defs.h:176`). **The rulings are landed; the
-> wire is not yet changed.** P2P-3 performs the removals; §0's banner says so
-> once, and this row says it again because a reader can arrive here directly.
+> wire is not yet changed.** P2P-3 performs the removals; the document's
+> **status banner** (above §0) says so once, and this row says it again because
+> a reader can arrive here directly.
 
 **`m_peer_id` is removed entirely, and an earlier version of this ruling was
 wrong to keep it.** It said a per-process identifier is *"retained internally for
@@ -1299,6 +1308,17 @@ pool-share `g` across all three regimes.
    And §13.5's own scope narrowing applies: after §14, *"the only `δ` left to
    price is the W3 residual."*
 
+**Conceded — and the shape of the concession is unusual, which is why it was
+missing.** This row specifies the content of a closure it **cannot perform**,
+so its correctness is not verifiable until Q-10 actually closes: the
+reconciliation below is *this round's reading* of §12.10 and §7, and a reading
+is exactly the thing that can be wrong. **If it is wrong, it is wrong in the
+most expensive place** — handed forward as settled ground to a sub-round that
+will not re-derive it, which is the failure this row exists to prevent,
+arriving through the row itself. The mitigation is that both sources are
+quoted verbatim rather than paraphrased, so a later closer can check the
+reading against the text rather than trusting it.
+
 **Falsifier.** **Reopen if the relay lane rules that §12.10's two bounds
 replace `g_max` rather than containing it** — that would falsify the
 reconciliation above, and it is a ruling a future reader can recognise.
@@ -1351,6 +1371,17 @@ double-spend no-drop guard is **inherited** — `f7fd209ed`, upstream Monero,
 2024-03-07 — and carries the census's `inherited-defensive` class: it works, and
 no Shekyl record has examined it. **A rewrite that re-derives the tx-ingest path
 from the census would drop it silently.** Cluster B owns that as PWD-B7.
+
+**Conceded — this row's correctness is entirely borrowed.** It verifies rather
+than selects, so it inherits PWD-I2's option space *and PWD-I2's risk*: if I2's
+three rules are implemented **partially** — the acceptance rule without the
+per-connection ceiling, say, or the white-list writer invariant without the
+per-host gray bound — then ① or ② is open again and **this row still reads
+closed**, because nothing in it observes the implementation. A verification row
+cannot detect a partial implementation of the thing it verifies. That is the
+price of pointing rather than restating, and it is worth paying for the reasons
+the next paragraph gives — but it is a price, and PWD-B10's and PWD-B9's
+FOLLOWUPS rows are where it is actually paid.
 
 **Falsifier — one per sub-attack, because the two are now closed by different
 rules and a single trigger would test only one of them.** The paper's own attack
@@ -1427,10 +1458,9 @@ claim about what this cluster ruled is not.)*
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
 
-**Running total against the round's gate:** 10 of **46** bucket-4 rows
-dispositioned. Clusters T (~16), B (~20) and A remain.
-
----
+**Running total against the round's gate:** **19 of 46** bucket-4 rows
+dispositioned — cluster I's 10 plus cluster T's 9. **Clusters B (~20) and A
+remain.**
 
 ---
 
@@ -1545,12 +1575,29 @@ retirement is the constancy, so the retirement dies with it.
 
 ### PWD-T3 — rekeying is BOLT-8-shaped: `ck', k' = HKDF(ck, k)`, per direction
 
-**RULED**, carrying PW-8's ruling and its §0(b) correction.
+**RULED**, carrying PW-8's ruling — **option (a)**, BOLT-8-style symmetric KDF
+rotation — and the primary-source corrections that row records.
 
-Each direction rekeys independently after a fixed number of messages or bytes,
-deriving `ck', k' = HKDF(ck, k)` and **resetting the nonce**. **Zero bytes on
-the wire**: both sides derive from state they already hold, so there is no
-rekey message to forge, delay, or use as a marker.
+Each direction rekeys independently, deriving `ck', k' = HKDF(ck, k)` and
+**resetting the nonce**; `sck` and `rck` are independent. **Zero bytes on the
+wire**: both sides derive from state they already hold, so there is no rekey
+message to forge, delay, or use as a marker.
+
+**The interval is counted in *nonce increments*, not messages, and that
+distinction is the correction PW-8 paid for at primary source.** BOLT-8 rotates
+after **1,000 nonce increments**, which is **500 messages** in *its* framing
+because each message there consumes two nonces — one for the encrypted length
+prefix, one for the body. **The message-count equivalent is therefore a property
+of our framing, not a number to copy**: a framing that spends one nonce per
+message rotates at twice BOLT-8's message count for the same nonce budget.
+Stating the interval in nonces makes it survive a framing change; stating it in
+messages would silently halve or double the real budget when PWD-T6/PWD-B3 settle
+the framing.
+
+**Rotation inherits the hybrid-PQ root, which is why it does not weaken T1.**
+Every rotated key descends from the ML-KEM-mixed `ck`, so harvest-now-decrypt-
+later resistance and forward secrecy survive rotation rather than being reset by
+it.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -1558,10 +1605,16 @@ rekey message to forge, delay, or use as a marker.
 | Explicit rekey message | The same | **Refused.** It mints an observable that is *itself* a fingerprint, and an error path for a mechanism that cannot otherwise fail |
 | No rekey | Nonce reuse under long sessions | **Refused.** Gossip sessions are long-lived by design; ChaChaPoly nonce space must not be a liveness limit |
 
-**Conceded.** Rekeying gives no *post-compromise* security here — with no static
-keys there is nothing to ratchet toward, so a full state compromise is
-terminal for that session. The property bought is bounded key usage, not
-recovery.
+**Conceded — and PCS is *ruled out on the merits*, not merely absent.** PW-8's
+argument is stronger than "there is nothing to ratchet toward", and the ruling
+rests on it: **PCS pays out only when an adversary obtains session keys, then
+*loses* that capability, and the session still matters afterwards.** On an open
+gossip network the dominant adversary never attacks the session at all — being a
+peer is free, and every relay is a middle-man by construction, so stolen session
+keys grant a view already available by dialling in. The adversary who *does*
+hold keys (node owner, RCE, hypervisor) has **permanent** access, which PCS
+cannot heal by definition. Recorded-ciphertext decryption is **forward secrecy's**
+job, which option (a) provides. The property bought here is bounded key usage.
 
 **Falsifier.** **Reopen if a session is specified that can outlive its rekey
 interval without rekeying** — the interval's value is PWD-B3's, but the
@@ -1665,8 +1718,8 @@ limit cannot be mistaken for reconciling the dead one.
 **Conceded.** The post-handshake limit is stated as a derivation, not a number,
 because its input is PWD-B3's per-command caps — **which are cluster B's.** This
 row is honest that it terminates on another row rather than pinning a value it
-does not own; §7's *"a bound that depends on a parameter owned further down is
-not a bound"* is the reason to say so plainly instead of inventing a figure.
+does not own; `DAEMON_RELAY_PRIVACY.md` §7's *"a bound that depends on a
+parameter owned further down is not a bound"* is the reason to say so plainly instead of inventing a figure.
 
 **Falsifier.** **Reopen if any legitimate message is specified that exceeds the
 derived post-handshake limit** — a message the protocol must send and the limit
