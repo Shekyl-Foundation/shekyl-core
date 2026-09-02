@@ -289,9 +289,13 @@ without pointer"), so the option is not re-proposed.
 This is the countermand's sharpest consequence, and the census already has the
 correct formulation while DRS does not.
 
-Census header:
+Census header, **as it read before CSR-3a**:
 
 > C++ is a differential-test oracle **only for rules ratified on record**.
+
+That hedge was the right *direction* and far better than DRS's phrasing — but
+§5.4.1 shows it is **not sufficient on its own**, and the census header has been
+extended in the same PR so both documents now carry the conformance axis.
 
 DRS-A2 / D11 / E2 use the unhedged form — "**trusted** LMDB digests",
 "redb matches trusted LMDB digests". Under the countermand that phrasing is
@@ -349,7 +353,11 @@ and extend it, and no parity claim may assert *correctness* for a bucket-1/2 row
 until that row has been checked against it. Rows enter the register from either
 side: a census round finding a divergence, or P0's wart pass finding one.
 
-**CSR-3:** propagate the census's oracle clause into DRS-A2/D11/E2 verbatim.
+**CSR-3:** propagate the census's oracle clause into DRS-A2/D11/E2 — **not
+verbatim.** CEN-L11 shows the ratification-only form is insufficient, so what
+propagates is the **corrected two-condition rule** (§5.4.1), and the census
+header is updated in the same change so the specification input does not retain
+the unsafe version.
 A "digest-identical extraction" claim over a bucket-4 rule is a statement about
 fidelity to a defect, and must say so.
 
@@ -380,8 +388,13 @@ defective implementation on a file being deleted.
 
 ### 6.1 The oracle clause is the census's, and it holds
 
-No change. The census's hedged formulation is the one the countermand
-vindicates, and §5.4 propagates it outward rather than revising it.
+**Corrected 2026-09-02 (CSR-3a) — the clause needed extending, not just
+propagating.** The census's hedge was the right direction and much better than
+DRS's unhedged phrasing, which is why §5.4 reached for it. But ratification is
+**necessary, not sufficient**: CEN-L11 is bucket-1 ratified with an
+implementation that does not meet its spec. The census header now carries the
+conformance condition as well, so the rewrite's specification input cannot be
+cited for the unsafe rule.
 
 ### 6.2 R8 gains an explicit consumer
 
@@ -420,8 +433,8 @@ this; it adds a second population (the store's schema) with the same shape.
 | --- | --- |
 | Any consensus rule's content or placement | census §10 batches (R8 for the store rows) |
 | The C2 queue order — **except** CSR-5's relative ordering (R8 before R6); the slot is not fixed | census ruling |
-| Whether DRS-C ships as C++ PRs or is analysis only | CSR-4, Rick |
-| The new D2 calendar anchor | CSR-2, Rick |
+| DRS-C's *implementation* detail — how the surface partition is used to scope rewrite increments (the ship-as-C++-PRs question is **ruled**: analysis-only, §5.1) | rewrite scoping |
+| **When** the testnet-gate legs complete (the *anchor* is **ruled**: the testnet-gate event, §5.2) | Rick |
 | redb schema design | DRS-0 / DRS-E1, after R8 |
 | Testnet date | Rick |
 
@@ -451,9 +464,9 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-09-01 | Testnet is gated on this work + consensus + wallet; genesis downstream of testnet | Rick, §5.2 |
 | 2026-09-01 | heed retired: no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
-| **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** no recorded spec-vs-implementation divergence; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete | §5.4, §5.4.1 |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | **CSR-3 corrected on review — the bucket axis is not the conformance axis.** A census bucket records that a rule is *ratified*, not that the C++ *implements* it. CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so the bucket-only rule would have scored redb reproducing that defect as a **correctness match**. Oracle status now requires ratification **and** no recorded spec-vs-implementation divergence; **CSR-3a** opens the register, seeded with CEN-L11 and explicitly not proven complete | §5.4, §5.4.1 |
 
 ---
 
@@ -463,4 +476,6 @@ this; it adds a second population (the store's schema) with the same shape.
 no cross-reference; the census's R8 batch and the daemon store's schema design
 are one decision, and the 2026-09-01 countermand retires the decompose-in-place
 posture, empties the D2 reopen bridges, and demotes the C++ from trusted oracle
-to a differential reference for ratified rules only.**
+to a differential reference for rules that are **both** ratified on record **and**
+free of a recorded spec-vs-implementation divergence — a bucket is not a
+conformance claim (CSR-3a).**
