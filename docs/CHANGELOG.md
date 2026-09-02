@@ -4,6 +4,12 @@
 
 ### Added
 
+- **CI gate: every workflow file must parse and be shaped like a workflow.**
+  A workflow GitHub cannot parse produces a run with zero jobs and no failing
+  named check, so the gates it carries go quiet — that is how one unquoted
+  step name took the documentation-lifecycle gate set offline. The check runs
+  in the unfiltered `grep-gates` job, so it sees every workflow edit.
+
 - **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
   enumerates the peer-to-peer wire surface and the connection-management
   behavior around it at `dev` `30cd547e2` — 57 bucketed rows, 3 b1 / 6 b2 /
