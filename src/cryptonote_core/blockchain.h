@@ -1615,10 +1615,9 @@ namespace cryptonote
      *
      * Builds the window of the up-to-11 newest main-chain timestamps and
      * applies the Rust rule (`shekyl_difficulty_check_timestamp_rule`,
-     * the FFI over shekyl-difficulty's `check_timestamp_rule`) — strict MTP
-     * + FTL; short
-     * windows genesis-padded, so the rule runs from block 1 — there is no
-     * bootstrap carve-out).
+     * the FFI over shekyl-difficulty's `check_timestamp_rule`):
+     * strict MTP + FTL, with short windows genesis-padded so the rule
+     * runs from block 1 — there is no bootstrap carve-out.
      *
      * @param b the block to be checked
      * @param median_ts return-by-reference the window median (always set;

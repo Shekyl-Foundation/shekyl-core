@@ -24,10 +24,12 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `fabc2b7c0` as of 2026-08-28 (§5). Older
-code-anchored rows keep the SHA they were verified at in the cell. When
-you update a status here, re-verify against code (`git grep`, not plan
-prose) and move this stamp.
+The unified stamp is `dev` = `47bfa66c3` as of 2026-09-02 (§5); the
+C2-R3-Q row and the CEN / census-pass status cells it updated were
+additionally verified at PR #592's branch tip (the R3 landing), which
+contains that dev revision. Older code-anchored rows keep the SHA they
+were verified at in the cell. When you update a status here, re-verify
+against code (`git grep`, not plan prose) and move this stamp.
 
 **Maintenance discipline** (institutionalized as
 [`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
