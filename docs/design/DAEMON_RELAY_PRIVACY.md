@@ -14766,11 +14766,40 @@ public infrastructure whose onion is discoverable anyway.
 > the graphs it runs**; a Tor-only node's return is the anonymity graph alone.
 > Under Design A a fluff traverses *every* configured zone, so a node running
 > both takes clearnet's `50` transit assumption as a **floor** instead of
-> eating the anonymity graph's `1625` as a **ceiling**. Forcing Tor-only would
-> throw that `min` away **and buy nothing in privacy**, because the *transport*
-> default (Tor recommended and installed — `P2P_2_REQUIREMENTS_REGISTER.md`
-> PW-3a) already steers privacy-seeking nodes onto Tor. A flexible graph is
-> strictly better on propagation at no privacy cost.
+> eating the anonymity graph's `1625` as a **ceiling**.
+>
+> **Correction 2026-09-02 — the ruling stands; its stated rationale did not,
+> and the error was in this document's own direction.** An earlier version said
+> forcing Tor-only would *"buy nothing in privacy, because the transport default
+> already steers privacy-seeking nodes onto Tor,"* and concluded *"a flexible
+> graph is strictly better on propagation at no privacy cost."* **§92.6 of this
+> same document says the opposite and says it twice**: a Tor-only originator
+> *"has no clearnet peers to be silent in front of"* so it does not leak §92.5's
+> absence signal **under any disarm branch**, and §91.4's emit-attribution
+> composition is the second mechanism — *"two independent mechanisms where
+> Tor-only is **strictly stronger** rather than merely equivalent."*
+>
+> **The transport default does not deliver either of them.** A node with Tor
+> installed and default-on *while still running a clearnet zone* is dual-network
+> by §91.2's own disambiguation, and a dual-network node **has** clearnet peers
+> to be silent in front of. §92.6's benefit belongs to the node that runs **no
+> clearnet zone at all** — precisely the posture the transport default does not
+> produce. Crediting the transport default with the graph posture's property is
+> the same over-read this section's disambiguation note was written to prevent,
+> arriving from the other side.
+>
+> **So the cost is real and is priced, not denied.** Declining Tor-only-by-default
+> keeps §92.5's absence-signal leak and §91.4's emit-attribution channel live for
+> **dual-stack nodes**, at the two magnitudes §92.6 and §91.6 already quantify.
+> The ruling is nonetheless unchanged, for a reason that does not require the
+> cost to be zero: **the posture stays available per node.** A node that wants
+> §92.6's strictly-stronger property configures Tor-only and gets it, paying the
+> anonymity zone's embargo (§91.6). Making it the *default* would impose that
+> embargo on every node — including those with no threat model that needs it —
+> and would throw the `min` away network-wide. **The privacy the default declines
+> is recoverable by the node that wants it; the propagation the default keeps is
+> not recoverable by anyone once the graph is uniform.** That asymmetry is the
+> argument, and it survives the cost being non-zero.
 >
 > **It resolves an open cost rather than inheriting it.** P2P-2 raised a second
 > cost of moving the graph default (`SHEKYL_P2P_PROTOCOL.md` PWD-I3): §12.10's

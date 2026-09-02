@@ -67,9 +67,12 @@ Two instances, both inherited, both flattering the defence, both of which would
 pass a review that reads only the constant:
 
 - **`ANCHOR_CONNECTIONS_COUNT = 2`** advertises two anchor-backed outbound
-  slots. The dial path delivers **one** and destroys the rest of the persisted
-  set on first use (PWD-I4). Found only because a review challenged the figure
-  rather than the reasoning.
+  slots. The dial path delivers **at most one** — zero if every persisted anchor
+  fails to handshake — and destroys the rest of the persisted set on first use
+  (PWD-I4). Found only because a review challenged the figure rather than the
+  reasoning. *"At most one" is the honest form and this line said "one" through
+  two rounds: the overstatement the check exists to catch reappeared in the
+  check's own statement of it.*
 - **`PER_BLOCK_CHECKPOINT`** is default-on (`CMakeLists.txt:470`,
   `set(PER_BLOCK_CHECKPOINT 1)`), but every consumer guards on
   `blockchain_height < m_blocks_hash_check.size()` — with an empty hash corpus
@@ -187,9 +190,18 @@ in the row above (self-connection detection, the back-ping), both route to
 cluster B, and **cluster B is where this challenge is first answered.** A reader
 finding a third consumer there has met the trigger.
 
-### PWD-I2 — peerlist disclosure is reduced, and the Shi et al. amplifiers are closed
+### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
-**RULED.** Disclosure stays, bounded and anonymised, **with three changes**.
+**RULED.** **Disclosure is not reduced — it is retained exactly as it is**, and
+**three changes are made to what this node *accepts*.**
+
+**The heading said "disclosure is reduced" through three rounds, and it was the
+original defect surviving in the title.** None of the three adopted rules
+touches what this node sends: the anonymised head (PWC-D2) is kept unchanged,
+the cross-zone refusal (PWC-D10) is kept unchanged, and "stop disclosing
+entirely" is refused below. A decision named for the side it does not act on is
+how the sender/receiver confusion got in, and leaving the name would keep the
+door open for it.
 
 The current shape (all verified): up to 250 entries per message (PWC-D1),
 disclosed on **both** handshake and timed-sync (PWC-B4), sampled over the whole
@@ -333,9 +345,35 @@ because the quantity it counted was never the one that bounds ②.
 **Conceded.** Topology mapping by a patient participant. PW-3a's discoverability
 leg means an adversary can enumerate candidates regardless; these changes raise
 the *cost and rate*, and do not claim to close it. **The ceiling bounds
-amortisation per connection; it does not bound an adversary willing to open
-many connections** — that is `has_too_many_connections`' job, and it is
-public-zone-only (PWC-E11), which cluster B owns.
+amortisation per connection; it does not bound an adversary willing to be
+dialled many times.**
+
+**And an earlier version named the wrong mechanism as that bound — the third
+instance of this PR's own defect class, found by a reviewer applying §1's third
+check to a paragraph I had only applied it to the *adopted rules*.** It said
+"that is `has_too_many_connections`' job." That guard cannot do this job, in
+three independent ways, all verified:
+
+1. It counts **only `cntxt.m_is_income`** connections (`net_node.inl:3083-3104`).
+2. Its **sole caller** is `is_host_limit` (`:241`), the **inbound admission**
+   path — it is never consulted on an outbound dial.
+3. It returns `false` immediately for any non-public zone (*"Unable to determine
+   how many connections from host"*), which is PWC-E11's public-zone-only note.
+
+**Under this decision's own corrected rules the adversary opens no inbound
+connection at all** — records are accepted only on connections *we* initiate, so
+the traffic that matters never passes the guard; and because the guard counts
+**concurrent** connections, even sequential inbound reconnects from one host
+reset the per-connection ceiling without ever tripping it. **A countermeasure
+named for the residual, facing the opposite direction from the residual.**
+
+**The real bound is outbound selection frequency**, which is a different lane's
+question: how often the adversary can get itself drawn from white/gray and
+dialled. **Routed to cluster B as a named mechanism rather than a named guard** —
+PWD-B1 (rate limiting, currently absent) and the outbound churn/selection
+decisions own it. This is a route with an owner and a mechanism, not a deferral:
+if cluster B cannot bound outbound re-selection, this concession becomes an open
+residual and PWD-I6's ② closure is re-argued.
 
 **Falsifier.** Accepting records only on outbound-initiated connections is
 expected to leave peer discovery viable at the deployed out-degree. **Reopen if a fleet run shows

@@ -568,6 +568,17 @@ is the address**, which is consistent with PW-18's rule that the recognition
 key is never a wire field: nothing about anchor tenure is serialized to a peer.
 `ANCHOR_CONNECTIONS_COUNT = 2` is the seed count, not a tenure duration.
 
+> **Corrected 2026-09-02 — the constant is the *configured* seed count, and the
+> dial path does not deliver it.** `get_and_empty_anchor_peerlist` drains every
+> persisted anchor into a caller-local vector and clears the container;
+> `make_new_connection_from_anchor_peerlist` returns after the **first**
+> successful dial, and only that peer is re-inserted. A cold restart therefore
+> gets **at most one** anchor-backed connection — zero if every anchor fails to
+> handshake — and loses the rest of the persisted set. PWC-E6's `= 2` above
+> reads the same way and carries the same correction. Recorded as
+> `inherited-defensive`; owned by `SHEKYL_P2P_PROTOCOL.md` PWD-I4 and a
+> FOLLOWUPS row.
+
 The caveat that matters for P2P-2: **#587's store bump drops the anchor list
 on first load after upgrade**, so anchor tenure does not survive a store
 version change — one bootstrap runs without it (PWC-D7). Recorded as PWC-X6.
