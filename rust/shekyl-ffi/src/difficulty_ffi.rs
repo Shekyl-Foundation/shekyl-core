@@ -354,9 +354,13 @@ pub const SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR: i32 = -1;
 ///
 /// # Safety
 ///
-/// The caller must uphold: when `window_len > 0`, `window` points to
-/// `window_len` valid, aligned, initialized `u64`s; `out_median` points
-/// to a valid, aligned, writable `u64`.
+/// The caller must uphold: `out_median` points to a valid, aligned,
+/// writable `u64`; and when `window_len` is in `1..=11`, `window` points
+/// to `window_len` valid, aligned, initialized `u64`s. For
+/// `window_len > 11` the pointer is never dereferenced (the width
+/// refusal below runs before slice construction), so only non-null is
+/// required — which is what makes an oversized-length call sound and
+/// lets the regression test pin the refusal with a tiny buffer.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
     candidate_ts: u64,
@@ -579,6 +583,77 @@ mod tests {
     /// pre-check) turns this test into the very slice-invariant UB the
     /// guard exists to refuse, so a regression is a crash/UB detector
     /// here, not a clean assertion failure.
+    /// The two null-rejection arms and the one PERMITTED null are the
+    /// ABI contract's edges — pinned like the LWMA-1/check_hash exports'
+    /// null paths. A null `out_median` and a null `window` with nonzero
+    /// length return ERR_NULL_PTR without touching anything; a null
+    /// `window` with `window_len == 0` is the documented block-1 shape
+    /// (full genesis padding) and must evaluate the rule normally.
+    #[test]
+    fn null_out_median_is_refused() {
+        let tiny = [1u64, 2u64];
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                tiny.as_ptr(),
+                tiny.len(),
+                0,
+                999,
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn null_window_with_nonzero_len_is_refused() {
+        let mut median = 123u64;
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                core::ptr::null(),
+                3,
+                0,
+                999,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR);
+        // The refused call writes nothing.
+        assert_eq!(median, 123);
+    }
+
+    #[test]
+    fn null_window_with_zero_len_pads_from_genesis() {
+        let mut median = 123u64;
+        // Empty window, genesis_ts = 700: the padded window is eleven
+        // 700s, median 700 — candidate 701 clears it, candidate 700
+        // does not.
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                701,
+                core::ptr::null(),
+                0,
+                700,
+                701,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_OK);
+        assert_eq!(median, 700);
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                700,
+                core::ptr::null(),
+                0,
+                700,
+                700,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN);
+    }
+
     #[test]
     fn oversized_window_len_is_refused_before_slice_construction() {
         let tiny = [1u64, 2u64];

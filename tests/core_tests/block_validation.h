@@ -104,6 +104,21 @@ struct gen_block_ts_in_past : public gen_block_verification_base<SHEKYL_DAA_MTP_
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
+// C2-R3-Q2 + the genesis-timestamp cache: the padding value must be the
+// CHAIN's genesis timestamp, not whatever block 0 the store held at
+// Blockchain::init. Core-test replay installs its own genesis via
+// reset_and_set_genesis_block, so a padding value cached only at init pads
+// deep-bootstrap windows with the superseded genesis (timestamp 0),
+// dragging the median low enough to accept a candidate the ruled rule
+// rejects. At h = 4 (three rewound blocks + genesis) correct padding makes
+// the median the genesis timestamp itself, so a candidate EQUAL to it must
+// be rejected under the strict boundary; stale-0 padding yields median 0
+// and accepts it.
+struct gen_block_ts_at_genesis_in_deep_bootstrap : public gen_block_verification_base<4>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
 // C2-R3-Q1 (CONSENSUS_C2_R3_TIMESTAMPS.md §4): the MTP boundary is strict —
 // a timestamp EQUAL to the median of the previous 11 is rejected.
 struct gen_block_ts_at_median : public gen_block_verification_base<SHEKYL_DAA_MTP_WINDOW>

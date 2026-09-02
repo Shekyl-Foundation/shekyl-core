@@ -404,6 +404,18 @@ fix evaluated on the merits rather than adopted verbatim:
   cache and rebuilds through the fresh path, closing the drift item at
   its root. Same `time(NULL)` testability posture as the refusal arm
   (R9 clock-seam).
+- The genesis-cache follow-up itself grew a real bug, caught by review:
+  `reset_and_set_genesis_block` (fakechain/core-test replay's way of
+  installing its own block 0) never refreshed the init-time cache, so
+  deep-bootstrap windows padded with the SUPERSEDED genesis timestamp.
+  The first bootstrap test masked it by coincidence — with a single pad
+  slot, a stale 0 and the correct value land on the same side of the
+  median — so a discriminating test was added at h = 4
+  (`gen_block_ts_at_genesis_in_deep_bootstrap`: correct padding makes
+  the median the genesis timestamp itself; stale-0 padding collapses it
+  to 0), observed red against the stale cache, then green after the
+  reset path refreshes the member. The member is now written by exactly
+  the two paths that (re)install block 0.
 - One review prescription was **rejected on the merits** (recorded here
   so it is not re-litigated per surface): routing the C++ rule owner
   through the Rust predicates via FFI now. Rule 20's

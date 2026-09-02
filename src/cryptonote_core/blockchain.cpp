@@ -926,7 +926,19 @@ bool Blockchain::reset_and_set_genesis_block(const block& b)
   add_new_block(b, bvc);
   if (!update_next_cumulative_weight_limit())
     return false;
-  return bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+  if (bvc.m_added_to_main_chain && !bvc.m_verifivation_failed)
+  {
+    // This is the second of the two places block 0 can be (re)installed
+    // (Blockchain::init is the first): refresh the cached C2-R3 padding
+    // value from the store, or short-window validation keeps padding
+    // with the SUPERSEDED genesis timestamp — observed as
+    // gen_block_ts_at_genesis_in_deep_bootstrap accepting a candidate
+    // the ruled rule rejects (fakechain replay installs its own genesis
+    // through this path).
+    m_genesis_timestamp = m_db->get_block_timestamp(0);
+    return true;
+  }
+  return false;
 }
 //------------------------------------------------------------------
 crypto::hash Blockchain::get_tail_id(uint64_t& height) const

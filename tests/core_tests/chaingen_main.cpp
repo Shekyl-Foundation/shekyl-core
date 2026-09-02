@@ -117,6 +117,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
     GENERATE_AND_PLAY(gen_block_ts_below_median_in_bootstrap);
+    GENERATE_AND_PLAY(gen_block_ts_at_genesis_in_deep_bootstrap);
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_at_median);
     GENERATE_AND_PLAY(gen_block_alt_ts_above_ftl);

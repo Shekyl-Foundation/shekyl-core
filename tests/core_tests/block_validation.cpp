@@ -118,6 +118,25 @@ bool gen_block_ts_in_past::generate(std::vector<test_event_entry>& events) const
   return true;
 }
 
+bool gen_block_ts_at_genesis_in_deep_bootstrap::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, 3);
+
+  // Window at h = 4: the four real timestamps [g, g+T, g+2T, g+3T] plus
+  // seven genesis pads -> sorted index 5 IS the genesis timestamp, so a
+  // candidate equal to it violates the strict boundary. If the padding
+  // value is a stale init-time genesis (timestamp 0 on fakechain) the
+  // median collapses to 0 and this candidate is wrongly accepted.
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp);
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
 bool gen_block_ts_at_median::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();

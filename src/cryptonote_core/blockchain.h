@@ -1289,11 +1289,13 @@ namespace cryptonote
     uint64_t m_btc_seed_height;
     bool m_btc_valid;
 
-    //! Block 0's timestamp, cached once at init (block 0 is immutable —
-    //! reorgs never touch it). The C2-R3 padding value: the timestamp-rule
-    //! shim passes it to the FFI unconditionally so the pad-or-not decision
-    //! lives wholly in the Rust rule owner (no duplicated short-window
-    //! threshold on this side of the boundary).
+    //! Block 0's timestamp — the C2-R3 padding value. Written by exactly
+    //! the two paths that (re)install block 0: Blockchain::init and
+    //! reset_and_set_genesis_block (reorgs never touch block 0, so it is
+    //! otherwise immutable). The timestamp-rule shim passes it to the FFI
+    //! unconditionally so the pad-or-not decision lives wholly in the
+    //! Rust rule owner (no duplicated short-window threshold on this side
+    //! of the boundary).
     uint64_t m_genesis_timestamp;
 
 
