@@ -291,6 +291,14 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   provenance; a mechanism-prose sweep across `src/` + `rust/` found no
   fourth instance (the `blockchain_db.h` "fast-sync resumption" hit is
   the curve-tree checkpoint family, a different mechanism).
+  **Fifth-round correction (a body-carried finding that never became a
+  review thread — the reason suppressed findings get read):** rule 71's
+  closing line still said both checkpoint instances "were resolved",
+  repeating the completed-migration claim in a sentence the round-3
+  tense fix did not sweep; now states one deleted (C2-R1a), one queued
+  (C2-R1b). Same lesson as the stranded-docstring class: sweep the
+  CLAIM's wording everywhere it was restated, not just the flagged
+  line.
 - **A fourth residue class the symbol sweep structurally cannot see:**
   fourteen test call sites passed the removed trailing parameter
   *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,

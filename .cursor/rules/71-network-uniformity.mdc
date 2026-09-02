@@ -94,5 +94,6 @@ Rule 16 (inherited code is not inherited architecture) explains how
 these branches got here; this rule governs what may replace them.
 Rule 21 supplies the ratification form for a deliberate divergence.
 Rule 47 supplies the gate discipline. Rule 60's deletion mandate is
-how most instances die — both checkpoint instances were resolved by
-deletion or re-homing, not by synchronizing the branches.
+how most instances die — the compiled-hash instance was resolved by
+deletion (C2-R1a); the operator-override instance is queued for
+re-homing (C2-R1b); neither path synchronizes the branches.
