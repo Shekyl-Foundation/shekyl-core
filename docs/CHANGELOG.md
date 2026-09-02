@@ -11,10 +11,10 @@
   during C2-R1a — both inherited checkpoint mechanisms had the
   `if (nettype == MAINNET) { do the real thing }` shape).
   `scripts/ci/check_network_uniformity.sh` (wired into `ci/grep-gates`)
-  flags any new public-nettype equality branch in
+  flags any new public-nettype equality or inequality branch in
   `cryptonote_core/ + checkpoints/ + blockchain_db/` against an annotated
-  7-entry allowlist enforced as a bijection (a copy-pasted duplicate of
-  an allowlisted branch fails the total); bitten red in three directions
+  8-entry allowlist enforced as a bijection (a copy-pasted duplicate of
+  an allowlisted branch fails the total); bitten red in four directions
   before landing.
 
 - **CI gate: every workflow file must parse and be shaped like a workflow.**

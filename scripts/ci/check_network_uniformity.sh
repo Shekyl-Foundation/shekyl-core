@@ -12,9 +12,13 @@
 # shape (`if (nettype == MAINNET) { do the real thing }` with nothing in the
 # else); one died in C2-R1a, the other is being re-homed by C2-R1b.
 #
-# This gate flags every equality test against a PUBLIC network type
-# (MAINNET / TESTNET / STAGENET) in the fenced consensus directories, against
-# an annotated allowlist. FAKECHAIN branches are deliberately out of scope:
+# This gate flags every equality OR inequality test against a PUBLIC
+# network type (MAINNET / TESTNET / STAGENET) in the fenced consensus
+# directories, against an annotated allowlist. Both operators: an
+# `if (m_nettype != MAINNET) return;` guard is the SAME rot shape as the
+# `== MAINNET` wrapper -- it keys control flow on the network -- and the
+# first revision of this gate, matching `==` only, was blind to the live
+# `update_checkpoints` guard (caught by review, 2026-09-02). FAKECHAIN branches are deliberately out of scope:
 # the test-seam family is census batch R9's subject and carries rule 71's
 # named-ratified-and-loud exception discipline, not this grep.
 #
@@ -27,8 +31,8 @@
 # hit count must equal the entry count. The total is what catches the
 # copy-paste case the per-entry checks cannot: a DUPLICATED branch matches
 # an existing entry, so "entry present" and "hit allowlisted" both stay
-# green while the surface gained a second instance -- only 8 hits against
-# 7 entries goes red. Observed counts are printed on failure.
+# green while the surface gained a second instance -- only the N+1-hits-
+# against-N-entries total goes red. Observed counts are printed on failure.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -57,6 +61,7 @@ FENCE=(src/cryptonote_core src/checkpoints src/blockchain_db)
 # entry absorb a second, longer branch that happens to share its opening.
 ALLOWLIST=$(cat <<'EOF'
 src/cryptonote_core/cryptonote_core.cpp	if (m_nettype == MAINNET) {	checkpoint wiring wrapped mainnet-only (inherited); C2-R1b re-homes the operator-override path across all nettypes
+src/cryptonote_core/cryptonote_core.cpp	if (m_nettype != MAINNET) return true;	update_checkpoints periodic-reload guard -- the E5 mechanism's THIRD wiring site (independent of the init block); C2-R1b re-homes it with the init wiring
 src/cryptonote_core/blockchain.cpp	if (m_nettype == FAKECHAIN || m_nettype == STAGENET) m_hardfork = new HardFork(*db, 1, 0);	hard-fork TABLE selection: data-selection written as branches; migration debt toward the parameter table (rule 71 owner: consensus lane)
 src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) m_hardfork = new HardFork(*db, 1, testnet_hard_fork_version_1_till);	hard-fork TABLE selection: data, not control flow; migration debt (consensus lane)
 src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) {	hard-fork schedule selection loop: data, not control flow; migration debt (consensus lane)
@@ -77,7 +82,7 @@ for d in "${FENCE[@]}"; do
     python3 "$here/strip_c_comments.py" "$f" \
       | tr '\n' ' ' \
       | sed 's:[;{}]:&\n:g' \
-      | rg -o '(else )?if \([^)]*(m_nettype|nettype) *== *(MAINNET|TESTNET|STAGENET)[^)]*\)[^\n]*' \
+      | rg -o '(else )?if \([^)]*(m_nettype|nettype) *[!=]= *(MAINNET|TESTNET|STAGENET)[^)]*\)[^\n]*' \
       | sed -e 's/  */ /g' -e "s:^:${f}\t:" >> "$hits_file" || true
   done < <(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
 done
@@ -87,7 +92,7 @@ done
 for d in "${FENCE[@]}"; do
   while IFS= read -r f; do
     python3 "$here/strip_c_comments.py" "$f" \
-      | rg -n '(MAINNET|TESTNET|STAGENET) *== *(m_)?nettype' \
+      | rg -n '(MAINNET|TESTNET|STAGENET) *[!=]= *(m_)?nettype' \
       | sed "s:^:${f}\t(reversed) :" >> "$hits_file" || true
   done < <(rg --files "$d" -g '*.cpp' -g '*.h' -g '*.inl')
 done

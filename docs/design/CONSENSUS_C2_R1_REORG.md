@@ -242,7 +242,14 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   red (unlisted-hit arm), a verbatim duplicate of an allowlisted branch
   went red (bijection-total arm — the case prefix-matching would have
   passed), a mutated allowlisted branch went red (stale-entry arm),
-  restore green.
+  restore green. **Second review-round correction:** the matcher's first
+  two revisions matched `==` only — blind to `!=`, which keys control
+  flow on the network just as hard; the live
+  `update_checkpoints` guard (`if (m_nettype != MAINNET) return true;`,
+  `cryptonote_core.cpp:254`) was invisible to the gate *and* missing
+  from §4a's ground. Matcher widened to `[!=]=` (both scans), the guard
+  allowlisted as the E5 mechanism's third wiring site (count 7→8), and
+  a planted inequality branch bitten red before trust.
 - **A fourth residue class the symbol sweep structurally cannot see:**
   fourteen test call sites passed the removed trailing parameter
   *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,
@@ -287,7 +294,21 @@ is R1b's subject**:
   `set_checkpoints_file_path` — in `if (m_nettype == MAINNET)`. Off
   mainnet, `m_checkpoints_path` stays `""`,
   `boost::filesystem::exists("")` is false, and the JSON loader
-  (`checkpoints.cpp:195`) silently no-ops. **The operator-override path —
+  (`checkpoints.cpp:195`) silently no-ops.
+- The mechanism has a **third wiring site, independent of the init
+  block** (found by the R1a Copilot round — my first read of the
+  function started below its opening guard):
+  `core::update_checkpoints()` opens with
+  `if (m_nettype != MAINNET) return true;`
+  (`cryptonote_core.cpp:254`), and it is the *periodic* path — called
+  from the protocol handler on incoming blocks, 600 s throttle. So
+  re-homing only the init block would still leave live checkpoint
+  reload mainnet-only; the uniform-wiring decision must take **both**
+  sites (and note the guard's tail: a failed reload calls
+  `graceful_exit()` — "bring down the house" — which the wargame prices
+  on every network once the guard goes). An **inequality** spelling,
+  which is also why the gate matches `[!=]=`, not `==` alone.
+  **The operator-override path —
   the exact mechanism whose forced-rollback semantics R1b rules (CEN-K6's
   checkpoint arm, E2, E5) — is unreachable by construction on testnet and
   stagenet.** As the code stands, a checkpoint-forced-switch ruling would
@@ -305,8 +326,9 @@ ratified, and loud — it can never just fall out of an `if`. The failure
 mode: once nettype selects a code path, "testnet passed" degrades from
 "this logic is correct" to "the logic testnet happens to run is correct".
 Enforcement landed with the rule (§3.8): the grep gate over
-`cryptonote_core/ + checkpoints/ + blockchain_db/`, allowlist seeded at 7
-and annotated (§3.8 records the 6→7 count correction). R1b therefore owes, citing rule 71 rather than re-deriving
+`cryptonote_core/ + checkpoints/ + blockchain_db/`, both equality
+operators, allowlist seeded at 8 and annotated (§3.8 records the 6→7→8
+count corrections). R1b therefore owes, citing rule 71 rather than re-deriving
 it:
 
 1. **E2/K6/E5 re-homing:** decide whether the operator-override wiring
