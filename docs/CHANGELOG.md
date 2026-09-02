@@ -28,7 +28,15 @@
   exists on any network, so format compatibility is worth zero); **redb stands**
   (DRS-D6 unchanged); **DRS-D4 substantially discharged** (wallet ~90%).
   CSR-1…CSR-5 are proposals awaiting ruling; no consensus rule, queue order, or
-  schema is decided.
+  schema is decided. C2-R3 landed mid-work (PR #592), re-bucketing the census to
+  87/16/2/66; the 18-row store-enforced set and its 7/1/10 split were re-derived
+  mechanically at `bf317111f` and are unchanged.
+
+- **CI gate: every workflow file must parse and be shaped like a workflow.**
+  A workflow GitHub cannot parse produces a run with zero jobs and no failing
+  named check, so the gates it carries go quiet — that is how one unquoted
+  step name took the documentation-lifecycle gate set offline. The check runs
+  in the unfiltered `grep-gates` job, so it sees every workflow edit.
 
 - **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
   enumerates the peer-to-peer wire surface and the connection-management
@@ -119,6 +127,31 @@
   prune tool derives its table set from the schema source of truth.
 
 ### Changed
+
+- **Consensus: the block-timestamp rule is ratified and single-sentence
+  (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
+  2026-09-01).** A candidate timestamp is valid iff it is at most
+  `local_clock + 540 s` (checked at main connect AND alt admission — the
+  alt store previously had no future-time bound) and strictly greater
+  than element index 5 of the sorted window of the 11 timestamps
+  immediately preceding it on its own chain (equality was previously
+  accepted; the alt path previously medianed the whole alt chain,
+  averaging even-length windows; below 11 blocks of history the window is
+  now right-padded with the genesis timestamp instead of skipping the
+  check). Miner templates floor their timestamp at `median + 1`. The rule
+  has ONE implementation — `shekyl-difficulty`'s `check_timestamp_rule`
+  (built on its `is_above_mtp` / `is_timestamp_below_ftl` predicates) —
+  exported through `shekyl-ffi` beside the LWMA-1 difficulty entry point;
+  the C++ validator is a marshaling shim per rule 20 (the crossing was
+  re-ratified 2026-09-01, replacing the round's original C++ owner). It is
+  pinned by the shared vectors
+  `docs/test_vectors/MTP_BOUNDARY_V1.json` (new; rule-30 pinned) natively
+  in Rust and end-to-end through the FFI, and is
+  exercised red-first in `core_tests` (strict boundary, bootstrap
+  padding, alt FTL, alt newest-11 truncation). Consensus-forking vs the
+  inherited behavior; the pre-genesis stressnet is genesis-only and the
+  estate rebuild required by the V11 schema + genesis remint absorbs the
+  regenesis. `DAA_LWMA1.md` §5.5 carries the refuted-premise correction.
 
 - **The four p2p read methods are served from Rust, and four things the C++ was
   doing are not reproduced.** `sync_info`, `get_connections`,

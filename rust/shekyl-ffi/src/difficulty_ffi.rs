@@ -107,7 +107,7 @@
 
 use core::slice;
 
-use shekyl_difficulty::{check_hash, lwma1_next, Error as DifficultyError};
+use shekyl_difficulty::{check_hash, check_timestamp_rule, lwma1_next, Error as DifficultyError};
 
 /// Difficulty target at the C-ABI boundary.
 ///
@@ -301,6 +301,111 @@ pub unsafe extern "C" fn shekyl_difficulty_check_hash(
     SHEKYL_DIFFICULTY_OK
 }
 
+/// Verdict codes for [`shekyl_difficulty_check_timestamp_rule`],
+/// wire-stable mirrors of [`shekyl_difficulty::TimestampRuleVerdict`]'s
+/// discriminants (renumbering is an FFI break):
+/// the candidate satisfies both bounds.
+pub const SHEKYL_TIMESTAMP_RULE_OK: i32 = 0;
+/// The caller handed more than `MTP_WINDOW` (11) timestamps — a caller
+/// bug (the newest-11 selection is order-dependent and the caller's job,
+/// C2-R3-Q1 sub-a); refused, never silently medianed. `*out_median` is 0.
+pub const SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE: i32 = 1;
+/// The candidate exceeds `local_clock + FTL` (saturating arithmetic).
+pub const SHEKYL_TIMESTAMP_RULE_ABOVE_FTL: i32 = 2;
+/// The candidate is not strictly greater than the window median.
+pub const SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN: i32 = 3;
+/// A required pointer was null (`out_median`, or `window` with
+/// `window_len > 0`).
+pub const SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR: i32 = -1;
+
+/// The C2-R3 block-timestamp consensus rule
+/// (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
+/// 2026-09-01; Rust crossing re-ratified same day).
+///
+/// Wraps [`shekyl_difficulty::check_timestamp_rule`] — the ONE
+/// implementation of the ruled sentence: valid iff
+/// `candidate_ts <= local_clock + 540` (saturating) AND strictly greater
+/// than sorted-index-5 of the 11 timestamps immediately preceding the
+/// candidate, the window right-padded with `genesis_ts` when fewer than
+/// 11 predecessors exist. The C++ validator's `check_block_timestamp` is
+/// a marshaling shim over this entry point (rule 20), exactly as
+/// [`shekyl_difficulty_lwma1_next`] above serves the difficulty half.
+///
+/// # Arguments
+///
+/// - `candidate_ts` — the candidate block's timestamp.
+/// - `window` — pointer to `[u64; window_len]`, the ≤ 11 newest
+///   predecessor timestamps in any order (callers with deeper history
+///   truncate to the newest 11 first). May be null when
+///   `window_len == 0` (the block-1 case: full genesis padding); must be
+///   non-null when `window_len > 0`.
+/// - `window_len` — entries in `window`. Values above 11 return
+///   [`SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE`].
+/// - `genesis_ts` — the timestamp of block 0 (the padding value).
+/// - `local_clock` — the validator's wall clock (FTL reference).
+/// - `out_median` — receives the padded window's median on every verdict
+///   except `WINDOW_TOO_WIDE` (where it receives 0); the miner-template
+///   caller reads it unconditionally. Must be non-null.
+///
+/// # Return
+///
+/// A verdict code ≥ 0 per the constants above (the rule's answer), or
+/// [`SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR`] on pointer misuse.
+///
+/// # Safety
+///
+/// The caller must uphold: `out_median` points to a valid, aligned,
+/// writable `u64`; and when `window_len` is in `1..=11`, `window` points
+/// to `window_len` valid, aligned, initialized `u64`s. For
+/// `window_len > 11` the pointer is never dereferenced (the width
+/// refusal below runs before slice construction), so only non-null is
+/// required — which is what makes an oversized-length call sound and
+/// lets the regression test pin the refusal with a tiny buffer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
+    candidate_ts: u64,
+    window: *const u64,
+    window_len: usize,
+    genesis_ts: u64,
+    local_clock: u64,
+    out_median: *mut u64,
+) -> i32 {
+    if out_median.is_null() || (window_len > 0 && window.is_null()) {
+        return SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR;
+    }
+
+    // Refuse oversized windows BEFORE constructing the slice: the API
+    // promises WINDOW_TOO_WIDE for every length above the MTP window, and
+    // `from_raw_parts` has a language-level precondition (byte span <=
+    // isize::MAX) that a corrupted C length would violate as UB rather
+    // than the documented refusal. Same pre-check pattern as
+    // archival_ffi/bond.rs. The rule's own width check stays as the
+    // semantic owner for native callers; this is the boundary's copy of
+    // the guard, not a second rule site.
+    if window_len > shekyl_difficulty::MTP_WINDOW_USIZE {
+        // SAFETY: out_median is non-null per the check above; the
+        // caller's contract guarantees alignment and writability.
+        core::ptr::write(out_median, 0);
+        return SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE;
+    }
+
+    let win: &[u64] = if window_len == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null per the check above; `window_len <= 11` per
+        // the width refusal above, so the caller's contract of
+        // `window_len` valid, aligned, initialized elements is within
+        // slice-invariant bounds.
+        slice::from_raw_parts(window, window_len)
+    };
+
+    let (verdict, median) = check_timestamp_rule(candidate_ts, win, genesis_ts, local_clock);
+    // SAFETY: out_median is non-null per the check above; the caller's
+    // contract guarantees alignment and writability.
+    core::ptr::write(out_median, median);
+    verdict as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +573,102 @@ mod tests {
         };
         assert_eq!(rc, SHEKYL_DIFFICULTY_OK);
         assert!(pass);
+    }
+
+    /// The boundary's width pre-check must fire BEFORE slice
+    /// construction: a hostile/corrupted `window_len` (here usize::MAX
+    /// against a 2-element buffer) must come back as the documented
+    /// WINDOW_TOO_WIDE with `*out_median == 0`. This call is only sound
+    /// BECAUSE of the pre-check — the named red edit (removing the
+    /// pre-check) turns this test into the very slice-invariant UB the
+    /// guard exists to refuse, so a regression is a crash/UB detector
+    /// here, not a clean assertion failure.
+    /// The two null-rejection arms and the one PERMITTED null are the
+    /// ABI contract's edges — pinned like the LWMA-1/check_hash exports'
+    /// null paths. A null `out_median` and a null `window` with nonzero
+    /// length return ERR_NULL_PTR without touching anything; a null
+    /// `window` with `window_len == 0` is the documented block-1 shape
+    /// (full genesis padding) and must evaluate the rule normally.
+    #[test]
+    fn null_out_median_is_refused() {
+        let tiny = [1u64, 2u64];
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                tiny.as_ptr(),
+                tiny.len(),
+                0,
+                999,
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn null_window_with_nonzero_len_is_refused() {
+        let mut median = 123u64;
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                core::ptr::null(),
+                3,
+                0,
+                999,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR);
+        // The refused call writes nothing.
+        assert_eq!(median, 123);
+    }
+
+    #[test]
+    fn null_window_with_zero_len_pads_from_genesis() {
+        let mut median = 123u64;
+        // Empty window, genesis_ts = 700: the padded window is eleven
+        // 700s, median 700 — candidate 701 clears it, candidate 700
+        // does not.
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                701,
+                core::ptr::null(),
+                0,
+                700,
+                701,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_OK);
+        assert_eq!(median, 700);
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                700,
+                core::ptr::null(),
+                0,
+                700,
+                700,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN);
+    }
+
+    #[test]
+    fn oversized_window_len_is_refused_before_slice_construction() {
+        let tiny = [1u64, 2u64];
+        let mut median = 123u64;
+        let rc = unsafe {
+            shekyl_difficulty_check_timestamp_rule(
+                999,
+                tiny.as_ptr(),
+                usize::MAX,
+                0,
+                999,
+                &raw mut median,
+            )
+        };
+        assert_eq!(rc, SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE);
+        assert_eq!(median, 0);
     }
 }

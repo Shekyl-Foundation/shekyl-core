@@ -2817,6 +2817,43 @@ int32_t shekyl_difficulty_check_hash(
     struct shekyl_u128 difficulty,
     bool* out_pass);
 
+/// C2-R3 block-timestamp consensus rule
+/// (docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified
+/// 2026-09-01): the candidate timestamp is valid iff it is at most
+/// `local_clock + 540` (saturating arithmetic) AND strictly greater
+/// than sorted-index-5 of the 11 timestamps immediately preceding it,
+/// the window right-padded with `genesis_ts` when fewer than 11
+/// predecessors exist. Wraps the `shekyl-difficulty` crate's
+/// `check_timestamp_rule` — the ONE implementation of the ruled
+/// sentence; `Blockchain::check_block_timestamp` is a marshaling shim
+/// over this entry point (rule 20), as `shekyl_difficulty_lwma1_next`
+/// above serves the difficulty half.
+///
+/// `window` holds the <= 11 newest predecessor timestamps in any order
+/// (callers with deeper history truncate to the newest 11 first —
+/// C2-R3-Q1 sub-a); it may be null only when `window_len == 0` (block 1:
+/// full genesis padding). `*out_median` receives the padded window's
+/// median on every verdict except WINDOW_TOO_WIDE (which writes 0); the
+/// miner-template caller reads it unconditionally. Returns a
+/// `SHEKYL_TIMESTAMP_RULE_*` verdict code (>= 0: the rule's answer), or
+/// `SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR` on pointer misuse.
+int32_t shekyl_difficulty_check_timestamp_rule(
+    uint64_t candidate_ts,
+    const uint64_t* window,
+    size_t window_len,
+    uint64_t genesis_ts,
+    uint64_t local_clock,
+    uint64_t* out_median);
+
+/// Verdict codes for `shekyl_difficulty_check_timestamp_rule` (mirrors
+/// of the Rust `TimestampRuleVerdict` discriminants; renumbering is an
+/// FFI break).
+#define SHEKYL_TIMESTAMP_RULE_OK               INT32_C(0)
+#define SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE  INT32_C(1)
+#define SHEKYL_TIMESTAMP_RULE_ABOVE_FTL        INT32_C(2)
+#define SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN INT32_C(3)
+#define SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR     INT32_C(-1)
+
 // ---------------------------------------------------------------------------
 // RandomX v2 light-cache PoW verification FFI surface
 //

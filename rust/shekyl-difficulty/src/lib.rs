@@ -33,18 +33,32 @@
 //!   satisfy a 128-bit difficulty? (`hash * difficulty < 2^256`.)
 //!   Ported from the inherited C++ `check_hash`/`_64`/`_128` family
 //!   into a single unified path.
-//! - [`is_timestamp_below_ftl`] and [`is_above_mtp`] — coupled
-//!   timestamp-validation predicates per §5.5.
+//! - [`check_timestamp_rule`] — **the production owner of the C2-R3
+//!   block-timestamp consensus rule**
+//!   (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
+//!   2026-09-01): saturating FTL + strict MTP over the 11 preceding
+//!   timestamps, short windows genesis-padded, wider windows refused
+//!   ([`TimestampRuleVerdict`] is the verdict, its discriminants the
+//!   wire codes). The C++ validator's `check_block_timestamp` is a
+//!   marshaling shim over this function's FFI export.
+//! - [`is_timestamp_below_ftl`], [`is_above_mtp`] and [`mtp_median`] —
+//!   the coupled timestamp predicates per §5.5, each the single site
+//!   of its comparison; [`check_timestamp_rule`] composes them and is
+//!   the entry consumers should reach for (the predicates alone are
+//!   not the complete timestamp API).
 //! - Public consensus constants `N`, `T_SECONDS`, `FTL_SECONDS`,
 //!   `MTP_WINDOW`, `GENESIS_DIFFICULTY` — see [`consts`].
 //!
 //! # FFI
 //!
-//! The FFI export `shekyl_difficulty_lwma1_next` (with the
-//! `ShekylU128` ABI) lives in `rust/shekyl-ffi/src/lib.rs` and is
-//! Phase 3 work, not Phase 1. This crate exposes only the safe-Rust
-//! API; the FFI shim wraps it with the `#[repr(C)]` ABI and `i32`
-//! error codes documented in `docs/completed/DAA_LWMA1.md` §6.1.
+//! Two consensus entry points live in
+//! `rust/shekyl-ffi/src/difficulty_ffi.rs`, both consumed per-block by
+//! the C++ validator: `shekyl_difficulty_lwma1_next` (the `ShekylU128`
+//! ABI and `i32` error codes documented in
+//! `docs/completed/DAA_LWMA1.md` §6.1) and
+//! `shekyl_difficulty_check_timestamp_rule` (the C2-R3 rule; verdict
+//! codes mirror [`TimestampRuleVerdict`]). This crate exposes only the
+//! safe-Rust API; the FFI shims wrap it with the `#[repr(C)]` ABI.
 
 #![no_std]
 #![deny(unsafe_code)]
@@ -62,4 +76,6 @@ pub use consts::{
 };
 pub use error::Error;
 pub use lwma1::lwma1_next;
-pub use timestamp::{is_above_mtp, is_timestamp_below_ftl};
+pub use timestamp::{
+    check_timestamp_rule, is_above_mtp, is_timestamp_below_ftl, mtp_median, TimestampRuleVerdict,
+};

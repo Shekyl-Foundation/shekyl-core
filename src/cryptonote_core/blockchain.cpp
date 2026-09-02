@@ -217,6 +217,7 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
+  m_genesis_timestamp(0),
   m_batch_success(true),
   m_prepare_height(0)
 {
@@ -527,6 +528,11 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   db_rtxn_guard rtxn_guard(m_db);
+
+  // Block 0 exists from here on (added above when the store was empty) and
+  // is immutable, so its timestamp — the C2-R3 genesis padding value — is
+  // cached once for the timestamp-rule shim.
+  m_genesis_timestamp = m_db->get_block_timestamp(0);
 
   // check how far behind we are
   uint64_t top_block_timestamp = m_db->get_top_block_timestamp();
@@ -920,7 +926,19 @@ bool Blockchain::reset_and_set_genesis_block(const block& b)
   add_new_block(b, bvc);
   if (!update_next_cumulative_weight_limit())
     return false;
-  return bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+  if (bvc.m_added_to_main_chain && !bvc.m_verifivation_failed)
+  {
+    // This is the second of the two places block 0 can be (re)installed
+    // (Blockchain::init is the first): refresh the cached C2-R3 padding
+    // value from the store, or short-window validation keeps padding
+    // with the SUPERSEDED genesis timestamp — observed as
+    // gen_block_ts_at_genesis_in_deep_bootstrap accepting a candidate
+    // the ruled rule rejects (fakechain replay installs its own genesis
+    // through this path).
+    m_genesis_timestamp = m_db->get_block_timestamp(0);
+    return true;
+  }
+  return false;
 }
 //------------------------------------------------------------------
 crypto::hash Blockchain::get_tail_id(uint64_t& height) const
@@ -1911,20 +1929,40 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     // just after the block template was created
     if (miner_address == m_btc_address && m_btc_nonce == ex_nonce
       && m_btc_pool_cookie == m_tx_pool.cookie() && m_btc.prev_id == get_tail_id()) {
-      MDEBUG("Using cached template");
       const uint64_t now = time(NULL);
-      if (m_btc.timestamp < now) // ensures it can't get below the median of the last few blocks
+      if (m_btc.timestamp < now)
         m_btc.timestamp = now;
-      b = m_btc;
-      diffic = m_btc_difficulty;
-      height = m_btc_height;
-      expected_reward = m_btc_expected_reward;
-      seed_height = m_btc_seed_height;
-      seed_hash = m_btc_seed_hash;
-      return true;
+      // C2-R3: a cached template must satisfy the same rule as a fresh
+      // one. The raise-to-now above keeps the timestamp strictly above
+      // the (tip-unchanged, so identical) window median as the clock
+      // advances; what it cannot repair is a BACKWARD clock step, which
+      // can leave the cached timestamp beyond the current FTL deadline.
+      // Revalidate through the rule owner rather than hand-rolling a
+      // second copy of the bound here; on failure, drop the cache and
+      // rebuild below — the fresh path's own edge refusal then decides
+      // loudly. (This replaces the inherited raise-only path, whose
+      // "ensures it can't get below the median" comment DAA_LWMA1.md
+      // §5.5 had flagged as doc-vs-code drift.)
+      uint64_t cached_median_ts;
+      if (check_block_timestamp(m_btc, cached_median_ts))
+      {
+        MDEBUG("Using cached template");
+        b = m_btc;
+        diffic = m_btc_difficulty;
+        height = m_btc_height;
+        expected_reward = m_btc_expected_reward;
+        seed_height = m_btc_seed_height;
+        seed_hash = m_btc_seed_hash;
+        return true;
+      }
+      MDEBUG("Cached template's timestamp no longer satisfies the C2-R3 rule (backward clock step?); rebuilding");
+      invalidate_block_template_cache();
     }
-    MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
-    invalidate_block_template_cache();
+    else
+    {
+      MDEBUG("Not using cached template: address " << (miner_address == m_btc_address) << ", nonce " << (m_btc_nonce == ex_nonce) << ", cookie " << (m_btc_pool_cookie == m_tx_pool.cookie()));
+      invalidate_block_template_cache();
+    }
   }
 
   // DRS/Stage-3a: the from_block (prev_block) template path was DELETED.
@@ -1946,10 +1984,36 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     seed_hash = get_block_id_by_height(seed_height);
   b.timestamp = time(NULL);
 
+  // Jagerman MTP patch (DAA_LWMA1.md §5.5): never issue a template the node
+  // itself would reject. The floor is median + 1 — the smallest
+  // consensus-valid value under the strict MTP boundary (C2-R3-Q1 sub-b;
+  // a template AT the median is self-rejecting under `>`); median_ts is
+  // set by the callee on every arm, including an FTL failure.
   uint64_t median_ts;
   if (!check_block_timestamp(b, median_ts))
   {
-    b.timestamp = median_ts;
+    b.timestamp = median_ts + 1;
+    // The floor does NOT license an invalid template. When the window
+    // median sits at or beyond the local FTL deadline, the constraint
+    // set {ts : ts > median AND ts <= now + FTL} is EMPTY (median + 1
+    // busts FTL; a maximal median even wraps the +1), so revalidate the
+    // bump and refuse template creation honestly rather than hand the
+    // miner a template this node would reject. Under a non-decreasing
+    // local clock the state is at most one second wide (every stored
+    // timestamp passed FTL against the clock at its own admission, so
+    // the median can reach now + FTL only in the admission second) and
+    // self-heals on the next tick. A BACKWARD clock step of D seconds
+    // can hold median > now + FTL for up to D seconds — the refusal
+    // then persists until the clock re-passes median - FTL, which is
+    // still the correct behavior (a rolled-back clock minting blocks at
+    // its own FTL edge would mint peer-rejected blocks); the operator
+    // NTP-hygiene obligation is DAA_LWMA1.md §5.5's. Callers already
+    // handle false from this function and retry.
+    if (!check_block_timestamp(b, median_ts))
+    {
+      MERROR("create_block_template: no timestamp currently satisfies the C2-R3 rule (window median at or beyond the local FTL deadline); retry shortly - if this persists, verify the system clock (NTP), it may have stepped backward");
+      return false;
+    }
   }
 
   CHECK_AND_ASSERT_MES(diffic, false, "difficulty overhead.");
@@ -2302,8 +2366,18 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
     bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward);
 
-    // verify that the block's timestamp is within the acceptable range
-    // (not earlier than the median of the last X blocks)
+    // C2-R3-Q1 sub-a: the ruled window is the 11 timestamps immediately
+    // preceding the candidate. build_alt_chain + complete_timestamps_vector
+    // hand back the full newest-first history (the whole alt chain, plus a
+    // main-chain top-up only when the alt part is short), so keep the
+    // newest 11 — the rule function refuses a wider window rather than
+    // medianing it the way the inherited code did.
+    if (timestamps.size() > SHEKYL_DAA_MTP_WINDOW)
+      timestamps.resize(SHEKYL_DAA_MTP_WINDOW);
+
+    // verify the block's timestamp: strictly above the window median and
+    // within the future-time limit — FTL applies at alt ADMISSION, not
+    // only at promotion (C2-R3-Q3)
     if(!check_block_timestamp(timestamps, b))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has invalid timestamp: " << b.timestamp);
@@ -5535,51 +5609,73 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
   return (adjusted_current_block_ts < median_ts ? adjusted_current_block_ts : median_ts);
 }
 //------------------------------------------------------------------
-//TODO: revisit, has changed a bit on upstream
-bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
+bool Blockchain::check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  median_ts = epee::misc_utils::median(timestamps);
-
-  if(b.timestamp < median_ts)
+  // Marshaling shim (rule 20) over the ONE implementation of the C2-R3
+  // block-timestamp rule: shekyl-difficulty's check_timestamp_rule,
+  // exported as shekyl_difficulty_check_timestamp_rule beside the LWMA-1
+  // difficulty entry point this validator already consumes. This side
+  // only assembles the window, reads the clock, and logs the verdict —
+  // it decides nothing (the crossing was re-ratified 2026-09-01 after
+  // the round's original C++ owner was ruled a rule-20 violation; see
+  // CONSENSUS_C2_R3_TIMESTAMPS.md §7's execution record).
+  //
+  // The padding value is passed unconditionally (cached at init; block 0
+  // is immutable) so the pad-or-not decision lives wholly in the rule
+  // owner — this side carries no copy of the short-window threshold.
+  const int32_t verdict = shekyl_difficulty_check_timestamp_rule(
+      b.timestamp, timestamps.data(), timestamps.size(), m_genesis_timestamp,
+      (uint64_t)time(NULL), &median_ts);
+  switch (verdict)
   {
-    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", less than median of last " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
-    return false;
+    case SHEKYL_TIMESTAMP_RULE_OK:
+      return true;
+    case SHEKYL_TIMESTAMP_RULE_ABOVE_FTL:
+      MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", more than " << SHEKYL_DAA_FTL_SECONDS << "s ahead of local time (LWMA-1 future-time limit)");
+      return false;
+    case SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN:
+      MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", not strictly above the median of the previous " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
+      return false;
+    case SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE:
+      // The newest-11 selection is order-dependent and therefore the
+      // caller's job (C2-R3-Q1 sub-a); the rule refuses a wider window
+      // rather than silently medianing it.
+      MERROR_VER("Timestamp window construction bug for block with id: " << get_block_hash(b) << " (window wider than " << SHEKYL_DAA_MTP_WINDOW << ")");
+      return false;
+    default:
+      MERROR_VER("Timestamp rule FFI misuse (code " << verdict << ") for block with id: " << get_block_hash(b));
+      return false;
   }
-
-  return true;
 }
 //------------------------------------------------------------------
-// This function grabs the timestamps from the most recent <n> blocks,
-// where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
-// blocks in the blockchain, the timestamp is assumed to be valid.  If there
-// are, this function returns:
-//   true if the block's timestamp is not less than the timestamp of the
-//       median of the selected blocks
-//   false otherwise
 bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  if(b.timestamp > (uint64_t)time(NULL) + SHEKYL_DAA_FTL_SECONDS)
-  {
-    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", more than " << SHEKYL_DAA_FTL_SECONDS << "s ahead of local time (LWMA-1 future-time limit)");
-    return false;
-  }
 
-  const auto h = m_db->height();
+  // The window is the up-to-11 newest main-chain timestamps. Fewer than 11
+  // exist only below SHEKYL_DAA_MTP_WINDOW blocks of history, where the
+  // rule's genesis padding takes over — the median check runs from block 1;
+  // the inherited bootstrap carve-out is deleted (C2-R3-Q2).
+  const uint64_t h = m_db->height();
 
-  // if not enough blocks, no proper median yet, return true
-  if(h < SHEKYL_DAA_MTP_WINDOW)
+  // h == 0 is exactly one caller: Blockchain::init adding the locally
+  // constructed genesis block to an empty store. The C2-R3 rule governs
+  // blocks with predecessors (heights >= 1); block 0 is pinned by the
+  // compiled genesis identity, and a peer-supplied "genesis" never reaches
+  // here (handle_alternative_block rejects block_height == 0, and every
+  // other main-path add has h >= 1). Not a carve-out: there is no window
+  // to check, not a window we decline to check.
+  if (h == 0)
   {
+    median_ts = 0;
     return true;
   }
 
   std::vector<uint64_t> timestamps;
-
-  // need most recent SHEKYL_DAA_MTP_WINDOW blocks, get index of first of those
-  size_t offset = h - SHEKYL_DAA_MTP_WINDOW;
+  uint64_t offset = h > SHEKYL_DAA_MTP_WINDOW ? h - SHEKYL_DAA_MTP_WINDOW : 0;
   timestamps.reserve(h - offset);
-  for(;offset < h; ++offset)
+  for (; offset < h; ++offset)
   {
     timestamps.push_back(m_db->get_block_timestamp(offset));
   }
@@ -5769,8 +5865,8 @@ leave:
   TIME_MEASURE_FINISH(t1);
   TIME_MEASURE_START(t2);
 
-  // make sure block timestamp is not less than the median timestamp
-  // of a set number of the most recent blocks.
+  // C2-R3 timestamp rule: strictly above the median of the previous 11
+  // (genesis-padded) and within the future-time limit.
   if(!check_block_timestamp(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has invalid timestamp: " << bl.timestamp);

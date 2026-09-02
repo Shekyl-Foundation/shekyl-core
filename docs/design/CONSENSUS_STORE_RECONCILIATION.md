@@ -5,8 +5,13 @@ C++ files on orthogonal cuts and, until this document, did not reference each
 other in either direction. Records the **2026-09-01 countermand** (§0) and its
 blast radius across both programs' binding decisions.
 
-**Pinned:** `dev` @ `47bfa66c3` (the merge of PR #593). All `file:line` and
-row-count reads below are at this sha.
+**Pinned:** `dev` @ `47bfa66c3` (the merge of PR #593) for the row-level reads;
+**re-verified at `bf317111f`** (the merge of PR #592) when C2-R3 landed mid-work.
+The census's buckets moved under this document — CEN-C2/C3 were ruled and
+promoted to bucket 2, so the live split is **87 / 16 / 2 / 66** where C1 close
+recorded 87 / 14 / 2 / 68. The **18-row store-enforced set and its 7 / 1 / 10
+bucket split are unchanged** (re-derived mechanically at the later sha); every
+aggregate below is stated in whichever denominator it belongs to.
 
 **Identifier family:** `CSR-*` (registered at birth, rule 94 §1; prefix checked
 tree-wide — zero hits before this document — and unique against every
@@ -61,7 +66,7 @@ ruling cites evidence rather than sentiment:
 | **§6 finding 2** | The **unlock_time triple-divergence**: one field that is consensus-legal (CEN-H16), relay-illegal (CEN-M5), and semantically inert (CEN-L12), with no single owner. |
 | **§6 finding 5** | The **reorg acceptance design has no examined-decision record anywhere** — steering searched the decision log, `docs/design`, and `docs/completed`. |
 | **§6 finding 8** | FAKECHAIN/regtest levers are **compiled into consensus paths** (CEN-I2, CEN-B5, CEN-D7, CEN-D3). |
-| **§6 finding 11** | **70 of 171 rows carry open questions**; most of the inherited consensus surface has no specification other than its own source. |
+| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**68** live after C2-R3 ruled CEN-C2/C3); most of the inherited consensus surface has no specification other than its own source. |
 
 The counterweight the census also records (Survey A O-4) stands and is not
 disturbed: the bucket-1/2 surfaces — DAA, economics KATs, FCMP++/PQC, archival
@@ -186,8 +191,10 @@ are the rule set; the DRS surface column in §3 is how R8's output is handed
 to the store design.
 
 **CSR-1 does not re-batch anything.** CEN-B3 is batched in R4 and CEN-K3 in R1,
-and §10's membership is exhaustive and sum-checked (70 = 68 + 2); moving them
-would break that sum. They stay where they are — the store design **consumes
+and §10's membership is exhaustive and sum-checked **as of C1 close**
+(70 = 68 + 2 — the queue is frozen at that denominator, which is why R3's
+promotion of CEN-C2/C3 to bucket 2 did not disturb it); moving them would break
+that sum. They stay where they are — the store design **consumes
 their rulings from R1/R4 wherever those land**. R8 remains 8 rows. What CSR-1
 establishes is only which instrument *rules* a store-enforced rule, not which
 batch carries it.
@@ -254,8 +261,8 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 | | Before | After |
 | --- | --- | --- |
-| For **bucket-1/2** rules (101 rows) | oracle | **oracle — unchanged.** These are Shekyl-spec'd or ratified-inherited; the census closes them |
-| For **bucket-3/4** rules (70 rows) | oracle | **not an oracle.** A digest match here proves the rewrite reproduced *behavior*, including CEN-L11's silent omission |
+| For **bucket-1/2** rules (**103** live; 101 at C1 close) | oracle | **oracle — unchanged.** These are Shekyl-spec'd or ratified-inherited; the census closes them |
+| For **bucket-3/4** rules (**68** live; 70 at C1 close) | oracle | **not an oracle.** A digest match here proves the rewrite reproduced *behavior*, including CEN-L11's silent omission |
 | As a **regression** instrument | — | **strengthened.** Over DRS-TLB-generated corpora it detects unintended change during extraction, which is all §6.2 ever needed |
 
 **CSR-3:** propagate the census's oracle clause into DRS-A2/D11/E2 verbatim.
@@ -349,6 +356,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | 2026-09-01 | Testnet is gated on this work + consensus + wallet; genesis downstream of testnet | Rick, §5.2 |
 | 2026-09-01 | heed retired: no chain data exists, so format compatibility is worth zero | Rick, §5.3 |
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
+| 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 
 ---
 
