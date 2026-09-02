@@ -419,11 +419,18 @@ reconciliation above, and it is a ruling a future reader can recognise.
 sub-attack ③'s two arms are already answered (private-transaction arm
 structurally inapplicable since RT-9 removed `--public-node`; D++ arm refused
 because a double-spend is a no-drop offense), while **sub-attacks ① and ②
-remained unaddressed**. PWD-I2's two changes close both: restricting disclosure
-records only on outbound-initiated connections removes the graylist-filling
-channel at the point the attack actually uses, and a
-per-connection acceptance cap removes the amortisation the whitelist attack
-needs.
+remained unaddressed**. **PWD-I2's two adopted rules close both** — its
+outbound-only *acceptance* rule removes the graylist-filling channel at the
+point the attack actually uses, and its per-connection ceiling removes the
+amortisation the whitelist attack needs.
+
+**This row points at those rules rather than restating them, deliberately.**
+Prose restating a contract is a defect generator, and this sentence proved it:
+an earlier version paraphrased PWD-I2, then survived the correction that turned
+that rule from sender-side to receiver-side, leaving the word "disclosure"
+stranded in a sentence that no longer parsed — **in the row a later reader would
+use to decide whether ① is closed.** The rule is stated once, in PWD-I2; if the
+two ever disagree, PWD-I2 is the contract and this is the stale copy.
 
 **One residue is *not* closed and is recorded rather than absorbed.** The
 double-spend no-drop guard is **inherited** — `f7fd209ed`, upstream Monero,

@@ -90,6 +90,17 @@ re-verified at primary source"*, and the options list was corrected to
 still said `Noise_IK`. Both would have survived a reviewer checking the
 sentence that was reported as fixed.
 
+**Two amendments from a third instance (P2P-2 cluster I).** *(a)* **The
+verifying grep must flatten newlines.** A stranded fragment survived a
+whole-file grep because the phrase was broken by a **line wrap**, so the check
+could not see what a reader could — the split-literal hazard biting the
+verification rather than the text. Use `tr '\n' ' '` before grepping a phrase
+that may wrap. *(b)* **Prefer a pointer to a restatement.** The stranded
+fragment existed only because a downstream row *paraphrased* a rule instead of
+citing it; the paraphrase then survived a correction that reversed the rule's
+direction. A row that points at its rule cannot go stale when the rule changes,
+which removes the need for the sweep in that case rather than performing it.
+
 **Sibling unit rule, same origin.** A **benchmark total is not a wire event.**
 PW-3's 33.0× and ≈2.6 KB are *whole-handshake totals across both directions*;
 because HFS splits the KEM across messages (`e1` initiator, `ekem1` responder),
