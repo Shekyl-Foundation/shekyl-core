@@ -227,11 +227,22 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   debit" arm removed (three sites remain); gate re-run green — the
   retirement's blast radius reached the gate that certified the belt.
 - Rule 71's gate `scripts/ci/check_network_uniformity.sh` landed wired
-  into `ci/grep-gates`, allowlist seeded with the 6 surviving public-
-  nettype branches (annotated with owners), and **bitten in both
-  directions before trust**: a planted `if (m_nettype == MAINNET)` in
-  scope went red (unlisted-hit arm), a mutated allowlisted branch went
-  red (stale-entry arm), restore green.
+  into `ci/grep-gates`, allowlist seeded with the **7** surviving public-
+  nettype branches (annotated with owners) — the check-in's "6" was an
+  under-count: the site census had excluded lines containing FAKECHAIN,
+  and the compound `blockchain.cpp:473` line
+  (`m_nettype == FAKECHAIN || m_nettype == STAGENET`) carries a public
+  STAGENET comparison the exclusion filter swallowed. An exclusion
+  filter can eat a hit the same way a pipe eats an exit status; the
+  Copilot round caught the count drift. The gate enforces a
+  **bijection** (exact-text hit↔entry, per-entry presence with observed
+  counts, and hit-total == entry-total, so a copy-pasted duplicate of an
+  allowlisted branch goes red) and was **bitten in three directions
+  before trust**: a planted `if (m_nettype == MAINNET)` in scope went
+  red (unlisted-hit arm), a verbatim duplicate of an allowlisted branch
+  went red (bijection-total arm — the case prefix-matching would have
+  passed), a mutated allowlisted branch went red (stale-entry arm),
+  restore green.
 - **A fourth residue class the symbol sweep structurally cannot see:**
   fourteen test call sites passed the removed trailing parameter
   *positionally* (`init(..., 0, NULL)` in `block_weight.cpp`,
@@ -294,8 +305,8 @@ ratified, and loud — it can never just fall out of an `if`. The failure
 mode: once nettype selects a code path, "testnet passed" degrades from
 "this logic is correct" to "the logic testnet happens to run is correct".
 Enforcement landed with the rule (§3.8): the grep gate over
-`cryptonote_core/ + checkpoints/ + blockchain_db/`, allowlist seeded at 6
-and annotated. R1b therefore owes, citing rule 71 rather than re-deriving
+`cryptonote_core/ + checkpoints/ + blockchain_db/`, allowlist seeded at 7
+and annotated (§3.8 records the 6→7 count correction). R1b therefore owes, citing rule 71 rather than re-deriving
 it:
 
 1. **E2/K6/E5 re-homing:** decide whether the operator-override wiring

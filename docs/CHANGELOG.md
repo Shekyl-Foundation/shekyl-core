@@ -13,7 +13,9 @@
   `scripts/ci/check_network_uniformity.sh` (wired into `ci/grep-gates`)
   flags any new public-nettype equality branch in
   `cryptonote_core/ + checkpoints/ + blockchain_db/` against an annotated
-  6-entry allowlist; bitten red in both directions before landing.
+  7-entry allowlist enforced as a bijection (a copy-pasted duplicate of
+  an allowlisted branch fails the total); bitten red in three directions
+  before landing.
 
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing
