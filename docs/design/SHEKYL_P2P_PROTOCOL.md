@@ -1690,8 +1690,23 @@ a compression context, so there is nothing for a length oracle to extract.
 That is true today because no such message exists. **It is written as an
 invariant rather than an observation because the property is a fact about the
 *message set*, and the message set is what future rounds change** — PWD-B3 and
-cluster A both add or alter commands. A reviewer adding a command must check it
-against this line.
+cluster A both add or alter commands.
+
+**And it is stated at the dispatch site, not only here, because an invariant
+enforced by "a reviewer must check this section" is enforced by attention.**
+`try_compress_message` (`rust/shekyl-levin/src/compress.rs`) now carries the
+invariant, its reasoning, and the retreat in its own doc comment — **that is
+where the decision is actually made**, by whoever adds the next message type,
+and they are far more likely to read the function they are calling than the
+design round that ruled it three clusters earlier.
+
+**A doc comment is still not a gate**, and this round series has produced three
+consecutive coverage claims narrower than believed, so the mechanical form is
+queued rather than assumed. Its **named blocker: there is no message
+classification to gate on** — nothing in the tree marks a command as
+secret-carrying, so a check today would be a gate whose subject does not exist
+(§1's discipline, and rule 47's). The classification lands with PWD-B3's command
+table; the gate lands with it.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |

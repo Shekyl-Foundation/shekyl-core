@@ -699,6 +699,9 @@ Default. Lands before genesis if it should exist at launch.
 - **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
   - Target: pre-genesis
 
+- **Gate PWD-T7's compression invariant mechanically once PWD-B3's command table exists: no message carrying per-connection secret material may reach `try_compress_message`.** Blocker: nothing in the tree classifies a command as secret-carrying, so a check today would have no subject to assert (rule 47). The invariant is stated at the dispatch site (`rust/shekyl-levin/src/compress.rs`) in the meantime, which is placement, not enforcement — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T7, PWD-B3
+  - Target: pre-genesis
+
 - **Size the Levin bucket header's length field once PWD-B3 sets the per-command caps.** Blocker: the header field cannot be sized before the caps it must express; PWC-A2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6, PWD-B3
   - Target: pre-genesis
 
