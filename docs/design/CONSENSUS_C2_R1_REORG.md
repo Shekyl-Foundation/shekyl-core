@@ -547,8 +547,23 @@ corruption**.
 loudly, at the landing point.** `BlockchainDB::pop_block` refuses to
 pop a block below `tip_at_pop_start − REORG_HARD_HORIZON`, where
 `REORG_HARD_HORIZON` is **derived from the same constant source as the
-retention prune** (one source — deriving it independently would mint
-the drift twin this program keeps deleting), minus a named slack. The
+retention prune** (steering-verified at source: the prune is driven
+from the epoch-close hook by `prune_below_epoch_at_height(height,
+MAX_CLAIM_AGE_W)` with `max_claim_age_w: 26` pinned in
+`config/consensus_constants.json` — height in, config constant, same
+answer on every node; deriving the refusal from that same source is
+the **load-bearing half of the ruling**, because a second constant
+would mint exactly the drift twin this program keeps deleting), minus
+a named slack. **Placement, stated so the next reader cannot cover the
+wrong surface:** `BlockchainDB::pop_block` has two overloads — the
+no-arg private helper (`blockchain_db.cpp:247`, the add-failure undo)
+**delegates** to the arg-taking overload (`:667`), and both
+Blockchain-layer callers (`blockchain.cpp:579`, `:819`) call the
+arg-taking form directly. **The check lives in the arg-taking
+overload's body**: that single placement covers every caller including
+the delegating helper (whose depth-1 undo trivially passes any
+horizon); a check placed on the no-arg form instead would cover
+nothing but the undo path. The
 refusal is a hard error: the reorg/rollback/RPC caller fails with a
 message naming the horizon and the remedy (resync), never a silent
 partial state. This is **not a fork-choice rule and introduces no new
@@ -561,6 +576,12 @@ heavier secret chain longer than ~260k blocks (≈ a year of work above
 the honest chain's rate) defeats every non-checkpoint defense in any
 design; what changes is only that an established node presented with
 such a chain **halts for operator action instead of corrupting**. The
+operator-tool framing (steering's, adopted): the console/RPC
+`pop_blocks` did not previously *work* past the horizon — it
+**appeared** to work and returned a silently-corrupted chain. The
+ruling removes no capability; it replaces an unreliable one with a
+refusal plus a remedy — **a silent wrong answer becomes a loud
+correct one**, the same shape as §4a's `:254` lead exhibit. The
 `ARCHIVAL_REORG_DEPTH_BLOCKS = 720` constant stays an **engine
 envelope, not consensus** — and its `segment.rs:20` duplicate
 collapses to the single source or names its owner in the same change
