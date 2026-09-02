@@ -4,6 +4,24 @@
 
 ### Added
 
+- **Daemon C++ is not a base — a complete rewrite gates release (countermand,
+  2026-09-01).** Recorded with its blast radius across `DRS-*` and its
+  row-level census map in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  (`CSR-`), which also reconciles that program with the consensus rewrite —
+  the two partition the same six C++ files on orthogonal cuts and had **zero**
+  cross-references in either direction. Consensus-relevant effects: the C++ is
+  demoted from *trusted* oracle to a differential reference for rules that are
+  **both** ratified on record **and** carrying an **affirmative conformance
+  record** — absence of a recorded divergence means *unreviewed*, not conformant,
+  so the checked set is **empty** until **DRS-P0f** (the per-row conformance review, minted here) populates it (a
+  **conformance-exception register** holds the known divergences, seeded with
+  CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
+  intermediate engine (DEL-007), **redb stands**. Design-round detail — the
+  CSR-1…CSR-5 rulings, the 18-row store map, and the arithmetic corrections —
+  stays in the owning document per
+  [`95-documentation-lifecycle`](../.cursor/rules/95-documentation-lifecycle.mdc).
+
 - **CI gate: every workflow file must parse and be shaped like a workflow.**
   A workflow GitHub cannot parse produces a run with zero jobs and no failing
   named check, so the gates it carries go quiet — that is how one unquoted
