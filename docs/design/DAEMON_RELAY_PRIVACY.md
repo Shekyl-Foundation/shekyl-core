@@ -1409,7 +1409,24 @@ instruments for both are built or scoped. What remains is the *arguments*:
      within it — preserves per-epoch selection entropy while closing the pool
      re-roll, the probable sweet spot) or *over* it (the successor itself pinned
      across epochs)? Different `g_max`, different privacy profile; needs the analysis.
-  2. **The anchor relationship.** Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
+  2. **The anchor relationship.**
+
+     > **Factual correction 2026-09-02 — the premise below overstates what the
+     > dial path delivers, and the correction is owed here rather than only in
+     > the p2p round.** `SHEKYL_P2P_PROTOCOL.md` PWD-I4 establishes that
+     > `get_and_empty_anchor_peerlist` copies **every** persisted anchor into a
+     > caller-local vector and then clears the container, while
+     > `make_new_connection_from_anchor_peerlist` returns after the **first**
+     > successful dial and only that peer is re-inserted. **A cold restart
+     > therefore yields at most *one* anchor-backed connection — zero if every
+     > anchor fails to handshake — and destroys the rest of the persisted set.**
+     > So "the 2 anchor slots are filled first" (§below) and `= 2` throughout
+     > this section describe the **configured** count, not the delivered one.
+     > **Only the numeric `g_max` seal stays deferred; this factual premise is
+     > corrected now**, because Q-10's *"≥ k slots are anchor-backed and thus not
+     > re-rollable"* framing reads `k = 2` and the tree gives `k = 1` at best.
+
+     Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
      [`get_and_empty_anchor_peerlist`](../../src/p2p/net_peerlist.h#L497), restart-
      persistent, `first_seen`-indexed, filled at
      [net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) are **already a partial
@@ -2369,8 +2386,10 @@ stem-eligible pool — the mechanism behind the `anchors = 2 ∥ STEMS = 2` haza
 **G-4 — anchor admission is *any* successful outbound handshake — no behavioural
 criterion.** `append_with_peer_anchor`
 ([net_node.inl:1347](../../src/p2p/net_node.inl#L1347)) is called on **every**
-successful outbound handshake, unconditionally; on reconnect the 2 anchor slots are
-filled *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)), then white
+successful outbound handshake, unconditionally; on reconnect the anchor slots are
+attempted *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) — **at
+most one of the configured 2 is actually filled, per the correction in §12.11's
+item 2** — then white
 (~70 %), then grey. So anchors are a **weak persistent pin populated by any
 accepted peer**, not a behavioural-floor pin.
 

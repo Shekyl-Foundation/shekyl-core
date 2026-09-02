@@ -699,6 +699,12 @@ Default. Lands before genesis if it should exist at launch.
 - **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
   - Target: pre-genesis
 
+- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
+  - Target: pre-genesis
+
+- **Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.** Blocker: the tor port-0 semantics are disputed (named by #587, not invented here). PWC-D9 — [`P2P_2_DISPATCH_BRIEF.md`](design/P2P_2_DISPATCH_BRIEF.md) PWD-B11
+  - Target: pre-genesis
+
 - **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into **gray** after handshake, bound gray occupancy per host, and bump the peerlist store version (which drops the persisted list).** The four are one outcome: `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; and without the bump, old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
   - Target: pre-genesis
 

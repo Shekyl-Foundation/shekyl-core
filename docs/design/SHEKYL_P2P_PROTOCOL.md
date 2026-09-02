@@ -313,9 +313,49 @@ set was always doing.
 Jobs 1–4 are public-zone-gated; **jobs 5 and 6 are not** — they run on every
 zone, so their replacements are not optional on any of them.
 
-**Six jobs, found across four sweeps, and the rising count is itself the
+**Six jobs, found across four sweeps, and the rising count was itself the
 record.** Identity, connection-state, outbound-selection and persisted-schema
-are four different frontiers; each sweep saw one and could not see the next. **On anonymity zones the identifier does no work
+are four different frontiers; each sweep saw one and could not see the next.
+
+#### The complete inventory, enumerated by *type* rather than by name
+
+**The count stopped rising when the sweep changed shape.** Every previous sweep
+searched for the *name* `peer_id`; this one enumerates every declaration of the
+**type** `peerid_type`, which is what carried the value across a subsystem
+boundary invisibly. It is recorded here so a later reader can check completeness
+instead of re-deriving it, and so P2P-3 has one list rather than six findings.
+
+**Structs declaring it — five, all accounted for:**
+
+| Declaration | Disposition |
+| --- | --- |
+| `peerlist_entry_base.id` (`p2p_protocol_defs.h:73`) | **Removed** — gossiped and persisted |
+| `anchor_peerlist_entry_base.id` (`:97`) | **Removed** — persisted; PWD-I3 makes anchors address-keyed |
+| `connection_entry_base.id` (`:118`) | **Already dead** — PWC-F2, zero callers tree-wide since `68ba2887c` (2020); dies with the dead-struct deletion, not with this decision |
+| `basic_node_data.peer_id` (`:176`) | **Removed** — the wire field |
+| `COMMAND_PING::response.peer_id` (`:283`) | **Removed with the command** (PWD-B10) |
+
+**The cross-subsystem vector is an interface, not a function.**
+`for_each_connection` and `for_connection` are declared on **`i_p2p_endpoint`**
+(`net_node_common.h:65-66`, with the null implementation at `:103,107`), so the
+`peerid_type` parameter is part of the **p2p↔cryptonote contract**. That is why
+a sweep inside `net_node.inl` could not see the consumers.
+
+**Consumers reached through it — 22 callbacks take the parameter; *three* read
+it:**
+
+| Site | Kind | Disposition |
+| --- | --- | --- |
+| `cryptonote_protocol_handler.inl:1723` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
+| `:2657-2660` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
+| `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
+
+**The other 19 callbacks accept the parameter and ignore it**, which is the
+useful part of the count: the interface change is largely mechanical, and the
+parameter was already vestigial at most call sites. **P2P-3 changes the
+`i_p2p_endpoint` signature once**; the three readers above are the only bodies
+that need thought. **On anonymity zones the identifier does no work
 at all**: self-detection is already a plain address comparison against
 `m_our_address` (`net_node.inl:1291`, `:1697` — *"It's ourselves, obviously don't
 take that"*), which is correct because a node on an anonymity network
@@ -746,9 +786,22 @@ eviction** — `append_with_peer_gray` (`net_peerlist.h:398-427`) has none, unli
 all 5,000 gray entries **without sending a single peerlist record**, bypassing
 both rules above and falsifying PWD-I6.
 
-> **Ruled here: gray occupancy is bounded *per host*, by the same address-based
-> mechanism that bounds outbound slots. The *invariant* is cluster I's; the
-> *number* is PWD-B9's.**
+> **Ruled here, value included: a host holds at most *one* gray entry, the same
+> bound `evict_host_from_peerlist` already enforces on the white list.**
+
+**These are two different quantities, and an earlier draft conflated them.**
+*List occupancy per host* is settled here at **1**, by **inheriting the white
+list's existing behaviour** rather than minting a number — the same derivation
+discipline as the 250 ceiling above. *Outbound connection slots per host* is a
+different bound, and **that** is the one PWD-B9 owns and PWD-I4 informs.
+
+**Why 1 is the right occupancy value and not a placeholder.** Under the outbound
+same-host cap only one entry per host can ever be *dialled*, so holding N entries
+for one host is amplifier surface with **no discovery value** — the extra entries
+can never become connections. Inheriting white's bound also means the two lists
+cannot drift apart, and it settles the number this closure depends on: **a cap
+without a value is not a decision**, and PWD-I6's ② closure would otherwise rest
+on one.
 
 **This closes a gap that predates the deletion rather than one the deletion
 invented** — gray has always been unbounded per host, including via the
@@ -759,8 +812,12 @@ check, and it needs nothing from the peer. **The two rules above bound records
 per connection; this one bounds *entries per host*, which is the quantity the
 record cap never constrained.**
 
-**The rule is not a new mechanism — the tree already implements it on the gray
-path, and that is the evidence this reroute costs nothing.**
+**The promotion rule is not a new mechanism — the tree already implements it on
+the gray path, and that is the evidence this reroute costs nothing.** *(The
+**occupancy** bound above is new: P2P-3 adds `handle_handshake` as a second gray
+writer and must add the per-host bound with it. What follows describes only the
+existing promotion path, and is not a claim that the gray path needs no
+change.)*
 `gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
 at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
 white via `set_peer_just_seen` only if that outbound handshake succeeds —
@@ -966,8 +1023,18 @@ mechanism.
   under PWD-I1's amendment**, which strengthens this ruling rather than
   disturbing it: continuity was already address-keyed, and removing the
   identifier leaves the address as the sole key it already effectively was. The address family was ruled out as an *admission*
-  basis (§6.10 — absent on Tor, lying on clearnet); it is **not** ruled out as
-  *continuity bookkeeping*, and those are different jobs.
+  basis (§6.10); it is **not** ruled out as *continuity bookkeeping*, and those
+  are different jobs.
+
+  **§6.10's "absent on Tor" does not apply to this mechanism, and an earlier
+  draft repeated it here as though it did.** That phrase is about *inbound*
+  anonymity peers, which carry `tor_address::unknown()`. Continuity here is
+  **outbound** — this node chose the onion, so it has a perfectly good address
+  key. The real concession on Tor is the one §33.5 and F-8 already state and
+  which the rest of this row is built on: **onion keys are cheap to mint and the
+  adversary reconnects rather than mints**, so the key exists but its
+  *re-entry cost* tends to zero. Saying the key is absent would have made the
+  mechanism look inapplicable when it is applicable and merely cheap to evade.
 - **Nothing about tenure reaches the wire** (PW-18). The anchor list is
   persisted and its KV map is never sent (PWC-D5).
 - **`first_seen` is an ordering input, not a log value** — it is the container's
@@ -1031,7 +1098,14 @@ described. **No decision in this cluster reasons from it.**
 below the warm-up any admission mechanism requires** — F-8's own condition,
 already stated as a comparison a measurement can settle.
 
-### PWD-I4 — `ρ` / `g_max`: **DEFERRED to its own round, with the blocker named**
+### PWD-I4 — `ρ` / `g_max`: **DEFERRED to its own round, with the blocker named, and scheduled**
+
+> **Rule 22 requires three things, not one: the blocker, a target, and the
+> reopening criterion.** An earlier version of this row named only the blocker.
+> **Target: pre-genesis**, queued as its own `FOLLOWUPS.md` item so the deferral
+> is tracked outside the document that made it — *"no genesis deadline" is not a
+> schedule*. The sub-round must derive against the **fixed** anchor and
+> white/gray behaviour (PWD-I1, PWD-I2), not the current tree.
 
 **NOT RULED.** Deferred under
 [`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc), which
@@ -1300,7 +1374,7 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
-| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here | cluster B |
+| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here. **Owner: PWD-B11**, a row minted for it because "cluster B" is not an owner; target pre-genesis, queued in FOLLOWUPS | PWD-B11 |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
 | PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
