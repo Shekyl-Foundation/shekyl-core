@@ -49,6 +49,53 @@ but contradicts the engine-isolation property the threat model needs.
 Both rules apply; this rule catches the residue that
 `36-secret-locality.mdc` doesn't.
 
+## The corollary: documentation is not verification
+
+Code is not architecture; **a claim about the code is not the code**.
+An inherited claim — in upstream documentation, in a comment, in a
+design doc we ourselves ratified — is a **hypothesis** about behavior
+until someone reads the implementation. The failure mode is not the
+claim that is plainly false; it is the claim that is **true of the
+design and false of the implementation**, because nothing distinguishes
+the two until the property is needed.
+
+Worked instances, all verified at source:
+
+- **`DAEMON_RELAY_PRIVACY.md` §91.1.** The tree ran Design A for the
+  stem and Design B for the fluff: a fluff took
+  `*m_network_zones.begin()` — clearnet, singular — so a Tor-only node
+  never learned of clearnet-originated transactions. *"Tor-only was not
+  a working posture — not by ruling, but by routing."* The upstream
+  claim that an anonymity transport protects its participants was true
+  of the design and false of the send path.
+- **`DAA_LWMA1.md` §5.5** ratified the MTP rule as "strictly greater …
+  **preserved unchanged**"; the inherited validator accepted equality.
+  This one is **ours**, not inherited — the failure reproduces whenever
+  a ratification is written from prose rather than from source.
+- **`fluff_return_ms`** is documented as "provisioned at the worst
+  zone". That describes a design-time choice, not a mechanism: it is a
+  hand-picked scalar, and a zone slower than the one it was chosen
+  against is silently under-provisioned.
+
+So, when a claim is load-bearing for a security property:
+
+1. **Read it at the implementation before relying on it**, including
+   claims in Shekyl's own ratified documents. Provenance is not
+   derivation (`05-system-thinking.mdc`), and a seal is not coverage.
+2. **Give it a gate that can fail** (`50-testing.mdc`,
+   `47-gate-subject-assertion.mdc`) — a derivation check, a pinned
+   vector, an assertion that the constant equals what it claims to be
+   the maximum of. A defence that cannot fail is worse than a missing
+   one: it consumes the attention that would have found the gap.
+3. **Otherwise demote it** to a recorded assumption with the check
+   named as owed. An unverifiable claim may be carried; it may not be
+   carried *as a property*.
+
+Distinguish the failure directions when recording one. A claim whose
+violation fails **loudly** (an unknown enum arm that throws) is a
+signpost; one that fails **silently** (a constant that stays valid-looking
+while the world moves past it) is the hazard this section is about.
+
 ## When to migrate vs. when to keep
 
 - **Migrate** when inherited architecture contradicts a Shekyl-specific
