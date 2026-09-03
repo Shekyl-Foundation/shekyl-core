@@ -47,7 +47,8 @@ namespace cryptonote
    *
    * A checkpoint is a pre-defined hash for the block at a given height.
    * Some of these are compiled-in, while others can be loaded at runtime
-   * either from a json file or via DNS from a checkpoint-hosting server.
+   * from a json file. (Loading via DNS from a checkpoint-hosting server was
+   * removed with the rest of the cleartext-DNS surface.)
    */
   class checkpoints
   {
