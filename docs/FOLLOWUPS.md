@@ -685,7 +685,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
-- **`network_config`'s never-sent KV map would advertise a packet limit the transport does not enforce (50 MB vs 100 MB).** Harmless only because nothing serializes it; delete the map or reconcile the constants, not neither. PWC-F3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
+- **Register `shekyl/p2p-wire-prefix-v1` in [`CRYPTO_DOMAIN_REGISTRY.tsv`](design/CRYPTO_DOMAIN_REGISTRY.tsv) and bump the mechanism-1 count-pin when PWD-T5's prefix derivation gets its call site.** Not registrable in P2P-2: the domain gate requires a registered literal to have a defining file and a `const` site, and this round implements nothing, so a row now would fail CI for being honest about the schedule. The derivation, the three computed prefixes and the pairwise-distinctness assertion are pinned in the ruling — this item is the registry half only. PWC-A1 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T5
+  - Target: pre-genesis
+
+- **Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.** Ruled, not deferred — the never-sent map would otherwise advertise a 50 MB packet limit against the 100 MB the transport enforces, and PWD-T6 names the authoritative limits so there is one source. The struct keeps its live fields; `handshake_interval`, `config_id` and `send_peerlist_sz` are also write-only but belong to PWD-B1/B2 and PWD-I2. PWC-F3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6
   - Target: pre-genesis
 
 - **Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.** The white-list writer invariant lands with the back-ping deletion and store bump in the row below, which is one composable change. PWC-D1/D3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2
@@ -695,6 +698,15 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
+  - Target: pre-genesis
+
+- **Gate PWD-T7's compression invariant mechanically once PWD-B3's command table exists: no message carrying confidential material of any lifetime — session key, node-local secret, reused token — may reach `try_compress_message`.** Blocker: nothing in the tree classifies a command as confidentiality-bearing, so a check today would have no subject to assert (rule 47). The invariant is stated at the dispatch site (`rust/shekyl-levin/src/compress.rs`) in the meantime, which is placement, not enforcement — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T7, PWD-B3
+  - Target: pre-genesis
+
+- **Size the Levin bucket header's length field once PWD-B3 sets the per-command caps.** Blocker: the header field cannot be sized before the caps it must express; PWC-A2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6, PWD-B3
+  - Target: pre-genesis
+
+- **Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.** `DAEMON_RELAY_PRIVACY.md` §74.2 concluded *"the 11-day figure is the worst case"* because the checkpoint skip rescued historical blocks; `fast_check` and `m_blocks_hash_check` no longer occur in `blockchain.cpp`, so the un-checkpointed case is now the only case. Blocker: the replacement figure needs a measurement, not an argument. Rule 76 — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
 - **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5

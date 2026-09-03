@@ -1,7 +1,8 @@
 # Shekyl P2P protocol — normative specification
 
-**Status:** OPEN — **P2P-2 design round; cluster I (identity and Sybil resistance) delivered
-for ratification; clusters T, B and A not yet drafted.** Produced by the P2P-2
+**Status:** OPEN — **P2P-2 design round; cluster I (identity and Sybil
+resistance) ratified and merged (#594); cluster T (transport) delivered for
+ratification; clusters B and A not yet drafted.** Produced by the P2P-2
 design round dispatched on
 [`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md). Ratification is Rick's,
 **per cluster**, on the relay-round convention; the umbrella chat reviews each
@@ -13,6 +14,14 @@ package first. **Nothing here is implemented — implementation is P2P-3.**
 
 **Identifier family:** `PWD-` (P2P wire decision), registered at birth in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
+
+**Section-reference convention.** `§N` **with no document named** is a section
+of **this** document. A section of another document is always named —
+`DAEMON_RELAY_PRIVACY.md §12.10`, `the census §5.2`, `the brief §3`. *Where a
+bare `§6.x`/`§7`/`§12.x`/`§13.x`/`§33.x`/`§54.x`/`§91.x` appears in cluster I's
+prose it is `DAEMON_RELAY_PRIVACY.md`'s* — those numbers do not exist here, and
+this line is the resolution for a reader who arrives at a section directly
+rather than reading forward.
 
 ---
 
@@ -124,6 +133,43 @@ connections"* — and the countermeasure still missed it, because a correct
 description and a correctly-aimed defence are independent properties. **Reading
 the attack right is not evidence of having answered it.**
 
+**The check has three rungs, not two, and the third is the strongest** (named
+2026-09-02 after its third instance):
+
+> **Prefer a *binding* that makes the lie impossible to a *check* that detects
+> it.**
+
+- **Worst — accept the claim and verify it.** Verification needs identity;
+  identity is forbidden; so every such mechanism grows a guard, and the guard
+  grows a guard. `peer_id` + `is_same_host` is the shape.
+- **Better — replace it with your own observation.** Nothing is claimed, so
+  nothing can be forged: the **same-host cap** (no value exists to spoof) and
+  the **`handshake_complete` flag** (this node watched its own handshake
+  finish).
+- **Best — when the value *must* come from the peer, bind it into the
+  transcript** so a false one cannot produce a working session.
+  **`network_id` as a Noise prologue** is the instance: today the peer asserts a
+  UUID and we compare it (`net_node.inl:1085`, `:2691`); mixed into the
+  handshake hash instead, a wrong network **fails to decrypt on the side that
+  receives an authenticated field**. The check is not passed — it is
+  *unnecessary*.
+
+> **The rung is directional, and PWD-T1 pays for saying so.** A binding only
+> removes the check on the side that verifies something authenticated under it.
+> In `NN` that is the initiator alone: message 1 carries no keyed field, so the
+> responder learns nothing from the prologue and needs a separate,
+> non-cryptographic answer (PWD-T5's prefix). **"A binding replaces the check"
+> is true per direction, never per protocol** — ask which side verifies, at
+> which message, before claiming the check is gone.
+
+**Why the third rung is worth separating from the second.** An observation
+removes the peer from the loop, which is not always possible — some values are
+irreducibly the peer's. A binding keeps the value on the wire and removes the
+*lie* instead, converting a comparison anyone can pass into a computation only a
+conforming peer can complete. **On the verifying side it also deletes the error
+path**: there is no "wrong network" branch to get wrong, only a handshake that
+does not complete.
+
 **The two failures are a pair, and the pair yields the standing form.** Both
 countermeasures were scoped to *a named code path*; both defended that path and
 nothing else. **A countermeasure scoped to a code path defends that path. A
@@ -222,9 +268,17 @@ ordering is about latency, not volume.)
 ### PWD-I1 — no peer identifier on the wire at all; the four jobs it served are replaced
 
 **RULED — and amended 2026-09-02, reversing this row's original verdict.** The
-transport carries **no peer identity, durable or ephemeral**. `peer_id` is
-removed from `basic_node_data`, and `id` is removed from `peerlist_entry` **and
-from `anchor_peerlist_entry`**.
+transport carries **no peer identity, durable or ephemeral**: the specified
+`basic_node_data` **has no `peer_id` field**, and `peerlist_entry` and
+`anchor_peerlist_entry` **have no `id` field**.
+
+> **Tense, deliberately: this row specifies a wire, it does not report one.**
+> An earlier wording said the fields *"are removed"*, which is operation voice
+> and reads as executed — and at the time of ratification the tree still carried
+> every one of them (`p2p_protocol_defs.h:176`). **The rulings are landed; the
+> wire is not yet changed.** P2P-3 performs the removals; the document's
+> **status banner** (above §0) says so once, and this row says it again because
+> a reader can arrive here directly.
 
 **`m_peer_id` is removed entirely, and an earlier version of this ruling was
 wrong to keep it.** It said a per-process identifier is *"retained internally for
@@ -1266,6 +1320,17 @@ pool-share `g` across all three regimes.
    And §13.5's own scope narrowing applies: after §14, *"the only `δ` left to
    price is the W3 residual."*
 
+**Conceded — and the shape of the concession is unusual, which is why it was
+missing.** This row specifies the content of a closure it **cannot perform**,
+so its correctness is not verifiable until Q-10 actually closes: the
+reconciliation below is *this round's reading* of §12.10 and §7, and a reading
+is exactly the thing that can be wrong. **If it is wrong, it is wrong in the
+most expensive place** — handed forward as settled ground to a sub-round that
+will not re-derive it, which is the failure this row exists to prevent,
+arriving through the row itself. The mitigation is that both sources are
+quoted verbatim rather than paraphrased, so a later closer can check the
+reading against the text rather than trusting it.
+
 **Falsifier.** **Reopen if the relay lane rules that §12.10's two bounds
 replace `g_max` rather than containing it** — that would falsify the
 reconciliation above, and it is a ruling a future reader can recognise.
@@ -1318,6 +1383,17 @@ double-spend no-drop guard is **inherited** — `f7fd209ed`, upstream Monero,
 2024-03-07 — and carries the census's `inherited-defensive` class: it works, and
 no Shekyl record has examined it. **A rewrite that re-derives the tx-ingest path
 from the census would drop it silently.** Cluster B owns that as PWD-B7.
+
+**Conceded — this row's correctness is entirely borrowed.** It verifies rather
+than selects, so it inherits PWD-I2's option space *and PWD-I2's risk*: if I2's
+three rules are implemented **partially** — the acceptance rule without the
+per-connection ceiling, say, or the white-list writer invariant without the
+per-host gray bound — then ① or ② is open again and **this row still reads
+closed**, because nothing in it observes the implementation. A verification row
+cannot detect a partial implementation of the thing it verifies. That is the
+price of pointing rather than restating, and it is worth paying for the reasons
+the next paragraph gives — but it is a price, and PWD-B10's and PWD-B9's
+FOLLOWUPS rows are where it is actually paid.
 
 **Falsifier — one per sub-attack, because the two are now closed by different
 rules and a single trigger would test only one of them.** The paper's own attack
@@ -1394,10 +1470,745 @@ claim about what this cluster ruled is not.)*
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
 
-**Running total against the round's gate:** 10 of **46** bucket-4 rows
-dispositioned. Clusters T (~16), B (~20) and A remain.
+**Running total against the round's gate:** **19 of 46** bucket-4 rows
+dispositioned — cluster I's 10 plus cluster T's 9. **Clusters B (~20) and A
+remain.**
 
 ---
+
+## 3.5 Cluster T — the transport, concretely
+
+**Eight decisions.** Where cluster I removed things from the wire, T specifies
+what replaces the framing they lived in. **This section is normative**: P2P-3
+implements from it, so it is written in state voice ("the handshake is…") and
+swept for stranded phrasing before first review rather than after — §1's fifth
+check applied to the artifact class where a stale sentence is *implemented*
+rather than merely read.
+
+### PWD-T1 — the handshake is `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`
+
+**RULED.**
+
+```
+Noise_NNhfs:
+  -> e, e1
+  <- e, ee, ekem1
+```
+
+#### Wire sizes, term by term
+
+**An earlier version gave 1216 and 1120 and was wrong in both**: it counted
+tokens and omitted the AEAD tags Noise adds once a key exists, and omitted the
+self-detection nonce this same row requires. **PWD-T6 turns these into hard
+receive limits and PWD-T8 into KAT lengths, so an incomplete figure here is a
+specification that rejects and mis-tests its own handshake.** The brief already
+had it right — *"the second roughly `e` + `ekem1` + **tag**"*.
+
+**The composition rule is Noise's, stated so each term is checkable rather than
+asserted:** `EncryptAndHash` **only hashes** while no key is established, and
+**encrypts and appends a 16-byte Poly1305 tag** once one is. In `NNhfs` the key
+appears at `ee`, in message 2.
+
+| Message 1 (initiator → responder) | Bytes |
+| --- | --- |
+| `e` — X25519 ephemeral, plaintext | 32 |
+| `e1` — ML-KEM-768 encapsulation key (`ML_KEM_768_EK_LEN`), plaintext | 1184 |
+| payload — the **self-detection nonce `N`** (below), plaintext: no key yet, so **no tag** | 32 |
+| **total** | **1248** |
+
+| Message 2 (responder → initiator) | Bytes |
+| --- | --- |
+| `e` — X25519 ephemeral, plaintext (written before `ee`) | 32 |
+| `ekem1` — ML-KEM-768 ciphertext (`ML_KEM_768_CT_LEN`), **encrypted after `ee`** | 1088 |
+| `ekem1` AEAD tag | 16 |
+| empty payload, encrypted — tag only | 16 |
+| **total** | **1152** |
+
+Both totals are **sums of named terms derived from our own constants**
+(`shekyl-crypto-pq/src/kem.rs:24,30`), never quoted from a benchmark — PW-3's
+correction history is exactly why the terms are shown rather than the totals
+alone. **A reader who disagrees with a total can now say which term is wrong**,
+and PWD-T8's vector 1 pins both.
+
+> **These three rows move together: the token layout here, PWD-T6's
+> pre-handshake limit, and PWD-T8's vector 1. Changing any one without the
+> others produces a node that rejects its own handshake.**
+
+#### The prologue's byte encoding
+
+`MixHash` consumes bytes, so a normative wire contract must say *which* bytes.
+
+> **The prologue is exactly the 16 raw bytes of `network_id`, in RFC-4122 field
+> order as stored. No length prefix, no delimiter, no text encoding.**
+
+Without this, two conforming implementations can share a network id and derive
+**different transcript hashes** — and the failure is the one PWD-T8's vector 3
+makes indistinguishable from an attack, so it would present as "the other node
+is on a different network" with no way to tell a bug from a stranger.
+
+**Chaining-key derivation, and the order is the hybrid claim.** `ck` is
+initialised from the protocol name, then:
+
+1. `MixHash(prologue)` — **the prologue is `network_id`** (see below).
+2. `MixKey(ECDH(e, re))` — the classical secret.
+3. `MixKey(ML-KEM-768 shared secret)` — the post-quantum secret.
+
+**Both are mixed, in that order, and the order is not cosmetic.** A session is
+secure if *either* primitive holds: an adversary breaking X25519 (a CRQC) still
+faces ML-KEM, and one breaking ML-KEM still faces X25519. **Mixing ECDH first
+means the KEM secret is folded into a chaining key that already depends on the
+classical exchange**, so a passive recorder cannot precompute against the KEM
+alone. This is the `00-mission` hybrid-PQC commitment expressed in a transcript.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **`NNhfs` — ephemeral-only, hybrid** | The non-participant path observer (§1.5); a CRQC harvesting today for tomorrow | **Adopted.** `NN` is entailed by PW-19a: no static keys exist to authenticate with. `hfs` puts the KEM in the *same* handshake rather than a later upgrade, which is what "PQC from genesis" means |
+| `NN` classical-only, PQC later | The same | **Refused — `00-mission` §1.** Harvest-now-decrypt-later is not a future threat for a chain whose traffic is archived by design |
+| `XX`/`IK` with static keys | Would answer peer authentication | **Inapplicable, not declined** (§1.2). The `K`/`X` pre-messages assume the parties are not strangers; on open gossip they are |
+| KEM-only, no ECDH | A CRQC | **Refused.** It trades a well-understood primitive for a young one and loses the hybrid property in the direction we are least able to re-fix later |
+
+**The prologue carries `network_id`, and this is the third rung of §1's fourth
+check — on the initiator's side only.** Today the peer *asserts* a UUID and the
+node compares it at **two** sites: `net_node.inl:1085` (outbound, on the
+response) and `:2691` (inbound, in `handle_handshake`). The prologue replaces
+the **first**. The field leaves `basic_node_data` with the others.
+
+> **The responder gets no key confirmation from `NN`, so the prologue cannot
+> reject on its side. An earlier version of this row claimed it could.**
+
+**Why, term by term, because the conclusion is not obvious from "it is bound":**
+`MixHash(prologue)` moves `h` and **not `ck`**; `Split()` is `HKDF(ck, zerolen)`
+and does not read `h`. So two nodes with **different** network ids derive
+**identical transport keys** and differ only in `h`, which enters solely as AEAD
+associated data during the handshake. Message 1 in `NN` carries no keyed field
+(the key first exists at `ee`, in message 2), so:
+
+- the **initiator** fails at message 2's first encrypted field, `ekem1`, whose
+  tag was computed under the responder's `h`. It aborts. ✅
+- the **responder** completes, `Split()`s, and has no failing operation to
+  observe — now or later, because the transport keys match. ❌
+
+**So the two-sided property is preserved by layering, not by the prologue
+alone**, and the layers answer different adversaries:
+
+| Layer | Side | Rejects | Against |
+| --- | --- | --- | --- |
+| **PWD-T5's 8-byte prefix, derived from `network_id`** | **Responder**, at byte 8, before the flight | A wrong-network peer that sends its own network's prefix | **Honest misconfiguration.** Unauthenticated and rewritable in transit — it is a filter, not a proof |
+| **The prologue, bound into `h`** | **Initiator**, at message 2 | A response computed under a different network id | **The on-path rewriter.** Even if the prefix is corrected in flight, the honest initiator still aborts |
+
+**That is the argument for keeping both**, and it is why PWD-T5's prefix is not
+merely a cost optimisation — see the second job named there.
+
+**Conceded, and it is capability-free.** An initiator that deliberately sends
+the *correct* prefix with a *wrong* prologue holds a working session the
+responder cannot distinguish. It gains nothing: `network_id` is public, so the
+same party could simply use the right prologue and be indistinguishable from a
+legitimate peer. The state is reachable and gainless, which is why it is
+conceded rather than closed.
+
+**And this is what `handshake_complete` means on each side.** The responder sets
+it at `Split()`. An honest wrong-network peer never reaches that point — the
+prefix rejected it eight bytes in. The deliberate divergent-`h` peer does reach
+it, and is the conceded case above. Slot occupancy by peers that send a
+well-formed flight and then nothing is **not** this row's — it is PWD-B1's rate
+limiting and PWD-B9's per-host caps, where every unauthenticated-buffering
+question is routed.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Prologue (initiator-side) layered over PWD-T5's network-derived prefix (responder-side)** | Honest misconfiguration on both sides; an on-path rewriter against the initiator | **Adopted.** Two-sided coverage at zero additional wire bytes and zero additional round trips, reusing a mechanism this cluster already rules |
+| Add a third flight, or defer responder completion to a key-confirming record | Would give the responder authenticated network identity | **Refused on cost against a gainless state.** It charges every honest connection a round trip — the one thing a p2p handshake budget cannot absorb at the Pi-4 floor (rule 76) — to close a case an adversary has no reason to enter. Deferring completion to the first transport record does not even work: those records decrypt correctly under a mismatched prologue |
+| Bind `network_id` into the **key schedule** rather than the transcript hash — a network-qualified protocol name, or `MixKeyAndHash` | The same, cryptographically | **Refused, but safe — record it as the retreat.** It would make transport keys diverge by network, giving the responder a genuine failure. It is refused because a network-qualified protocol name breaks the Noise name form that PW-7a's read-not-depend posture assumes a future implementer can parse, and `psk`-style mixing changes message 1's token rules and therefore PWD-T1's byte tables. **Reopen this option, not the third flight, if the concession above ever stops being gainless** |
+| Keep the inherited two-sided equality comparison | The same | **Refused.** It is a claim compared against a claim (§1's fourth check, worst rung), and it keeps a wire field for a property two cheaper mechanisms already hold |
+
+**Falsifier — narrow, because the concession is what would break.** **Reopen if
+any feature binds semantics to the handshake hash `h` or to a session value
+exported from it** — channel binding, a session-scoped commitment, anything that
+gives the divergent-`h` state a consequence — **or if responder-side
+*authenticated* network identity is ever required.** Either event turns a
+gainless reachable state into a capability, and the key-schedule option above is
+the prepared answer.
+
+**The self-detection nonce, inherited as a requirement from PWD-I1.** A random
+`N` is emitted in message 1; a handshake arriving with an `N` this node recently
+emitted **is** this node.
+
+**"Recently" is not a duration, and specifying it as one would be the defect.**
+A window shorter than a handshake round trip silently permits a self-edge, and
+PWD-I1's falsifier says what that costs: an undetected self-connection is an
+eligible stem candidate, so at `STEMS = 2` it halves effective stem width. A
+number chosen for that window would be a guess whose failure is invisible.
+**Scope the nonce to its outbound attempt instead:**
+
+> **A nonce is inserted into its zone's set immediately before message 1 is
+> written, and removed when that outbound attempt terminates — handshake
+> complete, failed, or timed out — or when it matches, whichever comes first.**
+
+**This covers detection by construction rather than by timing, and the reason is
+an ordering property.** A self-connection is **one TCP connection**: this node's
+outbound arm is the client and its own inbound listener is the server. The
+responder must *read* message 1 to produce message 2, so **the inbound handler
+sees `N` strictly before the outbound arm can complete.** There is no schedule
+under which the attempt terminates first and the match is missed. The one edge
+that looks like a race is benign: if the outbound times out while an inbound
+read is still queued, the connection is already dead, and the stem-width hazard
+needs a *live* edge.
+
+**Two properties fall out, rather than needing rulings of their own.** The set
+is bounded by in-flight outbound attempts, which `max_out_connection_count` and
+the connect cadence already cap — so there is no size limit to choose and no
+eviction policy to get wrong. And because `N` travels in the clear, **any peer
+this node dials learns it**; attempt-scoped removal is what keeps the window in
+which a dialed peer can replay `N` back at us equal to the attempt's own
+lifetime, rather than to an arbitrary retention period. A within-zone replay
+confirms only what the zone-scoping paragraph below already concedes.
+
+> **`N` is 32 bytes of CSPRNG output, carried as message 1's payload, in the
+> clear.**
+
+**In the clear is correct, not a concession:** message 1 has no key yet, so
+Noise cannot encrypt it, and `N` carries nothing secret — it is a value whose
+*only* job is to be recognised by the node that emitted it. 32 bytes matches
+`e`'s width so the flight introduces no novel field size, and makes collision
+across any plausible emission window unreachable.
+
+> **Nonce windows are per zone, and comparison is within-zone only.**
+
+`handle_handshake:2719` already warns why: *"an attacker could connect to you on
+clearnet and pass in a tor connection's peer id, and deduce the two are the same
+if you reject it."* A nonce reproduces that oracle exactly unless zone-scoped —
+**the drop is the confirmation.** On anonymity zones `m_our_address` comparison
+(`net_node.inl:1291`, `:1697`) already answers self-detection without any wire
+value, so the nonce is the clearnet mechanism specifically.
+
+**Conceded.** Recently-emitted nonces are per-zone local state the identifier
+did not need — small, bounded, and never on the wire, which is the direction
+PW-18 wants. And `NN` gives **no peer authentication whatsoever**: the
+counterparty is conceded (§1.5), and a MitM on a first contact is
+indistinguishable from the peer. That is not a gap this transport can close
+without prior knowledge, which PW-19a forbids.
+
+**Falsifier — on stem width, not connection count, because the p2p symptom is
+invisible.** An undetected self-connection is an eligible stem candidate
+(`levin_notify.cpp:232-233` filters only on `!m_is_income` and height), and at
+`STEMS = 2` a single self-edge halves effective stem width and leaves the
+embargo to fire. **Reopen if measured effective stem width falls below `STEMS`
+on a node whose connection count is nominal** — the relay lane's `stem_width()`
+and `record_stem` are the instrument. A connection-count trigger would read
+green throughout.
+
+### PWD-T2 — PW-3 is retired; no padding band is pinned
+
+**RULED — and this row deliberately does not re-derive anything.** PW-3 asked
+for a padding band to hide handshake identity. **It is retired**, and the
+argument is recorded rather than re-litigated:
+
+- **The flight is already constant-size** — **1256 and 1160 bytes as an observer
+  sees them**, from PWD-T1's 1248/1152 token layout plus PWD-T5's 8-byte prefix.
+  This row is about what a *path observer* measures, so it must quote the wire
+  totals and not the Noise-message ones. A band would relabel a constant.
+- **Clearnet protocol identity is undefendable against active probing** (PW-3a).
+  A passive defence cannot buy a property an active prober takes anyway.
+- **Anonymity is Tor's** (§1.6), and Tor is the recommended and installed
+  transport default.
+
+**No option table, declared rather than omitted.** A retirement has no option
+space: the question *"what padding band?"* is dissolved by the three facts
+above, not answered by choosing among candidates. Manufacturing a table of
+bands would imply one of them could be right. **The row that does carry an
+option space is PWD-T5**, where the same eight bytes are decided on cost.
+
+**Conceded, plainly:** on clearnet an observer learns that an IP speaks Shekyl.
+That is a real disclosure, and PW-3a is the ruling that accepts it rather than
+this row pretending otherwise.
+
+**Falsifier.** **Reopen if the handshake ceases to be constant-size** — for
+instance if a future token carries a variable-length field. The premise of the
+retirement is the constancy, so the retirement dies with it.
+
+### PWD-T3 — rekeying is BOLT-8-shaped: `ck', k' = HKDF(ck, k)`, per direction
+
+**RULED**, carrying PW-8's ruling — **option (a)**, BOLT-8-style symmetric KDF
+rotation — and the primary-source corrections that row records.
+
+Each direction rekeys independently, deriving `ck', k' = HKDF(ck, k)` and
+**resetting the nonce**; `sck` and `rck` are independent. **Zero bytes on the
+wire**: both sides derive from state they already hold, so there is no rekey
+message to forge, delay, or use as a marker.
+
+**The interval is counted in *nonce increments*, not messages, and that
+distinction is the correction PW-8 paid for at primary source.** BOLT-8 rotates
+after **1,000 nonce increments**, which is **500 messages** in *its* framing
+because each message there consumes two nonces — one for the encrypted length
+prefix, one for the body. **The message-count equivalent is therefore a property
+of our framing, not a number to copy**: a framing that spends one nonce per
+message rotates at twice BOLT-8's message count for the same nonce budget.
+Stating the interval in nonces makes it survive a framing change; stating it in
+messages would silently halve or double the real budget when PWD-T6/PWD-B3 settle
+the framing.
+
+**Rotation inherits the hybrid-PQ root, which is why it does not weaken T1.**
+Every rotated key descends from the ML-KEM-mixed `ck`, so harvest-now-decrypt-
+later resistance and forward secrecy survive rotation rather than being reset by
+it.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Silent derived rekey, per direction** | A path observer correlating long-lived sessions; nonce exhaustion | **Adopted.** No wire event means no new observable and no new failure mode |
+| Explicit rekey message | The same | **Refused.** It mints an observable that is *itself* a fingerprint, and an error path for a mechanism that cannot otherwise fail |
+| No rekey | Nonce reuse under long sessions | **Refused.** Gossip sessions are long-lived by design; ChaChaPoly nonce space must not be a liveness limit |
+
+**Conceded — and PCS is *ruled out on the merits*, not merely absent.** PW-8's
+argument is stronger than "there is nothing to ratchet toward", and the ruling
+rests on it: **PCS pays out only when an adversary obtains session keys, then
+*loses* that capability, and the session still matters afterwards.** On an open
+gossip network the dominant adversary never attacks the session at all — being a
+peer is free, and every relay is a middle-man by construction, so stolen session
+keys grant a view already available by dialling in. The adversary who *does*
+hold keys (node owner, RCE, hypervisor) has **permanent** access, which PCS
+cannot heal by definition. Recorded-ciphertext decryption is **forward secrecy's**
+job, which option (a) provides. The property bought here is bounded key usage.
+
+**Falsifier.** **Reopen if a session is specified that can outlive its rekey
+interval without rekeying** — the interval's value is PWD-B3's, but the
+mechanism's sufficiency is falsified by any such path existing.
+
+### PWD-T4 — `e1` and `ekem1` are specified here, normatively
+
+**RULED**, with `noise_hfs_spec` cited as **provenance only** — the semantics
+are stated here so P2P-3 implements from this document rather than from a draft
+that may move.
+
+- **`e1` (initiator → responder, message 1, 1184 B)** carries the **ML-KEM-768
+  encapsulation key** — the initiator's freshly generated KEM public key. It is
+  hashed into the transcript when sent.
+- **`ekem1` (responder → initiator, message 2, 1088 B)** carries the
+  **ciphertext** produced by encapsulating to `e1`. The responder obtains the
+  shared secret from encapsulation; the initiator obtains it by decapsulating
+  with the private key it kept from message 1.
+- **Mixing order is `ee` then the KEM secret**, per PWD-T1.
+- **`e1` is written plaintext and hashed** — message 1 has no key, so
+  `EncryptAndHash` degenerates to `MixHash`, and **no tag is emitted**.
+- **`ekem1` is encrypted *and* hashed** — the key exists after `ee`, so
+  `EncryptAndHash` applies in full and **appends a 16-byte Poly1305 tag**,
+  which is a wire term and is counted in PWD-T1's message-2 total.
+- **Transcript state**: each token is hashed **in the order written**, so
+  message 2's hash covers `e` before `ekem1`'s ciphertext. **PWD-T8's vector 2
+  pins the chaining key after each mix step precisely because this ordering is
+  invisible in the message bytes** — two implementations can emit identical
+  wire bytes and hold different transcript state.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **State the token semantics normatively here** | Not an adversary — the failure is a **silent implementation divergence** between two readings of a moving draft | **Adopted.** P2P-3 implements from a pinned document; `noise_hfs_spec` is provenance, not the contract |
+| Incorporate `noise_hfs_spec` by reference | The same | **Refused.** The extension is unratified; a reference binds us to whatever it becomes, and the drift would be invisible until a KAT broke |
+| Leave token layout to the implementation | The same | **Refused.** It is a wire format; leaving it out of the wire specification is where the swap below becomes possible |
+
+**These are not interchangeable and the failure is silent if they are swapped.**
+An implementation that sends the ciphertext where the encapsulation key belongs
+produces a handshake that *completes* on one side and fails on the other, or —
+worse with a lenient parser — completes with an unmixed secret. **Both lengths
+are distinct (1184 vs 1088), so length is a usable discriminator in tests**, and
+PWD-T8's vectors pin both directions.
+
+**Conceded.** `hfs` is a Noise extension, not part of the ratified Noise spec.
+That is a specification-stability risk, not a security one, and it is why the
+semantics are written out here rather than incorporated by reference.
+
+**Falsifier.** **Reopen if the `hfs` extension is ratified with different token
+semantics** — a concrete, checkable future event.
+
+### PWD-T5 — the 8-byte prefix stays, for two jobs, and neither is the fingerprint question PW-9 asked
+
+**RULED**, and it **corrects PW-9's framing rather than answering its question.**
+
+PW-9 (Survey A's L-1) priced `LEVIN_SIGNATURE` as a *scanning fingerprint* and
+asked whether removing it was worth the anonymity gain. **Two things have moved
+since.** PW-3a conceded that clearnet protocol identity is undefendable against
+active probing, so removal buys less than that row assumed; and the prefix's
+actual consumer was never named there — **epee compares the first 8 bytes as
+they arrive, before a full header is buffered**
+(`levin_protocol_handler_async.h:589,609`; `levin_protocol_handler.h:107,127`).
+**That is cheap early rejection of unsolicited noise** — *not* a
+resource-exhaustion defence, for the reason the concession below gives. PW-9 is
+amended in the register accordingly.
+
+**The prefix carries two jobs, and only the first was visible when this row was
+first drafted:**
+
+1. **Cheap rejection of non-adversarial noise** — port scanners, cross-protocol
+   probes, misdirected clients, rejected at 8 bytes instead of at 1248 plus a
+   decapsulation.
+2. **Responder-side network separation.** PWD-T1's prologue binds `network_id`
+   for the **initiator only**; `NN` gives the responder no key confirmation, so
+   **this prefix is the responder's only network check.** It replaces the
+   inbound half of the inherited comparison at `net_node.inl:2691`.
+
+> **Job 2 is load-bearing, and job 1's falsifier must not be read as licence to
+> delete the prefix.** If the measurement below fires, it retires the *cost*
+> rationale; the network-separation job survives it and would have to be
+> re-homed first. Deleting a mechanism because one of its jobs expired is the
+> failure rule 16 names — enumerate the jobs, not the name.
+
+**The derivation is pinned here, completely, because "derived from
+`network_id`" is not a wire contract.** An earlier version of this row said
+"the first 8 bytes of a domain-separated hash" and left the rest for
+ratification. That is not a derivation — it names no function, no separator and
+no output convention, so two conforming implementations can produce different
+eight bytes and neither is wrong.
+
+> **`prefix = cSHAKE256(S = "shekyl/p2p-wire-prefix-v1", X = network_id)[0..8]`**
+>
+> - **Function:** cSHAKE256 with customization, NIST SP 800-185 semantics.
+>   Mechanism 1 in [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv);
+>   cSHAKE and not raw Keccak because the job is **separation**, not identity.
+> - **Customization `S`:** the exact ASCII bytes `shekyl/p2p-wire-prefix-v1`,
+>   no NUL, no length prefix — the registry's `shekyl/<thing>-v<n>` form.
+> - **Input `X`:** the **16 raw `network_id` bytes, RFC-4122 field order as
+>   stored** — the same bytes and the same order as the prologue, defined once
+>   in *The prologue's byte encoding* above and not restated here.
+> - **Output:** bytes `[0..8]` of the 32-byte digest, in digest order, no
+>   re-ordering and no endian conversion.
+
+**The three prefixes, computed rather than promised.** The `NETWORK_ID`
+constants are frozen (`cryptonote_config.h:364`, `:496`, `:507`) and
+`cshake256_32` exists in-tree, so this is a measurement:
+
+| Network | `network_id` | Prefix |
+| --- | --- | --- |
+| mainnet | `556CA9708FF91F7A4069DAF3FC55BBBD` | `AFBCD4D1FAB98B6D` |
+| testnet | `78CE055BBBDA7956B9C8A1A2EC1F7672` | `F0B352E8928F8D56` |
+| stagenet | `2D219754A1BD79BA0540FDFB8DC8A4AE` | `5C2942C0F9F98A21` |
+
+**Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
+bytes cannot *guarantee* distinctness by construction, so the claim "different
+networks get different prefixes" is discharged by computing all three and
+comparing them, with the comparison exercised against a known-identical pair so
+it can be seen to fail. **P2P-3 carries this as a compile-time assertion over
+the network table**, which is what keeps the property true if a `NETWORK_ID`
+ever changes; **if one does pre-genesis, these three values re-derive** and
+PWD-T8's vectors re-mint with them.
+
+**The registry row is deliberately not added in this round.** The domain gate
+requires a registered literal to have a defining file and a `const` site, and
+P2P-2 implements nothing — a row now would fail CI for being honest about the
+schedule. `shekyl/p2p-wire-prefix-v1` registers **at the P2P-3 call site**,
+together with the mechanism-1 count-pin bump the gate requires; both halves are
+in the FOLLOWUPS item so neither can be dropped as an implementation detail.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Keep an 8-byte prefix, derived from `network_id`** | **Non-adversarial noise** — port scanners, cross-protocol probes, misdirected clients — **and, for job 2, honest cross-network dialling** | **Adopted, on those two only.** Rejection at 8 bytes rather than after a 1248-byte first flight and a KEM decapsulation, and the responder's network separation at the cheapest layer |
+| Drop it; the fixed-size first flight is self-framing | The same | **Refused on cost, and now on job 2 as well.** A wrong prefix fails the initiator's AEAD anyway — but dropping it moves rejection of *unsolicited noise* from an 8-byte compare to a full flight plus asymmetric crypto, and leaves the **responder** with no network check at all (PWD-T1) |
+| Keep the inherited fixed constant | — | **Refused.** It is a Monero-lineage value with no Shekyl meaning; deriving from `network_id` costs the same and does a second job |
+
+**Conceded — and the first version of this row overclaimed the benefit, which
+matters more than the cost it correctly named.**
+
+**The prefix does *not* defend against an adaptive flooder, and this row
+previously implied it did.** The value is derived from `network_id`, which is
+public; **an attacker simply prepends the correct eight bytes** and reaches the
+same buffering and KEM path at negligible extra cost. A deterministic,
+publicly-derivable prefix **cannot** impose work on an adversary willing to
+compute it — that is true of any such prefix, not a flaw in this one.
+
+**So the adopted benefit is narrower than "DoS defence": it rejects
+non-adversarial noise cheaply.** Port scanners, cross-protocol probes and
+misdirected clients are a real and constant load on a public port, and they are
+rejected at 8 bytes instead of at 1248 plus a decapsulation. That is worth
+having; it is not resource-exhaustion protection.
+
+> **Adaptive resource exhaustion is PWD-B1's (connection rate limiting) and
+> PWD-B9's (per-host caps). Those impose cost on an attacker; a magic prefix
+> never can.** Routed there rather than left implied here.
+
+**And the cost is unchanged and still knowingly paid:** a stable per-network
+prefix **is** a DPI fingerprint, accepted because PW-3a already concedes clearnet
+protocol identity. **PW-9's original framing would have had us delete it for an
+anonymity property we cannot have anyway; this row's first draft made the
+opposite error and credited it with a security property it cannot have either.**
+
+**Falsifier — and it reaches job 1 only.** **Reopen if measured
+*non-adversarial* junk-connection cost with the prefix removed is within 2× of
+cost with it present**, on the Q12-D6a rig. The adopted rationale is a cost
+ratio **against unsolicited noise**, so that is the traffic the measurement must
+use — **measuring it against an adaptive flooder would show no benefit and would
+be testing a claim this row no longer makes.** **If it fires, the prefix does
+not leave the wire**: job 2 is unaffected by any cost measurement, so the
+outcome is a re-derived prefix, not a deleted one, unless PWD-T1 has by then
+been given a responder-side check of its own.
+
+### PWD-T6 — packet limits are derived, and the pre-handshake limit collapses
+
+**RULED.** Three limits, each derived rather than inherited:
+
+| Limit | Value | Derivation |
+| --- | --- | --- |
+| **Pre-handshake** | **exactly one first flight, plus its 8-byte prefix** — **1256 B** initiator, **1160 B** responder on the wire, from PWD-T1's **1248**/**1152** Noise-message tables plus PWD-T5's prefix | Before the handshake completes, the *only* legal message is the handshake, and it is fixed-size. Anything larger is not a slow peer, it is not a peer |
+| **Post-handshake** | the largest legitimate message, from PWD-B3's per-command caps | Derived from what the protocol can legitimately send, not from a round number |
+| **Post-decompression** | the plaintext ceiling, above the post-handshake limit | `compress.rs:64-68` states why: bounding the compressor's *input* by the wire limit would reject exactly the payloads compression exists to bring under it |
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Pre-handshake = exactly one first flight** | The pre-authentication memory exhauster — an unproven peer making this node buffer | **Adopted.** The only legal pre-handshake message is fixed-size, so any larger allowance is unearned buffer |
+| Keep the inherited 256 KiB | The same | **Refused.** 256 KiB × concurrent junk connections is a memory amplifier with nothing legitimate on the other side of it |
+| Post-handshake: derive from the largest legitimate message | The bandwidth/memory exhauster post-handshake | **Adopted**, terminating on PWD-B3's per-command caps |
+| Post-handshake: keep 100 MB, or pick a round number | The same | **Refused.** An inherited round number is not a bound; it is a number that has not yet been questioned (§1's second check) |
+
+**The pre-handshake collapse from 256 KiB is the substantive change.**
+`LEVIN_INITIAL_MAX_PACKET_SIZE` is inherited at 256 KiB, which lets an unproven
+peer make this node buffer a quarter-megabyte. **Under a fixed-size first flight
+there is no reason for a single byte more.**
+
+**The pre-handshake limit is stated over *wire* bytes, and the two numbers it
+composes are owned by different rows.** PWD-T1 owns the Noise message sizes;
+PWD-T5 owns the prefix. Stating only the Noise totals would leave every
+conforming implementation rejecting its own first flight by eight bytes.
+**These now move as four rows in lockstep — PWD-T1's tables, PWD-T5's prefix,
+this limit, and PWD-T8's vector 1.**
+
+**Two inherited constants disagree, and PWC-F3's disposition follows from this
+row rather than waiting on anything.** `P2P_DEFAULT_PACKET_MAX_SIZE` (50 MB,
+`cryptonote_config.h:185`) is **dead** — two sites, its definition and a write
+into the never-sent `network_config` map (`net_node.h:388`), and
+`packet_max_size` is **written and never read** anywhere in the tree — while the
+live limit is `LEVIN_DEFAULT_MAX_PACKET_SIZE` (100 MB).
+
+> **Ruled: `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and
+> `network_config`'s KV serializer are deleted.** The struct stays as local
+> config with its live fields (`max_out_connection_count`,
+> `max_in_connection_count`, `connection_timeout`, `ping_connection_timeout`).
+
+**Why this row can rule it, and why deferring it after this row could not.**
+PWC-F3's hazard is a **2× disagreement between two candidate packet limits**;
+before this row there was no ruling on which was authoritative, so the row had a
+real dependency. This row supplies it — the limits above are the only enforced
+ones — and once there is exactly one source, deleting the other is a deletion of
+dead code (rule 15), not a derivation. **The KV serializer goes with it because
+PWD-T1 removes the possibility of it ever acquiring a consumer**: the handshake
+is a fixed-size Noise flight with no KV config exchange, so a serializer for a
+never-sent local-config struct cannot become live. *An earlier version of this
+row deferred PWC-F3 on the grounds that "it is a deletion, not a derivation" —
+that is a reason to keep the two **legible**, which the paragraph break above
+does, and not a blocker (rule 22).*
+
+**Not ruled here:** `handshake_interval`, `config_id` and `send_peerlist_sz` are
+also written-and-never-read on that struct, but they are cadence and peerlist
+questions owned by PWD-B1/PWD-B2 and PWD-I2. Deleting them alongside would be
+this row disposing of another row's subject.
+
+**Conceded.** The post-handshake limit is stated as a derivation, not a number,
+because its input is PWD-B3's per-command caps — **which are cluster B's.** This
+row is honest that it terminates on another row rather than pinning a value it
+does not own; `DAEMON_RELAY_PRIVACY.md` §7's *"a bound that depends on a
+parameter owned further down is not a bound"* is the reason to say so plainly instead of inventing a figure.
+
+**Falsifier.** **Reopen if any legitimate message is specified that exceeds the
+derived post-handshake limit** — a message the protocol must send and the limit
+forbids falsifies the derivation directly.
+
+### PWD-T7 — compression survives, and it is safe here for a stated reason
+
+**RULED.** zstd stays, before encryption, with its floor and ceiling unchanged
+(`COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1`).
+
+**Compress-then-encrypt is the CRIME/BREACH shape, and the reason it is safe
+here is specific rather than general.** That attack needs **a secret and
+attacker-influenced data compressed in the same context**, so the adversary can
+observe ciphertext length while varying its own input. **p2p payloads are blocks
+and transactions — public consensus data.** There is **no confidential value of
+any kind** in a compression context, so there is nothing for a length oracle to
+extract.
+
+> **The invariant, stated so it can be checked rather than assumed: no message
+> containing secret or otherwise confidential material — *of any lifetime* — is
+> ever compressed.**
+
+**"Per-connection" was an earlier and narrower wording, and the narrowing had no
+justification behind it.** CRIME/BREACH turns on a secret being compressed
+beside attacker-influenced data; **the secret's lifetime is irrelevant to the
+attack**. A node-local static value or a reused token is as extractable as a
+session key and is worth *more* once extracted, because it does not expire with
+the connection. The invariant is scoped to **confidentiality**, not to lifetime.
+
+That is true today because no such message exists. **It is written as an
+invariant rather than an observation because the property is a fact about the
+*message set*, and the message set is what future rounds change** — PWD-B3 and
+cluster A both add or alter commands.
+
+**And it is stated at the dispatch site, not only here, because an invariant
+enforced by "a reviewer must check this section" is enforced by attention.**
+`try_compress_message` (`rust/shekyl-levin/src/compress.rs`) now carries the
+invariant, its reasoning, and the retreat in its own doc comment — **that is
+where the decision is actually made**, by whoever adds the next message type,
+and they are far more likely to read the function they are calling than the
+design round that ruled it three clusters earlier.
+
+**A doc comment is still not a gate**, and this round series has produced three
+consecutive coverage claims narrower than believed, so the mechanical form is
+queued rather than assumed. Its **named blocker: there is no message
+classification to gate on** — nothing in the tree marks a command as
+secret-carrying, so a check today would be a gate whose subject does not exist
+(§1's discipline, and rule 47's). The classification lands with PWD-B3's command
+table; the gate lands with it.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Compress, then encrypt** | The length-observing path observer | **Adopted** under the invariant above. Block relay is the bandwidth case the chain actually has |
+| Encrypt only | The same | **Refused.** It pays real bandwidth on every block for a leak that requires a secret we do not put in the payload |
+| Compress, then pad to buckets | The same | **Refused as unnecessary here, and recorded as the retreat.** If the invariant above is ever broken, this is the position to move to rather than dropping compression |
+
+**Conceded.** Compressed length still correlates with *content entropy*, so a
+observer learns something coarse — a full block versus a single transaction —
+which the noise/padding path (PWC-A9) masks where it applies and does not mask
+elsewhere. This is arrival metadata, which §1.5 assigns to D++, taxed not
+eliminated.
+
+**Falsifier.** **Reopen if any message is specified that carries confidential
+material of any kind** — the invariant's own trigger, recognisable by inspection of a
+new command rather than by measurement.
+
+### PWD-T8 — Shekyl mints its own KATs, and pins both handshake directions
+
+**RULED.** There is no upstream oracle for this handshake: it is `NN` + `hfs`
+with a Shekyl prologue and a Shekyl prefix. **The vectors are ours to mint**,
+and the crate already carries the shape (`shekyl-levin/tests/oracle_kats.rs`,
+`notify_kats.rs`, `payload_kats.rs`).
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Mint Shekyl's own vectors, pinning both directions and each mix step** | Not an adversary — **implementation drift and silent regression** | **Adopted.** No upstream oracle exists for `NN`+`hfs` with a Shekyl prologue and prefix, so there is nothing to differentially test against yet |
+| Differential test against a second implementation (PW-7d) | A **shared misreading** of Noise, which self-minted vectors cannot catch | **Recorded, not decided.** It is the one thing our own vectors structurally cannot do; it becomes available when a second implementation exists, which is this row's falsifier |
+| Rely on interop testing alone | The same | **Refused.** Two nodes built from one codebase agreeing proves the codebase self-consistent, not correct — `a-seal-is-not-coverage` in wire form |
+
+The set, minimally — **six vectors**, and the rule they are built on is stated
+after them because it governs every vector added later:
+
+1. **Both handshake messages, byte-exact**, from pinned ephemerals — **1248 and
+   1152 bytes**, per PWD-T1's term-by-term tables. **These are Noise message
+   bytes and exclude PWD-T5's 8-byte prefix**; the wire allowance PWD-T6 states
+   is 1256/1160, and a vector that conflates the two would pin the wrong
+   number in the row that says it moves in lockstep with the other three.
+   This also pins `e1`/`ekem1`
+   **against being swapped** (PWD-T4), since their lengths differ, **and pins
+   the tags**, which is the term the first draft of PWD-T1 omitted.
+2. **The chaining key after each mix step**, so a wrong mixing *order* fails
+   even when both secrets are present — the failure PWD-T1's ordering exists to
+   prevent, which no message-level vector would catch.
+3. **A prologue-mismatch vector** proving a wrong `network_id` fails
+   **the initiator's** completion rather than being compared — and it is a
+   **different kind of test from the others, which changes what it must
+   assert.**
+
+   > **This vector is initiator-side, and that is a property of `NN`, not a gap
+   > in the vector.** Per PWD-T1, the responder derives identical transport keys
+   > under a mismatched prologue, so there is no responder-side Noise failure to
+   > pin. The responder's network rejection is PWD-T5's framing-layer prefix
+   > compare — **vector 6 below**, which belongs to the framing surface rather
+   > than to a handshake transcript, and is minted from the three prefixes
+   > PWD-T5 pins. **A vector asserting responder-side
+   > prologue rejection would be asserting a property the protocol does not
+   > have, and would pass only against an implementation that had invented one.**
+
+   A negative-path vector normally proves *an error branch behaves correctly*.
+   This one proves **there is no error branch on the side it covers**: a wrong
+   network does not reach a comparison that returns a "wrong network" result, it
+   produces a transcript whose AEAD does not verify — the same failure as any
+   corrupted byte.
+   **A branch that cannot be reached is a branch that cannot be implemented
+   wrong**, which is the whole reason PWD-T1 binds the value instead of checking
+   it.
+
+   > **So the assertion is *indistinguishability*, not a return code: a
+   > wrong-`network_id` handshake must fail in the same undifferentiated way as
+   > random bytes.**
+
+   That is also a security property and not only a tidiness one. **If a
+   wrong-network failure were distinguishable from a corrupted one, the
+   difference would be an oracle** — a prober could separate "you are Shekyl on
+   another network" from "you are not Shekyl", which is exactly the class of
+   distinction PW-19a refuses to hand out. A vector asserting a specific error
+   code would have *locked in* that oracle while appearing to test the feature.
+4. **A suite/version-mismatch vector**, asserting the same indistinguishability
+   as (3). **The protocol name is a binding too**, mixed into `ck` at
+   initialisation — which is exactly why PWC-A3 can refuse version negotiation
+   rather than specifying it. A peer speaking a different suite therefore fails
+   the same way a wrong network does, and the vector must pin that it fails
+   *identically*, not that it reports a version error.
+5. **A rekey vector** — `ck'`/`k'` after one rekey in each direction.
+6. **A framing-prefix vector**, pinning the **responder-side** network
+   separation that vector 3 structurally cannot cover. It asserts both
+   directions of the check: a connection opening with another network's prefix
+   is **dropped at the framing layer, before any Noise processing**, and one
+   opening with this network's prefix **proceeds to the handshake**. Its inputs
+   are the three pinned values in PWD-T5 — mainnet `AFBCD4D1FAB98B6D`, testnet
+   `F0B352E8928F8D56`, stagenet `5C2942C0F9F98A21` — so a cross-pair (dial
+   mainnet with the testnet prefix) is a real, runnable case rather than a
+   synthetic one.
+
+   > **This vector asserts a *discriminated* early rejection, and that does not
+   > violate the rule below.** The rule governs values moved into a **binding**;
+   > the prefix is a **filter**, not a binding — it is unauthenticated, public,
+   > and rewritable in transit, so it hands an adversary nothing it could not
+   > compute. Discriminating there is the *point*: rejecting at eight bytes is
+   > the entire benefit PWD-T5 adopts. **Without this paragraph the two rules
+   > read as contradicting each other on the same page**, and the next reviewer
+   > files that contradiction instead of the missing vector.
+
+> **The rule the set is built on, stated generally because it will outlive these
+> six vectors: for any value moved into a *binding*, the vector asserts
+> *indistinguishability*, never a discriminated failure.**
+
+**Otherwise the test reintroduces exactly what the binding removed.** The third
+rung of §1's fourth check buys "there is no error path left to implement wrong";
+a vector demanding an error code **requires** an implementation to build one,
+and to make it distinguishable — quietly restoring the discrimination while
+reading as a thorough negative-path test. **A test can put back what a design
+decision took out, and this is the shape in which it does so.**
+
+Two values are bound today — `network_id` (the prologue) and the protocol name
+(the suite) — so the rule has two instances immediately. **Any future binding
+inherits it without further argument**, which is the reason to state it as a
+rule here rather than as a note on vector 3.
+
+**PW-7d's differential-partner option is recorded, not decided.** Running a
+second implementation as a cross-check is valuable and is *not* what this row
+rules; it is noted so a later round does not read this as a rejection.
+
+**Conceded.** Self-minted vectors pin *our* implementation to *our* reading of
+the spec. They catch drift and regression; they do not catch a shared
+misunderstanding of Noise. That is precisely what PW-7d's differential partner
+would address, which is why it is recorded rather than dismissed.
+
+**Falsifier.** **Reopen if an independent implementation of this handshake
+exists** — at that point the differential option becomes available and the
+self-minted set is no longer the strongest evidence obtainable.
+
+### Cluster T disposition — the census rows this cluster accounts for
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-A1 (`LEVIN_SIGNATURE` fixed 8 bytes) | **Ruled** — kept, re-derived from `network_id`, repriced to two jobs: cheap rejection of non-adversarial noise, and the responder's network separation | PWD-T5 |
+| PWC-A2 (33-byte bucket header, field order) | **Deferred — named blocker: PWD-B3 owns per-command caps**, and the header's length field cannot be sized before them. Target pre-genesis, queued in FOLLOWUPS | PWD-B3 |
+| PWC-A3 (one protocol version, never negotiated) | **Ruled** — the **protocol name** is mixed into `ck` at initialisation, so a suite mismatch fails on **both** sides; version negotiation is refused for the same reason PW-19a refuses identity: it is a claim, and the binding makes it unnecessary. *(The `network_id` prologue is the initiator-side binding and is a weaker instance — see PWD-T1.)* | PWD-T1 |
+| PWC-A4 (256 KiB pre-handshake limit) | **Ruled** — collapses to one first flight | PWD-T6 |
+| PWC-A5 (100 MB post-handshake, inherited) | **Ruled** — replaced by a derivation terminating on PWD-B3 | PWD-T6 |
+| PWC-A9 (noise/fragment padding to `noise_size`) | **Absorbed** | PWD-T7 (the padded path is where the length leak is already masked) |
+| PWC-A10 (zstd level 1, floor 256) | **Ruled** — kept, with the no-secret invariant stated | PWD-T7 |
+| PWC-F3 (50 MB dead constant; never-sent `network_config` KV map) | **Ruled** — `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size` and the struct's KV serializer are deleted; the struct keeps its live fields. Decidable *because* PWD-T6 names the authoritative limits; implementation is P2P-3 like every other ruling here, queued in FOLLOWUPS | PWD-T6 |
+
+**Sum check: 7 ruled + 1 absorbed + 1 deferred = 9 rows.** ✅
+
+*PWC-F3 moved **deferred → ruled** in review: the recorded blocker — "it is a
+deletion, not a derivation" — is a reason to keep the two legible, not a
+dependency that prevents deciding (rule 22). The row count is unchanged; the
+claim about what this cluster ruled is not.*
+
+**Not decided here, and named so the boundary is legible:** per-command caps and
+the rekey interval (PWD-B3), the `return_code` and unknown-flag questions
+(PWD-B4/B5), and every behavioural cadence (cluster B). **PWD-T6's post-handshake
+limit and PWD-T3's interval both terminate on cluster B** — that is a real
+dependency, stated rather than papered over with a placeholder number.
 
 ## 4. What cluster I does not decide
 
