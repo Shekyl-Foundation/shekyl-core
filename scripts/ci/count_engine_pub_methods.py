@@ -7,9 +7,10 @@
 # Count `pub` (not pub(crate)) inherent methods on Engine. Used by
 # check_engine_decomposition.sh METHODS_CEILING. Prints one integer.
 # Optional CRATE_SRC as argv[1] (shekyl-engine-core/src, not src/engine);
-# --list prints path:line name; --self-test runs the where-clause / façade /
+# --list prints path:line name (original file line, including lines skipped
+# as #[cfg(test)] modules); --self-test runs the where-clause / façade /
 # cfg(test)-mod / noise / path-to-Engine / test-filename / raw-ident /
-# impl-item-macro / crate-root-impl negative controls.
+# impl-item-macro / crate-root-impl / Engine-alias negative controls.
 
 from __future__ import annotations
 
@@ -45,17 +46,39 @@ _IMPL_ITEM_MACRO = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
     r"(?:(?:r#)?[A-Za-z_][\w]*::)*(?:r#)?[A-Za-z_]\w*!\s*(?:[;(\[{]|$)"
 )
+# `type WalletEngine = Engine;` / `type W<S> = crate::Engine<S>;`.
+# Associated `type Reply = Result<…, StakeEngineError>` does not match:
+# the RHS must be a path ending in the ident `Engine`, not a suffix.
+_TYPE_START = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+(?:r#)?[A-Za-z_]\w*"
+)
+_ENGINE_ALIAS_RHS = re.compile(
+    r"(?:(?:r#)?[A-Za-z_][\w]*::)*Engine(?:\s*<|\s*;|\s*$)"
+)
+# `use crate::Engine as W;` / `use crate::{Engine as W, Other}`.
+# `\b` so `KeyEngine as` / `StakeEngine as` do not match.
+_USE_ENGINE_AS = re.compile(r"\bEngine\s+as\s+(?:r#)?[A-Za-z_]\w*")
 
 
 class FreezeHole(Exception):
-    """Lexer cannot see expanded macros; fail closed rather than under-count."""
+    """Lexer cannot see expanded macros or aliased Engine Self; fail closed."""
 
-    def __init__(self, rel: str, line_no: int, text: str) -> None:
-        super().__init__(
-            f"{rel}:{line_no}: impl-item macro {text!r} — METHODS_CEILING "
-            "cannot see expanded items; expand the invocation or do not "
-            "generate Engine methods from a macro"
-        )
+    def __init__(
+        self, rel: str, line_no: int, text: str, *, kind: str = "impl-item macro"
+    ) -> None:
+        if kind == "engine-alias":
+            msg = (
+                f"{rel}:{line_no}: Engine alias {text!r} — METHODS_CEILING "
+                "cannot see inherent impls on a renamed Self; use Engine "
+                "directly or do not alias it"
+            )
+        else:
+            msg = (
+                f"{rel}:{line_no}: impl-item macro {text!r} — METHODS_CEILING "
+                "cannot see expanded items; expand the invocation or do not "
+                "generate Engine methods from a macro"
+            )
+        super().__init__(msg)
 
 
 def mask_rust_noise(src: str) -> str:
@@ -199,6 +222,13 @@ def is_test_source(fname: str) -> bool:
 
 
 def strip_cfg_test_modules(lines: list[str]) -> list[str]:
+    """Drop #[cfg(test)] modules from the scan, keeping one newline per skipped line.
+
+    `--list` reports `path:line` against the original file. Dropping skipped
+    lines would make `j + 1` a compacted index (already wrong on
+    `engine/mod.rs`, where out-of-line `#[cfg(test)] mod …;` decls precede
+    the public Engine impl).
+    """
     out: list[str] = []
     i = 0
     n = len(lines)
@@ -211,6 +241,7 @@ def strip_cfg_test_modules(lines: list[str]) -> list[str]:
                 if "{" not in lines[j]:
                     # Out-of-line: `mod foo;` — skip the decl, not the next
                     # production `pub use { ... }` (or anything else with braces).
+                    out.extend("\n" for _ in range(i, j + 1))
                     i = j + 1
                     continue
                 depth = 0
@@ -223,11 +254,54 @@ def strip_cfg_test_modules(lines: list[str]) -> list[str]:
                     k += 1
                     if started and depth <= 0:
                         break
+                out.extend("\n" for _ in range(i, k))
                 i = k
                 continue
         out.append(lines[i])
         i += 1
     return out
+
+
+def type_alias_rhs_is_engine(decl: str) -> bool:
+    """True when `type X = Engine` / `type X<S> = crate::Engine<S>`."""
+    compact = re.sub(r"\s+", " ", decl)
+    eq = compact.find("=")
+    if eq < 0:
+        return False
+    return bool(_ENGINE_ALIAS_RHS.match(compact[eq + 1 :].lstrip()))
+
+
+def refuse_engine_aliases(lines: list[str], rel: str) -> None:
+    """Fail closed on `type … = Engine` and `use …Engine as …`.
+
+    Resolving aliases so `impl WalletEngine` counts as `impl Engine` is a
+    rustc-shaped job this lexer does not take on (cross-file aliases,
+    alias chains, `use {Engine as W}`). An alias of Engine is itself the
+    freeze hole: inherent methods on the alias compile and would bypass
+    METHODS_CEILING. No production Engine alias exists in this crate.
+    """
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _USE_ENGINE_AS.search(lines[i]):
+            raise FreezeHole(rel, i + 1, lines[i].strip(), kind="engine-alias")
+        if _TYPE_START.match(lines[i]):
+            parts = [lines[i]]
+            k = i
+            while k + 1 < n and ";" not in "".join(parts):
+                k += 1
+                parts.append(lines[k])
+            decl = "".join(parts)
+            if type_alias_rhs_is_engine(decl):
+                raise FreezeHole(
+                    rel,
+                    i + 1,
+                    re.sub(r"\s+", " ", decl).strip(),
+                    kind="engine-alias",
+                )
+            i = k + 1
+            continue
+        i += 1
 
 
 def impl_self_is_engine(header: str) -> bool:
@@ -254,9 +328,10 @@ def impl_self_is_engine(header: str) -> bool:
     return bool(_ENGINE_SELF.match(rest))
 
 
-def count_in_file(path: str, rel: str, listing: bool) -> list[str]:
+def count_in_file(path: str, rel: str, _listing: bool) -> list[str]:
     raw = open(path, encoding="utf-8").read()
     lines = strip_cfg_test_modules(mask_rust_noise(raw).splitlines(True))
+    refuse_engine_aliases(lines, rel)
     found: list[str] = []
     i = 0
     while i < len(lines):
@@ -366,7 +441,9 @@ def self_test() -> None:
     skip eats production); refuse `crate::Engine`; skip any filename
     containing the substring `test` (`attestation.rs`); miss `r#type`;
     ignore impl-item macros (`add_method!()` / `crate::add_method!()`); walk only `src/engine`
-    (`lib.rs` inherent impls vanish).
+    (`lib.rs` inherent impls vanish); accept `type WalletEngine = Engine` /
+    `use crate::Engine as W` so `impl WalletEngine` bypasses the ceiling;
+    compact `#[cfg(test)]` skips so `--list` line numbers drift.
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
     assert impl_self_is_engine("impl<S, D> Engine<S, D> {")
@@ -562,6 +639,95 @@ impl Engine {
         assert names == {"sneaky", "keep"}, names
         assert is_engine_only_scan(os.path.join(td, "engine"))
         assert not is_engine_only_scan(td)
+
+    # type / use-as aliases of Engine compile as inherent impls this lexer
+    # would miss. Fail closed on the alias; do not try to resolve it.
+    try:
+        method_names_in_source(
+            """
+type WalletEngine = Engine;
+impl WalletEngine {
+    pub fn extra(&self) {}
+}
+"""
+        )
+        raise AssertionError("expected FreezeHole on type alias of Engine")
+    except FreezeHole:
+        pass
+    try:
+        method_names_in_source(
+            """
+type W<S> = crate::Engine<S>;
+impl<S> W<S> {
+    pub fn extra(&self) {}
+}
+"""
+        )
+        raise AssertionError("expected FreezeHole on generic type alias of Engine")
+    except FreezeHole:
+        pass
+    try:
+        method_names_in_source(
+            """
+use crate::Engine as W;
+impl W {
+    pub fn extra(&self) {}
+}
+"""
+        )
+        raise AssertionError("expected FreezeHole on use-as alias of Engine")
+    except FreezeHole:
+        pass
+    # StakeEngine / associated types are not Engine aliases.
+    names = method_names_in_source(
+        """
+type Reply = Result<(), StakeEngineError>;
+impl Engine {
+    pub fn keep(&self) {}
+}
+"""
+    )
+    assert names == ["keep"], names
+
+    # --list line numbers are original-file lines, not compacted after
+    # stripping #[cfg(test)] modules (live miss: engine/mod.rs).
+    listed_src = (
+        "impl Engine {\n"
+        "    pub fn first(&self) {}\n"
+        "}\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    impl Engine {\n"
+        "        pub fn test_only(&self) {}\n"
+        "    }\n"
+        "}\n"
+        "impl Engine {\n"
+        "    pub fn after_cfg_test(&self) {}\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "x.rs")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(listed_src)
+        listed = count_in_file(path, "x.rs", True)
+    assert listed == ["x.rs:2 first", "x.rs:11 after_cfg_test"], listed
+
+    listed_src = (
+        "impl Engine {\n"
+        "    pub fn first(&self) {}\n"
+        "}\n"
+        "#[cfg(test)]\n"
+        "mod foo;\n"
+        "impl Engine {\n"
+        "    pub fn after_mod(&self) {}\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "x.rs")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(listed_src)
+        listed = count_in_file(path, "x.rs", True)
+    assert listed == ["x.rs:2 first", "x.rs:7 after_mod"], listed
 
 
 def main() -> None:
