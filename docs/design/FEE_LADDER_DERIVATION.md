@@ -326,6 +326,45 @@ states; citations must not conflate them.
 
 ---
 
+### FL-V7 — User-facing docs promise perpetual tail emission; the consensus arithmetic ends it (escalated finding, minted 2026-09-03 at steering review)
+
+The §4.6 exhaustion pin refutes a headline monetary-policy claim made to
+users, three times:
+
+- `docs/ECONOMY_EXPLAINED.md:35-36` — "floored at a **perpetual** tail of
+  0.6 coins/block"; `:49-50` — "the 0.6-coin tail preventing the 'zero
+  subsidy' security cliff **forever**."
+- `docs/DESIGN_CONCEPTS.md:162` — "Ensures **perpetual** security budget";
+  `:667` — "maintains **perpetual** security incentives through tail
+  emission."
+
+What consensus does (verified §4.6, independently re-derived at steering):
+the supply-headroom cap (`cryptonote_basic_impl.cpp:169-173`,
+`shekyl_cap_reward_to_remaining_supply` — added *deliberately*, with a
+comment fixing the underflow that used to disable it) zeroes the
+validation reward once `already_generated_coins` reaches `money_supply`.
+Tail-era headroom is exactly `tail·2^esf`, so the tail lasts exactly
+`2^21 = 2 097 152` blocks (~8 years) and then emission is zero, permanently.
+"Perpetual tail" and "hard supply cap" are mutually exclusive commitments;
+the code chose the cap, the explainers promise the tail —
+`ECONOMY_EXPLAINED.md` states the `>> 21` decay, the cap, *and* the
+"forever" claim in the same section. The cited precedent does not
+transfer: Monero's tail is perpetual because Monero's supply is uncapped
+(`DESIGN_CONCEPTS.md:544`).
+
+**Not fixed in this round, with the blocker named (rule 22):** the fix
+direction is a monetary-policy ratification, not a text edit — either the
+docs change to "a tail era of exactly 2²¹ blocks, then the fee era," or
+the cap semantics change to make the tail perpetual. Editing the docs
+first would presume the answer to a genesis-freeze-sensitive question.
+Decision row FL-R12; distinct from FL-D1 (which is the *design gap* —
+what governs block size once the reward is zero — and stands regardless
+of which way FL-R12 goes, though a perpetual-tail ruling would shrink
+it). Class note for the program: this is the negative-space failure from
+a third direction — a claim nowhere checked against the thing it
+describes, found only because a derivation round happened to compute the
+quantity the prose asserts.
+
 ## §3 The model
 
 **Which reward the derivation prices against — stated because every number
@@ -535,7 +574,10 @@ construction.) FL-C7: **pass**.
   floor. **Post-mining-era block-size governance has no economic mechanism
   at all.** Out of this round's scope to fix; deferred with reopen criteria
   (§9, FL-D1) — but the corrected estimate at least stops quoting fees from
-  a reward that no longer exists.
+  a reward that no longer exists. This pin also refutes the user-facing
+  "perpetual tail" claims — escalated separately as **FL-V7** with its own
+  decision row (FL-R12), because a false monetary-policy promise and a
+  missing governance mechanism need different owners and different urgency.
 
 ## §5 The rung ruling (proposed, unsigned) and the anonymity analysis
 
@@ -690,6 +732,7 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R9 | Wallet absolute cap re-derived as the swept maximum of the *served* (`C_q`) top rung over the reachable young-chain grid, pinned by KAT in the implementing PR (§4.2's raw-`C` 16 000 000 is a lower-bound anchor, not the value) | adopt | |
 | FL-R10 | FL-V1 recorded as a standing defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6) | record | ⚖ (F14b evidence) |
 | FL-R11 | The G6b fossil-flag punt is discharged **for the fee constants only**: this round derives the ladder *given* the 300 000-byte zone; the zone value itself and the 1.7×/×50 clamps remain underived | record | ⚖ CEN-G6b |
+| FL-R12 | **Perpetual tail vs supply cap (FL-V7)**: rule which commitment is intended — (a) docs corrected to the ~8-year tail era the code implements, or (b) cap semantics changed to deliver the promised perpetual tail. Genesis-freeze-sensitive; the losing text (four instances across `ECONOMY_EXPLAINED.md` / `DESIGN_CONCEPTS.md`, enumerated in FL-V7) is fixed by whichever side wins, in that PR | **decision required — neither presumed** | escalated via steering 2026-09-03 |
 
 Signature line (empty by design): ________________
 
