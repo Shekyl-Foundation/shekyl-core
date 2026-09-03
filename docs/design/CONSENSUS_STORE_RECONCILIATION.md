@@ -357,10 +357,9 @@ closed.
 | **DIVERGENT** | on the register below | **regression only** |
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
-**As of 2026-09-02 the CHECKED-CONFORMANT set holds thirty rows** — the four
-store-enforced promotions (CEN-H5, L7, L9, L10) plus the twenty-six §4.J
-archival-family rows (P0f slice 4). All six reviewable store-enforced rows and
-all of §4.J are now reviewed. **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
+**As of 2026-09-02 the CHECKED-CONFORMANT set holds forty-six rows** — the four
+store-enforced promotions, the twenty-six §4.J rows, and the sixteen §4.F rows
+(P0f slices 1–5). **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
 was reviewed and **failed closed to UNREVIEWED** — one of its clauses names
 behavior that is not wired, so it can be neither conformant nor divergent.
 Every row outside this register remains UNREVIEWED by construction, so the
@@ -464,6 +463,34 @@ mirror** (C++ predicate sequence + Rust `serve_credit_decisions`) kept honest
 by the equivalence KAT. That is the right *interim* structure and exactly the
 arrangement the rewrite exists to retire: one implementation, the KAT surviving
 as its pinning vectors, the mirror deleted.
+
+##### P0f slice 5 — §4.F, miner transaction and emission (16 rows)
+
+Reviewed at **`4b9807c5e`** (2026-09-02). One walk, **W-MT**:
+`prevalidate_miner_transaction` + `validate_miner_transaction`
+(`blockchain.cpp:1653–1822`), plus the economics boundary
+(`cryptonote_basic_impl.cpp:93–170`, `src/shekyl/economics.h`) and the
+operand derivations (`get_tx_volume_avg` `:2170`,
+`parent_frozen_segment_count` `:1745–1756`, `hardforks.cpp:35–37`).
+
+| Row | State | Evidence (all at `4b9807c5e`) |
+| --- | --- | --- |
+| CEN-F2 | **CHECKED-CONFORMANT** | W-MT. `version >= 3` asserted (`:1662`) |
+| CEN-F3 | **CHECKED-CONFORMANT** | W-MT. `ct_signatures.type == CTTypeNull` asserted (`:1663`) |
+| CEN-F4 | **CHECKED-CONFORMANT** | W-MT. `height == 0 \|\| vout.size() == 1` (`:1690`), with the claimed `txin_gen` height forced to EQUAL the caller-derived height immediately after — the exemption **cannot be spoofed** from the block's own claim. **REWRITE-NOTE:** the genesis exemption is **load-bearing today** (testnet's shipped `GENESIS_TX` carries 5 outputs — verified at the blob per the in-code note), and there is a rule-21 reopen for mined multi-output coinbases; the rewrite must carry the exemption *and* the caller-derived-operand anti-spoof structure, not just the cap |
+| CEN-F8 | **CHECKED-CONFORMANT** | W-MT. `check_output_types(b.miner_tx, hf_version)` asserted (`:1705`) — the same contract as CEN-H12, applied to the miner tx here because it bypasses pool admission |
+| CEN-F9 | **CHECKED-CONFORMANT** | W-MT. `check_outs_valid` applied at `:1710` with the in-code note that the miner tx never passes `core::check_tx_semantic`, so the §2.3 output-point rule is enforced at this second site — deliberate two-path coverage, documented in place |
+| CEN-F10 | **CHECKED-CONFORMANT** | W-MT. `check_commitment_mask_valid` (`:3346+`) drives `shekyl_check_commitment_masks` with the rc discriminated **three ways** (non-canonical point / trivial amount-leaking form / other), each rejecting |
+| CEN-F11 | **CHECKED-CONFORMANT** | W-MT. `block_height == 0` accepts as configured with `base_reward = money_in_use` (`:1786–1791`); the genesis blob's provenance was verified under slice 1 (`blockchain.cpp:513`, `GENESIS_TX`/`GENESIS_NONCE`) |
+| CEN-F13 | **CHECKED-CONFORMANT** | Economics boundary. The shim states — and the read confirms — **"Nothing is computed here"**: base subsidy, soft-median clamp, 2·median rejection and the 128-bit penalty are canonical in `shekyl-economics` via `shekyl_block_reward`, status discriminated. **Pinned by the 81-vector KAT asserted from BOTH languages** (`EconomicsC2aPrime.Layer1WeightPenaltyPinnedVectors` / `c2a_prime_layer1_weight_penalty_pinned_vectors`) |
+| CEN-F14 | **CHECKED-CONFORMANT** | Same boundary. `SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG` maps to the reject at `:1793–1795`; the recorded divergence comment at `cryptonote_basic_impl.cpp:122–135` remains accurate as read |
+| CEN-F15 | **CHECKED-CONFORMANT** | Same boundary — the release-rate clamp lives in `shekyl-economics/src/release.rs`, reached through the same single FFI call; nothing recomputed C++-side |
+| CEN-F16 | **CHECKED-CONFORMANT** | `compute_emission_split` (`economics.h:95`) is a pure FFI shim over `shekyl_calc_emission_share` + `shekyl_split_block_emission` (`:1797`) |
+| CEN-F17 | **CHECKED-CONFORMANT** | `compute_fee_burn` (`economics.h:63`) is a pure FFI shim over `shekyl_calc_burn_pct` + `shekyl_compute_burn_split_escalated` (`:1804`) |
+| CEN-F18 | **CHECKED-CONFORMANT** | W-MT. **Both directions**: overpay rejects (`money_in_use > reward`, `:1809`) and inexactness rejects (`!=`, `:1815`) — exact-equality confirmed, not `≤` |
+| CEN-F19 | **CHECKED-CONFORMANT** | `parent_frozen_segment_count` asserts `db_height == block_height` (THROW) before reading the leaf count (`:1750–1756`), so the count is the **parent's by construction**. **REWRITE-NOTE:** the in-code warning is itself load-bearing — the check's teeth depend on the *operand* being a pre-`add_block` snapshot, and "simplifying" the call to read the live height makes it a **permanent tautology** that still passes every test. The rewrite should make the read-point structural (a type or a snapshot handle), not a convention guarded by a comment |
+| CEN-F20 | **CHECKED-CONFORMANT** | `get_tx_volume_avg` (`:2170`) computes the integer mean of `tx_hashes.size()` over the prior `SHEKYL_TX_VOLUME_WINDOW` blocks exactly as the rule states, with the short-chain clamp arms read. **REWRITE-NOTE:** this is a **second implementation** — `shekyl-economics/src/activity.rs` maintains the same 720-block rolling mean; the rewrite collapses to one, and the census's own wart (window constant not in `config/`) rides along |
+| CEN-F21 | **CHECKED-CONFORMANT** | Pinned end-to-end: `HF_VERSION_SHEKYL_NG = 1` (`cryptonote_config.h:289`) → the sole mainnet fork entry `{version 1, height 1}` (`hardforks.cpp:35–37`) → `get_earliest_ideal_height_for_version` returns **1** (`hardfork.cpp:383–394`) → consumed at `:1796` |
 
 **Examined and excluded:** **CEN-L12** — its notes record that the spec's
 `staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
@@ -574,7 +601,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
 | **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
-| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **30 rows CHECKED-CONFORMANT** (store-enforced 4 + §4.J 26); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–4, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
+| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **46 rows CHECKED-CONFORMANT** (store-enforced 4 + §4.J 26 + §4.F 16); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–5, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
@@ -593,6 +620,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | **DRS-P0f slice 5 — all 16 §4.F rows CHECKED-CONFORMANT** at `4b9807c5e`. Economics arithmetic confirmed Rust-canonical ("nothing is computed here" holds as read; 81-vector KAT both languages); F18's exact-pay verified in both directions; F21 pinned constant→table→function→caller. REWRITE-NOTEs: F4's load-bearing genesis exemption + anti-spoof structure; F19's tautology hazard should become structural in the rewrite; F20's duplicated 720-mean collapses to one implementation | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 4 — all 26 §4.J rows CHECKED-CONFORMANT** at `4b9807c5e`, via three end-to-end branch walks (W-SC / W-BP / W-EM) with every FFI verdict checked and W-SC's predicate sequence KAT-pinned on both legs. Three REWRITE-NOTEs recorded (assign_epoch cutover reopen; drop-arm set-difference in the marshal; skip_fcmp_verify's embargo-load-bearing cache) plus the section-level note that the C++/Rust mirror is interim structure the rewrite retires | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 3 — the archival-journal family; all six reviewable store-enforced rows now reviewed.** **CEN-L7 → CHECKED-CONFORMANT** (the three bond-fold connect arms return their Rust verdict into one checked site, `apply_archival_bond_record_update`, so `return rc` is correct rather than a discarded verdict). **CEN-L9 → CHECKED-CONFORMANT** (every named fatality present; bonded-underflow checked twice, per-P and global). **CEN-L8 → failed closed to UNREVIEWED**: two clauses verify, but its settlement `(passes, issued)` clause names behavior that does not run — `set_archival_settlement` has **no production caller**, a hazard the tree itself flags at `db_lmdb.cpp:7649` — and **SO-D7 places that writer in the slash scheduler's pass, not epoch close**, so the row's wording is a **census question routed to R8**, not a conformance verdict | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 2 — CEN-L10 → CHECKED-CONFORMANT** at `4b9807c5e`. First-crossing division confined to one Rust site and pinned by a boundary table; layer-2 sub-root existence and the CREATE-only O-2 refusal both fatal; geometry constant structurally asserted against the fcmp widths. Every error arm aborts loudly. **Recorded precision:** L10 is an S-ARCH row, so although the verdict promotes it, **§7.1.1 still bars E2 from acting on it for the archival surface until archival digest coverage exists** — a conformance verdict and a coverage gate are different preconditions | §5.4.1 |
