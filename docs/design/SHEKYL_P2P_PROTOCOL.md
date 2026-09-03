@@ -2237,7 +2237,7 @@ dependency, stated rather than papered over with a placeholder number.
 
 ## 3.6 Cluster B, first sub-round — unrecognised input, and the command table
 
-**Two decisions: PWD-B3 and PWD-B6.** Cluster B carries **28** bucket-4 rows
+**Three decisions: PWD-B3a, PWD-B6 and PWD-B3.** Cluster B carries **28** bucket-4 rows
 across four validation surfaces, which is more than one review can hold at the
 attention each row deserves (rule 19). It is therefore split into sub-rounds,
 following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
@@ -2487,10 +2487,29 @@ lane**, not invented here.
   field is sized from the batch, not from one block. Sizing it to the
   single-block cap would make the header unable to express a legal sync
   response.
-- **PWD-T7's compression gate** gets its classification: **every command in
-  this table carries public consensus data**, so the confidentiality-bearing
-  set is **empty today** and the gate is a check that the set stays empty when
-  a command is added.
+- **PWD-T7's compression gate** gets its classification — **but from the
+  *route*, not from this table, and the difference matters.** *An earlier
+  version of this bullet said "every command in this table carries public
+  consensus data", which is false: `COMMAND_HANDSHAKE` and
+  `COMMAND_TIMED_SYNC` carry peerlists and support flags
+  (`src/p2p/p2p_protocol_defs.h:172-250`) — peer metadata, not consensus data,
+  and peerlist disclosure is a thing PWD-I2 deliberately controls.*
+
+  **The set is empty because of what can reach the compressor, which is a
+  narrower question than what is in the table.** All three call sites finalize
+  as **notifications** — `levin_notify.cpp:437`, and
+  `src/p2p/net_node.inl:2186` / `:2503`, both via `finalize_notify(command)`.
+  **Every p2p command is an *invoke***: `COMMAND_HANDSHAKE`
+  (`net_node.inl:1078`), `COMMAND_TIMED_SYNC` (`:1165`), `COMMAND_PING`
+  (`:2581`) and `COMMAND_REQUEST_SUPPORT_FLAGS` (`:2623`) all go through
+  `async_invoke_remote_command2`, so **they cannot reach the compressor at
+  all** — structurally, not by convention. What remains is the cryptonote
+  notify family, which carries blocks and transactions.
+
+  > **So the confidentiality-bearing set is empty today, and the gate is a
+  > check on the *routes into `try_compress_message`*, not on the command
+  > table.** A gate written against the table would pass while a future
+  > invoke-carried secret was quietly re-routed through a notify.
 
 **Conceded, and it is a real cost.** A dynamic cap means two nodes at different
 heights admit different maxima, so a node far behind the tip rejects a block a
