@@ -121,6 +121,8 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_at_median);
     GENERATE_AND_PLAY(gen_block_alt_ts_above_ftl);
+    GENERATE_AND_PLAY(gen_block_pow_verifier_failure_main);
+    GENERATE_AND_PLAY(gen_block_pow_verifier_failure_alt);
     GENERATE_AND_PLAY(gen_block_alt_ts_window_truncation);
     GENERATE_AND_PLAY(gen_reorg_watermark_refused_switch);
     GENERATE_AND_PLAY(gen_checkpoint_conflict_rollback);

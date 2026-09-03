@@ -90,7 +90,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
-**DRS-0 is blocked** until **DRS-P0** lands **and the register's S-graded divergences are closed or accepted** — CEN-M8's S0 is closed (PR #602 merged, rows re-verified 2026-09-03); CEN-D2's S1 (CEN-D1 coupled — §7.2: *S1 blocks DRS-0*) remains, fix-or-accept pending.
+**DRS-0 is blocked** until **DRS-P0** lands **and the register's S-graded divergences are closed or accepted** — CEN-M8's S0 is closed (PR #602 merged, rows re-verified 2026-09-03); CEN-D2's S1 (CEN-D1 coupled — §7.2: *S1 blocks DRS-0*) is **ruled FIX** — PR #604 in flight; the blocker clears when it merges and the rows re-review.
 
 ---
 
