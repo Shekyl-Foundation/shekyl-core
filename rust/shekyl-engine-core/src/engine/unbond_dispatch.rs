@@ -54,6 +54,22 @@
 //! construction and "wait" is its only correct remedy. Retirement is the
 //! dispatch driver's reservation-settlement pass, exactly as for a drain.
 //!
+//! **Failure disposition, and the recovery residue this lane shares.** A
+//! definite FIRST-send refusal (`RejectedTerminal`, or the pre-transport
+//! `PersonaMismatch`) releases the seal it just took — see the dispatch
+//! site: the bytes were never admitted or relayed, so the record could
+//! never settle and holding it would brick the lane. A retryable or
+//! ambiguous failure, and a crash between seal and send, HOLD the record:
+//! funds-safe (reservation intact, stored bytes the only re-sendable
+//! form), not yet live — no driver resubmits claims, drains, or unbonds
+//! today, and that is the registered dispatch-driver slice
+//! (`docs/FOLLOWUPS.md`: terminal-reject prune + byte-identical resubmit,
+//! #572), which cannot land piecemeal because the prune half is a
+//! SECURITY item (the retained bytes are a replay channel; resubmit
+//! without the prune widens it). Until it lands, the stall alarm names a
+//! stuck record in the operator log — funds-safety over liveness, the
+//! posture all three reservation-observed lanes share.
+//!
 //! ## What this seam does NOT lift
 //!
 //! `pub(crate)`, no RPC method, no CLI verb: the reachability gate on the
@@ -200,8 +216,16 @@ pub(crate) enum UnbondRequestError {
     InputRaced,
     /// The assembled bytes' dispatch failed at (or behind) the submit choke
     /// point; the exit was assembled and sealed, and its network fate is the
-    /// error's to name. The sealed record stays live — the bytes may have
-    /// reached the network.
+    /// error's to name. **What happened to the sealed record depends on the
+    /// verdict class** (the dispatch site's disposition match):
+    /// a definite first-send refusal — [`SubmitterError::RejectedTerminal`]
+    /// or the pre-transport [`BroadcastSubmitError::PersonaMismatch`] — has
+    /// already RELEASED it (the bytes were never admitted or relayed, so
+    /// the record could never settle), and the caller may rebuild and retry
+    /// at will; a retryable or ambiguous failure HOLDS it (the bytes may
+    /// have propagated), and the one-live-exit lane stays shut until the
+    /// record settles or the recovery slice (`docs/FOLLOWUPS.md`,
+    /// dispatch-driver prune + resubmit) disposes of it.
     #[error("unbond broadcast: {0}")]
     Submit(#[from] BroadcastSubmitError),
 }
@@ -532,9 +556,15 @@ where
 
         // Persist-before-dispatch (module docs; pin P-2's sibling): seal the
         // exit record — bytes and funding reservation — and its Dispatched
-        // transition in ONE mutation, before any network send. A crash after
-        // this seal resumes as "maybe sent", which is safe because every
-        // resend is byte-identical. `at` reads the same named
+        // transition in ONE mutation, before any network send. A crash
+        // between this seal and the send below resumes as "maybe sent":
+        // FUNDS-safe by construction (the reservation holds, nothing can
+        // double-spend the inputs, and the stored bytes are the only thing
+        // a future re-send may carry — pin P-2), but not yet LIVE — no
+        // driver resubmits a reservation-observed record today, so the lane
+        // stays held (stall-alarmed) until the shared dispatch-driver
+        // recovery slice lands (module docs: the same registered residue
+        // the claim and drain lanes carry). `at` reads the same named
         // daemon-claimed-tip clock as the bond/claim/drain dispatch.
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await

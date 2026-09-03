@@ -116,7 +116,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
   - Target: pre-genesis
 
-- **Drain/claim dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572).**
+- **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).**
   - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 
