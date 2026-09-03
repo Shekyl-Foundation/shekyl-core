@@ -50,10 +50,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
-  - Target: pre-genesis
-
-- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); the submit fact set landed, so what it now needs is the engine dispatch seam.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+- **Staking has no REACHABLE exit: producer, submit battery, dispatch seam, and the daemon walk all exist, but the seam (`Engine::submit_unbond`) is `pub(crate)` with only a `#[cfg(test)]` caller — no RPC method, no CLI verb, no composed `unstake` (= post + a decorrelated drain, PR-C).** [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release

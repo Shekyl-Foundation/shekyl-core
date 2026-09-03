@@ -4,6 +4,41 @@
 
 ### Added
 
+- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B,
+  2026-09-02) — an
+  `Unbond` has now been assembled by the wallet, accepted by native
+  `/submit_transaction`, and connected on a real regtest chain, for the
+  first time anywhere.** `Engine::submit_unbond`
+  (`shekyl-engine-core/src/engine/unbond_dispatch.rs`, `pub(crate)`) is
+  the claim/drain sibling seam: bond-record facts fetched as one bound
+  read view over the persona-isolated transport
+  (`fetch_claim_source_for`), readiness refused with consensus's own
+  predicates before any curve-tree work, the canonical P-lane floor fee
+  (no knob), sweep-all funding through the bond path's own sweep body,
+  `AssembleUnbond` in the actor, a `PendingUnbond` sealed
+  persist-before-dispatch, then the posture→submitter choke point. The
+  pending-post block gains the fourth reservation-observed kind —
+  **`PENDING_POST_VERSION` v8 → v9** (rule 42; snapshot + paired-bump
+  gate) — deliberately NOT a `PendingBondPost`: the exit draws no
+  decorrelation offset (its trigger, a cooldown expiring, is already
+  public), so it must not enter WI-3's due-check, and it retires by its
+  reservation settling (`remove_settled`), not a pscan match. The
+  **daemon walk** (`e2e_unbond_accepted_and_connected`, the FOLLOWUPS
+  registration it discharges) asserts the RF-D9-class byte proposition —
+  submit-accept via the §8.7.1.1 UB battery, block-connect via the
+  record row read back **present with `bonded_total == 0`** (a
+  transition observed from the pre-submit floor balance) — on the
+  genesis schedule with the cooldown predicates **vacuous by design**
+  (never-served persona; the served-exit arms remain PR-A's unit
+  battery, and the SEB lever cannot cheapen a served exit because the
+  slash watermark advances `CHALLENGE_RESOLUTION_BLOCKS` in blocks).
+  **Reachability is NOT lifted**: no RPC method, no CLI verb, `unstake`
+  RESERVED — the seam's only caller is the `#[cfg(test)]` walk, so
+  "nothing dispatches the assembled bytes" narrowed to "nothing
+  user-facing dispatches"; lifting it is PR-C's composed `unstake`
+  (post + a decorrelated drain), which also inherits the
+  retire-on-a-real-chain arm by its recorded conditional.
+
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;
   a real behavioral divergence must be named, ratified, and loud

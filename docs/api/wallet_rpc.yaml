@@ -141,8 +141,14 @@
 #                                                   is anchored to what
 #                                                   actually holds it: no RPC
 #                                                   verb, no CLI command, and
-#                                                   nothing dispatching the
-#                                                   assembled bytes. Native
+#                                                   no composed unstake verb.
+#                                                   "Nothing dispatching the
+#                                                   assembled bytes" was a
+#                                                   third condition until
+#                                                   PR-B narrowed it (seam
+#                                                   pub(crate), sole caller
+#                                                   #[cfg(test)] — the PR-B
+#                                                   UPDATE below), and native
 #                                                   /submit_transaction was a
 #                                                   fourth condition until
 #                                                   2026-08-29 and is not one
@@ -206,6 +212,35 @@
 #                                                   path closed, where it used
 #                                                   to be one of two
 #                                                   independent layers.
+#                                                   UPDATE 2026-09-02 (PR-B):
+#                                                   the dispatch
+#                                                   seam landed
+#                                                   (Engine::submit_unbond,
+#                                                   pub(crate)) and the daemon
+#                                                   walk ran green — an
+#                                                   Unbond has now been
+#                                                   assembled, dispatched,
+#                                                   ACCEPTED by native submit
+#                                                   and CONNECTED on a real
+#                                                   regtest chain
+#                                                   (e2e_unbond_accepted_and_
+#                                                   connected). Neither lifted
+#                                                   this gate: "nothing
+#                                                   DISPATCHES the assembled
+#                                                   bytes" NARROWED to
+#                                                   "nothing user-facing
+#                                                   dispatches" (the seam's
+#                                                   only caller is
+#                                                   #[cfg(test)]), and the
+#                                                   composed unstake =
+#                                                   unbond() = post + a
+#                                                   decorrelated drain still
+#                                                   does not exist. Those two
+#                                                   conditions — no user-
+#                                                   facing caller, no
+#                                                   composed verb — are what
+#                                                   RESERVED now anchors to;
+#                                                   lifting them is PR-C.
 #                                                   Read this entry as "the
 #                                                   hard part exists and is
 #                                                   unreachable", never as

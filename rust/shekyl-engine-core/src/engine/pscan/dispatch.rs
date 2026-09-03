@@ -388,6 +388,8 @@ pub(crate) enum ReservationKind {
     Claim,
     /// A pending `P`→principal drain.
     Drain,
+    /// A pending terminal `Unbond` exit.
+    Unbond,
 }
 
 impl ReservationKind {
@@ -396,6 +398,7 @@ impl ReservationKind {
         match self {
             Self::Claim => "emission claim",
             Self::Drain => "drain",
+            Self::Unbond => "unbond exit",
         }
     }
 }
@@ -571,6 +574,12 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                             .iter()
                             .map(|d| (ReservationKind::Drain, d.persona, d.state)),
                     )
+                    .chain(
+                        block
+                            .unbonds()
+                            .iter()
+                            .map(|u| (ReservationKind::Unbond, u.persona, u.state)),
+                    )
                 {
                     if let PendingPostState::Dispatched { at, .. } = state {
                         if tip.to_raw() >= at.to_raw().saturating_add(horizon)
@@ -650,6 +659,13 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                  reservation released, and the persona's one-live-drain lane reopened"
             );
         }
+        if !plan.settled.unbonds.is_empty() {
+            tracing::info!(
+                count = plan.settled.unbonds.len(),
+                "unbond exit: reservation settled — pending exit(s) retired, funding \
+                 reservation released, and the persona's one-live-exit lane reopened"
+            );
+        }
 
         // Clear ONLY the key whose record actually settled. Clearing both for
         // any settled persona would drop a still-live sibling's marker, and the
@@ -666,6 +682,10 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         for persona in &plan.settled.drains {
             self.alarmed_reservations
                 .remove(&(ReservationKind::Drain, *persona));
+        }
+        for persona in &plan.settled.unbonds {
+            self.alarmed_reservations
+                .remove(&(ReservationKind::Unbond, *persona));
         }
         for (kind, persona, at) in &plan.reservation_alarms {
             self.alarmed_reservations.insert((*kind, *persona));
