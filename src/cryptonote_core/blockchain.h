@@ -1087,9 +1087,12 @@ namespace cryptonote
     /**
      * @brief removes blocks from the top of the blockchain
      *
-     * @return false iff the request was refused at the prune watermark
-     * (nothing was popped; C2-R1b F-1) — callers surface an explicit
-     * error, never a silent success with an unchanged height.
+     * @return false on either failure arm — a prune-watermark refusal
+     * (nothing was popped; C2-R1b F-1) or a mid-pop exception (SOME
+     * blocks may already be popped: the failure path is not atomic, and
+     * the resulting height tells the caller how far it got). Callers
+     * surface an explicit error either way, never a silent success with
+     * an unchanged height.
      */
     bool pop_blocks(uint64_t nblocks);
 

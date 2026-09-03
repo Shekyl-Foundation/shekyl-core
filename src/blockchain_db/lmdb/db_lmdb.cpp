@@ -134,7 +134,15 @@ using namespace crypto;
 // with no repair path (the bytes are gone). The rows are required now, so
 // a datadir that may lack them is refused at open rather than mis-served
 // at runtime. Delete and resync.
-#define VERSION 11
+// V12: the prune-watermark receipt (properties `archival_prune_watermark_
+// epoch`, C2-R1b-Q1c) — semantics, not layout. A V11 datadir has already
+// pruned WITHOUT receipts, so its absent key would read as "no prune has
+// ever run" and every pop would pass the new floor: the exact walk-down
+// hole the receipt exists to close, open on every upgraded node until an
+// epoch close backfilled the key. Refused at open instead; the bump also
+// keeps a V11 binary (which reads no receipts) out of a V12 datadir.
+// Delete and resync.
+#define VERSION 12
 
 namespace
 {
@@ -10288,6 +10296,14 @@ void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
   // Pre-genesis posture (15-deletion-and-debt.mdc, 60-no-monero-legacy.mdc):
   // no in-Shekyl migration code; `rm -rf` and resync is the migration path.
+  // V12 added the prune-watermark receipt (properties key
+  // `archival_prune_watermark_epoch`, C2-R1b-Q1c): a V11 DB has already
+  // PRUNED without writing receipts, so on such a datadir an absent key
+  // would read as "no prune has ever run" and every pop would be allowed --
+  // the walk-down hole open on every upgraded node until an epoch close
+  // happened to backfill the key. No backfill is attempted (the posture
+  // above); the bump also stops a V11 binary from reopening a V12 datadir
+  // and popping past receipts it does not read.
   // V10 widened the `archival_serve_credit` key 48 → 56 B (PC-D4): a pre-V10
   // DB's rows are invisible to the widened point reads and FATAL to its scans.
   // V9 added the block-header `attestation_root` (ARCHIVAL_CREDIT_WIRE.md §3):

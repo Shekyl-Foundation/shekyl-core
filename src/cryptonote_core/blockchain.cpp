@@ -6636,7 +6636,15 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
       // keep running in contradiction with a checkpoint it accepted. Same
       // predicate as the pop_block belt; the false return fail-stops via
       // core::update_checkpoints -> graceful_exit.
-      if (!m_db->pop_target_allowed(rollback_target))
+      //
+      // Height-vs-index: `rollback_target` is a DB HEIGHT (the rollback
+      // loop stops when height() == rollback_target), while the predicate
+      // takes the resulting tip's block INDEX = rollback_target - 1.
+      // Passing the height verbatim let the boundary case slip past this
+      // pre-check into the belt's exception instead of the documented
+      // fail-stop (review round 2).
+      const uint64_t rollback_tip_index = rollback_target >= 1 ? rollback_target - 1 : 0;
+      if (!m_db->pop_target_allowed(rollback_tip_index))
       {
         MERROR("Checkpoint at height " << pt.first << " (expected " << pt.second
           << ", chain has " << m_db->get_block_hash_from_height(pt.first)
