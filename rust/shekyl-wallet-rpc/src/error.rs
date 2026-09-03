@@ -158,6 +158,11 @@ pub enum WalletRpcErrorCode {
     /// Stake: the foundation posture was requested without the
     /// acknowledgment; the refusal message is the warning itself (D-4).
     StakeFoundationUnacknowledged = -29506,
+    /// Stake: the persona's spendable funding is fragmented across more
+    /// outputs than one bond post's vin headroom carries (the consensus
+    /// vin cap minus the post's own bond input). W1-clean; funding is
+    /// intact — neither "fund and retry" nor an internal fault.
+    StakeFundingFragmented = -29512,
     /// Drain: this wallet runs no stake engine — it is not an archival
     /// staker, and the drain path does not exist here (WI-RPC-5;
     /// `stake_in`'s equivalent refusal is `-29500`).
@@ -368,6 +373,17 @@ pub enum WalletRpcError {
     /// scheduled broadcast; no action needed.
     #[error("stake already in flight: the bond will broadcast at its scheduled time")]
     StakeInFlight,
+    /// Stake: the persona's spendable funding is fragmented across more
+    /// outputs than one bond post can carry (W1-clean; the funding is
+    /// intact). Carries the public headroom constant, never the wallet's
+    /// record count.
+    #[error(
+        "stake refused: persona funding is fragmented across more than {max} spendable          outputs — more than one bond post can carry; avoid splitting persona funding          across more than {max} stake_in transfers"
+    )]
+    StakeFundingFragmented {
+        /// The per-transaction funding-input headroom (public constant).
+        max: usize,
+    },
     /// Stake: the wallet already staked (a confirmed bond exists).
     #[error("already staking")]
     AlreadyStaked,
@@ -552,6 +568,7 @@ impl WalletRpcError {
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
+            Self::StakeFundingFragmented { .. } => WalletRpcErrorCode::StakeFundingFragmented,
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
             Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
@@ -1416,6 +1433,21 @@ mod tests {
         }
         .into();
         assert_eq!(wire.code().as_i32(), -32603);
+    }
+
+    /// The fragmented-funding stake refusal mints `-29512` and renders the
+    /// public headroom constant, never the wallet's record count (which the
+    /// arm does not even carry) — the classification whose absence routed
+    /// this condition to `-32603` "internal error" (review #601 r5).
+    #[test]
+    fn stake_funding_fragmented_is_29512_and_count_free() {
+        let err = WalletRpcError::StakeFundingFragmented { max: 7 };
+        assert_eq!(err.code().as_i32(), -29512);
+        assert!(err.to_string().contains('7'), "the headroom renders");
+        assert!(
+            err.to_string().contains("fragmented"),
+            "names the condition"
+        );
     }
 
     /// `stake_in` mints no new codes: the no-persona arms are `-29500`

@@ -381,9 +381,10 @@
 #   -29200..-29299           refresh / rescan
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (-29500..-29506 live on `stake`;
-#                            -29507..-29511 live on `drain` (WI-RPC-5);
-#                            rest reserved — never reuse an allocated code)
+#   -29500..-29599           staking (-29500..-29506 and -29512 live on
+#                            `stake`; -29507..-29511 live on `drain`
+#                            (WI-RPC-5); rest reserved — never reuse an
+#                            allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
 #                            not pending work. A4 (2026-08-06) descoped
@@ -622,6 +623,7 @@ components:
         - -29509   # DRAIN_RESERVE_BREACHED
         - -29510   # DRAIN_UNANCHORABLE
         - -29511   # DRAIN_IN_FLIGHT
+        - -29512   # STAKE_FUNDING_FRAGMENTED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -866,6 +868,21 @@ components:
                                           renders the same condition as its
                                           `status: syncing` result
                                           discriminant, never this error
+          -29512 STAKE_FUNDING_FRAGMENTED stake: the persona's spendable
+                                          funding is fragmented across more
+                                          outputs than one bond post can
+                                          carry (the consensus vin cap
+                                          counts the post's own bond input,
+                                          so the funding headroom is 7).
+                                          W1-clean; the funding is intact —
+                                          neither -29500's "fund and retry"
+                                          (funding more worsens it) nor an
+                                          internal fault. No consolidation
+                                          verb exists yet for un-bonded
+                                          persona funding; avoid splitting
+                                          persona funding across more
+                                          stake_in transfers than the
+                                          headroom
           -29511 DRAIN_IN_FLIGHT          drain: a live pending drain already
                                           exists for this persona (one live
                                           drain per persona — the sealed

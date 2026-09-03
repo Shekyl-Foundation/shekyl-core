@@ -43,6 +43,33 @@ fn funding_refusal_detail_is_amount_free() {
         "assemble-path amounts sanitized: {d}"
     );
     assert!(d.contains("bond assembly failed"));
+
+    // The vin-headroom refusal: the wallet's record COUNT is P-activity
+    // volume (the redacted class); the public headroom constant survives.
+    let d = super::funding_refusal_detail(&super::BondAssemblyError::TooManyFundingInputs {
+        count: 424_242,
+        max: super::super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS,
+    });
+    assert!(!d.contains("424"), "no record count: {d}");
+    assert!(d.contains("fragmented"));
+}
+
+/// The vin-headroom refusal takes its OWN first-stake arm — both standing
+/// buckets misdiagnose it (rule 82): `Funding`'s "-29500 fund and retry"
+/// makes fragmentation worse, and `State`'s corrupt-state diagnosis is
+/// false (the funding is intact). Routing it to either bucket turns this
+/// red.
+#[test]
+fn a_fragmented_pool_is_its_own_first_stake_refusal() {
+    let max = super::super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS;
+    let mapped = super::preflight_error(&super::BondAssemblyError::TooManyFundingInputs {
+        count: max + 5,
+        max,
+    });
+    assert!(
+        matches!(mapped, super::FirstStakeError::FundingFragmented { max: m } if m == max),
+        "got {mapped:?}"
+    );
 }
 
 use super::*;
