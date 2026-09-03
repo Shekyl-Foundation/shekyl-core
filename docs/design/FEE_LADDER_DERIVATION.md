@@ -338,19 +338,23 @@ users, three times:
   `:667` — "maintains **perpetual** security incentives through tail
   emission."
 
-What consensus does (verified §4.6, independently re-derived at steering):
-the supply-headroom cap (`cryptonote_basic_impl.cpp:169-173`,
+**The contradiction is self-contained — no code and no instrument is
+needed to see it.** `ECONOMY_EXPLAINED.md:18` states *"one fixed supply —
+4,294,967,296 coins (2³²)"*; `:35` states *"floored at a perpetual tail
+of 0.6 coins/block"* — seventeen lines apart in the same document. A
+fixed cap and a perpetual per-block floor are mutually exclusive by
+arithmetic alone. What this round's derivation adds is only the *date*
+and which side the code took: the supply-headroom cap
+(`cryptonote_basic_impl.cpp:169-173`,
 `shekyl_cap_reward_to_remaining_supply` — added *deliberately*, with a
 comment fixing the underflow that used to disable it) zeroes the
-validation reward once `already_generated_coins` reaches `money_supply`.
-Tail-era headroom is exactly `tail·2^esf`, so the tail lasts exactly
-`2^21 = 2 097 152` blocks (~8 years) and then emission is zero, permanently.
-"Perpetual tail" and "hard supply cap" are mutually exclusive commitments;
-the code chose the cap, the explainers promise the tail —
-`ECONOMY_EXPLAINED.md` states the `>> 21` decay, the cap, *and* the
-"forever" claim in the same section. The cited precedent does not
-transfer: Monero's tail is perpetual because Monero's supply is uncapped
-(`DESIGN_CONCEPTS.md:544`).
+validation reward once `already_generated_coins` reaches `money_supply`,
+and tail-era headroom is exactly `tail·2^esf`, so the tail lasts exactly
+`2^21 = 2 097 152` blocks (~8 years) and then emission is zero,
+permanently (§4.6, independently re-derived at steering). Any dispute
+about the instrument therefore touches the timing, never the finding.
+The cited precedent does not transfer: Monero's tail is perpetual because
+Monero's supply is uncapped (`DESIGN_CONCEPTS.md:544`).
 
 **Not fixed in this round, with the blocker named (rule 22):** the fix
 direction is a monetary-policy ratification, not a text edit — either the
