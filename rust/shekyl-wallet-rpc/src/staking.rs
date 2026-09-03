@@ -5,11 +5,14 @@
 
 //! Staking read-only JSON-RPC methods (WI-RPC-1).
 //!
-//! Pure projections of [`Engine::staking_read_view`], the one authoritative
-//! aggregation over the sealed pscan / pending-post records — never the
-//! `bonded_slots` hint. All three methods are read-only (`&self` under the
-//! engine read guard). Staking *actions* (unstake, claim) are out of scope:
-//! they need Engine surfacing first.
+//! Pure projections of [`shekyl_engine_core::Engine::stake`] /
+//! [`shekyl_engine_core::StakeFacade::staking_read_view`], the one
+//! authoritative aggregation over the sealed pscan / pending-post records —
+//! never the `bonded_slots` hint. All three methods are read-only (`&self`
+//! under the engine read guard). The façade is always a view, so non-stakers
+//! get honest zeros rather than a missing-handle error. Staking *actions*
+//! (unstake, claim) are out of scope: they land on
+//! [`shekyl_engine_core::StakeFacade`] when reachable.
 //!
 //! `get_balance` / `get_wallet_info` snapshot-then-read through
 //! [`ledger_snapshot_with_staking`] — nested `ledger.read()` under a live
@@ -84,8 +87,9 @@ pub(crate) async fn staking_info(
 /// Compute the authoritative view from an already-held engine read guard.
 ///
 /// The staking RPC methods' single call site of
-/// [`Engine::staking_read_view`](shekyl_engine_core::Engine::staking_read_view),
-/// so the off-the-worker discipline and the error mapping below have one home
+/// [`StakeFacade::staking_read_view`](shekyl_engine_core::StakeFacade::staking_read_view)
+/// (product door; the Engine inherent still owns the body). The
+/// off-the-worker discipline and the error mapping below have one home
 /// rather than a copy per caller.
 ///
 /// **Do not call this while a [`shekyl_engine_core::LedgerReadGuard`] is
@@ -113,7 +117,9 @@ pub(crate) async fn staking_info(
 pub(crate) fn read_view_under_guard(
     engine: &Engine<SoloSigner>,
 ) -> Result<StakingReadView, WalletRpcError> {
-    map_staking_read(tokio::task::block_in_place(|| engine.staking_read_view()))
+    map_staking_read(tokio::task::block_in_place(|| {
+        engine.stake().staking_read_view()
+    }))
 }
 
 /// Like [`read_view_under_guard`], but uses a caller-supplied ledger
@@ -136,7 +142,9 @@ fn read_view_with_snapshot(
     recovery_pending_reopen: bool,
 ) -> Result<StakingReadView, shekyl_engine_core::StakingReadError> {
     tokio::task::block_in_place(|| {
-        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
+        engine
+            .stake()
+            .staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     })
 }
 
@@ -228,7 +236,7 @@ pub(crate) fn ledger_snapshot_with_staking<T>(
     };
     // Guard dropped above (non-reentrant lock): the session-adoption flag
     // takes its own brief ledger read, then the sealed-file staking read.
-    let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
+    let recovery_pending_reopen = engine.stake().staking_recovery_pending_reopen();
     let staking = degrade_or_loud(read_view_with_snapshot(
         engine,
         staking_enabled,

@@ -246,8 +246,8 @@ preservation. The two are complementary disciplines.
 | `ArchivalEngine` trait surface (per-shard state, archival operations) | V3.x — separate trait that consumes `EconomicsEngine` |
 | Anonymity-network-coordination trait (Tor/I2P transport for archival queries) | V3.x — currently flagged in §9 as a future-trait candidate; trait shape not designed |
 | View-only / hardware-offload `open_*` bodies | V3.0 follow-up; orthogonal |
-| Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
-| Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface). PR 4 C6β retired the original `MockLedger` parallel-implementation in favour of the no-Mock substrate `FaultInjecting<LocalLedger>::new(LocalLedger::from_test_blocks(Vec::new()))`; `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger` wrapping the production `LocalLedger` with the trait-level failure-injection wrapper (per `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6β + §6.1 "no-Mock substrate inheritance discipline"). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story (queued at V3.x in `FOLLOWUPS.md`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `L` alongside the `LedgerEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §1.4. |
+| Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). Remaining (pre-genesis; not coupled to trait-`pub`): generalize the production constructors (`Engine::create`, `Engine::open_full`) over `D`, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. Trait `pub` reopen is the second in-tree production crate that must construct a workflow without `Engine` (§2). |
+| Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface). PR 4 C6β retired the original `MockLedger` parallel-implementation in favour of the no-Mock substrate `FaultInjecting<LocalLedger>::new(LocalLedger::from_test_blocks(Vec::new()))`; `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger` wrapping the production `LocalLedger` with the trait-level failure-injection wrapper (per `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6β + §6.1 "no-Mock substrate inheritance discipline"). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story. Remaining (pre-genesis; not coupled to trait-`pub`): generalize the production constructors (`Engine::create`, `Engine::open_full`) over `L`, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §2. |
 
 ### 1.3 Why "concrete fields + generic-bounded methods" is the Stage 1 shape
 
@@ -635,18 +635,18 @@ preserve:
    existing methods may not change signature without a new design
    round.
 
-**Visibility (Round 4a — Item 13 pin).** The seven traits ship
-**`pub(crate)` until JSON-RPC server cutover** (V3.2 per
-`docs/FOLLOWUPS.md`'s `wallet_rpc_server` Rust migration
-target). The traits are internal contracts of `shekyl-engine-core`
-that consumers (the wallet binaries, the `shekyl-wallet-rpc`
-JSON-RPC server) reach via `Engine<S>`'s inherent methods, not
-via direct trait dispatch. `pub(crate)` keeps the trait surfaces
-*internally* reviewable while the implementations stabilize and
-the JSON-RPC contract solidifies; promoting to `pub` happens
-when a downstream consumer — the JSON-RPC server, an embedding
-library, or a non-CLI binary — needs to dispatch through trait
-references rather than `Engine<S>` calls.
+**Visibility (Round 4a — Item 13 pin; re-anchored 2026-09-02).** The
+seven traits ship **`pub(crate)`**. The original trigger was JSON-RPC
+server cutover (historical V3.2 label; that cutover landed with Phase 5,
+2026-08-19, #507). The trigger fired; the rejection is **re-anchored**,
+not delayed: consumers (the wallet binaries, `shekyl-wallet-rpc`) reach
+functionality via `Engine<S>`'s inherent methods and workflow façades
+(`Engine::stake()`), not via direct trait dispatch. There is no V3.1 /
+V3.2 / V3.x train (`docs/FOLLOWUPS.md`).
+
+**Reopen** (rule 21) when a second in-tree production crate must
+construct a workflow without `Engine` (not tests). Promotion to `pub`
+is additive and does not require trait-surface changes.
 
 This visibility decision shapes the test boundary (§6). With
 `pub(crate)` traits, integration tests against fully-mocked
@@ -660,9 +660,10 @@ fully-mocked `Engine<SoloSigner, MockKey, …>` live in-crate.
 
 Promoting traits to `pub` later is *additive* and does not
 require trait-surface changes — only visibility relaxation. The
-Round 4a pin is "`pub(crate)` for V3.0; revisable to `pub` at
-V3.2 alongside `wallet_rpc_server` Rust migration"; future
-rounds adjust visibility, not surface.
+Round 4a pin was "`pub(crate)` until JSON-RPC cutover"; that
+cutover landed, and the pin is now the product-surface choice
+above (Engine / façades, not trait dispatch) until the reopen
+criterion fires. Future rounds adjust visibility, not surface.
 
 The `Mock*` implementors are `pub(crate)` for the same reason:
 they're test-only support, not consumer-facing types.
@@ -5404,10 +5405,10 @@ Round 4a closure (the ground truth)
     │      §10.2.1 Stage 1 baseline (V3.0; gates Stage 1 PR review)
     │      §10.2.2 Stage 4 cost characterization (depends on §10.1.2)
     │
-    ├──► §10.3 V3.1 / V3.2 expansion axis  (governed by §2 trait surfaces, §2 preamble visibility)
+    ├──► §10.3 Expansion after the Stage-1 surface (historical labels V3.1 / V3.2; governed by §2 trait surfaces, §2 preamble visibility)
     │      §10.3.1 Multisig support (V3.1)
     │         └──► §10.3.2 Multi-engine server (V3.1+)
-    │                 └──► §10.3.3 JSON-RPC server cutover (V3.2; promotes pub(crate)→pub)
+    │                 └──► §10.3.3 JSON-RPC server cutover (landed; traits stay pub(crate))
     │
     ├──► §10.4 V3.x enhancement axis  (governed by §2.7, §2.8, §3.4, §7)
     │      §10.4.1 Adaptive-burn observation feeding (design hook on §10.1.2)
@@ -5719,10 +5720,11 @@ strategy (restart costs).
 
 Three entries in version-sequential order. V3.1's multisig
 adds structural complexity to two traits; V3.1+ multi-engine
-server changes the assumed engine-per-process model; V3.2's
-JSON-RPC cutover promotes the trait visibility per §2
-preamble. Sequential dependencies: each entry depends on the
-prior settling.
+server changes the assumed engine-per-process model; the
+JSON-RPC cutover **landed** without promoting traits to `pub`
+(§2 preamble; reopen only on the criterion there). Sequential
+dependencies: remaining entries still depend on the prior
+settling.
 
 #### 10.3.1 Multisig support (target: pre-genesis; protocol name V3.1)
 
@@ -5797,25 +5799,30 @@ multisig state); V3.0 ship.
 
 #### 10.3.3 JSON-RPC server cutover (target: pre-genesis)
 
-*Description.* The `wallet_rpc_server` Rust migration per
-`docs/FOLLOWUPS.md` V3.2 target. At cutover, the seven
-traits promote from `pub(crate)` (per §2 preamble Item 13)
-to `pub`; the trait surface becomes part of the public API.
-Promotion is additive and does not require trait-surface
-changes — only visibility relaxation — but it changes the
-test-boundary discipline (per §6, integration tests against
-`Mock*` implementors no longer need to live in-crate).
+*Description.* The C++ `wallet_rpc_server` → Rust
+`shekyl-wallet-rpc` cutover **landed** (Phase 5, 2026-08-19,
+#507). The seven traits did **not** promote to `pub` at that
+cutover: §2's visibility pin was re-anchored (2026-09-02) as
+a product-surface choice — consumers use `Engine` / workflow
+façades, not trait dispatch.
 
-*Trigger.* "V3.2 `wallet_rpc_server` Rust migration phase
-begins." (External — owned by V3.2 release planning per
-`docs/FOLLOWUPS.md`.)
+*Residue.* Trait `pub` promotion remains additive and is
+gated on the §2 reopen criterion (a second in-tree production
+crate that must construct a workflow without `Engine`). Until
+then, `Mock*` integration tests stay in-crate per §6.
+
+*Trigger (original, discharged).* "JSON-RPC server Rust
+migration begins." Discharged by Phase 5.
+
+*Trigger (re-anchored).* A second production crate needs trait
+dispatch without `Engine`.
 
 *Structural cross-reference.* §2 preamble visibility pin
-(Round 4a Item 13); §6 test boundary; `docs/FOLLOWUPS.md`
-V3.2 entry.
+(Round 4a Item 13, re-anchored 2026-09-02); §6 test boundary;
+[`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
 
 *Dependencies.* §10.3.1 multisig and §10.3.2 multi-engine
-server (both feed into the public API surface); V3.0 ship.
+server (both feed into the public API surface).
 
 ### 10.4 Later enhancements
 
@@ -6203,7 +6210,7 @@ the threshold conditions is rejected as conjectural.
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `run_refresh_task` rustdoc — the cancellation contract reproduced inline (PR 4 Phase 1 brings the inline rustdoc into alignment with §7's five-checkpoint discipline).
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `Engine::refresh` rustdoc (post-2026-04-28) — the sync-vs-async cancellation split.
 - [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockDaemon` (renamed from `MockRpc` in Stage 1 PR 1, extended into a full `DaemonEngine` implementor with submit dedup, fixed fee-estimate snapshot with override hook, and queued-error injection per §6.1; `ChaCha20Rng` reserved for future fee-jitter / synthetic-fork randomization per §6.2 but not yet consumed at this PR's contract surface) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
-- [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization deferred to V3.2 alongside the `DaemonEngine`-to-`pub` promotion.
+- [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization remains pre-genesis (`Engine::create` / `Engine::open_full` still take a concrete `DaemonClient`), not coupled to trait-`pub` (reopen: second in-tree production crate without `Engine`).
 - [`docs/CI_BASELINE.md`](CI_BASELINE.md) — `shekyl-oxide` divergence-canary policy referenced in §2.5's upstream/downstream rationale.
 - [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc) — the "4–6 review rounds before any Rust" rule this document is run against.
 - [PR #20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) — the spec's review-and-acceptance PR (merged 2026-05-01, merge commit `40093ac7a`; Interpretation D: linear-append commits per round, Rounds 1–5).

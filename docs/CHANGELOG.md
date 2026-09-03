@@ -22,6 +22,12 @@
   Every enforcement arm was observed red on a planted evasion before
   landing.
 
+- **Wallet engine staking product door (`Engine::stake()` → `StakeFacade`).**
+  Staking / drain / claim product calls go through `StakeFacade`; JSON-RPC
+  method names are unchanged. Inherent `Engine` methods are count-frozen
+  (`METHODS_CEILING`). See
+  [`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
+
 - **Daemon C++ is not a base — a complete rewrite gates release (countermand,
   2026-09-01).** Recorded with its blast radius across `DRS-*` and its
   row-level census map in
