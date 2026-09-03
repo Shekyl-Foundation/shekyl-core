@@ -54,7 +54,9 @@ fn fork_choice_cases_pin_the_rule() {
         let verdict = fork_choice(
             u128_of(case, "current_lo", "current_hi"),
             u128_of(case, "alternative_lo", "alternative_hi"),
-            case["checkpoint_match"].as_bool().expect("checkpoint_match"),
+            case["checkpoint_match"]
+                .as_bool()
+                .expect("checkpoint_match"),
         );
         let expected = match u64_field(case, "verdict") {
             0 => ForkChoiceVerdict::KeepCurrent,
@@ -68,7 +70,9 @@ fn fork_choice_cases_pin_the_rule() {
 #[test]
 fn alt_window_cases_pin_the_selection() {
     let v = load_vectors();
-    let window = v["constants"]["window_entries"].as_u64().expect("window_entries");
+    let window = v["constants"]["window_entries"]
+        .as_u64()
+        .expect("window_entries");
     let cases = v["alt_window_cases"]["cases"]
         .as_array()
         .expect("alt_window_cases.cases is an array");
@@ -86,9 +90,17 @@ fn alt_window_cases_pin_the_selection() {
             continue;
         }
         let plan = plan.unwrap_or_else(|e| panic!("case {name}: unexpected refusal {e}"));
-        assert_eq!(plan.main_start, u64_field(case, "main_start"), "case {name}");
+        assert_eq!(
+            plan.main_start,
+            u64_field(case, "main_start"),
+            "case {name}"
+        );
         assert_eq!(plan.main_stop, u64_field(case, "main_stop"), "case {name}");
-        assert_eq!(plan.alt_take_newest, u64_field(case, "alt_take"), "case {name}");
+        assert_eq!(
+            plan.alt_take_newest,
+            u64_field(case, "alt_take"),
+            "case {name}"
+        );
         // The window invariant, re-asserted on the vector's own arithmetic.
         assert_eq!(
             (plan.main_stop - plan.main_start) + plan.alt_take_newest,
