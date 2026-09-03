@@ -239,6 +239,31 @@ impl UnbondRequestError {
     }
 }
 
+/// Whether a first-send submit failure proves the bytes never propagated —
+/// the release predicate for the seal the seam just took.
+///
+/// `true` exactly for the two classes whose contract says nothing reached
+/// any pool or relay: a definite terminal daemon verdict
+/// ([`SubmitterError::RejectedTerminal`] — "release-and-rebuild",
+/// `DAEMON_SUBMIT_VERDICT.md` §2.5) and the pre-transport pairing refusal
+/// ([`BroadcastSubmitError::PersonaMismatch`]). `false` for
+/// [`SubmitterError::RejectedRetryable`] (a definite verdict whose remedy
+/// PRESERVES the selection — the record must stay sealed for the
+/// byte-identical resubmit) and [`SubmitterError::Ambiguous`] (no verdict;
+/// the bytes may have propagated — Two Generals — so releasing could free
+/// inputs a live transaction spends).
+///
+/// A pure function so the disposition is testable outcome-by-outcome
+/// without driving the engine to the dispatch stage; the seam's tripwire
+/// pins that the release call sits behind exactly this predicate.
+fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
+    matches!(
+        e,
+        BroadcastSubmitError::PersonaMismatch { .. }
+            | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. })
+    )
+}
+
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_drain
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -568,12 +593,7 @@ where
                 submit,
             }),
             Err(e) => {
-                let never_propagated = matches!(
-                    e,
-                    BroadcastSubmitError::PersonaMismatch { .. }
-                        | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. })
-                );
-                if never_propagated {
+                if released_on_first_send_failure(&e) {
                     store
                         .mutate(|block| {
                             let removed = block.remove_unbond(&persona);
@@ -590,6 +610,49 @@ where
 
 #[cfg(test)]
 mod tests {
+    use shekyl_types::PCanonicalId;
+
+    use super::super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
+    use super::super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
+    use super::released_on_first_send_failure;
+
+    /// The release predicate, outcome by outcome — the behavioral half of
+    /// the terminal-reject disposition (the tripwire below pins that the
+    /// seam's release call sits behind exactly this predicate). Releases
+    /// ONLY the two never-propagated classes: a definite terminal verdict,
+    /// and the pre-transport pairing refusal. A retryable verdict preserves
+    /// the selection by contract; an ambiguous outcome may have propagated,
+    /// and releasing it could free inputs a live transaction spends.
+    #[test]
+    fn only_never_propagated_failures_release_the_seal() {
+        let terminal = BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+            kind: TerminalErrorKind::DoubleSpend,
+        });
+        assert!(released_on_first_send_failure(&terminal));
+
+        let mismatch = BroadcastSubmitError::PersonaMismatch {
+            bytes_persona: PCanonicalId::from_bytes([1; 32]),
+            submitter_persona: PCanonicalId::from_bytes([2; 32]),
+        };
+        assert!(released_on_first_send_failure(&mismatch));
+
+        let retryable = BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable {
+            cause: RetryableRejectCause::StaleRoot,
+        });
+        assert!(
+            !released_on_first_send_failure(&retryable),
+            "a retryable verdict preserves the selection by contract — the record must hold"
+        );
+
+        let ambiguous = BroadcastSubmitError::Submit(SubmitterError::Ambiguous {
+            kind: AmbiguousErrorKind::DaemonTimeout,
+        });
+        assert!(
+            !released_on_first_send_failure(&ambiguous),
+            "an ambiguous outcome may have propagated (Two Generals) — the record must hold"
+        );
+    }
+
     /// The seam's structural pins, `wire.rs`-tripwire style (drop the
     /// trailing test module so these needles cannot self-match; drop
     /// comment-only lines so doc mentions of forbidden tokens cannot trip
@@ -679,6 +742,15 @@ mod tests {
         assert!(
             code.contains(release_call),
             "a terminal first-send refusal must release the sealed record"
+        );
+        let guard = "if released_on_first_send_failure(&e) {";
+        let guard_at = code
+            .find(guard)
+            .expect("the release must be gated on the tested predicate, not inlined");
+        let release_at = code.find(release_call).expect("checked non-empty above");
+        assert!(
+            guard_at < release_at,
+            "the release call must sit behind the predicate the behavioral test covers"
         );
 
         // Persist-before-dispatch ordering pin.

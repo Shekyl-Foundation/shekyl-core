@@ -761,11 +761,13 @@ impl PendingPostBlock {
     /// therefore only ever reported for what it actually means: a **cross-kind**
     /// collision, where some other kind of record took the input.
     ///
-    /// Both checks live here rather than at the three seams because all three
-    /// need the identical decision and had been hand-rolling it — the drain seam
-    /// with this same inverted order, and the claim and bond-post seams (until
-    /// review #572) with no overlap check at all. One implementation cannot
-    /// drift from itself.
+    /// Both checks live here rather than at the seams because every seam
+    /// needs the identical decision and the original three had been
+    /// hand-rolling it — the drain seam with this same inverted order, and
+    /// the claim and bond-post seams (until review #572) with no overlap
+    /// check at all; the unbond seam (the fourth writer, PR #601) was born
+    /// onto the shared decision. One implementation cannot drift from
+    /// itself.
     ///
     /// Private, and reached only through [`Self::seal_post`],
     /// [`Self::seal_claim`], [`Self::seal_drain`], and [`Self::seal_unbond`]:
@@ -1059,7 +1061,7 @@ mod tests {
     /// Two same-persona assemblies select the same deterministic inputs, so the
     /// second trips BOTH conditions. Reporting the overlap tells the caller to
     /// retry; the truth is that retrying cannot help until the live record
-    /// retires. Checking overlap first — the order all three seams originally
+    /// retires. Checking overlap first — the order the original three seams
     /// used — turns this red.
     #[test]
     fn a_same_persona_race_is_persona_live_not_input_raced() {
@@ -1935,6 +1937,37 @@ mod tests {
             block.generation(),
             g0 + 1,
             "a settled exit is a reservation release the generation must count"
+        );
+    }
+
+    /// The terminal-reject release removes ONLY the named persona's exit —
+    /// a release keyed on the wrong persona would free a live reservation
+    /// (the inputs a still-in-flight exit spends) while holding the dead one.
+    #[test]
+    fn remove_unbond_releases_only_the_named_persona() {
+        let mut block = PendingPostBlock::empty();
+        let g = block.generation();
+        assert_eq!(
+            block.seal_unbond(unbond(0xAA, &[7]), BlockHeight::from_raw(500), g),
+            SealAdmission::Admit
+        );
+        assert_eq!(
+            block.seal_unbond(unbond(0xBB, &[8]), BlockHeight::from_raw(500), g),
+            SealAdmission::Admit
+        );
+
+        let removed = block
+            .remove_unbond(&PCanonicalId::from_bytes([0xAA; 32]))
+            .expect("the named persona's exit removes");
+        assert_eq!(removed.persona, PCanonicalId::from_bytes([0xAA; 32]));
+        assert!(
+            block.has_live_unbond_for(&PCanonicalId::from_bytes([0xBB; 32])),
+            "the other persona's live exit must survive the release"
+        );
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![GlobalOutputIndex::from_raw(8)],
+            "only the removed exit's reservation is released"
         );
     }
 

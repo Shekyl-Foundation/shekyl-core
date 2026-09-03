@@ -329,10 +329,8 @@ impl DesignatedBacking {
 
         let mut excluded = reserved.clone();
         excluded.insert(self.record.gindex);
-        // RefuseTooMany: the fee sweep shares the bond post's
-        // consume-everything semantics, and the claim carries its own
-        // emission vin inside the consensus vin cap — see
-        // `MAX_RETENTION_FUNDING_INPUTS`.
+        // RefuseTooMany: consume-everything semantics + the claim's own
+        // emission vin in the cap — see `MAX_RETENTION_FUNDING_INPUTS`.
         let selection = sweep_funding_outputs(
             pruning_landed,
             records,

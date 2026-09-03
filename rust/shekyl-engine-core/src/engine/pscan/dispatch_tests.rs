@@ -448,7 +448,7 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
 /// each reserving one funding output.
 fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
     };
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
@@ -479,6 +479,19 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
         ),
         SealAdmission::Admit
     );
+    assert_eq!(
+        block.seal_unbond(
+            PendingUnbond {
+                persona: persona(3),
+                tx_bytes: vec![0xEB; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
     let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(vec![]));
@@ -498,12 +511,12 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
 /// a driver that crossed the two evidence sources retires them and this test
 /// goes red.
 #[tokio::test]
-async fn a_bond_post_confirmation_never_retires_a_claim_or_drain() {
+async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() {
     let (mut driver, store) = driver_with_reservations();
 
-    // Both personas confirmed a bond post; both reservations are still live.
-    let confirmed: BTreeSet<PCanonicalId> = [persona(1), persona(2)].into();
-    let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+    // All three personas confirmed a bond post; all reservations still live.
+    let confirmed: BTreeSet<PCanonicalId> = [persona(1), persona(2), persona(3)].into();
+    let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22, 33]
         .map(shekyl_types::GlobalOutputIndex::from_raw)
         .into();
     driver
@@ -532,6 +545,10 @@ async fn a_bond_post_confirmation_never_retires_a_claim_or_drain() {
         block.has_live_drain_for(&persona(2)),
         "a bond-post confirmation is not this drain's settlement"
     );
+    assert!(
+        block.has_live_unbond_for(&persona(3)),
+        "a bond-post confirmation is not this exit's settlement"
+    );
 }
 
 /// The seal releases when the reservation settles — the defect this driver
@@ -543,7 +560,7 @@ async fn a_bond_post_confirmation_never_retires_a_claim_or_drain() {
 /// claims are engine-automated: the persona simply stopped claiming, with no
 /// user action to correlate the silence against.
 #[tokio::test]
-async fn a_settled_reservation_retires_the_claim_and_the_drain() {
+async fn a_settled_reservation_retires_the_claim_the_drain_and_the_unbond() {
     let (mut driver, store) = driver_with_reservations();
 
     // Neither reservation remains in the accrual's live funding set: both
@@ -575,6 +592,10 @@ async fn a_settled_reservation_retires_the_claim_and_the_drain() {
         "drain lane reopened"
     );
     assert!(
+        !block.has_live_unbond_for(&persona(3)),
+        "one-live-exit lane reopened"
+    );
+    assert!(
         block.reserved_gindexes().is_empty(),
         "records and their reservations released in the same seal (R2-4)"
     );
@@ -590,9 +611,9 @@ async fn a_settled_reservation_retires_the_claim_and_the_drain() {
 /// the case an operator most needs to see. Collapsing the key makes this
 /// test red.
 #[tokio::test]
-async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
+async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
@@ -627,6 +648,19 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
         ),
         SealAdmission::Admit
     );
+    assert_eq!(
+        block.seal_unbond(
+            PendingUnbond {
+                persona: p,
+                tx_bytes: vec![0xEB; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
 
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
@@ -637,8 +671,8 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
         test_lock(),
     );
 
-    // Well past the horizon, with both reservations still on chain.
-    let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+    // Well past the horizon, with all three reservations still on chain.
+    let live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22, 33]
         .map(shekyl_types::GlobalOutputIndex::from_raw)
         .into();
     driver
@@ -663,20 +697,30 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
         driver
             .alarmed_reservations
             .contains(&(ReservationKind::Drain, p)),
-        "the stalled drain must alarm too — one persona, two stuck records"
+        "the stalled drain must alarm too — one persona, several stuck records"
+    );
+    assert!(
+        driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Unbond, p)),
+        "the stalled exit must alarm too — the kind-keyed marker covers the fourth kind"
     );
 
-    // Both records are HELD: the alarm names the stall, it does not resolve it.
+    // All records are HELD: the alarm names the stall, it does not resolve it.
     let block = store
         .block
         .lock()
         .expect("mem store")
         .clone()
         .expect("sealed");
-    assert!(block.has_live_claim_for(&p) && block.has_live_drain_for(&p));
+    assert!(
+        block.has_live_claim_for(&p)
+            && block.has_live_drain_for(&p)
+            && block.has_live_unbond_for(&p)
+    );
 }
 
-/// **Settling one kind must not un-alarm the other.**
+/// **Settling one kind must not un-alarm the others.**
 ///
 /// The companion to `a_stalled_claim_and_drain_on_one_persona_both_alarm`, and
 /// the half that test did NOT cover: it pinned the key's shape on the *insert*
@@ -688,9 +732,9 @@ async fn a_stalled_claim_and_drain_on_one_persona_both_alarm() {
 ///
 /// Restoring the both-keys clear turns this red.
 #[tokio::test]
-async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
+async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
@@ -725,6 +769,19 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
         ),
         SealAdmission::Admit
     );
+    assert_eq!(
+        block.seal_unbond(
+            PendingUnbond {
+                persona: p,
+                tx_bytes: vec![0xEB; 8],
+                funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
+                state: PendingPostState::Pending,
+            },
+            at,
+            g,
+        ),
+        SealAdmission::Admit
+    );
 
     let store = std::sync::Arc::new(MemStore::default());
     *store.block.lock().expect("mem store") = Some(block);
@@ -735,38 +792,41 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
         test_lock(),
     );
     let stalled_tip = BlockHeight::from_raw(100 + test_config().alarm_horizon_blocks);
-    let both_live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22]
+    let all_live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22, 33]
         .map(shekyl_types::GlobalOutputIndex::from_raw)
         .into();
 
-    // Tick 1: both stall, both alarm.
+    // Tick 1: all three stall, all three alarm.
     driver
         .on_tick(
             stalled_tip,
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
-                live_funding: &both_live,
+                live_funding: &all_live,
             },
             &CancellationToken::new(),
         )
         .await
         .expect("tick");
-    assert!(driver
-        .alarmed_reservations
-        .contains(&(ReservationKind::Claim, p)));
-    assert!(driver
-        .alarmed_reservations
-        .contains(&(ReservationKind::Drain, p)));
+    for kind in [
+        ReservationKind::Claim,
+        ReservationKind::Drain,
+        ReservationKind::Unbond,
+    ] {
+        assert!(driver.alarmed_reservations.contains(&(kind, p)));
+    }
 
-    // Tick 2: the CLAIM settles (gindex 11 gone); the drain is still stuck.
-    let drain_only: BTreeSet<shekyl_types::GlobalOutputIndex> =
-        [22].map(shekyl_types::GlobalOutputIndex::from_raw).into();
+    // Tick 2: the CLAIM settles (gindex 11 gone); the drain and the exit
+    // are still stuck.
+    let claim_gone: BTreeSet<shekyl_types::GlobalOutputIndex> = [22, 33]
+        .map(shekyl_types::GlobalOutputIndex::from_raw)
+        .into();
     driver
         .on_tick(
             stalled_tip,
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
-                live_funding: &drain_only,
+                live_funding: &claim_gone,
             },
             &CancellationToken::new(),
         )
@@ -781,6 +841,7 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
         .expect("sealed");
     assert!(!block.has_live_claim_for(&p), "the claim settled");
     assert!(block.has_live_drain_for(&p), "the drain is still stuck");
+    assert!(block.has_live_unbond_for(&p), "the exit is still stuck");
 
     assert!(
         !driver
@@ -794,6 +855,41 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
             .alarmed_reservations
             .contains(&(ReservationKind::Drain, p)),
         "the still-stuck drain stays marked, so it does NOT re-alarm every tick"
+    );
+    assert!(
+        driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Unbond, p)),
+        "the still-stuck exit stays marked too — the clear is per (kind, persona)"
+    );
+
+    // Tick 3: the EXIT settles (gindex 33 gone); its marker clears while
+    // the drain's survives — the per-kind clear covers the fourth kind in
+    // both directions.
+    let drain_only: BTreeSet<shekyl_types::GlobalOutputIndex> =
+        [22].map(shekyl_types::GlobalOutputIndex::from_raw).into();
+    driver
+        .on_tick(
+            stalled_tip,
+            TickEvidence {
+                confirmed_posts: &BTreeSet::new(),
+                live_funding: &drain_only,
+            },
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("tick");
+    assert!(
+        !driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Unbond, p)),
+        "the settled exit's marker is cleared"
+    );
+    assert!(
+        driver
+            .alarmed_reservations
+            .contains(&(ReservationKind::Drain, p)),
+        "the drain's marker survives the exit's settlement"
     );
 }
 
@@ -812,14 +908,18 @@ async fn settling_a_claim_leaves_a_still_stuck_drains_alarm_marked() {
 /// Only a re-check inside the same locked mutate does.
 ///
 /// The drain seam had an overlap check but ran it BEFORE persona dedup; the
-/// claim and bond-post seams had none. Review #572 replaced all three with one
-/// shared decision, `PendingPostBlock::classify_seal`, reached only through the
-/// `seal_post` / `seal_claim` / `seal_drain` trio that also performs the insert
-/// — so the ordering and the overlap rule exist once and cannot drift, and a
-/// seam cannot classify without sealing or seal without classifying.
+/// claim and bond-post seams had none. Review #572 replaced all three (the
+/// writer count at the time) with one shared decision,
+/// `PendingPostBlock::classify_seal`, reached only through the `seal_*`
+/// methods that also perform the insert — `seal_post` / `seal_claim` /
+/// `seal_drain`, joined by `seal_unbond` when PR #601 added the fourth
+/// writer — so the ordering and the overlap rule exist once and cannot
+/// drift, and a seam cannot classify without sealing or seal without
+/// classifying. This list below is the writer roster: a fifth seam
+/// registers here or the union it relies on is unenforced for it.
 ///
 /// This pin is deliberately only the structural half: it asserts every writer
-/// routes through that trio. What the decision *does* — persona dedup
+/// routes through those seal methods. What the decision *does* — persona dedup
 /// outranking overlap, cross-kind collisions classified as raced, one-live being
 /// per kind — is covered behaviourally beside `classify_seal` itself, where a
 /// wrong answer can be observed rather than merely a missing call. Splitting it
@@ -867,7 +967,8 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
              gindex actually confirmed, and the persona-vs-overlap ordering is \
              free to drift in this seam"
         );
-        // The insert primitives bypass the classifier; only the trio may seal.
+        // The insert primitives bypass the classifier; only the seal methods
+        // may insert.
         // They are `#[cfg(test)]` in `shekyl-engine-state`, so a seam cannot
         // reach them today and the compiler is the primary guard. This assert
         // is not therefore decorative: the edit it catches is someone widening

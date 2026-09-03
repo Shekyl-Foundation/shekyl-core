@@ -177,7 +177,9 @@ pub(crate) enum BondAssemblyError {
     /// consolidation path for a pool this fragmented (the drain lane
     /// consolidates `P`-funding in capped passes).
     #[error(
-        "too many spendable funding outputs for one transaction: {count} eligible,          max {max} (the transaction carries one non-funding input of its own);          the funding is intact — consolidate before retrying"
+        "too many spendable funding outputs for one transaction: {count} eligible, \
+         max {max} (the transaction carries one non-funding input of its own); \
+         the funding is intact — consolidate before retrying"
     )]
     TooManyFundingInputs {
         /// How many records were eligible at the reference height.
