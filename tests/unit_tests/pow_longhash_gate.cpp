@@ -171,7 +171,9 @@ TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
   crypto::hash seed{};
   crypto::hash res2 = crypto::null_hash;
   ASSERT_TRUE(get_altblock_longhash(blk, res2, seed));
-  ASSERT_EQ(0x42, static_cast<unsigned char>(res2.data[0]));
+  for (size_t i = 0; i < sizeof(res2.data); ++i)
+    ASSERT_EQ(0x42, static_cast<unsigned char>(res2.data[i]))
+      << "alt-path hash byte " << i << " not written through";
 }
 
 // The one consumer site reachable in a unit test: the precompute worker. Its
