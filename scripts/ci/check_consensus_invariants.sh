@@ -203,7 +203,17 @@ else
   WM_KEY_SITES=$(grep -c '"archival_prune_watermark_epoch"' src/blockchain_db/lmdb/db_lmdb.cpp || true)
   # Anchored on the prune watermark's own identifiers: the slash revert
   # legitimately speaks of the slash-fold watermark, a different concept.
-  WM_IN_REVERTS=$(awk '/^void BlockchainLMDB::revert_/,/^}$/' src/blockchain_db/lmdb/db_lmdb.cpp | grep -c "archival_prune_watermark" || true)
+  # Region bound: from each revert_* definition to the NEXT top-level
+  # BlockchainLMDB member -- not the first column-0 '}'. Review asked
+  # about inner-brace truncation (all seven bodies verified to end at
+  # their true '}' today), and checking that surfaced the real adjacent
+  # hole the wider bound closes: anonymous-namespace helpers that sit
+  # BETWEEN reverts (and are called by them) escaped a body-only scan,
+  # so a revert could launder the forbidden reference through a helper.
+  # Close only on a COLUMN-0 definition of a non-revert member: bodies
+  # log their own qualified name (LOG_PRINT_L3("BlockchainLMDB::"...)),
+  # so an unanchored close fires two lines into every function.
+  WM_IN_REVERTS=$(awk '/^void BlockchainLMDB::revert_/{inr=1} inr && /^[A-Za-z_].*BlockchainLMDB::/ && !/BlockchainLMDB::revert_/{inr=0} inr' src/blockchain_db/lmdb/db_lmdb.cpp | grep -c "archival_prune_watermark" || true)
   if [[ "${WM_KEY_SITES:-0}" -ne 2 ]]; then
     echo "      FAIL: property key must appear exactly twice (reader + writer);"
     echo "            found ${WM_KEY_SITES:-0} -- a third site is a drift twin or"

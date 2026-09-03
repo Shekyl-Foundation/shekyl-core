@@ -745,7 +745,7 @@ bool Blockchain::deinit()
 //------------------------------------------------------------------
 // This function removes blocks from the top of blockchain.
 // It starts a batch and calls private method pop_block_from_blockchain().
-void Blockchain::pop_blocks(uint64_t nblocks)
+bool Blockchain::pop_blocks(uint64_t nblocks)
 {
   uint64_t i = 0;
   CRITICAL_REGION_LOCAL(m_tx_pool);
@@ -771,7 +771,7 @@ void Blockchain::pop_blocks(uint64_t nblocks)
           << ") -- rows a revert needs are already pruned; remedy: resync this node");
         if (stop_batch)
           m_db->batch_abort();
-        return;
+        return false;
       }
     }
     while (i < nblocks && !m_cancel.load())
@@ -785,7 +785,7 @@ void Blockchain::pop_blocks(uint64_t nblocks)
     LOG_ERROR("Error when popping blocks after processing " << i << " blocks: " << e.what());
     if (stop_batch)
       m_db->batch_abort();
-    return;
+    return false;
   }
 
   CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(), "Error updating next cumulative weight limit");
@@ -802,6 +802,7 @@ void Blockchain::pop_blocks(uint64_t nblocks)
     if (seedhash != crypto::null_hash)
       shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
   }
+  return true;
 }
 //------------------------------------------------------------------
 // This function tells BlockchainDB to remove the top block from the
@@ -2461,9 +2462,10 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       //do reorganize!
       MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1
-        << (is_a_checkpoint ? ", checkpoint is found in alternative chain on height " : " with alt cum_difficulty ")
-        << (is_a_checkpoint ? cryptonote::difficulty_type(bei.height) : bei.cumulative_difficulty)
-        << ", main cum_difficulty " << main_chain_cumulative_difficulty
+        << (is_a_checkpoint ? " (checkpoint-forced)" : "")
+        << ": alt cum_difficulty " << bei.cumulative_difficulty
+        << " vs main " << main_chain_cumulative_difficulty
+        << ", alt tip height " << bei.height
         << ", alternative blockchain size: " << alt_chain.size());
 
       bool r = switch_to_alternative_blockchain(alt_chain, is_a_checkpoint);

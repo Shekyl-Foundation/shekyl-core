@@ -1084,7 +1084,14 @@ namespace cryptonote
      *
      * @param nblocks number of blocks to be removed
      */
-    void pop_blocks(uint64_t nblocks);
+    /**
+     * @brief removes blocks from the top of the blockchain
+     *
+     * @return false iff the request was refused at the prune watermark
+     * (nothing was popped; C2-R1b F-1) — callers surface an explicit
+     * error, never a silent success with an unchanged height.
+     */
+    bool pop_blocks(uint64_t nblocks);
 
     /**
      * @brief flush the invalid blocks set

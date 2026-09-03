@@ -1656,7 +1656,15 @@ namespace cryptonote
   {
     RPC_TRACKER(pop_blocks);
 
-    m_core.get_blockchain_storage().pop_blocks(req.nblocks);
+    if (!m_core.get_blockchain_storage().pop_blocks(req.nblocks))
+    {
+      // C2-R1b F-1: a watermark refusal (or a mid-pop failure) must reach
+      // the caller as an explicit error, never as OK with an unchanged
+      // height an operator has to notice.
+      res.height = m_core.get_current_blockchain_height();
+      res.status = "Refused or failed: rollback would cross the prune watermark floor (or popping failed part-way); see the daemon log; remedy for a watermark refusal: resync this node";
+      return true;
+    }
 
     res.height = m_core.get_current_blockchain_height();
     res.status = CORE_RPC_STATUS_OK;
