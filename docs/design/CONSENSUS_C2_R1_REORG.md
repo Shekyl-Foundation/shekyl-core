@@ -45,8 +45,22 @@ regrouping 2026-09-02:
 | **R1b** | CEN-K5, K6, K7, K8, D5, D6, E1, E2, E5 (9) | What decides the best chain — the difficulty arm, the checkpoint-forced arm, the depth question, and every override surface that can command a rollback — as one contract | Scoped (§4) |
 | **R1c** | CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4 (9) | What alt admission must verify, what the unvalidated alt store costs, and the acceptance topology around it | Scoped (§5) |
 
-2 + 9 + 9 = 20 ✓. One PR per sub-round, ratify-then-build, sequenced
-R1a → R1b → R1c.
+2 + 9 + 9 = 20 ✓. One PR per sub-round, ratify-then-build. **Sequence
+updated 2026-09-02 (Rick, via the census-direction thread): R1a → R1b →
+C2-R0 → R1c** — a **negative-space round** inserts before R1c. Its
+premise, confirmed by the instrument's own data: the census is anchored
+to `file:line`, so it is structurally incapable of minting a row for a
+rule that *ought to exist and does not* (171 rows, zero with an empty
+evidence column; `max_reorg|reorg_depth|reorg_limit` greps `src/` at
+zero — Shekyl reorganizes arbitrarily deep with no rule anywhere to
+say so). C2-R0 sources from postmortems and literature, mints `gap`
+rows with an explicit `no site exists` marker, claims completion
+source-based (never a sum — a denominator over rules-that-should-exist
+cannot fail), and its **finding #1 is maximum reorg depth**. Its
+deliverable into this round: a re-scoping note naming which of R1c's
+nine rows it affects. **Authority status: briefed, pending dispatch —
+not yet a tree artifact; cited here as direction, not as ratified
+ground.**
 
 **CEN-K1 spans all three groups** (three enforcement sites: the miner-tx
 height-0 reject `blockchain.cpp:2287–2292`, E2's height-0 arm
@@ -520,7 +534,11 @@ rule 20's "C++ if all of" — and its predicate is a hash equality with
 no derivation content; crossing only the equality makes the shim
 thicker than the rule. The rule content crosses if and when the
 checkpoint set itself moves into the Rust store — named owner: the DRS
-program / census batch R8.
+program / census batch R8. (Trigger state re-checked 2026-09-02 after
+CSR landed as PR #595: the CSR reconciliation ruled the store-schema
+decision and mapped 18 store rows with **zero** checkpoint mentions —
+the decision landed, the state has not moved and is not scheduled to;
+the trigger is not live.)
 
 *Falsifier (Q1b):* the crossings land red-first with shared vectors per
 the R3 pattern; the E1 no-crossing decision reopens automatically when
@@ -563,7 +581,25 @@ arg-taking form directly. **The check lives in the arg-taking
 overload's body**: that single placement covers every caller including
 the delegating helper (whose depth-1 undo trivially passes any
 horizon); a check placed on the no-arg form instead would cover
-nothing but the undo path. The
+nothing but the undo path. The landing point is chosen **by property,
+not by name**: it is the single funnel every pop writer traverses —
+the switch, the operator-checkpoint rollback, the RPC/console, the
+importer, and the add-failure undo alike — so if the DRS store
+decomposition re-homes the pop path, the check relocates by
+re-finding that funnel property, not by grepping for a class name.
+
+**Scope of this ruling, stated so the round is not read as answering a
+question it does not answer (Rick's characterisation, adopted: this is
+"a finality rule wearing storage clothes"):** Q1c bounds **storage
+recoverability** — the depth past which the database's own retention
+design makes reversal unsound. That bound is on the order of a year of
+blocks and therefore **never binds against a real attacker**. A
+*security* depth bound — the rule that decides how deep a reorg the
+network should ever accept — is a **separate, strictly tighter rule at
+a different layer, owned by C2-R0** (its finding #1), and the two
+compose (any security bound N ≪ this horizon) rather than compete.
+The census could not surface that rule because no `file:line` exists
+for it; that gap is C2-R0's founding case. The
 refusal is a hard error: the reorg/rollback/RPC caller fails with a
 message naming the horizon and the remedy (resync), never a silent
 partial state. This is **not a fork-choice rule and introduces no new
@@ -594,23 +630,33 @@ the epoch-close hook — either change re-derives this ruling's premise.
 
 ### C2-R1b-Q2 — the operator-checkpoint trust surfaces (E1, E2, E5)
 
-**Q2a (existence + uniform wiring).** The operator-checkpoint
-mechanism — `<datadir>/checkpoints.json` → the points map → E1's zone
-equality, E2's alt-height floor, and K6's forced-switch arm — is
-**kept**, as the operator's emergency-recovery instrument within the
-Q1c horizon, and **wired uniformly across all three public networks**
-per rule 71: both nettype sites (`:254`, `:326`) are deleted, so every
-network loads the file at init and reloads on the 600 s path. An
-operator can rehearse a checkpoint override on testnet before ever
-touching mainnet — §4a's unreachable-by-construction defect closes.
-The gate's allowlist shrinks by two entries in the same change
-(8 → 6). Scope fence: this re-homes the **checkpoint mechanism only**;
-the hard-fork table selection stays the allowlist's named migration
-debt toward the parameter table.
+**Q2a (uniform wiring — ratified; existence — HELD, deliberately).**
+Two questions the first draft fused, split on Rick's direction from
+the census thread. **The existence question is held provisional**: the
+operator-checkpoint mechanism is a trusted-party override in a
+trust-minimised system, and the attack it defends against may have a
+strictly better answer in a protocol-level depth bound — a comparison
+the census could never pose because "max reorg depth" had no
+`file:line` to anchor a row. C2-R0 owns that comparison (named owner,
+inserted before R1c); ratifying "the mechanism is kept" now would
+either churn or freeze a trusted-party override the network may not
+need. **What is ratified now is everything that is right whether or
+not the mechanism survives:** *while the mechanism exists*, it is
+**wired uniformly across all three public networks** per rule 71 —
+both nettype sites (`:254`, `:326`) are deleted, every network loads
+`<datadir>/checkpoints.json` at init and reloads on the 600 s path,
+and an operator can rehearse a checkpoint override on testnet before
+ever touching mainnet (§4a's unreachable-by-construction defect
+closes; the gate's allowlist shrinks 8 → 6 in the same change). Scope
+fence: this re-homes the **checkpoint mechanism only**; the hard-fork
+table selection stays the allowlist's named migration debt.
 
-*Falsifier (Q2a):* any future per-network divergence in this mechanism
-requires rule 71 §2's named-ratified-loud form; the gate enforces the
-default.
+*Falsifier (Q2a):* the wiring ruling — any future per-network
+divergence requires rule 71 §2's named-ratified-loud form; the gate
+enforces the default. The held existence question resolves in C2-R0's
+comparison; if the mechanism is retired there, the uniform wiring
+retires with it at zero additional cost (it is a deletion of two
+guards, not an investment).
 
 **Q2b (conflict semantics, ratified separately — rule 82).** Two
 distinct conflicts, two distinct verdicts, both ratified explicitly:
@@ -680,6 +726,12 @@ branch.
 
 ## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
 
+**R1c now runs after C2-R0** (§1) and inherits its re-scoping note —
+C2-R0's stated deliverable is naming which of these nine rows a
+protocol-level depth rule affects. The census-wide line re-anchor
+stays this round's obligation at R1c close (C2-R0 is docs-and-schema
+only and moves no line numbers).
+
 Rows: CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4. Banked wargame seeds:
 near-tip cycle cost (a 1-block fork needs ~2 blocks of real PoW to force a
 full pop-and-restore; victim churn per attacker block); `build_alt_chain`
@@ -725,3 +777,18 @@ rules already have owners), nothing new crosses.
   (SIGTERM fail-stop; rollback subject to Q1c), Q2c the
   difficulty-twin deletion (with the accidental periodic full-chain
   recompute enumerated).
+- 2026-09-02 — PR #600 opened at Rick's request (proposal-only;
+  implementation lands on it after ratification). Census-direction
+  check-in answered by steering: **C2-R0 (negative-space round) inserts
+  before R1c** — the census cannot mint rows for rules with no
+  `file:line`, and its finding #1 is maximum reorg depth. §4b amended
+  accordingly: Q1c scoped as a storage-recoverability bound ("a
+  finality rule wearing storage clothes" — the security depth bound is
+  C2-R0's, strictly tighter, composing not competing) with the landing
+  point stated by property; **Q2's existence question split out and
+  HELD** pending C2-R0's mechanism-vs-depth-bound comparison, with the
+  wiring/conflict/twin rulings ratifiable now (right regardless of the
+  mechanism's survival, and the wiring retires at zero cost if the
+  mechanism does); E1's reopen trigger re-checked against the landed
+  CSR (#595 — zero checkpoint rows; not live). C2-R0 cited as briefed,
+  pending dispatch, not yet tree-landed.
