@@ -598,6 +598,53 @@ TEST(rpc_facts_shims, a_hash_whose_coinbase_claims_a_height_past_the_tip_is_refu
   EXPECT_EQ(0, f.found) << "a refusal reports nothing, not a wrapped depth";
 }
 
+// ── RK-5b: hard-fork voting info, and the fee estimate ──────────────────────
+
+// **The resolution the C++ did in a local and then reported a different
+// version beside.** `queried_version` is what the voting fields describe;
+// asking with 0 means "the next fork" and the answer says which that was.
+TEST(rpc_facts_shims, hard_fork_info_reports_which_version_it_answered_about)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_hard_fork_facts zero{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 0, &zero));
+  EXPECT_NE(0, zero.queried_version)
+    << "0 is a sentinel meaning 'the next fork', and must be resolved before "
+       "it is reported";
+
+  // An explicit version is echoed, so a caller can tell what it got an answer
+  // about without re-deriving the daemon's default.
+  shekyl_rpc_hard_fork_facts explicit_v{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 1, &explicit_v));
+  EXPECT_EQ(1, explicit_v.queried_version);
+
+  // And the chain's own version is a separate field. They coincide at this
+  // fixture's single-entry table — which is exactly why the C++ collision was
+  // invisible — so what is pinned here is that they are two fields, not that
+  // they differ.
+  EXPECT_EQ(explicit_v.active_version, zero.active_version)
+    << "the active version does not depend on what was asked";
+}
+
+// The estimator asserts on `grace_blocks` and throws. The export refuses
+// first, so an out-of-range request is a named refusal rather than an
+// exception the caller reads as an internal fault.
+TEST(rpc_facts_shims, a_fee_estimate_beyond_the_reward_window_is_refused)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t ceiling = shekyl_rpc_fee_grace_blocks_max();
+  ASSERT_GT(ceiling, 0u) << "the exported ceiling must be the real constant";
+
+  shekyl_rpc_fee_estimate_facts f{};
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::fee_estimate(bap.bc, ceiling + 1, &f));
+  EXPECT_EQ(0u, f.fee_count) << "a refusal reports no tiers";
+}
+
 TEST(rpc_facts_shims, null_out_pointer_refuses)
 {
   BlockchainAndPool bap;
