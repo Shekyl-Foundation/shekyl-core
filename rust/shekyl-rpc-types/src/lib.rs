@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 pub mod bin_commands;
 pub mod chain;
 pub mod hash;
+pub mod headers;
 pub mod p2p;
 pub mod transactions;
 pub use bin_commands::{
@@ -82,6 +83,12 @@ pub use chain::{
     CORE_RPC_VERSION_MINOR,
 };
 pub use hash::{HashHex, HashHexError};
+pub use headers::{
+    BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
+    GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
+    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
+    HardForkInfoRequest, HardForkInfoResponse,
+};
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
