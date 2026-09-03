@@ -8,6 +8,7 @@ mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
+mod fee_ladder;
 mod mn_feasibility;
 mod population;
 mod proxy;
@@ -50,6 +51,13 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    // FL instrument (`docs/design/FEE_LADDER_DERIVATION.md` §1.9): the fee
+    // ladder derivation round's registered measurement set.
+    if std::env::args().any(|a| a == "--fee-ladder") {
+        fee_ladder::run();
         return;
     }
 
