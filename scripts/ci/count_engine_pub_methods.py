@@ -6,9 +6,10 @@
 #
 # Count `pub` (not pub(crate)) inherent methods on Engine. Used by
 # check_engine_decomposition.sh METHODS_CEILING. Prints one integer.
-# Optional ENGINE_DIR as argv[1]; --list prints path:line name;
-# --self-test runs the where-clause / façade / cfg(test)-mod / noise
-# / path-to-Engine / test-filename / raw-ident negative controls.
+# Optional CRATE_SRC as argv[1] (shekyl-engine-core/src, not src/engine);
+# --list prints path:line name; --self-test runs the where-clause / façade /
+# cfg(test)-mod / noise / path-to-Engine / test-filename / raw-ident /
+# impl-item-macro / crate-root-impl negative controls.
 
 from __future__ import annotations
 
@@ -36,6 +37,24 @@ _RAW_STR = re.compile(r"(?:[bc])?r(#*)\"")
 _ENGINE_SELF = re.compile(
     r"(?:(?:r#)?[A-Za-z_][\w]*::)*Engine(?:\s*<|\s*\{|\s*$)"
 )
+# Impl-item macros (`foo!();` / `foo! { }` / `foo!(...)`). Not `pub fn`
+# bodies that contain `vec![]` — those match FN_PUB on the same line, or
+# sit at brace depth > 1. Expanding macros is out of scope for this
+# lexer (syn/rustc would be a heavier freeze subject than the count).
+_IMPL_ITEM_MACRO = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?[A-Za-z_]\w*!\s*(?:[;(\[{]|$)"
+)
+
+
+class FreezeHole(Exception):
+    """Lexer cannot see expanded macros; fail closed rather than under-count."""
+
+    def __init__(self, rel: str, line_no: int, text: str) -> None:
+        super().__init__(
+            f"{rel}:{line_no}: impl-item macro {text!r} — METHODS_CEILING "
+            "cannot see expanded items; expand the invocation or do not "
+            "generate Engine methods from a macro"
+        )
 
 
 def mask_rust_noise(src: str) -> str:
@@ -262,6 +281,8 @@ def count_in_file(path: str, rel: str, listing: bool) -> list[str]:
                     m = FN_PUB.match(lines[j])
                     if m:
                         found.append(f"{rel}:{j + 1} {m.group(2)}")
+                    elif depth == 1 and _IMPL_ITEM_MACRO.match(lines[j]):
+                        raise FreezeHole(rel, j + 1, lines[j].strip())
                     depth += brace_delta(lines[j])
                     j += 1
                     if depth <= 0:
@@ -281,6 +302,57 @@ def method_names_in_source(source: str, rel: str = "x.rs") -> list[str]:
         return [entry.split()[-1] for entry in count_in_file(path, rel, True)]
 
 
+def count_in_dir(root: str, listing: bool = False) -> list[str]:
+    """Walk `root` for `.rs` files that are not dedicated test modules."""
+    names: list[str] = []
+    for dirpath, _, files in os.walk(root):
+        for fname in sorted(files):
+            if not fname.endswith(".rs"):
+                continue
+            if is_test_source(fname):
+                continue
+            path = os.path.join(dirpath, fname)
+            rel = os.path.relpath(path, root)
+            names.extend(count_in_file(path, rel, listing))
+    return names
+
+
+def is_engine_only_scan(root: str) -> bool:
+    """True when `root` is `src/engine` next to the crate's `lib.rs`."""
+    parent = os.path.dirname(os.path.abspath(root))
+    return os.path.basename(os.path.abspath(root)) == "engine" and os.path.isfile(
+        os.path.join(parent, "lib.rs")
+    )
+
+
+def refuse_engine_subdir(root: str) -> None:
+    """Rule 47: scanning only `src/engine` is first evidence the subject is incomplete.
+
+    Inherent `impl Engine` can live anywhere in the defining crate (`lib.rs`,
+    `scan.rs`, …). A caller that still passes `src/engine` must fail loud.
+    """
+    if is_engine_only_scan(root):
+        print(
+            "FATAL: scan root is src/engine; inherent Engine impls can live "
+            "anywhere in the defining crate. Pass rust/shekyl-engine-core/src.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def crate_src_default() -> str:
+    return os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "rust",
+            "shekyl-engine-core",
+            "src",
+        )
+    )
+
+
 def self_test() -> None:
     """Negative controls for the METHODS_CEILING subject.
 
@@ -291,7 +363,9 @@ def self_test() -> None:
     `mod foo;` into production `pub use { ... }`; ignore `pub const fn`;
     count `{`/`}` in comments or `'{'` (impl body ends early / test-mod
     skip eats production); refuse `crate::Engine`; skip any filename
-    containing the substring `test` (`attestation.rs`); miss `r#type`.
+    containing the substring `test` (`attestation.rs`); miss `r#type`;
+    ignore impl-item macros (`add_method!()`); walk only `src/engine`
+    (`lib.rs` inherent impls vanish).
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
     assert impl_self_is_engine("impl<S, D> Engine<S, D> {")
@@ -440,6 +514,42 @@ impl StakeFacade {
     assert not is_test_source("stake_facade.rs")
     assert not is_test_source("tx_weight_kat.rs")
 
+    # Impl-item macros can emit pub methods the lexer never sees.
+    try:
+        method_names_in_source(
+            """
+impl Engine {
+    add_method!();
+    pub fn keep(&self) {}
+}
+"""
+        )
+        raise AssertionError("expected FreezeHole on impl-item macro")
+    except FreezeHole:
+        pass
+    names = method_names_in_source(
+        """
+impl Engine {
+    pub fn keep(&self) {
+        let _ = vec![1];
+    }
+}
+"""
+    )
+    assert names == ["keep"], names
+
+    # Inherent impls outside engine/ (lib.rs, scan.rs, …) still count.
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "engine"))
+        with open(os.path.join(td, "lib.rs"), "w", encoding="utf-8") as fh:
+            fh.write("impl Engine {\n    pub fn sneaky(&self) {}\n}\n")
+        with open(os.path.join(td, "engine", "mod.rs"), "w", encoding="utf-8") as fh:
+            fh.write("impl Engine {\n    pub fn keep(&self) {}\n}\n")
+        names = {entry.split()[-1] for entry in count_in_dir(td, True)}
+        assert names == {"sneaky", "keep"}, names
+        assert is_engine_only_scan(os.path.join(td, "engine"))
+        assert not is_engine_only_scan(td)
+
 
 def main() -> None:
     listing = "--list" in sys.argv
@@ -448,26 +558,14 @@ def main() -> None:
         self_test()
         print("ok")
         return
-    engine_dir = args[0] if args else os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "rust",
-        "shekyl-engine-core",
-        "src",
-        "engine",
-    )
-    engine_dir = os.path.abspath(engine_dir)
-    names: list[str] = []
-    for dirpath, _, files in os.walk(engine_dir):
-        for fname in sorted(files):
-            if not fname.endswith(".rs"):
-                continue
-            if is_test_source(fname):
-                continue
-            path = os.path.join(dirpath, fname)
-            rel = os.path.relpath(path, engine_dir)
-            names.extend(count_in_file(path, rel, listing))
+    root = args[0] if args else crate_src_default()
+    root = os.path.abspath(root)
+    refuse_engine_subdir(root)
+    try:
+        names = count_in_dir(root, listing)
+    except FreezeHole as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        sys.exit(1)
     if listing:
         for n in names:
             print(n)

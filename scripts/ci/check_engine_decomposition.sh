@@ -123,7 +123,11 @@ if [ "${METHODS_CEILING}" -eq 0 ] || [ "${METHODS_BAND}" -eq 0 ]; then
   note "The inherent-API freeze is not optional; restore both keys."
   exit 2
 fi
-methods="$(python3 "${COUNT_PY}" "${ENGINE_DIR}")"
+# Walk crate src (not only engine/): inherent `impl Engine` can live in
+# lib.rs / scan.rs / … in the same defining crate. Passing src/engine is
+# a subject-assertion failure in the counter (rule 47).
+CRATE_SRC="${REPO_ROOT}/rust/shekyl-engine-core/src"
+methods="$(python3 "${COUNT_PY}" "${CRATE_SRC}")"
 if ! [[ "${methods}" =~ ^[0-9]+$ ]]; then
   echo "FATAL: ${COUNT_PY} did not print an integer (got: ${methods})"
   exit 2

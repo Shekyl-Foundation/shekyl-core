@@ -1,10 +1,10 @@
 # Engine composition: making it less of a monolith
 
-**Status:** LIVING CONTRACT. Last verified 2026-09-02 (StakeFacade product door + `METHODS_CEILING` count freeze). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
+**Status:** LIVING CONTRACT. Last verified 2026-09-03 (StakeFacade product door + crate-wide `METHODS_CEILING` count freeze). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 | Field | Value |
 |-------|--------|
-| **Date** | 2026-07-19 (StakeFacade + inherent-API freeze: 2026-09-02) |
+| **Date** | 2026-07-19 (StakeFacade + inherent-API freeze: 2026-09-02; crate-wide walk: 2026-09-03) |
 | **Context** | Follow-up to `WALLET_DAEMON_HOSTILE_AUDIT_2026-07-19.md` — finding that `Engine` remains a large composition hub despite Stage 1 traits and Stage 2 actors |
 | **Audience** | Wallet rewrite owners deciding how to decompose without fighting the staged actor migration |
 
@@ -250,7 +250,7 @@ it lands on `StakeFacade`.
 | **Layout** | `types.rs` domain values; `helpers.rs` shared funding/vout prep + P-secrets; `actor.rs` the actor struct, spawn, inherent methods and `Actor` impl; `handle.rs` `StakeEngineHandle`; one file per message family (`persona.rs`, `bond.rs`, `claim.rs`, `drain.rs`, `scan.rs`, `retire.rs`); `test_fixtures` + tests EXCLUDE'd |
 | **Do not** | Re-inflate bond/claim/drain assembly into top-level monofiles or Engine inherent soup — and do **not** add a `stake_engine/engine.rs`: actor, messages and handle are deliberately three concerns, not one file |
 | **Module surface** | `mod.rs` re-exports exactly what `crate::engine::…` consumes. Siblings and the in-tree suite import from siblings directly. No `#[allow(unused_imports)]` on the facade: a re-export that stops being consumed must fail rule 45's gate, which is what keeps the list a true statement |
-| **Mechanical pin** | `check_engine_decomposition.sh` sweeps `engine/**/*.rs`; `NEW_FILE_CAP` / FILE baselines apply; **`METHODS_CEILING`** is a **count** freeze of `pub` inherent methods on `Engine` (not a category allowlist — see below) |
+| **Mechanical pin** | `check_engine_decomposition.sh` FILE / `NEW_FILE_CAP` ceilings still sweep `engine/**/*.rs`; **`METHODS_CEILING`** is a **count** freeze of `pub` inherent methods on `Engine` across `shekyl-engine-core/src` (not only `engine/` — inherent impls can live in `lib.rs` / `scan.rs` / …). Impl-item macros fail closed (this lexer does not expand them). Not a category allowlist — see below |
 
 **Deferred:** renaming to `StakeWorkflow`. Named blocker: call-site rename
 across every `stake_handle()` consumer, which is a validation surface of its
@@ -357,5 +357,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + `METHODS_CEILING`; last verified 2026-09-02) |
+| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING`; last verified 2026-09-03) |
 | **Follow-up** | Optional: `TransferCtx` / `TransferFacade` / `ScanFacade` when product needs them; `StakeWorkflow` rename |
