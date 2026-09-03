@@ -32,6 +32,9 @@
 #include "block_validation.h"
 
 using namespace epee;
+#include "crypto/pow_registry.h"
+#include "crypto/pow_schema.h"
+
 using namespace cryptonote;
 
 // The inherited Monero-era `lift_up_difficulty` helper (which exercised
@@ -713,6 +716,123 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------------
+// CEN-D2: the PoW-verdict consumers (see block_validation.h for the contract)
+
+namespace
+{
+// Twin of the unit-test double in pow_longhash_gate.cpp -- deliberately
+// duplicated rather than shared: it is five lines of test scaffolding in a
+// different binary, and any IPowSchema change breaks both loudly at compile
+// time, so there is nothing here that can silently drift.
+class FailingPowSchema final : public IPowSchema
+{
+public:
+  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
+    crypto::hash&) const override
+  {
+    return false;
+  }
+  const char* name() const override { return "FailingCoreTestSchema"; }
+};
+
+const FailingPowSchema g_failing_pow_schema{};
+} // namespace
+
+gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
+  size_t invalid_block_idx, uint64_t expected_height)
+  : m_invalid_block_idx(invalid_block_idx)
+  , m_expected_height(expected_height)
+{
+  REGISTER_CALLBACK("install_failing_pow_schema",
+    gen_block_pow_verifier_failure_base::install_failing_pow_schema);
+  REGISTER_CALLBACK("check_rejected_unproven",
+    gen_block_pow_verifier_failure_base::check_rejected_unproven);
+}
+
+gen_block_pow_verifier_failure_base::~gen_block_pow_verifier_failure_base()
+{
+  // Belt: an assertion failure between install and check must not leave the
+  // override installed for whatever test runs next in this binary.
+  set_pow_schema_override_for_tests(nullptr);
+}
+
+bool gen_block_pow_verifier_failure_base::install_failing_pow_schema(
+  cryptonote::core& /*c*/, size_t /*ev_index*/,
+  const std::vector<test_event_entry>& /*events*/)
+{
+  set_pow_schema_override_for_tests(&g_failing_pow_schema);
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_base::check_rejected_unproven(
+  cryptonote::core& c, size_t /*ev_index*/,
+  const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_pow_verifier_failure_base::check_rejected_unproven");
+  set_pow_schema_override_for_tests(nullptr);
+
+  // The bvc assertions only run if the candidate actually reached them; a
+  // harness change that stopped submitting it would otherwise pass here
+  // vacuously.
+  CHECK_TEST_CONDITION(m_saw_expected_rejection);
+  CHECK_EQ(m_expected_height, c.get_current_blockchain_height());
+  CHECK_EQ(0, c.get_pool_transactions_count());
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_base::check_block_verification_context(
+  const cryptonote::block_verification_context& bvc, size_t event_idx,
+  const cryptonote::block& /*blk*/)
+{
+  if (event_idx != m_invalid_block_idx)
+    return !bvc.m_verifivation_failed;
+
+  // Rejected, and rejected as UNPROVEN: m_bad_pow would attribute a local
+  // verifier failure to the sender.
+  m_saw_expected_rejection = bvc.m_verifivation_failed && !bvc.m_bad_pow;
+  return m_saw_expected_rejection;
+}
+
+bool gen_block_pow_verifier_failure_main::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  DO_CALLBACK(events, "install_failing_pow_schema");
+
+  // A normal, fully valid block: mined against the real schema at generation
+  // time, so the verifier failure at submission is its only defect.
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+
+  DO_CALLBACK(events, "check_rejected_unproven");
+
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_alt::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  DO_CALLBACK(events, "install_failing_pow_schema");
+
+  // Forks from blk_1 while the tip is blk_2, so it takes
+  // handle_alternative_block. Mined to a second account so it differs from
+  // blk_2 by its miner tx alone -- same height, same parent, valid
+  // timestamp: the verifier failure is the only thing that can reject it.
+  GENERATE_ACCOUNT(alt_miner_account);
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, alt_miner_account, test_generator::bf_none);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_rejected_unproven");
 
   return true;
 }

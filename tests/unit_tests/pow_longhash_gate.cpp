@@ -14,12 +14,12 @@
 //   - block_longhash_worker: an uncomputed hash never enters the precompute
 //     table (a table hit is trusted by the consumer without re-checking).
 //
-// COVERAGE BOUNDARY (rule 50 — record the ground): the two validation call
-// sites in handle_block_to_main_chain / handle_alternative_block consume
-// these bools; exercising them end-to-end needs a connectable block and is
-// the same harness family as the CEN-M8 wiring regression in FOLLOWUPS. The
-// worker test covers one of the three consumer sites for real; the other two
-// rest on the code walk recorded in the register.
+// The three consumers that act on these verdicts are covered too: the
+// precompute worker here, and the two validation sites by the core-test
+// regressions gen_block_pow_verifier_failure_{main,alt}
+// (tests/core_tests/block_validation.cpp), which submit a fully valid block
+// under a failing schema at difficulty 1 and assert it is rejected as
+// unproven. Reverting either consumer to ignore the bool turns those red.
 
 #define IN_UNIT_TESTS
 
