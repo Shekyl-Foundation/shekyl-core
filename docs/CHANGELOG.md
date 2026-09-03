@@ -13,7 +13,7 @@
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
   tolerance means a tx whose proof failed at pool admission can connect with
   verification skipped; the exact required check exists unused on that path.
-  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix PR in flight. Detail:
+  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix = PR #602. Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The
