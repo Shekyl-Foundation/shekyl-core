@@ -12,15 +12,17 @@
 //! lands in its own per-trait PR per the §8.1 ordering; this module is
 //! the home of the trait surfaces as they land.
 //!
-//! # Visibility (Round 4a — Item 13)
+//! # Visibility (Round 4a — Item 13; re-anchored 2026-09-02)
 //!
-//! Traits ship `pub(crate)` until the JSON-RPC server cutover at V3.2
-//! (per the `wallet_rpc_server` follow-up in
-//! [`docs/FOLLOWUPS.md`]). The traits are internal contracts of
-//! `shekyl-engine-core`; consumers reach functionality via
-//! [`Engine<S>`](super::Engine)'s inherent methods, not via direct
-//! trait dispatch. Promoting to `pub` later is additive and does not
-//! require trait-surface changes — only visibility relaxation.
+//! Traits ship `pub(crate)`. The original promotion trigger was the
+//! JSON-RPC server cutover (historical V3.2 label); that cutover landed
+//! with Phase 5 (2026-08-19, #507). The trigger fired; traits stay
+//! crate-local. Reopen (rule 21) when a second in-tree production crate
+//! must construct a workflow without [`Engine<S>`](super::Engine).
+//! Consumers reach functionality via `Engine`'s inherent methods and
+//! workflow façades (`Engine::stake()`), not via direct trait dispatch.
+//! Promoting to `pub` later is additive and does not require
+//! trait-surface changes — only visibility relaxation.
 //!
 //! # Why traits live together rather than next to their primary
 //!   implementor

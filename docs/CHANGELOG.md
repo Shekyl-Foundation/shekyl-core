@@ -2,7 +2,58 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
+  (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
+  membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
+  tolerance admits admission-failed txs with `fcmp_verified = 0`, so an
+  invalid proof could connect unverified. `take_tx` now reports whether the
+  pool's verification cache affirmatively covers the bytes (flag AND hash
+  match), and connect skips only on that verdict. Admission-verified txs
+  keep their skip (the D++ embargo's `hop` is unchanged); a never-verified
+  tx pays full verification. Unit tests pin the verdict contract
+  (admission-failed false, hash-match true, stale-hash false, failure-return
+  reset); the connect-path wiring regression is a FOLLOWUPS item blocked on
+  the FCMP++ spend builder.
+
 ### Added
+
+- **DRS-P0f row coverage complete — and it found an S0.** The conformance
+  register now disposes **all 102** bucket-1/2 census rows: **95
+  CHECKED-CONFORMANT, 5 DIVERGENT, 2 failed closed** (CEN-L11 with L12
+  coupled; CEN-D2 at S1 with CEN-D1 coupled — the PoW-failure sentinel fails
+  open at difficulty 1; CEN-B5's rule-71 FAKECHAIN skip; CEN-M8's S0 was
+  found, ruled FIX, fixed by PR #602, and re-verified with G4/J26 promoted),
+  each with
+  sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
+  **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
+  the ratified rule requires **hash-gated**, and the `kept_by_block` admission
+  tolerance means a tx whose proof failed at pool admission can connect with
+  verification skipped; the exact required check exists unused on that path.
+  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix = PR #602. Detail:
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+
+- **DRS-P0f slice 1 — the conformance register's first verdicts.** The
+  register that gates DRS-E2's correctness arm is no longer empty. **CEN-H5
+  CHECKED-CONFORMANT** — the vin whitelist, carried by one rule site
+  (`check_inputs_types_supported`) reached from both relay admission
+  (`check_tx_semantic` — run once per pool entrant: in `add_tx` for fresh
+  entrants, caller-side for the pre-verified `kept_by_block` re-inserts) and
+  block connect (`ver_non_input_consensus` on the pool supplement, block-fatal
+  on main and alt paths), with `check_tx_inputs`' typed dispatch and the DB
+  write backstop behind it *(evidence as corrected 2026-09-03 — slice 1
+  originally cited the dead double-spend visitor as connect coverage; the CSR
+  decision log carries the correction)*. **CEN-L12 DIVERGENT**, coupled to
+  CEN-L11 — its maturity arithmetic conforms exactly (60/10, `unlock_time`
+  absent, staked arm retired) but the spec's *universality* clause fails while
+  L11's unchecked construct verdict can silently drop an accepted output, so
+  **L12 cannot be promoted while L11 stands**. Consensus-relevant because
+  correctness-oracle status attaches per row: a digest match on a
+  CHECKED-CONFORMANT row is correctness evidence; on any other row it remains
+  regression evidence only. Detail in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  §5.4.1.
 
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;
@@ -22,6 +73,12 @@
   Every enforcement arm was observed red on a planted evasion before
   landing.
 
+- **Wallet engine staking product door (`Engine::stake()` → `StakeFacade`).**
+  Staking / drain / claim product calls go through `StakeFacade`; JSON-RPC
+  method names are unchanged. Inherent `Engine` methods are count-frozen
+  (`METHODS_CEILING`). See
+  [`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
+
 - **Daemon C++ is not a base — a complete rewrite gates release (countermand,
   2026-09-01).** Recorded with its blast radius across `DRS-*` and its
   row-level census map in
@@ -32,7 +89,7 @@
   demoted from *trusted* oracle to a differential reference for rules that are
   **both** ratified on record **and** carrying an **affirmative conformance
   record** — absence of a recorded divergence means *unreviewed*, not conformant,
-  so the checked set is **empty** until **DRS-P0f** (the per-row conformance review, minted here) populates it (a
+  so the checked set was empty until **DRS-P0f** (the per-row conformance review, minted here) began populating it (a
   **conformance-exception register** holds the known divergences, seeded with
   CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
   intermediate engine (DEL-007), **redb stands**. Design-round detail — the

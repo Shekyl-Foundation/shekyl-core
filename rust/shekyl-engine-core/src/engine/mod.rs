@@ -46,7 +46,7 @@
 //!   Phase 2d.
 //! - **A god-object `Engine` with hundreds of public members.** Every
 //!   [`Engine`] member's mutability and locking discipline is explicit;
-//!   the type is *composition*, not *inheritance*.
+//!   the type is *composition*, not *inheritance*. Staking product API is [`Engine::stake`] / [`stake_facade::StakeFacade`].
 //! - **Background-sync as a wallet-internal feature.** Refresh is
 //!   `tokio::spawn`'d by the caller; cancellation is RAII via
 //!   `RefreshHandle` (lands in a follow-up commit).
@@ -364,6 +364,7 @@ pub(crate) mod signing_assembly;
 /// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
 /// into the lifecycle.
 pub(crate) mod stake_engine;
+pub mod stake_facade;
 /// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
 /// `PersistedBondTicket` persist-before-use typestate and its sole producer
 /// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
@@ -557,18 +558,17 @@ use crate::engine::traits::{
 /// [`PendingTx`]: error::PendingTxError
 // `D: DaemonEngine` and `L: LedgerEngine` are more private than this
 // `pub` item: per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2 preamble,
-// the Stage 1 trait surfaces are `pub(crate)` for V3.0 and revisable
-// to `pub` at V3.2 alongside the JSON-RPC server cutover. External
-// callers reach the daemon and ledger surfaces via inherent methods
-// on `Engine<S>` (the defaults `D = DaemonClient` and
-// `L = LocalLedger` plug in transparently); they cannot name `D` or
-// `L` themselves and never need to. Stage 4's trait promotion
-// deletes this allow attribute together with the sibling annotations
-// (mod.rs inherent impls; lifecycle.rs's `OpenedEngine` / its
-// inherent impl / signer-agnostic `Engine` impl; merge.rs /
-// pending.rs / refresh.rs inherent impls) in a single sweep —
-// they're all the same architectural relationship surfacing at each
-// `pub` site.
+// Stage 1 traits ship `pub(crate)`. JSON-RPC cutover (the original
+// promotion trigger) landed; traits stay crate-local until a second
+// in-tree production crate must construct a workflow without `Engine`
+// (rule 21). External callers use inherent methods on `Engine<S>`
+// (defaults `D = DaemonClient`, `L = LocalLedger`); they cannot name
+// `D` or `L`. Trait-`pub` (if that reopen fires) deletes this allow
+// together with the sibling annotations (mod.rs inherent impls;
+// lifecycle.rs's `OpenedEngine` / its inherent impl / signer-agnostic
+// `Engine` impl; merge.rs / pending.rs / refresh.rs inherent impls)
+// in a single sweep — same architectural relationship at each `pub`
+// site.
 #[allow(private_bounds)]
 pub struct Engine<
     S: EngineSignerKind,
@@ -861,18 +861,18 @@ pub struct Engine<
     /// that has staked (`StakingBlock::staking_enabled`); `None` for the
     /// overwhelming majority of wallets, which derive and hold no personas.
     ///
+    /// Homonym: `self.stake` is this field; [`Engine::stake`](Self::stake) is
+    /// the product façade (always a view — [`Self::has_stake_engine`] is the
+    /// handle predicate).
+    ///
     /// Spawned in [`assemble`](Self::assemble) over the derive-forward set —
     /// `{persisted bonded slots} ∪ {p_slot ..= p_slot + lookahead}` — derived
     /// there while the master seed is transiently borrowed, so the seed never
     /// reaches the actor and is dropped at the caller exactly as in the
     /// non-staker path. The actor's `Drop` (last handle clone) stops it and
     /// wipes the held bundles (`ZeroizeOnDrop`), mirroring `key`.
-    //
-    // Read on a production path now, so it carries no suppression. Its other
-    // load-bearing role is ownership: spawning the actor at open for stakers
-    // and wiping the bundles at close. The JoinMarket bond request that mints
-    // a `PersonaHandle` and consumes a `PersistedBondTicket` still lands in
-    // 2c-2b.
+    // Ownership: spawn-at-open / wipe-at-close. JoinMarket PersonaHandle +
+    // PersistedBondTicket still lands in 2c-2b.
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
@@ -1089,9 +1089,9 @@ impl<
     }
 
     /// Whether a StakeEngine actor is resident (a staker open, or an
-    /// open-with-first-stake-intent). The embedder-facing predicate the
-    /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
-    /// needed; deliberately a bool — the handle itself stays crate-private.
+    /// open-with-first-stake-intent). Embedder-facing handle predicate
+    /// (SA-R1-a intent reopen); [`Self::stake`] is a view either way.
+    /// Deliberately a bool — the handle itself stays crate-private.
     pub fn has_stake_engine(&self) -> bool {
         self.stake.is_some()
     }

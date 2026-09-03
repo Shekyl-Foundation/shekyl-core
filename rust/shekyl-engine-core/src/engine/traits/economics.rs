@@ -38,8 +38,7 @@
 //!
 //! # Visibility
 //!
-//! `pub(crate)` until the JSON-RPC server cutover (V3.2), per the
-//! [`traits` module](super) visibility note.
+//! `pub(crate)`, per the [`traits` module](super) visibility note.
 //!
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 
