@@ -1472,9 +1472,12 @@ claim about what this cluster ruled is not.)*
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
 
-**Running total against the round's gate:** **18 of 46** bucket-4 rows
-dispositioned — cluster I's 10 plus cluster T's 8. **28 rows remain for
-clusters B and A** — enumerated, not estimated: `PWC-A6`, `A6a`, `A7`, `B1`,
+**Running total as of cluster T:** **18 of 46** bucket-4 rows dispositioned —
+cluster I's 10 plus cluster T's 8. **This is a historical figure; the
+authoritative running total is the one at the end of the most recent
+sub-round.** Two live totals in one document is how the off-by-one below went
+unseen, so only one of them is ever current. As of cluster T, 28 rows remained
+for cluster B — enumerated, not estimated: `PWC-A6`, `A6a`, `A7`, `B1`,
 `B2`, `B4`, `B5`, `B6`, `B7`, `C1`, `C3`, `C5`, `C6`, `C7`, `C8`, `E1`, `E2`,
 `E3`, `E4`, `E4a`, `E5`, `E7`, `E8`, `E9`, `E11`, `E13`, `E14`, `F4`.
 
@@ -2230,6 +2233,182 @@ the rekey interval (PWD-B3), the `return_code` and unknown-flag questions
 (PWD-B4/B5), and every behavioural cadence (cluster B). **PWD-T6's post-handshake
 limit and PWD-T3's interval both terminate on cluster B** — that is a real
 dependency, stated rather than papered over with a placeholder number.
+
+## 3.6 Cluster B, first sub-round — unrecognised input, and the command table
+
+**Two decisions: PWD-B3 and PWD-B6.** Cluster B carries **28** bucket-4 rows
+across four validation surfaces, which is more than one review can hold at the
+attention each row deserves (rule 19). It is therefore split into sub-rounds,
+following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
+first because PWD-B3 is a hub rather than merely a blocker.**
+
+> **Four already-ruled commitments terminate on PWD-B3**, one of them in a
+> merged PR: PWD-T6's post-handshake limit, PWC-A2's deferral (the bucket
+> header's length field cannot be sized before the caps it must express),
+> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table* —
+> and PWD-T7's compression gate, whose named blocker is that nothing in the
+> tree classifies a command as confidentiality-bearing. **B3's command table is
+> what resolves that classification.**
+
+**PWD-B6 is in this sub-round because it decides B3's table membership, not
+because it is convenient.** The two block-propagation commands have **byte-
+identical request structs** — `block_complete_entry b; uint64_t
+current_blockchain_height;`, same KV map (`cryptonote_protocol_defs.h:115-129`
+and `:265-279`) — and inherited caps that differ by **32×** (128 MB vs 4 MB).
+The cap is the *only* thing distinguishing the two paths, so deriving one
+without deciding the other would set a limit for a command that may not exist,
+exactly as it would have for `COMMAND_PING`.
+
+### PWD-B3a — the unknown-input principle, ruled once for the whole cluster
+
+**RULED, and stated at cluster scope deliberately.** The same question is asked
+on two surfaces and today gets two different answers:
+
+| Surface | Unrecognised input | Inherited behaviour |
+| --- | --- | --- |
+| Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — no cap at all (`src/cryptonote_basic/connection_context.cpp:68-71`) |
+
+**One question, two answers, and neither was chosen.** That is the drift shape
+that produced the 50 MB / 100 MB packet-limit pair PWD-T6 had to reconcile: two
+rows deriving independently against the same underlying question.
+
+> **Ruled: unrecognised input is rejected at ingress. A field this protocol
+> does not define is not a field it forwards, stores, or sizes a buffer from.**
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that reaches an unbounded allocation, or an undefined flag bit that a future version gives meaning to while old nodes relay it unread | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
+| Preserve-and-forward (today's flag behaviour) | The same | **Refused.** Forwarding a bit you cannot interpret makes every node a relay for semantics it has not agreed to — and `COMPRESSED` (0x10) proves the range is one **we allocate from**, so a preserved unknown bit collides with our own next extension rather than with an inherited one |
+| Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
+| Cap unknown commands at a default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
+
+**Conceded.** This forecloses in-band extension without a version bump — a peer
+cannot introduce a new command or flag and have old nodes tolerate it. **That is
+intended**, and PWC-A3 already refuses version negotiation for the same reason:
+tolerance is a claim about the future that the tolerating node cannot verify.
+Extensions arrive by the same route consensus changes do.
+
+**Falsifier.** **Reopen if any deployment scenario requires two Shekyl versions
+with different command sets to interoperate on one network without a
+coordinated cutover** — that is the property this ruling trades away, and it is
+checkable against the release plan rather than against a benchmark.
+
+> **PWD-B4 applies this rule; it does not re-derive it.** B4's remaining work is
+> the *ingress check's* placement and its interaction with the framing rows
+> (PWC-A6/A6a/A7), not the policy. Recorded here so the two sub-rounds cannot
+> reach different answers.
+
+### PWD-B6 — one block-propagation path, not two
+
+**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008)
+is the sole block path.**
+
+**The two commands are the same message.** Identical structs, identical KV maps.
+What differs is a *usage convention* — 2008 is expected to carry a pruned entry
+and 2001 a complete one — and **nothing enforces it**: `block_complete_entry`
+carries a peer-controlled `pruned` bool, so either shape travels on either
+command. The 32× cap gap is the only enforcement, and it is enforcement of the
+wrong thing.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Keep 2008 only** | The peer choosing the path with the weaker bound; and the bandwidth cost of full-block flood on a chain that has a compact path | **Adopted.** Shekyl is v3-from-genesis with **no fluffy transition to be compatible across** (rule 60) — 2001 exists only because Monero needed both during a rollout that is not our history |
+| Keep 2001 only | The same | **Refused.** It is the *more* expensive path, and deleting the compact one to keep the verbose one inverts the reason both exist |
+| Keep both, reconcile the caps | The same | **Refused.** Reconciled caps still leave two commands with one schema, so the choice of command carries no information and the receiver must handle both — cost with no property bought |
+
+**Conceded.** A node that has every transaction of an incoming block still pays
+one round trip if any is missing, which the full-block path would have avoided
+for a peer that guessed right. **That is the compact path's standing trade, not
+a new one**, and `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is the mechanism.
+
+**Falsifier.** **Reopen if measured block-propagation latency on the compact
+path exceeds the full-block path by more than one round-trip time at the
+95th percentile**, on the Q12-D6a rig — a figure that would mean the missing-tx
+fetch is not the bounded cost this ruling assumes.
+
+### PWD-B3 — per-command caps, and the bound that is not a number
+
+**RULED as a derivation with a named dynamic input, because the honest answer
+is not a table of constants.**
+
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71`) —
+13 arms, and after PWD-B10 and PWD-B6 it is **11**:
+
+| Command | Inherited cap | Disposition |
+| --- | --- | --- |
+| `COMMAND_HANDSHAKE` (1001) | 65536 | Derived from `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × one peerlist entry + `CORE_SYNC_DATA` |
+| `COMMAND_TIMED_SYNC` (1002) | 65536 | Same derivation as 1001 |
+| `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
+| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
+| `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
+| `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | `CRYPTONOTE_MAX_TX_SIZE` (1 MB) × the relay batch bound |
+| `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
+| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **The dynamic one** — see below |
+| `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
+| `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
+| `NOTIFY_NEW_FLUFFY_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
+| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
+| `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010) | 4 MB | A hash list; derives from the pool bound |
+
+> **The block-carrying commands cannot take a static cap, and this is the
+> finding, not a gap in the round.** A block's maximum weight is
+> `m_current_block_cumul_weight_limit` — **dynamic, consensus-derived, and a
+> function of chain state** (`blockchain.cpp:1975`). A static number is
+> therefore either **too small**, rejecting a legitimate block during a growth
+> phase and partitioning the node, or **too large**, in which case it is not a
+> bound. The inherited 128 MB is the second.
+
+**Ruled: the block-carrying cap is computed from the receiver's own consensus
+state**, as a fixed multiple of its current weight limit, so it tracks the chain
+rather than a release. The multiple absorbs the receiver being behind the tip;
+it is a consensus-adjacent constant and is **named as owed to the consensus
+lane**, not invented here.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim |
+| A static ceiling picked to survive expected growth | The same | **Refused.** It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does |
+| Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
+
+**What this discharges, stated so the dependent rows can be closed:**
+
+- **PWD-T6's post-handshake limit** is the maximum over this table — now a
+  derivation with one dynamic term rather than an inherited round number.
+- **PWC-A2** (bucket header length field) can be sized: the field must express
+  the largest value this table can produce, which is the block-carrying cap.
+- **PWD-T7's compression gate** gets its classification: **every command in
+  this table carries public consensus data**, so the confidentiality-bearing
+  set is **empty today** and the gate is a check that the set stays empty when
+  a command is added.
+
+**Conceded, and it is a real cost.** A dynamic cap means two nodes at different
+heights admit different maxima, so a node far behind the tip rejects a block a
+synced node accepts. **That is correct behaviour** — it will fetch the
+intervening chain first — but it makes "the limit" a per-node quantity rather
+than a protocol constant, which every implementation must reproduce identically
+or interoperate poorly.
+
+**Falsifier.** **Reopen if a legitimate block is ever rejected by the derived
+cap at any reachable chain state** — the same falsifier PWD-T6 carries, now
+with a computable subject rather than a static number to compare against.
+
+### Cluster B first sub-round disposition — the census rows this sub-round accounts for
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-C7 (`get_max_bytes` unknown-command fallthrough to `size_t::max`) | **Ruled** — rejected at ingress, not defaulted | PWD-B3a, PWD-B3 |
+| PWC-C3 (two block-propagation paths) | **Ruled** — 2001 deleted, 2008 is the sole path | PWD-B6 |
+| PWC-A6 (codec round-trips unknown flag bits) | **Ruled** — the policy is set here; PWD-B4 places the check | PWD-B3a |
+| PWC-A6a (no relay carries unknown bits today) | **Absorbed** | PWD-B3a (it is the reason the change is safe now) |
+
+**Sum check: 3 ruled + 1 absorbed + 0 deferred = 4 rows.** ✅
+
+**Running total against the round's gate — authoritative:** **22 of 46**
+bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + this
+sub-round's 4. **24 rows remain**, all in cluster B's later sub-rounds:
+`PWC-A7`, `B1`, `B2`, `B4`, `B5`, `B6`, `B7`, `C1`, `C5`, `C6`, `C8`, `E1`,
+`E2`, `E3`, `E4`, `E4a`, `E5`, `E7`, `E8`, `E9`, `E11`, `E13`, `E14`, `F4`.
 
 ## 4. What cluster I does not decide
 
