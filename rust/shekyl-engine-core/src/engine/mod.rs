@@ -412,6 +412,9 @@ pub(crate) mod tx_counts;
 pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
+/// The `submit_unbond` dispatch seam (PR-P4): seal a `PendingUnbond`, then
+/// the persona-transport choke point — no decorrelation plan; gate narrowed.
+pub(crate) mod unbond_dispatch;
 pub mod view_material;
 
 pub use capability::Capability;

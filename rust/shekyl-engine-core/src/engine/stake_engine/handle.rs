@@ -295,18 +295,21 @@ impl StakeEngineHandle {
     ///
     /// **`pub(crate)`, and deliberately not wired to any RPC method or CLI verb.**
     /// The gate on this lane is reachability, not existence. Slice 3's engine
-    /// walk has landed and asserts all three named observables (the wipe, the
-    /// funded gate, the seal-then-act crash ordering) — and it did **not** make
-    /// anything user-callable. What still holds the exit closed is the set of
-    /// missing pieces, not a pending event: no RPC method, no CLI verb, and
-    /// nothing dispatching the assembled bytes. Native `/submit_transaction`
-    /// refusing `Unbond` was a fourth piece until 2026-08-29; the submit fact
-    /// set landed (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1), so a dispatched exit
-    /// would now be admitted rather than refused.
-    /// This is the engine-internal seam the walk drives — and the seam an
-    /// actor-level test uses to prove the handler's persona-binding refusal is
-    /// reachable, which a unit test on `UnbondRecordState` cannot do.
-    #[allow(dead_code)] // PR-P4: retires with the `unstake` verb; today's caller is a test.
+    /// walk asserted the three retire observables without making anything
+    /// user-callable; PR-B's dispatch seam ([`Engine::submit_unbond`]) drives
+    /// this ask from production code and the daemon walk drives THAT — and
+    /// neither made anything user-callable either. What still holds the exit
+    /// closed is the set of missing pieces, not a pending event: no RPC
+    /// method, no CLI verb ("nothing dispatches the assembled bytes" was a
+    /// third piece until the dispatch seam narrowed it to "nothing
+    /// user-facing dispatches"; native `/submit_transaction` refusing
+    /// `Unbond` was a fourth until 2026-08-29, `DAEMON_SUBMIT_VERDICT.md`
+    /// §8.7.1.1).
+    /// This is also the seam an actor-level test uses to prove the handler's
+    /// persona-binding refusal is reachable, which a unit test on
+    /// `UnbondRecordState` cannot do.
+    ///
+    /// [`Engine::submit_unbond`]: crate::engine::Engine::submit_unbond
     pub(crate) async fn assemble_unbond(
         &self,
         msg: AssembleUnbond,

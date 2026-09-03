@@ -2379,7 +2379,7 @@ is not a table of constants.**
 > **The block-carrying commands cannot take a static cap, and this is the
 > finding, not a gap in the round.** A block's maximum weight is
 > `m_current_block_cumul_weight_limit` — **dynamic, consensus-derived, and a
-> function of chain state** (`blockchain.cpp:1975`). A static number is
+> function of chain state** (`src/cryptonote_core/blockchain.cpp:1846`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
 > therefore either **too small**, rejecting a legitimate block during a growth
 > phase and partitioning the node, or **too large**, in which case it is not a
 > bound. The inherited 128 MB is the second.
@@ -2391,14 +2391,14 @@ rather than a release.
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
 > `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
-> list (`cryptonote_protocol_defs.h:175-190`) — a **sync batch**. A cap sized
+> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
 > for one block plus a tip-lag margin either rejects legitimate multi-block
 > sync responses or, if widened to fit a batch, hands the single-block announce
 > path a batch-sized bound. *An earlier version of this table gave both
 > commands the same disposition and would have done one or the other.*
 >
 > **Its bound is the batch this node asked for.** `NOTIFY_REQUEST_GET_OBJECTS`
-> (2003) carries `std::vector<crypto::hash> blocks` (`:156-171`), so the
+> (2003) carries `std::vector<crypto::hash> blocks` (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
 > receiver **already knows the cardinality it requested** — the cap is that
 > count times the per-block bound, and it needs nothing from the peer.
 > §1's fourth check again: the bound comes from this node's own record of what

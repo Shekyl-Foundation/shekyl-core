@@ -1315,17 +1315,18 @@ pub(crate) mod tests {
         // Synchronized with a non-zero raw target: the rule zeroes it, and the
         // zero is omitted on the wire exactly as epee omitted it.
         //
-        // Against `_v2`: this PR's wire change bumped `CORE_RPC_VERSION` to
-        // 3.25, and the vectors are never hand-edited (see their README), so
-        // the bump gets a file beside the C++ capture rather than inside it.
-        // `get_version_v2_is_v1_with_only_the_version_bumped` is what keeps
-        // `_v2` honest — it may differ from the oracle by that constant and
-        // nothing else.
+        // Against `_v3`: C2-R1b's `following_degraded` field bumped
+        // `CORE_RPC_VERSION` to 3.26 (the 3.25 bump minted `_v2` the same
+        // way), and the vectors are never hand-edited (see their README), so
+        // each bump gets a file beside the C++ capture rather than inside
+        // it. `get_version_v3_is_v2_with_only_the_version_bumped` is what
+        // keeps `_v3` honest — it may differ from its predecessor by that
+        // constant and nothing else.
         let out = get_version(&facts(true, 999_999)).unwrap();
         assert_eq!(out.target_height, 0);
         let ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v2.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v3.json"
         ))
         .unwrap();
         assert_eq!(ours, oracle);

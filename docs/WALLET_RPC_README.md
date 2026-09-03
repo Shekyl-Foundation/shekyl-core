@@ -46,9 +46,13 @@ persona's own drainable pool — the set a `drain` can actually spend.
 RESERVED methods remain Engine-gated: `unstake` and
 `match_transfer_to_request` (the latter gated on an Engine match
 method). `unstake` is no longer gated on a *missing producer* — PR-P4
-built the `Unbond` producer. Remaining gates: reachability (no RPC
-method, no CLI verb) and dispatch of the assembled bytes. Native
-`/submit_transaction` was a third gate until 2026-08-29 and is not one
+built the `Unbond` producer — nor on a missing dispatch path: PR-B
+landed `Engine::submit_unbond` (`pub(crate)`) and the daemon walk ran
+an assembled `Unbond` through native submit-accept and block-connect
+on a real regtest chain. Remaining gates: reachability (no RPC
+method, no CLI verb) and the composed `unstake` = post + a
+decorrelated drain. Native
+`/submit_transaction` was a separate gate until 2026-08-29 and is not one
 now — the Unbond submit fact set landed
 ([`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) §8.7.1.1),
 so a dispatched Unbond would be *accepted*. PR-P4 slice 3's engine walk

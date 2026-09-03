@@ -1,6 +1,6 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b RATIFIED by Rick 2026-09-03 as amended at `ad72e1bc9`** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). Implementation lands on PR #600.
+**Status:** **OPEN — R1a MERGED (#596); R1b RATIFIED 2026-09-03 and BUILT (§4c) on `feat/c2-r1b-impl`; R1c next after C2-R0** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). The implementation is PR #603; PR #600 was the proposal-only ratification record, merged 2026-09-03.
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
@@ -820,7 +820,119 @@ branch.
 
 ---
 
-## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
+## 4c. R1b execution record (built on `feat/c2-r1b-impl`, 2026-09-03)
+
+Phases, in landing order, each red-first where a losing leg exists:
+
+1. **Q2a** — both nettype guards deleted (`:254`'s `return true`
+   false-positive and the `:326` init wrapper); `init_default_checkpoints`
+   collapsed to one body (per-network DATA only). **Rule-71 allowlist
+   8 → 4, exceeding the ratified 8 → 6 deliberately**: the two
+   `checkpoints.cpp` no-op-arm entries carried the disposition
+   "C2-R1b re-homes or deletes" — leaving them would have left their own
+   disposition undischarged. The cross-params suite
+   (`checkpoint_uniformity.cpp`) runs identical load + enforcement
+   verdicts on all three public networks.
+2. **Q2c** — the twin deleted whole: `m_difficulty_points`, its getter,
+   `add_checkpoint`'s difficulty arm, `ADD_CHECKPOINT2`,
+   `check_difficulty_checkpoints`, `recalculate_difficulties` and the
+   weekly interval. Jobs enumerated: the init drift-check was
+   structurally dead (empty map ⇒ `{true, 0}`); the periodic job's only
+   live effect was the accidental full-chain recompute; the
+   drift-healing job, if ever wanted, needs a designed trigger.
+3. **Q1c** — the watermark: `note_archival_prune_watermark_epoch`
+   (monotonic, wtxn-required, written by the prune before its deletions
+   in the same txn) + `get_archival_prune_watermark_epoch` (base default
+   0 keeps every test double permissive) + ONE predicate
+   (`pop_target_allowed`) consumed by the `pop_block` belt and three
+   pre-checks that never re-spell it. **The belt's losing leg was
+   observed red first**: the bite test ran against the beltless tree and
+   failed with "Actual: false" (the pop completed silently on the no-op
+   double) before the enforcement commit turned it green. F-1(a): the
+   switch pre-check fails before mutating (fork height vs floor), sets
+   the sticky `m_following_degraded`, logs per re-attempt, and surfaces
+   as `get_info.following_degraded` (`CORE_RPC_VERSION` 3.26). **RK-5c
+   coordination (steering's sequencing ruling):** the field is minted
+   here the lane's way — RK-5a landed, RK-5b is the header remainder,
+   RK-5c ("get_info, the hub") is where this flag migrates; RK-5c's
+   scope carries no existing health slot, so this field is a **named
+   input to RK-5c's design**, and its test is value-shaped
+   (the flag's transitions, not the wire form) per RK-D9 so the
+   migration keeps it. Reset semantics: process-lifetime sticky,
+   re-armed on recurrence; alt blocks drop at restart, so a restarted
+   node re-degrades exactly when peers re-send the heavier chain —
+   self-correcting, not clear-on-restart. F-1(b): a watermark-refused
+   checkpoint rollback returns false through
+   `Blockchain::update_checkpoints` into the existing
+   `core::update_checkpoints → graceful_exit()` fail-stop, with the
+   named output at both layers. **F-2**: the exemption is enforced
+   structurally — `check_consensus_invariants.sh` [6/6] asserts the
+   watermark writer exists, its property key appears exactly twice
+   (reader + writer), and NO `revert_*` body references it (anchored on
+   the prune watermark's identifiers; the slash-fold watermark is a
+   different concept and stays free) — bitten red on a planted
+   revert-body reference. **Vector decomposition, recorded as the
+   derivation Rick asked for:** the floor quantizes to settlement-epoch
+   open heights (SEB = 10,000), so no unit-scale chain can straddle it;
+   vectors (ii)/(iii) therefore run against the production predicate at
+   the exact boundary (`open`, `open − 1`), the belt is bitten
+   separately through `pop_block` itself, and F-2's cross-boundary
+   no-revert claim is carried by the [6/6] structural gate plus the
+   writer-monotonicity tests — the full SEB-scale flow belongs to
+   stressnet territory and is named as such rather than faked.
+4. **Q2b** — `saturating_sub(pt.first, 2)` (the wrap unrepresentable),
+   conflict messages carry height + both hashes + file + watermark +
+   remedy.
+5. **Q1b** — `fork_choice` and `alt_window_plan` land in
+   `shekyl-difficulty` (49 native tests incl. the u128 hi-word boundary
+   and the D5 contiguity refusals), exported beside `lwma1`/`check_hash`
+   in `difficulty_ffi.rs` (**no new `from_raw_parts` — the boundary
+   ratchet pin is untouched**; both exports take scalars/structs by
+   value). C++ consumes the verdict at the admission site (the discard
+   flag stays orchestration keyed on the checkpoint arm) and performs
+   the fetches `alt_window_plan` names — both regimes now come from one
+   function, and the old reverse-fill branch is gone. Shared vectors
+   `docs/test_vectors/FORK_CHOICE_V1.json`, pinned per rule 30, with
+   two consumers: `fork_choice_vectors.rs` (native) and
+   `fork_choice_vectors.cpp` (end-to-end through the FFI).
+
+Bookkeeping: census rows K5/K6/K7/K8/D5/D6/E1/E2/E5 → bucket 2 (the
+E-rows carrying the **held-existence** condition in their own text),
+counts 86/25/5/55; the watermark names itself in the CSR store map
+(minted after the 18-row map landed) **and in `docs/LMDB_SCHEMA.md`**
+(properties table + the v12 version-history section); the
+`RETENTION_HORIZON_BLOCKS` rename rides FOLLOWUPS per Rick.
+**Corrected claim, owned:** an earlier revision of this record said
+"`LMDB_SCHEMA.md` does not exist" — a wrong-instrument negative
+(`grep -l LMDB_SCHEMA docs/` lists files *containing* the string, and
+the doc does not name itself; `check_lmdb_schema_coverage.py` reads it
+and failed CI the moment VERSION moved). The truncated-listing rule's
+fourth instrument: a containment grep cannot prove a file's absence —
+`ls` the path.
+
+**Copilot round 3 (#603, all five findings suppressed-but-valid, each
+addressed):** the substantive one — a watermark-refused switch set
+`bvc.m_verifivation_failed`, and both P2P receive paths respond to
+that flag by dropping and scoring the peer, so a degraded node would
+have punished every honest peer advertising the heavier chain and
+isolated itself onto its own fork. **The refusal is a local retention
+limitation, not block invalidity**: the pre-check now lives in the one
+caller (`handle_alternative_block`'s switch arm — still before any
+mutation, same predicate), the block stays in the alt store, `bvc`
+carries no failure, and the peer is kept; the pop belt still backstops
+any unchecked path. Value-shaped coverage the PR had promised and not
+delivered now exists: core test `gen_reorg_watermark_refused_switch`
+(fixed difficulty 1; watermark armed by callback; a strictly-heavier
+alt fork below the floor) pins the false→true transition, stickiness
+across a second refusal, and the unmoved tip — observed red on the
+pre-fix form at exactly the `m_verifivation_failed` axis. Lesser
+findings: the [6/6] writer-count floor (`>= 2`) became an equality so
+a third call site turns the gate red instead of passing; the `-5`
+window code joined `difficulty_ffi.rs`'s module-level wire-stable
+table; this doc's header no longer says the implementation "lands on
+PR #600". Same round: `origin/dev` merged (CHANGELOG both-sides-add
+resolved keeping both families; dev's CEN-M8 hash-gated skip is
+disjoint from every R1b region).
 
 **R1c now runs after C2-R0** (§1) and inherits its re-scoping note —
 C2-R0's stated deliverable is naming which of these nine rows a
@@ -898,6 +1010,10 @@ rules already have owners), nothing new crosses.
   corrected the round's own "no new subjectivity" sentence: the floor
   is **node-local by design** — durability, not uniformity, is the
   safety property.
+- 2026-09-03 — Built (§4c): all six rulings implemented red-first on
+  `feat/c2-r1b-impl`; the belt's losing leg observed red before
+  enforcement; every gate green (rule-71 at allowlist 4, invariants
+  6/6, fmt/clippy workspace-wide, crate + FFI + vector suites).
 - 2026-09-03 — **RATIFIED by Rick** as amended at `ad72e1bc9`: every
   new source claim re-verified by him (the wrap at `:6725`, the
   above-tip `return true` at `:1351`, the weekly-recompute chain, the
@@ -918,3 +1034,28 @@ rules already have owners), nothing new crosses.
   `RETENTION_HORIZON_BLOCKS` rename row rides the build PR's FOLLOWUPS
   edit (hygiene under the watermark form; the name cost one wrong
   ruling).
+- 2026-09-03 — Copilot round 3 on #603 (five suppressed findings, all
+  valid, all addressed — record in §4c): the refused-switch
+  peer-punishment defect fixed (refusal no longer travels
+  `m_verifivation_failed`; block kept as alternative, peer kept), the
+  promised `following_degraded` value test built and observed
+  red-first (`gen_reorg_watermark_refused_switch`), the [6/6]
+  writer-count floor tightened to an equality, the `-5` code added to
+  the FFI error table, the stale "lands on PR #600" header corrected.
+  `origin/dev` merged in the same round (CHANGELOG both-families
+  resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-03 — Copilot round 4 on #603 (three findings, all valid, all
+  addressed): the Q2b saturated-to-zero rollback target aborted on the
+  can't-pop-genesis guard for a height-1/2 checkpoint conflict — the
+  target is now floored at the genesis-only chain (DB height 1), and a
+  conflict AT genesis fail-stops as unresolvable instead of reporting a
+  no-op rollback as success (the shape's fourth instance); the
+  checkpoint walk now stops after an applied rollback, because the
+  height-ordered later entries would be tested against the stale
+  pre-rollback height and read past the new tip; the C++ RPC header's
+  prose copy of `CORE_RPC_VERSION` ("3.25") replaced with a
+  number-free pointer — a prose copy of a moving constant only goes
+  stale. Core test `gen_checkpoint_conflict_rollback` pins the
+  completed rollback with a second conflicting checkpoint present,
+  observed red-first ("Cannot pop the genesis block" escaping the
+  walk).

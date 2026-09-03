@@ -141,8 +141,14 @@
 #                                                   is anchored to what
 #                                                   actually holds it: no RPC
 #                                                   verb, no CLI command, and
-#                                                   nothing dispatching the
-#                                                   assembled bytes. Native
+#                                                   no composed unstake verb.
+#                                                   "Nothing dispatching the
+#                                                   assembled bytes" was a
+#                                                   third condition until
+#                                                   PR-B narrowed it (seam
+#                                                   pub(crate), sole caller
+#                                                   #[cfg(test)] — the PR-B
+#                                                   UPDATE below), and native
 #                                                   /submit_transaction was a
 #                                                   fourth condition until
 #                                                   2026-08-29 and is not one
@@ -206,6 +212,36 @@
 #                                                   path closed, where it used
 #                                                   to be one of two
 #                                                   independent layers.
+#                                                   UPDATE 2026-09-02 (PR-B,
+#                                                   #601):
+#                                                   the dispatch
+#                                                   seam landed
+#                                                   (Engine::submit_unbond,
+#                                                   pub(crate)) and the daemon
+#                                                   walk ran green — an
+#                                                   Unbond has now been
+#                                                   assembled, dispatched,
+#                                                   ACCEPTED by native submit
+#                                                   and CONNECTED on a real
+#                                                   regtest chain
+#                                                   (e2e_unbond_accepted_and_
+#                                                   connected). Neither lifted
+#                                                   this gate: "nothing
+#                                                   DISPATCHES the assembled
+#                                                   bytes" NARROWED to
+#                                                   "nothing user-facing
+#                                                   dispatches" (the seam's
+#                                                   only caller is
+#                                                   #[cfg(test)]), and the
+#                                                   composed unstake =
+#                                                   unbond() = post + a
+#                                                   decorrelated drain still
+#                                                   does not exist. Those two
+#                                                   conditions — no user-
+#                                                   facing caller, no
+#                                                   composed verb — are what
+#                                                   RESERVED now anchors to;
+#                                                   lifting them is PR-C.
 #                                                   Read this entry as "the
 #                                                   hard part exists and is
 #                                                   unreachable", never as
@@ -345,9 +381,10 @@
 #   -29200..-29299           refresh / rescan
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (-29500..-29506 live on `stake`;
-#                            -29507..-29511 live on `drain` (WI-RPC-5);
-#                            rest reserved — never reuse an allocated code)
+#   -29500..-29599           staking (-29500..-29506 and -29512 live on
+#                            `stake`; -29507..-29511 live on `drain`
+#                            (WI-RPC-5); rest reserved — never reuse an
+#                            allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
 #                            not pending work. A4 (2026-08-06) descoped
@@ -586,6 +623,7 @@ components:
         - -29509   # DRAIN_RESERVE_BREACHED
         - -29510   # DRAIN_UNANCHORABLE
         - -29511   # DRAIN_IN_FLIGHT
+        - -29512   # STAKE_FUNDING_FRAGMENTED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -830,6 +868,21 @@ components:
                                           renders the same condition as its
                                           `status: syncing` result
                                           discriminant, never this error
+          -29512 STAKE_FUNDING_FRAGMENTED stake: the persona's spendable
+                                          funding is fragmented across more
+                                          outputs than one bond post can
+                                          carry (the consensus vin cap
+                                          counts the post's own bond input,
+                                          so the funding headroom is 7).
+                                          W1-clean; the funding is intact —
+                                          neither -29500's "fund and retry"
+                                          (funding more worsens it) nor an
+                                          internal fault. No consolidation
+                                          verb exists yet for un-bonded
+                                          persona funding; avoid splitting
+                                          persona funding across more
+                                          stake_in transfers than the
+                                          headroom
           -29511 DRAIN_IN_FLIGHT          drain: a live pending drain already
                                           exists for this persona (one live
                                           drain per persona — the sealed

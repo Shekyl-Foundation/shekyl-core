@@ -32,6 +32,14 @@ Default. Lands before genesis if it should exist at launch.
 - **Live-oracle spend-hash KAT: a daemon-captured blob for the FCMP++/PQC spend arms.** Struct-derived cross-language hash parity landed with PR #576 (`pruned_tx_hash_parity.rs`/`.cpp` for the 4-part spend arm, `serve_credit_tx_parity.rs` + C++ leg for the 3-part), binding the two implementations to each other but not yet to a chain. Blocked on the FCMP++ spend path producing a daemon-accepted transaction to capture (`fcmp_spend_e2e.rs`'s self-validated builder is the stand-in); capture alongside `capture_coinbase.py`'s corpus when it exists (owner: [`GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md) §11).
   - Target: pre-genesis
 
+- **S1 (§7.2 ladder): the PoW-failure sentinel fails open at difficulty 1 (`CEN-D2` DIVERGENT).** On verifier FFI failure the longhash is forced to `0xff…` and the validation paths rely on `check_hash` rejecting it — but `check_hash(0xff…, 1)` passes ((2²⁵⁶−1)·1 < 2²⁵⁶; the crate's own test documents it), both call sites ignore the verifier's returned bool (`blockchain.cpp:5899–5902` main, `:2414–2416` alt), and difficulty 1 is reachable — `--fixed-difficulty` is a general daemon arg on any nettype, and organic LWMA-1 has no floor above CEN-D6's zero-guard. Under (FFI failure ∧ difficulty 1) a block connects with its PoW never verified. **CEN-D1 is coupled** (round 6): its own clause includes "FFI failure rejects", breached by the same path — one fix closes both rows. Fix ≈ consume the verifier's bool at both validation sites and reject on failure as a verification error (sentinel stays as a belt); correct the in-tree comment that claims the sentinel "guarantees" rejection. Per the ladder S1 blocks DRS-0: fix or accept before engine work — Rick's call. Owner: [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+  - Target: pre-genesis
+- **`CEN-L8`'s settlement clause describes an unwired writer, and names the wrong hook.** DRS-P0f slice 3 (2026-09-02) failed CEN-L8 closed to UNREVIEWED: `set_archival_settlement` has **no production caller** (`db_lmdb.cpp:7649` says so in the tree, and calls it "exactly the kind of 'not reachable, so not wrong' that stops being true silently"), while **SO-D7** ruled the writer belongs inside the slash scheduler's per-epoch pass rather than at a separate epoch-close event — which is where the census row puts it. Two questions, one owner: the census row needs re-wording against SO-D7 (census / §10 R8), and the writer needs a production caller before CEN-L8 can be re-reviewed for promotion. Until both, CEN-L8's digest is regression-only. Owner: [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+  - Target: pre-genesis (event-driven: writer wired + row re-worded against SO-D7)
+
+- **Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).** PR #602's unit tests pin `take_tx`'s cache verdict, but no test executes the consumer gate at block connect — reverting `can_skip_fcmp` to presence semantics would leave them green. The regression (an invalid-proof pool tx with `fcmp_verified = 0` must fail the block; its verified twin must connect with the skip) needs a connectable FCMP++ block whose tx is valid in every layer except the membership proof — **the same blocker as the spend-hash-KAT item above** (no daemon-accepted FCMP++ spend builder; `fcmp_spend_e2e.rs`'s self-validated builder is the stand-in). Build it when that builder exists; the M8/G4/J26 register re-review does not wait on it (the code walk covers the wiring), but E2's regression harness should include it. Owner: [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+  - Target: pre-genesis (blocked on the FCMP++ spend builder, named above)
+
 - **A pruned node keeps whole `pqc_auths` because they have no hash table.** A pruned v3 txid is `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)` and `pqc_auth_hash` is computed from the raw `txs_pqc_auths` bytes, so nameability costs the entire PQ signature slice where `txs_prunable_hash` does the same job in 32 bytes (`db_lmdb.cpp` `prune_tx_data`, PR #576; owner: [`LMDB_SCHEMA.md`](LMDB_SCHEMA.md)). A `txs_pqc_auth_hash` table would close it. **Unmeasured — do not open on the guess:** reopen with a real `pqc_auths`-vs-retained-bytes ratio from a pruned datadir, which an LMDB schema addition and its migration should be justified by.
   - Target: pre-genesis
 
@@ -50,10 +58,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: the Unbond producer and the daemon's submit battery both exist, but nothing dispatches the bytes and there is no RPC method or CLI verb.** When that verb becomes reachable it lands on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), not as `Engine::unstake`. [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
-  - Target: pre-genesis
-
-- **Assembled `Unbond` bytes are never submitted through the native C++ consensus path (the daemon walk); the submit fact set landed, so what it now needs is the engine dispatch seam.** [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+- **Staking has no REACHABLE exit: producer, submit battery, dispatch seam, and the daemon walk all exist, but the seam (`Engine::submit_unbond`) is `pub(crate)` with only a `#[cfg(test)]` caller — no RPC method, no CLI verb, no composed `unstake` (= post + a decorrelated drain, PR-C).** When that verb becomes reachable it lands on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), not as `Engine::unstake`. [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release
@@ -119,7 +124,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
   - Target: pre-genesis
 
-- **Drain/claim dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572).**
+- **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).**
   - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 
@@ -567,6 +572,9 @@ Default. Lands before genesis if it should exist at launch.
 
 - **PQC Multisig : external adversarial review (Phase 5).**
   - Target: pre-genesis
+
+- **Rename `RETENTION_HORIZON_BLOCKS` (hygiene, C2-R1b residue).** The name reads as a reorg bound and cost the program one wrong ruling draft (the tip-derived floor); under the watermark form it is only the archival sweep floor. Rename toward its actual job (e.g. `ARCHIVAL_SWEEP_FLOOR_BLOCKS`) with the [`ARCHIVAL_TIMING_CONSTANTS.md`](design/ARCHIVAL_TIMING_CONSTANTS.md) row updated in the same change.
+  - Target: post-genesis
 
 - **Threshold signatures: one missing primitive, two named customers (ruled 2026-09-03).** PQC multisig and quorum-style attestation (C2-R0 candidate C6's decisive constraint) wait on the **same external event**: a practical, standardized threshold construction for the **ML-DSA leg**. The classical half is not the problem — FROST-style Schnorr thresholds are mature for the Ed25519 leg — but hybrid signing means the PQ leg cannot be waved off: a threshold classical signature bolted to k-of-n individual PQ signatures inherits the fat certificate's size *and* its signer-naming (the C6 tier-1 persona-linkage oracle: an **attested, gap-free** presence/absence ledger — absences are *recorded*, not merely unobserved, so the adversary reads a ledger the chain maintains for them — and a **permanent** one: personas that ever signed stay linkable from history even after any later format fix). Whoever notices NIST or the research community shipping a practical lattice threshold scheme reopens **both** customers at once — one row so they cannot be reopened separately. Realistic horizon: years (interactive round complexity; security-analysis maturity). Owner: crypto lane; the V4 row below is the *transition* consumer of the same event.
   - Target: post-genesis
