@@ -15,20 +15,24 @@
   Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it). Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
-- **DRS-P0f slice 1 — the conformance register's first verdicts.** The register
-  that gates DRS-E2's correctness arm is no longer empty. Reviewed at
-  `6bc2de8f2`/`4b9807c5e`, covering **all six** reviewable store-enforced rows:
-  **CEN-H5, CEN-L7, CEN-L9 and CEN-L10 CHECKED-CONFORMANT** — the vin whitelist — three
-  enforcement sites agreeing with the ratified spec and with each other, relay
-  coverage via `check_tx_semantic` and connect coverage via the double-spend
-  visitor plus the unconditional DB backstop); **CEN-L12 DIVERGENT**, coupled to
+- **DRS-P0f slice 1 — the conformance register's first verdicts.** The
+  register that gates DRS-E2's correctness arm is no longer empty. **CEN-H5
+  CHECKED-CONFORMANT** — the vin whitelist, carried by one rule site
+  (`check_inputs_types_supported`) reached from both relay admission
+  (`check_tx_semantic`; hard-reject in `add_tx`, `kept_by_block` included) and
+  block connect (`ver_non_input_consensus` on the pool supplement, block-fatal
+  on main and alt paths), with `check_tx_inputs`' typed dispatch and the DB
+  write backstop behind it *(evidence as corrected 2026-09-03 — slice 1
+  originally cited the dead double-spend visitor as connect coverage; the CSR
+  decision log carries the correction)*. **CEN-L12 DIVERGENT**, coupled to
   CEN-L11 — its maturity arithmetic conforms exactly (60/10, `unlock_time`
   absent, staked arm retired) but the spec's *universality* clause fails while
   L11's unchecked construct verdict can silently drop an accepted output, so
   **L12 cannot be promoted while L11 stands**. Consensus-relevant because
-  correctness-oracle status now attaches per row: a digest match on CEN-H5 is
-  correctness evidence; everywhere else it remains regression evidence only.
-  Detail in [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  correctness-oracle status attaches per row: a digest match on a
+  CHECKED-CONFORMANT row is correctness evidence; on any other row it remains
+  regression evidence only. Detail in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
   §5.4.1.
 
 - **Rule 71 (network uniformity) + its CI gate.** On the

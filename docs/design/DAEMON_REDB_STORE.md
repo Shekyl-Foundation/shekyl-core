@@ -39,7 +39,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > divergence*, which means **unreviewed**, not conformant, because the exception
 > register is explicitly incomplete. Three states: CHECKED-CONFORMANT (oracle),
 > DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
-> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **98 CHECKED-CONFORMANT**, 3 DIVERGENT (incl. **CEN-M8 at S0**, see FOLLOWUPS), 1 failed closed (the conformance register; *not* P0d, which is Digest v0); everything else is UNREVIEWED. This invalidates the unhedged
+> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **98 CHECKED-CONFORMANT**, 3 DIVERGENT (incl. **CEN-M8 at S0**, see FOLLOWUPS), 1 failed closed. P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
@@ -48,8 +48,8 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > — absence of a recorded divergence means *unreviewed*, not conformant, and the
 > conformance register is **complete over the 102 bucket-1/2 rows** (98 / 3 / 1
 > — via **DRS-P0f**); outside the 98 the digest is a *regression* instrument,
-> and **CEN-M8 is DIVERGENT at S0** (see FOLLOWUPS) (**CSR-3a**; register seeded
-> with CEN-L11)) and
+> and **CEN-M8 is DIVERGENT at S0** (see FOLLOWUPS) — **CSR-3a**; register seeded
+> with CEN-L11) and
 > **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
 > **CSR-2** are ruled and recorded in the reconciliation; **CSR-5** is ruled in
 > direction only, with no queue slot fixed.
