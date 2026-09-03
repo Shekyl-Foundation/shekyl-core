@@ -262,8 +262,10 @@ parallel with the remaining clusters rather than after them. *(It is the
 gated on PWD-I4. An earlier wording said "closure", which is where PWD-I5's own
 heading drifted from: the ordering rationale was written before the row's scope
 was settled, and then the row was named to match the argument.)* (The *disposition* load runs
-the other way — cluster B carries ~20 bucket-4 rows to cluster I's 10 — so this
-ordering is about latency, not volume.)
+the other way — **cluster B carries all 28 remaining bucket-4 rows** to cluster
+I's 10, because cluster A's only row cites `PWC-X5`, and `PWC-X` records carry
+no bucket — so this ordering is about latency, not volume. *Corrected from
+"~20" on 2026-09-03, with cluster A's zero verified rather than assumed.*)
 
 ### PWD-I1 — no peer identifier on the wire at all; the four jobs it served are replaced
 
@@ -1470,9 +1472,17 @@ claim about what this cluster ruled is not.)*
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
 
-**Running total against the round's gate:** **19 of 46** bucket-4 rows
-dispositioned — cluster I's 10 plus cluster T's 9. **Clusters B (~20) and A
-remain.**
+**Running total against the round's gate:** **18 of 46** bucket-4 rows
+dispositioned — cluster I's 10 plus cluster T's 8. **28 rows remain for
+clusters B and A** — enumerated, not estimated: `PWC-A6`, `A6a`, `A7`, `B1`,
+`B2`, `B4`, `B5`, `B6`, `B7`, `C1`, `C3`, `C5`, `C6`, `C7`, `C8`, `E1`, `E2`,
+`E3`, `E4`, `E4a`, `E5`, `E7`, `E8`, `E9`, `E11`, `E13`, `E14`, `F4`.
+
+> **Corrected 2026-09-03, from 19.** The old figure inherited cluster T's
+> off-by-one. The remainder is now **listed** rather than given as "~20",
+> because a count with no enumeration behind it cannot be checked by a reader —
+> and the two independent derivations (46 minus the dispositioned rows, and the
+> census's own bucket-4 set) agree on these 28.
 
 ---
 
@@ -2197,7 +2207,18 @@ self-minted set is no longer the strongest evidence obtainable.
 | PWC-A10 (zstd level 1, floor 256) | **Ruled** — kept, with the no-secret invariant stated | PWD-T7 |
 | PWC-F3 (50 MB dead constant; never-sent `network_config` KV map) | **Ruled** — `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size` and the struct's KV serializer are deleted; the struct keeps its live fields. Decidable *because* PWD-T6 names the authoritative limits; implementation is P2P-3 like every other ruling here, queued in FOLLOWUPS | PWD-T6 |
 
-**Sum check: 7 ruled + 1 absorbed + 1 deferred = 9 rows.** ✅
+**Sum check: 6 ruled + 1 absorbed + 1 deferred = 8 rows.** ✅
+
+> **Corrected 2026-09-03: this table has always held 8 rows, and the sum check
+> claimed 9.** The original read *"6 ruled + 1 absorbed + 2 deferred = 9"* —
+> arithmetically true and wrong about its subject, since the table held
+> 5 ruled + 1 absorbed + 2 deferred = 8. **Ruling PWC-F3 then propagated the
+> error rather than exposing it**: the ruled count went 6 → 7 and deferred
+> 2 → 1, preserving a total that was already one too high. **A sum check that
+> is internally consistent is not a check** — it verifies the total against its
+> own addends, never against the rows. The pre-review sweep now compares each
+> claimed count to the table above it, and cluster I's table is the control
+> that shows the comparison discriminates rather than merely passing.
 
 *PWC-F3 moved **deferred → ruled** in review: the recorded blocker — "it is a
 deletion, not a derivation" — is a reason to keep the two legible, not a
