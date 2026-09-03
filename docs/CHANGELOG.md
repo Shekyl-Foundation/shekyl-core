@@ -9,7 +9,7 @@
   CHECKED-CONFORMANT, 6 DIVERGENT, 1 failed closed** (CEN-L11 with L12
   coupled; CEN-M8 at S0 with CEN-G4/J26 coupled to it, round 2; CEN-D2 at S1
   — the PoW-failure sentinel fails open at difficulty 1, round 4), each with
-  sha-pinned, arm-walked evidence and 14 routed REWRITE-NOTEs for the rebuild. The S0:
+  sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
   **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
   tolerance means a tx whose proof failed at pool admission can connect with

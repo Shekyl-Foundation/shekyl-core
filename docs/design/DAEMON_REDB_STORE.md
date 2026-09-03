@@ -36,10 +36,12 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > ratification alone — CEN-L11 is bucket-1 ratified with an implementation that
 > silently omits an accepted output, so a bucket-only rule would score
 > reproducing that defect as correctness — and *absence of a recorded
-> divergence*, which means **unreviewed**, not conformant, because the exception
-> register is explicitly incomplete. Three states: CHECKED-CONFORMANT (oracle),
+> divergence*, which means **unreviewed**, not conformant — stated when the
+> register was explicitly incomplete, and still the rule now that coverage is
+> complete over the bucket-1/2 set: the set itself grows (bucket promotions
+> enter UNREVIEWED), so absence keeps meaning unreviewed, never conformant. Three states: CHECKED-CONFORMANT (oracle),
 > DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
-> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **95 CHECKED-CONFORMANT**, 6 DIVERGENT (CEN-L11 with L12 coupled; **CEN-M8 at S0** with G4/J26 coupled; **CEN-D2 at S1** — see FOLLOWUPS), 1 failed closed. P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. This invalidates the unhedged
+> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **95 CHECKED-CONFORMANT**, 6 DIVERGENT (CEN-L11 with L12 coupled; **CEN-M8 at S0** with G4/J26 coupled; **CEN-D2 at S1** — see FOLLOWUPS), 1 failed closed. P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. **Per §7.2, CEN-D2's S1 blocks DRS-0 until fixed or accepted** (CEN-M8's S0 fix = PR #602, merge pending). This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
@@ -48,7 +50,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > — absence of a recorded divergence means *unreviewed*, not conformant, and the
 > conformance register is **complete over the 102 bucket-1/2 rows** (95 / 6 / 1
 > — via **DRS-P0f**); outside the 95 the digest is a *regression* instrument,
-> and **CEN-M8 is DIVERGENT at S0** (CEN-G4/J26 coupled) with **CEN-D2 at S1** (see FOLLOWUPS) — **CSR-3a**; register seeded
+> and **CEN-M8 is DIVERGENT at S0** (CEN-G4/J26 coupled; fix = PR #602) with **CEN-D2 at S1**, a DRS-0 blocker per §7.2 (see FOLLOWUPS) — **CSR-3a**; register seeded
 > with CEN-L11) and
 > **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
 > **CSR-2** are ruled and recorded in the reconciliation; **CSR-5** is ruled in
@@ -88,7 +90,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
-**DRS-0 is blocked** until **DRS-P0** lands.
+**DRS-0 is blocked** until **DRS-P0** lands **and the register's S-graded divergences are closed or accepted** — CEN-M8 (S0, ruled FIX = PR #602, merge pending) and CEN-D2 (S1 — §7.2: *S1 blocks DRS-0*; fix-or-accept pending).
 
 ---
 
@@ -161,7 +163,7 @@ engine swap without A1–A3.
 | **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with **RECORD-AND-SPECIFY** default (inverted 2026-09-01 by the countermand; was FIX-IN-CPP-FIRST). | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
-| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The register is **complete over the bucket-1/2 set** (2026-09-02; round 2 2026-09-03): 95 CHECKED-CONFORMANT / 6 DIVERGENT / 1 failed closed over all 102 bucket-1/2 rows — **DRS-P0f** populated it per row (P0d is Digest v0 and cannot). |
+| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The register is **complete over the bucket-1/2 set** (2026-09-02; review rounds through 4, 2026-09-03): 95 CHECKED-CONFORMANT / 6 DIVERGENT / 1 failed closed over all 102 bucket-1/2 rows — **DRS-P0f** populated it per row (P0d is Digest v0 and cannot). |
 
 ### 1.1 Schedule honesty
 
