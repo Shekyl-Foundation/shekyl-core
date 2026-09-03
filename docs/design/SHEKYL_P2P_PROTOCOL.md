@@ -2303,10 +2303,11 @@ command and exactly what this rule exists to reject.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that reaches an unbounded allocation, or an undefined flag bit that a future version gives meaning to while old nodes relay it unread | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
-| Preserve-and-forward (today's flag behaviour) | The same | **Refused.** Forwarding a bit you cannot interpret makes every node a relay for semantics it has not agreed to — and `COMPRESSED` (0x10) proves the range is one **we allocate from**, so a preserved unknown bit collides with our own next extension rather than with an inherited one |
+| **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that falls back to the **global** packet limit instead of a bound sized for what it claims to be, or an undefined flag bit accepted as uninterpreted semantics | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
+| Fall back to the global limit (today's command behaviour) | The same | **Refused.** `DEFAULT_MAX_PACKET_SIZE` is a *framing* bound, not a statement about what the message is — using it as the cap for an unknown command means the only thing sizing the buffer is how big a bucket may be, which is precisely the derivation PWD-T6 refused |
+| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means `COMPRESSED` (0x10) proves the range is one **we allocate from**, and the next Shekyl extension collides with a bit some peer was already permitted to set |
 | Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
-| Cap unknown commands at a default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
+| Cap unknown commands at a per-command default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
 
 **Conceded.** This forecloses in-band extension without a version bump — a peer
 cannot introduce a new command or flag and have old nodes tolerate it. **That is
@@ -2329,12 +2330,26 @@ checkable against the release plan rather than against a benchmark.
 **RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008)
 is the sole block path.**
 
-**The two commands are the same message.** Identical structs, identical KV maps.
-What differs is a *usage convention* — 2008 is expected to carry a pruned entry
-and 2001 a complete one — and **nothing enforces it**: `block_complete_entry`
-carries a peer-controlled `pruned` bool, so either shape travels on either
-command. The 32× cap gap is the only enforcement, and it is enforcement of the
-wrong thing.
+**The two commands are already one code path.** `handle_notify_new_block`
+builds a fluffy request from its argument and **returns
+`handle_notify_new_fluffy_block(...)`**
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:529`). 2001 is a wire
+alias for 2008, not a second implementation, so deleting it removes a name —
+not a behaviour.
+
+> **An earlier version of this row argued from `pruned`, and that was wrong.**
+> It claimed `block_complete_entry`'s peer-controlled `pruned` bool lets either
+> shape travel on either command. **`pruned` selects the transaction
+> *encoding*** — which branch of the KV map serializes `txs`
+> (`cryptonote_protocol_defs.h:76-95`) — and the announce path passes
+> **`allow_pruned=false`** (`cryptonote_protocol_handler.inl:616`), rejecting
+> pruned entries outright. **Compactness is not a struct property at all**: a
+> compact announce is one that sends a *subset* of `b.txs`, which no field
+> records. The correction strengthens the ruling — the two ids were never
+> distinguished by shape, so there is even less to preserve.
+
+**So the 32× cap gap enforces nothing about the message.** It is two different
+caps on one handler, reachable by choosing an id.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -2388,6 +2403,34 @@ is not a table of constants.**
 state**, as a fixed multiple of its current weight limit, so it tracks the chain
 rather than a release.
 
+**The formula, written out, because "a fixed multiple of the weight limit" is
+not one.** A `block_complete_entry` is **not** bounded by block weight alone: it
+also carries `attestation_witness`, an opaque blob capped **independently of
+`pruned` and of weight** at `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` =
+`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × PQC_HYBRID_SINGLE_SIG_LEN` = **866,568
+bytes** (`src/cryptonote_config.h:472-473`, bounded at the codec by
+`archival_attestation_witness_within_transport_cap`).
+
+> **`entry_max` = `margin` × `m_current_block_cumul_weight_limit`
+> + `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` + KV encoding overhead.**
+>
+> - **2008** (one announce): `entry_max`.
+> - **2004** (a batch): `n × entry_max` for the batch cardinality `n`.
+
+**`margin` is the one term this round does not fix, and it is named as owed
+rather than invented.** It exists to absorb the receiver being behind the tip,
+so its value is a function of how fast the consensus weight limit can grow per
+block — **a consensus parameter, and the consensus lane owns it.** Naming it as
+a symbol with a stated job is the honest form; picking a number here would be
+inventing a consensus constant from a p2p round.
+
+> **The witness term dominates at batch size, and that is a design consequence,
+> not a footnote.** At the inherited request bound of 100 blocks, the witness
+> alone contributes 100 × 866,568 ≈ **86.7 MB** — so **PWD-T6's post-handshake
+> limit is set primarily by the attestation witness, not by block weight.** Any
+> future change to `ARCHIVAL_MAX_ATTESTATION_RECORDS` moves the p2p packet
+> limit with it.
+
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
 > `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
@@ -2404,7 +2447,25 @@ rather than a release.
 > §1's fourth check again: the bound comes from this node's own record of what
 > it sent, not from a claim in the response. **A response to a request this node
 > did not make has a batch size of zero**, which the same rule rejects without a
-> separate mechanism. The multiple absorbs the receiver being behind the tip;
+> separate mechanism.
+
+**Enforced in two layers, because the ingress seam cannot see per-connection
+state — and it does not need to.** `BucketReader`'s hook is
+`fn(u32) -> u64` (`rust/shekyl-levin/src/reader.rs:177-185`), command-only, and
+the requested cardinality lives in per-connection handler state. Rather than
+widen the framing seam to carry connection state — which would push protocol
+policy into the framing crate, against `25-rust-architecture` — the bound
+splits along the boundary that already exists:
+
+| Layer | Bound | Why it fits there |
+| --- | --- | --- |
+| **Ingress** (`fn(u32) -> u64`) | `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT × entry_max` — **100 × entry_max** (`src/cryptonote_protocol/cryptonote_protocol_handler.h:58`) | Depends only on the receiver's own consensus state and a compile-time constant, so it is expressible in the existing signature. Bounds the allocation before any handler runs |
+| **Handler** (per connection) | the **exact** requested cardinality × `entry_max` | The request state is already there; this is a tightening, not the only bound, so nothing is unbounded if the handler check is reached late |
+
+**The static layer is what makes the claim safe**; the per-request layer is what
+makes it tight. *An earlier version of this row asserted only the tight bound,
+which the framing seam cannot express — so it named a cap that nothing could
+enforce at ingress.* The multiple absorbs the receiver being behind the tip;
 it is a consensus-adjacent constant and is **named as owed to the consensus
 lane**, not invented here.
 
