@@ -324,13 +324,14 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 25) == 0x0003_0019 == 196633. The captured
-        // get_version vectors carry 196632 (3.24), which is what they emitted
-        // before RK-4c removed `txs_as_hex` / `txs_as_json`; a vector is not
-        // edited to follow a constant, so `assert_version_parity` compares
-        // every other field against them and this pins the constant itself.
-        assert_eq!(CORE_RPC_VERSION, 196_633);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 25);
+        // MAKE_CORE_RPC_VERSION(3, 26) == 0x0003_001A == 196634 (3.26:
+        // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 was the RK-4c
+        // `txs_as_hex`/`txs_as_json` removal). Captured vectors are never
+        // edited to follow a constant — each bump mints a sibling vector —
+        // so `assert_version_parity` compares every other field against
+        // them and this pins the constant itself.
+        assert_eq!(CORE_RPC_VERSION, 196_634);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 26);
     }
 
     #[test]
