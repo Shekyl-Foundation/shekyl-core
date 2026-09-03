@@ -871,6 +871,25 @@ fn print_peer_list(
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
     let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let (white_limit, gray_limit) = CoreRpc::peerlist_limits();
+    Ok(render_peer_list_stats(
+        reply.white_list.len(),
+        reply.gray_list.len(),
+        white_limit,
+        gray_limit,
+    ))
+}
+
+/// The rendering, over values a caller states.
+///
+/// **Split out so the capacities are a parameter rather than an ambient FFI
+/// read.** `shekyl_rpc_peerlist_limits` is a bare `#[no_mangle]` symbol whose
+/// unit-test link stub answers 0, and `ffi.rs` carries a comment saying no
+/// unit test may take an answer from it — a prohibition with nothing enforcing
+/// it, which is how `fee_grace_blocks_max` was later added without inheriting
+/// the rule. Hoisting the read to the caller makes the prohibition
+/// unnecessary rather than unenforced: this function can be tested with real
+/// values, and the symbol is read in exactly one place.
+fn render_peer_list_stats(white: usize, gray: usize, white_limit: u32, gray_limit: u32) -> String {
     let line = |name: &str, size: usize, limit: u32| -> String {
         let percent = if limit == 0 {
             0.0
@@ -887,11 +906,11 @@ fn print_peer_list_stats(src: &Source) -> Result<String, String> {
             trimmed(percent, 4)
         )
     };
-    Ok(format!(
+    format!(
         "{}\n{}",
-        line("White", reply.white_list.len(), white_limit),
-        line("Gray", reply.gray_list.len(), gray_limit)
-    ))
+        line("White", white, white_limit),
+        line("Gray", gray, gray_limit)
+    )
 }
 
 /// `print_connections`.
@@ -2042,6 +2061,31 @@ mod tests {
         assert_eq!(address_type_name(4), "Tor");
         assert_eq!(address_type_name(0), "invalid");
         assert_eq!(address_type_name(200), "invalid");
+    }
+
+    /// The capacities are a parameter now, so this can be tested against the
+    /// values the daemon actually holds. Before the hoist it read
+    /// `shekyl_rpc_peerlist_limits` directly, whose unit-test link stub
+    /// answers **0** — so a test here would have asserted `0/0` and agreed
+    /// with a number no daemon reports, which is precisely what `ffi.rs`'s
+    /// comment prohibited and nothing enforced.
+    #[test]
+    fn the_peerlist_stats_report_real_capacities() {
+        let out = render_peer_list_stats(7, 250, 1000, 5000);
+        assert!(out.contains("White list size: 7/1000 (0.7%)"), "{out}");
+        assert!(out.contains("Gray list size: 250/5000 (5%)"), "{out}");
+        // The float noise this rounding exists to stop: 7/1000 is exactly the
+        // value that renders `0.7000000000000001` under `{}` on an `f64`.
+        assert!(!out.contains("0.7000000000000001"), "{out}");
+    }
+
+    /// A zero capacity is what the link stub would have supplied, and the
+    /// divide-by-zero guard makes it *survivable* — which is why a test that
+    /// touched it would have gone green rather than crashed.
+    #[test]
+    fn a_zero_capacity_renders_rather_than_dividing_by_zero() {
+        let out = render_peer_list_stats(3, 0, 0, 0);
+        assert!(out.contains("White list size: 3/0 (0%)"), "{out}");
     }
 
     /// Every selector the C++ parser can forward, plus the ones it cannot.
