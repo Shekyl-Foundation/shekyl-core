@@ -14,9 +14,9 @@ ratification **and** an **affirmative conformance record** for the row — a che
 that the C++ implements the spec it was ratified against. **Absence of a recorded
 divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
 regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
-§5.4.1 for the three states and the exception register; the checked-conformant
-set holds **77 rows** as of 2026-09-02 (store 4 + §4.J 26 + §4.F 16 + §4.H 13 +
-§4.I 18), promoted by **DRS-P0f**, the per-row
+§5.4.1 for the three states and the exception register; **DRS-P0f's row coverage is complete** as of 2026-09-02: all 102 bucket-1/2
+rows disposed — 98 CHECKED-CONFORMANT, 3 DIVERGENT (CEN-L11, CEN-L12, and
+**CEN-M8 at S0**), 1 failed closed (CEN-L8), the per-row
 conformance review — *not* P0d, which is Digest v0; every other row is
 UNREVIEWED). Bucket-4 rows record questions, never answers; the §10
 queue is the design-round program that answers them.

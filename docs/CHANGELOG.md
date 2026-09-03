@@ -4,6 +4,17 @@
 
 ### Added
 
+- **DRS-P0f row coverage complete — and it found an S0.** The conformance
+  register now disposes **all 102** bucket-1/2 census rows: **98
+  CHECKED-CONFORMANT, 3 DIVERGENT, 1 failed closed**, each with sha-pinned,
+  arm-walked evidence and 24 routed REWRITE-NOTEs for the rebuild. The S0:
+  **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
+  the ratified rule requires **hash-gated**, and the `kept_by_block` admission
+  tolerance means a tx whose proof failed at pool admission can connect with
+  verification skipped; the exact required check exists unused on that path.
+  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it). Detail:
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The register
   that gates DRS-E2's correctness arm is no longer empty. Reviewed at
   `6bc2de8f2`/`4b9807c5e`, covering **all six** reviewable store-enforced rows:
