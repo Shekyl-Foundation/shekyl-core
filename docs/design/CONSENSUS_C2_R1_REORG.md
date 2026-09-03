@@ -1044,3 +1044,18 @@ rules already have owners), nothing new crosses.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-03 — Copilot round 4 on #603 (three findings, all valid, all
+  addressed): the Q2b saturated-to-zero rollback target aborted on the
+  can't-pop-genesis guard for a height-1/2 checkpoint conflict — the
+  target is now floored at the genesis-only chain (DB height 1), and a
+  conflict AT genesis fail-stops as unresolvable instead of reporting a
+  no-op rollback as success (the shape's fourth instance); the
+  checkpoint walk now stops after an applied rollback, because the
+  height-ordered later entries would be tested against the stale
+  pre-rollback height and read past the new tip; the C++ RPC header's
+  prose copy of `CORE_RPC_VERSION` ("3.25") replaced with a
+  number-free pointer — a prose copy of a moving constant only goes
+  stale. Core test `gen_checkpoint_conflict_rollback` pins the
+  completed rollback with a second conflicting checkpoint present,
+  observed red-first ("Cannot pop the genesis block" escaping the
+  walk).

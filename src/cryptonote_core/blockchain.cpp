@@ -6650,13 +6650,29 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
 
     if (!points.check_block(pt.first, m_db->get_block_hash_from_height(pt.first)))
     {
-      // Roll back to a couple of blocks before the checkpoint. Saturating:
-      // the inherited `pt.first - 2` wrapped at a height-1 checkpoint to a
-      // target above the tip, which rollback_blockchain_switching treats
-      // as already-satisfied -- no rollback, while loading reported
-      // success (C2-R1b-Q2b, the mechanism's third
-      // reports-success-while-doing-nothing instance).
-      const uint64_t rollback_target = pt.first >= 2 ? pt.first - 2 : 0;
+      if (pt.first == 0)
+      {
+        // A conflict AT genesis has no rollback remedy: genesis cannot be
+        // popped, and "rolling back" to a chain whose height-0 block still
+        // mismatches would report the conflict resolved while fixing
+        // nothing (the reports-success shape, fourth instance). This node
+        // is on the wrong network or the file is wrong; fail-stop.
+        MERROR("Checkpoint at height 0 (expected " << pt.second
+          << ", chain has " << m_db->get_block_hash_from_height(0)
+          << ") conflicts with this chain's GENESIS -- no rollback can"
+          << " resolve it; remedy: fix the checkpoints file or resync on"
+          << " the right network");
+        ok = false;
+        continue;
+      }
+      // Roll back to a couple of blocks before the checkpoint, floored at
+      // DB height 1: genesis cannot be popped
+      // (pop_block_from_blockchain throws at height() == 1), so a target
+      // of 0 -- the inherited `pt.first - 2` wrap's saturated form at a
+      // height-1/2 checkpoint -- aborted mid-rollback on the genesis
+      // guard instead of completing (review round 4; the wrap itself was
+      // C2-R1b-Q2b's third reports-success-while-doing-nothing instance).
+      const uint64_t rollback_target = pt.first >= 3 ? pt.first - 2 : 1;
       // C2-R1b F-1(b): if the rollback itself would cross the prune
       // watermark, there is no remedy this daemon can apply -- it must not
       // keep running in contradiction with a checkpoint it accepted. Same
@@ -6687,6 +6703,12 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
         << ", rollback target " << rollback_target << ")");
       std::list<detached_block> empty;
       rollback_blockchain_switching(empty, rollback_target);
+      // The points map is height-ordered, so every later checkpoint now
+      // sits at or above the new tip -- but the loop's have-this-block
+      // test reads the PRE-rollback height, so continuing would call
+      // get_block_hash_from_height above the tip and throw (review
+      // round 4). Those checkpoints are re-checked as the chain regrows.
+      break;
     }
   }
   if (stop_batch)

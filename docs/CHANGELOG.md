@@ -46,8 +46,15 @@
   consumers). Checkpoint wiring is **uniform across all public
   networks** (both nettype guards deleted — the `return true` silent
   false positive included; rule-71 allowlist 8 → 4); the checkpoint
-  rollback target saturates (the height-1 wrap is unrepresentable) and
-  conflict output names file, height, and both hashes. Deleted: the
+  rollback target is floored at the genesis-only chain (the inherited
+  height-1 wrap is unrepresentable, and the saturated-to-zero form
+  aborted on the can't-pop-genesis guard), a conflict at genesis itself
+  fail-stops as unresolvable, the walk stops after an applied rollback
+  (later height-ordered checkpoints would be read against the stale
+  pre-rollback height), and conflict output names file, height, and
+  both hashes; core test `gen_checkpoint_conflict_rollback` pins the
+  completed low-height rollback with a second conflicting checkpoint in
+  the file, observed red-first on both pre-fix forms. Deleted: the
   unpopulatable difficulty-checkpoint twin and the weekly accidental
   full-chain difficulty recompute, and the caller-less no-arg
   `pop_block` overload. `check_consensus_invariants.sh` gains the
