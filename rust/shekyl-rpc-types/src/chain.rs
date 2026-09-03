@@ -101,6 +101,13 @@ pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
 /// JSON-RPC error code for a height at or past the chain tip
 /// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
 pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
+
+/// JSON-RPC error code for a request the restricted listener declines
+/// (`CORE_RPC_ERROR_CODE_RESTRICTED`) — a cap exceeded, or a privileged field
+/// asked for. **A refusal, never a silently emptied field**: the C++ answered
+/// `fill_pow_hash` under restriction with an empty string and status OK,
+/// reporting success about a question it had declined.
+pub const CORE_RPC_ERROR_CODE_RESTRICTED: i64 = -19;
 /// JSON-RPC error code for a daemon-side failure the method has a contract
 /// for (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`) — e.g. a store that reports a
 /// height it cannot produce the block for.
