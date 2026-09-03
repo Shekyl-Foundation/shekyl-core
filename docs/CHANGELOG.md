@@ -5,21 +5,23 @@
 ### Added
 
 - **DRS-P0f row coverage complete — and it found an S0.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **98
-  CHECKED-CONFORMANT, 3 DIVERGENT, 1 failed closed**, each with sha-pinned,
-  arm-walked evidence and 24 routed REWRITE-NOTEs for the rebuild. The S0:
+  register now disposes **all 102** bucket-1/2 census rows: **96
+  CHECKED-CONFORMANT, 5 DIVERGENT, 1 failed closed** (CEN-L11 with L12
+  coupled; CEN-M8 at S0 with CEN-G4/J26 coupled to it, round 2), each with
+  sha-pinned, arm-walked evidence and 14 routed REWRITE-NOTEs for the rebuild. The S0:
   **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
   tolerance means a tx whose proof failed at pool admission can connect with
   verification skipped; the exact required check exists unused on that path.
-  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it). Detail:
+  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix PR in flight. Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The
   register that gates DRS-E2's correctness arm is no longer empty. **CEN-H5
   CHECKED-CONFORMANT** — the vin whitelist, carried by one rule site
   (`check_inputs_types_supported`) reached from both relay admission
-  (`check_tx_semantic`; hard-reject in `add_tx`, `kept_by_block` included) and
+  (`check_tx_semantic` — run once per pool entrant: in `add_tx` for fresh
+  entrants, caller-side for the pre-verified `kept_by_block` re-inserts) and
   block connect (`ver_non_input_consensus` on the pool supplement, block-fatal
   on main and alt paths), with `check_tx_inputs`' typed dispatch and the DB
   write backstop behind it *(evidence as corrected 2026-09-03 — slice 1

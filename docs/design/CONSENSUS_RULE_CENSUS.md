@@ -16,9 +16,9 @@ divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
 regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 §5.4.1 for the three states and the exception register. **DRS-P0f's row
 coverage is complete** as of 2026-09-02 (P0f is the per-row conformance review
-— *not* P0d, which is Digest v0): all 102 bucket-1/2 rows disposed — 98
-CHECKED-CONFORMANT, 3 DIVERGENT (CEN-L11, CEN-L12, and **CEN-M8 at S0**), 1
-failed closed (CEN-L8); every other row is UNREVIEWED. Bucket-4 rows record
+— *not* P0d, which is Digest v0): all 102 bucket-1/2 rows disposed —
+96 CHECKED-CONFORMANT, 5 DIVERGENT (CEN-L11 with CEN-L12 coupled; **CEN-M8 at
+S0** with CEN-G4/CEN-J26 coupled, round 2), 1 failed closed (CEN-L8); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.
 **Pinned sha:** `ab3cc98e6eb73db2b309730ccc9853ba4ea95e7d` (`dev` tip,
