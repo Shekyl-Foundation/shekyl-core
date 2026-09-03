@@ -122,6 +122,14 @@ pub enum ResolvedCommand {
     Drain {
         amount: u64,
     },
+    /// `unstake` — post the permanent exit for the staked bond (PR-C).
+    /// No arguments exist, by contract: the persona, fee, and amount are
+    /// all engine-resolved, and the CLI's job is the irreversibility
+    /// confirmation.
+    Unstake,
+    /// `collect_unstaked` — sweep the released exit collateral back to
+    /// this wallet, one pass at a time. No arguments, by contract.
+    CollectUnstaked,
 
     // -- Fees (WI-RPC-1) --
     Fee {
@@ -457,6 +465,23 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 "drain: need exactly <amount>; the command takes no flags — \
                  the network fee and the destination (this wallet) are set \
                  automatically (usage: drain <amount>)",
+            ),
+        },
+        // The exit pair takes NO arguments, by contract: an amount or slot
+        // token here would be a steering attempt the server rejects with
+        // -32602 (F-1) — say so at the front door with more context.
+        "unstake" => match args {
+            [] => ResolvedCommand::Unstake,
+            _ => diag(
+                "unstake: takes no arguments — the exit releases the whole \
+                 bond and the fee is set automatically (usage: unstake)",
+            ),
+        },
+        "collect_unstaked" => match args {
+            [] => ResolvedCommand::CollectUnstaked,
+            _ => diag(
+                "collect_unstaked: takes no arguments — each pass collects \
+                 everything currently spendable (usage: collect_unstaked)",
             ),
         },
         "fee" => {

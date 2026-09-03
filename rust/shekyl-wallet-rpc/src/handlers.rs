@@ -77,6 +77,8 @@ pub async fn dispatch(
         "stake_in" => staking_actions::stake_in(tenants, params).await,
         "get_drain_balance" => staking_actions::get_drain_balance(tenants, params).await,
         "drain" => staking_actions::drain(tenants, params).await,
+        "unstake" => staking_actions::unstake(tenants, params).await,
+        "collect_unstaked" => staking_actions::collect_unstaked(tenants, params).await,
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
@@ -195,14 +197,40 @@ mod tests {
     /// `MethodNotFound`. Kept alongside the rescan case above: routing
     /// new methods must not blur the line between "designed but not
     /// built" (`-32601`) and "built, but the call is refused". (The
-    /// example was `sign_message` until PR-SM-2 implemented it.)
+    /// example was `sign_message` until PR-SM-2 implemented it, then
+    /// `unstake` until PR-C did — each lift correctly turned this test red
+    /// on the old name, which is the reachability gate observed flipping.)
     #[tokio::test]
     async fn unimplemented_reserved_method_is_method_not_found() {
         let tenants = test_tenants();
-        let err = dispatch(&tenants, "unstake", &json!({}), KdfParams::default())
-            .await
-            .unwrap_err();
+        let err = dispatch(
+            &tenants,
+            "match_transfer_to_request",
+            &json!({}),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    /// The inverse of the RESERVED fallthrough, pinned at the moment it
+    /// flipped: `unstake` and `collect_unstaked` are ROUTED — with no
+    /// wallet open the answer is the wallet gate, never `-32601`. This is
+    /// PR-C's reachability lift as a wire observable.
+    #[tokio::test]
+    async fn exit_verbs_are_routed_not_reserved() {
+        let tenants = test_tenants();
+        for method in ["unstake", "collect_unstaked"] {
+            let err = dispatch(&tenants, method, &json!({}), KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                WalletRpcErrorCode::WalletNotOpen,
+                "{method} must hit the wallet gate, not MethodNotFound"
+            );
+        }
     }
 
     /// `sign_message` is routed: with no wallet open the answer is the
@@ -343,6 +371,8 @@ mod tests {
             ("stake_in", json!({ "amount": "5" })),
             ("get_drain_balance", json!({})),
             ("drain", json!({ "amount": "5" })),
+            ("unstake", json!({})),
+            ("collect_unstaked", json!({})),
         ] {
             let err = dispatch(&tenants, method, &params, KdfParams::default())
                 .await
@@ -364,6 +394,11 @@ mod tests {
             ("drain", json!({ "amount": "5", "destination": "shekyl1x" })),
             ("drain", json!({ "amount": "5", "p_slot": 0 })),
             ("get_drain_balance", json!({ "p_slot": 0 })),
+            ("unstake", json!({ "p_slot": 0 })),
+            ("unstake", json!({ "amount": "5" })),
+            ("unstake", json!({ "fee": "1" })),
+            ("collect_unstaked", json!({ "p_slot": 0 })),
+            ("collect_unstaked", json!({ "amount": "all" })),
         ] {
             let err = dispatch(&tenants, method, &params, KdfParams::default())
                 .await

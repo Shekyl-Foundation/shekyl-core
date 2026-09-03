@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Archival principal staking **actions** (WI-RPC-5): `stake_in`,
-//! `get_drain_balance`, `drain`.
+//! Archival principal staking **actions**: WI-RPC-5's `stake_in`,
+//! `get_drain_balance`, `drain`, and PR-C's exit pair `unstake` /
+//! `collect_unstaked`.
 //!
 //! Its own module rather than growth on [`crate::staking`] (which stays the
 //! read-only projection surface): these three methods move money or read the
@@ -24,13 +25,18 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{DrainBalanceReadError, DrainOutcome, StakeFacade};
+use shekyl_engine_core::{
+    CollectOutcome, DrainBalanceReadError, DrainOutcome, StakeFacade, UnstakeOutcome,
+};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_atomic_units, parse_optional_object, parse_required_object};
 use crate::project::{atomic_units_string, pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{DrainResult, DrainVerdictView, GetDrainBalanceResult};
+use crate::types::{
+    CollectStatusView, CollectUnstakedResult, DrainResult, DrainVerdictView, GetDrainBalanceResult,
+    UnstakeResult,
+};
 
 /// Params for `stake_in`: `{ amount }` only. The `P` receive address is
 /// engine-derived (never on the wire) and the cover is system-drawn (never a
@@ -189,6 +195,85 @@ fn drain_result(outcome: &DrainOutcome) -> DrainResult {
             confirmed_height: Some(i64::try_from(*height).unwrap_or(i64::MAX)),
         },
     }
+}
+
+/// Params for `unstake` and `collect_unstaked`: none. The wire never names
+/// a slot, a fee, or a destination — both verbs resolve their persona
+/// engine-side (the `first_stake` precedent) — and `deny_unknown_fields`
+/// is what makes those absences enforced rather than prose (F-1): a client
+/// steering with `p_slot` / `amount` / `fee` gets `-32602`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExitParams {}
+
+/// `unstake` — post the terminal exit for the first live-bonded persona.
+/// **The irreversible step**: once the exit connects, the bond debits to
+/// zero and the persona can never re-bond on this record. The CLI carries
+/// the confirmation prompt (prompts are CLI-side, not RPC-side); this
+/// method fires on call.
+pub(crate) async fn unstake(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let _p: ExitParams = parse_optional_object(params, "unstake")?;
+
+    // One short tenant hold for both the engine handle and the embedder's
+    // daemon endpoint (the exit's record fetch rides the ① local-posture
+    // transport built from it — the serving-start shape).
+    let (shared, daemon_address) = {
+        let state = tenants.lock().await;
+        let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        (shared, state.daemon.address.clone())
+    };
+    let outcome = StakeFacade::unstake(shared, &daemon_address).await?;
+    let result = match outcome {
+        UnstakeOutcome::Broadcast { tx_hash } => UnstakeResult {
+            tx_hash: tx_hash.to_string(),
+            verdict: DrainVerdictView::Broadcast,
+            confirmed_height: None,
+        },
+        UnstakeOutcome::AlreadyInChain { tx_hash, height } => UnstakeResult {
+            tx_hash: tx_hash.to_string(),
+            verdict: DrainVerdictView::AlreadyInChain,
+            confirmed_height: Some(i64::try_from(height).unwrap_or(i64::MAX)),
+        },
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize unstake: {e}")))
+}
+
+/// `collect_unstaked` — sweep one pass of the released exit collateral to
+/// this wallet's principal. The reply's `remainder` is the completion fact
+/// (`"0"` = nothing beyond this pass); `NOTHING_LEFT` means the collection
+/// is already complete and the funded-gated retirement proceeds on its own.
+pub(crate) async fn collect_unstaked(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let _p: ExitParams = parse_optional_object(params, "collect_unstaked")?;
+
+    let shared = require_open_engine(tenants).await?;
+    let outcome = StakeFacade::collect_unstaked(shared).await?;
+    let result = match outcome {
+        CollectOutcome::Swept {
+            tx_hash,
+            swept,
+            remainder,
+        } => CollectUnstakedResult {
+            status: CollectStatusView::Swept,
+            tx_hash: Some(tx_hash.to_string()),
+            swept: Some(atomic_units_string(swept)),
+            remainder: Some(atomic_units_string(remainder)),
+        },
+        CollectOutcome::NothingLeft => CollectUnstakedResult {
+            status: CollectStatusView::NothingLeft,
+            tx_hash: None,
+            swept: None,
+            remainder: None,
+        },
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize collect_unstaked: {e}")))
 }
 
 #[cfg(test)]

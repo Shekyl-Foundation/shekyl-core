@@ -16,7 +16,9 @@
 //! never personas or slots (rule 81).
 
 use serde_json::{json, Value};
-use shekyl_wallet_rpc::types::{DrainResult, DrainVerdictView};
+use shekyl_wallet_rpc::types::{
+    CollectStatusView, CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
+};
 
 use super::{
     confirm, confirm_interactive, format_amount, opt_amount, read_password, require_open, transfers,
@@ -416,6 +418,124 @@ fn serving_posture_display(posture: Option<&str>) -> String {
         Some(other) => other.to_owned(),
         None => "not serving".to_owned(),
     }
+}
+
+/// `unstake` — post the terminal exit for the staked bond (PR-C).
+///
+/// **The irreversible step**: once the exit confirms on-chain, the bond is
+/// permanently closed — the collateral releases to the staking side, and
+/// staking again means a whole new bond. The CLI confirms BEFORE firing
+/// (prompts are CLI-side, not RPC-side), and the prompt names the
+/// irreversibility rather than reading like an ordinary send. No amount,
+/// fee, or target is shown as a choice because none exists: the exit
+/// releases the whole bond, the fee is set automatically, and the wallet
+/// picks the bonded stake to exit (rule 81 — no slot vocabulary).
+pub fn cmd_unstake(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    println!("Unstaking posts the permanent exit for this wallet's staked bond.");
+    println!("This cannot be undone: once the exit confirms, the bond is closed");
+    println!("for good, and staking again later means posting a whole new bond.");
+    println!("The released funds return to your staking balance first; collect");
+    println!("them to this wallet afterwards with \"collect_unstaked\".");
+
+    if !confirm_interactive("Post the permanent exit?", "unstake") {
+        println!("Unstake cancelled; nothing was sent.");
+        return;
+    }
+
+    println!("Posting the exit (this may take a while)...");
+    match rpc.call("unstake", json!({})) {
+        Ok(val) => match serde_json::from_value::<UnstakeResult>(val.clone()) {
+            Ok(result) => {
+                match result.verdict {
+                    DrainVerdictView::Broadcast => {
+                        println!("Exit posted: {}", result.tx_hash);
+                    }
+                    DrainVerdictView::AlreadyInChain => {
+                        println!("An identical exit is already confirmed: {}", result.tx_hash);
+                    }
+                }
+                println!("When the network confirms it, run \"collect_unstaked\" to move");
+                println!("the released funds back into this wallet's balance.");
+            }
+            Err(_) => eprintln!("Malformed unstake response: {val}"),
+        },
+        Err(e) => rpc.report("Failed to unstake", &e),
+    }
+}
+
+/// `collect_unstaked` — move the released exit collateral back to this
+/// wallet's balance, one pass at a time (PR-C).
+///
+/// The amount is not asked for and cannot be shown up front: each pass
+/// sweeps everything currently spendable (the engine computes the exact
+/// figure so nothing is left stranded), and the reply says what moved and
+/// what still remains. **A success is not completion** — the remainder
+/// line is the completion fact, and this command says so explicitly
+/// rather than letting "sent" read as "done".
+pub fn cmd_collect_unstaked(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    println!("This collects your released staking funds back into this wallet's");
+    println!("balance. The network fee is set automatically and paid from the");
+    println!("collected funds; large collections may take more than one pass.");
+
+    if !confirm_interactive("Collect the released funds?", "collect_unstaked") {
+        println!("Collection cancelled; nothing was sent.");
+        return;
+    }
+
+    println!("Collecting (this may take a while)...");
+    match rpc.call("collect_unstaked", json!({})) {
+        Ok(val) => match serde_json::from_value::<CollectUnstakedResult>(val.clone()) {
+            Ok(result) => match result.status {
+                CollectStatusView::Swept => {
+                    let swept = result.swept.as_deref().unwrap_or("?");
+                    println!(
+                        "Collection sent: {} ({} SKL on the way to this wallet).",
+                        result.tx_hash.as_deref().unwrap_or("?"),
+                        format_amount_str(swept),
+                    );
+                    match result.remainder.as_deref() {
+                        Some("0") => {
+                            println!(
+                                "Nothing further remains: once this confirms, the \
+                                 collection is complete."
+                            );
+                        }
+                        Some(rest) => {
+                            println!(
+                                "{} SKL still remains in the staking balance (not yet \
+                                 spendable, or beyond this pass's size).",
+                                format_amount_str(rest)
+                            );
+                            println!("Run \"collect_unstaked\" again once this pass confirms.");
+                        }
+                        None => {}
+                    }
+                }
+                CollectStatusView::NothingLeft => {
+                    println!("Nothing left to collect: the exit's funds are already in");
+                    println!("this wallet (or on their way in a previous pass).");
+                }
+            },
+            Err(_) => eprintln!("Malformed collect_unstaked response: {val}"),
+        },
+        Err(e) => rpc.report("Failed to collect", &e),
+    }
+}
+
+/// Render a decimal atomic-units string through the shared display format;
+/// echo the raw string if it does not parse (display metadata only — never
+/// worth failing the command over).
+fn format_amount_str(atomic: &str) -> String {
+    atomic
+        .parse::<u64>()
+        .map(format_amount)
+        .unwrap_or_else(|_| atomic.to_owned())
 }
 
 fn print_serving_posture(val: &Value) {

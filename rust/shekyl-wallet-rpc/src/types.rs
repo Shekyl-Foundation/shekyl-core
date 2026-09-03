@@ -906,6 +906,52 @@ pub struct DrainResult {
     pub confirmed_height: Option<i64>,
 }
 
+/// `unstake` result (PR-C): the sealed-then-dispatched exit's receipt —
+/// the [`DrainResult`] shape (the exit pipeline seals before dispatch the
+/// same way), reusing [`DrainVerdictView`]'s two terminal dispatch facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnstakeResult {
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Success verdict.
+    pub verdict: DrainVerdictView,
+    /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
+    /// confirming height (untrusted display metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<i64>,
+}
+
+/// `collect_unstaked` status discriminant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CollectStatusView {
+    /// One sweep pass was dispatched; `tx_hash`/`swept`/`remainder` are set.
+    Swept,
+    /// The exited pool is already empty — collection is complete and the
+    /// funded-gated retirement proceeds on its own.
+    NothingLeft,
+}
+
+/// `collect_unstaked` result (PR-C). **`remainder` is the completion
+/// fact**: `"0"` means nothing remains beyond this pass; nonzero means call
+/// again once the residue matures or this pass confirms — a caller must
+/// never read a `SWEPT` reply alone as "the collection is finished".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollectUnstakedResult {
+    /// What happened.
+    pub status: CollectStatusView,
+    /// `SWEPT` only: the pass's transaction hash (lowercase hex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// `SWEPT` only: what this pass moves to the principal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swept: Option<AtomicUnitsString>,
+    /// `SWEPT` only: what the pool still holds beyond this pass (immature
+    /// payouts plus mature overflow past the input cap).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remainder: Option<AtomicUnitsString>,
+}
+
 /// `get_tx_proof` result (WI-RPC-3 proofs).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetTxProofResult {
