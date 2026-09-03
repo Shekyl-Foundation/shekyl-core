@@ -1,6 +1,6 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a MERGED (#596); R1b RATIFIED 2026-09-03 and BUILT (§4c) on `feat/c2-r1b-impl`; R1c next after C2-R0** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). Implementation lands on PR #600.
+**Status:** **OPEN — R1a MERGED (#596); R1b RATIFIED 2026-09-03 and BUILT (§4c) on `feat/c2-r1b-impl`; R1c next after C2-R0** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). The implementation is PR #603; PR #600 was the proposal-only ratification record, merged 2026-09-03.
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
@@ -910,7 +910,29 @@ and failed CI the moment VERSION moved). The truncated-listing rule's
 fourth instrument: a containment grep cannot prove a file's absence —
 `ls` the path.
 
-## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
+**Copilot round 3 (#603, all five findings suppressed-but-valid, each
+addressed):** the substantive one — a watermark-refused switch set
+`bvc.m_verifivation_failed`, and both P2P receive paths respond to
+that flag by dropping and scoring the peer, so a degraded node would
+have punished every honest peer advertising the heavier chain and
+isolated itself onto its own fork. **The refusal is a local retention
+limitation, not block invalidity**: the pre-check now lives in the one
+caller (`handle_alternative_block`'s switch arm — still before any
+mutation, same predicate), the block stays in the alt store, `bvc`
+carries no failure, and the peer is kept; the pop belt still backstops
+any unchecked path. Value-shaped coverage the PR had promised and not
+delivered now exists: core test `gen_reorg_watermark_refused_switch`
+(fixed difficulty 1; watermark armed by callback; a strictly-heavier
+alt fork below the floor) pins the false→true transition, stickiness
+across a second refusal, and the unmoved tip — observed red on the
+pre-fix form at exactly the `m_verifivation_failed` axis. Lesser
+findings: the [6/6] writer-count floor (`>= 2`) became an equality so
+a third call site turns the gate red instead of passing; the `-5`
+window code joined `difficulty_ffi.rs`'s module-level wire-stable
+table; this doc's header no longer says the implementation "lands on
+PR #600". Same round: `origin/dev` merged (CHANGELOG both-sides-add
+resolved keeping both families; dev's CEN-M8 hash-gated skip is
+disjoint from every R1b region).
 
 **R1c now runs after C2-R0** (§1) and inherits its re-scoping note —
 C2-R0's stated deliverable is naming which of these nine rows a
@@ -1012,3 +1034,13 @@ rules already have owners), nothing new crosses.
   `RETENTION_HORIZON_BLOCKS` rename row rides the build PR's FOLLOWUPS
   edit (hygiene under the watermark form; the name cost one wrong
   ruling).
+- 2026-09-03 — Copilot round 3 on #603 (five suppressed findings, all
+  valid, all addressed — record in §4c): the refused-switch
+  peer-punishment defect fixed (refusal no longer travels
+  `m_verifivation_failed`; block kept as alternative, peer kept), the
+  promised `following_degraded` value test built and observed
+  red-first (`gen_reorg_watermark_refused_switch`), the [6/6]
+  writer-count floor tightened to an equality, the `-5` code added to
+  the FFI error table, the stale "lands on PR #600" header corrected.
+  `origin/dev` merged in the same round (CHANGELOG both-families
+  resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).

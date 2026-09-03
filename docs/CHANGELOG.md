@@ -30,7 +30,15 @@
   silent post-horizon corruption arm into a loud refusal; a
   watermark-refused network switch leaves the node loudly DEGRADED
   (sticky flag, new `get_info.following_degraded`, `CORE_RPC_VERSION`
-  3.26), and a watermark-refused checkpoint rollback fail-stops. The
+  3.26) **without penalizing the peer** — the refusal is a local
+  retention limitation, not block invalidity, so the block stays in the
+  alt store and `bvc` carries no failure (a `m_verifivation_failed`
+  refusal would have both P2P paths drop and score every honest peer
+  advertising the heavier chain, isolating the degraded node onto its
+  own fork; core test `gen_reorg_watermark_refused_switch` pins the
+  false→true transition, stickiness, and recurrence, observed red-first
+  on the pre-fix form) — and a watermark-refused checkpoint rollback
+  fail-stops. The
   fork-choice comparison and the CEN-D5 alt-window selection cross to
   `shekyl-difficulty` (`fork_choice`, `alt_window_plan`) behind new FFI
   exports with shared pinned vectors

@@ -73,6 +73,7 @@
 //! | `-2` | [`SHEKYL_DIFFICULTY_ERR_INVALID_COUNT`]   | `count` disagrees with `chain_height` per §5.3 step 1.        |
 //! | `-3` | [`SHEKYL_DIFFICULTY_ERR_OVERFLOW`]        | Consensus invariant violation or `u128` arithmetic overflow.  |
 //! | `-4` | [`SHEKYL_DIFFICULTY_ERR_INTERNAL`]        | Reserved; not currently returned (panic=abort short-circuits).|
+//! | `-5` | [`SHEKYL_DIFFICULTY_ERR_WINDOW`]          | Alt-window precondition failure (`shekyl_difficulty_alt_window_plan` only). |
 //!
 //! # Null-pointer convention
 //!

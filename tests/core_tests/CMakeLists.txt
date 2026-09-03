@@ -37,6 +37,7 @@ set(core_tests_sources
   chaingen_main.cpp
   economics_c2a_prime.cpp
   integer_overflow.cpp
+  reorg_watermark_degraded.cpp
   transaction_tests.cpp
   bulletproof_plus.cpp)
 
@@ -51,6 +52,7 @@ set(core_tests_headers
   economics_c2a_prime.h
   economics_chain_helpers.h
   integer_overflow.h
+  reorg_watermark_degraded.h
   transaction_tests.h
   bulletproof_plus.h)
 

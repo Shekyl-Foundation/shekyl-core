@@ -36,6 +36,7 @@
 #include "block_validation.h"
 #include "chain_split_1.h"
 #include "chain_switch_1.h"
+#include "reorg_watermark_degraded.h"
 #include "integer_overflow.h"
 #include "bulletproof_plus.h"
 #include "economics_c2a_prime.h"

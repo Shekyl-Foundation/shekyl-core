@@ -1282,28 +1282,12 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     return false;
   }
 
-  // C2-R1b F-1(a): pre-check the whole rollback against the prune
-  // watermark BEFORE mutating anything -- a mid-pop refusal would force a
-  // pointless restore cycle. Same single predicate as the pop_block belt,
-  // never a re-spelling. On refusal the node is a live participant that is
-  // knowingly NOT following the heaviest chain it has seen: flag it sticky
-  // (process-lifetime, re-armed here on every re-attempt), log loudly each
-  // time, and surface it on get_info -- a silent healthy-looking continue
-  // would be exactly the split the ruling forbids.
-  {
-    const uint64_t fork_parent_height = m_db->get_block_height(alt_chain.front().bl.prev_id);
-    if (!m_db->pop_target_allowed(fork_parent_height))
-    {
-      m_following_degraded.store(true, std::memory_order_relaxed);
-      MERROR("REFUSED chain switch at the prune watermark: the alternative chain forks at height "
-        << fork_parent_height << ", below the floor of epoch "
-        << m_db->get_archival_prune_watermark_epoch()
-        << " -- this node cannot safely revert that deep (rows already pruned)."
-        << " Continuing DEGRADED on the current chain; get_info reports"
-        << " following_degraded=true; remedy: resync this node");
-      return false;
-    }
-  }
+  // C2-R1b F-1(a): the prune-watermark pre-check lives in the ONE caller
+  // (handle_alternative_block's switch arm), because a refusal there is a
+  // LOCAL retention limitation, not a switch failure -- it must not travel
+  // this function's false return, which the caller maps to
+  // m_verifivation_failed and the P2P paths punish. The pop_block belt
+  // still backstops any path that reaches a below-floor pop unchecked.
 
   // pop blocks from the blockchain until the top block is the parent of the front
   // block of the alt chain. Each demoted block's credit-wire attestation witness
@@ -2460,6 +2444,38 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     }
     if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH)
     {
+      // C2-R1b F-1(a): pre-check the whole rollback against the prune
+      // watermark BEFORE the switch mutates anything -- a mid-pop refusal
+      // would force a pointless restore cycle. Same single predicate as the
+      // pop_block belt, never a re-spelling. A refusal is a LOCAL retention
+      // limitation, not block invalidity: the block above was already
+      // stored as an alternative, so keep it, leave bvc clean, and return
+      // success -- setting m_verifivation_failed here would make both P2P
+      // receive paths drop and score every honest peer advertising the
+      // heavier chain, isolating the degraded node onto its own fork. The
+      // node is a live participant knowingly NOT following the heaviest
+      // chain it has seen: flag it sticky (process-lifetime, re-armed on
+      // every re-attempt), log loudly each time, and surface it on
+      // get_info -- a silent healthy-looking continue would be exactly the
+      // split the ruling forbids. (The parent-existence guard mirrors the
+      // switch function's own first check; if the parent is somehow gone,
+      // fall through and let that guard fail the switch as before.)
+      if (m_db->block_exists(alt_chain.front().bl.prev_id))
+      {
+        const uint64_t fork_parent_height = m_db->get_block_height(alt_chain.front().bl.prev_id);
+        if (!m_db->pop_target_allowed(fork_parent_height))
+        {
+          m_following_degraded.store(true, std::memory_order_relaxed);
+          MERROR("REFUSED chain switch at the prune watermark: the alternative chain forks at height "
+            << fork_parent_height << ", below the floor of epoch "
+            << m_db->get_archival_prune_watermark_epoch()
+            << " -- this node cannot safely revert that deep (rows already pruned)."
+            << " Continuing DEGRADED on the current chain; the block is kept as an"
+            << " alternative and its peer is not penalized; get_info reports"
+            << " following_degraded=true; remedy: resync this node");
+          return true;
+        }
+      }
       //do reorganize!
       MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1
         << (is_a_checkpoint ? " (checkpoint-forced)" : "")

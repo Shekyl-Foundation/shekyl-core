@@ -194,10 +194,16 @@ echo
 #    presence is asserted before its uniqueness.)
 # ----------------------------------------------------------------------
 echo "[6/6] prune-watermark single-writer + no-revert (C2-R1b F-2)"
+# Exactly two identifier occurrences: the definition and the prune call.
+# A floor (>= 2) would let a THIRD call site ride in under a gate that
+# claims single-writer -- the count is an equality, so an unauthorized
+# second caller of the writer turns this red instead of passing.
 WM_CALLS=$(grep -c "note_archival_prune_watermark_epoch" src/blockchain_db/lmdb/db_lmdb.cpp || true)
-if [[ "${WM_CALLS:-0}" -lt 2 ]]; then
-  echo "      FAIL: writer definition or its prune call site is missing"
-  echo "            (note_archival_prune_watermark_epoch occurrences: ${WM_CALLS:-0}, expected >= 2)"
+if [[ "${WM_CALLS:-0}" -ne 2 ]]; then
+  echo "      FAIL: expected exactly 2 note_archival_prune_watermark_epoch"
+  echo "            occurrences (definition + the prune call site), found"
+  echo "            ${WM_CALLS:-0} -- fewer means the writer or its call is gone,"
+  echo "            more means an unauthorized second caller."
   FAIL=1
 else
   WM_KEY_SITES=$(grep -c '"archival_prune_watermark_epoch"' src/blockchain_db/lmdb/db_lmdb.cpp || true)
