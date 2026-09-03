@@ -76,4 +76,9 @@ Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
 3. **Push/PR authorization** — **HELD** per review round 2; branch stays
    local until lifted.
 4. Census-R2: **deferred per review-round-2 ruling** — resumes on
-   FL-R12′ signature (red-test conjunct already discharged).
+   FL-R12′ signature (red-test conjunct already discharged). Because this
+   branch is held and unpushed, the deferral + resume criteria were also
+   routed by the steering lane to the consensus lane (C2-R0 phase 2,
+   which edits `CONSENSUS_RULE_CENSUS.md` §10) so the queue itself
+   carries them — a deferral whose conditions are invisible to a census
+   reader would read as a queue item still waiting its turn.
