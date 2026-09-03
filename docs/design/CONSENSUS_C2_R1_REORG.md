@@ -375,7 +375,9 @@ is R1b's subject**:
   `set_checkpoints_file_path` — in `if (m_nettype == MAINNET)`. Off
   mainnet, `m_checkpoints_path` stays `""`,
   `boost::filesystem::exists("")` is false, and the JSON loader
-  (`checkpoints.cpp:195`) silently no-ops.
+  (`checkpoints.cpp:195`) no-ops behind an L1-only log ("file not
+  found" — invisible at default verbosity) **and returns success** —
+  the same reports-success shape as `:254`, one layer down.
   **The operator-override path —
   the exact mechanism whose forced-rollback semantics R1b rules (CEN-K6's
   checkpoint arm, E2, E5) — is unreachable by construction on testnet and
@@ -526,8 +528,12 @@ invariant (`:1557` region) — crosses as a pure window-assembly
 function; the DB fetches stay C++ (a thicker crossing would put LMDB
 reads behind the FFI: the anti-target). CEN-D6's zero-difficulty
 reject is ratified as the marshaling belt it is: the C++ call sites
-keep the guard on the FFI result (both sites), because a
-sentinel-eating shim is exactly what rule 46 forbids. **CEN-E1 does
+keep the guard on the FFI result (both sites) — a marshaling layer
+that swallowed the sentinel would convert a difficulty-function
+failure into a silently accepted block, the verdict-eaten-by-an-
+intermediary failure this codebase bans wherever it appears (rule 46
+is the shell-gate instance of the same principle; cited as analogy,
+not authority). **CEN-E1 does
 NOT cross — a decision, not a deferral** (rule 22): the checkpoint set
 is a `std::map` filled by an epee JSON loader — glue and state under
 rule 20's "C++ if all of" — and its predicate is a hash equality with
@@ -571,8 +577,18 @@ MAX_CLAIM_AGE_W)` with `max_claim_age_w: 26` pinned in
 `config/consensus_constants.json` — height in, config constant, same
 answer on every node; deriving the refusal from that same source is
 the **load-bearing half of the ruling**, because a second constant
-would mint exactly the drift twin this program keeps deleting), minus
-a named slack. **Placement, stated so the next reader cannot cover the
+would mint exactly the drift twin this program keeps deleting). The
+review asked that the slack be named; the honest answer dissolves it:
+there is **no separate slack constant at all**. The refusal floor is
+**the open height of the oldest fully-retained epoch**, computed by
+the same two helpers the prune itself calls
+(`shekyl_archival_prune_below_epoch(tip_at_pop_start)` →
+`shekyl_archival_epoch_open_height(...)`, the exact pair at the
+prune site `db_lmdb.cpp:8446`/`:7711`): a pop is refused iff its
+target height falls below that open height, because the corrupting
+arm lives precisely in the partially-covered epoch at the boundary —
+the epoch-boundary truncation *is* the margin. One function pair,
+shared with the prune, no new constant, no twin. **Placement, stated so the next reader cannot cover the
 wrong surface:** `BlockchainDB::pop_block` has two overloads — the
 no-arg private helper (`blockchain_db.cpp:247`, the add-failure undo)
 **delegates** to the arg-taking overload (`:667`), and both
@@ -686,9 +702,19 @@ is **unpopulatable** (the JSON schema carries height+hash only; the
 3-arg `add_checkpoint` is its sole writer and nothing calls it with a
 difficulty) and its two consumers are an init drift-check that is
 structurally dead (empty map ⇒ `{true, 0}` ⇒ the arm never fires) and
-a periodic on-idle recalculation whose empty-map default degenerates
-to **a full-chain difficulty recompute from height 0 every interval**
-— live wasted work inherited by accident. Ruled: delete the twin
+a periodic recalculation whose empty-map default degenerates to **a
+full-chain difficulty recompute from height 0 once a week** — live
+wasted work inherited by accident. The chain, stated so the claim is
+checkable (a review read only the init consumer and concluded the
+periodic recompute could not fire): `m_diff_recalc_interval` is
+`once_a_time_seconds<60*60*24*7>` (`cryptonote_core.h:994`); on-idle
+it calls `core::recalculate_difficulties()` (`:1570`) which calls
+`Blockchain::recalculate_difficulties()` with its **defaulted
+`std::nullopt`** argument (`blockchain.h:354`) — and only then does
+the empty map turn `check_difficulty_checkpoints().second` into
+`start_height = 0`. The init-time consumer is guarded by
+`difficulty_ok` and is indeed structurally dead; the interval caller
+is unconditional. Ruled: delete the twin
 (map, 3-arg parameter, `check_difficulty_checkpoints`,
 `get_difficulty_points`) and retire-or-rescope the recalculation
 machinery after enumerating its jobs at build time (a drift-healing
