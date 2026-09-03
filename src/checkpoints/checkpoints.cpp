@@ -180,15 +180,12 @@ namespace cryptonote
 
   bool checkpoints::init_default_checkpoints(network_type nettype)
   {
-    if (nettype == TESTNET)
-    {
-      return true;
-    }
-    if (nettype == STAGENET)
-    {
-      return true;
-    }
-    // Shekyl mainnet checkpoints will be added as the chain grows
+    // No compiled-in checkpoints exist yet on any network; when some
+    // are added, they are per-network DATA selected here — never
+    // per-network control flow (rule 71, C2-R1b-Q2a). The former
+    // per-nettype no-op arms were structurally divergent while
+    // behaviorally identical: the shape that rots.
+    (void)nettype;
     return true;
   }
 

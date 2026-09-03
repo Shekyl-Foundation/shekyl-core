@@ -251,8 +251,11 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::update_checkpoints()
   {
-    if (m_nettype != MAINNET) return true;
-
+    // Uniform across every network (C2-R1b-Q2a, rule 71): the periodic
+    // checkpoint reload runs wherever a checkpoints.json exists, so an
+    // operator can rehearse an override on testnet before touching
+    // mainnet. The former `!= MAINNET` guard returned TRUE — reporting
+    // success for work it never did.
     if (m_checkpoints_updating.test_and_set()) return true;
 
     bool res = true;
@@ -323,7 +326,11 @@ namespace cryptonote
 
     auto data_dir = boost::filesystem::path(m_config_folder);
 
-    if (m_nettype == MAINNET)
+    // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
+    // wiring — the points object AND the json reload path — is
+    // identical on mainnet, testnet and stagenet. Data may differ per
+    // network (the compiled-in list, when one ever exists); the code
+    // path may not.
     {
       cryptonote::checkpoints checkpoints;
       if (!checkpoints.init_default_checkpoints(m_nettype))
