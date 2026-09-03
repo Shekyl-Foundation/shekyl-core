@@ -15,7 +15,10 @@ const IPowSchema& get_randomx_pow_schema();
 // RandomX schema so unit tests can exercise the verifier-failure arms
 // (CEN-D2: a longhash the verifier could not compute must reject the block
 // at every difficulty, including 1, where the 0xff sentinel passes
-// check_hash). Pass nullptr to restore the real schema.
+// check_hash). Pass nullptr to restore the real schema. The installed
+// schema must outlive every call that can reach get_pow_for_height, and it
+// must be immutable and callable from several threads at once: the longhash
+// precompute worker runs the dispatch on a threadpool.
 void set_pow_schema_override_for_tests(const IPowSchema* schema);
 
 } // namespace cryptonote
