@@ -1,6 +1,6 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b proposed (§4b, steering-approved 2026-09-02) — awaiting Rick's ratification on PR #600.**
+**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b RATIFIED by Rick 2026-09-03 as amended at `ad72e1bc9`** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). Implementation lands on PR #600.
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
@@ -477,7 +477,7 @@ makes the shim thicker than the rule — the anti-target); K5/K7 orchestration;
 K8 ratify-and-keep (deleting the field would change the persisted
 `alt_block_data_t` layout — rule 42 fence).
 
-## 4b. R1b proposed rulings — steering-approved 2026-09-02; awaiting Rick (PR #600)
+## 4b. R1b rulings — RATIFIED 2026-09-03 (as amended at `ad72e1bc9`, + F-1/F-2 below)
 
 **Section pin: `4b9807c5e`** (dev tip = the R1a merge; §1–§4 sites are at
 the header pin `bf317111f`, and where a §4 site drifted both numbers are
@@ -597,7 +597,21 @@ recomputation to drift, no reset on restart: the floor is the prune's
 own durable receipt for what it destroyed, and the corrupting arm
 (the partially-covered epoch at the boundary) sits exactly above it —
 the epoch-boundary truncation *is* the margin. No separate slack
-constant, no new constant at all, no twin. **Placement, stated so the next reader cannot cover the
+constant, no new constant at all, no twin.
+
+**F-2 (Rick's ratification condition — the watermark is exempt from
+pop reversal, by design):** pops already traverse an epoch-close
+reversal path (`BlockchainDB::pop_block` →
+`revert_archival_epoch_close_at_height`, `blockchain_db.cpp:676`), and
+the watermark is written in that same epoch-close event's txn — so a
+build that symmetrically reverted it on a pop across an epoch-close
+boundary would reopen the walk-down hole through the back door. **The
+watermark records destruction, which pops cannot undo: monotonic, one
+writer, never lowered, exempt from every revert.** Three named red
+vectors bind the build: (i) pop across an epoch-close boundary — the
+watermark is unchanged; (ii) pop to exactly
+`epoch_open_height(watermark)` — allowed; (iii) one block below —
+refused. **Placement, stated so the next reader cannot cover the
 wrong surface — corrected by review round 2, and the correction is a
 worked instance of rule 16's corollary against this round's own
 prose:** the first draft called the no-arg `pop_block()` overload
@@ -646,7 +660,23 @@ consequence of divergence is that some nodes halt where others follow
 (a liveness/partition consequence, never a chain split; every halting
 node halts loudly with the same remedy). **Uniformity was never the
 property that made the floor safe — durability was.** The ruling
-converts an existing silent-corruption arm into a loud refusal. The
+converts an existing silent-corruption arm into a loud refusal.
+
+**F-1 (Rick's ratification condition — refused-pop semantics on the
+two non-interactive paths, because "every halting node halts loudly"
+must be specified, not assumed):**
+(a) a **network-driven switch** whose rollback is watermark-refused
+must put the node into a **loud, persistent, operator-visible
+non-following state** — at minimum a sticky degraded flag surfaced on
+RPC/status and logged at every re-attempt — never a silent
+healthy-looking continue: a refuse-and-continue node is a live
+minority-chain participant serving stale data, which *is* the split
+the ruling forbids.
+(b) a **checkpoint chain-conflict** whose saturated rollback is itself
+watermark-refused **fail-stops** with the named-output obligation
+(file, height, both hashes, the watermark, remedy: resync) — posture-
+consistent with the JSON-conflict arm; the daemon never continues
+running in contradiction with a loaded checkpoint it could not apply. The
 weak-subjectivity axis, priced: a fresh-syncing node follows the
 heaviest chain regardless of any horizon; an attacker able to build a
 heavier secret chain longer than ~260k blocks (≈ a year of work above
@@ -858,3 +888,33 @@ rules already have owners), nothing new crosses.
   mechanism does); E1's reopen trigger re-checked against the landed
   CSR (#595 — zero checkpoint rows; not live). C2-R0 cited as briefed,
   pending dispatch, not yet tree-landed.
+- 2026-09-03 — Copilot rounds 1–2 on #600 (all eight findings valid or
+  strengthening; the slack dissolved into the prune's boundary
+  function, then the tip-derived floor replaced by the persisted
+  monotonic watermark; the `pt.first − 2` wrap closed as the third
+  reports-success instance — named as a POSTURE finding for R1c; the
+  caller-less no-arg `pop_block` overload exposed and ruled deleted).
+  Steering re-verified the watermark's one-writer premise and
+  corrected the round's own "no new subjectivity" sentence: the floor
+  is **node-local by design** — durability, not uniformity, is the
+  safety property.
+- 2026-09-03 — **RATIFIED by Rick** as amended at `ad72e1bc9`: every
+  new source claim re-verified by him (the wrap at `:6725`, the
+  above-tip `return true` at `:1351`, the weekly-recompute chain, the
+  zero-caller overload). Conditions F-1 (refused-pop daemon semantics
+  on the switch and checkpoint-conflict paths) and F-2 (watermark
+  exempt from pop reversal + three named red vectors) — both landed
+  above, neither needing re-signature (additions within the ratified
+  design). **Two retractions logged under Rick's name at his
+  instruction:** (1) the walk-down hole was present in the form he
+  ratified ("derived from `max_claim_age_w` minus named slack" is a
+  pop-time derivation from current state) just as in the first draft —
+  the watermark closes it; (2) his R1b verification repeated the
+  no-arg overload's header comment ("the add-failure undo") as fact
+  without running the caller search — the same
+  documentation-is-not-verification failure the round twice caught in
+  others' prose. The record shows the reviewer's misses the same way
+  it shows everyone else's. Minor tracked: the
+  `RETENTION_HORIZON_BLOCKS` rename row rides the build PR's FOLLOWUPS
+  edit (hygiene under the watermark form; the name cost one wrong
+  ruling).
