@@ -9,9 +9,11 @@
 Shekyl is privacy-preserving, quantum-resistant money designed to last:
 hybrid post-quantum cryptography from genesis, FCMP++ membership-proof
 privacy, and a PoW chain with staking as an economic primitive. The node
-daemon and legacy wallet live in C++ under `src/`; the wallet stack is being
-actively rewritten as a native Rust workspace under `rust/`, and the rest of
-the codebase will follow. The long-term goal is an all-Rust stack, so editing
+daemon lives in C++ under `src/` (Rust-forward when touched); the live
+wallet is the Rust stack (`shekyl-cli`, `shekyl-wallet-rpc`,
+`shekyl-engine-core` and siblings under `rust/`). The C++ `wallet2` /
+`simplewallet` / `wallet_rpc_server` path was deleted in Phase 5
+(2026-08-19). The rest of the codebase will follow. The long-term goal is an all-Rust stack, so editing
 C++ is the exception, not the default: new code **and bug fixes** belong in
 Rust (with proper types), advancing the FFI boundary rather than thickening the
 C++ — patching C++ just re-creates debt the Rust rewrite must pay down again,
@@ -128,8 +130,8 @@ crypto primitives; the rest of that tree's application/protocol code is ours
 
 ```text
 shekyl-core/
-├── src/        # C++ core: daemon, wallet (legacy), p2p, crypto, rpc
-├── rust/       # Rust workspace: wallet stack rewrite + crypto/consensus crates
+├── src/        # C++ core: daemon, p2p, crypto, rpc (no wallet2)
+├── rust/       # Rust workspace: wallet stack + crypto/consensus crates
 ├── cmake/      # CMake modules and the Rust build bridge (BuildRust.cmake)
 ├── config/     # Economics/consensus parameters (build-script source of truth)
 ├── docs/       # Design docs, decision log, FOLLOWUPS, test vectors

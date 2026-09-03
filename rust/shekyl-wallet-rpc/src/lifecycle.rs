@@ -23,7 +23,7 @@ use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES}
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
-    OpenedEngine, SoloSigner, StakePosture,
+    OpenedEngine, SoloSigner, StakeFacade, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -634,8 +634,8 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
 
 /// Wrap a freshly opened / created engine in its shared arc and, for a staker,
 /// spawn the driving P-scan and serving tasks — the **sole production call
-/// site** for [`Engine::start_pscan_if_staker`] and
-/// [`Engine::start_serving_if_staker`]. Returns the arc plus the embedder-held
+/// site** for [`StakeFacade::start_pscan_if_staker`] and
+/// [`StakeFacade::start_serving_if_staker`]. Returns the arc plus the embedder-held
 /// [`OpenTasks`] (`None`/`None` for a non-staker), which the tenant parks for
 /// the wallet's open lifetime and [`close_wallet`] shuts down (serving first).
 ///
@@ -648,7 +648,7 @@ async fn wrap_and_start_tasks(
     daemon_address: &str,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
-    let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
+    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
             // Log the detailed cause server-side — the boxed error can carry a
@@ -671,7 +671,7 @@ async fn wrap_and_start_tasks(
     // will not configure does not open. The task itself does not publish
     // immediately; it waits the gate-6 §10.9 launch standoff first, precisely
     // so the onion does not reanimate in lockstep with this open.
-    let serving = match Engine::start_serving_if_staker(shared.clone(), daemon_address).await {
+    let serving = match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
         Ok(handle) => handle,
         Err(e) => {
             // The P-scan is already spawned at this point, so the aborted open
@@ -753,7 +753,7 @@ enum StakePostureParam {
 ///    close → reopen **with the transient first-stake intent** (SA-R1-a) so
 ///    the actor spawns pre-persist, then the on-demand P-scan starts (the
 ///    `stake_in` funding must be scan-discovered before it can validate).
-/// 3. The engine-side continuation (`Engine::first_stake`): preflight sweep
+/// 3. The engine-side continuation (`StakeFacade::first_stake`): preflight sweep
 ///    (W1-clean) → `persist_bond_record` → sign/assemble → the durable
 ///    `.wallet.pending` seal. **No broadcast** — the bond dispatch driver
 ///    sends at its GF-7 offset (SA-DQ-5, hold-across-reopen).
@@ -865,7 +865,7 @@ pub(crate) async fn stake(
     // The posture the caller named, gated above. `Market` (the default, and
     // every pre-parameter caller) still surfaces `NoShardsAvailable` until
     // the assignment round builds the arm it needs.
-    let outcome = Engine::first_stake(shared, slot, posture)
+    let outcome = StakeFacade::first_stake(shared, slot, posture)
         .await
         .map_err(|e| {
             use shekyl_engine_core::FirstStakeError as E;
@@ -1091,7 +1091,7 @@ async fn reopen_with_first_stake_intent(
             // best-effort here because a serving failure must not block the
             // stake the operator is in the middle of. It re-arms on the next
             // open like any other.
-            let serving = Engine::start_serving_if_staker(shared.clone(), &endpoint.address)
+            let serving = StakeFacade::start_serving_if_staker(shared.clone(), &endpoint.address)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(
@@ -1138,7 +1138,7 @@ async fn reopen_with_first_stake_intent(
 /// `stake` entry also self-heals it: a resident actor with no parked scan
 /// takes the intent reopen, which re-arms the scan).
 async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
-    let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
+    let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::warn!(
@@ -1155,7 +1155,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
     // with no close path — so this degrades with a warning exactly as the
     // P-scan re-arm above does. A fresh standoff is drawn either way, so the
     // re-armed host does not republish in lockstep with the failed close.
-    let serving = match Engine::start_serving_if_staker(shared.clone(), daemon_address).await {
+    let serving = match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::warn!(

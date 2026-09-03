@@ -54,6 +54,7 @@ pub use shekyl_standoff::COVER_RUNG_ATOMIC;
 pub use engine::stake_engine::serving::{
     ServingHandle, ServingPosture, ServingStartError, TorConfigError,
 };
+pub use engine::stake_facade::StakeFacade;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
 /// The tor-posture producer, re-exported so an embedder can spawn the
@@ -117,16 +118,16 @@ pub mod __bench_internals {
 
 /// **Not part of the public API.** The external half of the `test-helpers`
 /// feature (`Cargo.toml` `[features]` note): a narrow, feature-gated surface a
-/// downstream crate's tests can use to construct engine states that its own
-/// production API cannot yet reach.
+/// downstream crate's tests can use to construct engine states that production
+/// RPC cannot construct without a chain-backed first-stake ceremony.
 ///
 /// First (and currently sole) consumer: **`shekyl-wallet-rpc`**, whose WI-1
 /// P-scan lifecycle test needs a *staker* wallet to prove the embedder wires
-/// [`Engine::start_pscan_if_staker`] into open/close. No RPC staking entry
-/// exists yet (it is a separate, still-unbuilt work item), so the only way to
-/// reach `staking_enabled` from the RPC crate's tests is
-/// [`Engine::persist_bond_record`] — exposed here behind the feature rather than
-/// widened to `pub`, so no production-visible surface changes. This is the
+/// [`crate::StakeFacade::start_pscan_if_staker`] into open/close. Production staking RPC is
+/// live; first-stake still needs proofs, a daemon, and the FSM, which those
+/// tests must not run. The fixture path is [`Engine::persist_bond_record`]
+/// — exposed here behind the feature rather than widened to `pub`, so no
+/// production-visible surface changes. This is the
 /// "public-re-export half lands with its first downstream consumer" step the
 /// `test-helpers` feature doc reserved (rule 21): a named consumer, not
 /// speculative pre-provisioning.

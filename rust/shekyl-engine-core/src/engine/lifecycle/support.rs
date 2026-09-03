@@ -172,29 +172,27 @@ impl<
     /// real `Engine::create` ceremony pays for as many hybrid
     /// scenarios as the test composes.
     ///
-    /// # Cleanup target (V3.2)
+    /// # Cleanup target
     ///
-    /// V3.2 generalizes `Engine::create` and `Engine::open_full`
-    /// over `D: DaemonEngine` (default `DaemonClient`) alongside
-    /// the `DaemonEngine`-to-`pub` promotion. At that point the
-    /// production constructors accept any `D` directly, hybrid
-    /// tests construct their `Engine<SoloSigner, TestDaemon>` via
-    /// the public path without intermediate dummy-daemon ceremony,
-    /// and this `#[cfg(test)] pub(crate)` helper retires. The
-    /// retirement commit deletes both `replace_daemon` and the
-    /// dummy-daemon construction in `make_hybrid_engine_arc` (and
-    /// any sibling helpers that arrive in later Stage 1 PRs);
-    /// production paths are unaffected because they never named
-    /// this method.
+    /// Remaining work (pre-genesis; not a V3.2 train; not coupled to
+    /// trait-`pub` promotion): generalize `Engine::create` and
+    /// `Engine::open_full` over `D: DaemonEngine` (default
+    /// `DaemonClient`). Then production constructors accept any `D`
+    /// directly, hybrid tests construct `Engine<SoloSigner, TestDaemon>`
+    /// via that path without dummy-daemon ceremony, and this
+    /// `#[cfg(test)] pub(crate)` helper retires. The retirement commit
+    /// deletes both `replace_daemon` and the dummy-daemon construction
+    /// in `make_hybrid_engine_arc` (and any sibling helpers that arrive
+    /// in later Stage 1 PRs); production paths are unaffected because
+    /// they never named this method.
     ///
-    /// Pre-V3.2, the public `Engine::create` and `Engine::open_full`
-    /// constructors are concrete-typed (`daemon: DaemonClient`)
-    /// because their callers — `shekyl-cli`, `shekyl-wallet-rpc` —
-    /// only ever wire a real daemon transport. Until V3.2,
-    /// `replace_daemon` is the
-    /// test surface; production paths cannot reach it because
-    /// `pub(crate) #[cfg(test)]` excludes them from the published
-    /// API and from the non-test build.
+    /// Until that lands, the public `Engine::create` and
+    /// `Engine::open_full` constructors are concrete-typed (`daemon:
+    /// DaemonClient`) because their callers — `shekyl-cli`,
+    /// `shekyl-wallet-rpc` — only ever wire a real daemon transport.
+    /// `replace_daemon` is the test surface; production paths cannot
+    /// reach it because `pub(crate) #[cfg(test)]` excludes them from
+    /// the published API and from the non-test build.
     pub(crate) fn replace_daemon<D2: DaemonEngine>(
         self,
         daemon: D2,

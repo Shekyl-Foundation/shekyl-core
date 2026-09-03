@@ -12606,7 +12606,7 @@ what §65 named: `hop` states a *direction* and no *statistic*, so a central
 estimate sits where the policy demands a tail one. **The operational claim is
 that the constant needs to roughly double, not move an order.**
 
-### 74.2 Initial sync: the fast path exists and is compiled in
+### 74.2 Initial sync: the fast path existed and has since been deleted
 
 > **Superseded 2026-09-02 (C2-R1a,
 > [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3):** the
@@ -12621,8 +12621,31 @@ node's pool, so `can_skip_fcmp = found_tx_in_pool && …` is **false** for them
 and the block path pays full verification. At 127 ms, one year at 20k tx/day
 (~7.3M transactions) is ~11 days of pure verification on a Pi.
 
-**Checked, and there is a path.** The skip at `blockchain.cpp` sits inside
-`#if defined(PER_BLOCK_CHECKPOINT) / if (!fast_check)`, and:
+> **RETRACTED 2026-09-02 — the path this passage found has been deleted, and
+> the conclusion below is inverted rather than merely stale.** C2-R1a removed
+> `PER_BLOCK_CHECKPOINT` entirely (ratified and executed 2026-09-02,
+> `CONSENSUS_RULE_CENSUS.md` CEN-E3) on the grounds that an inert inherited
+> defence is ruled on, not kept. **`fast_check` and `m_blocks_hash_check` no
+> longer occur anywhere in `blockchain.cpp`** — verified: zero occurrences.
+>
+> **So the mitigation is not "inherited, present and on by default"; it does not
+> exist.** And the closing sentence reverses: **the 11-day figure is no longer
+> the worst case, it is the case.** `can_skip_fcmp` survives
+> (`blockchain.cpp:6128`) but it is exactly the predicate this passage said was
+> *false* for historical blocks — the checkpoint skip was what rescued them, and
+> it is gone.
+>
+> **This is a Pi-4 provisioning claim under [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+> so it is not left as a note.** The relay lane owns re-deriving initial-sync
+> cost without the checkpoint skip; queued in `FOLLOWUPS.md` with that blocker
+> and a pre-genesis target. **The retraction is written here rather than only in
+> the queue because this paragraph reads as a completed check** — *"Checked, and
+> there is a path"* — and a reader arriving at it would take the reassurance and
+> move on.
+
+**Superseded text, kept so the retraction has a subject:** the skip at
+`blockchain.cpp` sat inside `#if defined(PER_BLOCK_CHECKPOINT) / if (!fast_check)`,
+and:
 
 - `PER_BLOCK_CHECKPOINT` is **enabled by default** —
   `CMakeLists.txt:471` sets it and `:474` adds `-DPER_BLOCK_CHECKPOINT`;
@@ -12632,15 +12655,24 @@ and the block path pays full verification. At 127 ms, one year at 20k tx/day
 - when `fast_check` holds, the **entire** input-check block is skipped —
   `check_tx_inputs`, and with it FCMP verification, never runs.
 
-**So the 11-day figure is the worst case — the un-checkpointed one.** The
-mitigation is inherited, present and on by default.
+**~~So the 11-day figure is the worst case — the un-checkpointed one. The
+mitigation is inherited, present and on by default.~~** — **false as of
+2026-09-02; see the retraction above.** The un-checkpointed case is now the only
+case.
 
-**What it is contingent on, and this is a pre-genesis decision rather than a
-code gap:** the skip covers only heights present in `m_blocks_hash_check`.
-Shekyl is v3-from-genesis with no history, so whether a given sync benefits
-depends on whether we ship a pre-validated hash set and how far it reaches —
-**a shipping decision nobody has taken.** Until it is, *"run a node on a Pi"*
-should be qualified for initial sync, though **not** for steady-state relaying.
+**~~What it is contingent on, and this is a pre-genesis decision rather than a
+code gap: the skip covers only heights present in `m_blocks_hash_check`. Shekyl
+is v3-from-genesis with no history, so whether a given sync benefits depends on
+whether we ship a pre-validated hash set and how far it reaches — a shipping
+decision nobody has taken.~~** — **superseded 2026-09-02 (C2-R1a): the decision
+was taken, and the answer is that no hash set ships.** There is no skip left to
+be contingent on.
+
+**The operational caution survives the mechanism, and hardens.** *"Run a node on
+a Pi"* must be qualified for initial sync — **unconditionally now**, not "until
+the shipping decision is taken", because the un-checkpointed cost is the only
+cost there is. Steady-state relaying is unaffected, which is the half this
+document actually owns.
 
 ### 74.3 Pruned — the Pi is a derivation floor, not a deployment story
 
@@ -12663,9 +12695,20 @@ Three claims hung on it, and two do not survive:
 - **Initial sync — withdrawn from this document.** It is an operator-experience
   question about whether Pi-class nodes can *bootstrap*, not a relay-privacy
   one. It surfaced here by accident. §74.2's source finding stands and is worth
-  passing to whoever owns node onboarding — **the fast path exists, is enabled
-  by default, and its reach is an unmade shipping decision** — but carrying it
-  here would be this arc keeping someone else's item.
+  passing to whoever owns node onboarding — but carrying it here would be this
+  arc keeping someone else's item.
+
+  > **Superseded 2026-09-02 (C2-R1a), in the mitigation clause only.** This
+  > bullet handed the question on with *"the fast path exists, is enabled by
+  > default, and its reach is an unmade shipping decision."* The shipping
+  > decision **has since been taken — not shipped**: `PER_BLOCK_CHECKPOINT` is
+  > deleted whole (`CONSENSUS_RULE_CENSUS.md` CEN-E3), and `fast_check` /
+  > `m_blocks_hash_check` no longer occur in `blockchain.cpp`. **The finding
+  > survives and gets worse**: what was handed on as a bounded concern with a
+  > default mitigation is now unmitigated, so §74.2's 11-day figure is the case
+  > rather than the worst case. The re-derivation is queued in
+  > [`FOLLOWUPS.md`](../FOLLOWUPS.md) with its blocker (the replacement figure
+  > needs a measurement, not an argument) and its rule-76 owner.
 - **Large-input transactions are under-provisioned — this survives, and it is
   the real output.** 383 ms against a 175 ms constant at 4 inputs and chain
   age, on the arm the policy derives from. **A privacy penalty correlated with
