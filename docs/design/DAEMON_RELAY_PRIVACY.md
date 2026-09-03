@@ -12660,12 +12660,19 @@ mitigation is inherited, present and on by default.~~** — **false as of
 2026-09-02; see the retraction above.** The un-checkpointed case is now the only
 case.
 
-**What it is contingent on, and this is a pre-genesis decision rather than a
-code gap:** the skip covers only heights present in `m_blocks_hash_check`.
-Shekyl is v3-from-genesis with no history, so whether a given sync benefits
-depends on whether we ship a pre-validated hash set and how far it reaches —
-**a shipping decision nobody has taken.** Until it is, *"run a node on a Pi"*
-should be qualified for initial sync, though **not** for steady-state relaying.
+**~~What it is contingent on, and this is a pre-genesis decision rather than a
+code gap: the skip covers only heights present in `m_blocks_hash_check`. Shekyl
+is v3-from-genesis with no history, so whether a given sync benefits depends on
+whether we ship a pre-validated hash set and how far it reaches — a shipping
+decision nobody has taken.~~** — **superseded 2026-09-02 (C2-R1a): the decision
+was taken, and the answer is that no hash set ships.** There is no skip left to
+be contingent on.
+
+**The operational caution survives the mechanism, and hardens.** *"Run a node on
+a Pi"* must be qualified for initial sync — **unconditionally now**, not "until
+the shipping decision is taken", because the un-checkpointed cost is the only
+cost there is. Steady-state relaying is unaffected, which is the half this
+document actually owns.
 
 ### 74.3 Pruned — the Pi is a derivation floor, not a deployment story
 
@@ -12688,9 +12695,20 @@ Three claims hung on it, and two do not survive:
 - **Initial sync — withdrawn from this document.** It is an operator-experience
   question about whether Pi-class nodes can *bootstrap*, not a relay-privacy
   one. It surfaced here by accident. §74.2's source finding stands and is worth
-  passing to whoever owns node onboarding — **the fast path exists, is enabled
-  by default, and its reach is an unmade shipping decision** — but carrying it
-  here would be this arc keeping someone else's item.
+  passing to whoever owns node onboarding — but carrying it here would be this
+  arc keeping someone else's item.
+
+  > **Superseded 2026-09-02 (C2-R1a), in the mitigation clause only.** This
+  > bullet handed the question on with *"the fast path exists, is enabled by
+  > default, and its reach is an unmade shipping decision."* The shipping
+  > decision **has since been taken — not shipped**: `PER_BLOCK_CHECKPOINT` is
+  > deleted whole (`CONSENSUS_RULE_CENSUS.md` CEN-E3), and `fast_check` /
+  > `m_blocks_hash_check` no longer occur in `blockchain.cpp`. **The finding
+  > survives and gets worse**: what was handed on as a bounded concern with a
+  > default mitigation is now unmitigated, so §74.2's 11-day figure is the case
+  > rather than the worst case. The re-derivation is queued in
+  > [`FOLLOWUPS.md`](../FOLLOWUPS.md) with its blocker (the replacement figure
+  > needs a measurement, not an argument) and its rule-76 owner.
 - **Large-input transactions are under-provisioned — this survives, and it is
   the real output.** 383 ms against a 175 ms constant at 4 inputs and chain
   age, on the arm the policy derives from. **A privacy penalty correlated with

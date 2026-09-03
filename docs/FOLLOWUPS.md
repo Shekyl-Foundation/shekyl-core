@@ -685,6 +685,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Two dead p2p wire structs survive with no callers, inherited dead from the lineage (rule 60).** `connection_entry_base` and its `connection_entry` typedef have zero references tree-wide (last caller removed 2020 in `68ba2887c`); `network_address_old` has only `debug_utilities/object_sizes.cpp`, whose two lines must be deleted with it. p2p-lane work, not RPC-cutover residue. PWC-F1/PWC-F2, bucket 3 — [`P2P_1_WIRE_CENSUS.md`](design/P2P_1_WIRE_CENSUS.md)
   - Target: pre-genesis
 
+- **Register `shekyl/p2p-wire-prefix-v1` in [`CRYPTO_DOMAIN_REGISTRY.tsv`](design/CRYPTO_DOMAIN_REGISTRY.tsv) and bump the mechanism-1 count-pin when PWD-T5's prefix derivation gets its call site.** Not registrable in P2P-2: the domain gate requires a registered literal to have a defining file and a `const` site, and this round implements nothing, so a row now would fail CI for being honest about the schedule. The derivation, the three computed prefixes and the pairwise-distinctness assertion are pinned in the ruling — this item is the registry half only. PWC-A1 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T5
+  - Target: pre-genesis
+
 - **Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.** Ruled, not deferred — the never-sent map would otherwise advertise a 50 MB packet limit against the 100 MB the transport enforces, and PWD-T6 names the authoritative limits so there is one source. The struct keeps its live fields; `handshake_interval`, `config_id` and `send_peerlist_sz` are also write-only but belong to PWD-B1/B2 and PWD-I2. PWC-F3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6
   - Target: pre-genesis
 

@@ -1633,6 +1633,36 @@ the prepared answer.
 `N` is emitted in message 1; a handshake arriving with an `N` this node recently
 emitted **is** this node.
 
+**"Recently" is not a duration, and specifying it as one would be the defect.**
+A window shorter than a handshake round trip silently permits a self-edge, and
+PWD-I1's falsifier says what that costs: an undetected self-connection is an
+eligible stem candidate, so at `STEMS = 2` it halves effective stem width. A
+number chosen for that window would be a guess whose failure is invisible.
+**Scope the nonce to its outbound attempt instead:**
+
+> **A nonce is inserted into its zone's set immediately before message 1 is
+> written, and removed when that outbound attempt terminates — handshake
+> complete, failed, or timed out — or when it matches, whichever comes first.**
+
+**This covers detection by construction rather than by timing, and the reason is
+an ordering property.** A self-connection is **one TCP connection**: this node's
+outbound arm is the client and its own inbound listener is the server. The
+responder must *read* message 1 to produce message 2, so **the inbound handler
+sees `N` strictly before the outbound arm can complete.** There is no schedule
+under which the attempt terminates first and the match is missed. The one edge
+that looks like a race is benign: if the outbound times out while an inbound
+read is still queued, the connection is already dead, and the stem-width hazard
+needs a *live* edge.
+
+**Two properties fall out, rather than needing rulings of their own.** The set
+is bounded by in-flight outbound attempts, which `max_out_connection_count` and
+the connect cadence already cap — so there is no size limit to choose and no
+eviction policy to get wrong. And because `N` travels in the clear, **any peer
+this node dials learns it**; attempt-scoped removal is what keeps the window in
+which a dialed peer can replay `N` back at us equal to the attempt's own
+lifetime, rather than to an arbitrary retention period. A within-zone replay
+confirms only what the zone-scoping paragraph below already concedes.
+
 > **`N` is 32 bytes of CSPRNG output, carried as message 1's payload, in the
 > clear.**
 
@@ -1820,14 +1850,51 @@ first drafted:**
 > re-homed first. Deleting a mechanism because one of its jobs expired is the
 > failure rule 16 names — enumerate the jobs, not the name.
 
-**The derivation must be pinned, and is proposed here for ratification rather
-than assumed.** "Derived from `network_id`" is not a wire contract: two
-implementations must agree on the same eight bytes, and different networks must
-get different ones. **Proposed: the first 8 bytes of a domain-separated hash of
-the 16 raw `network_id` bytes**, with the domain separator distinct from every
-other Shekyl separator (rule 30). Left as a proposal because it is a wire
-constant this round has not ratified, not because it can be decided later —
-PWD-T8's vectors cannot be minted without it.
+**The derivation is pinned here, completely, because "derived from
+`network_id`" is not a wire contract.** An earlier version of this row said
+"the first 8 bytes of a domain-separated hash" and left the rest for
+ratification. That is not a derivation — it names no function, no separator and
+no output convention, so two conforming implementations can produce different
+eight bytes and neither is wrong.
+
+> **`prefix = cSHAKE256(S = "shekyl/p2p-wire-prefix-v1", X = network_id)[0..8]`**
+>
+> - **Function:** cSHAKE256 with customization, NIST SP 800-185 semantics.
+>   Mechanism 1 in [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv);
+>   cSHAKE and not raw Keccak because the job is **separation**, not identity.
+> - **Customization `S`:** the exact ASCII bytes `shekyl/p2p-wire-prefix-v1`,
+>   no NUL, no length prefix — the registry's `shekyl/<thing>-v<n>` form.
+> - **Input `X`:** the **16 raw `network_id` bytes, RFC-4122 field order as
+>   stored** — the same bytes and the same order as the prologue, defined once
+>   in *The prologue's byte encoding* above and not restated here.
+> - **Output:** bytes `[0..8]` of the 32-byte digest, in digest order, no
+>   re-ordering and no endian conversion.
+
+**The three prefixes, computed rather than promised.** The `NETWORK_ID`
+constants are frozen (`cryptonote_config.h:364`, `:496`, `:507`) and
+`cshake256_32` exists in-tree, so this is a measurement:
+
+| Network | `network_id` | Prefix |
+| --- | --- | --- |
+| mainnet | `556CA9708FF91F7A4069DAF3FC55BBBD` | `AFBCD4D1FAB98B6D` |
+| testnet | `78CE055BBBDA7956B9C8A1A2EC1F7672` | `F0B352E8928F8D56` |
+| stagenet | `2D219754A1BD79BA0540FDFB8DC8A4AE` | `5C2942C0F9F98A21` |
+
+**Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
+bytes cannot *guarantee* distinctness by construction, so the claim "different
+networks get different prefixes" is discharged by computing all three and
+comparing them, with the comparison exercised against a known-identical pair so
+it can be seen to fail. **P2P-3 carries this as a compile-time assertion over
+the network table**, which is what keeps the property true if a `NETWORK_ID`
+ever changes; **if one does pre-genesis, these three values re-derive** and
+PWD-T8's vectors re-mint with them.
+
+**The registry row is deliberately not added in this round.** The domain gate
+requires a registered literal to have a defining file and a `const` site, and
+P2P-2 implements nothing — a row now would fail CI for being honest about the
+schedule. `shekyl/p2p-wire-prefix-v1` registers **at the P2P-3 call site**,
+together with the mechanism-1 count-pin bump the gate requires; both halves are
+in the FOLLOWUPS item so neither can be dropped as an implementation detail.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -2014,7 +2081,7 @@ and the crate already carries the shape (`shekyl-levin/tests/oracle_kats.rs`,
 | Differential test against a second implementation (PW-7d) | A **shared misreading** of Noise, which self-minted vectors cannot catch | **Recorded, not decided.** It is the one thing our own vectors structurally cannot do; it becomes available when a second implementation exists, which is this row's falsifier |
 | Rely on interop testing alone | The same | **Refused.** Two nodes built from one codebase agreeing proves the codebase self-consistent, not correct — `a-seal-is-not-coverage` in wire form |
 
-The set, minimally — **five vectors**, and the rule they are built on is stated
+The set, minimally — **six vectors**, and the rule they are built on is stated
 after them because it governs every vector added later:
 
 1. **Both handshake messages, byte-exact**, from pinned ephemerals — **1248 and
@@ -2037,9 +2104,9 @@ after them because it governs every vector added later:
    > in the vector.** Per PWD-T1, the responder derives identical transport keys
    > under a mismatched prologue, so there is no responder-side Noise failure to
    > pin. The responder's network rejection is PWD-T5's framing-layer prefix
-   > compare — a **separate** vector belonging to the framing surface, not a
-   > handshake transcript, and it must be minted with the prefix derivation
-   > PWD-T5 puts up for ratification. **A vector asserting responder-side
+   > compare — **vector 6 below**, which belongs to the framing surface rather
+   > than to a handshake transcript, and is minted from the three prefixes
+   > PWD-T5 pins. **A vector asserting responder-side
    > prologue rejection would be asserting a property the protocol does not
    > have, and would pass only against an implementation that had invented one.**
 
@@ -2069,9 +2136,27 @@ after them because it governs every vector added later:
    the same way a wrong network does, and the vector must pin that it fails
    *identically*, not that it reports a version error.
 5. **A rekey vector** — `ck'`/`k'` after one rekey in each direction.
+6. **A framing-prefix vector**, pinning the **responder-side** network
+   separation that vector 3 structurally cannot cover. It asserts both
+   directions of the check: a connection opening with another network's prefix
+   is **dropped at the framing layer, before any Noise processing**, and one
+   opening with this network's prefix **proceeds to the handshake**. Its inputs
+   are the three pinned values in PWD-T5 — mainnet `AFBCD4D1FAB98B6D`, testnet
+   `F0B352E8928F8D56`, stagenet `5C2942C0F9F98A21` — so a cross-pair (dial
+   mainnet with the testnet prefix) is a real, runnable case rather than a
+   synthetic one.
+
+   > **This vector asserts a *discriminated* early rejection, and that does not
+   > violate the rule below.** The rule governs values moved into a **binding**;
+   > the prefix is a **filter**, not a binding — it is unauthenticated, public,
+   > and rewritable in transit, so it hands an adversary nothing it could not
+   > compute. Discriminating there is the *point*: rejecting at eight bytes is
+   > the entire benefit PWD-T5 adopts. **Without this paragraph the two rules
+   > read as contradicting each other on the same page**, and the next reviewer
+   > files that contradiction instead of the missing vector.
 
 > **The rule the set is built on, stated generally because it will outlive these
-> five vectors: for any value moved into a *binding*, the vector asserts
+> six vectors: for any value moved into a *binding*, the vector asserts
 > *indistinguishability*, never a discriminated failure.**
 
 **Otherwise the test reintroduces exactly what the binding removed.** The third
