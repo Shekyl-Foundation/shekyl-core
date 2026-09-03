@@ -2787,6 +2787,34 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
+/// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
+/// difficulty switches, equality keeps the incumbent, an operator-
+/// checkpoint match forces the switch. Writes
+/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT` or `SHEKYL_FORK_CHOICE_SWITCH` to
+/// `*out_verdict`; returns 0 on success or
+/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
+int32_t shekyl_difficulty_fork_choice(
+    struct shekyl_u128 current_cumulative,
+    struct shekyl_u128 alternative_cumulative,
+    uint8_t checkpoint_match,
+    int32_t* out_verdict);
+
+/// Alt-chain LWMA window selection (C2-R1b-Q1b / CEN-D5): which
+/// main-chain height range `[*out_main_start, *out_main_stop)` and how
+/// many newest alt entries fill the window for a candidate at
+/// `bei_height` whose stored alt ancestry has `alt_len` blocks starting
+/// at `first_alt_height` (ignored when `alt_len == 0`). Returns 0, or
+/// `SHEKYL_DIFFICULTY_ERR_WINDOW` on a height-0 candidate or
+/// discontiguous ancestry (fail closed), or
+/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
+int32_t shekyl_difficulty_alt_window_plan(
+    uint64_t bei_height,
+    uint64_t alt_len,
+    uint64_t first_alt_height,
+    uint64_t* out_main_start,
+    uint64_t* out_main_stop,
+    uint64_t* out_alt_take_newest);
+
 /// PoW-target predicate: does `hash` satisfy `difficulty`?
 ///
 /// Wraps the `shekyl-difficulty` crate's `check_hash` — the unified
@@ -3567,6 +3595,14 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
 /// Rust workspace runs `panic = "abort"` so any panic terminates the
 /// process before reaching the return path.
 #define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
+/// `shekyl_difficulty_alt_window_plan` preconditions failed: height-0
+/// candidate or alt ancestry not contiguous with the candidate.
+#define SHEKYL_DIFFICULTY_ERR_WINDOW         -5
+
+/// `shekyl_difficulty_fork_choice`: the incumbent chain stays.
+#define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
+/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
+#define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.

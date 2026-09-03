@@ -244,13 +244,6 @@ void BlockchainDB::init_options(boost::program_options::options_description& des
   command_line::add_arg(desc, arg_db_salvage);
 }
 
-void BlockchainDB::pop_block()
-{
-  block blk;
-  std::vector<transaction> txs;
-  pop_block(blk, txs);
-}
-
 void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& txp, uint64_t block_height, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
 {
   const transaction &tx = txp.first;
@@ -664,8 +657,39 @@ void BlockchainDB::set_hard_fork(HardFork* hf)
   m_hardfork = hf;
 }
 
+bool BlockchainDB::pop_target_allowed(uint64_t target_tip_height) const
+{
+  const uint64_t watermark = get_archival_prune_watermark_epoch();
+  if (watermark == 0)
+    return true;
+  return target_tip_height >= shekyl_archival_epoch_open_height(watermark);
+}
+
 void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 {
+  // C2-R1b-Q1c belt: the single funnel every pop writer traverses. Refuse
+  // any pop landing below the open height of the oldest fully-retained
+  // epoch -- past it, the retention prune has destroyed (un-journaled) the
+  // accrual rows a later re-close would range-sum, and the daemon would
+  // silently reconstruct wrong epoch state. The floor comes from the
+  // prune's own persisted receipt (get_archival_prune_watermark_epoch),
+  // never from the current tip: a tip-derived floor retreats with the tip
+  // and reopens the hole across iterated pops or a restart.
+  {
+    const uint64_t h = height();
+    const uint64_t resulting_tip = h >= 2 ? h - 2 : 0;
+    if (!pop_target_allowed(resulting_tip))
+    {
+      const uint64_t watermark = get_archival_prune_watermark_epoch();
+      throw DB_ERROR((std::string("pop refused at the prune watermark: popping to height ")
+        + std::to_string(resulting_tip) + " would cross below epoch "
+        + std::to_string(watermark) + "'s open height "
+        + std::to_string(shekyl_archival_epoch_open_height(watermark))
+        + ", where the retention prune has already destroyed the rows a "
+          "revert needs; remedy: resync this node").c_str());
+    }
+  }
+
   blk = get_top_block();
 
   // Capture the height of the block being removed BEFORE remove_block()

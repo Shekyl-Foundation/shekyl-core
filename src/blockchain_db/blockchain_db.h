@@ -781,14 +781,6 @@ private:
   /*********************************************************************
    * private concrete members
    *********************************************************************/
-  /**
-   * @brief private version of pop_block, for undoing if an add_block fails
-   *
-   * This function simply calls pop_block(block& blk, std::vector<transaction>& txs)
-   * with dummy parameters, as the returns-by-reference can be discarded.
-   */
-  void pop_block();
-
   // helper function to remove transaction from blockchain
   /**
    * @brief helper function to remove transaction from the blockchain
@@ -2183,6 +2175,30 @@ public:
   virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
   virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
   virtual void remove_archival_budget_accrual(uint64_t height) = 0;
+
+  /**
+   * @brief highest `prune_below_epoch` the retention prune has ever applied
+   *
+   * The pop floor's source (C2-R1b-Q1c): written by the prune itself in the
+   * same write txn (the prune's durable receipt for what it destroyed) —
+   * monotonic, one writer, never lowered, and deliberately EXEMPT from pop
+   * reversal (F-2: destruction cannot be undone by a pop, so unlike the
+   * frozen-shard counter this property never decrements). 0 = no prune has
+   * ever run; every pop is then within journal coverage. The base default
+   * keeps every test double permissive.
+   */
+  virtual uint64_t get_archival_prune_watermark_epoch() const { return 0; }
+
+  /**
+   * @brief the single pop-refusal predicate (C2-R1b-Q1c)
+   *
+   * True iff a pop landing at `target_tip_height` stays at or above the
+   * open height of the oldest fully-retained epoch. THE one comparison:
+   * the pop_block belt and every pre-check (chain switch, checkpoint
+   * rollback, RPC pop_blocks) call this — never a local re-spelling (the
+   * three-copies drift trap the debit-auth gate exists for).
+   */
+  bool pop_target_allowed(uint64_t target_tip_height) const;
 
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;

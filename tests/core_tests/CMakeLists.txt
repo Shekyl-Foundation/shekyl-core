@@ -32,11 +32,13 @@ set(core_tests_sources
   block_validation.cpp
   chain_split_1.cpp
   chain_switch_1.cpp
+  checkpoint_conflict_rollback.cpp
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
   economics_c2a_prime.cpp
   integer_overflow.cpp
+  reorg_watermark_degraded.cpp
   transaction_tests.cpp
   bulletproof_plus.cpp)
 
@@ -46,11 +48,13 @@ set(core_tests_headers
   block_validation.h
   chain_split_1.h
   chain_switch_1.h
+  checkpoint_conflict_rollback.h
   chaingen.h
   chaingen_tests_list.h
   economics_c2a_prime.h
   economics_chain_helpers.h
   integer_overflow.h
+  reorg_watermark_degraded.h
   transaction_tests.h
   bulletproof_plus.h)
 
