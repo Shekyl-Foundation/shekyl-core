@@ -1,6 +1,6 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b proposed (§4b), awaiting steering review, then Rick.**
+**Status:** **OPEN — R1a MERGED (PR #596 → dev `4b9807c5e`); R1b proposed (§4b, steering-approved 2026-09-02) — awaiting Rick's ratification on PR #600.**
 Second design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
@@ -477,7 +477,7 @@ makes the shim thicker than the rule — the anti-target); K5/K7 orchestration;
 K8 ratify-and-keep (deleting the field would change the persisted
 `alt_block_data_t` layout — rule 42 fence).
 
-## 4b. R1b proposed rulings — awaiting steering review, then Rick
+## 4b. R1b proposed rulings — steering-approved 2026-09-02; awaiting Rick (PR #600)
 
 **Section pin: `4b9807c5e`** (dev tip = the R1a merge; §1–§4 sites are at
 the header pin `bf317111f`, and where a §4 site drifted both numbers are
@@ -578,26 +578,40 @@ MAX_CLAIM_AGE_W)` with `max_claim_age_w: 26` pinned in
 answer on every node; deriving the refusal from that same source is
 the **load-bearing half of the ruling**, because a second constant
 would mint exactly the drift twin this program keeps deleting). The
-review asked that the slack be named; the honest answer dissolves it:
-there is **no separate slack constant at all**. The refusal floor is
-**the open height of the oldest fully-retained epoch**, computed by
-the same two helpers the prune itself calls
-(`shekyl_archival_prune_below_epoch(tip_at_pop_start)` →
-`shekyl_archival_epoch_open_height(...)`, the exact pair at the
-prune site `db_lmdb.cpp:8446`/`:7711`): a pop is refused iff its
-target height falls below that open height, because the corrupting
-arm lives precisely in the partially-covered epoch at the boundary —
-the epoch-boundary truncation *is* the margin. One function pair,
-shared with the prune, no new constant, no twin. **Placement, stated so the next reader cannot cover the
-wrong surface:** `BlockchainDB::pop_block` has two overloads — the
-no-arg private helper (`blockchain_db.cpp:247`, the add-failure undo)
-**delegates** to the arg-taking overload (`:667`), and both
-Blockchain-layer callers (`blockchain.cpp:579`, `:819`) call the
-arg-taking form directly. **The check lives in the arg-taking
-overload's body**: that single placement covers every caller including
-the delegating helper (whose depth-1 undo trivially passes any
-horizon); a check placed on the no-arg form instead would cover
-nothing but the undo path. The landing point is chosen **by property,
+first draft derived the floor from `tip_at_pop_start`; review round 2
+found the hole that formulation leaves open, and the fix strengthens
+the same-source property into a **same-event** one. **The hole:** a
+tip-derived floor moves with the tip — repeated pops (or a restart
+between commands) recompute a lower floor from the new, lower tip,
+and the node can iteratively walk below rows that were pruned when
+the tip was at its historical high-water mark; pruned rows do not
+come back when the tip retreats (the prunes are un-journaled — this
+round's own ground). **The ruling therefore uses a persisted,
+monotonic watermark:** the prune, which already knows exactly what it
+deleted, records the highest `prune_below_epoch` it has ever applied
+— written in the **same write txn as the prune itself**
+(`db_lmdb.cpp:8446` site), monotonically non-decreasing, one writer.
+`pop_block` refuses any pop whose target height falls below
+`epoch_open_height(watermark)`. No inference from the current tip, no
+recomputation to drift, no reset on restart: the floor is the prune's
+own durable receipt for what it destroyed, and the corrupting arm
+(the partially-covered epoch at the boundary) sits exactly above it —
+the epoch-boundary truncation *is* the margin. No separate slack
+constant, no new constant at all, no twin. **Placement, stated so the next reader cannot cover the
+wrong surface — corrected by review round 2, and the correction is a
+worked instance of rule 16's corollary against this round's own
+prose:** the first draft called the no-arg `pop_block()` overload
+(`blockchain_db.cpp:247`) "the add-failure undo," sourced from its
+header comment — and a repo-wide caller search finds **zero callers**:
+the actual add-failure undos (`blockchain.cpp:6469`, `:6479`) call
+`pop_block_from_blockchain()`, which reaches the **arg-taking**
+overload (`:667`), as do both direct Blockchain-layer callers
+(`:579`, `:819`). The header comment describes an intent no code
+serves; the doc had repeated the comment as fact. **The check lives
+in the arg-taking overload's body — now the only body: the build
+DELETES the caller-less no-arg overload** (rules 15/60 — a dead
+overload beside a guarded one is a standing invitation to bypass),
+making the placement question moot by construction. The landing point is chosen **by property,
 not by name**: it is the single funnel every pop writer traverses —
 the switch, the operator-checkpoint rollback, the RPC/console, the
 importer, and the add-failure undo alike — so if the DRS store
@@ -685,13 +699,23 @@ direction, and datadir write access is already LMDB-corruption
 the rule-82 obligation is that the exit path names the file, height,
 and both hashes before dying (verified or added at build).
 (ii) **chain conflict** (a loaded checkpoint contradicts the local
-chain) → the `pt.first − 2` rollback rides the pop machinery and is
-therefore **subject to Q1c's horizon refusal**: an operator checkpoint
-deeper than the horizon cannot force a beyond-horizon rollback — the
-daemon refuses loudly and the remedy is resync. Stated here because
-the two rulings compose: E5 hands every network's operator a pop
-trigger, and Q1c bounds what any pop — operator-commanded included —
-may do.
+chain) → the rollback target is ratified as
+**`saturating_sub(pt.first, 2)`** — review round 2 found the inherited
+expression's boundary: a checkpoint at height 1 is loader-accepted,
+and unsigned `pt.first − 2` wraps to `UINT64_MAX`, which
+`rollback_blockchain_switching` treats as target-above-tip and
+**returns immediately — no rollback, while checkpoint loading reports
+success**. That is the *third* reports-success-while-doing-nothing
+instance in this one mechanism (the `:254` guard, the missing-file
+loader, now the wrap), and the ruling closes it: targets clamp to 0
+(genesis) for checkpoints at heights 1–2, and the wrap case becomes
+unrepresentable. The rollback rides the pop machinery and is
+therefore **subject to Q1c's watermark refusal**: an operator
+checkpoint conflicting below the watermark cannot force a
+beyond-floor rollback — the daemon refuses loudly and the remedy is
+resync. Stated here because the two rulings compose: E5 hands every
+network's operator a pop trigger, and Q1c bounds what any pop —
+operator-commanded included — may do.
 
 *Falsifier (Q2b):* the fail-stop reopens on operational evidence of
 accidental-conflict kills (a named telemetry signal, not a vibe);
