@@ -558,18 +558,17 @@ use crate::engine::traits::{
 /// [`PendingTx`]: error::PendingTxError
 // `D: DaemonEngine` and `L: LedgerEngine` are more private than this
 // `pub` item: per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2 preamble,
-// the Stage 1 trait surfaces are `pub(crate)` for V3.0 and revisable
-// to `pub` at V3.2 alongside the JSON-RPC server cutover. External
-// callers reach the daemon and ledger surfaces via inherent methods
-// on `Engine<S>` (the defaults `D = DaemonClient` and
-// `L = LocalLedger` plug in transparently); they cannot name `D` or
-// `L` themselves and never need to. Stage 4's trait promotion
-// deletes this allow attribute together with the sibling annotations
-// (mod.rs inherent impls; lifecycle.rs's `OpenedEngine` / its
-// inherent impl / signer-agnostic `Engine` impl; merge.rs /
-// pending.rs / refresh.rs inherent impls) in a single sweep —
-// they're all the same architectural relationship surfacing at each
-// `pub` site.
+// Stage 1 traits ship `pub(crate)`. JSON-RPC cutover (the original
+// promotion trigger) landed; traits stay crate-local until a second
+// in-tree production crate must construct a workflow without `Engine`
+// (rule 21). External callers use inherent methods on `Engine<S>`
+// (defaults `D = DaemonClient`, `L = LocalLedger`); they cannot name
+// `D` or `L`. Trait-`pub` (if that reopen fires) deletes this allow
+// together with the sibling annotations (mod.rs inherent impls;
+// lifecycle.rs's `OpenedEngine` / its inherent impl / signer-agnostic
+// `Engine` impl; merge.rs / pending.rs / refresh.rs inherent impls)
+// in a single sweep — same architectural relationship at each `pub`
+// site.
 #[allow(private_bounds)]
 pub struct Engine<
     S: EngineSignerKind,

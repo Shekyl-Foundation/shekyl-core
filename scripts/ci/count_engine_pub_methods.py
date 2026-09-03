@@ -8,7 +8,7 @@
 # check_engine_decomposition.sh METHODS_CEILING. Prints one integer.
 # Optional ENGINE_DIR as argv[1]; --list prints path:line name;
 # --self-test runs the where-clause / façade / cfg(test)-mod / noise
-# / path-to-Engine / test-filename negative controls.
+# / path-to-Engine / test-filename / raw-ident negative controls.
 
 from __future__ import annotations
 
@@ -22,11 +22,12 @@ import tempfile
 # `pub(crate)` / `pub(super)` do not match: they have `(` immediately after `pub`.
 FN_PUB = re.compile(
     r"^(\s+)pub\s+(?:(?:const|async|unsafe|extern)\s+)*"
-    r"fn\s+(\w+)\s*[\(<]"
+    r"fn\s+(?:r#)?(\w+)\s*[\(<]"
 )
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]")
 # `mod foo`, `pub mod foo`, `pub(crate) mod foo`, `pub(in crate::engine) mod foo`.
-MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+")
+# Optional `r#` so `mod r#type;` is still a module decl, not production code.
+MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?\w+")
 # Raw strings: r"…" / r#"…"# / br#"…"# / cr#"…"#. Must run before ordinary strings.
 _RAW_STR = re.compile(r"(?:[bc])?r(#*)\"")
 # Inherent Self is a path ending in `Engine` (`Engine`, `super::Engine`,
@@ -290,7 +291,7 @@ def self_test() -> None:
     `mod foo;` into production `pub use { ... }`; ignore `pub const fn`;
     count `{`/`}` in comments or `'{'` (impl body ends early / test-mod
     skip eats production); refuse `crate::Engine`; skip any filename
-    containing the substring `test` (`attestation.rs`).
+    containing the substring `test` (`attestation.rs`); miss `r#type`.
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
     assert impl_self_is_engine("impl<S, D> Engine<S, D> {")
@@ -314,6 +315,7 @@ impl<S, D> Engine<S, D> {
     pub const fn capacity(&self) {}
     pub unsafe fn poke(&self) {}
     pub extern "C" fn abi(&self) {}
+    pub fn r#type(&self) {}
     pub(crate) fn hidden(&self) {}
 }
 
@@ -373,6 +375,7 @@ impl crate::Engine {
         "capacity",
         "poke",
         "abi",
+        "type",
         "nested_generics",
         "keep",
         "after_out_of_line_mod",

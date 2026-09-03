@@ -117,7 +117,7 @@ refresh-driver split was designed to remove.
 | PQC extra field parsing (0x06, 0x07) | ✅ Complete |
 | View-tag pre-filtering | ✅ Inside `scan_output_recover` |
 | Native Rust key image computation | ✅ Via `compute_output_key_image` |
-| Transfer details with PQC secrets | ✅ Complete, ZeroizeOnDrop |
+| Transfer details (public PQC residue; spend secrets re-derived in engine-core) | ✅ Complete; wipe via `Drop` + `Zeroize` |
 | Wallet state management | ✅ Complete with reorg handling |
 | Balance computation | ✅ Complete (no staking bucket; that is engine-core) |
 | Coin selection | ✅ Complete |

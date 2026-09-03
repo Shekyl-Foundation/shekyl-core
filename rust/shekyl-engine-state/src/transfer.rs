@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Extended transfer details with Shekyl staking and PQC fields.
+//! Confirmed-output transfer details (Shekyl-native ledger row).
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -116,10 +116,12 @@ pub struct FcmpPrecomputedPath {
     pub path_blob: Vec<u8>,
 }
 
-/// Extended transfer details combining base output data with Shekyl-specific fields.
+/// Shekyl-native transfer record for one owned output.
 ///
-/// This is the Shekyl-native transfer record, extended from the monero-oxide output
-/// shape with PQC and staking metadata. Per-output spend secrets (HKDF-derived
+/// Extended from the monero-oxide output shape with PQC ciphertext and
+/// FCMP++ path residue. Stake classification and accounting live on
+/// `shekyl-engine-core` (`StakeFacade` / sealed pscan), not on this row.
+/// Per-output spend secrets (HKDF-derived
 /// `ho`, `y`, `z`, `k_amount`, `combined_shared_secret`) are deliberately
 /// **not** persisted on this struct: they are re-derived inside the engine from
 /// `(view_secret, source_ciphertext)` at signing time per
