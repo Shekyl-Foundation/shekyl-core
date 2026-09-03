@@ -226,10 +226,21 @@ pub(crate) enum SweepSelectError {
 /// grep below covers this arm too), and is reachable only through a
 /// [`TerminalSweep`](super::drain_orchestrator::DrainIntent::TerminalSweep)
 /// intent, whose witness certifies the persona's terminal exit is already
-/// public on-chain — the §12.3 reward-subsum matching the carve defends
-/// against adds nothing to a persona whose collateral return the record
-/// delta has already published (the F-W10-era re-pricing; the amendment is
-/// recorded in `PRINCIPAL_STAKE_LIFECYCLE.md`, not silently assumed).
+/// public on-chain. **What the carve concedes, named in full:** the swept
+/// sum is collateral + residue, and its components are already public
+/// per-`P` — the collateral via the record delta, the reward component via
+/// the loud cleartext emission mints (`reward_P(E)` is §18.10
+/// publicly-derivable) — so the marginal VALUE disclosure is only the
+/// system-drawn funding cover (random, bounded). The real residual is
+/// LINKAGE: a total-shaped sweep makes the collected figure per-`P`
+/// predictable (collateral + derivable rewards ± cover noise − fees),
+/// conceding the off-chain amount-matching channel for this one terminal
+/// figure — accepted because exactness is the funded gate's requirement,
+/// bounded by the sweep tx being unattributable on-chain (F-W10), with
+/// amount-shaping relocating to its natural home, the principal side's
+/// subsequent ordinary transfers. The full statement is in
+/// `PRINCIPAL_STAKE_LIFECYCLE.md`, recorded for countersign, not silently
+/// assumed.
 ///
 /// Unlike [`select_for_drain`] there is no `Insufficient` / cap refusal: the
 /// pass takes what it can and reports the rest as `remainder` — a capped or
