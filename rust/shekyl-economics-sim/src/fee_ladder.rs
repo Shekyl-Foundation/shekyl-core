@@ -10,8 +10,10 @@
 //! `C = (1−σ)·M_r/(1−b)`, the expansion (`x`) characterization of the
 //! inherited ArticMine ladder, corrected-vs-current rung tables with the
 //! relay-floor check (FL-C6), rung-value dwell under Poisson traffic
-//! (FL-C4a), the fee↔volume feedback map (FL-C7), and the §1.8 degenerate
-//! pins (FL-C8).
+//! (FL-C4a) for **both** pow2 snap rules (the registered round-to-nearest
+//! and the adopted ceiling), the fee↔volume feedback map (FL-C7) on the
+//! **served** (quantized) ladder across demand scales that exercise the
+//! pow2 boundary, and the §1.8 degenerate pins (FL-C8).
 //!
 //! **Which reward the derivation prices against:** the *validation* path —
 //! the modulated, emission-split, burn-netted quantities consensus actually
@@ -20,40 +22,61 @@
 //! *measured output* of this instrument, never an input assumption.
 //!
 //! Every economics quantity comes from canonical `shekyl-economics`
-//! functions (drift-pair ban, §1.9). Two deliberate exceptions, marked at
-//! their definitions: the ArticMine ladder transliteration (the round's
-//! *subject* — it exists nowhere in Rust, and porting it faithfully is the
-//! point of the comparison column) and the two C++ block-policy constants
-//! the ladder folds in (which cross the FFI as arguments precisely so Rust
-//! does not own a copy — see `cryptonote_basic_impl.cpp:110-113`).
+//! functions or build-generated params (drift-pair ban, §1.9): the reward
+//! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
+//! `TX_VOLUME_WINDOW` are all imported; the block-policy zone constant is
+//! read from its single Rust owner (`shekyl_wire::transaction::MIN_BLOCK_WEIGHT`).
+//! Two deliberate exceptions, marked at their definitions: the ArticMine
+//! ladder transliteration (the round's *subject* — porting it faithfully is
+//! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
+//! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
+//! copy wallet-side).
 //!
-//! Output convention matches the crate: JSON to stdout, human summary to
-//! stderr.
+//! I/O convention: this module renders; the binary target performs the
+//! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
+
+use core::fmt::Write as _;
+use std::collections::{BTreeSet, VecDeque};
 
 use serde::Serialize;
-use shekyl_economics::params::SCALE;
+use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     base_block_reward, calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
-    cap_reward_to_remaining_supply, projected_already_generated, EconomicParams, BLOCKS_PER_YEAR,
-    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    cap_reward_to_remaining_supply, emission_speed_factor, projected_already_generated,
+    tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
+    STAKER_EMISSION_SHARE,
 };
 
-/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` (`src/cryptonote_config.h:58`).
-/// A C++ block-policy constant that crosses the FFI as an argument by design;
-/// instrument-local copy, pinned by this comment.
-const FULL_REWARD_ZONE_V5: u64 = 300_000;
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
+/// Rust owner (`shekyl-wire`; `fee_policy.rs` single-sources from the same
+/// constant).
+const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
 /// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
-/// Same status; `fee_policy.rs` carries the same pinned copy wallet-side.
+/// Declared exception: no single Rust owner exists;
+/// `rust/shekyl-engine-core/src/engine/fee_policy.rs` carries the same
+/// pinned copy wallet-side.
 const REF_TX_WEIGHT: u64 = 3_000;
 
-/// Rolling `tx_volume_avg` window (`SHEKYL_TX_VOLUME_WINDOW`,
-/// `config/economics_params.json`): 720 blocks = one day at 120 s.
-const VOLUME_WINDOW: usize = 720;
+/// Rolling `tx_volume_avg` window (`SHEKYL_TX_VOLUME_WINDOW`): 720 blocks =
+/// one day at 120 s. Build-generated from `config/economics_params.json` so
+/// a pre-genesis window recalibration cannot leave this instrument silently
+/// measuring a window the chain no longer uses.
+const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
 
 // ---------------------------------------------------------------------------
 // Correction factor
 // ---------------------------------------------------------------------------
+
+/// The correction factor and its components at one state.
+#[derive(Serialize, Clone, Copy)]
+pub struct Correction {
+    pub release_multiplier: u64,
+    pub burn_pct: u64,
+    pub emission_share_sigma: u64,
+    /// `C = (1−σ)·M_r/(1−b)`, fixed-point `SCALE`.
+    pub c_scaled: u64,
+}
 
 /// One evaluated grid point of the correction surface.
 #[derive(Serialize, Clone, Copy)]
@@ -63,21 +86,14 @@ pub struct CorrectionPoint {
     pub supply_ratio_millionths: u64,
     pub reachable: bool,
     pub tx_volume_avg: u64,
-    pub release_multiplier: u64,
-    pub burn_pct: u64,
-    pub emission_share_sigma: u64,
-    /// `C = (1−σ)·M_r/(1−b)`, fixed-point `SCALE`.
-    pub c_scaled: u64,
+    #[serde(flatten)]
+    pub correction: Correction,
 }
 
 /// `C = (1−σ)·M_r/(1−b)` in fixed point, every input from the canonical
-/// crate. `b < SCALE` structurally (burn cap 0.9).
-fn correction_factor(
-    v: u64,
-    circulating: u64,
-    height: u64,
-    params: &EconomicParams,
-) -> (u64, u64, u64, u64) {
+/// crate. Single division (`(1−σ)·M_r / (1−b)`) so no intermediate
+/// truncation is amplified; `b < SCALE` structurally (burn cap 0.9).
+fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
     let m_r = calc_release_multiplier(
         v,
         params.tx_volume_baseline,
@@ -99,10 +115,13 @@ fn correction_factor(
         STAKER_EMISSION_DECAY,
         BLOCKS_PER_YEAR,
     );
-    let miner_share = SCALE - sigma;
-    let c = u128::from(miner_share) * u128::from(m_r) / u128::from(SCALE);
-    let c = c * u128::from(SCALE) / u128::from(SCALE - b);
-    (m_r, b, sigma, u64::try_from(c).expect("C fits u64"))
+    let c = u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b);
+    Correction {
+        release_multiplier: m_r,
+        burn_pct: b,
+        emission_share_sigma: sigma,
+        c_scaled: u64::try_from(c).expect("C fits u64"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +133,16 @@ fn correction_factor(
 /// (`blockchain.cpp:4475-4508`), including its folded-division order.
 /// Instrument-local by design: this is the artifact under derivation, and
 /// the comparison column must reproduce it bit-for-bit, not idealize it.
+///
+/// The 5-arg C++ this transliterates does not clamp its medians — the
+/// production wrapper (`blockchain.cpp:4527-4537`) guarantees
+/// `Mlw ≥ zone` and `Mnw ≥ Mlw` before it is ever called. The
+/// `debug_assert`s document that precondition so an instrument grid row
+/// below the zone fails loudly instead of printing fees the daemon cannot
+/// emit (and instead of a divide-by-zero in the `Fh` folded divisor).
 fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
+    debug_assert!(mlw >= FULL_REWARD_ZONE_V5, "wrapper guarantees Mlw >= zone");
+    debug_assert!(mnw >= mlw, "wrapper guarantees Mnw >= Mlw");
     let mfw = mnw.min(mlw);
     let fl = base_reward * REF_TX_WEIGHT / (mfw * mfw);
     let fn_ = 4 * base_reward * REF_TX_WEIGHT / (mfw * mfw);
@@ -124,7 +152,10 @@ fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
 }
 
 /// `cryptonote::round_money_up(v, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES=2)`:
-/// round UP to 2 significant decimal digits.
+/// round UP to 2 significant decimal digits. The C++ throws on overflow in
+/// the final multiply (`cryptonote_format_utils.cpp`, pinned by
+/// `scaling_2021.cpp`'s overflow case); the `expect` here is the same
+/// fail-loud semantics.
 fn round_money_up_2(v: u64) -> u64 {
     if v < 100 {
         return v;
@@ -135,7 +166,9 @@ fn round_money_up_2(v: u64) -> u64 {
         head /= 10;
         unit *= 10;
     }
-    v.div_ceil(unit) * unit
+    v.div_ceil(unit)
+        .checked_mul(unit)
+        .expect("round_money_up overflow (C++ throws here)")
 }
 
 fn rounded(raw: [u64; 4]) -> [u64; 4] {
@@ -143,9 +176,11 @@ fn rounded(raw: [u64; 4]) -> [u64; 4] {
 }
 
 /// Corrected ladder: `C` applied to each unrounded rung, then daemon
-/// rounding. (Equivalent to running the ArticMine formula on the
-/// miner-effective reward `(1−σ)·M_r·R` and dividing by `(1−b)`, since the
-/// formula is linear in the reward.)
+/// rounding. Equivalent — up to integer truncation of at most one atomic
+/// unit per rung, before the coarse 2-significant-digit rounding — to
+/// running the ArticMine formula on the miner-effective reward
+/// `(1−σ)·M_r·R` and dividing by `(1−b)`; the two forms are NOT bit-exact
+/// interchangeable at rounding-step boundaries.
 fn corrected_ladder(raw: [u64; 4], c_scaled: u64) -> [u64; 4] {
     raw.map(|f| {
         let scaled = u128::from(f) * u128::from(c_scaled) / u128::from(SCALE);
@@ -156,7 +191,7 @@ fn corrected_ladder(raw: [u64; 4], c_scaled: u64) -> [u64; 4] {
 /// The relay floor, transliterating `get_dynamic_base_fee`
 /// (`blockchain.cpp:4422-4437`): `R·w_ref/M²` minus 5%, floor 1. The
 /// `check_fee` acceptance bound is this minus its further 2% buffer
-/// (`blockchain.cpp:4468`).
+/// (`blockchain.cpp:4466`).
 fn relay_floor(base_reward: u64, median: u64) -> u64 {
     let median = median.max(FULL_REWARD_ZONE_V5);
     let lo = u128::from(base_reward) * u128::from(REF_TX_WEIGHT)
@@ -167,6 +202,91 @@ fn relay_floor(base_reward: u64, median: u64) -> u64 {
         1
     } else {
         lo
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quantization (FL-C4a remedy; §5.2 adopted form)
+// ---------------------------------------------------------------------------
+
+/// Which pow2 snap rule to apply to `C`.
+#[derive(Clone, Copy, Debug)]
+pub enum SnapRule {
+    /// `2^round(log2 C)` — the §1.4a *registered* remedy, kept measurable
+    /// so the register-vs-adopted deviation stays auditable from the
+    /// branch.
+    Nearest,
+    /// `2^ceil(log2 C)` — the §5.2 *adopted* refinement: never under-funds
+    /// marginal pricing, overprices ≤ 2×.
+    Ceiling,
+}
+
+/// `2^k ≤ c/s`, exactly, in integers.
+fn pow2_le(c: u128, s: u128, k: i32) -> bool {
+    if k >= 0 {
+        (s << k) <= c
+    } else {
+        s <= (c << (-k))
+    }
+}
+
+/// Snap `C` to a power of two under `rule`, in exact integer arithmetic
+/// (no float log2/exp2 — this is the reference implementation of a
+/// concept destined for a wallet-must-match-daemon derivation, so
+/// cross-platform float behavior must not be load-bearing). Panics if the
+/// snapped exponent is below −6, where `SCALE = 10^6` can no longer
+/// represent `2^k` exactly (unreachable for the derivation's C range
+/// [0.68, 12.92]; the assert makes a future range widening loud instead of
+/// silently truncated).
+fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
+    assert!(c_scaled > 0, "C is structurally positive");
+    let c = u128::from(c_scaled);
+    let s = u128::from(SCALE);
+
+    // kf = floor(log2(c/s)).
+    let mut kf: i32 = -40;
+    while pow2_le(c, s, kf + 1) {
+        kf += 1;
+    }
+
+    let exact = if kf >= 0 {
+        (s << kf) == c
+    } else {
+        (c << (-kf)) == s
+    };
+    let k = match rule {
+        SnapRule::Ceiling => {
+            if exact {
+                kf
+            } else {
+                kf + 1
+            }
+        }
+        SnapRule::Nearest => {
+            // Log-space midpoint between kf and kf+1 is √2·2^kf:
+            // round up iff (c/s)² ≥ 2^(2kf+1), compared exactly.
+            let e = 2 * kf + 1;
+            let up = if e >= 0 {
+                c * c >= (s * s) << e
+            } else {
+                (c * c) << (-e) >= s * s
+            };
+            if up {
+                kf + 1
+            } else {
+                kf
+            }
+        }
+    };
+
+    assert!(
+        k >= -6,
+        "2^{k} not exactly representable in SCALE=10^6 units"
+    );
+    if k >= 0 {
+        SCALE << k
+    } else {
+        SCALE >> (-k)
     }
 }
 
@@ -213,6 +333,29 @@ fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
 }
 
 // ---------------------------------------------------------------------------
+// Per-age chain state (hoisted once; `projected_already_generated` is
+// O(height) and was previously recomputed 25× at age 4 alone)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct AgeState {
+    height: u64,
+    ag: u64,
+    base_reward: u64,
+}
+
+fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
+    let height = age_years * BLOCKS_PER_YEAR;
+    let ag = projected_already_generated(height, params).expect("projected ag");
+    let base_reward = base_block_reward(ag, params).expect("base reward");
+    AgeState {
+        height,
+        ag,
+        base_reward,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Rung tables at representative states
 // ---------------------------------------------------------------------------
 
@@ -227,11 +370,20 @@ pub struct RungTable {
     pub c_scaled: u64,
     /// What the daemon serves today (5-arg estimate semantics).
     pub current: [u64; 4],
-    /// What the validation-path economics ask for.
-    pub corrected: [u64; 4],
-    /// `check_fee` acceptance bound at this state (floor − 2% buffer).
+    /// The validation-path economics with raw `C` — the *mispricing*
+    /// measurement. The §5.2 proposal serves the quantized form below.
+    pub corrected_raw_c: [u64; 4],
+    /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
+    pub served_ceil_cq: [u64; 4],
+    /// `check_fee` acceptance bound at this state. Modeled as
+    /// `floor − floor/50` per byte: the real check takes 2% off the
+    /// *total* and rounds up to the quantization mask
+    /// (`blockchain.cpp:4462-4466`) — both divergences are bounded well
+    /// below every measured state's margin, and the mask examination is
+    /// CEN-M3's held row.
     pub relay_floor_accept: u64,
-    /// FL-C6/FL-V5: does the corrected floor rung bounce off `check_fee`?
+    /// FL-C6/FL-V5: does the raw-`C` corrected floor bounce off
+    /// `check_fee`?
     pub corrected_floor_below_relay: bool,
 }
 
@@ -240,29 +392,29 @@ fn rung_table(
     age_years: u64,
     v: u64,
     median: u64,
+    st: AgeState,
     params: &EconomicParams,
 ) -> RungTable {
-    let height = age_years * BLOCKS_PER_YEAR;
-    let ag = projected_already_generated(height, params).expect("projected ag");
-    let base = base_block_reward(ag, params).expect("base reward");
-    let (_, _, _, c) = correction_factor(v, ag, height, params);
-    let raw = articmine_ladder_raw(base, median, median);
-    let floor = relay_floor(base, median);
+    let corr = correction_factor(v, st.ag, st.height, params);
+    let raw = articmine_ladder_raw(st.base_reward, median, median);
+    let floor = relay_floor(st.base_reward, median);
     let accept = floor - floor / 50;
-    let corrected = corrected_ladder(raw, c);
+    let corrected = corrected_ladder(raw, corr.c_scaled);
+    let served = corrected_ladder(raw, quantize_c_pow2(corr.c_scaled, SnapRule::Ceiling));
     RungTable {
         label,
         age_years,
         supply_ratio_millionths: u64::try_from(
-            u128::from(ag) * u128::from(SCALE) / u128::from(params.money_supply),
+            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply),
         )
         .expect("ratio fits"),
         tx_volume_avg: v,
         median,
-        base_reward_unmodulated: base,
-        c_scaled: c,
+        base_reward_unmodulated: st.base_reward,
+        c_scaled: corr.c_scaled,
         current: rounded(raw),
-        corrected,
+        corrected_raw_c: corrected,
+        served_ceil_cq: served,
         relay_floor_accept: accept,
         corrected_floor_below_relay: corrected[0] < accept,
     }
@@ -291,8 +443,10 @@ impl Rng {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// Knuth Poisson sampler; fine for the registered means (≤ 500).
+    /// Knuth Poisson sampler; exact for the registered means (≤ 500 —
+    /// `e^-500 ≈ 7.9e-218` is a normal f64; the real breakdown is ≳ 745).
     fn poisson(&mut self, mean: f64) -> u64 {
+        debug_assert!(mean < 700.0, "Knuth sampler underflows near mean 745");
         if mean <= 0.0 {
             return 0;
         }
@@ -309,29 +463,28 @@ impl Rng {
     }
 }
 
-/// Snap `C` UP to a power of two: `2^ceil(log2(C))`, in `SCALE` fixed
-/// point. The FL-C4a *registered* remedy was round-to-nearest; ceiling is
-/// the adopted refinement (doc §5.2): round-to-nearest under-funds the top
-/// rung's marginal pricing by up to √2, while ceiling never under-funds
-/// (FL-C2(b) preserved everywhere), overprices ≤ 2× (inside FL-C3), and is
-/// the same monotone step function of the same slow input, so it faces the
-/// same dwell gate — re-measured, not assumed.
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-fn quantize_c_pow2(c_scaled: u64) -> u64 {
-    let log = (c_scaled as f64 / SCALE as f64).log2();
-    let k = log.ceil();
-    (SCALE as f64 * k.exp2()) as u64
-}
-
 #[derive(Serialize)]
 pub struct DwellResult {
-    pub scenario: String,
-    pub mode: &'static str,
+    pub scenario: &'static str,
+    pub mode: String,
     pub blocks_measured: u64,
-    /// Median run length (blocks) of an unchanged posted value, per rung.
+    /// Median run length (blocks) of an unchanged posted value, per rung,
+    /// over the whole trace.
     pub median_dwell: [u64; 4],
-    /// Number of distinct posted values seen, per rung.
-    pub distinct_values: [u64; 4],
+    /// TRUE distinct posted values per rung (set cardinality — the wire
+    /// alphabet).
+    pub distinct_posted_values: [u64; 4],
+    /// Number of value CHANGES per rung (churn; a value revisited counts
+    /// each time). The pre-review field misnamed this "distinct values".
+    pub value_changes: [u64; 4],
+    /// For ramp scenarios: the shortest completed run that STARTED inside
+    /// the ramp window, per rung — the statistic the FL-C4a ramp criterion
+    /// actually gates on (the whole-trace median is dominated by the
+    /// stationary tail and structurally cannot fail for ≤ 2 posted
+    /// values). `None` when no value change began inside the window (the
+    /// value held through the whole ramp — vacuous pass, reported as
+    /// such).
+    pub min_dwell_started_in_ramp: [Option<u64>; 4],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -340,41 +493,54 @@ enum LadderMode {
     Current,
     /// `C` applied raw.
     CorrectedRaw,
-    /// `C` snapped to powers of two first.
-    CorrectedQuantized,
+    /// `C` snapped to a power of two first.
+    Quantized(&'static str),
 }
 
 impl LadderMode {
-    fn name(self) -> &'static str {
+    fn name(self) -> String {
         match self {
-            LadderMode::Current => "current",
-            LadderMode::CorrectedRaw => "corrected-raw",
-            LadderMode::CorrectedQuantized => "corrected-quantized-pow2",
+            LadderMode::Current => "current".to_owned(),
+            LadderMode::CorrectedRaw => "corrected-raw".to_owned(),
+            LadderMode::Quantized(rule) => format!("corrected-quantized-pow2-{rule}"),
         }
     }
 }
 
+/// Registered dwell scenarios: `(label, mean_start, mean_end, median)`.
+/// Stationary rows cover the full §1.8 volume grid (v=0 exercises the
+/// degenerate mean; v=100 the `M_r` rail; v=500 the largest burn
+/// gradient); the ramp is the registered 50→200 over one window.
+const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
+    ("stationary-v0", 0.0, 0.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v5", 5.0, 5.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v50", 50.0, 50.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v100", 100.0, 100.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v200", 200.0, 200.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE_V5),
+    ("stationary-v50-m10z", 50.0, 50.0, 10 * FULL_REWARD_ZONE_V5),
+    ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE_V5),
+];
+
 #[allow(clippy::cast_precision_loss)]
 fn dwell_scenario(
-    label: &str,
+    scenario: &'static str,
     mean_start: f64,
     mean_end: f64,
     median: u64,
-    age_years: u64,
+    st: AgeState,
     mode: LadderMode,
     params: &EconomicParams,
 ) -> DwellResult {
     // σ, supply ratio, and the median are quasi-static on the measured
     // horizon (≈28 days): σ moves < 0.1 pp and the ratio ≈1% — orders below
     // the volume axis this scenario exercises. Held fixed per §1.8.
-    let height = age_years * BLOCKS_PER_YEAR;
-    let ag = projected_already_generated(height, params).expect("projected ag");
-    let base = base_block_reward(ag, params).expect("base reward");
-    let raw = articmine_ladder_raw(base, median, median);
+    let raw = articmine_ladder_raw(st.base_reward, median, median);
 
     let blocks: u64 = 20_000;
+    let ramp_len = VOLUME_WINDOW as u64;
     let mut rng = Rng(0x5EED_F1FE_ED1E_5EED);
-    let mut window: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+    let mut window: VecDeque<u64> = VecDeque::new();
     let mut sum: u64 = 0;
     for _ in 0..VOLUME_WINDOW {
         let n = rng.poisson(mean_start);
@@ -382,14 +548,18 @@ fn dwell_scenario(
         window.push_back(n);
     }
 
-    let mut runs: [Vec<u64>; 4] = [vec![], vec![], vec![], vec![]];
+    let current_fees = rounded(raw);
+    // Per rung: (value, run_length, run_start_block) plus accumulators.
+    let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
+    let mut values: [BTreeSet<u64>; 4] = Default::default();
     let mut current: [u64; 4] = [0; 4];
     let mut run_len: [u64; 4] = [0; 4];
+    let mut run_start: [u64; 4] = [0; 4];
     for t in 0..blocks {
-        let frac = if mean_end == mean_start {
+        let frac = if (mean_end - mean_start).abs() < f64::EPSILON {
             0.0
         } else {
-            (t as f64 / VOLUME_WINDOW as f64).min(1.0)
+            (t as f64 / ramp_len as f64).min(1.0)
         };
         let mean = mean_start + (mean_end - mean_start) * frac;
         let n = rng.poisson(mean);
@@ -399,58 +569,85 @@ fn dwell_scenario(
         let v_avg = sum / VOLUME_WINDOW as u64;
 
         let fees = match mode {
-            LadderMode::Current => rounded(raw),
-            LadderMode::CorrectedRaw => {
-                let (_, _, _, c) = correction_factor(v_avg, ag, height, params);
-                corrected_ladder(raw, c)
-            }
-            LadderMode::CorrectedQuantized => {
-                let (_, _, _, c) = correction_factor(v_avg, ag, height, params);
-                corrected_ladder(raw, quantize_c_pow2(c))
+            LadderMode::Current => current_fees,
+            LadderMode::CorrectedRaw => corrected_ladder(
+                raw,
+                correction_factor(v_avg, st.ag, st.height, params).c_scaled,
+            ),
+            LadderMode::Quantized(rule_name) => {
+                let rule = if rule_name == "nearest" {
+                    SnapRule::Nearest
+                } else {
+                    SnapRule::Ceiling
+                };
+                let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+                corrected_ladder(raw, quantize_c_pow2(c, rule))
             }
         };
         for i in 0..4 {
+            values[i].insert(fees[i]);
             if fees[i] == current[i] {
                 run_len[i] += 1;
             } else {
                 if run_len[i] > 0 {
-                    runs[i].push(run_len[i]);
+                    runs[i].push((run_start[i], run_len[i]));
                 }
                 current[i] = fees[i];
                 run_len[i] = 1;
+                run_start[i] = t;
             }
         }
     }
     for i in 0..4 {
-        runs[i].push(run_len[i]);
+        runs[i].push((run_start[i], run_len[i]));
     }
+
+    let is_ramp = (mean_end - mean_start).abs() >= f64::EPSILON;
     let mut median_dwell = [0u64; 4];
     let mut distinct = [0u64; 4];
+    let mut changes = [0u64; 4];
+    let mut min_ramp: [Option<u64>; 4] = [None; 4];
     for i in 0..4 {
-        runs[i].sort_unstable();
-        median_dwell[i] = runs[i][runs[i].len() / 2];
-        distinct[i] = runs[i].len() as u64;
+        let mut lens: Vec<u64> = runs[i].iter().map(|&(_, l)| l).collect();
+        lens.sort_unstable();
+        median_dwell[i] = lens[lens.len() / 2];
+        distinct[i] = values[i].len() as u64;
+        changes[i] = (runs[i].len() - 1) as u64;
+        if is_ramp {
+            min_ramp[i] = runs[i]
+                .iter()
+                .filter(|&&(start, _)| start > 0 && start < ramp_len)
+                .map(|&(_, l)| l)
+                .min();
+        }
     }
     DwellResult {
-        scenario: label.to_owned(),
+        scenario,
         mode: mode.name(),
         blocks_measured: blocks,
         median_dwell,
-        distinct_values: distinct,
+        distinct_posted_values: distinct,
+        value_changes: changes,
+        min_dwell_started_in_ramp: min_ramp,
     }
 }
 
 // ---------------------------------------------------------------------------
-// Feedback map (FL-C7)
+// Feedback map (FL-C7) — on the SERVED (quantized) ladder
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct FeedbackResult {
     pub elasticity_milli: u64,
+    /// Demand scale `D`: the fixed point of the demand curve
+    /// (`v = D·(f/f_D)^(−ε)`). Swept so the fixed-point `C` crosses a pow2
+    /// boundary (`D = 230` sits at `C ≈ 2.0` at the reference state).
+    pub demand_scale: u64,
     pub start_volume: u64,
+    pub mode: String,
     /// Distinct standard-rung fee values over the final 3 000 blocks:
     /// 1 = converged to a fixed point; > 1 = residual cycle amplitude in
-    /// rounding steps.
+    /// quantization/rounding steps.
     pub distinct_fees_tail: u64,
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
@@ -458,9 +655,11 @@ pub struct FeedbackResult {
     pub fee_tail_max: u64,
 }
 
-/// Deterministic iteration of the fee↔volume map: demand
-/// `v = v0·(f/f_ref)^(−ε)` against the corrected standard rung, through the
-/// real 720-block trailing window and the real fee rounding.
+/// Deterministic iteration of the fee↔volume map through the real
+/// 720-block trailing window and the real fee rounding, under the ladder
+/// the mode serves. The raw-`C` rows measure the smooth map; the
+/// quantized rows measure the §5.2 served map, whose pow2 step is exactly
+/// the limit-cycle mechanism FL-C7 exists to exclude.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -468,24 +667,35 @@ pub struct FeedbackResult {
 )]
 fn feedback_scenario(
     eps_milli: u64,
+    demand_scale: u64,
     start_volume: u64,
-    age_years: u64,
+    st: AgeState,
     median: u64,
+    mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let height = age_years * BLOCKS_PER_YEAR;
-    let ag = projected_already_generated(height, params).expect("projected ag");
-    let base = base_block_reward(ag, params).expect("base reward");
-    let raw = articmine_ladder_raw(base, median, median);
-    let v0 = params.tx_volume_baseline;
-    let (_, _, _, c0) = correction_factor(v0, ag, height, params);
-    let f_ref = corrected_ladder(raw, c0)[1].max(1);
+    let raw = articmine_ladder_raw(st.base_reward, median, median);
+    let fee_at = |v_avg: u64| -> u64 {
+        let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+        let c = match mode {
+            LadderMode::Quantized(rule_name) => {
+                let rule = if rule_name == "nearest" {
+                    SnapRule::Nearest
+                } else {
+                    SnapRule::Ceiling
+                };
+                quantize_c_pow2(c, rule)
+            }
+            _ => c,
+        };
+        corrected_ladder(raw, c)[1].max(1)
+    };
+    let f_ref = fee_at(demand_scale);
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
     let tail: u64 = 3_000;
-    let mut window: std::collections::VecDeque<f64> =
-        std::collections::VecDeque::with_capacity(VOLUME_WINDOW);
+    let mut window: VecDeque<f64> = VecDeque::with_capacity(VOLUME_WINDOW);
     let mut sum = 0.0f64;
     for _ in 0..VOLUME_WINDOW {
         sum += start_volume as f64;
@@ -496,12 +706,11 @@ fn feedback_scenario(
     let mut fee_max = 0u64;
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
-    let mut tail_fees = std::collections::BTreeSet::new();
+    let mut tail_fees = BTreeSet::new();
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let (_, _, _, c) = correction_factor(v_avg, ag, height, params);
-        let fee = corrected_ladder(raw, c)[1].max(1);
-        let demand = (v0 as f64) * (fee as f64 / f_ref as f64).powf(-eps);
+        let fee = fee_at(v_avg);
+        let demand = (demand_scale as f64) * (fee as f64 / f_ref as f64).powf(-eps);
         let demand = demand.clamp(0.0, 10_000.0);
         sum += demand;
         window.push_back(demand);
@@ -516,7 +725,9 @@ fn feedback_scenario(
     }
     FeedbackResult {
         elasticity_milli: eps_milli,
+        demand_scale,
         start_volume,
+        mode: mode.name(),
         distinct_fees_tail: tail_fees.len() as u64,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
@@ -537,8 +748,9 @@ pub struct DegeneratePins {
     pub release_at_zero: u64,
     pub release_at_double_baseline: u64,
     /// Tail subsidy per block, and the supply headroom at tail entry
-    /// (`tail << esf`). The tail era is `headroom / tail` blocks long, then
-    /// the supply cap zeroes the validation reward permanently.
+    /// (`tail << esf`). The tail era is `2^esf` blocks by IDENTITY
+    /// (doc §FL-V7: `remaining/tail = 2^esf`), then the supply cap zeroes
+    /// the validation reward permanently.
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
@@ -555,8 +767,8 @@ pub struct DegeneratePins {
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
     let ratio_09 = params.money_supply / 10 * 9;
-    let esf = params.emission_speed_factor_per_minute - (params.daa_target_seconds / 60 - 1);
-    let tail = params.final_subsidy_per_minute * (params.daa_target_seconds / 60);
+    let esf = emission_speed_factor(params);
+    let tail = tail_subsidy_per_block(params).expect("tail subsidy");
     let s = params.money_supply;
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
     let val_reward = cap_reward_to_remaining_supply(est_reward, s, params);
@@ -583,7 +795,8 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         ),
         tail_subsidy_per_block: tail,
         headroom_at_tail_entry: tail << esf,
-        tail_era_blocks: (tail << esf) / tail,
+        // Identity, not a measurement: (tail << esf) / tail == 1 << esf.
+        tail_era_blocks: 1 << esf,
         estimate_reward_at_exhaustion: est_reward,
         validation_reward_at_exhaustion: val_reward,
         estimate_ladder_at_exhaustion: rounded(articmine_ladder_raw(
@@ -592,7 +805,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
         )),
         validation_ladder_at_exhaustion: rounded(articmine_ladder_raw(
-            val_reward,
+            val_reward.max(1),
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5,
         )),
@@ -601,11 +814,11 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
 }
 
 // ---------------------------------------------------------------------------
-// Driver
+// Driver (renders; the binary performs the writes)
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
-struct FeeLadderReport {
+pub struct FeeLadderReport {
     c_surface: Vec<CorrectionPoint>,
     c_reachable_min: u64,
     c_reachable_max: u64,
@@ -616,9 +829,8 @@ struct FeeLadderReport {
     degenerate: DegeneratePins,
 }
 
-/// Run the FL instrument and print the report (JSON → stdout, summary →
-/// stderr).
-pub fn run() {
+/// Run the FL instrument and build the report.
+pub fn report() -> FeeLadderReport {
     let params = EconomicParams::default();
     let zone = FULL_REWARD_ZONE_V5;
 
@@ -627,12 +839,19 @@ pub fn run() {
     let ratios: [u64; 3] = [SCALE / 10, SCALE / 2, SCALE * 9 / 10];
     let volumes: [u64; 6] = [0, 5, 50, 100, 200, 500];
 
+    let states: Vec<(u64, AgeState)> = ages.iter().map(|&a| (a, age_state(a, &params))).collect();
+    let state_of = |age: u64| -> AgeState {
+        states
+            .iter()
+            .find(|&&(a, _)| a == age)
+            .expect("age in grid")
+            .1
+    };
+
     let mut c_surface = Vec::new();
     let (mut c_min, mut c_max) = (u64::MAX, 0u64);
-    for &age in &ages {
-        let height = age * BLOCKS_PER_YEAR;
-        let proj = projected_already_generated(height, &params).expect("projected ag");
-        let proj_ratio = u128::from(proj) * u128::from(SCALE) / u128::from(params.money_supply);
+    for &(age, st) in &states {
+        let proj_ratio = u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply);
         for &ratio in &ratios {
             // §1.8 reachability: the release multiplier bounds the real
             // trajectory within [0.8, 1.3]× of the neutral one.
@@ -644,109 +863,105 @@ pub fn run() {
             )
             .expect("circ fits");
             for &v in &volumes {
-                let (m_r, b, sigma, c) = correction_factor(v, circ, height, &params);
+                let correction = correction_factor(v, circ, st.height, &params);
                 if reachable {
-                    c_min = c_min.min(c);
-                    c_max = c_max.max(c);
+                    c_min = c_min.min(correction.c_scaled);
+                    c_max = c_max.max(correction.c_scaled);
                 }
                 c_surface.push(CorrectionPoint {
                     age_years: age,
-                    height,
+                    height: st.height,
                     supply_ratio_millionths: ratio,
                     reachable,
                     tx_volume_avg: v,
-                    release_multiplier: m_r,
-                    burn_pct: b,
-                    emission_share_sigma: sigma,
-                    c_scaled: c,
+                    correction,
                 });
             }
         }
     }
+    // The grid ratios exclude genesis (proj ratio ≈ 0 there); fold the
+    // projected-trajectory states themselves in so the reachable extremes
+    // include genesis-quiet (C = 0.680) rather than only the ratio grid.
+    for &(_, st) in &states {
+        for &v in &volumes {
+            let c = correction_factor(v, st.ag, st.height, &params).c_scaled;
+            c_min = c_min.min(c);
+            c_max = c_max.max(c);
+        }
+    }
 
-    // x-characterization at the §1.8 medians (genesis-era reward; x is
-    // reward-independent, the reward only sets absolute fee levels).
-    let genesis_base = base_block_reward(0, &params).expect("genesis base");
+    let genesis = state_of(0);
     let x_ladder = vec![
-        x_ladder_row(genesis_base, zone, zone),
-        x_ladder_row(genesis_base, 3 * zone, 3 * zone),
-        x_ladder_row(genesis_base, 10 * zone, 10 * zone),
-        x_ladder_row(genesis_base, 50 * zone, 50 * zone),
+        x_ladder_row(genesis.base_reward, zone, zone),
+        x_ladder_row(genesis.base_reward, 3 * zone, 3 * zone),
+        x_ladder_row(genesis.base_reward, 10 * zone, 10 * zone),
+        x_ladder_row(genesis.base_reward, 50 * zone, 50 * zone),
         // Registered spot-check: short-term surge decoupled from long-term.
-        x_ladder_row(genesis_base, 50 * zone, zone),
+        x_ladder_row(genesis.base_reward, 50 * zone, zone),
     ];
 
     let rung_tables = vec![
-        rung_table("genesis-quiet", 0, 0, zone, &params),
-        rung_table("genesis-baseline", 0, 50, zone, &params),
-        rung_table("young-congested", 1, 200, zone, &params),
-        rung_table("mature-quiet", 12, 5, zone, &params),
-        rung_table("mature-congested", 12, 200, 3 * zone, &params),
-        rung_table("old-congested-wide", 30, 500, 10 * zone, &params),
+        rung_table("genesis-quiet", 0, 0, zone, genesis, &params),
+        rung_table("genesis-baseline", 0, 50, zone, genesis, &params),
+        rung_table("young-congested", 1, 200, zone, state_of(1), &params),
+        rung_table("mature-quiet", 12, 5, zone, state_of(12), &params),
+        rung_table("mature-congested", 12, 200, 3 * zone, state_of(12), &params),
+        rung_table(
+            "old-congested-wide",
+            30,
+            500,
+            10 * zone,
+            state_of(30),
+            &params,
+        ),
     ];
 
+    let st4 = state_of(4);
     let mut dwell = Vec::new();
     for mode in [
         LadderMode::Current,
         LadderMode::CorrectedRaw,
-        LadderMode::CorrectedQuantized,
+        LadderMode::Quantized("nearest"),
+        LadderMode::Quantized("ceil"),
     ] {
-        dwell.push(dwell_scenario(
-            "stationary-v5",
-            5.0,
-            5.0,
-            zone,
-            4,
-            mode,
-            &params,
-        ));
-        dwell.push(dwell_scenario(
-            "stationary-v50",
-            50.0,
-            50.0,
-            zone,
-            4,
-            mode,
-            &params,
-        ));
-        dwell.push(dwell_scenario(
-            "stationary-v200",
-            200.0,
-            200.0,
-            zone,
-            4,
-            mode,
-            &params,
-        ));
-        dwell.push(dwell_scenario(
-            "stationary-v50-m10z",
-            50.0,
-            50.0,
-            10 * zone,
-            4,
-            mode,
-            &params,
-        ));
-        dwell.push(dwell_scenario(
-            "ramp-v50-to-v200",
-            50.0,
-            200.0,
-            zone,
-            4,
-            mode,
-            &params,
-        ));
+        for &(label, m0, m1, median) in DWELL_SCENARIOS {
+            dwell.push(dwell_scenario(label, m0, m1, median, st4, mode, &params));
+        }
     }
 
     let mut feedback = Vec::new();
-    for eps in [0u64, 500, 1000, 2000, 3000] {
-        feedback.push(feedback_scenario(eps, 50, 4, zone, &params));
-        feedback.push(feedback_scenario(eps, 400, 4, zone, &params));
+    for mode in [LadderMode::CorrectedRaw, LadderMode::Quantized("ceil")] {
+        for eps in [0u64, 500, 1000, 2000, 3000] {
+            // Demand scales chosen so the fixed-point C crosses the pow2
+            // boundary (at age 4 the C(v) curve passes C = 2 near v ≈ 230).
+            for demand_scale in [50u64, 100, 230, 400] {
+                feedback.push(feedback_scenario(
+                    eps,
+                    demand_scale,
+                    demand_scale,
+                    st4,
+                    zone,
+                    mode,
+                    &params,
+                ));
+                // A displaced start probes convergence back to the fixed
+                // point, not just persistence at it.
+                feedback.push(feedback_scenario(
+                    eps,
+                    demand_scale,
+                    8 * demand_scale.min(1_250),
+                    st4,
+                    zone,
+                    mode,
+                    &params,
+                ));
+            }
+        }
     }
 
     let degenerate = degenerate_pins(&params);
 
-    let report = FeeLadderReport {
+    FeeLadderReport {
         c_surface,
         c_reachable_min: c_min,
         c_reachable_max: c_max,
@@ -755,58 +970,71 @@ pub fn run() {
         dwell,
         feedback,
         degenerate,
-    };
+    }
+}
 
-    eprintln!(
-        "fee-ladder: C over reachable grid = [{:.3}, {:.3}]",
-        ratio_f(c_min),
-        ratio_f(c_max)
+/// Render the human summary into `out` (the binary writes it to stderr).
+#[allow(clippy::cast_precision_loss)]
+pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
+    let f = |scaled: u64| scaled as f64 / SCALE as f64;
+    let _ = writeln!(
+        out,
+        "fee-ladder: C over reachable states = [{:.3}, {:.3}]",
+        f(r.c_reachable_min),
+        f(r.c_reachable_max)
     );
-    for t in &report.rung_tables {
-        eprintln!(
-            "fee-ladder: {} C={:.3} current={:?} corrected={:?} floor_accept={} floor_bounce={}",
+    for t in &r.rung_tables {
+        let _ = writeln!(
+            out,
+            "fee-ladder: {} C={:.3} current={:?} corrected_raw={:?} served_ceil={:?} floor_accept={} floor_bounce={}",
             t.label,
-            ratio_f(t.c_scaled),
+            f(t.c_scaled),
             t.current,
-            t.corrected,
+            t.corrected_raw_c,
+            t.served_ceil_cq,
             t.relay_floor_accept,
             t.corrected_floor_below_relay
         );
     }
-    for d in &report.dwell {
-        eprintln!(
-            "fee-ladder: dwell {} [{}] median={:?} distinct={:?}",
-            d.scenario, d.mode, d.median_dwell, d.distinct_values
+    for d in &r.dwell {
+        let _ = writeln!(
+            out,
+            "fee-ladder: dwell {} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?}",
+            d.scenario,
+            d.mode,
+            d.median_dwell,
+            d.distinct_posted_values,
+            d.value_changes,
+            d.min_dwell_started_in_ramp
         );
     }
-    for f in &report.feedback {
-        eprintln!(
-            "fee-ladder: feedback eps={} start_v={} distinct_tail={} v_tail=[{},{}] fee_tail=[{},{}]",
-            f.elasticity_milli,
-            f.start_volume,
-            f.distinct_fees_tail,
-            f.v_avg_tail_min,
-            f.v_avg_tail_max,
-            f.fee_tail_min,
-            f.fee_tail_max
+    for fb in &r.feedback {
+        let _ = writeln!(
+            out,
+            "fee-ladder: feedback [{}] eps={} D={} start={} distinct_tail={} v_tail=[{},{}] fee_tail=[{},{}]",
+            fb.mode,
+            fb.elasticity_milli,
+            fb.demand_scale,
+            fb.start_volume,
+            fb.distinct_fees_tail,
+            fb.v_avg_tail_min,
+            fb.v_avg_tail_max,
+            fb.fee_tail_min,
+            fb.fee_tail_max
         );
     }
-    eprintln!(
+    let _ = writeln!(
+        out,
         "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={}",
-        report.degenerate.tail_era_blocks,
-        report.degenerate.estimate_reward_at_exhaustion,
-        report.degenerate.validation_reward_at_exhaustion
-    );
-
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).expect("report serializes")
+        r.degenerate.tail_era_blocks,
+        r.degenerate.estimate_reward_at_exhaustion,
+        r.degenerate.validation_reward_at_exhaustion
     );
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn ratio_f(scaled: u64) -> f64 {
-    scaled as f64 / SCALE as f64
+/// Render the machine-readable report (the binary writes it to stdout).
+pub fn render_json(r: &FeeLadderReport) -> String {
+    serde_json::to_string_pretty(r).expect("report serializes")
 }
 
 #[cfg(test)]
@@ -857,38 +1085,6 @@ mod tests {
         assert_eq!(relay_floor(10 * coin, 100_000), 317);
     }
 
-    /// FL-V10's red companion, and conjunct (b) of the census-R2 reopen
-    /// criterion (`FEE_LADDER_DERIVATION.md` §0.1): the estimate leg (the
-    /// uncapped `base_block_reward`, what the 5-arg C++ path serves) and
-    /// the validation leg (the same reward through
-    /// `cap_reward_to_remaining_supply`, what the 6-arg path pays) must
-    /// agree at the terminal state — two descriptions of one chain.
-    ///
-    /// RED TODAY under *either* reading of the terminal policy: the legs
-    /// disagree with each other (tail vs remaining/zero), so the assertion
-    /// presumes neither side of FL-R12′. It greens with whichever signed
-    /// ruling's implementation lands, at which point it graduates into
-    /// `shekyl-economics` beside the wrong-oracle exhibit
-    /// `base_block_reward_tail_floor` (FL-V10). Ignored until then so an
-    /// unsigned design branch does not carry a failing gate.
-    #[test]
-    #[ignore = "FL-R12' (terminal emission ruling) unsigned: the two legs are two different numbers (FL-V8); un-ignore with the signed ruling's fix"]
-    fn terminal_reward_legs_agree() {
-        let params = EconomicParams::default();
-        let tail = params.final_subsidy_per_minute * (params.daa_target_seconds / 60);
-        let s = params.money_supply;
-        // The first block where divergence begins (remaining < tail) and
-        // exhaustion itself.
-        for ag in [s - tail + 1, s] {
-            let estimate_leg = base_block_reward(ag, &params).expect("estimate leg");
-            let validation_leg = cap_reward_to_remaining_supply(estimate_leg, ag, &params);
-            assert_eq!(
-                estimate_leg, validation_leg,
-                "estimate and validation legs disagree at already_generated={ag}"
-            );
-        }
-    }
-
     #[test]
     fn round_money_up_two_places() {
         assert_eq!(round_money_up_2(0), 0);
@@ -897,5 +1093,28 @@ mod tests {
         assert_eq!(round_money_up_2(27_810), 28_000);
         assert_eq!(round_money_up_2(13_653_333), 14_000_000);
         assert_eq!(round_money_up_2(68_000), 68_000);
+    }
+
+    /// The exact-integer snap rules against hand-computed anchors,
+    /// including exact powers of two (must not round up) and the log-space
+    /// midpoint (nearest rounds up at ≥ √2·2^k).
+    #[test]
+    fn quantize_snap_rules() {
+        // Exact powers stay put under both rules.
+        for c in [500_000u64, 1_000_000, 2_000_000, 4_000_000] {
+            assert_eq!(quantize_c_pow2(c, SnapRule::Ceiling), c);
+            assert_eq!(quantize_c_pow2(c, SnapRule::Nearest), c);
+        }
+        // Ceiling always rounds up off-power.
+        assert_eq!(quantize_c_pow2(680_000, SnapRule::Ceiling), 1_000_000);
+        assert_eq!(quantize_c_pow2(1_130_000, SnapRule::Ceiling), 2_000_000);
+        assert_eq!(quantize_c_pow2(5_600_000, SnapRule::Ceiling), 8_000_000);
+        assert_eq!(quantize_c_pow2(12_917_390, SnapRule::Ceiling), 16_000_000);
+        // Nearest: √2 ≈ 1.41421356 is the up/down midpoint.
+        assert_eq!(quantize_c_pow2(680_000, SnapRule::Nearest), 500_000);
+        assert_eq!(quantize_c_pow2(1_130_000, SnapRule::Nearest), 1_000_000);
+        assert_eq!(quantize_c_pow2(1_414_213, SnapRule::Nearest), 1_000_000);
+        assert_eq!(quantize_c_pow2(1_414_214, SnapRule::Nearest), 2_000_000);
+        assert_eq!(quantize_c_pow2(5_600_000, SnapRule::Nearest), 4_000_000);
     }
 }

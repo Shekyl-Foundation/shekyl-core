@@ -1,9 +1,9 @@
 # FL Round Record — Fee Ladder Derivation
 
-> **STATUS: OPEN, HELD AT DESIGN-DOC STAGE.** All substance lives in
-> [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md); this file is the
-> thin round-state record only (rule 95 — one owner per claim, no
-> restatement). Nothing lands in consensus until that doc's §8 is signed.
+**Status:** OPEN — held at design-doc stage. All substance lives in
+[`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md); this file is the
+thin round-state record only (rule 95 — one owner per claim, no
+restatement). Nothing lands in consensus until that doc's §8 is signed.
 
 Family: `FL-*` (index row: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)).
 Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
@@ -14,12 +14,13 @@ Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
 
 | Commit | What |
 | --- | --- |
-| fb02e4b7c | Pre-registration: FL-C1…C8 criteria + FL-V1…V6 verifications, committed **before the instrument existed** (rule-11 register; the ordering is the method) |
+| fb02e4b7c | Pre-registration: FL-C1…C8 criteria + FL-V1…V6 verifications, committed **before the instrument existed** (the brief's pre-registration mandate; the ordering is the method) |
 | 8a55415b5 | Instrument + derivation + unsigned §8 (3-rung state-computed proposal) |
 | fc6018803 | Adversarial-review corrections (12.5× not 6.25×; ceil quantization, register untouched + deviation disclosed; unbuffered clamp) |
 | 1a7390674 | FL-V7 minted (perpetual-tail contradiction, escalated at steering) |
 | a8a01b950 | FL-V7 first restatement (superseded at review round 2 — see below) |
-| (review round 2) | dev merge to a566a466; FL-V7 re-restated per maintainer ruling; FL-V8…V11 minted; FL-R12′/FL-R13/FL-D5/W7; red test `terminal_reward_legs_agree` observed red; this file |
+| 99aefbc24 + b05ddbaf6 (+1) | Review round 2: dev merge to a566a466; FL-V7 re-restated per maintainer ruling; FL-V8…V11 minted; FL-R12′/FL-R13/FL-D5/W7; red test observed red; this file (+ census-queue routing note) |
+| (review round 3) | dev merge to c1010b70a; self-review findings fixed (banners, measurement integrity re-run, drift pairs, conventions — §Review round 3); red test re-homed to `emission.rs` |
 
 ## Review rounds
 
@@ -53,7 +54,7 @@ Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
   and `:35`'s formula are faithful; the instrument of refutation is the
   code (FL-V8), not a doc-vs-doc reading; 2²¹ labeled an identity.
 - **F-1 → FL-V8** (opposite-policy clamps, both live; verified at
-  `blockchain.cpp:6410-6420` / `cryptonote_basic_impl.cpp:169`).
+  `blockchain.cpp:6410-6420` / `cryptonote_basic_impl.cpp:168`).
 - **F-2 → FL-V9** (cap gated on `SHEKYL_TX_VOLUME_BASELINE > 0`,
   `cryptonote_basic_impl.cpp:153`). No behavior edit on an unsigned
   branch — deliberate; ships with FL-R12′'s implementation.
@@ -68,17 +69,61 @@ Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
   through registered FL-C2, with the FCMP++ metadata-share point quoted,
   and a named reopen).
 
+## Review round 3 (self-review before push, 2026-09-03)
+
+Push authorized for review (no PR yet); dev merged to c1010b70a. A
+high-effort `/code-review` before pushing returned 10 consolidated
+findings; all fixed on-branch, the load-bearing ones being:
+
+- **CI**: both new docs' status banners were blockquoted and failed the
+  rule-95 banner gate — reformatted; gate re-run green (165 files).
+- **Measurement integrity**: the §4.4 dwell table carried stale
+  round-to-nearest output as the adopted-rule row; "distinct values" was
+  a churn count (~84× overstated — the true raw-`C` wire alphabet is 2–3
+  values flickering every 3–6 blocks); the ramp gate's whole-trace median
+  structurally could not fail (replaced by a min-dwell-of-runs-starting-
+  in-ramp statistic); the FL-C7 feedback verdict was measured on the
+  raw-`C` map with the fixed point pinned away from the pow2 boundary.
+  All re-measured: both snap rules are now instrument modes (the
+  register-vs-adopted audit is reproducible from the branch), and
+  feedback runs on the served quantized map across demand scales that
+  cross the boundary — **all 80 cells converge**. New result: on the
+  reachable grid the ceiling rule's `C_q = 1` in every quiet state, so
+  the served ladder equals today's at launch and the FL-C6 clamp is a
+  belt, not a live fix (§4.2/§5.4).
+- **Drift pairs**: `terminal_reward_legs_agree` re-homed into
+  `shekyl-economics` `emission.rs` tests with a projection-leg assertion
+  (conjunct (b) of the census-R2 criterion now names a function the test
+  calls); `emission_speed_factor`/`tail_subsidy_per_block` made `pub` and
+  consumed instead of local re-derivations; `TX_VOLUME_WINDOW` codegen'd
+  from `config/economics_params.json`; the zone constant read from
+  `shekyl-wire`'s owner copy; float `log2` quantization replaced with
+  exact integer snap (KAT'd, both rules).
+- **Convention**: the instrument now renders and `main.rs` writes
+  (stage2 precedent); the phantom "rule 11" citations are re-anchored to
+  the brief's pre-registration mandate (no `.cursor/rules/11-*` exists);
+  `cryptonote_basic_impl.cpp` cap refs corrected `:169`→`:168`; FL-R/FL-D
+  series enumerated in the index family cell.
+
+Deferred from this round's review, each with the blocker named: RNG
+unification (a shared in-crate `SplitMix64` home is an instrument-side
+refactor with no behavioral stake — rides the FL-R12′ implementation PR
+or the instrument's retirement, whichever first) and a shared
+`round_money_up` owner (the wallet copy is private to `shekyl-engine-core`
+and a sim→engine-core dependency is the wrong direction; the daemon-side
+Rust rounding gets a real owner in the §7 implementation, which is where
+one home for all three copies is decided).
+
 ## Decisions pending (all with the maintainer)
 
 1. **FL-R12′** — terminal emission-state ruling (lean recorded: cap;
    unsigned).
 2. **FL-R13 / FL-D5** — fee-floor basis round (genesis-blocking if cap).
-3. **Push/PR authorization** — **HELD** per review round 2; branch stays
-   local until lifted.
+3. **PR** — branch is pushed for review (review round 3); **PR remains
+   unopened** per the maintainer's instruction.
 4. Census-R2: **deferred per review-round-2 ruling** — resumes on
-   FL-R12′ signature (red-test conjunct already discharged). Because this
-   branch is held and unpushed, the deferral + resume criteria were also
-   routed by the steering lane to the consensus lane (C2-R0 phase 2,
-   which edits `CONSENSUS_RULE_CENSUS.md` §10) so the queue itself
-   carries them — a deferral whose conditions are invisible to a census
-   reader would read as a queue item still waiting its turn.
+   FL-R12′ signature (red-test conjunct already discharged). The deferral
+   + resume criteria were also routed by the steering lane to the
+   consensus lane (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md`
+   §10) so the queue itself carries them; with the branch now pushed the
+   criteria are additionally reachable at this file.

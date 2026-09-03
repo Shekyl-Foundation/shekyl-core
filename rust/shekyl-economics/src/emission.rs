@@ -29,7 +29,7 @@ pub enum EmissionError {
 /// shift amount directly. Keeping the value in `u64` avoids a gratuitous
 /// narrowing cast.
 #[inline]
-fn emission_speed_factor(params: &EconomicParams) -> u64 {
+pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
     debug_assert_eq!(
         params.daa_target_seconds % 60,
         0,
@@ -40,8 +40,12 @@ fn emission_speed_factor(params: &EconomicParams) -> u64 {
 }
 
 /// Tail (minimum) subsidy per block in atomic units.
+///
+/// `pub` (with [`emission_speed_factor`]) since the FL round: the fee-ladder
+/// instrument's degenerate pins consume both, and a local re-derivation
+/// there was a third undeclared drift pair (FL round review round 3).
 #[inline]
-fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
+pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
     params
         .final_subsidy_per_minute
         .checked_mul(params.daa_target_seconds / 60)
@@ -271,6 +275,53 @@ mod tests {
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
         let near_max = p.money_supply - ((2 << 20) + 1);
         assert_eq!(base_block_reward(near_max, &p).unwrap(), tail);
+    }
+
+    /// FL-V10's red companion, and conjunct (b) of the census-R2 reopen
+    /// criterion (`docs/design/FEE_LADDER_DERIVATION.md` §0.1): the
+    /// estimate leg (uncapped [`base_block_reward`], the C++ 5-arg path),
+    /// the projection leg ([`projected_already_generated`] →
+    /// [`base_block_reward`], which saturates clean past exhaustion), and
+    /// the validation leg (the same reward through
+    /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
+    /// the terminal state — they are descriptions of one chain.
+    ///
+    /// RED TODAY under *either* reading of the terminal policy: the legs
+    /// disagree with each other (tail vs remaining/zero), so the
+    /// assertion presumes neither side of FL-R12′. Un-ignore with the
+    /// signed ruling's implementation. Sits beside
+    /// `base_block_reward_tail_floor` deliberately: that test pins the
+    /// pre-cap floor in a state where the capped composition pays ~1/286th
+    /// of it, and this is the missing composition oracle.
+    #[test]
+    #[ignore = "FL-R12' (terminal emission ruling) unsigned: the legs are two different numbers (FL-V8); un-ignore with the signed ruling's fix"]
+    fn terminal_reward_legs_agree() {
+        let p = EconomicParams::default();
+        let tail = tail_subsidy_per_block(&p).unwrap();
+        let s = p.money_supply;
+
+        // Estimate vs validation at the first diverging block
+        // (`remaining < tail`) and at exhaustion itself.
+        for ag in [s - tail + 1, s] {
+            let estimate_leg = base_block_reward(ag, &p).unwrap();
+            let validation_leg = cap_reward_to_remaining_supply(estimate_leg, ag, &p);
+            assert_eq!(
+                estimate_leg, validation_leg,
+                "estimate and validation legs disagree at already_generated={ag}"
+            );
+        }
+
+        // The projection leg — the function the census-R2 reopen
+        // criterion names. Past the exhaustion height it saturates to
+        // `money_supply` and reports the tail while validation pays 0.
+        let past_exhaustion = 19_200_000; // > the 2^21-identity exhaustion block (~19_158_412)
+        let ag = projected_already_generated(past_exhaustion, &p).unwrap();
+        let projection_leg = base_block_reward(ag, &p).unwrap();
+        let validation_leg = cap_reward_to_remaining_supply(projection_leg, ag, &p);
+        assert_eq!(
+            projection_leg, validation_leg,
+            "projection and validation legs disagree past exhaustion (height {past_exhaustion})"
+        );
     }
 
     #[test]

@@ -55,9 +55,15 @@ fn main() {
     }
 
     // FL instrument (`docs/design/FEE_LADDER_DERIVATION.md` §1.9): the fee
-    // ladder derivation round's registered measurement set.
+    // ladder derivation round's registered measurement set. The module
+    // renders; this binary target performs the writes (stage2 precedent —
+    // JSON to stdout, summary to stderr).
     if std::env::args().any(|a| a == "--fee-ladder") {
-        fee_ladder::run();
+        let report = fee_ladder::report();
+        let mut summary = String::new();
+        fee_ladder::render_summary(&report, &mut summary);
+        eprint!("{summary}");
+        println!("{}", fee_ladder::render_json(&report));
         return;
     }
 

@@ -60,7 +60,8 @@ fn main() {
          pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n\
          pub const GENERATED_STAKER_EMISSION_SHARE: u64 = {staker_emission_share};\n\
          pub const GENERATED_STAKER_EMISSION_DECAY: u64 = {staker_emission_decay};\n\
-         pub const GENERATED_BLOCKS_PER_YEAR: u64 = {blocks_per_year};\n",
+         pub const GENERATED_BLOCKS_PER_YEAR: u64 = {blocks_per_year};\n\
+         pub const GENERATED_TX_VOLUME_WINDOW: u64 = {tx_volume_window};\n",
         scale = get_u64(&map, "shekyl_fixed_point_scale"),
         release_min = get_u64(&map, "shekyl_release_min"),
         release_max = get_u64(&map, "shekyl_release_max"),
@@ -77,6 +78,7 @@ fn main() {
         staker_emission_share = get_u64(&map, "shekyl_staker_emission_share"),
         staker_emission_decay = get_u64(&map, "shekyl_staker_emission_decay"),
         blocks_per_year = get_u64(&map, "shekyl_blocks_per_year"),
+        tx_volume_window = get_u64(&map, "shekyl_tx_volume_window"),
     );
 
     fs::write(&out_file, output).expect("failed writing generated Rust economics params");
