@@ -357,9 +357,8 @@ closed.
 | **DIVERGENT** | on the register below | **regression only** |
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
-**As of 2026-09-02 the CHECKED-CONFORMANT set holds forty-six rows** — the four
-store-enforced promotions, the twenty-six §4.J rows, and the sixteen §4.F rows
-(P0f slices 1–5). **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
+**As of 2026-09-02 the CHECKED-CONFORMANT set holds fifty-nine rows** — the
+store-enforced 4, §4.J's 26, §4.F's 16, and §4.H's 13 (P0f slices 1–6). **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
 was reviewed and **failed closed to UNREVIEWED** — one of its clauses names
 behavior that is not wired, so it can be neither conformant nor divergent.
 Every row outside this register remains UNREVIEWED by construction, so the
@@ -492,6 +491,30 @@ operand derivations (`get_tx_volume_avg` `:2170`,
 | CEN-F20 | **CHECKED-CONFORMANT** | `get_tx_volume_avg` (`:2170`) computes the integer mean of `tx_hashes.size()` over the prior `SHEKYL_TX_VOLUME_WINDOW` blocks exactly as the rule states, with the short-chain clamp arms read. **REWRITE-NOTE:** this is a **second implementation** — `shekyl-economics/src/activity.rs` maintains the same 720-block rolling mean; the rewrite collapses to one, and the census's own wart (window constant not in `config/`) rides along |
 | CEN-F21 | **CHECKED-CONFORMANT** | Pinned end-to-end: `HF_VERSION_SHEKYL_NG = 1` (`cryptonote_config.h:289`) → the sole mainnet fork entry `{version 1, height 1}` (`hardforks.cpp:35–37`) → `get_earliest_ideal_height_for_version` returns **1** (`hardfork.cpp:383–394`) → consumed at `:1796` |
 
+##### P0f slice 6 — §4.H, transaction non-input consensus (13 rows; H5 was slice 1)
+
+Reviewed at **`4b9807c5e`** (2026-09-02). Walks: **W-TO** =
+`Blockchain::check_tx_outputs` (`blockchain.cpp:3403–3465`; the census's
+3348–3389 drifted +~70 under C2-R3, same as H5's site 2), **W-VU** =
+`tx_verification_utils.cpp:55–240`, **W-FU** =
+`cryptonote_format_utils.cpp:800–1000`, **W-CT** = `ct_semantics.cpp:206–401`.
+
+| Row | State | Evidence (all at `4b9807c5e`) |
+| --- | --- | --- |
+| CEN-H2 | **CHECKED-CONFORMANT** | W-VU. `min_tx_version`/`max_tx_version` both collapse to 3 at HF1 given `HF_VERSION_SHEKYL_NG = 1` (expressions read at `:55–56`, constant pinned in slice 5); out-of-range rejects |
+| CEN-H6 | **CHECKED-CONFORMANT** | W-FU. All five mixing bans reject: serve-credit×anything, >1 bond post, >1 emission, emission×bond, bond×serve (`:802–833`) |
+| CEN-H7 | **CHECKED-CONFORMANT** | W-FU. `shekyl_check_output_keys` batch check, rc-checked reject (`:859–864`); empty-vout early-true is vacuous, not a skip |
+| CEN-H12 | **CHECKED-CONFORMANT** | W-FU. `txout_to_tagged_key` asserted per output on the always-taken `hf_version >= SHEKYL_NG` arm (`:975–984`). **REWRITE-NOTE:** the VIEW_TAGS-era `else` arms below it are dead from genesis — rule-60 deletion residue for R5; the rewrite carries only the one live arm |
+| CEN-H13 | **CHECKED-CONFORMANT** | W-TO. `tx.version < 3` rejects (`:3407`). **REWRITE-NOTE:** this is the version rule's *third* site (with H2's table and its other site) — census §6 finding 6's two-site-drift class; the rewrite collapses to one |
+| CEN-H14 | **CHECKED-CONFORMANT** | W-TO. Zero-amount ban with the emission exemption keyed on `classify_archival_tx(tx.vin).kind` — **the same classifier `check_tx_inputs` uses**, with the in-code note explaining why a bare vin count would leak the ban on malformed pairings. **REWRITE-NOTE (positive):** single-classifier-both-sites is the anti-drift structure to keep |
+| CEN-H15 | **CHECKED-CONFORMANT** | W-TO `:3433–3439` + W-VU's per-shape `rv.type` checks — Null or FcmpPlusPlusPqc only, everything else rejects |
+| CEN-H16 | **CHECKED-CONFORMANT** | W-TO. `unlock_time >= 500 000 000` sentinel rejects (`:3441–3447`) — the consensus leg of the unlock_time triple-divergence, exactly as the census composition finding describes |
+| CEN-H17 | **CHECKED-CONFORMANT** | W-TO `:3458+` → the same three-way-discriminated `shekyl_check_commitment_masks` verified under CEN-F10 |
+| CEN-H18 | **CHECKED-CONFORMANT** | W-CT. Cleartext balance **single-sourced in Rust** (`shekyl-ct-balance::verify_ct_balance`), rc-checked reject (`:222–231`), then BP+ verification |
+| CEN-H20 | **CHECKED-CONFORMANT** | W-VU `:113–131` (no pqc_auths / no RCT material / type gate) + W-CT `:372+` + the connect-side re-check read under slice 4's W-SC (`blockchain.cpp:3724–3760`) — all three legs reject |
+| CEN-H21 | **CHECKED-CONFORMANT** | W-VU `:132–148` (pqc_auths == vin count, pseudoOuts == spend count, type) + `ct::verCtSemanticsBondPost` → the shared `verArchivalCtBalanceAndRange` with `shekyl_archival_verify_bond_post_ct_balance` rc-checked (W-CT `:262–309`) |
+| CEN-H22 | **CHECKED-CONFORMANT** | W-VU `:149–181` (checked reward sum, overflow reject, pqc_auths/pseudoOuts/type) + the same shared W-CT tail for the emission arm |
+
 **Examined and excluded:** **CEN-L12** — its notes record that the spec's
 `staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
 is **claim-era and retired**, so the *live* spec and the code agree. A retired
@@ -601,7 +624,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
 | **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
-| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **46 rows CHECKED-CONFORMANT** (store-enforced 4 + §4.J 26 + §4.F 16); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–5, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
+| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **59 rows CHECKED-CONFORMANT** (store 4 + §4.J 26 + §4.F 16 + §4.H 13); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–6, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
@@ -620,6 +643,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | **DRS-P0f slice 6 — all 13 remaining §4.H rows CHECKED-CONFORMANT** at `4b9807c5e`. CT balance and output-key checks confirmed Rust-single-sourced with discriminated verdicts; H14's emission exemption confirmed to share one classifier with `check_tx_inputs` (anti-drift structure worth keeping). REWRITE-NOTEs: H12's dead VIEW_TAGS arms (R5 residue); H13 as the version rule's third site (collapse to one) | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 5 — all 16 §4.F rows CHECKED-CONFORMANT** at `4b9807c5e`. Economics arithmetic confirmed Rust-canonical ("nothing is computed here" holds as read; 81-vector KAT both languages); F18's exact-pay verified in both directions; F21 pinned constant→table→function→caller. REWRITE-NOTEs: F4's load-bearing genesis exemption + anti-spoof structure; F19's tautology hazard should become structural in the rewrite; F20's duplicated 720-mean collapses to one implementation | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 4 — all 26 §4.J rows CHECKED-CONFORMANT** at `4b9807c5e`, via three end-to-end branch walks (W-SC / W-BP / W-EM) with every FFI verdict checked and W-SC's predicate sequence KAT-pinned on both legs. Three REWRITE-NOTEs recorded (assign_epoch cutover reopen; drop-arm set-difference in the marshal; skip_fcmp_verify's embargo-load-bearing cache) plus the section-level note that the C++/Rust mirror is interim structure the rewrite retires | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 3 — the archival-journal family; all six reviewable store-enforced rows now reviewed.** **CEN-L7 → CHECKED-CONFORMANT** (the three bond-fold connect arms return their Rust verdict into one checked site, `apply_archival_bond_record_update`, so `return rc` is correct rather than a discarded verdict). **CEN-L9 → CHECKED-CONFORMANT** (every named fatality present; bonded-underflow checked twice, per-P and global). **CEN-L8 → failed closed to UNREVIEWED**: two clauses verify, but its settlement `(passes, issued)` clause names behavior that does not run — `set_archival_settlement` has **no production caller**, a hazard the tree itself flags at `db_lmdb.cpp:7649` — and **SO-D7 places that writer in the slash scheduler's pass, not epoch close**, so the row's wording is a **census question routed to R8**, not a conformance verdict | §5.4.1 |

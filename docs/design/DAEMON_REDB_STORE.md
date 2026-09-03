@@ -39,15 +39,15 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > divergence*, which means **unreviewed**, not conformant, because the exception
 > register is explicitly incomplete. Three states: CHECKED-CONFORMANT (oracle),
 > DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
-> the checked set holds **forty-six rows as of 2026-09-02** (store-enforced 4 + §4.J 26 + §4.F 16), promoted by **DRS-P0f** (the conformance register; *not* P0d, which is Digest v0); everything else is UNREVIEWED. This invalidates the unhedged
+> the checked set holds **fifty-nine rows as of 2026-09-02** (store 4 + §4.J 26 + §4.F 16 + §4.H 13), promoted by **DRS-P0f** (the conformance register; *not* P0d, which is Digest v0); everything else is UNREVIEWED. This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
 > clause is propagated into A2 / D11 / E2 — the digest is an oracle only where a
 > rule is **both** ratified **and** carries an **affirmative conformance record**
 > — absence of a recorded divergence means *unreviewed*, not conformant, and the
-> checked set holds **forty-six rows as of 2026-09-02** (store-enforced 4 +
-> §4.J 26 + §4.F 16 — via **DRS-P0f**), so outside those the digest is still a
+> checked set holds **fifty-nine rows as of 2026-09-02** (store 4 + §4.J 26 +
+> §4.F 16 + §4.H 13 — via **DRS-P0f**), so outside those the digest is still a
 > *regression* instrument (**CSR-3a**; register seeded
 > with CEN-L11)) and
 > **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
@@ -161,7 +161,7 @@ engine swap without A1–A3.
 | **DRS-D8** | Schema **redb-native** at engine swap; **divergence register** with **RECORD-AND-SPECIFY** default (inverted 2026-09-01 by the countermand; was FIX-IN-CPP-FIRST). | §6.4. |
 | **DRS-D9** | Consensus store uses the **strictest practical durability** (full fsync / equivalent per block commit). | Steady-state commits are **block-cadence network-bound**; write set finishes in ms against a budget measured in minutes. A 10× engine difference is invisible; **strict fsync has no measurable steady-state cost** — security decision with no efficiency reopen (§5.2). Not inherited from LeafStore silence. |
 | **DRS-D10** | **Reconstructible derived state is mandatory for D2-closed genesis.** All non-block-corpus tables must be rebuildable by replaying local blocks through `apply_block`. Under D2-reopen, still **strongly preferred** and required before any later redb cutover. | Longevity + security recovery (E-6). Soft “preferred” language removed for the redb path — without this, format migration and crash recovery re-inherit debt. |
-| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set holds **46 rows** as of 2026-09-02 (store-enforced 4 + §4.J 26 + §4.F 16) — **DRS-P0f** populates it per row (P0d is Digest v0 and cannot). |
+| **DRS-D11** | **Logical state digest** is a first-class artifact, built **against LMDB** in P0/C (E-1). | Oracle for DRS-C; input definition for DRS-D8; harness exercised before redb. **Scope (CSR-3 / CSR-3a):** oracle only where **both** hold — ratified on record **and** an **affirmative conformance record** exists. Three states: CHECKED-CONFORMANT (oracle), DIVERGENT (register), UNREVIEWED (**default**); the latter two are **regression** instruments. The checked set holds **59 rows** as of 2026-09-02 (store 4 + §4.J 26 + §4.F 16 + §4.H 13) — **DRS-P0f** populates it per row (P0d is Digest v0 and cannot). |
 
 ### 1.1 Schedule honesty
 
@@ -444,7 +444,7 @@ replay (E-6).
 | Phase | Digest role |
 | --- | --- |
 | **DRS-P0 / DRS-C** | Build digest **against LMDB**. Oracle for decomposition: byte-identical before/after each extraction. Discovers “canonical logical state” definition DRS-D8 re-encodes. |
-| **DRS-E2** | Same harness already exercised. **The acceptance condition is per conformance state (CSR-3a), not blanket digest identity** — changing only the *label* on a match would have left the unsafe gate in place, since blanket identity requires redb to reproduce CEN-L11's silent omission in order to pass. **CHECKED-CONFORMANT:** digest identity **required**, and a match *is* correctness evidence. **DIVERGENT:** identity is **not** the pass condition — the row needs an explicitly reviewed expected-divergence (or a replacement KAT/oracle asserting the corrected behavior); reproducing the defect **fails**. **UNREVIEWED (the default):** identity may be *observed* as regression signal but grants **no** correctness acceptance, and no row may be promoted out of this state without a **DRS-P0f** record. As of 2026-09-02 **46 rows are CHECKED-CONFORMANT** (store-enforced 4 + §4.J 26 + §4.F 16) and every other row is UNREVIEWED, so E2 gates on correctness for those and on regression everywhere else — with §7.1.1 still barring E2 from acting on CEN-L10 for the archival surface until archival digest coverage exists. |
+| **DRS-E2** | Same harness already exercised. **The acceptance condition is per conformance state (CSR-3a), not blanket digest identity** — changing only the *label* on a match would have left the unsafe gate in place, since blanket identity requires redb to reproduce CEN-L11's silent omission in order to pass. **CHECKED-CONFORMANT:** digest identity **required**, and a match *is* correctness evidence. **DIVERGENT:** identity is **not** the pass condition — the row needs an explicitly reviewed expected-divergence (or a replacement KAT/oracle asserting the corrected behavior); reproducing the defect **fails**. **UNREVIEWED (the default):** identity may be *observed* as regression signal but grants **no** correctness acceptance, and no row may be promoted out of this state without a **DRS-P0f** record. As of 2026-09-02 **59 rows are CHECKED-CONFORMANT** (store 4 + §4.J 26 + §4.F 16 + §4.H 13) and every other row is UNREVIEWED, so E2 gates on correctness for those and on regression everywhere else — with §7.1.1 still barring E2 from acting on CEN-L10 for the archival surface until archival digest coverage exists. |
 
 No existing `state_hash` / `db_digest` in tree — greenfield; **when** is the
 variable, not **whether**.
