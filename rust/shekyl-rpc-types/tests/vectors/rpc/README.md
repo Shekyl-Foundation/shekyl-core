@@ -37,7 +37,27 @@ changes `get_block_header_by_hash` on purpose (a deleted request field, a
 per-element found discriminator, a refusal where there was a silent blank) and
 carries `CORE_RPC_VERSION` 3.26 for it. A later slice reading only the
 paragraph above could inherit the constraint backwards and treat an
-un-recapturable method as frozen; it is not. **Never hand-edit a vector.** A wire
+un-recapturable method as frozen; it is not. **A `_v2` is derived, never authored.** Each pair carries a delta test that
+re-derives `_v2` from `_v1`, so a hand-edited `_v2` fails rather than standing
+as its own authority — demonstrated, not assumed: changing
+`get_fee_estimate_v2.json`'s `quantization_mask` and `hard_fork_info_v2.json`'s
+renamed field both turn their delta tests red. Three delta shapes exist, and
+RK-5b added the third:
+
+- **subtraction** — `_v2` is `_v1` minus exactly these fields
+  (`v2_is_v1_minus_exactly_the_two_retired_members`,
+  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`)
+- **substitution** — `_v1` with one value replaced
+  (`get_version_v2_is_v1_with_only_the_version_bumped`)
+- **transform, plus a named extension** — for a change of *shape*, where no
+  subtraction from `_v1` produces `_v2`. `by_hash_v2_is_v1_reshaped_into_slots`
+  writes the reshaping as code; the cases `_v1` structurally cannot express —
+  a slot with no header, because the C++ returned an error and discarded the
+  batch — are asserted separately in
+  `a_missing_slot_is_the_case_v1_could_not_express`, so the extension is named
+  rather than hidden inside a shape comparison.
+
+**Never hand-edit a vector.** A wire
 change is a decision with a `CORE_RPC_VERSION` bump, recorded in the design
 doc, and gets a new `_v2` file beside the old one.
 

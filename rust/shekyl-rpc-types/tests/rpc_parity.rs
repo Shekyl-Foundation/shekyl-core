@@ -19,7 +19,8 @@
 use serde_json::Value;
 use shekyl_rpc_types::{
     BlockHeader, ConnectionInfo, ConnectionState, GetBlockCountResponse,
-    GetBlockHeaderByHeightResponse, GetBlockResponse, GetConnectionsResponse, GetHeightResponse,
+    GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
+    GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
     GetTransactionsResponse, GetVersionResponse, HardForkEntry, HashHex, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, Peer, RpcStatus, SyncInfoPeer, SyncInfoResponse,
@@ -1015,4 +1016,177 @@ fn sync_info_empty_matches_the_oracle() {
     assert!(doc["overview"].is_string(), "overview is a string");
     let obj = doc.as_object().expect("object");
     assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
+}
+
+// ── RK-5b: the header remainder, and four deliberate divergences ────────────
+//
+// **A green parity run here does NOT mean "Rust matches C++".** Three of these
+// methods change shape at 3.26, so their `_v1` captures are the *before* half
+// of a pair and the `_v2` files are what the daemon emits now. Each `_v2` is
+// held honest by a delta test below that **re-derives it from `_v1`**, so a
+// hand-edited `_v2` fails rather than passing as its own authority.
+//
+// The denominator, stated rather than implied. Compared against `_v1`
+// directly: `get_last_block_header`, `get_block_headers_range` — those two do
+// not diverge. Compared against `_v2` only, with the delta pinned separately:
+// `get_block_header_by_hash` (request and response), `hard_fork_info`,
+// `get_fee_estimate`. No field is excluded from an equality without its own
+// positive assertion in one of the delta tests, which is the thing that makes
+// "excluded" different from "forgotten".
+
+fn vector_header_v(tag: u8, orphan: bool) -> BlockHeader {
+    BlockHeader {
+        orphan_status: orphan,
+        hash: tagged_hash(tag),
+        ..block_vector_header(orphan, None)
+    }
+}
+
+#[test]
+fn get_last_block_header_matches_the_oracle() {
+    let built = GetLastBlockHeaderResponse {
+        status: RpcStatus::ok(),
+        block_header: vector_header_v(11, false),
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_last_block_header_v1.json"),
+        &built,
+    );
+}
+
+#[test]
+fn get_block_headers_range_matches_the_oracle() {
+    let built = GetBlockHeadersRangeResponse {
+        status: RpcStatus::ok(),
+        headers: vec![vector_header_v(11, false), vector_header_v(12, false)],
+    };
+    assert_parity(
+        include_str!("vectors/rpc/get_block_headers_range_v1.json"),
+        &built,
+    );
+}
+
+/// **Subtraction.** The request `_v2` is `_v1` minus exactly the singular
+/// `hash`, and nothing else moves.
+#[test]
+fn by_hash_request_v2_is_v1_minus_exactly_the_singular_hash() {
+    let mut derived = parsed(include_str!(
+        "vectors/rpc/get_block_header_by_hash_request_v1.json"
+    ));
+    let removed = derived
+        .as_object_mut()
+        .expect("object")
+        .remove("hash")
+        .expect("`_v1` must carry the field `_v2` retires");
+    assert!(
+        removed.is_string(),
+        "the retired field was the singular hash"
+    );
+    assert_eq!(
+        derived,
+        parsed(include_str!(
+            "vectors/rpc/get_block_header_by_hash_request_v2.json"
+        )),
+        "the request `_v2` must differ from `_v1` by that field and nothing else"
+    );
+}
+
+/// **Transform, not subtraction.** `block_headers` becomes per-element slots,
+/// which no removal from `_v1` produces — so the delta is written as code:
+/// slot *i* carries `_v1`'s header *i* and that header's own hash, and the
+/// singular `block_header` the C++ always emitted goes.
+#[test]
+fn by_hash_v2_is_v1_reshaped_into_slots() {
+    let v1 = parsed(include_str!("vectors/rpc/get_block_header_by_hash_v1.json"));
+    let headers = v1["block_headers"].as_array().expect("array");
+    let slots: Vec<Value> = headers
+        .iter()
+        .map(|h| serde_json::json!({ "hash": h["hash"], "block_header": h }))
+        .collect();
+    let derived = serde_json::json!({ "status": v1["status"], "block_headers": slots });
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_block_header_by_hash_v2.json")),
+        "`_v2` must be `_v1` reshaped, not authored"
+    );
+    assert!(
+        v1.get("block_header").is_some(),
+        "`_v1` carried a singular header that `_v2` drops; if it did not, this \
+         delta would be describing a field that never existed"
+    );
+}
+
+/// The extension `_v1` **cannot** express: a slot with no header. The C++
+/// returned an error and discarded the batch, so there is no `_v1` counterpart
+/// to derive this from — which is exactly why it is named here rather than
+/// left implicit in a shape comparison.
+#[test]
+fn a_missing_slot_is_the_case_v1_could_not_express() {
+    let with_miss = parsed(include_str!(
+        "vectors/rpc/get_block_header_by_hash_missing_v2.json"
+    ));
+    let slots = with_miss["block_headers"].as_array().expect("array");
+    assert_eq!(slots.len(), 3);
+    assert!(
+        slots[1].get("block_header").is_none(),
+        "the middle slot missed"
+    );
+    assert!(slots[1].get("hash").is_some(), "and still names its hash");
+    assert!(
+        slots[0].get("block_header").is_some() && slots[2].get("block_header").is_some(),
+        "a miss costs only its own slot — the property the all-or-nothing C++ \
+         could not have a vector for"
+    );
+    let round_trip: GetBlockHeaderByHashResponse =
+        serde_json::from_value(with_miss).expect("the missing-slot shape parses");
+    assert_eq!(round_trip.block_headers.len(), 3);
+}
+
+/// **Rename plus one addition.** `version` becomes `active_version`, and
+/// `queried_version` is information `_v1` does not contain — the C++ never
+/// reported what the caller asked about — so its value is asserted rather than
+/// derived.
+#[test]
+fn hard_fork_v2_renames_version_and_adds_the_query() {
+    let v1 = parsed(include_str!("vectors/rpc/hard_fork_info_v1.json"));
+    let v2 = parsed(include_str!("vectors/rpc/hard_fork_info_v2.json"));
+
+    let queried = v2["queried_version"].as_u64().expect("the added field");
+    assert_eq!(
+        v2["active_version"], v1["version"],
+        "the old `version` is the ACTIVE one — that was the collision"
+    );
+    assert_ne!(
+        queried,
+        v1["version"].as_u64().expect("v1 version"),
+        "the vector deliberately uses different numbers, so a reply that \
+         confused the two would not pass by coincidence"
+    );
+
+    let mut derived = v1.clone();
+    let obj = derived.as_object_mut().expect("object");
+    let old = obj.remove("version").expect("v1 carries it");
+    obj.insert("active_version".to_owned(), old);
+    obj.insert("queried_version".to_owned(), queried.into());
+    assert_eq!(
+        derived, v2,
+        "rename plus exactly one addition, nothing else"
+    );
+}
+
+/// **Subtraction.** `fee` was `fees[0]` under a second name.
+#[test]
+fn fee_v2_is_v1_minus_exactly_the_redundant_scalar() {
+    let v1 = parsed(include_str!("vectors/rpc/get_fee_estimate_v1.json"));
+    assert_eq!(
+        v1["fee"], v1["fees"][0],
+        "the scalar was the first tier restated — which is why it goes"
+    );
+    let mut derived = v1;
+    derived.as_object_mut().expect("object").remove("fee");
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json")),
+        "`_v2` differs by that field and nothing else"
+    );
 }
