@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-scanner"
-description = "Transaction scanner for the Shekyl protocol with FCMP++, PQC, and staking support"
+description = "Transaction scanner for the Shekyl protocol with FCMP++ and hybrid PQC"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

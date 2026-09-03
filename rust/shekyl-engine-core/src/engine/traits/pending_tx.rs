@@ -88,12 +88,11 @@
 //! handle, a `FeeEstimator` impl holding a non-`Send` RPC client)
 //! before the actor wrap forces the issue.
 //!
-//! # Visibility (`pub(crate)` until JSON-RPC cutover)
+//! # Visibility (`pub(crate)`)
 //!
-//! Per [`super`]'s visibility doc: traits ship `pub(crate)` until
-//! V3.2's JSON-RPC server cutover; consumers reach functionality
-//! via [`Engine<S>`](super::super::Engine)'s inherent methods, not
-//! via direct trait dispatch.
+//! Per [`super`]'s visibility doc: traits ship `pub(crate)`; consumers
+//! reach functionality via [`Engine<S>`](super::super::Engine)'s
+//! inherent methods, not via direct trait dispatch.
 //!
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md

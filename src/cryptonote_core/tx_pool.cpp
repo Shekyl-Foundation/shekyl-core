@@ -840,10 +840,14 @@ namespace cryptonote
     return ok;
   }
   //---------------------------------------------------------------------------------
-  bool tx_memory_pool::take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, const bool suppress_missing_msgs)
+  bool tx_memory_pool::take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, bool &fcmp_verification_cached, const bool suppress_missing_msgs)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
+
+    // Defined on every exit path: a caller that gates verification on this
+    // must see false unless the cache affirmatively covers these bytes.
+    fcmp_verification_cached = false;
 
     bool sensitive = false;
     try
@@ -880,6 +884,11 @@ namespace cryptonote
       double_spend_seen = meta.double_spend_seen;
       pruned = meta.pruned;
       sensitive = !meta.matches(relay_category::broadcasted);
+      // Read the verification-cache verdict while the meta still exists: the
+      // flag alone is not enough — the recorded hash must match these parsed
+      // bytes (CEN-M8: the connect-path skip is hash-gated, never
+      // presence-gated).
+      fcmp_verification_cached = is_fcmp_verification_cached(meta, tx);
 
       // remove first, in case this throws, so key images aren't removed
       m_blockchain.remove_txpool_tx(id);
@@ -890,6 +899,9 @@ namespace cryptonote
     catch (const std::exception &e)
     {
       MERROR("Failed to remove tx from txpool: " << e.what());
+      // The verdict is only meaningful on success: a failure return must not
+      // leave a true value a caller could consume as a skip licence.
+      fcmp_verification_cached = false;
       return false;
     }
 
@@ -2232,7 +2244,8 @@ namespace cryptonote
         cryptonote::transaction tx;
         cryptonote::blobdata blob;
         bool relayed, do_not_relay, double_spend_seen, pruned;
-        if (!take_tx(e.txid, tx, blob, weight, fee, relayed, do_not_relay, double_spend_seen, pruned))
+        bool fcmp_cached_unused; // re-validation re-runs checks; the cache verdict is not consumed
+        if (!take_tx(e.txid, tx, blob, weight, fee, relayed, do_not_relay, double_spend_seen, pruned, fcmp_cached_unused))
           MERROR("Failed to get tx " << e.txid << " from txpool for re-validation");
 
         cryptonote::tx_verification_context tvc{};

@@ -20,9 +20,9 @@
 //!
 //! # Round 4a visibility
 //!
-//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`
-//! until the JSON-RPC server cutover at V3.2. Stage 1's consumer is
-//! [`Engine<S>`](super::super::Engine), which lives inside this crate.
+//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`.
+//! Stage 1's consumer is [`Engine<S>`](super::super::Engine), which lives
+//! inside this crate.
 //!
 //! # Workflow-shape, not primitive-shape
 //!

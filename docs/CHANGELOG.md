@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
+  (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
+  membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
+  tolerance admits admission-failed txs with `fcmp_verified = 0`, so an
+  invalid proof could connect unverified. `take_tx` now reports whether the
+  pool's verification cache affirmatively covers the bytes (flag AND hash
+  match), and connect skips only on that verdict. Admission-verified txs
+  keep their skip (the D++ embargo's `hop` is unchanged); a never-verified
+  tx pays full verification. Unit tests pin the verdict contract
+  (admission-failed false, hash-match true, stale-hash false, failure-return
+  reset); the connect-path wiring regression is a FOLLOWUPS item blocked on
+  the FCMP++ spend builder.
+
 ### Added
 
 - **DRS-P0f row coverage complete — and it found an S0.** The conformance
@@ -55,6 +70,12 @@
   fence directory fails the gate rather than reading as no-match).
   Every enforcement arm was observed red on a planted evasion before
   landing.
+
+- **Wallet engine staking product door (`Engine::stake()` → `StakeFacade`).**
+  Staking / drain / claim product calls go through `StakeFacade`; JSON-RPC
+  method names are unchanged. Inherent `Engine` methods are count-frozen
+  (`METHODS_CEILING`). See
+  [`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
 
 - **Daemon C++ is not a base — a complete rewrite gates release (countermand,
   2026-09-01).** Recorded with its blast radius across `DRS-*` and its
