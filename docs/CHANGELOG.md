@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
+  (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
+  membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
+  tolerance admits admission-failed txs with `fcmp_verified = 0`, so an
+  invalid proof could connect unverified. `take_tx` now reports whether the
+  pool's verification cache affirmatively covers the bytes (flag AND hash
+  match), and connect skips only on that verdict. Admission-verified txs
+  keep their skip (the D++ embargo's `hop` is unchanged); a never-verified
+  tx pays full verification. Unit tests pin the verdict contract
+  (admission-failed false, hash-match true, stale-hash false, failure-return
+  reset); the connect-path wiring regression is a FOLLOWUPS item blocked on
+  the FCMP++ spend builder.
+
 ### Added
 
 - **Rule 71 (network uniformity) + its CI gate.** On the

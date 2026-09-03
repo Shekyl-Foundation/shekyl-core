@@ -479,6 +479,17 @@ TEST(txpool_ref_age, template_seed_refused_for_too_recent_reference)
 
 // ─────────────────────────────────────────────────────────────────────────
 // CEN-M8: take_tx's verification-cache verdict is hash-gated
+//
+// COVERAGE BOUNDARY (rule 50 — record the ground): these tests pin the
+// VERDICT take_tx reports, not the connect-path gate that consumes it
+// (blockchain.cpp handle_block_to_main_chain's can_skip_fcmp). Reverting
+// that consumer line to presence semantics would leave these tests green.
+// The wiring regression — an invalid-proof tx in the pool with
+// fcmp_verified = 0 must fail the BLOCK — needs a connectable FCMP++ block
+// whose tx is valid in every layer except the membership proof, which is
+// the same named blocker as the FOLLOWUPS "live-oracle spend-hash KAT"
+// item (no daemon-accepted FCMP++ spend builder yet). FOLLOWUPS carries
+// the regression obligation against that blocker.
 // ─────────────────────────────────────────────────────────────────────────
 
 namespace
