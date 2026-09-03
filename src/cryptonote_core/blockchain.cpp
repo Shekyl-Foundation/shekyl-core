@@ -5683,8 +5683,9 @@ bool Blockchain::flush_txes_from_pool(const std::vector<crypto::hash> &txids)
     size_t tx_weight;
     uint64_t fee;
     bool relayed, do_not_relay, double_spend_seen, pruned;
+    bool fcmp_cached_unused; // removal path; the cache verdict is not consumed
     MINFO("Removing txid " << txid << " from the pool");
-    if(m_tx_pool.have_tx(txid, relay_category::all) && !m_tx_pool.take_tx(txid, tx, txblob, tx_weight, fee, relayed, do_not_relay, double_spend_seen, pruned))
+    if(m_tx_pool.have_tx(txid, relay_category::all) && !m_tx_pool.take_tx(txid, tx, txblob, tx_weight, fee, relayed, do_not_relay, double_spend_seen, pruned, fcmp_cached_unused))
     {
       MERROR("Failed to remove txid " << txid << " from the pool");
       res = false;
@@ -5951,9 +5952,11 @@ leave:
      * notification for this tx.
      */
     bool _unused1, _unused2, _unused3;
+    bool fcmp_verification_cached = false;
     const bool found_tx_in_pool{
         m_tx_pool.take_tx(tx_id, tx, txblob, tx_weight, fee,
-          _unused1, _unused2, _unused3, pruned, /*suppress_missing_msgs=*/true)
+          _unused1, _unused2, _unused3, pruned, fcmp_verification_cached,
+          /*suppress_missing_msgs=*/true)
       };
     bool find_tx_failure{!found_tx_in_pool};
     if (!found_tx_in_pool) // if not in mempool:
@@ -6019,18 +6022,25 @@ leave:
     TIME_MEASURE_START(cc);
 
     {
-      // If this tx came from the mempool and is FCMP++, the proof was already
-      // LOAD-BEARING FOR THE EMBARGO, not only for throughput: `hop` is
-      // defined (DAEMON_RELAY_PRIVACY.md §71) as receive-to-forward including
-      // verification, and only the POOL-ADMISSION path pays it. Removing this
-      // skip would put a full membership verification inside the block path
-      // too and change what `hop` measures -- re-derive the embargo (§72.1)
-      // before touching it.
-      // verified during pool admission.  Skip the expensive shekyl_fcmp_verify
-      // FFI call but still run all structural checks (referenceBlock, depth,
-      // key images, PQC auth).
-      const bool can_skip_fcmp = found_tx_in_pool
-          && ct::is_ct_fcmp_pp_pqc(tx.ct_signatures.type);
+      // The skip must be HASH-GATED, never presence-gated (CEN-M8): take_tx
+      // reports whether the pool's verification cache affirmatively covers
+      // these bytes (fcmp_verified set AND the recorded hash matching the
+      // proof/referenceBlock/key images just parsed). Mere pool presence is
+      // not enough — add_tx's kept_by_block tolerance inserts txs whose input
+      // check FAILED with fcmp_verified = 0, and such a tx must pay full
+      // verification here before it may connect.
+      //
+      // The skip itself stays LOAD-BEARING FOR THE EMBARGO, not only for
+      // throughput: `hop` is defined (DAEMON_RELAY_PRIVACY.md §71) as
+      // receive-to-forward including verification, and only the
+      // POOL-ADMISSION path pays it. An admission-verified tx keeps its skip
+      // (add_tx's success arm records flag + hash on the same derivation), so
+      // `hop` still measures what the embargo priced; only a never-verified
+      // tx loses a skip it should never have had. Removing the skip outright
+      // would change what `hop` measures -- re-derive the embargo (§72.1)
+      // before doing that. When the skip holds, all structural checks
+      // (referenceBlock, depth, key images, PQC auth) still run.
+      const bool can_skip_fcmp = found_tx_in_pool && fcmp_verification_cached;
 
       tx_verification_context tvc;
       if(!check_tx_inputs(tx, tvc, nullptr, can_skip_fcmp))

@@ -3,12 +3,21 @@
 // All rights reserved.
 // BSD-3-Clause
 
+// fcmp_verified verification-cache semantics.
+//
 // F22 defect-fix coverage (docs/design/DAEMON_SUBMIT_VERDICT.md §6, §10 item 5):
 //   leg 1 — remove_stuck_transactions evicts pool txs whose FCMP++ reference
 //           aged past FCMP_REFERENCE_BLOCK_MAX_AGE (defect 0.8);
 //   leg 2 — is_transaction_ready_to_go re-checks the ref-age window and
 //           reference-block canonicality before honoring the fcmp_verified
 //           cache seed (defect 0.9).
+//
+// CEN-M8 fix coverage (docs/design/CONSENSUS_STORE_RECONCILIATION.md §5.4.1):
+//   take_tx reports the verification-cache verdict HASH-GATED — false unless
+//   fcmp_verified is set AND the recorded hash matches the parsed bytes — so
+//   the block-connect proof-skip can never be granted on pool presence alone
+//   (add_tx's kept_by_block tolerance inserts admission-FAILED txs with
+//   fcmp_verified = 0).
 
 #define IN_UNIT_TESTS
 
@@ -77,7 +86,13 @@ public:
     if (it != m_txpool.end())
       it->second.meta = meta;
   }
-  virtual void remove_txpool_tx(const crypto::hash& txid) override { m_txpool.erase(txid); }
+  virtual void remove_txpool_tx(const crypto::hash& txid) override
+  {
+    if (throw_on_remove)
+      throw std::runtime_error("test: injected remove_txpool_tx failure");
+    m_txpool.erase(txid);
+  }
+  bool throw_on_remove = false;
   virtual uint64_t get_txpool_tx_count(relay_category = relay_category::broadcasted) const override
   {
     return m_txpool.size();
@@ -460,4 +475,127 @@ TEST(txpool_ref_age, template_seed_refused_for_too_recent_reference)
   const auto it = fx.bap.txpool.m_input_cache.find(fx.txid);
   ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
   EXPECT_FALSE(std::get<0>(it->second));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CEN-M8: take_tx's verification-cache verdict is hash-gated
+//
+// COVERAGE BOUNDARY (rule 50 — record the ground): these tests pin the
+// VERDICT take_tx reports, not the connect-path gate that consumes it
+// (blockchain.cpp handle_block_to_main_chain's can_skip_fcmp). Reverting
+// that consumer line to presence semantics would leave these tests green.
+// The wiring regression — an invalid-proof tx in the pool with
+// fcmp_verified = 0 must fail the BLOCK — needs a connectable FCMP++ block
+// whose tx is valid in every layer except the membership proof, which is
+// the same named blocker as the FOLLOWUPS "live-oracle spend-hash KAT"
+// item (no daemon-accepted FCMP++ spend builder yet). FOLLOWUPS carries
+// the regression obligation against that blocker.
+// ─────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+struct TakeTxFixture
+{
+  static constexpr uint64_t chain_height = 300;
+
+  RefAgeTestDB* db;
+  BlockchainAndPool bap;
+  cryptonote::transaction shape_tx;
+  cryptonote::blobdata blob;
+  crypto::hash txid;
+  txpool_tx_meta_t meta;
+
+  TakeTxFixture()
+  {
+    db = new RefAgeTestDB(chain_height);
+    EXPECT_TRUE(init_blockchain(bap.bc, db));
+
+    shape_tx = make_fcmp_shape_tx();
+    blob = cryptonote::tx_to_blob(shape_tx);
+    txid = make_txid(0x77);
+    meta = make_meta(blob.size(), time(nullptr));
+  }
+
+  // Seeds the pool with (blob, meta) and takes it back out, returning
+  // take_tx's success and writing the cache verdict the connect gate
+  // consumes.
+  bool take(bool &fcmp_verification_cached)
+  {
+    db->add_txpool_tx(txid, {blob.data(), blob.size()}, meta);
+    bap.txpool.m_txpool_weight = 1000000;
+
+    cryptonote::transaction tx_out;
+    cryptonote::blobdata blob_out;
+    size_t weight{};
+    uint64_t fee{};
+    bool relayed{}, do_not_relay{}, double_spend_seen{}, pruned{};
+    return bap.txpool.take_tx(txid, tx_out, blob_out, weight, fee, relayed,
+      do_not_relay, double_spend_seen, pruned, fcmp_verification_cached);
+  }
+};
+
+} // namespace
+
+// The kept_by_block tolerance shape: admission's input check failed, the tx
+// was inserted anyway with fcmp_verified = 0. Presence in the pool must NOT
+// read as a cached verification — this is the CEN-M8 S0 (a presence-gated
+// skip let an invalid proof connect).
+TEST(txpool_take_tx_fcmp_gate, verdict_false_when_admission_failed)
+{
+  TakeTxFixture f;
+  f.meta.fcmp_verified = 0;
+  f.meta.fcmp_verification_hash = crypto::null_hash;
+
+  bool cached = true; // must be overwritten to false
+  ASSERT_TRUE(f.take(cached));
+  EXPECT_FALSE(cached) << "presence-gated skip: an admission-FAILED tx would "
+    "connect with FCMP++ verification skipped";
+}
+
+// The admission success shape: flag set and the hash recorded on the same
+// derivation take_tx recomputes. The skip survives for exactly this
+// population — the embargo's `hop` (receive-to-forward including
+// verification, paid at pool admission) keeps measuring what it priced.
+TEST(txpool_take_tx_fcmp_gate, verdict_true_for_verified_hash_match)
+{
+  TakeTxFixture f;
+  f.meta.fcmp_verified = 1;
+  f.meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(f.shape_tx);
+  ASSERT_NE(f.meta.fcmp_verification_hash, crypto::null_hash);
+
+  bool cached = false;
+  ASSERT_TRUE(f.take(cached));
+  EXPECT_TRUE(cached) << "an admission-verified tx lost its skip: this "
+    "changes what the embargo's hop measures";
+}
+
+// The flag alone is not the contract: a set bit whose recorded hash does not
+// match the parsed bytes (stale cache, mutated content) must read false.
+// This is the hash-gated clause CEN-M8 ratified.
+// A failure return must not leave a true verdict behind: even when the cache
+// affirmatively covers the bytes, an exception during the removal phase
+// (take_tx returns false) resets the out-param so no caller can consume a
+// stale skip licence.
+TEST(txpool_take_tx_fcmp_gate, verdict_reset_on_failed_take)
+{
+  TakeTxFixture f;
+  f.meta.fcmp_verified = 1;
+  f.meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(f.shape_tx);
+  f.db->throw_on_remove = true;
+
+  bool cached = true;
+  ASSERT_FALSE(f.take(cached));
+  EXPECT_FALSE(cached) << "failed take_tx left a consumable true verdict";
+}
+
+TEST(txpool_take_tx_fcmp_gate, verdict_false_on_hash_mismatch)
+{
+  TakeTxFixture f;
+  f.meta.fcmp_verified = 1;
+  memset(f.meta.fcmp_verification_hash.data, 0x5A, sizeof(f.meta.fcmp_verification_hash.data));
+
+  bool cached = true;
+  ASSERT_TRUE(f.take(cached));
+  EXPECT_FALSE(cached) << "a stale/mismatched verification hash was honored";
 }

@@ -136,16 +136,14 @@ pub(crate) struct LedgerState {
 /// (also `pub` for the same reason it serves as `D`'s default).
 ///
 /// The trait [`LedgerEngine`](super::traits::LedgerEngine) itself
-/// stays `pub(crate)` per the design doc §1.4 visibility policy —
+/// stays `pub(crate)` per the design doc §2 visibility pin
+/// (re-anchored 2026-09-02): the JSON-RPC cutover that was the
+/// original promotion trigger landed; reopen when a second in-tree
+/// production crate must construct a workflow without `Engine`.
 /// `LocalLedger`'s implementor type is the only piece that needs
 /// `pub` for the default to resolve. Stage 4's actor swap-in
 /// retires `LocalLedger` regardless; the visibility lift here does
 /// not change the deletion target.
-///
-/// V3.2 promotes the trait alongside the JSON-RPC server cutover,
-/// at which point external callers constructing an `Engine` choose
-/// between [`LocalLedger`] (the default) and `ActorRef<LedgerActor>`
-/// (Stage 4) by naming the trait directly.
 pub struct LocalLedger {
     state: RwLock<LedgerState>,
 }
