@@ -4,6 +4,32 @@
 
 ### Added
 
+- **C2-R1b implementation — the fork-choice/depth contract and the
+  operator-checkpoint surfaces**
+  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
+  ratified 2026-09-03, §4c execution record). The prune now writes a
+  **monotonic watermark** (its durable receipt, same txn as the
+  deletions; exempt from every revert), and `BlockchainDB::pop_block` —
+  the single funnel all pop writers traverse — **refuses any pop landing
+  below the oldest fully-retained epoch's open height**, converting the
+  silent post-horizon corruption arm into a loud refusal; a
+  watermark-refused network switch leaves the node loudly DEGRADED
+  (sticky flag, new `get_info.following_degraded`, `CORE_RPC_VERSION`
+  3.26), and a watermark-refused checkpoint rollback fail-stops. The
+  fork-choice comparison and the CEN-D5 alt-window selection cross to
+  `shekyl-difficulty` (`fork_choice`, `alt_window_plan`) behind new FFI
+  exports with shared pinned vectors
+  (`docs/test_vectors/FORK_CHOICE_V1.json`, Rust-native + C++ e2e
+  consumers). Checkpoint wiring is **uniform across all public
+  networks** (both nettype guards deleted — the `return true` silent
+  false positive included; rule-71 allowlist 8 → 4); the checkpoint
+  rollback target saturates (the height-1 wrap is unrepresentable) and
+  conflict output names file, height, and both hashes. Deleted: the
+  unpopulatable difficulty-checkpoint twin and the weekly accidental
+  full-chain difficulty recompute, and the caller-less no-arg
+  `pop_block` overload. `check_consensus_invariants.sh` gains the
+  watermark single-writer/no-revert invariant [6/6].
+
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;
   a real behavioral divergence must be named, ratified, and loud

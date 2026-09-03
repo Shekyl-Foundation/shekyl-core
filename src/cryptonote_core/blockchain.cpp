@@ -1484,48 +1484,44 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
   // above, so `bei.height - 1` is well-defined.
   const uint64_t chain_height = bei.height - 1;
 
-  if (alt_chain.size() < lwma1_window_size)
+  // C2-R1b-Q1b / CEN-D5: the window SELECTION -- which main-chain range
+  // and how many newest alt entries -- is the rule, and it lives in
+  // shekyl-difficulty::alt_window_plan behind the FFI (both regimes: the
+  // short-alt stitch and the alt-covers-the-window tail). This site
+  // performs the fetches the plan names; a plan refusal (height-0
+  // candidate, discontiguous ancestry) fails closed into the difficulty-0
+  // sentinel that CEN-D6's zero guard rejects.
   {
     CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-    // Main-chain prefix: heights < first_alt_height (or bei.height if
-    // alt_chain is empty). Include genesis — LWMA-1 treats genesis as
-    // a normal entry inside the window when chain_height == N.
-    const uint64_t main_chain_stop_offset = alt_chain.size() ? alt_chain.front().height : bei.height;
-    const uint64_t main_chain_count = std::min<uint64_t>(
-        lwma1_window_size - alt_chain.size(),
-        main_chain_stop_offset);
-    const uint64_t main_chain_start_offset = main_chain_stop_offset - main_chain_count;
+    uint64_t plan_main_start = 0, plan_main_stop = 0, plan_alt_take = 0;
+    const uint64_t first_alt_height = alt_chain.size() ? alt_chain.front().height : 0;
+    const int32_t plan_rc = shekyl_difficulty_alt_window_plan(
+        bei.height, alt_chain.size(), first_alt_height,
+        &plan_main_start, &plan_main_stop, &plan_alt_take);
+    CHECK_AND_ASSERT_MES(plan_rc == SHEKYL_DIFFICULTY_OK, false,
+        "alt-window plan refused (rc " << plan_rc << ") for candidate height " << bei.height
+        << ", alt length " << alt_chain.size() << ", first alt height " << first_alt_height);
 
-    for (uint64_t h = main_chain_start_offset; h < main_chain_stop_offset; ++h)
+    for (uint64_t h = plan_main_start; h < plan_main_stop; ++h)
     {
       timestamps.push_back(m_db->get_block_timestamp(h));
       cumulative_difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
     }
 
-    CHECK_AND_ASSERT_MES((alt_chain.size() + timestamps.size()) <= lwma1_window_size, false, "Internal error, alt_chain.size()[" << alt_chain.size() << "] + timestamps.size()[" << timestamps.size() << "] NOT <= LWMA-1 window[" << lwma1_window_size << "]");
-
+    // Newest `plan_alt_take` alt entries, oldest-first so the assembled
+    // window ends at the candidate's parent.
+    uint64_t skip = alt_chain.size() - plan_alt_take;
     for (const auto &alt_bei : alt_chain)
     {
+      if (skip > 0) { --skip; continue; }
       timestamps.push_back(alt_bei.bl.timestamp);
       cumulative_difficulties.push_back(alt_bei.cumulative_difficulty);
     }
-  }
-  else
-  {
-    // Alt chain alone covers the window; take its most recent N+1.
-    timestamps.resize(lwma1_window_size);
-    cumulative_difficulties.resize(lwma1_window_size);
-    size_t count = 0;
-    const size_t max_i = timestamps.size() - 1;
-    for (const auto &alt_bei : boost::adaptors::reverse(alt_chain))
-    {
-      timestamps[max_i - count] = alt_bei.bl.timestamp;
-      cumulative_difficulties[max_i - count] = alt_bei.cumulative_difficulty;
-      count++;
-      if (count >= lwma1_window_size)
-        break;
-    }
+
+    CHECK_AND_ASSERT_MES(timestamps.size() == cumulative_difficulties.size()
+        && timestamps.size() == std::min<uint64_t>(lwma1_window_size, bei.height), false,
+        "assembled alt window size " << timestamps.size() << " violates the plan invariant for height " << bei.height);
   }
 
   return lwma1_next_difficulty(chain_height, timestamps, cumulative_difficulties);
@@ -2437,24 +2433,40 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     alt_chain.push_back(bei);
 
     // FIXME: is it even possible for a checkpoint to show up not on the main chain?
-    if(is_a_checkpoint)
+    // C2-R1b-Q1a/Q1b: the fork-choice rule has ONE implementation --
+    // shekyl-difficulty's fork_choice behind the FFI (strictly greater
+    // switches, equality keeps, a checkpoint match forces). This site
+    // marshals the two cumulative difficulties and consumes the verdict;
+    // the DISCARD flag stays C++ orchestration keyed on the checkpoint
+    // arm (a checkpoint-forced switch can promote a LIGHTER chain, and
+    // re-admitting the heavier demoted chain would immediately switch
+    // back -- the discard is the flip-flop terminator, round doc §4b).
+    const cryptonote::difficulty_type fc_u64_mask =
+        cryptonote::difficulty_type(std::numeric_limits<uint64_t>::max());
+    shekyl_u128 fc_current{}, fc_alternative{};
+    fc_current.lo = (main_chain_cumulative_difficulty & fc_u64_mask).convert_to<std::uint64_t>();
+    fc_current.hi = (main_chain_cumulative_difficulty >> 64).convert_to<std::uint64_t>();
+    fc_alternative.lo = (bei.cumulative_difficulty & fc_u64_mask).convert_to<std::uint64_t>();
+    fc_alternative.hi = (bei.cumulative_difficulty >> 64).convert_to<std::uint64_t>();
+    int32_t fc_verdict = SHEKYL_FORK_CHOICE_KEEP_CURRENT;
+    if (shekyl_difficulty_fork_choice(fc_current, fc_alternative,
+          is_a_checkpoint ? 1 : 0, &fc_verdict) != SHEKYL_DIFFICULTY_OK)
     {
-      //do reorganize!
-      MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1 << ", checkpoint is found in alternative chain on height " << bei.height);
-
-      bool r = switch_to_alternative_blockchain(alt_chain, true);
-
-      if(r) bvc.m_added_to_main_chain = true;
-      else bvc.m_verifivation_failed = true;
-
-      return r;
+      // Fail closed: an FFI failure must never silently keep OR switch.
+      MERROR("fork-choice FFI failure for alt block " << id);
+      bvc.m_verifivation_failed = true;
+      return false;
     }
-    else if(main_chain_cumulative_difficulty < bei.cumulative_difficulty) //check if difficulty bigger then in main chain
+    if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH)
     {
       //do reorganize!
-      MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1 << " with cum_difficulty " << m_db->get_block_cumulative_difficulty(m_db->height() - 1) << std::endl << " alternative blockchain size: " << alt_chain.size() << " with cum_difficulty " << bei.cumulative_difficulty);
+      MGINFO_GREEN("###### REORGANIZE on height: " << alt_chain.front().height << " of " << m_db->height() - 1
+        << (is_a_checkpoint ? ", checkpoint is found in alternative chain on height " : " with alt cum_difficulty ")
+        << (is_a_checkpoint ? cryptonote::difficulty_type(bei.height) : bei.cumulative_difficulty)
+        << ", main cum_difficulty " << main_chain_cumulative_difficulty
+        << ", alternative blockchain size: " << alt_chain.size());
 
-      bool r = switch_to_alternative_blockchain(alt_chain, false);
+      bool r = switch_to_alternative_blockchain(alt_chain, is_a_checkpoint);
       if (r)
         bvc.m_added_to_main_chain = true;
       else

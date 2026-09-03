@@ -237,6 +237,9 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
         }
         Err(DifficultyError::InvalidCount) => SHEKYL_DIFFICULTY_ERR_INVALID_COUNT,
         Err(DifficultyError::Overflow) => SHEKYL_DIFFICULTY_ERR_OVERFLOW,
+        // Unreachable from lwma1_next (Window is alt_window_plan's error),
+        // but the enum is shared: map it rather than panic across the FFI.
+        Err(DifficultyError::Window) => SHEKYL_DIFFICULTY_ERR_WINDOW,
     }
 }
 
@@ -404,6 +407,87 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
     // contract guarantees alignment and writability.
     core::ptr::write(out_median, median);
     verdict as i32
+}
+
+/// The incumbent chain stays (`shekyl_difficulty_fork_choice`).
+pub const SHEKYL_FORK_CHOICE_KEEP_CURRENT: i32 = 0;
+/// Reorganize onto the alternative chain.
+pub const SHEKYL_FORK_CHOICE_SWITCH: i32 = 1;
+/// Alt-window precondition failure (`shekyl_difficulty_alt_window_plan`):
+/// height-0 candidate or discontiguous alt ancestry.
+pub const SHEKYL_DIFFICULTY_ERR_WINDOW: i32 = -5;
+
+/// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
+/// difficulty switches, equality keeps the incumbent, an operator-
+/// checkpoint match forces the switch. Wraps
+/// [`shekyl_difficulty::fork_choice`]; the two `ShekylU128` operands are
+/// the cumulative difficulties in the crate ABI's two-`u64` form.
+///
+/// Returns [`SHEKYL_DIFFICULTY_OK`] with the verdict
+/// ([`SHEKYL_FORK_CHOICE_KEEP_CURRENT`] / [`SHEKYL_FORK_CHOICE_SWITCH`])
+/// written to `out_verdict`, or [`SHEKYL_DIFFICULTY_ERR_NULL_PTR`].
+///
+/// # Safety
+///
+/// `out_verdict` must be non-null, aligned, and writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_difficulty_fork_choice(
+    current_cumulative: ShekylU128,
+    alternative_cumulative: ShekylU128,
+    checkpoint_match: u8,
+    out_verdict: *mut i32,
+) -> i32 {
+    if out_verdict.is_null() {
+        return SHEKYL_DIFFICULTY_ERR_NULL_PTR;
+    }
+    let verdict = shekyl_difficulty::fork_choice(
+        u128::from(current_cumulative),
+        u128::from(alternative_cumulative),
+        checkpoint_match != 0,
+    );
+    // SAFETY: non-null per the check above; caller guarantees alignment
+    // and writability.
+    core::ptr::write(out_verdict, verdict as i32);
+    SHEKYL_DIFFICULTY_OK
+}
+
+/// Alt-chain LWMA window selection (C2-R1b-Q1b / CEN-D5): which
+/// main-chain height range and how many newest alt entries fill the
+/// window for a candidate at `bei_height`. Wraps
+/// [`shekyl_difficulty::alt_window_plan`]; the C++ caller performs the
+/// DB fetches the plan names.
+///
+/// Returns [`SHEKYL_DIFFICULTY_OK`] with the plan written to the three
+/// out-params; [`SHEKYL_DIFFICULTY_ERR_WINDOW`] on a height-0 candidate
+/// or discontiguous ancestry (the D5 linkage precondition, failed
+/// closed); [`SHEKYL_DIFFICULTY_ERR_NULL_PTR`] on any null out-param.
+///
+/// # Safety
+///
+/// The three out-pointers must be non-null, aligned, and writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_difficulty_alt_window_plan(
+    bei_height: u64,
+    alt_len: u64,
+    first_alt_height: u64,
+    out_main_start: *mut u64,
+    out_main_stop: *mut u64,
+    out_alt_take_newest: *mut u64,
+) -> i32 {
+    if out_main_start.is_null() || out_main_stop.is_null() || out_alt_take_newest.is_null() {
+        return SHEKYL_DIFFICULTY_ERR_NULL_PTR;
+    }
+    match shekyl_difficulty::alt_window_plan(bei_height, alt_len, first_alt_height) {
+        Ok(plan) => {
+            // SAFETY: all three non-null per the check above; caller
+            // guarantees alignment and writability.
+            core::ptr::write(out_main_start, plan.main_start);
+            core::ptr::write(out_main_stop, plan.main_stop);
+            core::ptr::write(out_alt_take_newest, plan.alt_take_newest);
+            SHEKYL_DIFFICULTY_OK
+        }
+        Err(_) => SHEKYL_DIFFICULTY_ERR_WINDOW,
+    }
 }
 
 #[cfg(test)]

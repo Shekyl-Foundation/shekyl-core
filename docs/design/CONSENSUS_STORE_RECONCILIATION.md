@@ -162,6 +162,7 @@ is ruled.
 | CEN-L11 | 1 | Curve-tree growth; **construct verdict unchecked → silent omission** | **S-CURVE** | ratified spec, defective implementation — §0.1 |
 | CEN-L12 | 1 | Deferred-insertion maturity **is** the spend-maturity rule (60/10) | **S-CURVE** | ratified; third leg of the unlock_time divergence |
 | CEN-L15 | 3 | Dead Monero-v4 RCT accumulation arm on the write path | S-CHAIN-W | delete, do not port |
+| *(post-map mint)* C2-R1b-Q1c | 2 | **Prune watermark** (`m_properties` key `archival_prune_watermark_epoch`): the prune's monotonic same-txn receipt; `pop_block` refuses below its epoch's open height; exempt from every revert (F-2) | **S-CHAIN-W** (pop path) | Minted 2026-09-03, after this map landed — named here so the DRS decomposition carries the floor with the pop path; the refusal predicate (`pop_target_allowed`) must survive any store re-home at the same single-funnel property |
 
 **Surface load** (recomputed from the table above; CEN-L1 and CEN-L3 each map to
 two surfaces and are counted under both, so the column sums to 20, not 18):
