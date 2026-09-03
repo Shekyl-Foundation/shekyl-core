@@ -899,10 +899,16 @@ Phases, in landing order, each red-first where a losing leg exists:
 Bookkeeping: census rows K5/K6/K7/K8/D5/D6/E1/E2/E5 → bucket 2 (the
 E-rows carrying the **held-existence** condition in their own text),
 counts 86/25/5/55; the watermark names itself in the CSR store map
-(minted after the 18-row map landed); the `RETENTION_HORIZON_BLOCKS`
-rename rides FOLLOWUPS per Rick; `LMDB_SCHEMA.md` does not exist as a
-doc (the in-code cite is a naming convention) — the CSR row is the
-store registry that actually exists.
+(minted after the 18-row map landed) **and in `docs/LMDB_SCHEMA.md`**
+(properties table + the v12 version-history section); the
+`RETENTION_HORIZON_BLOCKS` rename rides FOLLOWUPS per Rick.
+**Corrected claim, owned:** an earlier revision of this record said
+"`LMDB_SCHEMA.md` does not exist" — a wrong-instrument negative
+(`grep -l LMDB_SCHEMA docs/` lists files *containing* the string, and
+the doc does not name itself; `check_lmdb_schema_coverage.py` reads it
+and failed CI the moment VERSION moved). The truncated-listing rule's
+fourth instrument: a containment grep cannot prove a file's absence —
+`ls` the path.
 
 ## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
 
