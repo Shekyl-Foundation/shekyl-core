@@ -1477,9 +1477,10 @@ cluster I's 10 plus cluster T's 8. **This is a historical figure; the
 authoritative running total is the one at the end of the most recent
 sub-round.** Two live totals in one document is how the off-by-one below went
 unseen, so only one of them is ever current. As of cluster T, 28 rows remained
-for cluster B — enumerated, not estimated: `PWC-A6`, `A6a`, `A7`, `B1`,
-`B2`, `B4`, `B5`, `B6`, `B7`, `C1`, `C3`, `C5`, `C6`, `C7`, `C8`, `E1`, `E2`,
-`E3`, `E4`, `E4a`, `E5`, `E7`, `E8`, `E9`, `E11`, `E13`, `E14`, `F4`.
+for cluster B — enumerated, not estimated: `PWC-A6`, `PWC-A6a`, `PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`,
+`PWC-B6`, `PWC-B7`, `PWC-C1`, `PWC-C3`, `PWC-C5`, `PWC-C6`, `PWC-C7`,
+`PWC-C8`, `PWC-E1`, `PWC-E2`, `PWC-E3`, `PWC-E4`, `PWC-E4a`, `PWC-E5`,
+`PWC-E7`, `PWC-E8`, `PWC-E9`, `PWC-E11`, `PWC-E13`, `PWC-E14`, `PWC-F4`.
 
 > **Corrected 2026-09-03, from 19.** The old figure inherited cluster T's
 > off-by-one. The remainder is now **listed** rather than given as "~20",
@@ -2267,7 +2268,7 @@ on two surfaces and today gets two different answers:
 | Surface | Unrecognised input | Inherited behaviour |
 | --- | --- | --- |
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
-| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — no cap at all (`src/cryptonote_basic/connection_context.cpp:68-71`) |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
 **One question, two answers, and neither was chosen.** That is the drift shape
 that produced the 50 MB / 100 MB packet-limit pair PWD-T6 had to reconcile: two
@@ -2275,6 +2276,30 @@ rows deriving independently against the same underlying question.
 
 > **Ruled: unrecognised input is rejected at ingress. A field this protocol
 > does not define is not a field it forwards, stores, or sizes a buffer from.**
+
+**The rule is scoped to the *dispatch* surface, and getting that wrong would
+have deleted cover traffic.** `limit_for(head.command)` runs on **every** bucket
+header as it arrives (`rust/shekyl-levin/src/reader.rs:315`), *before* any
+flag-based classification — and **`noise_notify` emits `command = 0`** with
+`BEGIN|END` (`rust/shekyl-levin/src/fragment.rs:47-58`), as does every fragment
+carrier. A rejection keyed on "the id is not in the switch" therefore rejects
+the white-noise and fragmentation paths **cluster T deliberately kept**, which
+PWC-A9 records and PWD-T7's length-leak masking depends on.
+
+> **So the discriminator is the flag class, not the id.** A bucket whose flags
+> carry **neither `Q` nor `S`** is the noise/fragment class: it carries **no
+> command at all** — the zero is a filler, not an identifier — and its bound is
+> the framing bound (`noise_size`), never a command cap. A bucket that *does*
+> carry `Q` or `S` is a dispatch, and **its command must be one this protocol
+> defines**. The reassembled inner message is a dispatch too, and is checked the
+> same way (`reader.rs:425`).
+
+**This is the jobs-not-names rule again** (rule 16): "command id 0" has two jobs
+— filler in a framing bucket, and a genuine id — and a check written against the
+*field* rather than against the *job* silently takes out the first. **Carving
+out the literal `0` would not have been the fix either**: it would admit a
+`Q`-flagged bucket claiming command 0, which is a dispatch of an undefined
+command and exactly what this rule exists to reject.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -2344,7 +2369,7 @@ is not a table of constants.**
 | `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
 | `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | `CRYPTONOTE_MAX_TX_SIZE` (1 MB) × the relay batch bound |
 | `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
-| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **The dynamic one** — see below |
+| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
 | `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
 | `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
 | `NOTIFY_NEW_FLUFFY_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
@@ -2361,7 +2386,25 @@ is not a table of constants.**
 
 **Ruled: the block-carrying cap is computed from the receiver's own consensus
 state**, as a fixed multiple of its current weight limit, so it tracks the chain
-rather than a release. The multiple absorbs the receiver being behind the tip;
+rather than a release.
+
+> **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
+> `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
+> payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
+> list (`cryptonote_protocol_defs.h:175-190`) — a **sync batch**. A cap sized
+> for one block plus a tip-lag margin either rejects legitimate multi-block
+> sync responses or, if widened to fit a batch, hands the single-block announce
+> path a batch-sized bound. *An earlier version of this table gave both
+> commands the same disposition and would have done one or the other.*
+>
+> **Its bound is the batch this node asked for.** `NOTIFY_REQUEST_GET_OBJECTS`
+> (2003) carries `std::vector<crypto::hash> blocks` (`:156-171`), so the
+> receiver **already knows the cardinality it requested** — the cap is that
+> count times the per-block bound, and it needs nothing from the peer.
+> §1's fourth check again: the bound comes from this node's own record of what
+> it sent, not from a claim in the response. **A response to a request this node
+> did not make has a batch size of zero**, which the same rule rejects without a
+> separate mechanism. The multiple absorbs the receiver being behind the tip;
 it is a consensus-adjacent constant and is **named as owed to the consensus
 lane**, not invented here.
 
@@ -2374,9 +2417,15 @@ lane**, not invented here.
 **What this discharges, stated so the dependent rows can be closed:**
 
 - **PWD-T6's post-handshake limit** is the maximum over this table — now a
-  derivation with one dynamic term rather than an inherited round number.
+  derivation with **two** dynamic terms rather than an inherited round number:
+  the per-block bound *and* `NOTIFY_RESPONSE_GET_OBJECTS`'s requested
+  cardinality. **The maximum is 2004's batch bound, not the single-block one**,
+  which is the term a reader would otherwise take from the more visible row.
 - **PWC-A2** (bucket header length field) can be sized: the field must express
-  the largest value this table can produce, which is the block-carrying cap.
+  the largest value this table can produce — **2004's batch bound**, so the
+  field is sized from the batch, not from one block. Sizing it to the
+  single-block cap would make the header unable to express a legal sync
+  response.
 - **PWD-T7's compression gate** gets its classification: **every command in
   this table carries public consensus data**, so the confidentiality-bearing
   set is **empty today** and the gate is a check that the set stays empty when
@@ -2407,8 +2456,15 @@ with a computable subject rather than a static number to compare against.
 **Running total against the round's gate — authoritative:** **22 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + this
 sub-round's 4. **24 rows remain**, all in cluster B's later sub-rounds:
-`PWC-A7`, `B1`, `B2`, `B4`, `B5`, `B6`, `B7`, `C1`, `C5`, `C6`, `C8`, `E1`,
-`E2`, `E3`, `E4`, `E4a`, `E5`, `E7`, `E8`, `E9`, `E11`, `E13`, `E14`, `F4`.
+`PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
+`PWC-C1`, `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E1`, `PWC-E2`, `PWC-E3`,
+`PWC-E4`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`, `PWC-E9`, `PWC-E11`,
+`PWC-E13`, `PWC-E14`, `PWC-F4`.
+
+> **Every id is spelled in full deliberately.** A bare `B1` in this document
+> reads as **PWD-B1**, a decision id, not `PWC-B1`, a census row — two live
+> families whose short forms collide. An enumeration exists to be checked
+> mechanically, and an ambiguous id cannot be.
 
 ## 4. What cluster I does not decide
 
