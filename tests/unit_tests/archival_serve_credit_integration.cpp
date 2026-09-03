@@ -435,7 +435,7 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
   // init() takes ownership; ~Blockchain deletes the DB in deinit().
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -488,7 +488,7 @@ TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_th
       std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
     };
     const cryptonote::test_options test_options = {hard_forks, 5000};
-    if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr))
+    if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0))
       throw std::runtime_error("Blockchain::init failed");
 
     cryptonote::transaction tx_copy = tx;
@@ -527,7 +527,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -559,7 +559,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
-    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
     db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
     EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal,
@@ -576,7 +576,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
-    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
     db_raw->block_hash_queried_heights.clear();
     // Guard passes at h_seal + 1 (the seal is now the committed tip), so the gate
@@ -645,7 +645,7 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -680,7 +680,7 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));
@@ -709,7 +709,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
     hash_from_hex(kat.prev_block_hash_hex)));

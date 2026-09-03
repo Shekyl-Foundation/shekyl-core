@@ -150,7 +150,6 @@ example.
 | `--prune-blockchain` | Enable pruning (~95% storage reduction for old prunable data) |
 | `--db-sync-mode <mode>` | LMDB sync mode: `safe`, `fast`, `fastest` |
 | `--block-sync-size <n>` | Number of blocks per sync batch |
-| `--fast-block-sync 1` | Use precomputed block hashes to skip PoW verification during sync |
 
 **RPC**
 

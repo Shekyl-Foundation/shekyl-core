@@ -54,12 +54,15 @@ fi
 
 # Each REQUIRED site by name, not a count. A count cannot tell a removed
 # checkpoint call from a new unrelated one, and it counts comments; both were
-# true of the previous version. These are the four places consensus decides a
-# value-out is authorized, and each is asserted to reach the shared predicate:
+# true of the previous version. These are the three places consensus decides a
+# value-out is authorized, and each is asserted to reach the shared predicate
+# (a fourth -- the per-block-checkpoint fast path's "block fast-check debit"
+# belt -- was deleted with its whole mechanism in C2-R1a: with the fast path
+# gone the per-tx verify below is unconditional at block connect, so the
+# belt's job is covered by the primary; CEN-G8 retired):
 #
 #   blockchain.cpp   "Unbond"                 per-tx debit verify
 #   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
-#   blockchain.cpp   "block fast-check debit" checkpoint fast path
 #   daemon_submit_ffi.cpp                     the submit gather's work gate
 #
 # Comments are stripped first, so a mention in prose cannot stand in for a
@@ -116,13 +119,6 @@ require_call src/cryptonote_core/blockchain.cpp \
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
   "per-tx HoldingsUpdate-drop verify"
-# Anchored on the arm label, not on the call shape: `archival_debit_auth_pin(record,`
-# also matches both per-tx calls, so deleting the checkpoint pin left hits behind
-# and this arm could not fail. It was the one arm I did not bite when the gate
-# landed, and it was the one that was broken.
-require_call src/cryptonote_core/blockchain.cpp \
-  '"block fast-check debit"' \
-  "checkpoint fast path"
 require_call src/rpc/daemon_submit_ffi.cpp \
   'shekyl_archival_debit_auth_pin\(' \
   "submit gather work gate"

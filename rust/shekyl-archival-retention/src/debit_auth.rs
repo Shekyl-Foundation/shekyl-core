@@ -15,11 +15,10 @@
 //! `Rebond` is *not* one: its verify requires `bond_debit == 0` and
 //! `blockchain.cpp` authorizes it with the **identity** key on the
 //! credit path, exactly as `HoldingsUpdate`-add is. Applying this pin
-//! there would reject a legitimate credit — and keying the rule on kind
-//! rather than on the debit term is the specific mistake the block-level
-//! fast-path arm documents at length, because it would reject valid
-//! `HoldingsUpdate`-add blocks under fast sync while fully-verifying nodes
-//! accept them.
+//! there would reject a legitimate credit — keying the rule on kind
+//! rather than on the debit term rejects every valid `HoldingsUpdate`-add
+//! block. (The since-retired block-level fast-path belt, CEN-G8, existed
+//! to hold exactly this line under a now-deleted verification skip.)
 //!
 //! (An earlier revision of this module listed `Rebond` here. It came from
 //! reading `archival_marshal_record_facts`'s "record-mutating arms" comment

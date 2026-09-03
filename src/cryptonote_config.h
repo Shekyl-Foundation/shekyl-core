@@ -333,8 +333,6 @@ static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
 
-#define HASH_OF_HASHES_STEP                     512
-
 #define DEFAULT_TXPOOL_MAX_WEIGHT               648000000ull // 3 days at 300000, in bytes
 
 #define BULLETPROOF_MAX_OUTPUTS                 16

@@ -1982,10 +1982,8 @@ uint8_t shekyl_archival_last_served_scan(
 // SELECTOR: bond_debit > 0, NOT the post kind. Consumers are Unbond and the
 // DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are credit paths
 // (bond_debit == 0) that consensus authorizes with the identity key -- do
-// not call this for them, or a legitimate credit is rejected. Keying on kind
-// instead of the debit term is what the block-level fast-path arm in
-// blockchain.cpp warns about: it would split fast-syncing from
-// fully-verifying nodes on valid HoldingsUpdate-add blocks.
+// not call this for them, or a legitimate credit is rejected: keying on kind
+// instead of the debit term rejects every valid HoldingsUpdate-add block.
 //
 // The Rust submit battery calls the same shekyl-archival-retention function
 // natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so block path and
