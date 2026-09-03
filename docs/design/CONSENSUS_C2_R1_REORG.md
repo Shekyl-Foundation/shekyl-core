@@ -632,10 +632,21 @@ The census could not surface that rule because no `file:line` exists
 for it; that gap is C2-R0's founding case. The
 refusal is a hard error: the reorg/rollback/RPC caller fails with a
 message naming the horizon and the remedy (resync), never a silent
-partial state. This is **not a fork-choice rule and introduces no new
-subjectivity**: the capability loss already exists, network-uniform,
-because the prune runs in consensus lockstep — the ruling converts an
-existing silent-corruption arm into a loud refusal. The
+partial state. This is **not a fork-choice rule**, and — corrected for the watermark
+form, because the earlier "introduces no new subjectivity" sentence
+was verified of the tip-derived floor and is **false of the form that
+ships** — the honest claim is: **the floor is deliberately node-local,
+because the hazard is node-local.** A persisted watermark is this
+node's state; two nodes at the same tip can hold different watermarks
+if one saw a higher tip and reorged back, and their refusal depths
+then differ. That is correct, not a defect: a node that pruned cannot
+safely revert and a node that did not can — the refusal is a **local
+data-availability property, not a consensus rule**, and the
+consequence of divergence is that some nodes halt where others follow
+(a liveness/partition consequence, never a chain split; every halting
+node halts loudly with the same remedy). **Uniformity was never the
+property that made the floor safe — durability was.** The ruling
+converts an existing silent-corruption arm into a loud refusal. The
 weak-subjectivity axis, priced: a fresh-syncing node follows the
 heaviest chain regardless of any horizon; an attacker able to build a
 heavier secret chain longer than ~260k blocks (≈ a year of work above
@@ -707,7 +718,12 @@ and unsigned `pt.first − 2` wraps to `UINT64_MAX`, which
 **returns immediately — no rollback, while checkpoint loading reports
 success**. That is the *third* reports-success-while-doing-nothing
 instance in this one mechanism (the `:254` guard, the missing-file
-loader, now the wrap), and the ruling closes it: targets clamp to 0
+loader, now the wrap) — at three, this stops being a coincidence and
+becomes a finding about the mechanism's **whole error-handling
+posture**: every edge in the inherited checkpoint machinery resolves
+toward reporting success, and R1c should read its nine rows expecting
+the same posture rather than treating each instance as local. The
+ruling closes this one: targets clamp to 0
 (genesis) for checkpoints at heights 1–2, and the wrap case becomes
 unrepresentable. The rollback rides the pop machinery and is
 therefore **subject to Q1c's watermark refusal**: an operator
@@ -760,7 +776,7 @@ the one operator-authority input (Q2b).
 | Adversary | Channel | Today | Under the rulings | Direction check |
 | --- | --- | --- | --- | --- |
 | Majority-hash attacker, shallow (< horizon) | heavier alt chain | switch fires; promotion re-validates; rollback contains invalid bodies | unchanged — Q1a ratifies; cost floor is real PoW above the honest tip | countermeasure (promotion re-validation) sits on the attacker's path; residual churn cost is R1c's subject |
-| Majority-hash attacker, deep (> horizon) | heavier secret chain, ~year-scale | pop traverses; epoch re-derivation **silently wrong** | loud refusal at the landing point; operator resyncs | faces the write path all four writers share; converts corruption to halt; no new subjectivity (prune is already consensus-uniform) |
+| Majority-hash attacker, deep (> horizon) | heavier secret chain, ~year-scale | pop traverses; epoch re-derivation **silently wrong** | loud refusal at the landing point; operator resyncs | faces the write path all four writers share; converts corruption to halt; the floor is node-local by design (the hazard is this node's data loss) — divergence means some nodes halt loudly where others follow, never a split |
 | Operator error: conflicting JSON | datadir file | SIGTERM (undocumented) | same, ratified + named-output obligation (rule 82) | fail-stop on ambiguous pins is the safe direction; authority-not-access priced |
 | Malware with datadir write | checkpoint file | could pin a false chain or kill the node | unchanged — datadir write is already LMDB-corruption-equivalent; no new position | the file adds no access an attacker lacks; refusing to ship the mechanism would not remove the position |
 | Checkpoint-forced lighter chain | operator pin + K6 arm | switch + discard of heavier demoted chain | ratified with rationale: discard is the flip-flop terminator | the discard faces the oscillation, which is the actual failure mode |
