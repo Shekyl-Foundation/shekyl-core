@@ -122,6 +122,7 @@ set(unit_tests_sources
   pruned_tx_hash_parity.cpp
   tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
+  pow_longhash_gate.cpp
   txpool_ref_age.cpp
   txpool_origin_zone.cpp
   txpool_relay_timers.cpp

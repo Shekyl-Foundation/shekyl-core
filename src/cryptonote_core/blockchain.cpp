@@ -2411,7 +2411,16 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       {
         seedhash = get_block_id_by_height(seedheight);
       }
-      get_altblock_longhash(bei.bl, proof_of_work, seedhash);
+      if (!get_altblock_longhash(bei.bl, proof_of_work, seedhash))
+      {
+        // CEN-D2, alt path: verifier failure rejects at every difficulty
+        // (the sentinel alone passes check_hash at difficulty 1). Local
+        // failure, not evidence against the block -- no m_bad_pow.
+        MERROR_VER("PoW verifier failure (RandomX FFI) for alt block " << id
+          << " -- block rejected unverified");
+        bvc.m_verifivation_failed = true;
+        return false;
+      }
     }
     if(!check_hash(proof_of_work, current_diff))
     {
@@ -5896,8 +5905,19 @@ leave:
       precomputed = true;
       proof_of_work = it->second;
     }
-    else
-      proof_of_work = get_block_longhash(this, bl, blockchain_height, 0);
+    else if (!get_block_longhash(this, bl, proof_of_work, blockchain_height, nullptr, 0))
+    {
+      // CEN-D2: a longhash the verifier could not compute must reject the
+      // block at EVERY difficulty — the 0xff sentinel alone passes
+      // check_hash at difficulty 1. This is a local verifier failure, not
+      // evidence against the block, so m_bad_pow is deliberately NOT set
+      // (same class as the checkpoint-validation arm below: the block is
+      // unproven, not disproven).
+      MERROR_VER("PoW verifier failure (RandomX FFI) for block " << id
+        << " at height " << blockchain_height << " -- block rejected unverified");
+      bvc.m_verifivation_failed = true;
+      goto leave;
+    }
 
     // validate proof_of_work versus difficulty target
     if(!check_hash(proof_of_work, current_diffic))
@@ -6764,7 +6784,17 @@ void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const b
     if (m_cancel)
        break;
     crypto::hash id = get_block_hash(block);
-    crypto::hash pow = get_block_longhash(this, block, height++, 0);
+    crypto::hash pow;
+    if (!get_block_longhash(this, block, pow, height++, nullptr, 0))
+    {
+      // CEN-D2: an uncomputed hash must never enter the precompute table --
+      // the consumer trusts table hits without re-checking. Skipping the
+      // insert makes the validation site recompute and hit its own
+      // verifier-failure rejection.
+      MERROR("PoW verifier failure (RandomX FFI) in longhash worker for block "
+        << id << " -- leaving hash uncached");
+      continue;
+    }
     map.emplace(id, pow);
   }
 

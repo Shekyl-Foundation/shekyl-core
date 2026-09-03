@@ -752,22 +752,25 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
+  bool get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    if (shekyl_pow_randomx_v2_hash(
-          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
-          reinterpret_cast<const uint8_t*>(bd.data()),
-          bd.size(),
-          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    // One PoW dispatch point: the same IPowSchema the main path uses (the
+    // registry is ratified height/version-unconditional — CEN-D2's schema
+    // half — so 0 is passed rather than parsing an untrusted miner tx for an
+    // operand the dispatch ignores). This collapses what used to be a second,
+    // direct FFI call site.
+    const IPowSchema& pow_schema = get_pow_for_height(0, b.major_version);
+    if (!pow_schema.hash(bd.data(), bd.size(), 0, &seed_hash, 0, res))
     {
-      // Fail closed: a longhash the verifier could not compute must never
-      // satisfy a difficulty target. 0xff..ff is the numerically maximum
-      // 256-bit value, which check_hash() rejects for any difficulty > 1.
-      // Matches the fail-closed sentinel the alt-block caller pre-seeds in
-      // blockchain.cpp.
+      // The 0xff..ff sentinel is a BELT, not the gate: check_hash() rejects
+      // it only at difficulty > 1 — at difficulty 1 every hash passes, so a
+      // caller relying on the sentinel alone fails OPEN (CEN-D2). The
+      // returned bool is the gate; the alt validation site rejects on it.
       memset(res.data, 0xff, sizeof(res.data));
+      return false;
     }
+    return true;
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
@@ -790,13 +793,13 @@ namespace cryptonote
 
     if (!pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res))
     {
-      // Fail closed: on a verifier failure pow_schema.hash() leaves res
-      // unwritten, and the hash-returning overload below pre-seeds res to
-      // null_hash (0x00..00) — the numerically minimum 256-bit value, which
-      // check_hash() accepts for ANY difficulty. Several callers ignore the
-      // returned bool, so a soft failure must never surface as an accepted
-      // PoW. Writing the maximum 256-bit value guarantees check_hash() rejects
-      // it. Matches the fail-closed sentinel in get_altblock_longhash().
+      // The 0xff..ff sentinel is a BELT, not the gate: it makes check_hash()
+      // reject at any difficulty > 1, but at difficulty 1 every hash passes
+      // ((2^256-1)*1 < 2^256), so the sentinel alone fails OPEN there
+      // (CEN-D2). The returned bool is the gate — the block-validation call
+      // sites and the longhash worker reject on it; the sentinel remains for
+      // display-only callers that ignore the bool (RPC pow_hash fills).
+      // Matches the fail-closed belt in get_altblock_longhash().
       memset(res.data, 0xff, sizeof(res.data));
       return false;
     }
