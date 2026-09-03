@@ -138,7 +138,10 @@ relay.*
    (above) but building the consensus change (clamp reconciliation,
    flag-path removal, rename sweep per FL-R15) is a separate
    authorization; **FL-R14** (persisted `u128` + V13 resync vs
-   documented-`u64`-bound) must be answered before or with it.
+   documented-`u64`-bound) and **FL-R16** (the two cap-asserting guards —
+   the activity invariant that fires forever after tail onset, and the
+   past-asymptote error arm) are answered together, before build — same
+   files, one pass.
 2. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
    since the ruling).
 3. **PR** — branch is pushed for review (review round 3); **PR remains
