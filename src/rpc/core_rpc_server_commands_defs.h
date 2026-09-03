@@ -247,6 +247,7 @@ namespace cryptonote
       std::string version;
       uint32_t protocol_version;
       bool synchronized;
+      bool following_degraded;
       bool restricted;
 
       // Shekyl NG four-component economics fields
@@ -294,6 +295,7 @@ namespace cryptonote
         KV_SERIALIZE(version)
         KV_SERIALIZE(protocol_version)
         KV_SERIALIZE(synchronized)
+        KV_SERIALIZE(following_degraded)
         KV_SERIALIZE(restricted)
         KV_SERIALIZE(release_multiplier)
         KV_SERIALIZE(burn_pct)

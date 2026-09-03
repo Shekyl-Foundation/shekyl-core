@@ -377,6 +377,19 @@ public:
 
   virtual void pop_block(block& blk, std::vector<transaction>& txs);
 
+  uint64_t get_archival_prune_watermark_epoch() const override;
+
+  /**
+   * @brief monotonic watermark writer — the prune's receipt (C2-R1b-Q1c)
+   *
+   * Requires an active write txn; refuses to lower (a lower value is a
+   * no-op, never an error — re-running an old prune must not regress the
+   * floor). Public as the unit-test seam; the one production caller is
+   * `prune_archival_epochs_before`, same txn as the deletions it receipts.
+   */
+  void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
+
+
   virtual bool can_thread_bulk_indices() const { return true; }
 
   /**

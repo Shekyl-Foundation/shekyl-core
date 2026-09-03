@@ -608,15 +608,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     m_long_term_block_weights_cache_rolling_median = epee::misc_utils::rolling_median_t<uint64_t>(m_long_term_block_weights_window);
   }
 
-  bool difficulty_ok;
-  uint64_t difficulty_recalc_height;
-  std::tie(difficulty_ok, difficulty_recalc_height) = check_difficulty_checkpoints();
-  if (!difficulty_ok)
-  {
-    MERROR("Difficulty drift detected!");
-    recalculate_difficulties(difficulty_recalc_height);
-  }
-
   {
     db_txn_guard txn_guard(m_db, m_db->is_read_only());
     if (!update_next_cumulative_weight_limit())
@@ -767,6 +758,22 @@ void Blockchain::pop_blocks(uint64_t nblocks)
     const uint64_t blockchain_height = m_db->height();
     if (blockchain_height > 0)
       nblocks = std::min(nblocks, blockchain_height - 1);
+    // C2-R1b F-1: refuse the whole request up front rather than popping
+    // part-way to a wall -- the operator asked for a rollback the retention
+    // design cannot honor. Same predicate as the pop_block belt.
+    {
+      const uint64_t target_tip = blockchain_height > nblocks ? blockchain_height - 1 - nblocks : 0;
+      if (!m_db->pop_target_allowed(target_tip))
+      {
+        MERROR("REFUSED pop_blocks(" << nblocks << "): target height " << target_tip
+          << " is below the prune watermark floor (epoch "
+          << m_db->get_archival_prune_watermark_epoch()
+          << ") -- rows a revert needs are already pruned; remedy: resync this node");
+        if (stop_batch)
+          m_db->batch_abort();
+        return;
+      }
+    }
     while (i < nblocks && !m_cancel.load())
     {
       pop_block_from_blockchain();
@@ -1187,146 +1194,6 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   return diff;
 }
 //------------------------------------------------------------------
-std::pair<bool, uint64_t> Blockchain::check_difficulty_checkpoints() const
-{
-  uint64_t res = 0;
-  for (const std::pair<const uint64_t, difficulty_type>& i : m_checkpoints.get_difficulty_points())
-  {
-    if (i.first >= m_db->height())
-      break;
-    if (m_db->get_block_cumulative_difficulty(i.first) != i.second)
-      return {false, res};
-    res = i.first;
-  }
-  return {true, res};
-}
-//------------------------------------------------------------------
-size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height_opt)
-{
-  if (m_fixed_difficulty)
-  {
-    return 0;
-  }
-  LOG_PRINT_L3("Blockchain::" << __func__);
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  const uint64_t start_height = start_height_opt ? *start_height_opt : check_difficulty_checkpoints().second;
-  const uint64_t top_height = m_db->height() - 1;
-  MGINFO("Recalculating difficulties from height " << start_height << " to height " << top_height);
-
-  // LWMA-1 window: up to N+1 entries ending at the parent of the
-  // first block to recalculate. Genesis IS included (the legacy DAA
-  // skipped genesis; LWMA-1's algorithmic surface treats genesis as a
-  // normal entry — the genesis short-circuit operates on
-  // chain_height < N, not on slice contents).
-  constexpr uint64_t lwma1_window_size = SHEKYL_DAA_WINDOW_N + 1;
-  std::deque<uint64_t> timestamps;
-  std::deque<difficulty_type> difficulties;
-  if (start_height > 0)
-  {
-    const uint64_t entries_to_fetch =
-        std::min<uint64_t>(start_height, lwma1_window_size);
-    const uint64_t fetch_start = start_height - entries_to_fetch;
-    for (uint64_t h = fetch_start; h < start_height; ++h)
-    {
-      timestamps.push_back(m_db->get_block_timestamp(h));
-      difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
-    }
-  }
-  // Cumulative-difficulty seed for the recalculation loop.
-  //
-  // Behavior change from legacy DAA: the inherited code used
-  // `start_height <= 1 ? start_height : difficulties.back()`, so at
-  // `start_height == 1` the seed was the literal 1 (matching the
-  // legacy genesis cum-diff convention). LWMA-1 includes genesis in
-  // the algorithmic window and treats it as a normal entry with
-  // `difficulty(0) == SHEKYL_DAA_GENESIS_DIFFICULTY` (100, not 1);
-  // the stored `cum_diff(0)` on the LWMA-1 chain therefore equals
-  // SHEKYL_DAA_GENESIS_DIFFICULTY. The correct seed for any
-  // `start_height >= 1` is `cum_diff(start_height - 1)` = the DB-
-  // stored value at the parent. `difficulties.back()` returns exactly
-  // this (the bootstrap loop above populates the window with the
-  // last `min(start_height, N+1)` cumulative-difficulty entries
-  // ending at `start_height - 1`).
-  //
-  // The new behavior is correct-by-construction for LWMA-1; the
-  // legacy literal-1 seed would silently produce a 99-unit drift at
-  // every recalculation that started at height 1 under the new DAA.
-  difficulty_type last_cum_diff = start_height == 0
-      ? difficulty_type(0)
-      : difficulties.back();
-  uint64_t drift_start_height = 0;
-  std::vector<difficulty_type> new_cumulative_difficulties;
-  for (uint64_t height = start_height; height <= top_height; ++height)
-  {
-    // chain_height is the height of the parent of the block being
-    // recalculated. For height == 0 (recalculating genesis) the parent
-    // doesn't exist; pass 0, which trips the FFI's genesis
-    // short-circuit (0 < N), returning SHEKYL_DAA_GENESIS_DIFFICULTY.
-    const uint64_t parent_height = height == 0 ? 0u : height - 1;
-    difficulty_type recalculated_diff =
-        lwma1_next_difficulty(parent_height, timestamps, difficulties);
-
-    boost::multiprecision::uint256_t recalculated_cum_diff_256 = boost::multiprecision::uint256_t(recalculated_diff) + last_cum_diff;
-    CHECK_AND_ASSERT_THROW_MES(recalculated_cum_diff_256 <= std::numeric_limits<difficulty_type>::max(), "Difficulty overflow!");
-    difficulty_type recalculated_cum_diff = recalculated_cum_diff_256.convert_to<difficulty_type>();
-
-    if (drift_start_height == 0)
-    {
-      difficulty_type existing_cum_diff = m_db->get_block_cumulative_difficulty(height);
-      if (recalculated_cum_diff != existing_cum_diff)
-      {
-        drift_start_height = height;
-        new_cumulative_difficulties.reserve(top_height + 1 - height);
-        LOG_ERROR("Difficulty drift found at height:" << height << ", hash:" << m_db->get_block_hash_from_height(height) << ", existing:" << existing_cum_diff << ", recalculated:" << recalculated_cum_diff);
-      }
-    }
-    if (drift_start_height > 0)
-    {
-      new_cumulative_difficulties.push_back(recalculated_cum_diff);
-      if (height % 100000 == 0)
-        LOG_ERROR(boost::format("%llu / %llu (%.1f%%)") % height % top_height % (100 * (height - drift_start_height) / float(top_height - drift_start_height)));
-    }
-
-    // LWMA-1 includes genesis in the window when chain_height == N
-    // (window heights 0..N). Unlike the legacy DAA, do not skip
-    // pushing the block-at-height-0 entry.
-    timestamps.push_back(m_db->get_block_timestamp(height));
-    difficulties.push_back(recalculated_cum_diff);
-    // Trim back to the LWMA-1 window. By construction only one entry
-    // was pushed this iteration, so the deque can exceed the window
-    // by at most 1 — but using `while` rather than `if` keeps the
-    // invariant intact if a future refactor pushes additional entries
-    // per iteration. Mirrors the trimming pattern at lines ~1043-1046
-    // in `get_difficulty_for_next_block`.
-    while (timestamps.size() > lwma1_window_size)
-    {
-      timestamps.pop_front();
-      difficulties.pop_front();
-    }
-    last_cum_diff = recalculated_cum_diff;
-  }
-
-  if (drift_start_height > 0)
-  {
-    LOG_ERROR("Writing to the DB...");
-    try
-    {
-      m_db->correct_block_cumulative_difficulties(drift_start_height, new_cumulative_difficulties);
-    }
-    catch (const std::exception& e)
-    {
-      LOG_ERROR("Error correcting cumulative difficulties from height " << drift_start_height << ", what = " << e.what());
-    }
-    LOG_ERROR("Corrected difficulties for " << new_cumulative_difficulties.size() << " blocks");
-    // clear cache
-    m_difficulty_for_next_block_top_hash = crypto::null_hash;
-    m_timestamps_and_difficulties_height = 0;
-  }
-
-  return new_cumulative_difficulties.size();
-}
-//------------------------------------------------------------------
 std::vector<time_t> Blockchain::get_last_block_timestamps(unsigned int blocks) const
 {
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -1412,6 +1279,29 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   {
     LOG_ERROR("Attempting to move to an alternate chain, but it doesn't appear to connect to the main chain!");
     return false;
+  }
+
+  // C2-R1b F-1(a): pre-check the whole rollback against the prune
+  // watermark BEFORE mutating anything -- a mid-pop refusal would force a
+  // pointless restore cycle. Same single predicate as the pop_block belt,
+  // never a re-spelling. On refusal the node is a live participant that is
+  // knowingly NOT following the heaviest chain it has seen: flag it sticky
+  // (process-lifetime, re-armed here on every re-attempt), log loudly each
+  // time, and surface it on get_info -- a silent healthy-looking continue
+  // would be exactly the split the ruling forbids.
+  {
+    const uint64_t fork_parent_height = m_db->get_block_height(alt_chain.front().bl.prev_id);
+    if (!m_db->pop_target_allowed(fork_parent_height))
+    {
+      m_following_degraded.store(true, std::memory_order_relaxed);
+      MERROR("REFUSED chain switch at the prune watermark: the alternative chain forks at height "
+        << fork_parent_height << ", below the floor of epoch "
+        << m_db->get_archival_prune_watermark_epoch()
+        << " -- this node cannot safely revert that deep (rows already pruned)."
+        << " Continuing DEGRADED on the current chain; get_info reports"
+        << " following_degraded=true; remedy: resync this node");
+      return false;
+    }
   }
 
   // pop blocks from the blockchain until the top block is the parent of the front
@@ -6701,10 +6591,11 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
 //------------------------------------------------------------------
 //TODO: Refactor, consider returning a failure height and letting
 //      caller decide course of action.
-void Blockchain::check_against_checkpoints(const checkpoints& points)
+bool Blockchain::check_against_checkpoints(const checkpoints& points)
 {
   const auto& pts = points.get_points();
   bool stop_batch;
+  bool ok = true;
 
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   stop_batch = m_db->batch_start();
@@ -6719,14 +6610,40 @@ void Blockchain::check_against_checkpoints(const checkpoints& points)
 
     if (!points.check_block(pt.first, m_db->get_block_hash_from_height(pt.first)))
     {
-      // roll back to a couple of blocks before the checkpoint
-      LOG_ERROR("Local blockchain failed to pass a checkpoint, rolling back!");
+      // Roll back to a couple of blocks before the checkpoint. Saturating:
+      // the inherited `pt.first - 2` wrapped at a height-1 checkpoint to a
+      // target above the tip, which rollback_blockchain_switching treats
+      // as already-satisfied -- no rollback, while loading reported
+      // success (C2-R1b-Q2b, the mechanism's third
+      // reports-success-while-doing-nothing instance).
+      const uint64_t rollback_target = pt.first >= 2 ? pt.first - 2 : 0;
+      // C2-R1b F-1(b): if the rollback itself would cross the prune
+      // watermark, there is no remedy this daemon can apply -- it must not
+      // keep running in contradiction with a checkpoint it accepted. Same
+      // predicate as the pop_block belt; the false return fail-stops via
+      // core::update_checkpoints -> graceful_exit.
+      if (!m_db->pop_target_allowed(rollback_target))
+      {
+        MERROR("Checkpoint at height " << pt.first << " (expected " << pt.second
+          << ", chain has " << m_db->get_block_hash_from_height(pt.first)
+          << ") conflicts with the local chain, and the rollback target "
+          << rollback_target << " is below the prune watermark floor (epoch "
+          << m_db->get_archival_prune_watermark_epoch()
+          << ") -- cannot roll back that deep; remedy: resync this node");
+        ok = false;
+        continue;
+      }
+      LOG_ERROR("Local blockchain failed to pass a checkpoint, rolling back! (checkpoint height " << pt.first
+        << ", expected " << pt.second
+        << ", chain has " << m_db->get_block_hash_from_height(pt.first)
+        << ", rollback target " << rollback_target << ")");
       std::list<detached_block> empty;
-      rollback_blockchain_switching(empty, pt.first - 2);
+      rollback_blockchain_switching(empty, rollback_target);
     }
   }
   if (stop_batch)
     m_db->batch_stop();
+  return ok;
 }
 //------------------------------------------------------------------
 // returns false if any of the checkpoints loading returns false.
@@ -6739,7 +6656,15 @@ bool Blockchain::update_checkpoints(const std::string& file_path)
       return false;
   }
 
-  check_against_checkpoints(m_checkpoints);
+  if (!check_against_checkpoints(m_checkpoints))
+  {
+    // F-1(b): a conflict the rollback could not apply -- the caller
+    // (core::update_checkpoints) fail-stops rather than letting the daemon
+    // run in contradiction with a checkpoint it accepted. The file is the
+    // one operator input; name it.
+    MERROR("Checkpoint conflict from '" << file_path << "' could not be resolved; refusing to continue");
+    return false;
+  }
 
   return true;
 }

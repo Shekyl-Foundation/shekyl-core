@@ -250,6 +250,9 @@ namespace cryptonote
     res.version = restricted ? "" : SHEKYL_VERSION_FULL;
     res.protocol_version = SHEKYL_PROTOCOL_VERSION;
     res.synchronized = check_core_ready();
+    // C2-R1b F-1(a): sticky watermark-refusal flag -- monitoring must see a
+    // node that is knowingly not following the heaviest chain it has seen.
+    res.following_degraded = m_core.get_blockchain_storage().is_following_degraded();
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 

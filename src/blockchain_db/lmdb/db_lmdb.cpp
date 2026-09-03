@@ -7698,6 +7698,12 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   if (prune_below_epoch == 0)
     return;
 
+  // The receipt precedes the destruction, in the same write txn: if the
+  // txn commits, floor and deletions land together; if it aborts, neither
+  // does (C2-R1b-Q1c / F-2). Deliberately NOT reverted by any pop path --
+  // pops cannot restore pruned rows, so the floor never retreats.
+  note_archival_prune_watermark_epoch(prune_below_epoch);
+
   delete_archival_serve_credit_before_epoch(prune_below_epoch);
   // SO-D1's verdict rows retire on the same horizon as the evidence they fold.
   delete_archival_settlement_before_epoch(prune_below_epoch);
@@ -7723,6 +7729,51 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   // 0-based index, so it is the one the helper exists for.
   delete_archival_attestation_witness_before_height(
     archival_attestation_witness_key(shekyl_archival_epoch_open_height(prune_below_epoch)));
+}
+
+uint64_t BlockchainLMDB::get_archival_prune_watermark_epoch() const
+{
+  const std::string key = "archival_prune_watermark_epoch";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v;
+  const int rc = archival_db_get(m_properties, &k, &v);
+  if (rc == MDB_NOTFOUND)
+    return 0;
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival prune watermark: ", rc).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw std::runtime_error("FATAL: archival prune watermark size mismatch");
+  uint64_t epoch;
+  memcpy(&epoch, v.mv_data, sizeof(epoch));
+  return epoch;
+}
+
+void BlockchainLMDB::note_archival_prune_watermark_epoch(uint64_t prune_below_epoch)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival prune watermark write requires active write txn");
+
+  const std::string key = "archival_prune_watermark_epoch";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v;
+  const int get_rc = mdb_get(*m_write_txn, m_properties, &k, &v);
+  if (get_rc && get_rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival prune watermark for max: ", get_rc).c_str()));
+  if (get_rc == 0)
+  {
+    if (v.mv_size != sizeof(uint64_t))
+      throw std::runtime_error("FATAL: archival prune watermark size mismatch on write");
+    uint64_t current;
+    memcpy(&current, v.mv_data, sizeof(current));
+    if (prune_below_epoch <= current)
+      return; // monotonic: lowering is a no-op, never an error
+  }
+  MDB_val nv = {sizeof(prune_below_epoch), &prune_below_epoch};
+  const int put_rc = mdb_put(*m_write_txn, m_properties, &k, &nv, 0);
+  if (put_rc)
+    throw0(DB_ERROR(lmdb_error("Failed to set archival prune watermark: ", put_rc).c_str()));
 }
 
 uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const

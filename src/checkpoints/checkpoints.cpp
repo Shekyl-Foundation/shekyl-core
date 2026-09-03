@@ -73,7 +73,7 @@ namespace cryptonote
   {
   }
   //---------------------------------------------------------------------------
-  bool checkpoints::add_checkpoint(uint64_t height, const std::string& hash_str, const std::string& difficulty_str)
+  bool checkpoints::add_checkpoint(uint64_t height, const std::string& hash_str)
   {
     crypto::hash h = crypto::null_hash;
     bool r = epee::string_tools::hex_to_pod(hash_str, h);
@@ -82,26 +82,13 @@ namespace cryptonote
     // return false if adding at a height we already have AND the hash is different
     if (m_points.count(height))
     {
-      CHECK_AND_ASSERT_MES(h == m_points[height], false, "Checkpoint at given height already exists, and hash for new checkpoint was different!");
+      // Named output (C2-R1b-Q2b): a conflicting pin fail-stops the daemon
+      // upstream, so the log line must carry everything the operator needs.
+      CHECK_AND_ASSERT_MES(h == m_points[height], false, "Checkpoint conflict at height " << height
+        << ": existing " << m_points[height] << ", new " << h
+        << " -- two different pins for one height; fix the checkpoint source");
     }
     m_points[height] = h;
-    if (!difficulty_str.empty())
-    {
-      try
-      {
-        difficulty_type difficulty(difficulty_str);
-        if (m_difficulty_points.count(height))
-        {
-          CHECK_AND_ASSERT_MES(difficulty == m_difficulty_points[height], false, "Difficulty checkpoint at given height already exists, and difficulty for new checkpoint was different!");
-        }
-        m_difficulty_points[height] = difficulty;
-      }
-      catch (...)
-      {
-        LOG_ERROR("Failed to parse difficulty checkpoint: " << difficulty_str);
-        return false;
-      }
-    }
     return true;
   }
   //---------------------------------------------------------------------------
@@ -159,11 +146,6 @@ namespace cryptonote
   const std::map<uint64_t, crypto::hash>& checkpoints::get_points() const
   {
     return m_points;
-  }
-  //---------------------------------------------------------------------------
-  const std::map<uint64_t, difficulty_type>& checkpoints::get_difficulty_points() const
-  {
-    return m_difficulty_points;
   }
 
   bool checkpoints::check_for_conflicts(const checkpoints& other) const

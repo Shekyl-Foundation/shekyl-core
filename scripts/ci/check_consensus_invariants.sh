@@ -184,10 +184,46 @@ fi
 echo
 
 # ----------------------------------------------------------------------
+# 6. C2-R1b-Q1c / F-2: the prune watermark has ONE writer and no revert.
+#    The pop floor is the prune's durable receipt: written only inside
+#    prune_archival_epochs_before (same txn as the deletions), monotonic,
+#    and deliberately EXEMPT from pop reversal -- pops cannot restore
+#    pruned rows, so the floor never retreats. A second key site is a
+#    drift twin; a mention inside any revert_* function body is the
+#    walk-down hole reopening through the back door. (Rule 47: writer
+#    presence is asserted before its uniqueness.)
+# ----------------------------------------------------------------------
+echo "[6/6] prune-watermark single-writer + no-revert (C2-R1b F-2)"
+WM_CALLS=$(grep -c "note_archival_prune_watermark_epoch" src/blockchain_db/lmdb/db_lmdb.cpp || true)
+if [[ "${WM_CALLS:-0}" -lt 2 ]]; then
+  echo "      FAIL: writer definition or its prune call site is missing"
+  echo "            (note_archival_prune_watermark_epoch occurrences: ${WM_CALLS:-0}, expected >= 2)"
+  FAIL=1
+else
+  WM_KEY_SITES=$(grep -c '"archival_prune_watermark_epoch"' src/blockchain_db/lmdb/db_lmdb.cpp || true)
+  # Anchored on the prune watermark's own identifiers: the slash revert
+  # legitimately speaks of the slash-fold watermark, a different concept.
+  WM_IN_REVERTS=$(awk '/^void BlockchainLMDB::revert_/,/^}$/' src/blockchain_db/lmdb/db_lmdb.cpp | grep -c "archival_prune_watermark" || true)
+  if [[ "${WM_KEY_SITES:-0}" -ne 2 ]]; then
+    echo "      FAIL: property key must appear exactly twice (reader + writer);"
+    echo "            found ${WM_KEY_SITES:-0} -- a third site is a drift twin or"
+    echo "            an unauthorized writer."
+    FAIL=1
+  elif [[ "${WM_IN_REVERTS:-0}" -ne 0 ]]; then
+    echo "      FAIL: a revert_* body references the prune watermark -- the floor"
+    echo "            is exempt from pop reversal BY DESIGN (F-2)."
+    FAIL=1
+  else
+    echo "      OK"
+  fi
+fi
+echo
+
+# ----------------------------------------------------------------------
 # Result summary.
 # ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (5/5)"
+echo "consensus-invariants: PASS (6/6)"

@@ -42,7 +42,9 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.25: `get_transactions` drops `txs_as_hex` and
+/// `CORE_RPC_VERSION_MINOR`. 3.26: `get_info` gains `following_degraded`
+/// (C2-R1b F-1(a): sticky watermark-refusal flag; migrates into RK-5c's
+/// node-state hub). 3.25: `get_transactions` drops `txs_as_hex` and
 /// `txs_as_json` — the handler filled them "in case an old wallet asks" and
 /// the old wallet is `src/wallet/`, deleted, so they duplicated
 /// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
@@ -57,7 +59,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 25;
+pub const CORE_RPC_VERSION_MINOR: u32 = 26;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
