@@ -357,8 +357,9 @@ closed.
 | **DIVERGENT** | on the register below | **regression only** |
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
-**As of 2026-09-02 the CHECKED-CONFORMANT set holds fifty-nine rows** — the
-store-enforced 4, §4.J's 26, §4.F's 16, and §4.H's 13 (P0f slices 1–6). **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
+**As of 2026-09-02 the CHECKED-CONFORMANT set holds seventy-seven rows** — the
+store-enforced 4, §4.J's 26, §4.F's 16, §4.H's 13, and §4.I's 18 (P0f slices
+1–7). **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
 was reviewed and **failed closed to UNREVIEWED** — one of its clauses names
 behavior that is not wired, so it can be neither conformant nor divergent.
 Every row outside this register remains UNREVIEWED by construction, so the
@@ -515,6 +516,36 @@ Reviewed at **`4b9807c5e`** (2026-09-02). Walks: **W-TO** =
 | CEN-H21 | **CHECKED-CONFORMANT** | W-VU `:132–148` (pqc_auths == vin count, pseudoOuts == spend count, type) + `ct::verCtSemanticsBondPost` → the shared `verArchivalCtBalanceAndRange` with `shekyl_archival_verify_bond_post_ct_balance` rc-checked (W-CT `:262–309`) |
 | CEN-H22 | **CHECKED-CONFORMANT** | W-VU `:149–181` (checked reward sum, overflow reject, pqc_auths/pseudoOuts/type) + the same shared W-CT tail for the emission arm |
 
+##### P0f slice 7 — §4.I, the FCMP++ spend path (18 rows)
+
+Reviewed at **`4b9807c5e`** (2026-09-02). Walks: **W-TI** = the spend-path
+gates in `check_tx_inputs` (`blockchain.cpp:3536–3740`, census lines drifted
++~70 as established), **W-RB** = the reference-block/proof block
+(`:4251–4390`), **W-PQ** = `tx_pqc_verify.cpp` (whose real path is
+`src/cryptonote_core/`, not the census's `src/fcmp/` — pointer drift recorded)
+plus its gate (`:4405–4415`).
+
+| Row | State | Evidence (all at `4b9807c5e`) |
+| --- | --- | --- |
+| CEN-I1 | **CHECKED-CONFORMANT** | W-TI. Too-few-outputs rejects with `m_too_few_outputs` |
+| CEN-I2 | **CHECKED-CONFORMANT** | W-TI. `!is_fcmp_pp` rejects; second sites re-reject ring-based inputs and non-coinbase `CTTypeNull` (`:3676–3690`). **REWRITE-NOTE:** multi-site belts of one rule — H13's collapse class |
+| CEN-I3 | **CHECKED-CONFORMANT** | W-TI. `min = max = 3` **hardcoded at the site**, independent of the HF dispatch, exactly as the row states. **REWRITE-NOTE:** the whole gate block sits under `m_nettype != FAKECHAIN` — the §6-finding-8 test-lever class (R9): the rewrite needs a *designed* test seam, not a nettype carve-out around consensus gates |
+| CEN-I4 | **CHECKED-CONFORMANT** | W-TI. `vin.size() > FCMP_MAX_INPUTS_PER_TX` (8, `cryptonote_config.h:311`) rejects — the cap covers total `vin.size()`, confirmed |
+| CEN-I5 | **CHECKED-CONFORMANT** | W-TI. `memcmp >= 0` rejects — strictly descending, so duplicate and mis-ordered key images fail the **same** check (the row's "one rule, two guarantees") |
+| CEN-I6 | **CHECKED-CONFORMANT** | W-TI. Non-empty `key_offsets` rejects (`:3663`) |
+| CEN-I7 | **CHECKED-CONFORMANT** | W-TI. `have_tx_keyimg_as_spent` per input rejects (`:3667`) — the verify-side belt in front of CEN-L1's storage enforcement, both now on the register |
+| CEN-I8 | **CHECKED-CONFORMANT** | W-TI. `pqc_auths.size() != vin count` rejects for non-serve-credit; serve-credit must be **empty** (`:3695–3720`) |
+| CEN-I9 | **CHECKED-CONFORMANT** | W-TI. `pseudoOuts == num_inputs` for regular spends; archival shapes excepted here because their own counts are enforced in W-VU (slice 6) |
+| CEN-I10 | **CHECKED-CONFORMANT** | W-RB. `block_exists(rv.referenceBlock)` rejects (`:4251`; the two twins at `:3856`/`:4005` are the archival copies read in slice 4) |
+| CEN-I11 | **CHECKED-CONFORMANT** | W-RB. Both windows reject: min-age 5 and max-age, each with the correct boundary arithmetic as read |
+| CEN-I12 | **CHECKED-CONFORMANT** | W-RB. Root read **from the per-height root table**, with the in-code rationale (FAKECHAIN headers carry placeholder roots) — the anchor is the table, never the header |
+| CEN-I13 | **CHECKED-CONFORMANT** | W-RB. `depth == 0 \|\| depth > current` rejects; layers = depth+1 at the verify call (the FFI-boundary convention documented in `shekyl-ffi`) |
+| CEN-I14 | **CHECKED-CONFORMANT** | W-RB. Empty proof rejects (`:4306`) |
+| CEN-I15 | **CHECKED-CONFORMANT** | W-RB. `shekyl_fcmp_verify` rc-checked reject. The **verification cache** (`can_skip_fcmp`, `:6128–6129`) is exactly `found_tx_in_pool && is_ct_fcmp_pp_pqc` — pool admission paid the full verify, structural checks still run under the skip, and the in-code note marks the skip **load-bearing for the D++ embargo's `hop`** (same note as CEN-J26's; one semantics, two riders) |
+| CEN-I16 | **CHECKED-CONFORMANT** | W-PQ. `auth_version == 1`, `flags == 0`, `scheme_id ∈ {single, multisig}`, per-scheme key-length bounds — each rejects (`:175–223`) |
+| CEN-I17 | **CHECKED-CONFORMANT** | W-PQ. Signed payload binds prefix ‖ CtSig base ‖ keccak256(prunable) ‖ per-input PQC header ‖ **all** inputs' key hashes (`:62–158`), the cross-input bind included |
+| CEN-I18 | **CHECKED-CONFORMANT** | W-PQ. `shekyl_pqc_verify` rc-checked reject (`:230–243`). **Interaction verified, not assumed:** the gate carries `&& !is_archival_serve_credit_only` (`:4408`), so serve-credit txs (whose auths are empty by H20's rule) never reach the size gate that would reject them. The hybrid scheme's own adequacy is the signature-alignment round's subject, not this row's |
+
 **Examined and excluded:** **CEN-L12** — its notes record that the spec's
 `staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
 is **claim-era and retired**, so the *live* spec and the code agree. A retired
@@ -624,7 +655,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
 | **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
-| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **59 rows CHECKED-CONFORMANT** (store 4 + §4.J 26 + §4.F 16 + §4.H 13); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–6, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
+| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **77 rows CHECKED-CONFORMANT** (store 4 + §4.J 26 + §4.F 16 + §4.H 13 + §4.I 18); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–7, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
@@ -643,6 +674,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | **DRS-P0f slice 7 — all 18 §4.I rows CHECKED-CONFORMANT** at `4b9807c5e`, including the serve-credit/PQC-gate interaction verified explicitly and the verification cache's condition read at its derivation site. Census pointer drift recorded: `tx_pqc_verify.cpp` lives in `src/cryptonote_core/`, not `src/fcmp/`. REWRITE-NOTEs: the FAKECHAIN carve-out around the spend gates (R9's designed-test-seam), and the multi-site belts (I2, I7) joining H13's collapse class | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 6 — all 13 remaining §4.H rows CHECKED-CONFORMANT** at `4b9807c5e`. CT balance and output-key checks confirmed Rust-single-sourced with discriminated verdicts; H14's emission exemption confirmed to share one classifier with `check_tx_inputs` (anti-drift structure worth keeping). REWRITE-NOTEs: H12's dead VIEW_TAGS arms (R5 residue); H13 as the version rule's third site (collapse to one) | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 5 — all 16 §4.F rows CHECKED-CONFORMANT** at `4b9807c5e`. Economics arithmetic confirmed Rust-canonical ("nothing is computed here" holds as read; 81-vector KAT both languages); F18's exact-pay verified in both directions; F21 pinned constant→table→function→caller. REWRITE-NOTEs: F4's load-bearing genesis exemption + anti-spoof structure; F19's tautology hazard should become structural in the rewrite; F20's duplicated 720-mean collapses to one implementation | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 4 — all 26 §4.J rows CHECKED-CONFORMANT** at `4b9807c5e`, via three end-to-end branch walks (W-SC / W-BP / W-EM) with every FFI verdict checked and W-SC's predicate sequence KAT-pinned on both legs. Three REWRITE-NOTEs recorded (assign_epoch cutover reopen; drop-arm set-difference in the marshal; skip_fcmp_verify's embargo-load-bearing cache) plus the section-level note that the C++/Rust mirror is interim structure the rewrite retires | §5.4.1 |
