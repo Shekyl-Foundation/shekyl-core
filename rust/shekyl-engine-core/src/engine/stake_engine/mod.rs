@@ -154,3 +154,4 @@ pub(crate) use types::{
     FundedSlots, PSlot, PersonaHandle, RetireOutcome, RetirementWitness, StakeEngineError,
     ARCHIVAL_PERSONA_LOOKAHEAD, ARCHIVAL_PERSONA_PROBE_WINDOW,
 };
+pub(crate) use unbond::{AssembleUnbond, AssembledUnbondPost, UnbondRecordState};

@@ -42,13 +42,15 @@ use crate::engine::stake_engine::{
 ///
 /// Unbond is a genesis-valid archival bond-post kind (wire `Other(2)` ==
 /// [`BondPostKind::Unbond`]). This retire path fires when pscan sees a
-/// confirmed Unbond. The producer exists (`AssembleUnbond`) and is deliberately
-/// unreachable from RPC/CLI — no RPC method, no CLI verb, and nothing
-/// dispatching the assembled bytes. Native `/submit_transaction` refusing
-/// `Unbond` used to be a fourth condition and stopped being one on
-/// 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1), so the retire path this
-/// module drives is now one layer closer to live evidence, not the same
-/// distance. Neither that nor slice 3's engine walk lifted the gate; the
+/// confirmed Unbond. The producer exists (`AssembleUnbond`), the dispatch
+/// seam exists (`Engine::submit_unbond`, `pub(crate)`, driven only by the
+/// daemon walk under `#[cfg(test)]`), and the lane stays deliberately
+/// unreachable from RPC/CLI — no RPC method, no CLI verb. Native
+/// `/submit_transaction` refusing `Unbond` stopped being a condition on
+/// 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1) and "nothing dispatches
+/// the assembled bytes" narrowed to "nothing user-facing dispatches" with
+/// PR-B, so the retire path this module drives is now two layers closer to
+/// live evidence, not the same distance. None of that lifted the gate; the
 /// consumer here is live and waits. The byte equivalence is pinned by a
 /// `scan_step` test so the two crates' assignments cannot drift.
 const UNBOND_POST_KIND: u8 = BondPostKind::Unbond as u8;

@@ -55,6 +55,62 @@
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
   §5.4.1.
 
+- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B = #601,
+  2026-09-02) — an
+  `Unbond` has now been assembled by the wallet, accepted by native
+  `/submit_transaction`, and connected on a real regtest chain, for the
+  first time anywhere.** `Engine::submit_unbond`
+  (`shekyl-engine-core/src/engine/unbond_dispatch.rs`, `pub(crate)`) is
+  the claim/drain sibling seam: bond-record facts fetched as one bound
+  read view over the persona-isolated transport
+  (`fetch_claim_source_for`), readiness refused with consensus's own
+  predicates before any curve-tree work, the canonical P-lane floor fee
+  (no knob), sweep-all funding through the bond path's own sweep body,
+  `AssembleUnbond` in the actor, a `PendingUnbond` sealed
+  persist-before-dispatch, then the posture→submitter choke point. The
+  pending-post block gains the fourth reservation-observed kind —
+  **`PENDING_POST_VERSION` v8 → v9** (rule 42; snapshot + paired-bump
+  gate) — deliberately NOT a `PendingBondPost`: the exit draws no
+  decorrelation offset (its trigger, a cooldown expiring, is already
+  public), so it must not enter WI-3's due-check, and it retires by its
+  reservation settling (`remove_settled`), not a pscan match. The
+  **daemon walk** (`e2e_unbond_accepted_and_connected`, the FOLLOWUPS
+  registration it discharges) asserts the RF-D9-class byte proposition —
+  submit-accept via the §8.7.1.1 UB battery, block-connect via the
+  record row read back **present with `bonded_total == 0`** (a
+  transition observed from the pre-submit floor balance) — on the
+  genesis schedule with the cooldown predicates **vacuous by design**
+  (never-served persona; the served-exit arms remain PR-A's unit
+  battery, and the SEB lever cannot cheapen a served exit because the
+  slash watermark advances `CHALLENGE_RESOLUTION_BLOCKS` in blocks).
+  **Reachability is NOT lifted**: no RPC method, no CLI verb, `unstake`
+  RESERVED — the seam's only caller is the `#[cfg(test)]` walk, so
+  "nothing dispatches the assembled bytes" narrowed to "nothing
+  user-facing dispatches"; lifting it is PR-C's composed `unstake`
+  (post + a decorrelated drain), which also inherits the
+  retire-on-a-real-chain arm by its recorded conditional. **Review
+  round 3 hardened the funding sweep with a consensus vin-headroom
+  bound spanning all three retention lanes**: `FCMP_MAX_INPUTS_PER_TX`
+  caps the WHOLE vin, and every tx `sweep_funding_outputs` funds
+  carries exactly one non-funding vin (bond, emission, or Unbond), so
+  an 8-record sweep assembled a 9-vin transaction — accepted on
+  FAKECHAIN (the C++ cap is gated off there, so no regtest walk can
+  observe the boundary) and rejected on every public network. The
+  sweep now owns `MAX_RETENTION_FUNDING_INPUTS` (= 7, pinned by an
+  absolute KAT after a bite proved the relative tests could not see
+  the constant drift) with a per-caller overflow policy: the bond post
+  and the claim's fee sweep refuse by name (their GF-4b
+  consume-everything semantics forbid a silent subset), and the exit
+  caps to the largest subset (no consume-everything obligation;
+  leftovers go to the retired persona's drain). Round 5 classified the
+  refusal on the first-stake surface: `FirstStakeError::FundingFragmented`
+  → wallet-RPC **-29512 STAKE_FUNDING_FRAGMENTED** — its own arm because
+  both standing buckets misdiagnose it (rule 82: "-29500 fund and retry"
+  worsens fragmentation; "-32603 internal" is false, the funding is
+  intact) — rendering the public headroom constant and never the
+  wallet's record count (P-activity volume, the redacted class; the
+  sanitizer reduces the engine arm the same way).
+
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;
   a real behavioral divergence must be named, ratified, and loud
