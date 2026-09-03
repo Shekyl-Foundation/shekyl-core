@@ -286,41 +286,46 @@ mod tests {
     /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
     /// the terminal state — they are descriptions of one chain.
     ///
-    /// RED TODAY under *either* reading of the terminal policy: the legs
-    /// disagree with each other (tail vs remaining/zero), so the
-    /// assertion presumes neither side of FL-R12′. Un-ignore with the
-    /// signed ruling's implementation. Sits beside
+    /// Since the FL-R12′ ruling (2026-09-03, perpetual tail) this is the
+    /// RULED oracle, no longer the direction-neutral leg-agreement form:
+    /// the reward is `TAIL` on **both** sides of the exhaustion boundary,
+    /// on every leg. RED TODAY against the shipped code — the capped
+    /// 6-arg path pays `remaining` (then 0) instead of `TAIL`, and the
+    /// uncapped path errors once `ag` passes the asymptote. Un-ignore
+    /// with the FL-R12′ implementation. Sits beside
     /// `base_block_reward_tail_floor` deliberately: that test pins the
-    /// pre-cap floor in a state where the capped composition pays ~1/286th
-    /// of it, and this is the missing composition oracle.
+    /// pre-cap floor in a state where today's capped composition pays
+    /// ~1/286th of it, and this is the missing composition oracle.
     #[test]
-    #[ignore = "FL-R12' (terminal emission ruling) unsigned: the legs are two different numbers (FL-V8); un-ignore with the signed ruling's fix"]
+    #[ignore = "FL-R12' ruled (perpetual tail) but not yet implemented: the capped path pays remaining-then-zero instead of TAIL; un-ignore with the implementation"]
     fn terminal_reward_legs_agree() {
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
         let s = p.money_supply;
 
-        // Estimate vs validation at the first diverging block
-        // (`remaining < tail`) and at exhaustion itself.
-        for ag in [s - tail + 1, s] {
-            let estimate_leg = base_block_reward(ag, &p).unwrap();
-            let validation_leg = cap_reward_to_remaining_supply(estimate_leg, ag, &p);
+        // Both sides of the boundary: last sub-tail-headroom block,
+        // asymptote itself, and PAST the asymptote (reachable under the
+        // ruled non-saturating accumulator).
+        for ag in [s - tail + 1, s, s + tail] {
+            let base_leg = base_block_reward(ag, &p)
+                .unwrap_or_else(|e| panic!("base leg must pay TAIL at ag={ag}, got {e:?}"));
+            assert_eq!(base_leg, tail, "base leg != TAIL at already_generated={ag}");
+            let validation_leg = cap_reward_to_remaining_supply(base_leg, ag, &p);
             assert_eq!(
-                estimate_leg, validation_leg,
-                "estimate and validation legs disagree at already_generated={ag}"
+                validation_leg, tail,
+                "validation leg != TAIL at already_generated={ag}"
             );
         }
 
         // The projection leg — the function the census-R2 reopen
-        // criterion names. Past the exhaustion height it saturates to
-        // `money_supply` and reports the tail while validation pays 0.
-        let past_exhaustion = 19_200_000; // > the 2^21-identity exhaustion block (~19_158_412)
-        let ag = projected_already_generated(past_exhaustion, &p).unwrap();
+        // criterion names — must also report TAIL past the boundary.
+        let past_boundary = 19_200_000; // > the 2^21-identity tail-headroom crossing
+        let ag = projected_already_generated(past_boundary, &p).unwrap();
         let projection_leg = base_block_reward(ag, &p).unwrap();
-        let validation_leg = cap_reward_to_remaining_supply(projection_leg, ag, &p);
         assert_eq!(
-            projection_leg, validation_leg,
-            "projection and validation legs disagree past exhaustion (height {past_exhaustion})"
+            cap_reward_to_remaining_supply(projection_leg, ag, &p),
+            tail,
+            "projection→validation != TAIL past the boundary (height {past_boundary})"
         );
     }
 

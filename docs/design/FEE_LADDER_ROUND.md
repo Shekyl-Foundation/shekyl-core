@@ -114,11 +114,33 @@ and a sim→engine-core dependency is the wrong direction; the daemon-side
 Rust rounding gets a real owner in the §7 implementation, which is where
 one home for all three copies is decided).
 
+## FL-R12′ ruling (2026-09-03, relayed via steering)
+
+**Signed: plain perpetual tail** — reversing the earlier recorded cap
+lean. Hard cap rejected on the priority-order derivation; the fee-fed
+burn-recycling floor declined, with the maintainer's dormancy rationale
+on the record (a maturing monetary asset is mostly high-value/low-volume
+— exactly when the opportunity-cost attacker is cheapest and a fee-fed
+pool is empty; a floor that vanishes under the conditions it was built
+for is not a floor). Ruled build shape, consequences FL-R14/FL-R15, the
+FL-V7 polarity flip (`:18` becomes the false line), FL-D1's shrink,
+FL-R13's de-escalation to a calibration round, and the FL-D6
+smoothing-pool row are all recorded in the derivation doc's §8/§9. The
+red test is re-oriented to the ruled oracle (`reward == TAIL` on both
+sides of the boundary; observed red against the capped path:
+599 999 999 vs 600 000 000). *The §8 signature line remains empty for
+the in-tree countersignature; provenance of this entry is the steering
+relay.*
+
 ## Decisions pending (all with the maintainer)
 
-1. **FL-R12′** — terminal emission-state ruling (lean recorded: cap;
-   unsigned).
-2. **FL-R13 / FL-D5** — fee-floor basis round (genesis-blocking if cap).
+1. **FL-R12′ implementation authorization** — the ruling is signed
+   (above) but building the consensus change (clamp reconciliation,
+   flag-path removal, rename sweep per FL-R15) is a separate
+   authorization; **FL-R14** (persisted `u128` + V13 resync vs
+   documented-`u64`-bound) must be answered before or with it.
+2. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
+   since the ruling).
 3. **PR** — branch is pushed for review (review round 3); **PR remains
    unopened** per the maintainer's instruction.
 4. Census-R2: **deferred per review-round-2 ruling** — resumes on
