@@ -1,32 +1,28 @@
-# The C++ `wallet2_ffi` Dispatcher (Phase 5 deletion target)
+# The C++ `wallet2_ffi` Dispatcher (Phase 5 deletion record)
 
-> **Scope note (2026-08-06, roadmap B1).** This document used to describe
-> `rust/shekyl-engine-rpc`, the transitional Rust crate that wrapped C++
-> `wallet2` over a C FFI facade and served it as JSON-RPC. **That crate is
-> deleted.** What survives, and what this document now covers, is the C++
-> side it wrapped: `src/wallet/wallet2_ffi.{h,cpp}`, still compiled into
-> `libwallet` (`src/wallet/CMakeLists.txt`) and exercised by C++ unit tests,
-> with no Rust consumer left. Deleting it is Phase 5's job
-> ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5).
+> **Status: CLOSED-as-record (2026-09-03).** Phase 5 landed 2026-08-19
+> (#507). `src/wallet/wallet2_ffi.{h,cpp}` and the rest of `src/wallet/`
+> are deleted. This table is the deletion checklist as it stood at
+> cutover, retained so the method-coverage argument is not re-derived
+> from git history.
 >
-> **This is not the wallet RPC reference.** The live, Shekyl-native wallet
-> RPC is `rust/shekyl-wallet-rpc`, and its contract is
-> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml). Nothing below describes
-> a surface a client should target.
+> **This is not the wallet RPC reference.** The live, Shekyl-native
+> wallet RPC is `rust/shekyl-wallet-rpc`, and its contract is
+> [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml). Nothing below
+> describes a surface a client should target.
 
 ## Why this document still exists
 
-The dispatcher tabulated below is dead-ended but not yet removed, and its
-method coverage is the checklist Phase 5 works against: every row is either
-superseded by a `wallet_rpc.yaml` method, or rejected by design (Shekyl has
-no accounts, no subaddresses, no integrated addresses, no raw tx-secret
-export). Keeping the table until the C++ is gone is cheaper than
-re-deriving it from `wallet2_ffi.cpp` at deletion time.
+The dispatcher tabulated below was the Phase 5 deletion checklist:
+every row is either superseded by a `wallet_rpc.yaml` method, or
+rejected by design (Shekyl has no accounts, no subaddresses, no
+integrated addresses, no raw tx-secret export). The C++ is gone; the
+table stays as the record of what was deleted.
 
 ## FFI boundary design
 
-The facade `rust/shekyl-engine-rpc` consumed is described here as-built,
-because the C++ half is unchanged by the crate's deletion.
+The facade `rust/shekyl-engine-rpc` consumed is described here as it was
+at cutover. The C++ half is deleted (Phase 5, #507).
 
 ### JSON at the boundary
 
@@ -195,12 +191,11 @@ boundary)"* (2026-04-27) for the rationale and
 *"`Wallet::refresh` snapshot-merge-with-retry"* (2026-04-26) for the
 driver contract.
 
-## What Phase 5 removes
+## What Phase 5 removed
 
-- `src/wallet/wallet2_ffi.{h,cpp}` — the facade and dispatcher above, now
-  with no Rust consumer.
+- `src/wallet/wallet2_ffi.{h,cpp}` — the facade and dispatcher above.
 - `src/wallet/wallet2.{h,cpp}` — deleted wholesale by the Phase 5 single
-  commit (the C++ `wallet_rpc_server` is already gone; see below)
+  commit (the C++ `wallet_rpc_server` was already gone; see below)
   ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5).
 - ~~The C++ `shekyl-wallet-rpc` binary name collision resolves at the same
   point: only the Rust binary remains.~~ **Resolved earlier, 2026-08-18

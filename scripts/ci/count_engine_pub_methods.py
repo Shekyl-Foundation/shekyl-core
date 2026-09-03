@@ -42,7 +42,8 @@ _ENGINE_SELF = re.compile(
 # sit at brace depth > 1. Expanding macros is out of scope for this
 # lexer (syn/rustc would be a heavier freeze subject than the count).
 _IMPL_ITEM_MACRO = re.compile(
-    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?[A-Za-z_]\w*!\s*(?:[;(\[{]|$)"
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+    r"(?:(?:r#)?[A-Za-z_][\w]*::)*(?:r#)?[A-Za-z_]\w*!\s*(?:[;(\[{]|$)"
 )
 
 
@@ -364,7 +365,7 @@ def self_test() -> None:
     count `{`/`}` in comments or `'{'` (impl body ends early / test-mod
     skip eats production); refuse `crate::Engine`; skip any filename
     containing the substring `test` (`attestation.rs`); miss `r#type`;
-    ignore impl-item macros (`add_method!()`); walk only `src/engine`
+    ignore impl-item macros (`add_method!()` / `crate::add_method!()`); walk only `src/engine`
     (`lib.rs` inherent impls vanish).
     """
     assert impl_self_is_engine("impl Engine<S, D> {")
@@ -525,6 +526,18 @@ impl Engine {
 """
         )
         raise AssertionError("expected FreezeHole on impl-item macro")
+    except FreezeHole:
+        pass
+    try:
+        method_names_in_source(
+            """
+impl Engine {
+    crate::add_method!();
+    pub fn keep(&self) {}
+}
+"""
+        )
+        raise AssertionError("expected FreezeHole on path-qualified impl-item macro")
     except FreezeHole:
         pass
     names = method_names_in_source(

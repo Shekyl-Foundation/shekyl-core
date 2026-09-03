@@ -508,9 +508,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
   - Target: pre-genesis
 
-- **Rust `WalletFile` vs C++ `wallet2` advisory-lock cross-test (PR 6 §5.12 F4).**
-  - Target: pre-genesis
-
 - **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   - Target: pre-genesis
 

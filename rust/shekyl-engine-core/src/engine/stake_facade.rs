@@ -44,7 +44,11 @@ use super::{Engine, EngineSignerKind, LocalLedger, LocalRefresh};
 /// for non-stakers (`staking_read_view`) are callable here; handle-gated
 /// verbs refuse with their existing error types when no
 /// [`super::stake_engine::StakeEngineHandle`] is resident.
-#[derive(Clone, Copy)]
+///
+/// `Copy`/`Clone` are manual: `#[derive]` would demand those bounds on
+/// every Engine type parameter, and production `LocalLedger` /
+/// `WalletFile` are neither. The only field is a shared reference, so the
+/// view copies regardless.
 #[allow(private_bounds)] // same Engine-trait privacy posture as `Engine` itself
 pub struct StakeFacade<'a, S, D, L, E, R, P, F>
 where
@@ -57,6 +61,35 @@ where
     F: PersistenceEngine,
 {
     engine: &'a Engine<S, D, L, E, R, P, F>,
+}
+
+#[allow(private_bounds)]
+impl<S, D, L, E, R, P, F> Copy for StakeFacade<'_, S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    F: PersistenceEngine,
+{
+}
+
+#[allow(private_bounds)]
+impl<S, D, L, E, R, P, F> Clone for StakeFacade<'_, S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    F: PersistenceEngine,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[allow(private_bounds)]
@@ -250,5 +283,18 @@ mod tests {
             .staking_read_view()
             .expect("a staker read is the same door");
         assert!(view.staking_enabled);
+    }
+
+    /// `#[derive(Clone, Copy)]` would not actually Copy a production Engine
+    /// (LocalLedger / WalletFile are not Copy). The manual impls must.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stake_facade_is_copy_on_a_production_engine() {
+        let (_tmp, engine) = non_staker_engine(SEED);
+        let a = engine.stake();
+        let b = a;
+        a.staking_read_view()
+            .expect("copy must not consume the view");
+        b.staking_read_view()
+            .expect("copy must not consume the view");
     }
 }

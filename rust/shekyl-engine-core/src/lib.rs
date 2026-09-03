@@ -123,7 +123,7 @@ pub mod __bench_internals {
 ///
 /// First (and currently sole) consumer: **`shekyl-wallet-rpc`**, whose WI-1
 /// P-scan lifecycle test needs a *staker* wallet to prove the embedder wires
-/// [`Engine::start_pscan_if_staker`] into open/close. Production staking RPC is
+/// [`crate::StakeFacade::start_pscan_if_staker`] into open/close. Production staking RPC is
 /// live; first-stake still needs proofs, a daemon, and the FSM, which those
 /// tests must not run. The fixture path is [`Engine::persist_bond_record`]
 /// — exposed here behind the feature rather than widened to `pub`, so no
