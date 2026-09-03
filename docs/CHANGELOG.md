@@ -6,7 +6,8 @@
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The register
   that gates DRS-E2's correctness arm is no longer empty. Reviewed at
-  `6bc2de8f2`/`4b9807c5e`: **CEN-H5 and CEN-L10 CHECKED-CONFORMANT** — the vin whitelist — three
+  `6bc2de8f2`/`4b9807c5e`, covering **all six** reviewable store-enforced rows:
+  **CEN-H5, CEN-L7, CEN-L9 and CEN-L10 CHECKED-CONFORMANT** — the vin whitelist — three
   enforcement sites agreeing with the ratified spec and with each other, relay
   coverage via `check_tx_semantic` and connect coverage via the double-spend
   visitor plus the unconditional DB backstop); **CEN-L12 DIVERGENT**, coupled to
