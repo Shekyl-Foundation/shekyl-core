@@ -412,6 +412,10 @@ reproducible from the module; headline numbers:
 ### §4.1 The correction surface (FL-C5 input)
 
 `C` over the reachable §1.8 grid spans **[0.680, 12.92] — a 19× range**.
+(The JSON's `c_reachable_min` prints 0.692: the age-0 grid *ratios* {0.1,
+0.5, 0.9} are all unreachable — genesis sits at ratio ≈ 0 and enters the
+measurement through the §4.2 rung tables, whose genesis-quiet row is the
+0.680 endpoint.)
 Extremes: genesis-quiet (`σ=0.15, M_r=0.8, b≈0`) → 0.680; old chain at 90%
 supply ratio under congestion (`M_r=1.3, b=0.90, σ≈0.006`) → 12.92. Both
 `M_r` and `b` saturate at their rails, so `C` is *constant* in the deep
@@ -432,6 +436,10 @@ whole rung somewhere reachable.
 | mature-quiet (12 y, `v=5`) | 0.874 | 16 000 / 61 000 / 250 000 / 3 100 000 | 14 000 / 54 000 / 220 000 / 2 700 000 | 14 129 | **yes** |
 | mature-congested (12 y, `v=200`, `M=3·Zm`) | 5.60 | 1 700 / 6 800 / 81 000 / 1 100 000 | 9 500 / 38 000 / 460 000 / 5 700 000 | 1 570 | no |
 | old-congested-wide (30 y, `v=500`, `M=10·Zm`) | 12.92 | 15 / 63 / 2 600 / 32 000 | 200 / 820 / 33 000 / 420 000 | 15 | no |
+
+(These tables measure the *mispricing* and therefore apply raw `C`; the
+values a §5.2 daemon would actually serve apply the quantized `C_q` and
+differ by up to one pow2 step.)
 
 Two regimes, both mispriced today, in opposite directions:
 
@@ -486,9 +494,14 @@ reward held quasi-static, so it isolates the *marginal* churn `C` adds):
 
 **Raw `C` fails FL-C4a catastrophically** — per-value anonymity cohorts of
 3–6 blocks (~150–300 txs at baseline volume vs ~500 000 for a month-stable
-value). **The registered pow2 quantization remedy passes every scenario**,
-including the 4× volume ramp (exactly one 2× step). FL-C4a verdict:
-`C` enters the formula only as `C_q = 2^round(log2 C)`. Residual risk: a
+value). **Pow2 quantization passes every scenario.** Two snap rules were
+measured: the *registered* round-to-nearest (§1.4a) passes with one 2×
+step on the 4× ramp; the *adopted* ceiling variant (`2^ceil(log2 C)`,
+§5.2 — a post-registration refinement selected by the already-registered
+FL-C2(b), because round-to-nearest under-funds the top rung's marginal
+pricing by up to √2) passes with **zero** steps on the same ramp. The
+register itself is not rewritten; this paragraph is the disclosure.
+FL-C4a verdict: `C` enters the formula only as `C_q`. Residual risk: a
 state sitting exactly on a pow2 boundary could flicker at 2× amplitude —
 the registered scenarios did not exhibit it, and §7 carries a hysteresis
 construction requirement with the dwell gate as its acceptance test.
@@ -544,13 +557,21 @@ construction.) FL-C7: **pass**.
 ### §5.2 The proposed ladder
 
 Three rungs, values computed by the daemon at estimate time from state it
-already holds, with `C_q = 2^round(log2((1−σ)·M_r/(1−b)))`:
+already holds, with `C_q = 2^ceil(log2((1−σ)·M_r/(1−b)))` (ceiling, not
+the registered round-to-nearest — the §4.4 disclosure: ceiling never
+under-funds marginal pricing, overprices ≤ 2× which is inside FL-C3, and
+re-passed the full dwell gate):
 
 ```text
-fees[0]  economy   = max( round_up2( C_q · R·w_ref/Mfw² ),  relay_accept_floor )
+fees[0]  economy   = max( round_up2( C_q · R·w_ref/Mfw² ),  relay_floor )
 fees[1]  standard  =      round_up2( C_q · 4·R·w_ref/Mfw² )
 fees[2]  priority  =      round_up2( C_q · 2·R/Mfw )
 ```
+
+`relay_floor` is the **unbuffered** `check_fee` operand (`0.95·R·w_ref/M²`,
+the `blockchain.h:682` seam) — clamping to the post-2%-buffer acceptance
+edge would spend the entire buffer that exists to absorb estimate→admission
+state drift.
 
 - `R` = the 5-arg base subsidy (unmodulated) — `C_q` carries the modulation;
   `Mfw = min(Mnw, Mlw)` and the grace-block median machinery are unchanged.
@@ -583,9 +604,16 @@ named as misfitting a two-family ladder.**
 1. Privacy is lexicographically prior. A rung's cost is paid by *every*
    transaction in the anonymity set it splits, forever; the overpayment C3
    bounds is paid only by a user whose need falls between rungs, once,
-   voluntarily, and capped: within the expansion family the worst case is
-   **6.25×** (a user needing `Fm`'s 16% who now pays the `2R/M` top —
-   constant at every median, because both rungs are 1/M-family).
+   voluntarily, and capped: a user needing `Fm`'s 16% who now pays the
+   `2R/M` top overpays **12.5×** — exactly the `Fh/Fm` gap the inherited
+   ladder already carries at every median (§4.3), and constant across
+   medians because both rungs are 1/M-family. Deleting `Fm` does not
+   *create* a C3 violation; it inherits the 12.5× one the ladder always
+   had, confines its marginal cost to needs in the 16%-neighborhood, and
+   those needs are borne today by **zero measured users** (FL-V3). Needs
+   *between* the standard rung's `x` and 16% cross the inter-family seam
+   and overpay up to `M/(2·w_ref)` — with or without `Fm`; the deletion
+   does not change that side.
 2. The rungs C3 would insert have no users to protect: the traffic model
    assigns them < 5%, and the one intermediate rung that existed measured
    **0%** in production for its entire life (FL-V3). C4b would delete them
@@ -595,8 +623,10 @@ named as misfitting a two-family ladder.**
    vs 1/M by construction (§3.2). Uniform-geometric spacing across that
    seam is not achievable with any finite rung count — the criterion's
    premise (one geometric family) does not describe this object. The
-   *intra-family* spacings of the proposed ladder are 4× (admission) and
-   6.25× worst-case overpayment (expansion), both within C3's bound.
+   *intra-family* spacings of the proposed ladder are 4× (admission,
+   within C3's bound) and 12.5× worst-case overpayment on the expansion
+   side — the inherited `Fh/Fm` gap, above C3's bound and resolved for
+   privacy per point 1.
 4. The losing branch, recorded: 4 rungs re-spaced uniform-geometric
    (`r = 5.85` over 1%–200% at `Zm`) satisfies C3 at minimum zone only,
    re-breaks at 10·Zm (`r = 12.6`), and staffs its extra rung with nobody —
@@ -605,9 +635,11 @@ named as misfitting a two-family ladder.**
 ### §5.4 Relay-floor disposition (FL-C6)
 
 Adopted (proposal): **clamp** — `fees[0] = max(corrected economy,
-check_fee's acceptance bound)`, with the daemon reading the bound from the
-same function `check_fee` uses (the seam `blockchain.h:682` already
-extracts it). Rationale: the clamp is correct *unconditionally* — whatever
+unbuffered relay floor)`, the floor read from the same seam `check_fee`
+prices from (`blockchain.h:682`), *not* the post-2%-buffer acceptance
+edge: serving the edge would spend the whole buffer that exists to absorb
+estimate→admission state drift. Rationale: the clamp is correct
+*unconditionally* — whatever
 the floor is ruled to be later, serving an estimate below it dead-letters
 wallets (FL-V5, three of six states). Re-deriving the floor itself (scaling
 `get_dynamic_base_fee` by `C_q`, principled endpoint) **is CEN-M3's row**
@@ -636,7 +668,7 @@ bounded by the measured 1.5× worst case.
 | `CORE_RPC_VERSION` | minor bump with the vector change | Yes | with the row above |
 | `shekyl-engine-core` `fee_policy.rs` mapping | 0/1/3 → 0/1/2 | No | with the vector change |
 | `shekyl-rpc-client` | unify to the engine mapping; **delete** the dead `[1, 5, 25, 1000]` fallback ladder (`lib.rs:471-486`, impossible daemon shape, rule 60) | No | fallback deletion any time; mapping with the vector change |
-| `fee_policy.rs` absolute cap | `Fh` moves ⇒ the KAT-pinned 14 000 000 genesis-condition cap is re-derived as the swept maximum of the corrected top rung near genesis (instrument bound: young-congested already reaches 16 000 000; exact value pinned by KAT in the implementing PR) | No | with the daemon value change |
+| `fee_policy.rs` absolute cap | `Fh` moves ⇒ the KAT-pinned 14 000 000 genesis-condition cap is re-derived as the swept maximum of the **served** (`C_q`) top rung over the reachable young-chain grid; §4.2's raw-`C` young-congested 16 000 000 is a lower-bound anchor only; exact value pinned by KAT in the implementing PR | No | with the daemon value change |
 | `check_fee` / `get_dynamic_base_fee` | **unchanged** this round (clamp absorbs the collision); re-derivation is CEN-M3's | — | FL-D2 |
 | Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin; the §4.4 dwell scenarios are the acceptance gate | No | implementing PR |
 
@@ -652,10 +684,10 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R3 | `C` enters only pow2-quantized (`C_q`), hysteresis-guarded | adopt | |
 | FL-R4 | Rung count = 3; `Fm` deleted; FL-C3-vs-C4b conflict resolved for privacy per §5.3 | adopt | |
 | FL-R5 | Top rung = `C_q·2R/Mfw` unconditional (surge discount removed) | adopt | |
-| FL-R6 | `fees[0]` clamped to the `check_fee` acceptance bound | adopt | ⚖ CEN-M3 |
+| FL-R6 | `fees[0]` clamped to the unbuffered relay floor (`blockchain.h:682` seam) | adopt | ⚖ CEN-M3 |
 | FL-R7 | Wire shape (vector 3), `CORE_RPC_VERSION`, both client mappings | adopt **post-RK-5**; bridge = duplicate `fees[2]=fees[1]` | |
 | FL-R8 | Dead rpc-client fallback ladder deleted | adopt | |
-| FL-R9 | Wallet absolute cap re-derived from corrected genesis top rung (~16 000 000, KAT-swept) | adopt | |
+| FL-R9 | Wallet absolute cap re-derived as the swept maximum of the *served* (`C_q`) top rung over the reachable young-chain grid, pinned by KAT in the implementing PR (§4.2's raw-`C` 16 000 000 is a lower-bound anchor, not the value) | adopt | |
 | FL-R10 | FL-V1 recorded as a standing defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6) | record | ⚖ (F14b evidence) |
 | FL-R11 | The G6b fossil-flag punt is discharged **for the fee constants only**: this round derives the ladder *given* the 300 000-byte zone; the zone value itself and the 1.7×/×50 clamps remain underived | record | ⚖ CEN-G6b |
 

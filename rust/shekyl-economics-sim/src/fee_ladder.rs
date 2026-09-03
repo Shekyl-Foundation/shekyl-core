@@ -309,12 +309,17 @@ impl Rng {
     }
 }
 
-/// Snap `C` to the nearest power of two (the FL-C4a registered quantization
-/// remedy): `2^round(log2(C))`, computed in `SCALE` fixed point.
+/// Snap `C` UP to a power of two: `2^ceil(log2(C))`, in `SCALE` fixed
+/// point. The FL-C4a *registered* remedy was round-to-nearest; ceiling is
+/// the adopted refinement (doc §5.2): round-to-nearest under-funds the top
+/// rung's marginal pricing by up to √2, while ceiling never under-funds
+/// (FL-C2(b) preserved everywhere), overprices ≤ 2× (inside FL-C3), and is
+/// the same monotone step function of the same slow input, so it faces the
+/// same dwell gate — re-measured, not assumed.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn quantize_c_pow2(c_scaled: u64) -> u64 {
     let log = (c_scaled as f64 / SCALE as f64).log2();
-    let k = log.round();
+    let k = log.ceil();
     (SCALE as f64 * k.exp2()) as u64
 }
 
