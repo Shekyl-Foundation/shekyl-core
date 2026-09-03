@@ -13,8 +13,10 @@ Convention, because the family token is one case-flip from a rung symbol:
 rung symbols always appear backticked as `Fl` / `Fn` / `Fm` / `Fh`; family
 tokens are always `FL-` followed by a digit or section letter.
 
-Branch: `design/fee-ladder-derivation` (worktree, off `dev`). All `file:line`
-anchors are at `dev` = 6d2f49a5c unless stated.
+Branch: `design/fee-ladder-derivation` (worktree, off `dev`). `file:line`
+anchors in §1–§9 are at `dev` = 6d2f49a5c unless stated; FL-V8…FL-V11
+(minted at review round 2) are anchored at the merge with `dev` =
+a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 
 ---
 
@@ -75,6 +77,15 @@ the design-doc stage**: §8 stays unsigned, and no CEN-M3 / CEN-F14b /
 CEN-G6b-shaped question is *ruled* here before the sequencing answer.
 Derivation, findings, and the unsigned table proceed — they are inputs to
 whichever sequencing wins, not rulings.
+
+**Sequencing ruled at review round 2 (maintainer, 2026-09-03): census-R2
+is deferred, not silently.** FL-V8/FL-V9 are consensus-surface,
+genesis-frozen, and pre-genesis-cheap; they jump the R2 queue. Rule-21
+reopen criterion for the R2 deferral, as ruled: **R2 resumes when (a) the
+emission terminal-state ruling (FL-R12′) is signed in §8, and (b)
+`projected_already_generated` has a red test at the exhaustion
+boundary.** Conjunct (b) is discharged as of this round's review-round-2
+commit (`terminal_reward_legs_agree`, FL-V10); conjunct (a) is open.
 
 ## §1 Pre-registered decision criteria (rule 11)
 
@@ -329,7 +340,7 @@ states; citations must not conflate them.
 ### FL-V7 — User-facing docs promise perpetual tail emission; the consensus arithmetic ends it (escalated finding, minted 2026-09-03 at steering review)
 
 The §4.6 exhaustion pin refutes a headline monetary-policy claim made to
-users, three times:
+users, four times:
 
 - `docs/ECONOMY_EXPLAINED.md:35-36` — "floored at a **perpetual** tail of
   0.6 coins/block"; `:49-50` — "the 0.6-coin tail preventing the 'zero
@@ -338,36 +349,140 @@ users, three times:
   `:667` — "maintains **perpetual** security incentives through tail
   emission."
 
-**The contradiction is self-contained — no code and no instrument is
-needed to see it.** `ECONOMY_EXPLAINED.md:18` states *"one fixed supply —
-4,294,967,296 coins (2³²)"*; `:35` states *"floored at a perpetual tail
-of 0.6 coins/block"* — seventeen lines apart in the same document. A
-fixed cap and a perpetual per-block floor are mutually exclusive by
-arithmetic alone. What this round's derivation adds is only the *date*
-and which side the code took: the supply-headroom cap
-(`cryptonote_basic_impl.cpp:169-173`,
-`shekyl_cap_reward_to_remaining_supply` — added *deliberately*, with a
-comment fixing the underflow that used to disable it) zeroes the
-validation reward once `already_generated_coins` reaches `money_supply`,
-and tail-era headroom is exactly `tail·2^esf`, so the tail lasts exactly
-`2^21 = 2 097 152` blocks (~8 years) and then emission is zero,
-permanently (§4.6, independently re-derived at steering). Any dispute
-about the instrument therefore touches the timing, never the finding.
-The cited precedent does not transfer: Monero's tail is perpetual because
-Monero's supply is uncapped (`DESIGN_CONCEPTS.md:544`).
+**Restated at review round 2 (maintainer ruling, 2026-09-03).** An
+earlier draft led with the doc-vs-doc contradiction (`:18` fixed supply
+vs `:35` "perpetual") and demoted the code to "supplying only the date" —
+optimizing for a finding undisputable-by-disputing-the-instrument. That
+was the wrong objective function: a doc-vs-doc contradiction is a prose
+bug, and the demotion buried the code defect where the real severity
+lives. Correct statement:
+
+- **`:35`'s formula description is implemented faithfully** —
+  `(remaining_supply >> 21)` floored at 0.6/block *is*
+  `base_block_reward` (`emission.rs:52-67`); only the word "perpetual"
+  overreaches. `:18`'s fixed supply is faithful too.
+- **The refuted line is `:49-50`** — "the 0.6-coin tail preventing the
+  'zero subsidy' security cliff **forever**." The instrument of
+  refutation is the code itself, **FL-V8 below**: the validation path
+  composes the tail floor with a supply cap that zeroes the reward at
+  exhaustion, so the cliff arrives at ≈ block 19 158 412 (~year 73) —
+  exactly where the doc promises it cannot.
+- The tail-era length is an **identity, not a measurement**: the tail
+  engages when `remaining < tail·2^esf`, so `remaining/tail = 2^esf =
+  2²¹` blocks exactly. (Tail entry ≈ block 17 061 260, ~year 65; the
+  ±1 against any independently quoted height is a fencepost convention,
+  not a disagreement.)
+- The cited precedent does not transfer: Monero's tail is perpetual
+  because Monero's supply cap is unreachable
+  (`DESIGN_CONCEPTS.md:544`).
 
 **Not fixed in this round, with the blocker named (rule 22):** the fix
-direction is a monetary-policy ratification, not a text edit — either the
-docs change to "a tail era of exactly 2²¹ blocks, then the fee era," or
-the cap semantics change to make the tail perpetual. Editing the docs
-first would presume the answer to a genesis-freeze-sensitive question.
-Decision row FL-R12; distinct from FL-D1 (which is the *design gap* —
-what governs block size once the reward is zero — and stands regardless
-of which way FL-R12 goes, though a perpetual-tail ruling would shrink
-it). Class note for the program: this is the negative-space failure from
-a third direction — a claim nowhere checked against the thing it
-describes, found only because a derivation round happened to compute the
-quantity the prose asserts.
+direction is a monetary-policy ratification, not a text edit — and FL-V8
+shows the code itself has not taken one side. Decision row FL-R12′;
+distinct from FL-D1 (the *design gap* — what governs block size once the
+reward is zero — which stands regardless of the ruling, though a
+perpetual-tail ruling would shrink it). Class note for the program: the
+negative-space failure from a third direction — a claim nowhere checked
+against the thing it describes, found only because a derivation round
+happened to compute the quantity the prose asserts.
+
+### FL-V8 — The two supply clamps encode opposite terminal policies, and both are live (review round 2; anchors at a566a466)
+
+The FFI calls them twins (`rust/shekyl-ffi/src/legacy_core.rs:585`, "the
+emission-side twin of `shekyl_advance_already_generated`"). They are not
+twins:
+
+- **`blockchain.cpp:6420`** advances the supply accumulator through
+  `shekyl_advance_already_generated`, saturating at `money_supply`. The
+  rationale directly above it (`:6410-6413`) is inherited Monero prose
+  verbatim: *"MONEY_SUPPLY yields a subsidy of 0 under the base formula
+  and therefore the minimum subsidy >0 in the tail state"* — i.e. **pay
+  the tail forever**. Precision matters for whoever fixes this: the
+  comment's *local* claim about the base formula is **true** (at
+  `A = S`, `base_block_reward` returns the tail); what is false is the
+  policy conclusion, because the comment predates the capped composition
+  below. In Monero the premise holds because `MONEY_SUPPLY = 2⁶⁴−1` is
+  unreachable; here it is reached at ≈ block 19 158 412. Rule 16: the
+  inherited rationale is still sitting in the comment.
+- **`cryptonote_basic_impl.cpp:169`** clips the validation reward through
+  `shekyl_cap_reward_to_remaining_supply` to `money_supply −
+  already_generated` — **pay nothing** once the accumulator saturates.
+
+One component says tail-forever, the other says cap-to-zero, and both
+ship on the consensus surface. The earlier FL-V7 draft's "the code took
+the cap side" was wrong as stated: the *validation composition*
+behaviorally ends at zero, but the codebase as a whole has not taken one
+side — which is exactly why FL-R12 was malformed as originally posed.
+
+### FL-V9 — The supply cap is gated on an unrelated feature flag (review round 2)
+
+`cryptonote_basic_impl.cpp:153` wraps **both** the release multiplier and
+the supply cap in `if (SHEKYL_TX_VOLUME_BASELINE > 0)`. Setting the
+demand-pacing baseline to 0 silently flips terminal emission policy from
+cap-to-zero back to tail-forever. A genesis-frozen supply rule must not
+be reachable through a pacing parameter — this is the
+silent-security-downgrade class, and it also couples FL-R12′'s answer to
+a knob that has nothing to do with it. **No behavior edit in this round**
+(deliberately: the branch's charter is design-doc-only, and making the
+cap unconditional would entrench one side of FL-R12′ before signature);
+the unconditional-cap fix ships with whichever FL-R12′ implementation
+wins.
+
+### FL-V10 — The canonical crate cannot see the terminal defect, and one test pins it green (review round 2)
+
+- `projected_already_generated` returns `Ok(money_supply)` on saturation
+  (`emission.rs:80-82`), so `base_emission_at` at any height beyond
+  exhaustion returns the tail cleanly — the projection leg reports a
+  clean perpetual tail forever. `base_block_reward` errors only *past*
+  the cap (`:56-58`), never at it. No canonical-crate path composes the
+  cap into a height-indexed emission answer, so no test built on the
+  crate can reach the failure (rule 47: there was no edit that makes it
+  go red).
+- Worse, `emission.rs`' `base_block_reward_tail_floor` test sets
+  `near_max = money_supply − 2 097 153` and asserts the reward is
+  600 000 000 — **a block paying ≈ 286× the entire remaining supply,
+  pinned green as intended behavior**. The function's arithmetic is
+  correct for what it computes (the pre-cap floor); the test's *name and
+  role* present it as terminal behavior with no companion asserting the
+  capped composition. Wrong-oracle exhibit; left untouched this round.
+- The missing companion now exists as this round's **red test**:
+  `terminal_reward_legs_agree` (sim crate, `#[ignore]`d with the reason
+  naming FL-R12′) asserts the estimate leg and the validation leg agree
+  at the first diverging block (`remaining < tail`) and at exhaustion.
+  It is red today under *either* reading of the terminal policy — the
+  invariant "two descriptions of one chain agree" presumes neither — and
+  greens with whichever FL-R12′ implementation is signed, at which point
+  it graduates into `shekyl-economics` beside the exhibit above. This
+  discharges the test conjunct of the census-R2 reopen criterion (§0.1).
+
+### FL-V11 — The ladder's anti-spam floor decays 3 413× across the emission curve; the round measured it and failed to name it (review round 2)
+
+`Fl = R·w_ref/Mfw²` is linear in the reward. At `Mfw = Zm`: genesis
+`Fl = 68 266` atomic/byte; tail-era `Fl = 20` atomic/byte — a **3 413×
+decay** (and 0 after exhaustion on the capped leg). Monero's equivalent
+span (35.18 → 0.6 XMR) is ~59×: the 2³² cap plus ESF-21 plus the
+inherited-unexamined 0.6 tail produced a floor dynamic range ~58× wider
+than the one ArticMine's constants (`w_ref = 3000`, `Zm = 300 000`) were
+tuned for — on a chain where stakers are paid to store whatever the
+floor admits, and where the burn loop is downstream of fee level.
+
+Two things stated on the record:
+
+1. **The instrument printed this number and the round failed to name the
+   finding** — `[20, 80, 320, 4000]` sits in §4.6's degenerate pins; the
+   3 413× ratio was never computed from it. A measured value is not a
+   finding until it is named against the thing it breaks.
+2. **§5.2's proposed ladder does not resolve it.** The correction keeps
+   `Fl ∝ R` by construction, and `C_q`'s 19× range cannot offset a
+   3 413× reward decay: the corrected tail-era floor is ~20·`C_q`
+   against a genesis ~46 000–68 000. The open question — whether the
+   anti-spam floor should be reward-proportional *at all*, versus an
+   absolute constant or a fee-era recalibration — is **new derivation
+   scope** requiring its own pre-registered criteria (repeating this
+   round's rule-11 discipline, not skipping it). Decision row FL-R13;
+   deferral FL-D5. Per the maintainer's review: **if FL-R12′ lands on
+   the cap side, the fee floor is the sole long-run security budget and
+   this is genesis-blocking, not a calibration question.**
 
 ## §3 The model
 
@@ -580,7 +695,7 @@ construction.) FL-C7: **pass**.
   (§9, FL-D1) — but the corrected estimate at least stops quoting fees from
   a reward that no longer exists. This pin also refutes the user-facing
   "perpetual tail" claims — escalated separately as **FL-V7** with its own
-  decision row (FL-R12), because a false monetary-policy promise and a
+  decision row (FL-R12′), because a false monetary-policy promise and a
   missing governance mechanism need different owners and different urgency.
 
 ## §5 The rung ruling (proposed, unsigned) and the anonymity analysis
@@ -704,6 +819,7 @@ bounded by the measured 1.5× worst case.
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | Corrected estimate at least reports the truth (zero); the governance gap itself remains | **Open hazard, deferred FL-D1** — post-mining-era block-size governance has no economic mechanism; reopen criteria §9 |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
+| W7 | Fee-tier fingerprint adversary vs the **single-tier** alternative (review round 2, maintainer F-6) | One canonical rate + coarse quantization: every conforming tx pays the identical fee value — the tier signal vanishes entirely | (n/a — option, not attack) | Privacy upside is real and larger here than in Monero: with FCMP++ removing ring heuristics, fee tier is a proportionally bigger share of the remaining public metadata, and the tier count is a free variable while the ladder is being re-derived anyway | Dispositioned through registered FL-C2, not rubber-stamped: a single price cannot do both registered jobs — the relay/admission floor and full-expansion (`2R/M`) pricing differ by ~50×–2500× across medians, so one tier either prices everyone at the cap (users pay ~200× at baseline) or abandons expansion pricing (the block-scaling mechanism the rungs exist for goes unfunded under congestion). 3 tiers is the registered minimum that funds expansion at all; if a future round relaxes FL-C2(b) (e.g. expansion priced only via `Custom`), single-tier reopens — noted in FL-D3's neighborhood, criterion: a round proposing to retire daemon-served expansion pricing |
 
 ## §7 What changes downstream (proposals with triggers — RK-5 lane untouched)
 
@@ -736,7 +852,8 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R9 | Wallet absolute cap re-derived as the swept maximum of the *served* (`C_q`) top rung over the reachable young-chain grid, pinned by KAT in the implementing PR (§4.2's raw-`C` 16 000 000 is a lower-bound anchor, not the value) | adopt | |
 | FL-R10 | FL-V1 recorded as a standing defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6) | record | ⚖ (F14b evidence) |
 | FL-R11 | The G6b fossil-flag punt is discharged **for the fee constants only**: this round derives the ladder *given* the 300 000-byte zone; the zone value itself and the 1.7×/×50 clamps remain underived | record | ⚖ CEN-G6b |
-| FL-R12 | **Perpetual tail vs supply cap (FL-V7)**: rule which commitment is intended — (a) docs corrected to the ~8-year tail era the code implements, or (b) cap semantics changed to deliver the promised perpetual tail. Genesis-freeze-sensitive; the losing text (four instances across `ECONOMY_EXPLAINED.md` / `DESIGN_CONCEPTS.md`, enumerated in FL-V7) is fixed by whichever side wins, in that PR | **decision required — neither presumed** | escalated via steering 2026-09-03 |
+| FL-R12′ | **Terminal emission-state ruling (supersedes FL-R12, which was malformed as posed — "which side the code took" has no answer, FL-V8).** Reconcile in one signed ruling: the saturating `shekyl_advance_already_generated` and its inherited tail-forever rationale (`blockchain.cpp:6410-6420` — whose local claim about the base formula is true; its policy conclusion is what falls), the `shekyl_cap_reward_to_remaining_supply` cap (`cryptonote_basic_impl.cpp:169`), and the FL-V9 flag gate (`:153`). Outcomes: (a) cap ratified ⇒ `ECONOMY_EXPLAINED.md:49-50` + the other three FL-V7 instances corrected, cap made unconditional, FL-R13 becomes genesis-blocking; (b) perpetual tail ratified ⇒ cap semantics changed, docs stand, FL-D1 shrinks. **Maintainer lean recorded 2026-09-03, unsigned: the cap is the honest reading of "one fixed supply."** Genesis-freeze-sensitive; the ladder derivation is downstream of a `base_reward` whose terminal value is currently two different numbers | **decision required — neither presumed** | escalated via steering 2026-09-03; restated at review round 2 |
+| FL-R13 | **Fee-floor basis (FL-V11)**: whether the anti-spam floor stays reward-proportional (`Fl ∝ R`, decaying 3 413× to the tail and 0 past exhaustion on the capped leg) or moves to an absolute/fee-era-recalibrated basis. New derivation scope with its own pre-registered criteria (rule 11) — not resolved by §5.2, which inherits the decay by construction. **If FL-R12′ lands on the cap side this is genesis-blocking** (the floor becomes the sole long-run security budget) | **decision required — own round, criteria first** | minted at review round 2 |
 
 Signature line (empty by design): ________________
 
@@ -747,7 +864,8 @@ Signature line (empty by design): ________________
 | FL-D1 | Post-mining-era block-size governance (`R = 0` ⇒ penalty prices nothing; §4.6) | Bigger than the fee surface: needs the end-of-mining-era economics round the mission hierarchy already names as an evaluation horizon | (a) any round touches tail-era or post-exhaustion economics, or (b) the V4 lattice-only transition round opens, whichever first — the ladder holder then owes this row an answer |
 | FL-D2 | Relay-floor re-derivation (scale `get_dynamic_base_fee` by `C_q`) | CEN-M3 is a queued census-R2 row; ruling it here would create the double-ratification §0.1 forbids | the §0.1 sequencing decision lands; or CEN-M3's round opens; or the clamp is observed binding in > 50% of mainnet estimate calls over a 30-day window (evidence the floor, not the ladder, is setting prices) |
 | FL-D3 | A fourth tier, if UX ever wants one | No engine tier addresses one (FL-V3: `Elevated` has zero production callers); a rung without users is fingerprint surface | an engine/GUI round proposes a user-facing tier with a predicted ≥ 5% usage share under FL-C4b's test |
-| FL-D4 | Zone value (300 000) and the 1.7×/×50 clamps | CEN-G6b/G6 own them; this round consumed them as boundary (§1.8) | census-R2 runs; FL-R11 records the partial discharge so R2 inherits a smaller question |
+| FL-D4 | Zone value (300 000) and the 1.7×/×50 clamps | CEN-G6b/G6 own them; this round consumed them as boundary (§1.8) | census-R2 runs (deferred per the §0.1 review-round-2 ruling: resumes on FL-R12′ signature — the red-test conjunct is already discharged); FL-R11 records the partial discharge so R2 inherits a smaller question |
+| FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 3 413× reward decay as the anti-spam floor, on a chain where stakers store what the floor admits | Its own rule-11 round: criteria must be pre-registered before the floor model is chosen, and the question is downstream of FL-R12′'s terminal-state answer | FL-R12′ is signed (the floor's long-run role — sole security budget or not — depends on it); **escalates to genesis-blocking if the cap side wins** |
 
 ---
 

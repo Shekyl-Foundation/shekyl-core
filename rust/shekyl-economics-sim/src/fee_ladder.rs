@@ -857,6 +857,38 @@ mod tests {
         assert_eq!(relay_floor(10 * coin, 100_000), 317);
     }
 
+    /// FL-V10's red companion, and conjunct (b) of the census-R2 reopen
+    /// criterion (`FEE_LADDER_DERIVATION.md` §0.1): the estimate leg (the
+    /// uncapped `base_block_reward`, what the 5-arg C++ path serves) and
+    /// the validation leg (the same reward through
+    /// `cap_reward_to_remaining_supply`, what the 6-arg path pays) must
+    /// agree at the terminal state — two descriptions of one chain.
+    ///
+    /// RED TODAY under *either* reading of the terminal policy: the legs
+    /// disagree with each other (tail vs remaining/zero), so the assertion
+    /// presumes neither side of FL-R12′. It greens with whichever signed
+    /// ruling's implementation lands, at which point it graduates into
+    /// `shekyl-economics` beside the wrong-oracle exhibit
+    /// `base_block_reward_tail_floor` (FL-V10). Ignored until then so an
+    /// unsigned design branch does not carry a failing gate.
+    #[test]
+    #[ignore = "FL-R12' (terminal emission ruling) unsigned: the two legs are two different numbers (FL-V8); un-ignore with the signed ruling's fix"]
+    fn terminal_reward_legs_agree() {
+        let params = EconomicParams::default();
+        let tail = params.final_subsidy_per_minute * (params.daa_target_seconds / 60);
+        let s = params.money_supply;
+        // The first block where divergence begins (remaining < tail) and
+        // exhaustion itself.
+        for ag in [s - tail + 1, s] {
+            let estimate_leg = base_block_reward(ag, &params).expect("estimate leg");
+            let validation_leg = cap_reward_to_remaining_supply(estimate_leg, ag, &params);
+            assert_eq!(
+                estimate_leg, validation_leg,
+                "estimate and validation legs disagree at already_generated={ag}"
+            );
+        }
+    }
+
     #[test]
     fn round_money_up_two_places() {
         assert_eq!(round_money_up_2(0), 0);
