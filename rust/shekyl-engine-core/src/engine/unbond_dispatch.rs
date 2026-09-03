@@ -70,14 +70,17 @@
 //! stuck record in the operator log — funds-safety over liveness, the
 //! posture all three reservation-observed lanes share.
 //!
-//! ## What this seam does NOT lift
+//! ## Reachability (the gate PR-C lifted)
 //!
-//! `pub(crate)`, no RPC method, no CLI verb: the reachability gate on the
-//! exit lane (`docs/api/wallet_rpc.yaml`, RESERVED `unstake`) is **narrowed,
-//! not lifted** — the dispatch seam now exists, and its only caller outside
-//! this crate's tests is nothing at all. Lifting the gate is PR-C's composed
-//! `unstake` verb (post + a *decorrelated* drain), which is also the
-//! rule-21 retirement condition for the staging allow on [`Engine::submit_unbond`].
+//! This seam stays `pub(crate)`; its production caller is
+//! [`StakeFacade::unstake`](super::unstake_facade) — the composed `unstake`
+//! verb (PR-C), which lifted the exit lane's reachability gate
+//! (`docs/api/wallet_rpc.yaml`: `unstake` shipped, no longer RESERVED) and
+//! retired the staging allow this seam carried. What protects the
+//! irreversible path now that it is reachable: the consensus-ordered
+//! readiness refusal below, the engine-side persona resolution (no wire
+//! slot), the CLI-side confirmation, and the funds-safe seal semantics —
+//! see the façade's module docs.
 //!
 //! [`submit_bound`]: BroadcastSubmitter::submit_bound
 
@@ -117,15 +120,19 @@ use super::Engine;
 /// What one dispatched terminal exit did: the assembled exit's public facts
 /// plus the network verdict. Secrets never cross the boundary — the contained
 /// [`PBoundBytes`](super::bond_assembly::PBoundBytes) redacts its own `Debug`.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt's
-// production reader is PR-C's composed `unstake` verb — the same rule-21
-// retirement condition as `submit_unbond`'s allow; the daemon-walk regtest e2e
-// is the test consumer.
-#[allow(dead_code)]
+/// The production reader landed with PR-C: the exit façade
+/// ([`unstake_facade`](super::unstake_facade)) projects [`Self::submit`] into
+/// the public [`UnstakeOutcome`](super::unstake_facade::UnstakeOutcome).
 #[derive(Debug)]
 pub(crate) struct UnbondReceipt {
     /// The dispatched exit exactly as assembled (bytes + funding
     /// reservation) — the actor's reply embedded whole, not field-restated.
+    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this
+    // field's production reader is the dispatch driver's recovery slice
+    // (terminal-reject prune + byte-identical resubmit, `docs/FOLLOWUPS.md`)
+    // — the same reader `DrainReceipt::drain` stages for; the daemon-walk
+    // regtest e2e is the test consumer. The façade reads only `submit`.
+    #[allow(dead_code)]
     pub unbond: AssembledUnbondPost,
     /// The daemon's submit verdict (network-exposed / already mined).
     pub submit: SubmitSuccess,
@@ -313,12 +320,9 @@ where
     /// [`SpentRecordsDurablyPruned::for_test`].
     ///
     /// [`ClaimSourceFor`]: super::emission_source::ClaimSourceFor
-    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the
-    // production caller is PR-C's composed `unstake` verb (wallet-RPC
-    // RESERVED entry, `docs/api/wallet_rpc.yaml`) — the rule-21 retirement
-    // condition for this allow; the daemon-walk regtest e2e
-    // (`e2e_unbond_accepted_and_connected`) is the test consumer.
-    #[allow(dead_code)]
+    // The `dead_code` staging allow retired with PR-C: the production caller
+    // the rule-21 note reserved landed as
+    // [`StakeFacade::unstake`](super::unstake_facade), which calls this seam.
     pub(crate) async fn submit_unbond<T: PersonaIsolatedTransport>(
         self_arc: Arc<RwLock<Self>>,
         unbond_rpc: &T,

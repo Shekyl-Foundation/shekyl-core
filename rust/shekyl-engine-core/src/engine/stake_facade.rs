@@ -16,8 +16,9 @@
 //! [`Engine::stake`] is always a view — including for non-stakers.
 //! Handle-gated verbs (`stake_in`) still fail closed inside the body
 //! (`StakeInError::NotStaking`). [`Engine::has_stake_engine`] is the
-//! predicate for a resident actor. `unstake` / Unbond dispatch is not a
-//! product method yet.
+//! predicate for a resident actor. The exit pair (`unstake` /
+//! `collect_unstaked`) landed here with PR-C
+//! ([`unstake_facade`](super::unstake_facade) — the freeze held).
 
 use std::sync::Arc;
 
