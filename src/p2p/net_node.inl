@@ -730,11 +730,17 @@ namespace nodetool
   std::set<std::string> node_server<t_payload_net_handler>::get_ip_seed_nodes() const
   {
     std::set<std::string> full_addrs;
-    static const std::array<const char *, 4> default_seed_hosts = {
-      "134.199.166.22",
-      "45.77.147.65",
-      "45.76.171.128",
-      "45.77.66.189"
+    // The Foundation seed fleet. Six hosts, not four: seedjp and seedbrz were
+    // provisioned after this list was written and were reachable but invisible --
+    // absent here and absent from DNS, so no node could ever bootstrap from them.
+    // Literal addresses, not hostnames: bootstrap must not depend on a resolver.
+    static const std::array<const char *, 6> default_seed_hosts = {
+      "134.199.166.22",  // seedaus  -- Sydney
+      "45.77.147.65",    // seeduse  -- US East
+      "45.76.171.128",   // seedusw  -- US West
+      "45.77.66.189",    // seedeu   -- EU Frankfurt
+      "139.162.71.114",  // seedjp   -- Tokyo
+      "104.64.59.31"     // seedbrz  -- Brazil
     };
     if (m_nettype == cryptonote::TESTNET)
     {
