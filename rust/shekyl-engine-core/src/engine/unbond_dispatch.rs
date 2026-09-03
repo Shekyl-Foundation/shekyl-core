@@ -94,7 +94,9 @@ use super::stake_engine::{
     AssembleUnbond, AssembledUnbondPost, PSlot, StakeEngineError, UnbondRecordState,
 };
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
-use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess};
+use super::transaction_submitter::{
+    BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess, SubmitterError,
+};
 use super::Engine;
 
 /// What one dispatched terminal exit did: the assembled exit's public facts
@@ -225,16 +227,27 @@ impl UnbondRequestError {
 /// terminal post — records left behind by the cap stay spendable and the
 /// composed `unstake`'s drain sweeps a retired persona to zero (in as many
 /// passes as its own input cap needs). So a fragmented pool (>8 eligible
-/// records) caps to the **oldest** [`MAX_INPUTS`] — the sweep's order is
-/// already deterministic oldest-first — rather than refusing the exit and
-/// telling the user to consolidate, which would be protocol knowledge
-/// (rule 81) on the one verb that must not demand any.
+/// records) caps to a subset rather than refusing the exit and telling the
+/// user to consolidate, which would be protocol knowledge (rule 81) on the
+/// one verb that must not demand any.
+///
+/// The subset is the [`MAX_INPUTS`] **largest** records (ties broken
+/// `(height, gindex)` ascending — fully deterministic), then restored to
+/// the sweep's oldest-first order for the wire. Largest-first for the same
+/// reason the drain planner selects largest-first, plus two exit-specific
+/// ones: the greedy-max subset covers `required` whenever ANY subset of
+/// that size does — an oldest-first truncation could select eight dust
+/// records, refuse `InsufficientFunding`, and then refuse identically on
+/// every retry while a single newer record would have covered it — and the
+/// terminal post should carry out the most value per transaction, leaving
+/// the least behind for the drain's own passes.
 ///
 /// The sweep checked sufficiency against the FULL eligible total, so the
 /// capped subset must be re-checked: refusing here (fail-closed, named)
-/// beats assembling a post the actor then refuses. `required` is normally
-/// zero (the released collateral covers the fee), so the re-check bites
-/// only in the slashed-to-dust corner.
+/// beats assembling a post the actor then refuses — and because the subset
+/// is greedy-max, that refusal now means no admissible subset covers.
+/// `required` is normally zero (the released collateral covers the fee), so
+/// the re-check bites only in the slashed-to-dust corner.
 fn cap_exit_sweep(
     selection: &mut FundingSelection,
     required: AtomicUnits,
@@ -242,7 +255,17 @@ fn cap_exit_sweep(
     if selection.records.len() <= MAX_INPUTS {
         return Ok(());
     }
+    // Largest-first selection (ties oldest-first), then oldest-first order.
+    // `sort_by` is stable, but the comparator is total anyway: distinct
+    // records have distinct gindexes.
+    selection.records.sort_by(|a, b| {
+        b.amount
+            .cmp(&a.amount)
+            .then(a.height.cmp(&b.height))
+            .then(a.gindex.cmp(&b.gindex))
+    });
     selection.records.truncate(MAX_INPUTS);
+    selection.records.sort_by_key(|r| (r.height, r.gindex));
     let mut total = AtomicUnits::ZERO;
     for record in &selection.records {
         total = total
@@ -545,16 +568,50 @@ where
 
         // Dispatch through the pre-bound ① `Local` posture (the audited
         // posture→submitter choke point) — the privacy default: loopback on
-        // the operator's own box. A submit failure leaves the sealed record
-        // live — the bytes may have reached the network, and the dispatch
-        // driver's reservation settlement / stall alarm owns its fate.
+        // the operator's own box.
+        //
+        // The failure disposition follows the submit taxonomy's own remedies
+        // (`SubmitterError`, `DAEMON_SUBMIT_VERDICT.md` §2.5), and this seam
+        // can apply the terminal one where the claim/drain seams cannot:
+        // this is provably the record's FIRST and only send (the seal
+        // happened in this call, and no driver resubmits unbonds), so a
+        // definite `RejectedTerminal` verdict means the bytes were never
+        // admitted to any pool and never relayed — the transaction CANNOT
+        // confirm, and holding its reservation would brick the persona's
+        // one-live-exit lane forever (`remove_settled` retires only records
+        // whose inputs get SPENT). The sealed record is therefore released
+        // (`remove_unbond`: byte-prune + reservation release + generation
+        // bump in one seal) before the refusal propagates — release-and-
+        // rebuild, the remedy the taxonomy names. A `PersonaMismatch`
+        // refusal never reached a transport at all, so it releases too.
+        // `RejectedRetryable` and `Ambiguous` keep the record live — a
+        // retryable verdict preserves the selection by contract, and an
+        // ambiguous one means the bytes MAY have propagated (Two Generals);
+        // the driver's reservation settlement / stall alarm owns their fate.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let submit = submitter.submit_bound(assembled.bound_tx.clone()).await?;
-
-        Ok(UnbondReceipt {
-            unbond: assembled,
-            submit,
-        })
+        match submitter.submit_bound(assembled.bound_tx.clone()).await {
+            Ok(submit) => Ok(UnbondReceipt {
+                unbond: assembled,
+                submit,
+            }),
+            Err(e) => {
+                let never_propagated = matches!(
+                    e,
+                    BroadcastSubmitError::PersonaMismatch { .. }
+                        | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. })
+                );
+                if never_propagated {
+                    store
+                        .mutate(|block| {
+                            let removed = block.remove_unbond(&persona);
+                            (removed.is_some(), ())
+                        })
+                        .await
+                        .map_err(|e| UnbondRequestError::state("terminal-reject release", e))?;
+                }
+                Err(e.into())
+            }
+        }
     }
 }
 
@@ -591,26 +648,60 @@ mod tests {
         FundingSelection { records, total }
     }
 
-    /// A fragmented pool caps to the oldest [`MAX_INPUTS`] instead of
+    /// A fragmented pool caps to a [`MAX_INPUTS`]-record subset instead of
     /// refusing the exit — the consensus input limit would otherwise
     /// surface as an opaque `assemble_tx` refusal (the curve-tree actor
-    /// enforces the same bound).
+    /// enforces the same bound). Equal amounts: the tie-break keeps the
+    /// oldest, and the kept subset stays in wire (oldest-first) order.
     #[test]
-    fn a_fragmented_pool_caps_to_the_oldest_max_inputs() {
+    fn a_fragmented_pool_caps_to_max_inputs_ties_oldest() {
         let mut selection = selection_of(MAX_INPUTS as u64 + 3);
         cap_exit_sweep(&mut selection, AtomicUnits::ZERO).expect("cap admits");
         assert_eq!(selection.records.len(), MAX_INPUTS);
-        // Oldest-first survives the cap: the sweep's deterministic order is
-        // (height, gindex) ascending, and truncate keeps the front.
         assert_eq!(
             selection.records[0].gindex,
             GlobalOutputIndex::from_raw(0),
-            "the cap must keep the OLDEST records, not an arbitrary subset"
+            "equal amounts tie-break oldest-first"
+        );
+        assert!(
+            selection
+                .records
+                .windows(2)
+                .all(|w| w[0].gindex < w[1].gindex),
+            "the kept subset must be restored to oldest-first wire order"
         );
         assert_eq!(
             selection.total,
             AtomicUnits::from_raw(10 * MAX_INPUTS as u64),
             "the total must be re-summed over the capped subset, not left stale"
+        );
+    }
+
+    /// The selection under the cap is largest-first, so a `required` that
+    /// any admissible subset covers IS covered — eight old dust records
+    /// must not shadow the one newer record that funds the exit (an
+    /// oldest-first truncation refused this exact shape forever, since
+    /// every retry re-selected the same dust).
+    #[test]
+    fn a_covering_record_is_selected_over_older_dust() {
+        let mut records: Vec<_> = (0..MAX_INPUTS as u64 + 2).map(|g| rec(g, 1)).collect();
+        // The newest record is the only one that can cover `required`.
+        let whale_gindex = MAX_INPUTS as u64 + 2;
+        records.push(rec(whale_gindex, 1_000));
+        let total = AtomicUnits::from_raw(MAX_INPUTS as u64 + 2 + 1_000);
+        let mut selection = FundingSelection { records, total };
+        cap_exit_sweep(&mut selection, AtomicUnits::from_raw(900)).expect("the whale covers");
+        assert_eq!(selection.records.len(), MAX_INPUTS);
+        assert!(
+            selection
+                .records
+                .iter()
+                .any(|r| r.gindex == GlobalOutputIndex::from_raw(whale_gindex)),
+            "largest-first selection must include the covering record"
+        );
+        assert!(
+            selection.total >= AtomicUnits::from_raw(900),
+            "the capped subset must cover required when any subset does"
         );
     }
 
@@ -719,6 +810,21 @@ mod tests {
         assert!(
             !code.contains(raw_client),
             "the exit must not reach for a raw daemon client to broadcast (T-DS-2)"
+        );
+
+        // Terminal-reject release: the taxonomy's release-and-rebuild remedy
+        // must stay wired — a definite first-send refusal releases the seal
+        // it just took, or the one-live-exit lane bricks on a transaction
+        // that cannot confirm.
+        let terminal_arm = "RejectedTerminal";
+        assert!(
+            code.contains(terminal_arm),
+            "the seam must classify the terminal verdict"
+        );
+        let release_call = ".remove_unbond(";
+        assert!(
+            code.contains(release_call),
+            "a terminal first-send refusal must release the sealed record"
         );
 
         // Persist-before-dispatch ordering pin.

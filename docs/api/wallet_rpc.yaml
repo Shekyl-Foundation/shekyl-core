@@ -212,7 +212,8 @@
 #                                                   path closed, where it used
 #                                                   to be one of two
 #                                                   independent layers.
-#                                                   UPDATE 2026-09-02 (PR-B):
+#                                                   UPDATE 2026-09-02 (PR-B,
+#                                                   #601):
 #                                                   the dispatch
 #                                                   seam landed
 #                                                   (Engine::submit_unbond,

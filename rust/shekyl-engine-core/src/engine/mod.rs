@@ -411,11 +411,8 @@ pub(crate) mod tx_counts;
 pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
-/// The `submit_unbond` dispatch seam (PR-P4): assemble the terminal exit via
-/// `AssembleUnbond`, seal a `PendingUnbond` before any send, dispatch through
-/// the persona-transport choke point (T-DS-2) — immediately, no decorrelation
-/// plan (the exit's trigger is already public). `pub(crate)`: the reachability
-/// gate (RESERVED `unstake`) is narrowed by this seam, not lifted.
+/// The `submit_unbond` dispatch seam (PR-P4): seal a `PendingUnbond`, then
+/// the persona-transport choke point — no decorrelation plan; gate narrowed.
 pub(crate) mod unbond_dispatch;
 pub mod view_material;
 

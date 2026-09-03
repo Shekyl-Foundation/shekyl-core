@@ -647,6 +647,22 @@ impl PendingPostBlock {
         Some(self.drains.remove(idx))
     }
 
+    /// Remove `persona`'s live `Unbond` exit — the terminal-reject release
+    /// (the `submit_unbond` seam prunes the record it just sealed when the
+    /// daemon's FIRST-send verdict is `RejectedTerminal`: a definite refusal
+    /// means the bytes were never admitted or relayed, so holding the
+    /// reservation would brick the persona's one-live-exit lane on a
+    /// transaction that cannot confirm). Removal *is* the byte-prune and the
+    /// reservation release in one seal — the generation bump makes the
+    /// release visible to any assembly snapshotted across it; idempotent
+    /// under crash-replay (`None` when absent).
+    #[must_use]
+    pub fn remove_unbond(&mut self, persona: &PCanonicalId) -> Option<PendingUnbond> {
+        let idx = self.unbonds.iter().position(|u| &u.persona == persona)?;
+        self.generation += 1;
+        Some(self.unbonds.remove(idx))
+    }
+
     /// WI-3 §3.3 step 2 — transition `persona`'s post into
     /// [`PendingPostState::Dispatched`] with `attempts = 1`, or bump its
     /// attempt counter (saturating) if it is already dispatched (the
@@ -1870,6 +1886,25 @@ mod tests {
         let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
         assert_eq!(back, block);
         assert_eq!(back.unbonds().len(), 1);
+
+        // Terminal-reject release: removal prunes the bytes, releases the
+        // reservation, bumps the generation (a release IS a release — an
+        // assembly snapshotted across it must land Stale), and is idempotent.
+        let g_before = block.generation();
+        let removed = block.remove_unbond(&persona).expect("live unbond removes");
+        assert_eq!(removed.persona, persona);
+        assert!(!block.has_live_unbond_for(&persona));
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![GlobalOutputIndex::from_raw(1)],
+            "only the bond post's reservation remains"
+        );
+        assert_eq!(
+            block.generation(),
+            g_before + 1,
+            "a terminal-reject release must move the generation"
+        );
+        assert!(block.remove_unbond(&persona).is_none());
     }
 
     /// The reservation-observed retire covers the exit: every reserved input

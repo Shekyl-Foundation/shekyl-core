@@ -4,7 +4,7 @@
 
 ### Added
 
-- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B,
+- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B = #601,
   2026-09-02) — an
   `Unbond` has now been assembled by the wallet, accepted by native
   `/submit_transaction`, and connected on a real regtest chain, for the
