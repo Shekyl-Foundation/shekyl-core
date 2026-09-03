@@ -161,6 +161,127 @@ pub(crate) fn select_for_drain(
     })
 }
 
+/// The outcome of the terminal-sweep select stage: the pass's inputs, the
+/// payment they fund after the fee, and the pool residue this pass leaves.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SweepSelection {
+    /// The selected outputs' global indices — the same largest-first,
+    /// id-ascending order as [`select_for_drain`].
+    pub(crate) chosen: Vec<GlobalOutputIndex>,
+    /// The sum of the chosen outputs' amounts.
+    pub(crate) input_total: AtomicUnits,
+    /// The pass's principal payment: `input_total − fee`. Exact by
+    /// construction, so the assembly's change is zero and its drain-all arm
+    /// (the T-DS-6 two-output principal split) is the shape that fires.
+    pub(crate) payment: AtomicUnits,
+    /// What this pass leaves in the pool: every candidate **not** chosen —
+    /// immature outputs plus any mature overflow past the input cap. An
+    /// aggregate scalar (the same class `get_drain_balance` serves); `"0"`
+    /// is the completion fact the caller cannot infer from a payment amount.
+    pub(crate) remainder: AtomicUnits,
+}
+
+impl std::fmt::Debug for SweepSelection {
+    /// Redacted like [`DrainSelection`]: `chosen` is a slice of `P`'s spend
+    /// set; the aggregates are public scalars and render.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SweepSelection")
+            .field("chosen", &"<redacted spend-set>")
+            .field("input_total", &self.input_total)
+            .field("payment", &self.payment)
+            .field("remainder", &self.remainder)
+            .finish()
+    }
+}
+
+/// Why the terminal-sweep select stage refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SweepSelectError {
+    /// No candidate is mature at the reference height — nothing is provable
+    /// yet. Distinct from [`Self::DustPool`]: the remedy is "wait for
+    /// maturity", not "the residue is uncollectable".
+    NothingSpendable,
+    /// The mature candidates cannot fund the pass's own fee
+    /// (`input_total <= fee`) — the pool residue is smaller than the cost of
+    /// moving it. The named dust residual: it stays in `P`, and the funded
+    /// retirement gate stays held by it, until further value matures into
+    /// the slot or the fee floor moves.
+    DustPool,
+    /// Summing candidate amounts overflowed `u64` atomic units.
+    Overflow,
+}
+
+/// Select one terminal-sweep pass: **all** mature candidates, largest-first
+/// (ties by output id ascending), capped at [`shekyl_tx_builder::MAX_INPUTS`];
+/// the payment is what they fund after the fee.
+///
+/// This is the one selection arm whose payment is an **output of selection**
+/// rather than a caller target — deliberately, and only here: the funded
+/// retirement gate needs the slot at exactly zero, and an exact-zero payment
+/// is not expressible through the user-target path (the fee is an internal
+/// quote, never a parameter — `unstake_facade`'s finding). The F-D1 amount
+/// stage (`drain_amount.rs`) is **not** consulted and its carve text is
+/// untouched: this stage already legitimately holds the stripped per-output
+/// amounts, still reads none of the lineage/epoch/arrival fields (the M1
+/// grep below covers this arm too), and is reachable only through a
+/// [`TerminalSweep`](super::drain_orchestrator::DrainIntent::TerminalSweep)
+/// intent, whose witness certifies the persona's terminal exit is already
+/// public on-chain — the §12.3 reward-subsum matching the carve defends
+/// against adds nothing to a persona whose collateral return the record
+/// delta has already published (the F-W10-era re-pricing; the amendment is
+/// recorded in `PRINCIPAL_STAKE_LIFECYCLE.md`, not silently assumed).
+///
+/// Unlike [`select_for_drain`] there is no `Insufficient` / cap refusal: the
+/// pass takes what it can and reports the rest as `remainder` — a capped or
+/// immature residue is "call again once it matures/confirms", not an error.
+pub(crate) fn select_for_sweep(
+    candidates: &[DrainCandidate],
+    fee: AtomicUnits,
+    reference_height: BlockHeight,
+) -> Result<SweepSelection, SweepSelectError> {
+    let mut mature: Vec<&DrainCandidate> = candidates
+        .iter()
+        .filter(|c| c.spendable_height <= reference_height)
+        .collect();
+    if mature.is_empty() {
+        return Err(SweepSelectError::NothingSpendable);
+    }
+    // The same ordering as `select_for_drain`, same rationale.
+    mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
+
+    let mut chosen = Vec::new();
+    let mut input_total = AtomicUnits::ZERO;
+    for candidate in &mature {
+        if chosen.len() == shekyl_tx_builder::MAX_INPUTS {
+            break;
+        }
+        chosen.push(candidate.output_id);
+        input_total = input_total
+            .checked_add(candidate.amount)
+            .ok_or(SweepSelectError::Overflow)?;
+    }
+
+    let payment = input_total
+        .checked_sub(fee)
+        .filter(|p| !p.is_zero())
+        .ok_or(SweepSelectError::DustPool)?;
+
+    // Everything not chosen — mature overflow past the cap plus every
+    // immature candidate — is what the pool still holds after this pass.
+    let all_total = AtomicUnits::checked_sum(candidates.iter().map(|c| c.amount))
+        .ok_or(SweepSelectError::Overflow)?;
+    let remainder = all_total
+        .checked_sub(input_total)
+        .ok_or(SweepSelectError::Overflow)?;
+
+    Ok(SweepSelection {
+        chosen,
+        input_total,
+        payment,
+        remainder,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +416,102 @@ mod tests {
             .expect("eight inputs cover 80");
         assert_eq!(at_cap.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
         assert_eq!(at_cap.input_total, AtomicUnits::from_raw(80));
+    }
+
+    /// This bites against the sweep payment drifting off `Σ selected − fee`
+    /// (the exact-zero-change property the funded retirement gate needs) and
+    /// against a remainder that forgets either residue class. It does NOT
+    /// cover the witness gate (the intent's, at the seam) or the assembly's
+    /// two-output split.
+    #[test]
+    fn sweep_takes_all_mature_and_pays_sum_minus_fee() {
+        // Two mature, one immature: the pass takes exactly the mature pair.
+        let candidates = [
+            candidate(1, 300, 10),
+            candidate(2, 200, 10),
+            candidate(3, 400, 99),
+        ];
+        let sel = select_for_sweep(
+            &candidates,
+            AtomicUnits::from_raw(50),
+            BlockHeight::from_raw(10),
+        )
+        .expect("two mature candidates fund a 50 fee");
+        assert_eq!(
+            sel.chosen,
+            vec![
+                GlobalOutputIndex::from_raw(1),
+                GlobalOutputIndex::from_raw(2)
+            ],
+            "largest-first over the mature subset only"
+        );
+        assert_eq!(sel.input_total, AtomicUnits::from_raw(500));
+        assert_eq!(
+            sel.payment,
+            AtomicUnits::from_raw(450),
+            "the payment is exactly Σ selected − fee: zero change by construction"
+        );
+        assert_eq!(
+            sel.remainder,
+            AtomicUnits::from_raw(400),
+            "the immature candidate is reported as residue, not dropped"
+        );
+    }
+
+    /// This bites against the sweep refusing (or panicking) at the input cap
+    /// instead of taking a full pass and reporting the mature overflow as
+    /// remainder — the multi-pass contract `collect_unstaked` documents. It
+    /// does NOT cover pass sequencing (the one-live-drain gate's).
+    #[test]
+    fn sweep_caps_at_max_inputs_and_reports_the_overflow_as_remainder() {
+        // Nine mature candidates of 10 each: one pass spends the cap (80).
+        let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
+        let sel = select_for_sweep(
+            &candidates,
+            AtomicUnits::from_raw(5),
+            BlockHeight::from_raw(10),
+        )
+        .expect("a full pass fits the cap");
+        assert_eq!(sel.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
+        assert_eq!(sel.payment, AtomicUnits::from_raw(75));
+        assert_eq!(
+            sel.remainder,
+            AtomicUnits::from_raw(10),
+            "the ninth output stays in the pool and the reply must say so"
+        );
+    }
+
+    /// This bites against the dust arm collapsing into an empty selection or
+    /// a zero payment (the prover rejects zero-value outputs; the caller
+    /// needs the named residual, not a downstream fault). Boundary exact:
+    /// `Σ == fee` is dust, `Σ == fee + 1` pays 1.
+    #[test]
+    fn sweep_dust_and_nothing_spendable_refuse_distinctly() {
+        let none = select_for_sweep(
+            &[candidate(1, 100, 99)],
+            AtomicUnits::from_raw(5),
+            BlockHeight::from_raw(10),
+        );
+        assert_eq!(
+            none,
+            Err(SweepSelectError::NothingSpendable),
+            "an all-immature pool is 'wait for maturity', not dust"
+        );
+
+        let dust = select_for_sweep(
+            &[candidate(1, 50, 10)],
+            AtomicUnits::from_raw(50),
+            BlockHeight::from_raw(10),
+        );
+        assert_eq!(dust, Err(SweepSelectError::DustPool));
+
+        let one_over = select_for_sweep(
+            &[candidate(1, 51, 10)],
+            AtomicUnits::from_raw(50),
+            BlockHeight::from_raw(10),
+        )
+        .expect("one atomic unit over the fee is a payable sweep");
+        assert_eq!(one_over.payment, AtomicUnits::from_raw(1));
     }
 }

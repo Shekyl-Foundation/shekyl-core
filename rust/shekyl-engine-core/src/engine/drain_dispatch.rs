@@ -9,7 +9,7 @@
 //! [`orchestrate_drain`] is the production preparer+assembler and deliberately
 //! returns its reply **unbroadcast** (CB-3: the builder never self-schedules).
 //! This module is the other half of that routing: one explicit drain intent in
-//! (a slot, a payment, a fee), one assembled drain dispatched through the
+//! (a slot, a [`DrainIntent`], a fee), one assembled drain dispatched through the
 //! audited posture→submitter choke point ([`BroadcastSubmitter::local`] →
 //! [`submit_bound`]) out. Scheduling policy — when a drain fires, how it is
 //! split, over what cadence — stays external (the GUI drain flow, §12.4); this
@@ -75,7 +75,9 @@ use tokio::sync::RwLock;
 
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::drain_assembly::{AssembledDrain, DrainDestination};
-use super::drain_orchestrator::{orchestrate_drain, DrainCtx, DrainOrchestrationError};
+use super::drain_orchestrator::{
+    orchestrate_drain, DrainCtx, DrainIntent, DrainOrchestrationError,
+};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
@@ -103,6 +105,14 @@ pub(crate) struct DrainReceipt {
     pub drain: AssembledDrain,
     /// The daemon's submit verdict (network-exposed / already mined).
     pub submit: SubmitSuccess,
+    /// The principal payment this drain carries — the caller's own figure on
+    /// a `Payment` intent, the pipeline's `Σ selected − fee` on a
+    /// `TerminalSweep` (the figure the caller structurally cannot supply).
+    pub payment: AtomicUnits,
+    /// `TerminalSweep` only: the pool residue this pass leaves (immature
+    /// outputs plus mature overflow past the input cap) — the completion
+    /// fact `collect_unstaked`'s reply owes. `None` on a payment drain.
+    pub sweep_remainder: Option<AtomicUnits>,
 }
 
 /// Why the drain request refused, at any rung: before the pipeline (no stake
@@ -199,13 +209,19 @@ where
     /// Assemble and dispatch one `P`→principal drain for the persona at
     /// `p_slot` — the CB-3 request path (module docs).
     ///
-    /// `payment` is paid to the wallet's own principal (vout 0); `fee` funds
-    /// the tx from the swept `P` inputs; the residual (`swept − payment − fee`)
-    /// returns to `P` as change on a partial drain. The reserve gate
+    /// `intent` names what moves. `Payment(p)`: `p` is paid to the wallet's
+    /// own principal (vout 0), and the residual (`swept − payment − fee`)
+    /// returns to `P` as change on a partial drain. `TerminalSweep`: the
+    /// payment is the pipeline's own `Σ selected − fee` (zero change), legal
+    /// only for a terminally-unbonded persona — this seam's basis resolution
+    /// of `retired` is the AUTHORITATIVE check (the witness inside the
+    /// intent is the boundary's, minted from an earlier read; a divergence
+    /// refuses in the pipeline rather than trusting the token), and the
+    /// witness must name the very persona `p_slot` resolves to. Either way
+    /// `fee` funds the tx from the swept `P` inputs, and the reserve gate
     /// ([`orchestrate_drain`]) refuses a live-persona drain that would spend
-    /// the pool below the exit-fee reserve (DS-4); a retired (terminally
-    /// unbonded) persona may sweep to zero. The principal destination is
-    /// resolved engine-side (T-DS-3), not caller-supplied.
+    /// the pool below the exit-fee reserve (DS-4). The principal destination
+    /// is resolved engine-side (T-DS-3), not caller-supplied.
     ///
     /// `pruning_landed` is the [`SpentRecordsDurablyPruned`] witness the drain
     /// shares with every other funding-output spender (bond post, emission
@@ -220,7 +236,7 @@ where
     pub(crate) async fn submit_drain(
         self_arc: Arc<RwLock<Self>>,
         p_slot: PSlot,
-        payment: AtomicUnits,
+        intent: DrainIntent,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<DrainReceipt, DrainRequestError> {
@@ -317,11 +333,25 @@ where
             return Err(DrainRequestError::DrainPending);
         }
 
+        // A sweep witness naming a different persona than the slot resolves
+        // to is a caller defect (the façade mints the witness from the same
+        // resolution that picks the slot), never a user-recoverable state —
+        // refuse before any proof work rather than sweep slot A on slot B's
+        // certificate.
+        if let DrainIntent::TerminalSweep(w) = &intent {
+            if w.p_canonical_id() != p_canonical_id {
+                return Err(DrainRequestError::state(
+                    "sweep witness",
+                    "the terminal-exit witness names a different persona than the slot",
+                ));
+            }
+        }
+
         let handle = stake.mint_handle(p_slot).await?;
 
         // Assemble through the production pipeline — the reply comes back
         // unbroadcast (CB-3); routing it is the step below, not the builder's.
-        let assembled = orchestrate_drain(
+        let orchestrated = orchestrate_drain(
             handle,
             DrainCtx {
                 stake: &stake,
@@ -330,7 +360,7 @@ where
                 funding_records,
                 reserved,
                 dest,
-                payment: payment.to_raw(),
+                intent,
                 fee: fee.to_raw(),
                 retired,
                 chain_tip,
@@ -338,6 +368,7 @@ where
             block_hash_at,
         )
         .await?;
+        let assembled = orchestrated.assembled;
 
         // Persist-before-dispatch (module docs): seal the drain record — bytes,
         // input reservation — and its Dispatched transition in ONE mutation,
@@ -401,6 +432,8 @@ where
         Ok(DrainReceipt {
             drain: assembled,
             submit,
+            payment: orchestrated.payment,
+            sweep_remainder: orchestrated.sweep_remainder,
         })
     }
 }
