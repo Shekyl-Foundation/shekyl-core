@@ -86,7 +86,13 @@ public:
     if (it != m_txpool.end())
       it->second.meta = meta;
   }
-  virtual void remove_txpool_tx(const crypto::hash& txid) override { m_txpool.erase(txid); }
+  virtual void remove_txpool_tx(const crypto::hash& txid) override
+  {
+    if (throw_on_remove)
+      throw std::runtime_error("test: injected remove_txpool_tx failure");
+    m_txpool.erase(txid);
+  }
+  bool throw_on_remove = false;
   virtual uint64_t get_txpool_tx_count(relay_category = relay_category::broadcasted) const override
   {
     return m_txpool.size();
@@ -556,6 +562,22 @@ TEST(txpool_take_tx_fcmp_gate, verdict_true_for_verified_hash_match)
 // The flag alone is not the contract: a set bit whose recorded hash does not
 // match the parsed bytes (stale cache, mutated content) must read false.
 // This is the hash-gated clause CEN-M8 ratified.
+// A failure return must not leave a true verdict behind: even when the cache
+// affirmatively covers the bytes, an exception during the removal phase
+// (take_tx returns false) resets the out-param so no caller can consume a
+// stale skip licence.
+TEST(txpool_take_tx_fcmp_gate, verdict_reset_on_failed_take)
+{
+  TakeTxFixture f;
+  f.meta.fcmp_verified = 1;
+  f.meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(f.shape_tx);
+  f.db->throw_on_remove = true;
+
+  bool cached = true;
+  ASSERT_FALSE(f.take(cached));
+  EXPECT_FALSE(cached) << "failed take_tx left a consumable true verdict";
+}
+
 TEST(txpool_take_tx_fcmp_gate, verdict_false_on_hash_mismatch)
 {
   TakeTxFixture f;

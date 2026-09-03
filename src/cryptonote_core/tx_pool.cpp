@@ -899,6 +899,9 @@ namespace cryptonote
     catch (const std::exception &e)
     {
       MERROR("Failed to remove tx from txpool: " << e.what());
+      // The verdict is only meaningful on success: a failure return must not
+      // leave a true value a caller could consume as a skip licence.
+      fcmp_verification_cached = false;
       return false;
     }
 

@@ -236,6 +236,11 @@ namespace cryptonote
      * @param do_not_relay return-by-reference is transaction not to be relayed to the network?
      * @param double_spend_seen return-by-reference was a double spend seen for that transaction?
      * @param pruned return-by-reference is the tx pruned
+     * @param fcmp_verification_cached return-by-reference does the pool's
+     *   verification cache affirmatively cover these bytes (`fcmp_verified`
+     *   set AND the recorded hash matching the parsed
+     *   proof/referenceBlock/key images)? False on every failure return —
+     *   never gate a verification skip on pool presence alone (CEN-M8)
      * @param suppress_missing_msgs suppress warning msgs when txid is missing (optional, defaults to `false`)
      *
      * @return true unless the transaction cannot be found in the pool
