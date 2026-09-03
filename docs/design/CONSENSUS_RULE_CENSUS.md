@@ -15,8 +15,8 @@ that the C++ implements the spec it was ratified against. **Absence of a recorde
 divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
 regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 §5.4.1 for the three states and the exception register; the checked-conformant
-set holds **CEN-H5, CEN-L7, CEN-L9 and CEN-L10** as of 2026-09-02, promoted by
-**DRS-P0f**, the per-row
+set holds **30 rows** as of 2026-09-02 (store-enforced 4 + the §4.J 26),
+promoted by **DRS-P0f**, the per-row
 conformance review — *not* P0d, which is Digest v0; every other row is
 UNREVIEWED). Bucket-4 rows record questions, never answers; the §10
 queue is the design-round program that answers them.

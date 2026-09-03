@@ -357,9 +357,10 @@ closed.
 | **DIVERGENT** | on the register below | **regression only** |
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
-**As of 2026-09-02 the CHECKED-CONFORMANT set holds four rows: CEN-H5, CEN-L7,
-CEN-L9 and CEN-L10.** DRS-P0f has now reviewed **all six** reviewable
-store-enforced rows. **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
+**As of 2026-09-02 the CHECKED-CONFORMANT set holds thirty rows** — the four
+store-enforced promotions (CEN-H5, L7, L9, L10) plus the twenty-six §4.J
+archival-family rows (P0f slice 4). All six reviewable store-enforced rows and
+all of §4.J are now reviewed. **CEN-L12** is DIVERGENT (coupled to CEN-L11); **CEN-L8**
 was reviewed and **failed closed to UNREVIEWED** — one of its clauses names
 behavior that is not wired, so it can be neither conformant nor divergent.
 Every row outside this register remains UNREVIEWED by construction, so the
@@ -396,6 +397,73 @@ P0d's deliverable is Digest v0, and §5.5 said P0d/P0e survive unchanged. An
 obligation with no producer is a dangling requirement, which under rules 15/16
 is exactly the tech debt this program is supposed to avoid. P0f is that
 producer, and it is the **only** way a row leaves UNREVIEWED.
+
+##### P0f slice 4 — §4.J, the archival transaction families (26 rows, all bucket 1)
+
+Reviewed at **`4b9807c5e`** (2026-09-02). These rows share three C++ verify
+branches, each **walked end-to-end once** and cited per row rather than
+re-derived 26 times:
+
+- **Walk W-SC** — serve-credit: `Blockchain::check_archival_serve_credit_input`
+  (`blockchain.cpp:5349–5560`) plus the tx-shape gate (`:3720–3800`).
+  **Every verdict is discriminated and checked**; the whole ordered predicate
+  sequence is mirrored in Rust (`shekyl-archival-retention::serve_credit_decisions`)
+  and **pinned by the standing equivalence KAT**
+  (`serve_credit_equivalence_kat_v1.json`, Rust leg
+  `serve_credit_equivalence_kat.rs`, C++ leg
+  `archival_serve_credit_equivalence.cpp`) — the AUDITED DECISION header
+  requires re-authoring the fixture on any predicate change.
+- **Walk W-BP** — bond-post: `blockchain.cpp:4808–5290`. Four kind arms plus
+  the shared debit-auth pin (`shekyl_archival_debit_auth_pin`, rc discriminated
+  three ways, all non-OK reject) and the credit-arm identity-key check, present
+  on every credit path.
+- **Walk W-EM** — emission: `blockchain.cpp:3888–4190`. Extract, key-derivation,
+  reference-context, per-epoch snapshot, reward-set, coarse-verify and
+  fee-proof arms all reject on their discriminated codes.
+
+**Tier justification (applies to every row below):** verdict bodies are Rust —
+the crates the rewrite keeps (`shekyl-archival-retention`, the archival FFI
+verify family); the C++ carries marshaling, DB reads and sequencing, with the
+sequencing itself KAT-pinned on W-SC; every FFI verdict return in all three
+walks is checked at its call site (verified by reading, not grep); operand
+*derivations* (epochs, heights, H_fire, leaf index, chunk bounds) are
+Rust-side FFI calls, with the exceptions noted per row.
+
+| Row | State | Evidence (all at `4b9807c5e`) |
+| --- | --- | --- |
+| CEN-J1 | **CHECKED-CONFORMANT** | W-SC. Parse failure rejects (`:5361`); the RF-D1 comment holds in code — "nothing here reads inside the bytes", structural bounds live in the Rust parser |
+| CEN-J2 | **CHECKED-CONFORMANT** | W-SC. `pruned_records.size() != num_inputs` rejects (`:3786`) with index-`i` pairing stated; per-record size bound rejects (`:5366`) |
+| CEN-J3 | **CHECKED-CONFORMANT** | W-SC. `archival_serve_credit_pass_count > 0` rejects (`:5392`). **REWRITE-NOTE:** the pair-epoch-wide bound is a *documented interim* — `assign_epoch` exists in Rust with **no FFI export and no consensus caller**, and the code carries a rule-21 REOPEN ("reject unless this block's assignment names this pair") for the assignment cutover. The rewrite should implement the cutover semantics, not fossilize the beacon bound → routed to that reopen + census §10 |
+| CEN-J4 | **CHECKED-CONFORMANT** | W-SC. Missing bond substrate rejects (`:5398`) |
+| CEN-J5 | **CHECKED-CONFORMANT** | W-SC. `shekyl_archival_serve_credit_epoch_ok` (Rust predicate) rejects (`:5406`) |
+| CEN-J6 | **CHECKED-CONFORMANT** | W-SC. `archival_bond_good_through` rejects (`:5414`) |
+| CEN-J7 | **CHECKED-CONFORMANT** | W-SC. `current_height > h_close` rejects; seal-on-chain is **Rust-authoritative** (`challenge_seal_on_chain`), called here and mirrored from one source; the seal-hash DB read is try/caught to a reject with the corrupt-read policy question named in place (`:5420–5457`) |
+| CEN-J8 | **CHECKED-CONFORMANT** | W-SC. `H_fire` derived by Rust FFI from (seal hash, P, shard, E); `archival_bond_holds_shard(…, h_fire)` rejects (`:5466–5475`); WS-1 h_fire symmetry with the slash consumer documented at the site |
+| CEN-J9 | **CHECKED-CONFORMANT** | W-SC. Leaf index **derived** (`shekyl_archival_challenge_leaf_index`, rc-checked reject; RF-D6 "never read off the vin"); PC-D3 binds to `prev_block_hash`, all-zero refused FFI-side; chunk bounds Rust-only ("same one-site family as the freeze rule") (`:5489–5516`) |
+| CEN-J10 | **CHECKED-CONFORMANT** | W-SC. `shekyl_archival_verify_serve_credit_vin` rc-checked reject (`:5551–5556`); chunk read is all-or-nothing before the FFI ("no partial-fill path reaches the FFI verifier") |
+| CEN-J11 | **CHECKED-CONFORMANT** | W-BP. Length gate, recompute-failure gate, and hint-mismatch gate each reject (`:4892–4909`) |
+| CEN-J12 | **CHECKED-CONFORMANT** | W-BP. JoinMarket requires canonical-length `bond_spend_pk` (`:5201`); Unbond/HoldingsUpdate/Rebond each reject a non-empty one (`:4922`, `:4990`, `:5138`), and a kind-agnostic catch-all rejects the residue (`:5208`) — **all five sites agree** |
+| CEN-J13 | **CHECKED-CONFORMANT** | W-BP. Debit arms authorize via `shekyl_archival_debit_auth_pin` (three-way rc, all non-OK reject, `:4828–4855`); credit arms check the identity key on every path (add `:5041`, Rebond `:5183`, JoinMarket `:5288`) |
+| CEN-J14 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_join_market_bond_post` rc-checked reject (`:5216–5231`) |
+| CEN-J15 | **CHECKED-CONFORMANT** | W-BP. Admission FFI rc-checked reject with decoded reason (`:5273–5284`); the per-shard facts (r_market, freeze/presence) are gathered C++-side as **marshaled operands**, decided Rust-side |
+| CEN-J16 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_unbond_bond_post` rc-checked reject (`:4958–4980`); last-served scan selection itself asks Rust (`shekyl_archival_last_served_scan`) |
+| CEN-J17 | **CHECKED-CONFORMANT** | W-BP. Both arm verifies rc-checked (`:5034`, `:5123`). **REWRITE-NOTE:** the drop arm derives the dropped shard by a C++ set-difference (`:5065–5078`) — operand logic in the marshal; the Rust verify re-validates shape, but in the rewrite this derivation belongs inside the verify → routed to the rewrite via this register |
+| CEN-J18 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_rebond_bond_post` rc-checked reject (`:5156–5179`) |
+| CEN-J19 | **CHECKED-CONFORMANT** | W-EM. `extract_rc != OK \|\| len == 0` rejects (`:3952–3961`) |
+| CEN-J20 | **CHECKED-CONFORMANT** | W-EM. Key-derivation failure and derived-id mismatch each reject (`:3970–3980`) |
+| CEN-J21 | **CHECKED-CONFORMANT** | W-EM. `block_exists`, min/max age windows, and depth range each reject (`:4005–4034`) — the same context contract as CEN-I10–I13, enforced with zero fee inputs |
+| CEN-J22 | **CHECKED-CONFORMANT** | W-EM. Signable hash computed with the emission vin removed (`:3982–3994` region read); consumed by the coarse verify whose rc is checked (J25). The hash *construction* is C++-side operand derivation — noted, pinned by the round's signing-order tests per the census row |
+| CEN-J23 | **CHECKED-CONFORMANT** | W-EM. `!snaps[k].has_budget_row` rejects per claimed epoch (`:4070–4076`) |
+| CEN-J24 | **CHECKED-CONFORMANT** | W-EM. `outPk` count gate, loud-vout selection in vout order, missing-key reject, and `shekyl_checked_sum_amounts` overflow reject (`:4099–4143`) |
+| CEN-J25 | **CHECKED-CONFORMANT** | W-EM. `shekyl_emission_vin_verify` rc-checked reject (`:4151–4177`) |
+| CEN-J26 | **CHECKED-CONFORMANT** | W-EM + the FCMP arm. Absent⇔zero-fee-inputs enforced both directions (`:4186` no-proof-with-inputs reject at `:3889`); present ⇒ `shekyl_fcmp_verify` rc-checked reject (`:4351+`). **REWRITE-NOTE:** `skip_fcmp_verify` is a **pool-admission verification cache**, and the in-code comment marks it **load-bearing for the D++ embargo's `hop` definition** (`DAEMON_RELAY_PRIVACY.md` §71) — the rewrite must preserve that timing semantics or re-derive the embargo before changing where verification runs; the cache-condition's own derivation is reviewed under §4.I, not here |
+
+**Section-level REWRITE-NOTE (routed to the rewrite through this register):**
+W-SC's correctness is currently held by a **deliberate two-implementation
+mirror** (C++ predicate sequence + Rust `serve_credit_decisions`) kept honest
+by the equivalence KAT. That is the right *interim* structure and exactly the
+arrangement the rewrite exists to retire: one implementation, the KAT surviving
+as its pinning vectors, the mirror deleted.
 
 **Examined and excluded:** **CEN-L12** — its notes record that the spec's
 `staked: max(effective_lock_until…)` arm "does not exist in code", but that arm
@@ -506,7 +574,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **CSR-1** | R8 is the ruling instrument for store-enforced rules; DRS-C's surface map is its input (§4) | store design | **RATIFIED 2026-09-01** — R8's 8 rows independently re-verified all bucket-4 at `bf317111f`, so "R8 stays 8 rows, B3/K3 not re-batched" holds |
 | **CSR-2** | Re-anchor D2-R1 — its milestone cannot arrive early (§5.2) | DRS schedule honesty | **RATIFIED 2026-09-01, with a replacement anchor** — re-anchored to the **testnet-gate event** (three named legs), not a new calendar date |
 | **CSR-3** | Propagate the census oracle clause into DRS-A2/D11/E2 (§5.4) | every parity claim | **RATIFIED + APPLIED** — A2, D11, E2 and the §7 flowchart label now scope the digest by ratification **and** conformance |
-| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **CEN-H5, CEN-L7, CEN-L9, CEN-L10 CHECKED-CONFORMANT**; CEN-L8 failed closed to UNREVIEWED (P0f slices 1–3, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
+| **CSR-3a** | The **conformance register** (§5.4.1): a bucket says a rule is *ratified*, never that the C++ *implements* it | every parity claim asserting correctness | **OPEN** — **30 rows CHECKED-CONFORMANT** (store-enforced 4 + §4.J 26); CEN-L8 failed closed to UNREVIEWED (P0f slices 1–4, 2026-09-02); CEN-L11 and **CEN-L12** DIVERGENT; CEN-L12 (spec's staked arm) examined and excluded as retired. **Not proven complete**; **DRS-P0f** (minted 2026-09-02) and the census own extending it, and E2 must consult it before calling any match correctness |
 | **CSR-4** | DRS-C's PR shape (§5.1) | DRS-C PR shape | **RULED: analysis-only** — does not ship as C++ refactor PRs; `DAEMON_REDB_STORE.md` §3.5 amended, D5's cell annotated |
 | **CSR-5** | Re-price R8's §10 queue position (§6.2) | R8 dispatch | **DIRECTION RULED, no slot fixed** — R8 moves earlier than R6 (it alone has a named downstream consumer); the count is recomputed at dispatch, not locked here |
 | **CSR-6** | Add the missing cross-references in both documents (§1) | drift prevention | **Landed with this PR** |
@@ -525,6 +593,7 @@ this; it adds a second population (the store's schema) with the same shape.
 | **2026-09-01** | **Countermand: the inherited C++ is not a base. A complete rewrite gates release.** | **Rick, §0** |
 | 2026-09-01 | C2-R3 (timestamps) ruled and landed (PR #592) mid-work; census re-bucketed to 87/16/2/66. Store-enforced set re-derived at `bf317111f` — unchanged | header, §2 |
 | **2026-09-01** | **CSR-1…CSR-5 ruled (Rick), from an independent fresh-clone review.** CSR-1 ratified; CSR-2 ratified *with* an event-based replacement anchor (an emptied trigger with no replacement is half a ruling); CSR-3 ratified and applied; CSR-4 ruled analysis-only; CSR-5 ruled in direction only. Two arithmetic corrections folded: §6.2 said six batches ahead of R8 where §10's order shows **five**, and R3's landing leaves **four** unruled ahead | §5.1, §5.2, §5.4, §6.2, §8 |
+| **2026-09-02** | **DRS-P0f slice 4 — all 26 §4.J rows CHECKED-CONFORMANT** at `4b9807c5e`, via three end-to-end branch walks (W-SC / W-BP / W-EM) with every FFI verdict checked and W-SC's predicate sequence KAT-pinned on both legs. Three REWRITE-NOTEs recorded (assign_epoch cutover reopen; drop-arm set-difference in the marshal; skip_fcmp_verify's embargo-load-bearing cache) plus the section-level note that the C++/Rust mirror is interim structure the rewrite retires | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 3 — the archival-journal family; all six reviewable store-enforced rows now reviewed.** **CEN-L7 → CHECKED-CONFORMANT** (the three bond-fold connect arms return their Rust verdict into one checked site, `apply_archival_bond_record_update`, so `return rc` is correct rather than a discarded verdict). **CEN-L9 → CHECKED-CONFORMANT** (every named fatality present; bonded-underflow checked twice, per-P and global). **CEN-L8 → failed closed to UNREVIEWED**: two clauses verify, but its settlement `(passes, issued)` clause names behavior that does not run — `set_archival_settlement` has **no production caller**, a hazard the tree itself flags at `db_lmdb.cpp:7649` — and **SO-D7 places that writer in the slash scheduler's pass, not epoch close**, so the row's wording is a **census question routed to R8**, not a conformance verdict | §5.4.1 |
 | **2026-09-02** | **DRS-P0f slice 2 — CEN-L10 → CHECKED-CONFORMANT** at `4b9807c5e`. First-crossing division confined to one Rust site and pinned by a boundary table; layer-2 sub-root existence and the CREATE-only O-2 refusal both fatal; geometry constant structurally asserted against the fcmp widths. Every error arm aborts loudly. **Recorded precision:** L10 is an S-ARCH row, so although the verdict promotes it, **§7.1.1 still bars E2 from acting on it for the archival surface until archival digest coverage exists** — a conformance verdict and a coverage gate are different preconditions | §5.4.1 |
 | **2026-09-02** | C2-R1 (reorg/alt) landed (PR #596) during this slice; census re-bucketed again to **86 / 16 / 5 / 64** (three rows to bucket 3 — the deleted per-block-checkpoint fast path). **CEN-H5, CEN-L11 and CEN-L12 re-verified as still bucket 1 at `4b9807c5e`**, so the P0f verdicts stand | header, §5.4 |
