@@ -845,6 +845,11 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
             include_str!("../bond_orchestrator.rs"),
             ".seal_post(",
         ),
+        (
+            "unbond_dispatch.rs",
+            include_str!("../unbond_dispatch.rs"),
+            ".seal_unbond(",
+        ),
     ] {
         let production = src
             .split("\n#[cfg(test)]\nmod tests {")
@@ -868,7 +873,16 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
         // is not therefore decorative: the edit it catches is someone widening
         // their visibility again and calling one here, which compiles cleanly
         // and would silently drop the overlap and generation checks.
-        for bare in [".push_post(", ".push_claim(", ".push_drain("] {
+        for bare in [
+            ".push_post(",
+            ".push_claim(",
+            ".push_drain(",
+            // No `push_unbond` insert primitive exists even under
+            // `cfg(test)`; the needle stands so that MINTING one and
+            // reaching for it here is caught by the same gate that guards
+            // the other three, not discovered at the next review.
+            ".push_unbond(",
+        ] {
             assert!(
                 !code.contains(bare),
                 "{name} inserts a pending record with `{bare}`, which skips the \

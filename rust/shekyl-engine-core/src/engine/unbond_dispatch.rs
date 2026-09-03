@@ -87,14 +87,13 @@ use shekyl_curve_tree::{AssembleInput, ClientError, Gindex};
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingPostState, PendingUnbond, SealAdmission};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
-use shekyl_tx_builder::MAX_INPUTS;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::bond_assembly::{
-    sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned,
+    sweep_funding_outputs, BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned,
+    SweepOverflowPolicy,
 };
 use super::bond_orchestrator::{anchored_reference_block, p_lane_floor_fee};
 use super::curve_tree_actor::CurveTreeHandleError;
@@ -240,72 +239,6 @@ impl UnbondRequestError {
     }
 }
 
-/// Cap the exit's sweep at the consensus per-tx input limit
-/// ([`MAX_INPUTS`], CEN-I4 — a limit the curve-tree actor also enforces, so
-/// an uncapped selection would surface as an opaque `assemble_tx` refusal
-/// instead of assembling at all).
-///
-/// The bond sweep's "consume everything" rule does NOT carry to the exit:
-/// that rule is GF-4b's structural-emptiness argument on the **entry** path
-/// (nothing raw may survive backing-eligible), while the exit is the
-/// terminal post — records left behind by the cap stay spendable and the
-/// composed `unstake`'s drain sweeps a retired persona to zero (in as many
-/// passes as its own input cap needs). So a fragmented pool (>8 eligible
-/// records) caps to a subset rather than refusing the exit and telling the
-/// user to consolidate, which would be protocol knowledge (rule 81) on the
-/// one verb that must not demand any.
-///
-/// The subset is the [`MAX_INPUTS`] **largest** records (ties broken
-/// `(height, gindex)` ascending — fully deterministic), then restored to
-/// the sweep's oldest-first order for the wire. Largest-first for the same
-/// reason the drain planner selects largest-first, plus two exit-specific
-/// ones: the greedy-max subset covers `required` whenever ANY subset of
-/// that size does — an oldest-first truncation could select eight dust
-/// records, refuse `InsufficientFunding`, and then refuse identically on
-/// every retry while a single newer record would have covered it — and the
-/// terminal post should carry out the most value per transaction, leaving
-/// the least behind for the drain's own passes.
-///
-/// The sweep checked sufficiency against the FULL eligible total, so the
-/// capped subset must be re-checked: refusing here (fail-closed, named)
-/// beats assembling a post the actor then refuses — and because the subset
-/// is greedy-max, that refusal now means no admissible subset covers.
-/// `required` is normally zero (the released collateral covers the fee), so
-/// the re-check bites only in the slashed-to-dust corner.
-fn cap_exit_sweep(
-    selection: &mut FundingSelection,
-    required: AtomicUnits,
-) -> Result<(), BondAssemblyError> {
-    if selection.records.len() <= MAX_INPUTS {
-        return Ok(());
-    }
-    // Largest-first selection (ties oldest-first), then oldest-first order.
-    // `sort_by` is stable, but the comparator is total anyway: distinct
-    // records have distinct gindexes.
-    selection.records.sort_by(|a, b| {
-        b.amount
-            .cmp(&a.amount)
-            .then(a.height.cmp(&b.height))
-            .then(a.gindex.cmp(&b.gindex))
-    });
-    selection.records.truncate(MAX_INPUTS);
-    selection.records.sort_by_key(|r| (r.height, r.gindex));
-    let mut total = AtomicUnits::ZERO;
-    for record in &selection.records {
-        total = total
-            .checked_add(record.amount)
-            .ok_or(BondAssemblyError::AmountOverflow)?;
-    }
-    selection.total = total;
-    if total < required {
-        return Err(BondAssemblyError::InsufficientFunding {
-            available: total.to_raw(),
-            required: required.to_raw(),
-        });
-    }
-    Ok(())
-}
-
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_drain
 impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
@@ -331,15 +264,21 @@ where
     /// post and drain quote; §3.5 rule 3: a tunable fee on a `P`-attributed
     /// transaction is a wallet-fingerprint channel in a cleartext field).
     ///
-    /// **Sweeps the persona's whole eligible funding pool.** The exit is the
-    /// terminal post, so it is the one constructor permitted to spend below
-    /// the exit-fee reserve — that reserve exists to keep *this* transaction
-    /// fundable — and sweeping everything consolidates the pool into the
-    /// exit's two payout outputs (to `P`'s own base address), which is what
-    /// the composed `unstake`'s decorrelated drain then sweeps to zero for
-    /// the funded-gated retirement. The sweep's shortfall bound is the fee
-    /// beyond the released collateral (zero in practice: the debit is at
-    /// least the bond floor); the actor's `verify_debit_funding` is the
+    /// **Sweeps the persona's eligible funding pool, bounded at the vin
+    /// headroom.** The exit is the terminal post, so it is the one
+    /// constructor permitted to spend below the exit-fee reserve — that
+    /// reserve exists to keep *this* transaction fundable — and the sweep
+    /// consolidates the pool into the exit's two payout outputs (to `P`'s
+    /// own base address), which is what the composed `unstake`'s
+    /// decorrelated drain then sweeps to zero for the funded-gated
+    /// retirement. A pool fragmented past
+    /// [`MAX_RETENTION_FUNDING_INPUTS`](super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS)
+    /// (the consensus vin cap minus the exit's own `Unbond` vin) caps to
+    /// the largest subset rather than refusing
+    /// ([`SweepOverflowPolicy::CapLargest`]) — leftovers stay spendable for
+    /// the drain's own capped passes. The sweep's shortfall bound is the
+    /// fee beyond the released collateral (zero in practice: the debit is
+    /// at least the bond floor); the actor's `verify_debit_funding` is the
     /// authoritative sufficiency check.
     ///
     /// `unbond_rpc` is the persona-isolated transport the record fetch rides
@@ -459,7 +398,7 @@ where
         // Anchor + sweep + membership paths (the WI-2 shape). The sweep
         // body is the bond path's own (`sweep_funding_outputs`): everything
         // eligible, oldest-first, reserved and immature records excluded —
-        // then capped at the consensus input limit (`cap_exit_sweep`).
+        // bounded at the vin headroom by the sweep's own overflow policy.
         // `required` is what the sources must cover beyond the released
         // collateral: the debit is a SOURCE on the exit (`sum(funding) +
         // debit == outputs + fee`), and the payout splits across TWO
@@ -477,16 +416,20 @@ where
                 .saturating_add(2)
                 .saturating_sub(record.bonded_total_atomic()),
         );
-        let mut selection = sweep_funding_outputs(
+        // CapLargest: the exit owes no consume-everything invariant, so a
+        // pool fragmented past the vin headroom caps to the largest subset
+        // (see `SweepOverflowPolicy`) instead of refusing — leftovers go to
+        // the retired persona's drain.
+        let selection = sweep_funding_outputs(
             pruning_landed,
             funding_records,
             p_slot,
             reserved,
             required,
             reference_height,
+            SweepOverflowPolicy::CapLargest,
         )
         .map_err(StakeEngineError::from)?;
-        cap_exit_sweep(&mut selection, required).map_err(StakeEngineError::from)?;
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -647,125 +590,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use shekyl_engine_state::pscan_state::PFundingOutputRecord;
-    use shekyl_tx_builder::MAX_INPUTS;
-    use shekyl_types::{GlobalOutputIndex, PSlot};
-    use shekyl_units::AtomicUnits;
-
-    use super::super::bond_assembly::{BondAssemblyError, FundingSelection};
-    use super::cap_exit_sweep;
-
-    fn rec(gindex: u64, amount: u64) -> PFundingOutputRecord {
-        PFundingOutputRecord {
-            p_slot: PSlot::from_raw(0),
-            index_in_transaction: 0,
-            gindex: GlobalOutputIndex::from_raw(gindex),
-            output_key: [0u8; 32],
-            commitment: [0u8; 32],
-            ciphertext_x25519: [0u8; 32],
-            ciphertext_ml_kem: Vec::new(),
-            amount: AtomicUnits::from_raw(amount),
-            height: shekyl_types::BlockHeight::from_raw(gindex),
-            epoch: shekyl_types::SettlementEpoch::from_raw(0),
-            spendable_height: shekyl_types::BlockHeight::from_raw(0),
-            lineage: shekyl_engine_state::pscan_state::MintLineageOutput::ExternalTransfer,
-        }
-    }
-
-    fn selection_of(n: u64) -> FundingSelection {
-        let records: Vec<_> = (0..n).map(|g| rec(g, 10)).collect();
-        let total = AtomicUnits::from_raw(10 * n);
-        FundingSelection { records, total }
-    }
-
-    /// A fragmented pool caps to a [`MAX_INPUTS`]-record subset instead of
-    /// refusing the exit — the consensus input limit would otherwise
-    /// surface as an opaque `assemble_tx` refusal (the curve-tree actor
-    /// enforces the same bound). Equal amounts: the tie-break keeps the
-    /// oldest, and the kept subset stays in wire (oldest-first) order.
-    #[test]
-    fn a_fragmented_pool_caps_to_max_inputs_ties_oldest() {
-        let mut selection = selection_of(MAX_INPUTS as u64 + 3);
-        cap_exit_sweep(&mut selection, AtomicUnits::ZERO).expect("cap admits");
-        assert_eq!(selection.records.len(), MAX_INPUTS);
-        assert_eq!(
-            selection.records[0].gindex,
-            GlobalOutputIndex::from_raw(0),
-            "equal amounts tie-break oldest-first"
-        );
-        assert!(
-            selection
-                .records
-                .windows(2)
-                .all(|w| w[0].gindex < w[1].gindex),
-            "the kept subset must be restored to oldest-first wire order"
-        );
-        assert_eq!(
-            selection.total,
-            AtomicUnits::from_raw(10 * MAX_INPUTS as u64),
-            "the total must be re-summed over the capped subset, not left stale"
-        );
-    }
-
-    /// The selection under the cap is largest-first, so a `required` that
-    /// any admissible subset covers IS covered — eight old dust records
-    /// must not shadow the one newer record that funds the exit (an
-    /// oldest-first truncation refused this exact shape forever, since
-    /// every retry re-selected the same dust).
-    #[test]
-    fn a_covering_record_is_selected_over_older_dust() {
-        let mut records: Vec<_> = (0..MAX_INPUTS as u64 + 2).map(|g| rec(g, 1)).collect();
-        // The newest record is the only one that can cover `required`.
-        let whale_gindex = MAX_INPUTS as u64 + 2;
-        records.push(rec(whale_gindex, 1_000));
-        let total = AtomicUnits::from_raw(MAX_INPUTS as u64 + 2 + 1_000);
-        let mut selection = FundingSelection { records, total };
-        cap_exit_sweep(&mut selection, AtomicUnits::from_raw(900)).expect("the whale covers");
-        assert_eq!(selection.records.len(), MAX_INPUTS);
-        assert!(
-            selection
-                .records
-                .iter()
-                .any(|r| r.gindex == GlobalOutputIndex::from_raw(whale_gindex)),
-            "largest-first selection must include the covering record"
-        );
-        assert!(
-            selection.total >= AtomicUnits::from_raw(900),
-            "the capped subset must cover required when any subset does"
-        );
-    }
-
-    /// A selection at or under the cap passes through untouched.
-    #[test]
-    fn an_uncapped_selection_is_untouched() {
-        let mut selection = selection_of(MAX_INPUTS as u64);
-        let before_total = selection.total;
-        cap_exit_sweep(&mut selection, AtomicUnits::ZERO).expect("cap admits");
-        assert_eq!(selection.records.len(), MAX_INPUTS);
-        assert_eq!(selection.total, before_total);
-    }
-
-    /// The sweep's sufficiency check ran against the FULL eligible total,
-    /// so the capped subset must be re-checked — a shortfall the cap
-    /// creates refuses by name (fail-closed), never assembles.
-    #[test]
-    fn a_shortfall_created_by_the_cap_refuses_by_name() {
-        let mut selection = selection_of(MAX_INPUTS as u64 + 3);
-        // Full total (110) covers; capped total (80) does not.
-        let required = AtomicUnits::from_raw(10 * MAX_INPUTS as u64 + 5);
-        let err = cap_exit_sweep(&mut selection, required).expect_err("must refuse");
-        assert!(
-            matches!(
-                err,
-                BondAssemblyError::InsufficientFunding {
-                    available,
-                    required: r,
-                } if available == 10 * MAX_INPUTS as u64 && r == required.to_raw()
-            ),
-            "got {err:?}"
-        );
-    }
-
     /// The seam's structural pins, `wire.rs`-tripwire style (drop the
     /// trailing test module so these needles cannot self-match; drop
     /// comment-only lines so doc mentions of forbidden tokens cannot trip

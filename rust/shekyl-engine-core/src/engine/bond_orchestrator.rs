@@ -31,7 +31,7 @@ use shekyl_curve_tree::ClientError;
 
 use super::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned,
+    SpentRecordsDurablyPruned, SweepOverflowPolicy,
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
@@ -733,6 +733,10 @@ where
             .checked_add(fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;
 
+        // RefuseTooMany: the bond post's consume-everything semantics
+        // (GF-4b structural emptiness) forbid a silent subset, and the post
+        // carries its own bond vin inside the consensus vin cap — see
+        // `MAX_RETENTION_FUNDING_INPUTS`.
         let selection = sweep_funding_outputs(
             pruning_landed,
             &funding_records,
@@ -740,6 +744,7 @@ where
             &reserved,
             required,
             reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )?;
         Ok((selection, reference, snapshot_generation))
     }

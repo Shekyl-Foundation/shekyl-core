@@ -37,7 +37,21 @@
   "nothing dispatches the assembled bytes" narrowed to "nothing
   user-facing dispatches"; lifting it is PR-C's composed `unstake`
   (post + a decorrelated drain), which also inherits the
-  retire-on-a-real-chain arm by its recorded conditional.
+  retire-on-a-real-chain arm by its recorded conditional. **Review
+  round 3 hardened the funding sweep with a consensus vin-headroom
+  bound spanning all three retention lanes**: `FCMP_MAX_INPUTS_PER_TX`
+  caps the WHOLE vin, and every tx `sweep_funding_outputs` funds
+  carries exactly one non-funding vin (bond, emission, or Unbond), so
+  an 8-record sweep assembled a 9-vin transaction — accepted on
+  FAKECHAIN (the C++ cap is gated off there, so no regtest walk can
+  observe the boundary) and rejected on every public network. The
+  sweep now owns `MAX_RETENTION_FUNDING_INPUTS` (= 7, pinned by an
+  absolute KAT after a bite proved the relative tests could not see
+  the constant drift) with a per-caller overflow policy: the bond post
+  and the claim's fee sweep refuse by name (their GF-4b
+  consume-everything semantics forbid a silent subset), and the exit
+  caps to the largest subset (no consume-everything obligation;
+  leftovers go to the retired persona's drain).
 
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;
