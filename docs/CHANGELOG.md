@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **The drain byte-parity e2e pinned a fixture state that never existed.**
+  `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
+  sweep-all bond leaves exactly ONE persona funding record; the bond post's
+  change has been a two-output split (`change_lo`/`change_hi`) since before
+  the assertion was written, so the walk was deterministically red on clean
+  `dev` — surfaced by PR-C's full walk battery, verified against a clean
+  dev baseline with the same daemon. Corrected to the assembly's real
+  invariant (two split halves), with the cushion re-sized so the larger
+  half alone funds the drain and the 1-in/2-out byte-parity proposition is
+  preserved; the shared confirmed-bond fixture's wait now also requires
+  the swept records' arm-1 prune before snapshotting (a determinism hole).
+
 - **Consensus: PoW acceptance is gated on the verifier's verdict, not the
   fail-closed sentinel (CEN-D2/D1 S1).** The `0xff…` hash written on RandomX
   FFI failure passes `check_hash` at difficulty 1, and the validation sites
@@ -29,6 +41,45 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
+  the composed verb, wallet-RPC + CLI).** The reachability gate held since
+  PR-P4 (and narrowed, never lifted, by the engine walk, the submit fact
+  set, and PR-B's dispatch seam + daemon walk) is lifted: `unstake` posts
+  the irreversible `Unbond` exit for the first live-bonded persona
+  (engine-resolved — the wire never names a slot, fee is the canonical
+  P-lane floor, CLI carries the irreversibility confirmation), and
+  `collect_unstaked` sweeps the released collateral to principal with an
+  engine-computed exact payment (`Σ selected − fee`, zero change), its
+  reply's `remainder` the completion fact. A single overloaded verb was
+  rejected for irreversible-step mis-selection, and the sweep deliberately
+  does not ride `drain`'s firewall-pinned active-persona shape — the
+  RESERVED→shipped reconciliation is recorded in the OpenAPI census.
+  Codes `-29513..-29527`, with the released-vs-held dispatch dispositions
+  on distinct codes (`-29521`/`-29522`) because they demand opposite
+  client behavior. Both staging `dead_code` allows retired
+  (rule-21 conditions met); `PENDING_POST_VERSION` v9 stands (no
+  persisted-wire change).
+
+- **Finding discharged with it: the funded retirement gate had passing
+  coverage and zero production reach.** Emptying a persona slot requires a
+  drain of exactly `spendable − fee`; the fee is an internal quote over a
+  live daemon estimate — never a parameter, never exposed by any read —
+  and `get_drain_balance` is gross-of-fee, so no user path could produce
+  the zero the gate fires on: the retire engine walk (#575) observed it
+  fire only on synthetically constructed states (a test that constructs a
+  gate's trigger state proves the gate works, and says nothing about
+  whether the state is reachable). The witness-gated terminal sweep is
+  what makes it reachable, and the new composed-arc regtest walk
+  (`e2e_unstake_collect_retire_composed_arc`) retires a persona
+  end-to-end from states produced only by the shipped verbs: post →
+  connect → sweep (remainder 0) → rotation → claim-window expiry →
+  funded-gated retirement on real-chain evidence. The F-D1 amount stage
+  is untouched (the sweep's payment is an output of selection, where
+  per-output amounts already legitimately live); the §12.3 carve
+  exception for the total-shaped exit sweep is recorded in
+  `PRINCIPAL_STAKE_LIFECYCLE.md` and scoped by the `TerminalExitObserved`
+  witness type.
 
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**

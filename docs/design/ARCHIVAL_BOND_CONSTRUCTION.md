@@ -463,12 +463,12 @@ round-trip KAT against `verify_unbond_bond_post` (`unbond_round_trip.rs`), and
 the persona-bound transaction around that vin is built too — `AssembleUnbond`
 assembles the whole exit, with the surface-A auth slot under `bond_spend_pk`.
 So the section title overstates for that kind: two of the four are exercised,
-not one. What `Unbond` still lacks is not construction but **reachability** —
-no RPC method, no CLI verb — and neither slice 3's engine walk, the Unbond
-submit fact set (2026-08-29), nor PR-B's dispatch seam + daemon walk (which
-narrowed the former third condition, "nothing dispatches the assembled bytes",
-to "nothing user-facing dispatches": `Engine::submit_unbond` is `pub(crate)`
-with only a `#[cfg(test)]` caller) lifted either. **`Rebond` and `HoldingsUpdate` remain
+not one. `Unbond`'s reachability gate — held through slice 3's engine walk, the
+submit fact set (2026-08-29), and PR-B's dispatch seam + daemon walk,
+each narrowing without lifting — was **lifted by PR-C (2026-09-03)**:
+`StakeFacade::unstake` drives `Engine::submit_unbond` from wallet-RPC and
+the CLI, and `collect_unstaked`'s terminal sweep completes the arc
+(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Rebond` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture

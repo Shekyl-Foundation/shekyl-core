@@ -59,7 +59,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
   - Target: pre-genesis
 
-- **Staking has no REACHABLE exit: producer, submit battery, dispatch seam, and the daemon walk all exist, but the seam (`Engine::submit_unbond`) is `pub(crate)` with only a `#[cfg(test)]` caller — no RPC method, no CLI verb, no composed `unstake` (= post + a decorrelated drain, PR-C).** When that verb becomes reachable it lands on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), not as `Engine::unstake`. [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
+- **`unbond_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.** The exit became reachable with PR-C (the line this one replaces is DISCHARGED: `unstake` + `collect_unstaked` landed on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), wallet-RPC + CLI, 2026-09-03), and its refusals carry the readiness operands (`-29517 data.detail`), so a staker is never blind to WHY an exit refuses. What did NOT land is the standalone pre-flight query `unbond_readiness(P)` from the frozen §2 surface. The named blocker, not a convenience deferral: the frozen signature is persona-addressed, the RPC surface is forbidden from enumerating personas (`principal_stakes()` is RPC-REJECTED as the P↔principal edge), so the query's wire shape is blocked on a persona-addressing design the multi-slot UX round owns. At genesis scope (single slot) the refusal detail is the same information. [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §2.
   - Target: pre-genesis
 
 - **Release-asset manifest signing owed before the first non-RC release
@@ -126,6 +126,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).**
+  - **PR-C made this residue USER-VISIBLE (2026-09-03):** `unstake` is reachable, and an ambiguous/held exit now surfaces as `-29522 UNSTAKE_FATE_UNKNOWN` (seal held funds-safe, lane shut, stall alarm in the operator log) with **no recovery verb** — the honest rendering of this unbuilt driver, stated in the contract rather than hidden. The prune half remains a SECURITY item (below); never land resubmit alone.
   - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
 

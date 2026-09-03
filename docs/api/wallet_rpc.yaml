@@ -105,188 +105,78 @@
 #                                                   never parameters — the
 #                                                   P-lane CONTRACT PIN below
 #                                                   applied)
-#   RESERVED (prerequisite in parentheses):
-#     unstake                                      (the Unbond PRODUCER.
-#                                                   Prerequisite rewritten by
-#                                                   WI-RPC-5, then CORRECTED
-#                                                   2026-08-26 by PR-P4: the
-#                                                   WI-RPC-5 text said "no
-#                                                   producer exists; blocked
-#                                                   on the
-#                                                   PostKindNotJoinMarket
-#                                                   connect path". BOTH
-#                                                   clauses are now false.
-#                                                   PostKindNotJoinMarket
-#                                                   guards only the
-#                                                   JoinMarket verifier — the
-#                                                   Unbond verify + connect
-#                                                   arms landed in #303 — and
-#                                                   the producer itself
-#                                                   (build_unbond_vin +
-#                                                   AssembleUnbond) lands in
-#                                                   PR-P4. The prerequisite
-#                                                   is now the REACHABILITY
-#                                                   gate, not a missing
-#                                                   producer: nothing on the
-#                                                   exit path is callable
-#                                                   from any RPC verb or CLI
-#                                                   command. PR-P4 slice 3's
-#                                                   engine walk HAS landed and
-#                                                   asserts all three named
-#                                                   observables — the wipe,
-#                                                   the funded gate, and the
-#                                                   seal-then-act crash
-#                                                   ordering — and it did NOT
-#                                                   lift this gate. RESERVED
-#                                                   is anchored to what
-#                                                   actually holds it: no RPC
-#                                                   verb, no CLI command, and
-#                                                   no composed unstake verb.
-#                                                   "Nothing dispatching the
-#                                                   assembled bytes" was a
-#                                                   third condition until
-#                                                   PR-B narrowed it (seam
-#                                                   pub(crate), sole caller
-#                                                   #[cfg(test)] — the PR-B
-#                                                   UPDATE below), and native
-#                                                   /submit_transaction was a
-#                                                   fourth condition until
-#                                                   2026-08-29 and is not one
-#                                                   now — it admits an Unbond
-#                                                   (§8.7.1.1).
-#                                                   (Re-anchored 2026-08-28:
-#                                                   this previously read
-#                                                   "RESERVED stands until
-#                                                   that walk runs", which
-#                                                   would have read as
-#                                                   SATISFIED the moment a
-#                                                   walk landed. A gate tied
-#                                                   to an event expires when
-#                                                   the event happens; tie it
-#                                                   to the condition.)
-#                                                   The walk lands as its OWN
-#                                                   PR, separately from the
-#                                                   producer (ruled
-#                                                   2026-08-26): a walk
-#                                                   sharing a PR with the code
-#                                                   it judges creates pressure
-#                                                   to soften the walk when it
-#                                                   goes red. So the producer
-#                                                   merging is NOT the event
-#                                                   that lifts RESERVED — this
-#                                                   line is the only thing
-#                                                   binding the two once they
-#                                                   are split.
-#                                                   UPDATE 2026-08-26: slice
-#                                                   2b landed, so "the
-#                                                   producer" now means the
-#                                                   WHOLE exit transaction —
-#                                                   funding, outputs, proving,
-#                                                   wire encoding, and the
-#                                                   surface-A pqc_auths slot
-#                                                   under bond_spend_pk — not
-#                                                   just the vin. TWO things
-#                                                   still sit between that and
-#                                                   a working verb, and
-#                                                   neither is the walk nor
-#                                                   the submit battery — both
-#                                                   landed: nothing DISPATCHES
-#                                                   the assembled bytes yet,
-#                                                   and `unstake` is the
-#                                                   composed unbond() = post +
-#                                                   a decorrelated drain.
-#                                                   UPDATE 2026-08-29: native
-#                                                   `/submit_transaction` used
-#                                                   to be a third condition
-#                                                   and no longer is — the
-#                                                   Unbond submit fact set
-#                                                   landed
-#                                                   (DAEMON_SUBMIT_VERDICT.md
-#                                                   §8.7.1.1), so a dispatched
-#                                                   Unbond would now be
-#                                                   ACCEPTED. That narrows the
-#                                                   margin rather than
-#                                                   widening it:
-#                                                   unreachability is now the
-#                                                   whole of what holds this
-#                                                   path closed, where it used
-#                                                   to be one of two
-#                                                   independent layers.
-#                                                   UPDATE 2026-09-02 (PR-B,
-#                                                   #601):
-#                                                   the dispatch
-#                                                   seam landed
-#                                                   (Engine::submit_unbond,
-#                                                   pub(crate)) and the daemon
-#                                                   walk ran green — an
-#                                                   Unbond has now been
-#                                                   assembled, dispatched,
-#                                                   ACCEPTED by native submit
-#                                                   and CONNECTED on a real
-#                                                   regtest chain
-#                                                   (e2e_unbond_accepted_and_
-#                                                   connected). Neither lifted
-#                                                   this gate: "nothing
-#                                                   DISPATCHES the assembled
-#                                                   bytes" NARROWED to
-#                                                   "nothing user-facing
-#                                                   dispatches" (the seam's
-#                                                   only caller is
-#                                                   #[cfg(test)]), and the
-#                                                   composed unstake =
-#                                                   unbond() = post + a
-#                                                   decorrelated drain still
-#                                                   does not exist. Those two
-#                                                   conditions — no user-
-#                                                   facing caller, no
-#                                                   composed verb — are what
-#                                                   RESERVED now anchors to;
-#                                                   lifting them is PR-C.
-#                                                   Read this entry as "the
-#                                                   hard part exists and is
-#                                                   unreachable", never as
-#                                                   "only a handler is
-#                                                   missing".
-#                                                   WIRE-ACTIVITY PIN, owed by
-#                                                   this facade: a wallet
-#                                                   HOLDS many personas and
-#                                                   activates one. The exit is
-#                                                   deliberately NOT active-
-#                                                   scoped — bonded personas
-#                                                   stay resident precisely so
-#                                                   a RETIRED one can still be
-#                                                   unbonded (ARCHIVAL_BOND_CO
-#                                                   NSTRUCTION.md keeps the
-#                                                   bonded union rather than a
-#                                                   lookahead window, "bricks
-#                                                   unbonding otherwise"), so
-#                                                   copying
-#                                                   drain_to_principal's
-#                                                   active_persona()-only
-#                                                   shape here would be a
-#                                                   regression, not a
-#                                                   hardening. What the
-#                                                   firewall requires is NO
-#                                                   SIMULTANEOUS WIRE
-#                                                   ACTIVITY: dormant bonded
-#                                                   balances are permitted,
-#                                                   concurrent broadcast is
-#                                                   not. Nothing enforces that
-#                                                   yet because nothing on
-#                                                   this path broadcasts —
-#                                                   when this facade lands it
-#                                                   owns the serialization.)
+#   SPECIFIED (PR-C — the composed exit; SHIPPED 2026-09-03):
+#     unstake                                      (the irreversible Unbond
+#                                                   POST for the first
+#                                                   live-bonded persona. No
+#                                                   parameters — persona,
+#                                                   fee, and amount are all
+#                                                   engine-resolved; see
+#                                                   UnstakeParams)
+#     collect_unstaked                             (the terminal sweep of
+#                                                   the released collateral
+#                                                   to principal, one capped
+#                                                   pass per call; the
+#                                                   reply's `remainder` is
+#                                                   the completion fact —
+#                                                   see CollectUnstakedResult)
+#
+#     RESERVED→SHIPPED RECONCILIATION (read before assuming drift): the
+#     reservation said "`unstake` is the composed unbond() = post + a
+#     decorrelated drain". The shipped shape discharges that composition
+#     ACROSS TWO NAMED ACTIONS rather than inside one method, and the
+#     departure is deliberate, not drift:
+#       1. The composition cannot be synchronous — the sweep can only spend
+#          payouts that have confirmed and matured, epochs after the post.
+#       2. A single overloaded verb was REJECTED for irreversible-step
+#          mis-selection: a verb overload is an ergonomics question until
+#          its resolution ladder can fall through to an irreversible
+#          action — with persona A exited (payouts immature) and persona B
+#          still bonded, a "finish A" call would fall through and post B's
+#          irreversible exit, firing exactly when the caller's mental model
+#          and engine state have diverged. Multi-bonded is a routine state
+#          (rotation-while-bonded), so the fallback is a trap, not an edge.
+#       3. The sweep could not land on `drain`: its active-persona
+#          resolution is a FIREWALL pin, and the persona being collected is
+#          routinely not the active one — routing the sweep through it
+#          would have quietly deleted that pin. `collect_unstaked` is
+#          therefore a contract ADDITION beyond the reserved name, with
+#          engine-side exited-persona resolution.
+#       "Decorrelated" post-F-W10 is structural: two separate, user-timed,
+#       FCMP-private transactions — never machinery.
+#
+#     THE FINDING THIS SHIPMENT DISCHARGES (recorded 2026-09-03, PR-C):
+#     the funded retirement gate had PASSING COVERAGE AND ZERO PRODUCTION
+#     REACH — emptying a slot needs a payment of exactly `spendable − fee`,
+#     the fee is an internal quote never exposed by any read, and
+#     get_drain_balance is gross-of-fee, so no user path could produce the
+#     zero the gate fires on; the retire engine walk observed it fire only
+#     on synthetically constructed states. A test that constructs a gate's
+#     trigger state proves the gate works and says nothing about whether
+#     the state is reachable. collect_unstaked's engine-computed exact
+#     sweep (`Σ selected − fee`, zero change) is what makes the gate
+#     reachable; the composed-arc regtest walk now retires a persona from
+#     states produced only by the shipped verbs.
+#
+#     WIRE-ACTIVITY PIN (carried from the reservation, now owned here): a
+#     wallet HOLDS many personas and activates one; the exit pair is
+#     deliberately NOT active-scoped — bonded personas stay resident
+#     precisely so a rotated-away one can still be unbonded
+#     (ARCHIVAL_BOND_CONSTRUCTION.md keeps the bonded union; "bricks
+#     unbonding otherwise"). What the firewall requires is NO SIMULTANEOUS
+#     WIRE ACTIVITY, and the per-persona one-live-exit / one-live-drain
+#     seals own that serialization on this path.
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
-#       V3_WALLET_DECISION_LOG.md "P-lane fees"): when this schema lands
-#       it carries NO fee parameter — no FeePriority, no amount, no
-#       cover-amount input. Every P-lane tx pays the canonical weight-priced
-#       floor fee from persona working capital (cover + earnings); a
-#       user-visible fee control would be a wallet-fingerprint channel in a
-#       cleartext field on P-attributed transactions. Unbonding is an
-#       autonomous first-class process: the surfaced method is at most a
-#       trigger plus read-only progress, never a parameterized action.
-#       (WI-RPC-5's drain method carries this pin already: amount is user
-#       intent, fee/destination are engine-resolved.)
+#       V3_WALLET_DECISION_LOG.md "P-lane fees"): both schemas carry NO fee
+#       parameter — no FeePriority, no amount, no cover input. Every P-lane
+#       tx pays the canonical weight-priced floor fee; a user-visible fee
+#       control would be a wallet-fingerprint channel in a cleartext field
+#       on P-attributed transactions. (The reservation-era text survives at
+#       the git history of this entry; the gate's four conditions and their
+#       narrowing history are preserved in PRINCIPAL_STAKE_LIFECYCLE.md's
+#       PR-P4 row.)
+#
+#   RESERVED (prerequisite in parentheses):
 #     match_transfer_to_request                    (Phase 2c orchestrator
 #                                                   wrapper over the FA-8
 #                                                   engine substrate; the
@@ -383,8 +273,10 @@
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (-29500..-29506 and -29512 live on
 #                            `stake`; -29507..-29511 live on `drain`
-#                            (WI-RPC-5); rest reserved — never reuse an
-#                            allocated code)
+#                            (WI-RPC-5); -29513..-29522 live on `unstake`
+#                            and -29523..-29527 on `collect_unstaked`
+#                            (PR-C; -29513 is shared by the exit pair);
+#                            rest reserved — never reuse an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
 #                            not pending work. A4 (2026-08-06) descoped
@@ -523,6 +415,8 @@ components:
             - stake_in
             - get_drain_balance
             - drain
+            - unstake
+            - collect_unstaked
             - get_tx_proof
             - check_tx_proof
             - get_reserve_proof
@@ -624,6 +518,21 @@ components:
         - -29510   # DRAIN_UNANCHORABLE
         - -29511   # DRAIN_IN_FLIGHT
         - -29512   # STAKE_FUNDING_FRAGMENTED
+        - -29513   # UNSTAKE_NOT_STAKER
+        - -29514   # UNSTAKE_NOTHING_STAKED
+        - -29515   # UNSTAKE_BOND_CONFIRMING
+        - -29516   # UNSTAKE_EXIT_IN_PROGRESS
+        - -29517   # UNSTAKE_NOT_READY
+        - -29518   # UNSTAKE_NO_BOND_RECORD
+        - -29519   # UNSTAKE_NOT_FUNDABLE
+        - -29520   # UNSTAKE_RETRY_TRANSIENT
+        - -29521   # UNSTAKE_REFUSED_RELEASED
+        - -29522   # UNSTAKE_FATE_UNKNOWN
+        - -29523   # COLLECT_NO_EXIT
+        - -29524   # COLLECT_NOT_SPENDABLE_YET
+        - -29525   # COLLECT_DUST_REMAINDER
+        - -29526   # COLLECT_PASS_IN_FLIGHT
+        - -29527   # COLLECT_SYNCING
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -929,6 +838,106 @@ components:
                                           sealed; plain retry). Automation
                                           MUST branch on data.cause, never
                                           by parsing the message prose
+          -29513 UNSTAKE_NOT_STAKER       unstake/collect_unstaked: this
+                                          wallet runs no stake engine — the
+                                          exit lane does not exist here
+                                          (shared by the exit pair: one lane)
+          -29514 UNSTAKE_NOTHING_STAKED   unstake: no persona holds a live
+                                          confirmed bond and nothing is
+                                          mid-exit — nothing to unstake
+          -29515 UNSTAKE_BOND_CONFIRMING  unstake: the only bond activity is
+                                          an in-flight bond post; its connect
+                                          sets the balance the exit must
+                                          debit exactly — wait for it to
+                                          confirm, then unstake
+          -29516 UNSTAKE_EXIT_IN_PROGRESS unstake: an exit is already in
+                                          progress (dispatched, or confirmed
+                                          and awaiting collection) — wait,
+                                          then collect_unstaked; never a
+                                          second post (one live exit per
+                                          persona; the exit debits the whole
+                                          bonded total, so a second is doomed
+                                          by construction)
+          -29517 UNSTAKE_NOT_READY        unstake: consensus's own readiness
+                                          predicates refuse for now (release
+                                          cooldown, slash-settlement
+                                          watermark, interval log);
+                                          data.detail carries the predicate's
+                                          own operands — WHEN the refusal
+                                          lifts, not just that it applies.
+                                          One code for the family: the
+                                          remedy class is "wait" for all arms
+          -29518 UNSTAKE_NO_BOND_RECORD   unstake: the daemon holds no bond
+                                          record for the resolved persona —
+                                          the wallet and chain disagree
+                                          about this stake; resync and retry
+          -29519 UNSTAKE_NOT_FUNDABLE     unstake: the exit's floor fee
+                                          cannot be funded from the persona
+                                          pool yet (nothing spendable, an
+                                          output mid-drain, or a shortfall
+                                          data.detail names) — wait for
+                                          outputs to mature or land, then
+                                          retry
+          -29520 UNSTAKE_RETRY_TRANSIENT  unstake: a transient condition
+                                          refused BEFORE anything was sealed
+                                          or sent — data.cause is "syncing"
+                                          (reference view lagging; sync and
+                                          retry) or "raced" (a concurrent
+                                          operation took an input; plain
+                                          retry). Automation MUST branch on
+                                          data.cause, never message prose
+          -29521 UNSTAKE_REFUSED_RELEASED unstake: the daemon refused the
+                                          exit with a DEFINITE first-send
+                                          verdict and the sealed record was
+                                          RELEASED — nothing propagated;
+                                          address data.detail's refusal and
+                                          retry at will. Distinct from
+                                          -29522 because the two demand
+                                          OPPOSITE client behavior
+          -29522 UNSTAKE_FATE_UNKNOWN     unstake: the dispatch failed with
+                                          no definite verdict (or a
+                                          retryable one) — the bytes may
+                                          have reached the network, so the
+                                          sealed record is HELD funds-safe
+                                          and the one-live-exit lane stays
+                                          shut until it settles or the
+                                          recovery slice (FOLLOWUPS
+                                          dispatch-driver prune+resubmit)
+                                          disposes of it. Do NOT re-fire
+                                          blindly; a stall alarm names the
+                                          record in the operator log
+          -29523 COLLECT_NO_EXIT          collect_unstaked: no confirmed
+                                          exit awaits collection — unstake
+                                          first, or wait for the exit to
+                                          confirm and the wallet's own scan
+                                          to observe it
+          -29524 COLLECT_NOT_SPENDABLE_YET collect_unstaked: the exit is
+                                          observed but nothing in the pool
+                                          is spendable yet (payouts, or the
+                                          last pass's residue, not yet
+                                          mature at the reference height) —
+                                          wait and retry
+          -29525 COLLECT_DUST_REMAINDER   collect_unstaked: the spendable
+                                          residue is smaller than the fee to
+                                          move it — the NAMED dust residual:
+                                          it stays in the persona's pool
+                                          (and holds the funded retirement
+                                          gate) until further value matures
+                                          into the slot or the fee floor
+                                          moves. Scalar-free by the drain
+                                          path's contract
+          -29526 COLLECT_PASS_IN_FLIGHT   collect_unstaked: one live drain
+                                          per persona — a previous pass (or
+                                          another drain) is still sealed
+                                          (data.cause "pending": wait for it
+                                          to settle) or this pass's inputs
+                                          raced (data.cause "raced": plain
+                                          retry). The -29511 discriminant
+                                          discipline applies
+          -29527 COLLECT_SYNCING          collect_unstaked: no submittable
+                                          reference can be anchored yet —
+                                          transient; sync and retry (the
+                                          -29510 sibling for the sweep)
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -2400,6 +2409,100 @@ components:
           type: integer
           format: int64
           description: Present iff verdict is ALREADY_IN_CHAIN.
+
+
+
+    # ── Composed exit — PR-C ─────────────────────────────────────────
+    UnstakeParams:
+      type: object
+      additionalProperties: false
+      description: >
+        Post the terminal Unbond exit for the first live-bonded persona.
+        THE IRREVERSIBLE STEP: once the exit connects, the bond debits to
+        zero and the persona can never re-bond on this record. NO
+        parameters, and that is the contract: the persona is
+        engine-resolved (first live-bonded slot — the wire never names a
+        slot; a multi-bonded wallet exits one persona per invocation and
+        re-invokes), the fee is the canonical P-lane floor (CONTRACT PIN),
+        the exit pays the persona's OWN base address (the P↔principal edge
+        is drawn only by collect_unstaked's later, separate sweep), and
+        the released amount is the record's whole bonded total (consensus
+        requires the exact debit). A request carrying `p_slot`, `amount`,
+        or `fee` is -32602 via deny_unknown_fields. Confirmation prompts
+        are CLI-side, never RPC-side: this method fires on call.
+      properties: {}
+
+    UnstakeResult:
+      type: object
+      required: [tx_hash, verdict]
+      description: >
+        The exit was durably sealed BEFORE dispatch (persist-then-send)
+        and then submitted; the DrainResult dispatch-verdict shape. When
+        the network confirms it, collect_unstaked completes the arc.
+        Failure dispositions are first-class here because the path is
+        irreversible: -29521 means the seal was RELEASED (retry at will);
+        -29522 means it is HELD funds-safe (do not re-fire) — see the
+        code table.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        verdict:
+          type: string
+          enum: [BROADCAST, ALREADY_IN_CHAIN]
+          description: >
+            BROADCAST is the normal arm; ALREADY_IN_CHAIN means a
+            previously-sealed identical exit was found confirmed at
+            submit time.
+        confirmed_height:
+          type: integer
+          format: int64
+          description: Present iff verdict is ALREADY_IN_CHAIN.
+
+    CollectUnstakedParams:
+      type: object
+      additionalProperties: false
+      description: >
+        Sweep one pass of the released exit collateral to this wallet's
+        own principal balance. NO parameters: the persona is
+        engine-resolved (first slot with an observed confirmed exit and a
+        nonempty pool), and the pass's payment is an OUTPUT OF SELECTION —
+        `Σ selected − fee`, exactly zero change — because the funded
+        retirement gate needs the slot at zero and no caller-supplied
+        amount can express that (the fee is an internal quote; this is
+        the reachability finding recorded in the census above). One pass
+        spends at most the consensus input cap; re-invoke per the
+        remainder. The pin against caller steering is
+        deny_unknown_fields, as everywhere on this surface.
+      properties: {}
+
+    CollectUnstakedResult:
+      type: object
+      required: [status]
+      description: >
+        A SWEPT reply alone is NOT completion — `remainder` is the
+        completion fact: "0" means nothing remains beyond this pass;
+        nonzero means call again once the residue matures or this pass
+        confirms. The engine knows the remainder and the caller cannot
+        infer it from any payment figure, which is why it is on the wire
+        rather than implied. NOTHING_LEFT means the exited pool is
+        already empty: the collection is complete and the funded-gated
+        retirement proceeds engine-side on its own (an active persona
+        retires after its next rotation).
+      properties:
+        status:
+          type: string
+          enum: [SWEPT, NOTHING_LEFT]
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+          description: SWEPT only — the pass's transaction hash.
+        swept:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: SWEPT only — what this pass moves to principal.
+        remainder:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            SWEPT only — what the pool still holds beyond this pass
+            (immature payouts plus mature overflow past the input cap).
 
     # ── Proofs — WI-RPC-3 (Phase 2c) ─────────────────────────────────
     # DLEQ-based payment and reserve proofs over rust/shekyl-proofs. Two
