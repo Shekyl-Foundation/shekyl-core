@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **Consensus: PoW acceptance is gated on the verifier's verdict, not the
+  fail-closed sentinel (CEN-D2/D1 S1).** The `0xff…` hash written on RandomX
+  FFI failure passes `check_hash` at difficulty 1, and the validation sites
+  ignored the verifier's returned bool — so under (verifier failure ∧
+  difficulty 1) a block could connect with its PoW never verified. All three
+  consumer sites (main connect, alt path, longhash worker) now reject on the
+  bool; the sentinel remains as a belt; a local verifier failure rejects
+  without `m_bad_pow` (the block is unproven, not disproven);
+  `get_altblock_longhash` routes through the single `IPowSchema` dispatch
+  point. Five verdict-contract unit tests, two red-observed.
+
 - **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
   (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
   membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
