@@ -235,10 +235,13 @@ pub(crate) enum SweepSelectError {
 /// LINKAGE: a total-shaped sweep makes the collected figure per-`P`
 /// predictable (collateral + derivable rewards ± cover noise − fees),
 /// conceding the off-chain amount-matching channel for this one terminal
-/// figure — accepted because exactness is the funded gate's requirement,
-/// bounded by the sweep tx being unattributable on-chain (F-W10), with
-/// amount-shaping relocating to its natural home, the principal side's
-/// subsequent ordinary transfers. The full statement is in
+/// figure — accepted because exactness is the funded gate's requirement.
+/// Two bounds are structural (the sweep tx is unattributable on-chain,
+/// F-W10; amount-shaping relocates to the principal side's subsequent
+/// ordinary transfers); the third — the cover noise blurring the match —
+/// is an UNMEASURED magnitude claim here (the neighbouring GF-7
+/// measurement found its parameter cover-blind at the scale checked), not
+/// an established one. The full statement is in
 /// `PRINCIPAL_STAKE_LIFECYCLE.md`, recorded for countersign, not silently
 /// assumed.
 ///
