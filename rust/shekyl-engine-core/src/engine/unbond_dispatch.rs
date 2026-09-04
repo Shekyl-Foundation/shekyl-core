@@ -193,7 +193,7 @@ pub(crate) enum UnbondRequestError {
     /// so nothing was assembled or propagated and the caller may retry at
     /// will. Kept distinct from [`State`] (a local sealed-store read) so
     /// wallet-RPC can name a reachable daemon outage as retryable rather than
-    /// an opaque internal fault (review-5).
+    /// an opaque internal fault.
     #[error("daemon unreachable ({context}): {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed.
@@ -378,7 +378,7 @@ where
         // layer keeps the -29109 (refused answer) vs -29102 (failed query)
         // remedy split: the query-transport failure was previously wrapped
         // as a `State` read error, which routed a reachable daemon-down
-        // condition to -32603 (review-2).
+        // condition to -32603.
         let fee = p_lane_floor_fee(
             daemon
                 .get_fee_estimates()

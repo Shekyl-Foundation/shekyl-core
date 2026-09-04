@@ -1174,7 +1174,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 detail: "a concurrent operation raced the exit's inputs".into(),
             },
             // A pre-seal daemon outage is transient like the two above, on the
-            // same generic retry code with its own cause; NOT -32603 (review-5).
+            // same generic retry code with its own cause; NOT -32603.
             E::DaemonUnreachable { detail } => Self::UnstakeRetryTransient {
                 cause: "daemon",
                 detail,
@@ -1197,7 +1197,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "unstake dispatch fate unknown; seal held");
                 Self::UnstakeFateUnknown { detail }
             }
-            // NOT -32603 (review-1, Copilot): a non-loopback daemon address
+            // NOT -32603: a non-loopback daemon address
             // is operator-fixable configuration — every other verb works over
             // a remote daemon, so "internal error" on exactly this one is the
             // hard-to-diagnose shape rule 82 forbids. Named code + remedy.
@@ -1209,7 +1209,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
 
 impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
     /// The `collect_unstaked` code table (PR-C): `-29513` + `-29523..-29527` +
-    /// `-29529` (a pre-seal daemon outage, review-5);
+    /// `-29529` (a pre-seal daemon outage);
     /// the fee arms reuse the send path's `-29102`/`-29109` split and a
     /// post-seal transport failure is `-29107` (the drain precedent — the
     /// sealed pass's fate is the driver's; the client must not re-fire
@@ -1227,7 +1227,7 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             // A pre-seal daemon outage is retryable, but its remedy ("check the
             // daemon") is not `CollectSyncing`'s ("wait for sync"), so it gets
             // its own code rather than borrowing one with the wrong text
-            // (review-5); NOT -32603.
+            // NOT -32603.
             E::DaemonUnreachable { detail } => Self::CollectDaemonUnreachable { detail },
             E::FeeEstimate { detail } => {
                 tracing::warn!(detail = %detail, "collect_unstaked fee estimate failed");
@@ -1827,7 +1827,7 @@ mod tests {
         assert_eq!(
             fee_query.code().as_i32(),
             -29102,
-            "a failed fee QUERY keeps the shared retry-the-daemon code (review-2)"
+            "a failed fee QUERY keeps the shared retry-the-daemon code"
         );
         let fee_refused: WalletRpcError = E::FeeUnreasonable {
             reason: "per-weight rate above ceiling",
@@ -1838,7 +1838,7 @@ mod tests {
         assert_eq!(
             fee_refused.code().as_i32(),
             -29109,
-            "a refused fee ANSWER keeps the shared sanity-ceiling code (review-2)"
+            "a refused fee ANSWER keeps the shared sanity-ceiling code"
         );
         let transport: WalletRpcError = E::Transport {
             detail: "not loopback".into(),
@@ -1847,7 +1847,7 @@ mod tests {
         assert_eq!(
             transport.code().as_i32(),
             -29528,
-            "a non-loopback daemon is operator config, never -32603 (review-1)"
+            "a non-loopback daemon is operator config, never -32603"
         );
         // The shared-transient pair splits on data.cause, the -29511 shape.
         let syncing: WalletRpcError = E::Resyncing {
@@ -1858,7 +1858,7 @@ mod tests {
         let raced: WalletRpcError = E::InputRaced.into();
         assert_eq!(raced.data().expect("data")["cause"], "raced");
         // A pre-seal daemon outage joins the same generic retry code on its
-        // own cause — retryable, never -32603 (review-5).
+        // own cause — retryable, never -32603.
         let daemon: WalletRpcError = E::DaemonUnreachable {
             detail: "connection refused".into(),
         }
@@ -1914,7 +1914,7 @@ mod tests {
             assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
         }
         // A pre-seal daemon outage is its own retryable code, not the
-        // sync-remedy `-29527` nor an opaque internal fault (review-5).
+        // sync-remedy `-29527` nor an opaque internal fault.
         let unreachable: WalletRpcError = E::DaemonUnreachable {
             detail: "connection refused".into(),
         }

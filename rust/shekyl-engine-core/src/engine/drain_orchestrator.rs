@@ -578,8 +578,8 @@ pub(crate) struct DrainCtx<'a> {
 
 /// The terminal sweep's pool residue: everything the pass leaves on the
 /// slot — Σ over ALL of the slot's unspent records minus the pass's input
-/// total. Summed over the **unfiltered** slot set on purpose (review-1,
-/// Bugbot HIGH): the selection stage receives only the mature ∧ unreserved
+/// total. Summed over the **unfiltered** slot set on purpose: the
+/// selection stage receives only the mature ∧ unreserved
 /// candidates, so a residue summed there silently drops the immature class
 /// — a pass emptying the mature subset would then report `0`, the CLI
 /// would declare the collection complete, and the immature payouts would
