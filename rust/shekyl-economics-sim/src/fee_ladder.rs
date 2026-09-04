@@ -26,11 +26,13 @@
 //! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
 //! `TX_VOLUME_WINDOW` are all imported; the block-policy zone constant is
 //! read from its single Rust owner (`shekyl_wire::transaction::MIN_BLOCK_WEIGHT`).
-//! Two deliberate exceptions, marked at their definitions: the ArticMine
+//! Four deliberate exceptions, marked at their definitions: the ArticMine
 //! ladder transliteration (the round's *subject* — porting it faithfully is
-//! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
+//! the point of the comparison column), `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side).
+//! copy wallet-side), `GENESIS_NG_HEIGHT` (the hardfork table has no Rust
+//! owner), and [`HysteresisCq`] (the §7 construction, whose canonical
+//! owner lives on the implementing branch until it merges).
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -41,10 +43,10 @@ use std::collections::{BTreeSet, VecDeque};
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
-    base_block_reward, calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
-    cap_reward_to_remaining_supply, emission_speed_factor, projected_already_generated,
-    tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    base_block_reward, block_reward_with_penalty, calc_burn_pct, calc_effective_emission_share,
+    calc_release_multiplier, cap_reward_to_remaining_supply, emission_speed_factor,
+    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -63,6 +65,18 @@ const REF_TX_WEIGHT: u64 = 3_000;
 /// a pre-genesis window recalibration cannot leave this instrument silently
 /// measuring a window the chain no longer uses.
 const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
+
+/// The NG-genesis height production feeds to `calc_effective_emission_share`:
+/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` resolves to
+/// **1** on the mainnet hardfork table (`src/hardforks/hardforks.cpp`
+/// `{ 1, 1, 0, … }`; consumed at the `blockchain.cpp` emission-split and
+/// fee-estimate call sites). Declared exception like `REF_TX_WEIGHT`: no
+/// Rust owner exists for the hardfork table, so this pinned copy names its
+/// C++ authority — a retune of that table must update it. The instrument
+/// previously hard-coded 0 here, which at exact year-boundary heights put
+/// `σ` a whole decay step ahead of the validation path (PR #614 review):
+/// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
+const GENESIS_NG_HEIGHT: u64 = 1;
 
 // ---------------------------------------------------------------------------
 // Correction factor
@@ -110,7 +124,7 @@ fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicPar
     );
     let sigma = calc_effective_emission_share(
         height,
-        0,
+        GENESIS_NG_HEIGHT,
         STAKER_EMISSION_SHARE,
         STAKER_EMISSION_DECAY,
         BLOCKS_PER_YEAR,
@@ -178,12 +192,19 @@ fn rounded(raw: [u64; 4]) -> [u64; 4] {
     raw.map(round_money_up_2)
 }
 
-/// Corrected ladder: `C` applied to each unrounded rung, then daemon
-/// rounding. Equivalent — up to integer truncation of at most one atomic
-/// unit per rung, before the coarse 2-significant-digit rounding — to
-/// running the ArticMine formula on the miner-effective reward
-/// `(1−σ)·M_r·R` and dividing by `(1−b)`; the two forms are NOT bit-exact
-/// interchangeable at rounding-step boundaries.
+/// Corrected ladder: `C` applied to each **already-truncated** rung, then
+/// daemon rounding — the SERVED order (`shekyl-economics`
+/// `corrected_fee_ladder` computes `scale(base·w_ref/(m·m))`: rung
+/// truncated first, `C_q` applied to the truncated value, one rounding at
+/// the end), which this instrument must mirror bit-for-bit (§1.9; F-3's
+/// instrument-blindness lesson). It is NOT the algebraic
+/// `⌊C·R·w/M²⌋`: truncating the rung first loses up to `C_q` atomic units
+/// pre-rounding (the fractional loss is amplified by the scalar), which
+/// the coarse 2-significant-digit rounding then may or may not absorb —
+/// at (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) served rounds to 210 where the
+/// algebraic form would round to 220 (PR #614 review; the pin below
+/// keeps a "fix" toward the algebraic form from silently diverging the
+/// instrument from the served path).
 fn corrected_ladder(raw: [u64; 4], c_scaled: u64) -> [u64; 4] {
     raw.map(|f| {
         let scaled = u128::from(f) * u128::from(c_scaled) / u128::from(SCALE);
@@ -347,6 +368,27 @@ struct AgeState {
     base_reward: u64,
 }
 
+/// The demand scale at which the ceiling-quantized `C_q` first steps above
+/// its baseline (`v = tx_volume_baseline`) value at this state — the
+/// pow2-boundary-straddling probe, computed per state rather than
+/// hard-coded (PR #614 review: the fixed `D = 230` was read off the age-4
+/// curve and sits off-boundary at every other state). Falls back to the
+/// historical 230 when no step exists in the reachable `v ≤ 500` range
+/// (then the state has no interior boundary to straddle and the probe
+/// degenerates to a plain interior point, which is the honest reading).
+fn boundary_demand(st: AgeState, params: &EconomicParams) -> u64 {
+    let q_at = |v: u64| {
+        quantize_c_pow2(
+            correction_factor(v, st.ag, st.height, params).c_scaled,
+            SnapRule::Ceiling,
+        )
+    };
+    let base = q_at(params.tx_volume_baseline);
+    (params.tx_volume_baseline..=500)
+        .find(|&v| q_at(v) != base)
+        .unwrap_or(230)
+}
+
 fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
     let height = age_years * BLOCKS_PER_YEAR;
     let ag = projected_already_generated(height, params).expect("projected ag");
@@ -472,6 +514,10 @@ impl Rng {
 #[derive(Serialize)]
 pub struct DwellResult {
     pub scenario: &'static str,
+    /// Chain age of the swept state (§1.8 grid; PR #614 review — dwell was
+    /// previously pinned to the single age-4 state, and age/supply shift
+    /// `C` relative to every pow2 boundary).
+    pub age_years: u64,
     pub mode: String,
     pub blocks_measured: u64,
     /// Median run length (blocks) of an unchanged posted value, per rung,
@@ -501,6 +547,44 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(&'static str),
+    /// The ceiling snap behind the §7 hysteresis construction — the map
+    /// the daemon actually serves once the implementing branch lands.
+    QuantizedHysteresis,
+}
+
+/// The §7 hysteresis construction, transliterated from the implementing
+/// branch's `shekyl-economics::fee_correction_quantized`
+/// (`feat/fee-ladder-impl-1`; 3% band, `HYSTERESIS_MARGIN_MILLI = 30`,
+/// band around the PREVIOUS step, `prev = 0` ⇒ no history). Declared
+/// exception #3 (with the transliteration and `REF_TX_WEIGHT`): the
+/// canonical owner does not exist on this branch yet, and §1.7's
+/// registered remedy requires measuring the CONSTRUCTED map — hysteresis
+/// on `C`, then re-test. At the impl-1 merge this copy must be replaced by
+/// the crate function or the §4.5 acceptance claim is about a different
+/// mechanism than the one shipped.
+struct HysteresisCq {
+    prev: u64,
+}
+
+impl HysteresisCq {
+    fn step(&mut self, c_raw: u64) -> u64 {
+        let cq = quantize_c_pow2(c_raw, SnapRule::Ceiling);
+        if self.prev == 0 || cq == self.prev {
+            self.prev = cq;
+            return cq;
+        }
+        const MARGIN_MILLI: u128 = 30;
+        let prev = u128::from(self.prev);
+        let c = u128::from(c_raw);
+        let upper = prev * (1000 + MARGIN_MILLI) / 1000;
+        let lower = (prev / 2) * (1000 - MARGIN_MILLI) / 1000;
+        if c > upper || c < lower {
+            self.prev = cq;
+            cq
+        } else {
+            self.prev
+        }
+    }
 }
 
 impl LadderMode {
@@ -509,6 +593,9 @@ impl LadderMode {
             LadderMode::Current => "current".to_owned(),
             LadderMode::CorrectedRaw => "corrected-raw".to_owned(),
             LadderMode::Quantized(rule) => format!("corrected-quantized-pow2-{rule}"),
+            LadderMode::QuantizedHysteresis => {
+                "corrected-quantized-pow2-ceil-hysteresis".to_owned()
+            }
         }
     }
 }
@@ -555,6 +642,7 @@ fn dwell_scenario(
     }
 
     let current_fees = rounded(raw);
+    let mut hyst = HysteresisCq { prev: 0 };
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -588,6 +676,10 @@ fn dwell_scenario(
                 };
                 let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
                 corrected_ladder(raw, quantize_c_pow2(c, rule))
+            }
+            LadderMode::QuantizedHysteresis => {
+                let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+                corrected_ladder(raw, hyst.step(c))
             }
         };
         for i in 0..4 {
@@ -629,6 +721,7 @@ fn dwell_scenario(
     }
     DwellResult {
         scenario,
+        age_years: st.height / BLOCKS_PER_YEAR,
         mode: mode.name(),
         blocks_measured: blocks,
         median_dwell,
@@ -644,10 +737,16 @@ fn dwell_scenario(
 
 #[derive(Serialize)]
 pub struct FeedbackResult {
+    /// Chain age and median of the swept state (§1.8 interior grid;
+    /// PR #614 review — feedback was previously pinned to (age 4, zone)).
+    pub age_years: u64,
+    pub median: u64,
     pub elasticity_milli: u64,
     /// Demand scale `D`: the fixed point of the demand curve
     /// (`v = D·(f/f_D)^(−ε)`). Swept so the fixed-point `C` crosses a pow2
-    /// boundary (`D = 230` sits at `C ≈ 2.0` at the reference state).
+    /// boundary; the boundary scale is COMPUTED per state
+    /// ([`boundary_demand`]) — a fixed `D = 230` straddles the boundary
+    /// only at the age-4 state it was read from.
     pub demand_scale: u64,
     pub start_volume: u64,
     pub mode: String,
@@ -681,7 +780,7 @@ fn feedback_scenario(
     params: &EconomicParams,
 ) -> FeedbackResult {
     let raw = articmine_ladder_raw(st.base_reward, median, median);
-    let fee_at = |v_avg: u64| -> u64 {
+    let fee_at = |v_avg: u64, hyst: &mut HysteresisCq| -> u64 {
         let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
         let c = match mode {
             LadderMode::Quantized(rule_name) => {
@@ -692,11 +791,14 @@ fn feedback_scenario(
                 };
                 quantize_c_pow2(c, rule)
             }
+            LadderMode::QuantizedHysteresis => hyst.step(c),
             _ => c,
         };
         corrected_ladder(raw, c)[1].max(1)
     };
-    let f_ref = fee_at(demand_scale);
+    // The reference fee is history-free (a fresh estimate at the fixed
+    // point); the loop's fee below carries the band's memory.
+    let f_ref = fee_at(demand_scale, &mut HysteresisCq { prev: 0 });
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -713,9 +815,10 @@ fn feedback_scenario(
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
     let mut tail_fees = BTreeSet::new();
+    let mut hyst = HysteresisCq { prev: 0 };
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = fee_at(v_avg);
+        let fee = fee_at(v_avg, &mut hyst);
         let demand = (demand_scale as f64) * (fee as f64 / f_ref as f64).powf(-eps);
         let demand = demand.clamp(0.0, 10_000.0);
         sum += demand;
@@ -730,6 +833,8 @@ fn feedback_scenario(
         }
     }
     FeedbackResult {
+        age_years: st.height / BLOCKS_PER_YEAR,
+        median,
         elasticity_milli: eps_milli,
         demand_scale,
         start_volume,
@@ -765,6 +870,13 @@ pub struct DegeneratePins {
     /// validation pays. FL-V1's divergence in its terminal form.
     pub estimate_reward_at_exhaustion: u64,
     pub validation_reward_at_exhaustion: u64,
+    /// The KAT-pinned penalty through the crate's block-reward entry point
+    /// (§1.9: the instrument calls it, reimplements nothing): tail-emission
+    /// reward at `x = ½` (`weight = 1.5·zone`) → `TAIL·(1 − x²) = TAIL·¾`.
+    /// The FL-C8 tail-reward degenerate, coupled to the same entry point
+    /// the 81-vector KAT pins (PR #614 review: the register claimed the
+    /// coupling; this pin makes it true).
+    pub penalty_at_tail_x_half: u64,
     /// The ladder and relay floor computed from each at exhaustion.
     pub estimate_ladder_at_exhaustion: [u64; 4],
     pub validation_ladder_at_exhaustion: [u64; 4],
@@ -805,6 +917,14 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         tail_era_blocks: 1 << esf,
         estimate_reward_at_exhaustion: est_reward,
         validation_reward_at_exhaustion: val_reward,
+        penalty_at_tail_x_half: block_reward_with_penalty(
+            FULL_REWARD_ZONE_V5,
+            FULL_REWARD_ZONE_V5 + FULL_REWARD_ZONE_V5 / 2,
+            s,
+            FULL_REWARD_ZONE_V5,
+            params,
+        )
+        .expect("tail-reward penalty pin"),
         estimate_ladder_at_exhaustion: rounded(articmine_ladder_raw(
             est_reward,
             FULL_REWARD_ZONE_V5,
@@ -1001,45 +1121,63 @@ pub fn report() -> FeeLadderReport {
         ),
     ];
 
-    let st4 = state_of(4);
+    // Dwell and feedback sweep the REACHABLE §1.8 interior — the projected
+    // trajectory state at every registered age (supply ratio is coupled to
+    // age through the emission curve, so the projected state IS the
+    // reachable one; the synthetic ratio grid feeds only the C surface
+    // above, where reachability is marked per point). Previously both were
+    // pinned to the single age-4 state and feedback to the zone median
+    // (PR #614 review): age/supply move `C` relative to every pow2
+    // boundary, and the median moves the rung values the rounding acts on.
     let mut dwell = Vec::new();
-    for mode in [
-        LadderMode::Current,
-        LadderMode::CorrectedRaw,
-        LadderMode::Quantized("nearest"),
-        LadderMode::Quantized("ceil"),
-    ] {
-        for &(label, m0, m1, median) in DWELL_SCENARIOS {
-            dwell.push(dwell_scenario(label, m0, m1, median, st4, mode, &params));
+    for &(_age, st) in &states {
+        for mode in [
+            LadderMode::Current,
+            LadderMode::CorrectedRaw,
+            LadderMode::Quantized("nearest"),
+            LadderMode::Quantized("ceil"),
+            LadderMode::QuantizedHysteresis,
+        ] {
+            for &(label, m0, m1, median) in DWELL_SCENARIOS {
+                dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
+            }
         }
     }
 
     let mut feedback = Vec::new();
-    for mode in [LadderMode::CorrectedRaw, LadderMode::Quantized("ceil")] {
-        for eps in [0u64, 500, 1000, 2000, 3000] {
-            // Demand scales chosen so the fixed-point C crosses the pow2
-            // boundary (at age 4 the C(v) curve passes C = 2 near v ≈ 230).
-            for demand_scale in [50u64, 100, 230, 400] {
-                feedback.push(feedback_scenario(
-                    eps,
-                    demand_scale,
-                    demand_scale,
-                    st4,
-                    zone,
-                    mode,
-                    &params,
-                ));
-                // A displaced start probes convergence back to the fixed
-                // point, not just persistence at it.
-                feedback.push(feedback_scenario(
-                    eps,
-                    demand_scale,
-                    8 * demand_scale.min(1_250),
-                    st4,
-                    zone,
-                    mode,
-                    &params,
-                ));
+    for &(_age, st) in &states {
+        // The boundary-straddling demand scale, computed at THIS state.
+        let d_boundary = boundary_demand(st, &params);
+        for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+            for mode in [
+                LadderMode::CorrectedRaw,
+                LadderMode::Quantized("ceil"),
+                LadderMode::QuantizedHysteresis,
+            ] {
+                for eps in [0u64, 500, 1000, 2000, 3000] {
+                    for demand_scale in [50u64, 100, d_boundary, 400] {
+                        feedback.push(feedback_scenario(
+                            eps,
+                            demand_scale,
+                            demand_scale,
+                            st,
+                            median,
+                            mode,
+                            &params,
+                        ));
+                        // A displaced start probes convergence back to the
+                        // fixed point, not just persistence at it.
+                        feedback.push(feedback_scenario(
+                            eps,
+                            demand_scale,
+                            8 * demand_scale.min(1_250),
+                            st,
+                            median,
+                            mode,
+                            &params,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1095,22 +1233,69 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             t.corrected_floor_below_relay
         );
     }
+    // Dwell over the swept grid: aggregate per mode, then every run where
+    // a QUANTIZED mode posted more than one value (the FL-C4a hazard —
+    // "no exceptions listed" is the pass statement, so the exceptions ARE
+    // the interesting rows; raw-C rows print their per-age summary since
+    // raw C is the rejected baseline the table contrasts).
+    let quantized_runs = r
+        .dwell
+        .iter()
+        .filter(|d| d.mode.contains("quantized"))
+        .count();
+    let quantized_changed: Vec<_> = r
+        .dwell
+        .iter()
+        .filter(|d| d.mode.contains("quantized") && d.value_changes.iter().any(|&c| c > 0))
+        .collect();
+    let _ = writeln!(
+        out,
+        "fee-ladder: dwell grid = {} runs ({} quantized; {} quantized runs posted any value change)",
+        r.dwell.len(),
+        quantized_runs,
+        quantized_changed.len()
+    );
     for d in &r.dwell {
-        let _ = writeln!(
-            out,
-            "fee-ladder: dwell {} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?}",
-            d.scenario,
-            d.mode,
-            d.median_dwell,
-            d.distinct_posted_values,
-            d.value_changes,
-            d.min_dwell_started_in_ramp
-        );
+        let interesting = if d.mode.contains("quantized") {
+            d.value_changes.iter().any(|&c| c > 0)
+        } else {
+            d.mode == "corrected-raw" && d.scenario.starts_with("stationary-v50")
+        };
+        if interesting {
+            let _ = writeln!(
+                out,
+                "fee-ladder: dwell {} age={} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?}",
+                d.scenario,
+                d.age_years,
+                d.mode,
+                d.median_dwell,
+                d.distinct_posted_values,
+                d.value_changes,
+                d.min_dwell_started_in_ramp
+            );
+        }
     }
-    for fb in &r.feedback {
+    // Feedback over the swept grid: the FL-C7 gate is distinct_fees_tail
+    // == 1 (fixed point) or a cycle within one rounding step; aggregate,
+    // then print every non-converged cell in full.
+    let fb_total = r.feedback.len();
+    let fb_multi: Vec<_> = r
+        .feedback
+        .iter()
+        .filter(|fb| fb.distinct_fees_tail > 1)
+        .collect();
+    let _ = writeln!(
+        out,
+        "fee-ladder: feedback grid = {} cells; {} with distinct_tail > 1 (listed below)",
+        fb_total,
+        fb_multi.len()
+    );
+    for fb in fb_multi {
         let _ = writeln!(
             out,
-            "fee-ladder: feedback [{}] eps={} D={} start={} distinct_tail={} v_tail=[{},{}] fee_tail=[{},{}]",
+            "fee-ladder: feedback age={} M={} [{}] eps={} D={} start={} distinct_tail={} v_tail=[{},{}] fee_tail=[{},{}]",
+            fb.age_years,
+            fb.median,
             fb.mode,
             fb.elasticity_milli,
             fb.demand_scale,
@@ -1134,10 +1319,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     }
     let _ = writeln!(
         out,
-        "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={}",
+        "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={}",
         r.degenerate.tail_era_blocks,
         r.degenerate.estimate_reward_at_exhaustion,
-        r.degenerate.validation_reward_at_exhaustion
+        r.degenerate.validation_reward_at_exhaustion,
+        r.degenerate.penalty_at_tail_x_half
     );
 }
 
@@ -1225,5 +1411,23 @@ mod tests {
         assert_eq!(quantize_c_pow2(1_414_213, SnapRule::Nearest), 1_000_000);
         assert_eq!(quantize_c_pow2(1_414_214, SnapRule::Nearest), 2_000_000);
         assert_eq!(quantize_c_pow2(5_600_000, SnapRule::Nearest), 4_000_000);
+    }
+
+    /// The correction scales the ALREADY-TRUNCATED rung — the served order
+    /// (`shekyl-economics` `corrected_fee_ladder`), which the instrument
+    /// mirrors. Discriminating pin: at (10 SKL, `Mfw = 1.5 MB`) the raw
+    /// economy rung truncates to 13; with `C_q = 16` the served value is
+    /// `round2(13·16) = round2(208) = 210`. The REJECTED alternative —
+    /// `C_q` in the numerator, `⌊16·R·w/M²⌋ = 213 → 220` — would make the
+    /// instrument diverge from the path the daemon serves (PR #614
+    /// review): a change toward it must fail here, loudly, not retune the
+    /// measurements. (The `C_q = 2` heritage case does not discriminate:
+    /// 670 both ways.)
+    #[test]
+    fn correction_scales_the_truncated_rung_like_the_served_path() {
+        let coin: u64 = 1_000_000_000;
+        let raw = articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000);
+        assert_eq!(raw[0], 13);
+        assert_eq!(corrected_ladder(raw, 16 * SCALE)[0], 210);
     }
 }
