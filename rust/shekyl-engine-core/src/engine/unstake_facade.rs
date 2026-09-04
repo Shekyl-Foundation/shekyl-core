@@ -78,7 +78,7 @@
 //! [`UnstakeError::ExitFateUnknown`]) because they demand opposite caller
 //! behavior.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -95,6 +95,7 @@ use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::{
     DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
 };
+use super::emission_source::EmissionSourceError;
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
 use super::prpc::LocalNodeRpc;
@@ -202,6 +203,17 @@ pub enum UnstakeError {
     #[error("the wallet's reference view is still syncing: {detail}")]
     Resyncing {
         /// The assembly's own (public chain-fact) reason.
+        detail: String,
+    },
+    /// A daemon query needed to prepare the exit failed transiently — a
+    /// connection/status failure fetching the bond record, or the dispatch-tip
+    /// clock read. All are pre-seal, so nothing propagated: check the daemon
+    /// and retry. NOT an internal fault (review-5): every other P-lane verb
+    /// keeps working over a reachable daemon, so an opaque `-32603` on exactly
+    /// this one is the hard-to-diagnose shape rule 82 forbids.
+    #[error("the daemon could not be reached to prepare the exit: {detail}")]
+    DaemonUnreachable {
+        /// Which daemon query failed, and the transport's own reason.
         detail: String,
     },
     /// The exit's floor fee cannot be funded from the persona pool **yet**
@@ -337,6 +349,16 @@ pub enum CollectUnstakedError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// A daemon query needed to prepare the sweep failed transiently — the
+    /// dispatch-tip clock read. Pre-seal, so nothing propagated: check the
+    /// daemon and retry. Distinct from `Unanchorable` (the wallet's reference
+    /// is syncing) and from `Engine` (an internal fault): the remedy here is
+    /// "the daemon is unreachable", not "wait for sync" (review-5).
+    #[error("the daemon could not be reached to prepare the sweep: {detail}")]
+    DaemonUnreachable {
+        /// Which daemon query failed, and the transport's own reason.
+        detail: String,
+    },
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry.
     #[error("sweep fee estimate failed: {detail}")]
@@ -416,10 +438,30 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     };
 
     let live = live_bonded_personas(pscan);
+    // A persona whose exit is already sealed (dispatched, unconfirmed) is still
+    // in the confirmed-bond set — the exit is not yet observed — but it must
+    // not be an unstake target. Re-resolving it re-posts nothing (the seam
+    // refuses `ExitInProgress`), and while its seal is outstanding it would
+    // block every OTHER live bond from exiting; a held seal (-29522) on the
+    // lowest slot would strand them with no recovery verb (Bugbot r5). Exclude
+    // the mid-exit personas and target the lowest ELIGIBLE bond — the ladder's
+    // order is unchanged, the candidate set is not. When every live bond is
+    // already sealing, `candidates` is empty and the `sealed_exit` fall-through
+    // below returns `ExitInProgress`.
+    let sealing: BTreeSet<PCanonicalId> = evidence
+        .pending
+        .as_ref()
+        .map(|p| p.unbonds().iter().map(|u| u.persona).collect())
+        .unwrap_or_default();
+    let candidates: BTreeSet<PCanonicalId> = live
+        .iter()
+        .copied()
+        .filter(|id| !sealing.contains(id))
+        .collect();
     let live_slots = address_personas(
         &evidence.id_by_slot,
-        |id| live.contains(id),
-        live.len(),
+        |id| candidates.contains(id),
+        candidates.len(),
         "a live-bonded persona is missing from the slot index; refusing to \
          resolve an exit over an incomplete index",
     )?;
@@ -467,7 +509,10 @@ enum CollectTarget {
 /// [`resolve_unstake_target`] applies. "Pool is nonempty" reads the
 /// persisted per-slot funding rows — spendability (maturity, reservations)
 /// is the pipeline's call, not resolution's.
-fn resolve_collect_target(evidence: &ExitEvidence) -> Result<CollectTarget, &'static str> {
+fn resolve_collect_target(
+    evidence: &ExitEvidence,
+    skip: &BTreeSet<PSlot>,
+) -> Result<CollectTarget, &'static str> {
     let Some(pscan) = evidence.pscan.as_ref() else {
         return Ok(CollectTarget::NoExit);
     };
@@ -484,13 +529,36 @@ fn resolve_collect_target(evidence: &ExitEvidence) -> Result<CollectTarget, &'st
          resolve a collection over an incomplete index",
     )?;
 
+    // Lowest exited slot with a pool, skipping any the caller has proven
+    // permanently unsweepable this call (a dust pool with no maturing rows).
+    // Resolution stays fee-blind — it cannot tell dust from a real pool — so
+    // the skip set, not a fee check here, is what lets a stuck low slot fall
+    // through to a higher collectable one (Bugbot r5).
     for (slot, id) in &exited_slots {
+        if skip.contains(slot) {
+            continue;
+        }
         let has_rows = pscan.funding_outputs().iter().any(|r| r.p_slot == *slot);
         if has_rows {
             return Ok(CollectTarget::Sweep(*slot, *id));
         }
     }
     Ok(CollectTarget::NothingLeft)
+}
+
+/// Whether `slot` still holds funding rows that are not yet spendable at the
+/// scanned frontier — i.e. value is maturing into it. A dust refusal on such a
+/// slot is transient (it clears when the value matures), so the collect loop
+/// must **wait** on it, not skip past it. The reference is the pscan cursor,
+/// which is at or behind the sweep's own anchored reference, so this errs
+/// toward "maturing" (wait) and never skips a slot that was about to become
+/// collectable.
+fn slot_has_maturing_rows(pscan: &PScanState, slot: PSlot) -> bool {
+    let reference = pscan.cursor().synced_height();
+    pscan
+        .funding_outputs()
+        .iter()
+        .any(|r| r.p_slot == slot && r.spendable_height > reference)
 }
 
 /// Address a set of persona ids through the slot cache. Fail closed if any
@@ -625,92 +693,144 @@ where
                     context: "exit evidence",
                     detail: e.to_string(),
                 })?;
-        let (slot, p_id) = match resolve_collect_target(&evidence).map_err(|detail| {
-            CollectUnstakedError::Engine {
-                context: "collection resolution",
-                detail: detail.to_owned(),
+        // The fee is the canonical P-lane floor — persona-independent, so it
+        // is quoted once and reused across the loop. It is memoised (quoted on
+        // first need) so a `PassInFlight` answer still lands before any fee I/O
+        // (review-4).
+        let mut fee: Option<AtomicUnits> = None;
+        // Exited slots proven permanently unsweepable this call — a dust pool
+        // with no maturing rows. Skipping them lets a lower stuck slot fall
+        // through to a higher collectable pool instead of stranding it.
+        let mut skip: BTreeSet<PSlot> = BTreeSet::new();
+
+        loop {
+            let (slot, p_id) = match resolve_collect_target(&evidence, &skip).map_err(|detail| {
+                CollectUnstakedError::Engine {
+                    context: "collection resolution",
+                    detail: detail.to_owned(),
+                }
+            })? {
+                CollectTarget::Sweep(slot, id) => (slot, id),
+                // Nothing left to sweep. If we skipped dust slots to get here,
+                // every exited pool was permanently unsweepable dust — the
+                // stranded-residual answer (-29525), not the completion one.
+                CollectTarget::NothingLeft if skip.is_empty() => {
+                    return Ok(CollectOutcome::NothingLeft)
+                }
+                CollectTarget::NothingLeft => return Err(CollectUnstakedError::DustRemainder),
+                CollectTarget::NoExit => return Err(CollectUnstakedError::NoExitToCollect),
+            };
+
+            // The boundary's witness: minted from the same evidence the
+            // resolution read. The seam re-resolves exited-ness from its own
+            // basis load and refuses a divergence — the witness proposes, the
+            // seam disposes.
+            let witness = evidence
+                .pscan
+                .as_ref()
+                .and_then(|s| TerminalExitObserved::for_persona(s, p_id))
+                .ok_or(CollectUnstakedError::Engine {
+                    context: "sweep witness",
+                    detail: "the resolved persona lost its observed exit between reads".to_owned(),
+                })?;
+
+            // A sweep already in flight is visible in the evidence we already
+            // loaded; surface `PassInFlight` (-29526) here rather than after a
+            // daemon fee round trip whose failure would mask it as -29102 and
+            // send the person to debug a healthy daemon. The sibling drain
+            // façade prechecks the seal before its fee I/O for exactly this
+            // reason; the seam still rechecks atomically under the write lock,
+            // so this is an advisory fast-answer, not the authoritative
+            // serialization.
+            if evidence
+                .pending
+                .as_ref()
+                .is_some_and(|b| b.has_live_drain_for(&p_id))
+            {
+                return Err(CollectUnstakedError::PassInFlight);
             }
-        })? {
-            CollectTarget::Sweep(slot, id) => (slot, id),
-            CollectTarget::NothingLeft => return Ok(CollectOutcome::NothingLeft),
-            CollectTarget::NoExit => return Err(CollectUnstakedError::NoExitToCollect),
-        };
 
-        // The boundary's witness: minted from the same evidence the
-        // resolution read. The seam re-resolves exited-ness from its own
-        // basis load and refuses a divergence — the witness proposes, the
-        // seam disposes.
-        let witness = evidence
-            .pscan
-            .as_ref()
-            .and_then(|s| TerminalExitObserved::for_persona(s, p_id))
-            .ok_or(CollectUnstakedError::Engine {
-                context: "sweep witness",
-                detail: "the resolved persona lost its observed exit between reads".to_owned(),
-            })?;
+            // Canonical P-lane floor fee — quoted once, memoised, no override.
+            let fee = match fee {
+                Some(f) => f,
+                None => {
+                    let daemon = { engine.read().await.daemon().clone() };
+                    let quoted =
+                        p_lane_floor_fee(daemon.get_fee_estimates().await.map_err(|e| {
+                            CollectUnstakedError::FeeEstimate {
+                                detail: e.into().to_string(),
+                            }
+                        })?)
+                        .map_err(|e| match e {
+                            FeeEstimatorError::DaemonFeeUnreasonable(v) => {
+                                CollectUnstakedError::FeeUnreasonable {
+                                    reason: v.reason(),
+                                    rate: v.rate(),
+                                    bound: v.bound(),
+                                }
+                            }
+                            other => CollectUnstakedError::FeeEstimate {
+                                detail: other.to_string(),
+                            },
+                        })?;
+                    fee = Some(quoted);
+                    quoted
+                }
+            };
 
-        // A sweep already in flight is visible in the evidence we already
-        // loaded; surface `PassInFlight` (-29526) here rather than after a
-        // daemon fee round trip whose failure would mask it as -29102 and
-        // send the person to debug a healthy daemon. The sibling drain façade
-        // prechecks the seal before its fee I/O for exactly this reason; the
-        // seam still rechecks atomically under the write lock, so this is an
-        // advisory fast-answer, not the authoritative serialization.
-        if evidence
-            .pending
-            .as_ref()
-            .is_some_and(|b| b.has_live_drain_for(&p_id))
-        {
-            return Err(CollectUnstakedError::PassInFlight);
-        }
+            let pruning = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
+            let receipt = match Engine::submit_drain(
+                engine.clone(),
+                slot,
+                DrainIntent::TerminalSweep(witness),
+                fee,
+                &pruning,
+            )
+            .await
+            {
+                Ok(receipt) => receipt,
+                // This slot's mature pool is dust. If the slot still holds rows
+                // maturing into it, the dust is transient — wait, do not skip
+                // past a slot about to become collectable. Only permanent dust
+                // (no maturing rows) is skipped, so a lower stuck slot cannot
+                // strand a higher pool (Bugbot r5). DustPool refuses in
+                // planning, before the seal, so a skipped attempt leaves no
+                // record.
+                Err(DrainRequestError::Drain(DrainOrchestrationError::Plan(
+                    DrainError::SweepDustPool,
+                ))) => {
+                    let maturing = evidence
+                        .pscan
+                        .as_ref()
+                        .is_some_and(|s| slot_has_maturing_rows(s, slot));
+                    if maturing {
+                        return Err(CollectUnstakedError::DustRemainder);
+                    }
+                    skip.insert(slot);
+                    continue;
+                }
+                Err(other) => return Err(flatten_collect_error(other)),
+            };
 
-        // Canonical P-lane floor fee — the same single fee decision every
-        // P-lane spend quotes; no caller override exists.
-        let daemon = { engine.read().await.daemon().clone() };
-        let fee = p_lane_floor_fee(daemon.get_fee_estimates().await.map_err(|e| {
-            CollectUnstakedError::FeeEstimate {
-                detail: e.into().to_string(),
-            }
-        })?)
-        .map_err(|e| match e {
-            FeeEstimatorError::DaemonFeeUnreasonable(v) => CollectUnstakedError::FeeUnreasonable {
-                reason: v.reason(),
-                rate: v.rate(),
-                bound: v.bound(),
-            },
-            other => CollectUnstakedError::FeeEstimate {
-                detail: other.to_string(),
-            },
-        })?;
-
-        let pruning = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
-        let receipt = Engine::submit_drain(
-            engine,
-            slot,
-            DrainIntent::TerminalSweep(witness),
-            fee,
-            &pruning,
-        )
-        .await
-        .map_err(flatten_collect_error)?;
-
-        let (SubmitSuccess::Broadcast { hash: tx_hash, .. }
-        | SubmitSuccess::AlreadyInChain { hash: tx_hash, .. }) = receipt.submit;
-        // The receipt's arm is the completion fact: a Payment variant here
-        // means the payment path ran on a sweep intent — a defect, not a
-        // missing Option to default to zero.
-        let DrainMoved::Sweep { payment, remainder } = receipt.moved else {
-            return Err(CollectUnstakedError::Engine {
-                context: "sweep receipt",
-                detail: "the sweep receipt is a payment — the payment path ran on a sweep intent"
-                    .to_owned(),
+            let (SubmitSuccess::Broadcast { hash: tx_hash, .. }
+            | SubmitSuccess::AlreadyInChain { hash: tx_hash, .. }) = receipt.submit;
+            // The receipt's arm is the completion fact: a Payment variant here
+            // means the payment path ran on a sweep intent — a defect, not a
+            // missing Option to default to zero.
+            let DrainMoved::Sweep { payment, remainder } = receipt.moved else {
+                return Err(CollectUnstakedError::Engine {
+                    context: "sweep receipt",
+                    detail:
+                        "the sweep receipt is a payment — the payment path ran on a sweep intent"
+                            .to_owned(),
+                });
+            };
+            return Ok(CollectOutcome::Swept {
+                tx_hash,
+                swept: payment,
+                remainder,
             });
-        };
-        Ok(CollectOutcome::Swept {
-            tx_hash,
-            swept: payment,
-            remainder,
-        })
+        }
     }
 }
 
@@ -793,10 +913,27 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         UnbondRequestError::Fee(e) => UnstakeError::FeeEstimate {
             detail: e.to_string(),
         },
-        UnbondRequestError::Fetch(e) => UnstakeError::Engine {
-            context: "bond record fetch",
-            detail: e.to_string(),
+        // The fetch's inner class decides the disposition (review-5): a
+        // connection/status failure is a reachable daemon outage (retryable),
+        // a malformed response is an untrusted-input rejection (internal).
+        UnbondRequestError::Fetch(e) => match e {
+            EmissionSourceError::Rpc(_) | EmissionSourceError::Status(_) => {
+                UnstakeError::DaemonUnreachable {
+                    detail: e.to_string(),
+                }
+            }
+            EmissionSourceError::Malformed(_) => UnstakeError::Engine {
+                context: "bond record fetch",
+                detail: e.to_string(),
+            },
         },
+        // Pre-seal daemon-tip failure: retryable, never the opaque internal
+        // -32603 a sealed-store read gets (review-5).
+        UnbondRequestError::DaemonUnreachable { context, detail } => {
+            UnstakeError::DaemonUnreachable {
+                detail: format!("{context}: {detail}"),
+            }
+        }
         UnbondRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
         UnbondRequestError::Submit(submit) => match &submit {
             BroadcastSubmitError::PersonaMismatch { .. }
@@ -849,6 +986,13 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
             context: "principal destination",
             detail: detail.to_string(),
         },
+        // Pre-seal daemon-tip failure: retryable, never the opaque internal
+        // -32603 a sealed-store read gets (review-5).
+        DrainRequestError::DaemonUnreachable { context, detail } => {
+            CollectUnstakedError::DaemonUnreachable {
+                detail: format!("{context}: {detail}"),
+            }
+        }
         DrainRequestError::State { context, detail } => {
             CollectUnstakedError::Engine { context, detail }
         }

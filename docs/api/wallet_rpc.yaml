@@ -274,7 +274,7 @@
 #   -29500..-29599           staking (-29500..-29506 and -29512 live on
 #                            `stake`; -29507..-29511 live on `drain`
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
-#                            `unstake` and -29523..-29527 on
+#                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
 #                            the exit pair); rest reserved — never reuse an
 #                            allocated code)
@@ -313,7 +313,12 @@ info:
   # the census), codes -29513..-29528, the {swept, remainder} completion
   # contract (CollectUnstakedResult is oneOf: SWEPT requires remainder),
   # and the released-vs-held dispatch dispositions.
-  version: 0.3.0
+  # 0.3.1: PR-C review — collect_unstaked gains -29529
+  # COLLECT_DAEMON_UNREACHABLE, so a pre-seal daemon outage while preparing
+  # the sweep is retryable ("check the daemon") rather than an opaque
+  # internal -32603; the analogous unstake failure joins the existing
+  # -29520 UNSTAKE_RETRY_TRANSIENT on data.cause "daemon".
+  version: 0.3.1
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -540,6 +545,7 @@ components:
         - -29526   # COLLECT_PASS_IN_FLIGHT
         - -29527   # COLLECT_SYNCING
         - -29528   # UNSTAKE_LOCAL_NODE_REQUIRED
+        - -29529   # COLLECT_DAEMON_UNREACHABLE
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -966,6 +972,19 @@ components:
                                           undiagnosable from the client
                                           side. data.detail carries the
                                           transport constructor's refusal
+          -29529 COLLECT_DAEMON_UNREACHABLE collect_unstaked: a daemon query
+                                          needed to prepare the sweep (the
+                                          dispatch-tip clock read) failed
+                                          before anything was sealed — the
+                                          daemon is unreachable. Retryable
+                                          ("check the daemon"), distinct from
+                                          -29527 ("wait for sync") and NOT
+                                          -32603: a reachable daemon outage
+                                          is operator-diagnosable, not an
+                                          internal fault. The analogous
+                                          unstake failure joins -29520 on
+                                          data.cause "daemon". data.detail
+                                          carries the transport's reason
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -2157,8 +2176,9 @@ components:
     # Read-only projections of the authoritative staking view (reconcile
     # evidence + sealed pending posts + funding outputs). NEVER derived
     # from the StakingBlock `bonded_slots` hint. Staking ACTIONS: stake_in
-    # and drain landed with WI-RPC-5 (schemas below); unstake remains
-    # RESERVED; claim / get_stakes are REJECTED (header registry).
+    # and drain landed with WI-RPC-5, the exit pair unstake / collect_unstaked
+    # with PR-C (schemas below); claim / get_stakes are REJECTED (header
+    # registry).
     StakedBalance:
       type: object
       required:

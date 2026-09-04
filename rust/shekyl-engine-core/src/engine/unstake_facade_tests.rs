@@ -9,7 +9,7 @@
 //! Both files are scanned by the ratchet; this one is well under the cap
 //! on its own.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc as StdArc;
 
 use shekyl_engine_file::SafetyOverrides;
@@ -117,7 +117,7 @@ fn the_two_resolutions_never_trade_personas() {
     );
     // `collect` sees persona 1 (slot 1) — the only observed exit.
     assert_eq!(
-        resolve_collect_target(&ev).expect("resolvable"),
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
         CollectTarget::Sweep(PSlot::from_raw(1), persona(1)),
     );
 }
@@ -222,7 +222,7 @@ fn a_live_or_exited_persona_missing_from_the_index_fails_closed() {
     let state = pscan(vec![bond_match(1, 0)], exited(1), Vec::new(), Vec::new());
     let ev = evidence(Some(state), None, &[]);
     assert!(
-        resolve_collect_target(&ev).is_err(),
+        resolve_collect_target(&ev, &BTreeSet::new()).is_err(),
         "an observed exit with no index row is an error, not NoExit"
     );
 }
@@ -243,14 +243,14 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
     );
     let ev = evidence(Some(state), None, &[(1, 1), (2, 2)]);
     assert_eq!(
-        resolve_collect_target(&ev).expect("resolvable"),
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
         CollectTarget::Sweep(PSlot::from_raw(2), persona(2)),
     );
 
     let state = pscan(Vec::new(), both, Vec::new(), Vec::new());
     let ev = evidence(Some(state), None, &[(1, 1), (2, 2)]);
     assert_eq!(
-        resolve_collect_target(&ev).expect("resolvable"),
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
         CollectTarget::NothingLeft
     );
 
@@ -260,7 +260,7 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
         &[],
     );
     assert_eq!(
-        resolve_collect_target(&ev).expect("resolvable"),
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
         CollectTarget::NoExit
     );
 }
@@ -362,7 +362,7 @@ fn lowest_slot_is_independent_of_cache_insertion_order() {
     );
     let ev = evidence(Some(state), None, &[(9, 2), (3, 1)]);
     assert_eq!(
-        resolve_collect_target(&ev).expect("resolvable"),
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
         CollectTarget::Sweep(PSlot::from_raw(3), persona(1)),
         "lowest exited slot with rows sweeps first"
     );
@@ -468,5 +468,117 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     assert!(
         matches!(cerr, Err(CollectUnstakedError::NoExitToCollect)),
         "actor present, no exited pool is NoExitToCollect, not NotStaker: {cerr:?}"
+    );
+}
+
+// --- Resolution-ladder stranding: the candidate set, not the order (r5) ----
+//
+// The ladder still targets the lowest slot; review-5 narrowed which slots are
+// eligible. Unstake excludes a persona whose exit is already sealed (so a
+// multi-bonded wallet advances instead of re-targeting the in-flight one, and
+// a held seal on the lowest slot cannot strand the rest); collect skips a slot
+// the caller has proven permanently unsweepable (so a stuck dust slot cannot
+// strand a higher collectable pool).
+
+/// A persona with a SEALED (dispatched, unconfirmed) exit is still in the
+/// confirmed-bond set — the exit is not yet observed — but must not be an
+/// unstake target: resolution excludes it so the next live bond can exit.
+/// Red before the fix (it returned `Post(slot 1)`).
+#[test]
+fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
+    // Personas 1 and 2 both hold live confirmed bonds; neither exit is
+    // observed (pending_unbonds empty), but persona 1's exit is already sealed.
+    let state = pscan(
+        vec![bond_match(1, 0), bond_match(2, 0)],
+        BTreeMap::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut block = PendingPostBlock::empty();
+    let g = block.generation();
+    assert_eq!(
+        block.seal_unbond(
+            PendingUnbond {
+                persona: persona(1),
+                tx_bytes: vec![0xEE; 4],
+                funding_gindexes: Vec::new(),
+                state: PendingPostState::Pending,
+            },
+            BlockHeight::from_raw(5_000),
+            g,
+        ),
+        SealAdmission::Admit
+    );
+    let ev = evidence(Some(state), Some(block), &[(1, 1), (2, 2)]);
+    assert_eq!(
+        resolve_unstake_target(&ev).expect("resolvable"),
+        UnstakeTarget::Post(PSlot::from_raw(2)),
+        "the sealed-exit persona 1 is excluded; the next live bond (slot 2) is the target"
+    );
+}
+
+/// Collect resolution honours a skip set: a slot the caller proved
+/// permanently unsweepable falls through to the next exited pool, and when
+/// every candidate is skipped resolution reports nothing left (the loop turns
+/// that into the dust residual, not completion).
+#[test]
+fn collect_skips_a_slot_the_caller_proved_unsweepable() {
+    let mut exited_both = exited(1);
+    exited_both.insert(persona(2), SettlementEpoch::from_raw(9));
+    let state = pscan(
+        vec![bond_match(1, 0), bond_match(2, 0)],
+        exited_both,
+        Vec::new(),
+        vec![funding(1, 7, 500), funding(2, 8, 500)],
+    );
+    let ev = evidence(Some(state), None, &[(1, 1), (2, 2)]);
+    assert_eq!(
+        resolve_collect_target(&ev, &BTreeSet::new()).expect("resolvable"),
+        CollectTarget::Sweep(PSlot::from_raw(1), persona(1)),
+        "no skip: the lowest exited slot with a pool"
+    );
+    let skip: BTreeSet<PSlot> = [PSlot::from_raw(1)].into_iter().collect();
+    assert_eq!(
+        resolve_collect_target(&ev, &skip).expect("resolvable"),
+        CollectTarget::Sweep(PSlot::from_raw(2), persona(2)),
+        "slot 1 skipped: advance to the next exited pool, never strand it"
+    );
+    let skip_all: BTreeSet<PSlot> = [PSlot::from_raw(1), PSlot::from_raw(2)]
+        .into_iter()
+        .collect();
+    assert_eq!(
+        resolve_collect_target(&ev, &skip_all).expect("resolvable"),
+        CollectTarget::NothingLeft,
+        "all candidates skipped: nothing resolvable (the loop reports the dust residual)"
+    );
+}
+
+/// The maturing-rows gate is what keeps the dust skip from advancing past a
+/// slot that is about to become collectable: a slot with any row not yet
+/// spendable at the scanned frontier is maturing (wait), a slot whose rows are
+/// all spendable is permanent-dust territory (skippable).
+#[test]
+fn a_slot_still_maturing_is_not_permanent_dust() {
+    let mut maturing = funding(1, 9, 500);
+    maturing.spendable_height = BlockHeight::from_raw(6_000); // > cursor 5_000
+    let has_maturing = pscan(
+        vec![bond_match(1, 0)],
+        exited(1),
+        Vec::new(),
+        vec![funding(1, 7, 500), maturing],
+    );
+    assert!(
+        slot_has_maturing_rows(&has_maturing, PSlot::from_raw(1)),
+        "a row not yet spendable at the frontier is maturing — the dust is transient"
+    );
+    let all_mature = pscan(
+        vec![bond_match(2, 0)],
+        exited(2),
+        Vec::new(),
+        vec![funding(2, 8, 500)],
+    );
+    assert!(
+        !slot_has_maturing_rows(&all_mature, PSlot::from_raw(2)),
+        "all rows spendable at the frontier: no maturing value, dust here is permanent"
     );
 }

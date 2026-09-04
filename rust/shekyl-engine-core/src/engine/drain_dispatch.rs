@@ -136,13 +136,27 @@ pub(crate) enum DrainRequestError {
         /// The invariant that broke.
         detail: &'static str,
     },
-    /// A sealed-state read failed (the P-scan seal or the pending-post seal) —
-    /// fail-closed, never an invented-empty set over a bad seal.
+    /// A **local** sealed-state read failed (the P-scan seal or the
+    /// pending-post seal) — fail-closed, never an invented-empty set over a
+    /// bad seal. Our own store, so a failure here is internal corruption, not
+    /// a reachable-daemon condition: distinct from [`DaemonUnreachable`].
     #[error("engine state read ({context}): {detail}")]
     State {
         /// Which read refused.
         context: &'static str,
         /// The store's own rendering of the failure.
+        detail: String,
+    },
+    /// A daemon query needed to *prepare* the sweep failed transiently — the
+    /// dispatch-tip clock read. It is **before** the seal, so nothing was
+    /// assembled or propagated and the caller may retry at will. Kept distinct
+    /// from [`State`] so wallet-RPC can name a reachable daemon outage as
+    /// retryable rather than an opaque internal fault (review-5).
+    #[error("daemon unreachable ({context}): {detail}")]
+    DaemonUnreachable {
+        /// Which daemon query failed.
+        context: &'static str,
+        /// The transport's own rendering of the failure.
         detail: String,
     },
     /// A live pending drain already exists for this persona. One live drain
@@ -182,9 +196,17 @@ pub(crate) enum DrainRequestError {
 }
 
 impl DrainRequestError {
-    /// A fail-closed sealed-state read refusal, context named.
+    /// A fail-closed **local** sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
+            context,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// A transient **daemon** query failure (pre-seal), context named.
+    fn daemon_unreachable(context: &'static str, detail: impl std::fmt::Display) -> Self {
+        Self::DaemonUnreachable {
             context,
             detail: detail.to_string(),
         }
@@ -374,7 +396,7 @@ where
         // stamps (WI-3 R2-1).
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| DrainRequestError::state("dispatch tip", e))?;
+            .map_err(|e| DrainRequestError::daemon_unreachable("dispatch tip", e))?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingDrain {
             persona,

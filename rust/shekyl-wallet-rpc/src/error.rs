@@ -239,6 +239,11 @@ pub enum WalletRpcErrorCode {
     /// address is not loopback. Operator-actionable configuration, never an
     /// internal fault.
     UnstakeLocalNodeRequired = -29528,
+    /// Collect: a daemon query needed to prepare the sweep failed (the
+    /// dispatch-tip clock read) before anything was sealed — the daemon is
+    /// unreachable, not the wallet out of sync (`-29527`) nor an internal
+    /// fault (`-32603`). Check the daemon and retry.
+    CollectDaemonUnreachable = -29529,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -658,6 +663,14 @@ pub enum WalletRpcError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// `collect_unstaked` (`-29529`): a daemon query needed to prepare the
+    /// sweep failed before sealing — the daemon is unreachable; check it and
+    /// retry.
+    #[error("the daemon could not be reached to prepare the sweep — check the daemon and retry")]
+    CollectDaemonUnreachable {
+        /// Which daemon query failed, and the transport's own reason.
+        detail: String,
+    },
     /// `unstake` (`-29528`): the exit lane needs the wallet's own loopback
     /// node; this server points at a non-loopback daemon.
     #[error(
@@ -761,6 +774,7 @@ impl WalletRpcError {
                 WalletRpcErrorCode::CollectPassInFlight
             }
             Self::CollectSyncing { .. } => WalletRpcErrorCode::CollectSyncing,
+            Self::CollectDaemonUnreachable { .. } => WalletRpcErrorCode::CollectDaemonUnreachable,
             Self::UnstakeLocalNodeRequired { .. } => WalletRpcErrorCode::UnstakeLocalNodeRequired,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
@@ -791,6 +805,7 @@ impl WalletRpcError {
             | Self::UnstakeRefusedReleased { detail }
             | Self::UnstakeFateUnknown { detail }
             | Self::CollectSyncing { detail }
+            | Self::CollectDaemonUnreachable { detail }
             | Self::UnstakeLocalNodeRequired { detail } => Some(json!({ "detail": detail })),
             // The `-29511` pair shares one code with two remedies; the
             // structured discriminant is what lets automation branch
@@ -1158,6 +1173,12 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 cause: "raced",
                 detail: "a concurrent operation raced the exit's inputs".into(),
             },
+            // A pre-seal daemon outage is transient like the two above, on the
+            // same generic retry code with its own cause; NOT -32603 (review-5).
+            E::DaemonUnreachable { detail } => Self::UnstakeRetryTransient {
+                cause: "daemon",
+                detail,
+            },
             E::FeeEstimate { detail } => {
                 tracing::warn!(detail = %detail, "unstake fee estimate failed");
                 Self::FeeEstimationFailed
@@ -1202,6 +1223,11 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             E::PassInFlight => Self::CollectPassInFlight,
             E::InputRaced => Self::CollectInputRaced,
             E::Unanchorable { detail } => Self::CollectSyncing { detail },
+            // A pre-seal daemon outage is retryable, but its remedy ("check the
+            // daemon") is not `CollectSyncing`'s ("wait for sync"), so it gets
+            // its own code rather than borrowing one with the wrong text
+            // (review-5); NOT -32603.
+            E::DaemonUnreachable { detail } => Self::CollectDaemonUnreachable { detail },
             E::FeeEstimate { detail } => {
                 tracing::warn!(detail = %detail, "collect_unstaked fee estimate failed");
                 Self::FeeEstimationFailed
@@ -1768,6 +1794,13 @@ mod tests {
             ),
             (E::InputRaced.into(), -29520),
             (
+                E::DaemonUnreachable {
+                    detail: "connection refused".into(),
+                }
+                .into(),
+                -29520,
+            ),
+            (
                 E::ExitRefusedAndReleased {
                     detail: "refused".into(),
                 }
@@ -1823,6 +1856,13 @@ mod tests {
         assert_eq!(syncing.data().expect("data")["cause"], "syncing");
         let raced: WalletRpcError = E::InputRaced.into();
         assert_eq!(raced.data().expect("data")["cause"], "raced");
+        // A pre-seal daemon outage joins the same generic retry code on its
+        // own cause — retryable, never -32603 (review-5).
+        let daemon: WalletRpcError = E::DaemonUnreachable {
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(daemon.data().expect("data")["cause"], "daemon");
     }
 
     /// The `collect_unstaked` table: named codes for the exit-collection
@@ -1847,6 +1887,13 @@ mod tests {
                 -29527,
             ),
             (
+                E::DaemonUnreachable {
+                    detail: "connection refused".into(),
+                }
+                .into(),
+                -29529,
+            ),
+            (
                 E::FeeEstimate {
                     detail: "daemon down".into(),
                 }
@@ -1863,7 +1910,18 @@ mod tests {
         ];
         for (err, code) in &cases {
             assert_eq!(err.code().as_i32(), *code, "{err}");
+            assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
         }
+        // A pre-seal daemon outage is its own retryable code, not the
+        // sync-remedy `-29527` nor an opaque internal fault (review-5).
+        let unreachable: WalletRpcError = E::DaemonUnreachable {
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(
+            unreachable.data().expect("data")["detail"],
+            "connection refused"
+        );
         let dust: WalletRpcError = E::DustRemainder.into();
         assert!(
             !dust.to_string().chars().any(|c| c.is_ascii_digit()),

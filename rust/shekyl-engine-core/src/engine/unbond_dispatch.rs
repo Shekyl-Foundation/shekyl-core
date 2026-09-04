@@ -176,9 +176,11 @@ pub(crate) enum UnbondRequestError {
     /// fall back to.
     #[error("P-lane floor fee: {0}")]
     Fee(#[from] FeeEstimatorError),
-    /// A sealed-state read failed (the P-scan seal, the pending-post seal,
-    /// or the daemon tip/fee query behind them) — fail-closed, never an
-    /// invented-empty set over a bad seal.
+    /// A **local** sealed-state read failed (the P-scan seal, the
+    /// pending-post seal) — fail-closed, never an invented-empty set over a
+    /// bad seal. This is our own store, so a failure here is internal
+    /// corruption, not a reachable-daemon condition: distinct from
+    /// [`DaemonUnreachable`], which the caller can retry.
     #[error("engine state read ({context}): {detail}")]
     State {
         /// Which read refused.
@@ -186,7 +188,23 @@ pub(crate) enum UnbondRequestError {
         /// The store's own rendering of the failure.
         detail: String,
     },
-    /// The record-facts fetch failed on the persona-isolated transport.
+    /// A daemon query needed to *prepare* the exit failed transiently — the
+    /// dispatch-tip clock read here. Every such site is **before** the seal,
+    /// so nothing was assembled or propagated and the caller may retry at
+    /// will. Kept distinct from [`State`] (a local sealed-store read) so
+    /// wallet-RPC can name a reachable daemon outage as retryable rather than
+    /// an opaque internal fault (review-5).
+    #[error("daemon unreachable ({context}): {detail}")]
+    DaemonUnreachable {
+        /// Which daemon query failed.
+        context: &'static str,
+        /// The transport's own rendering of the failure.
+        detail: String,
+    },
+    /// The record-facts fetch failed on the persona-isolated transport. Its
+    /// [`EmissionSourceError`] inner class decides the disposition at the
+    /// façade: `Rpc`/`Status` are a reachable daemon outage (retryable),
+    /// `Malformed` is an untrusted-response rejection (internal).
     #[error("bond record fetch: {0}")]
     Fetch(#[from] EmissionSourceError),
     /// The daemon holds no bond record for this persona — there is no exit
@@ -237,9 +255,17 @@ pub(crate) enum UnbondRequestError {
 }
 
 impl UnbondRequestError {
-    /// A fail-closed sealed-state read refusal, context named.
+    /// A fail-closed **local** sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
+            context,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// A transient **daemon** query failure (pre-seal), context named.
+    fn daemon_unreachable(context: &'static str, detail: impl std::fmt::Display) -> Self {
+        Self::DaemonUnreachable {
             context,
             detail: detail.to_string(),
         }
@@ -543,7 +569,7 @@ where
         // daemon-claimed-tip clock as the bond/claim/drain dispatch.
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| UnbondRequestError::state("dispatch tip", e))?;
+            .map_err(|e| UnbondRequestError::daemon_unreachable("dispatch tip", e))?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingUnbond {
             persona,
