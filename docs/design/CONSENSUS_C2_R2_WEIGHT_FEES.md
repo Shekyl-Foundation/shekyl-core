@@ -31,8 +31,13 @@ penalty(x)`, penalty **after** the floor, build authorization YES. (A stale
 §0.1 passage in that document still reads "conjunct (a) is OPEN"; `git log -S`
 dates it to review round 4, before the signature. Routed to the fee lane for
 an in-lane fix; it does not gate this draft.)
-(b) The exhaustion-boundary red test `terminal_reward_legs_agree` exists and
-is green through the new owner (`paid_block_reward`, per the §8 BUILT record).
+(b) The exhaustion-boundary test `terminal_reward_legs_agree` — **also
+branch-only**: it lives in `emission.rs` on the fee-ladder branch
+(FETCH_HEAD `ccfb85c72` :318), not on dev (grepped at the pin: zero hits;
+the census §10 text describing it is describing a branch artifact). Green
+through the new owner per the §8 BUILT record. Both conjuncts therefore
+share the same detectability profile — evidence on an unmerged branch —
+which is the sequencing rationale above applied twice, not once.
 
 **Identifier family:** `C2-R2-Q1…Q11` (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) this PR, rule 94).
@@ -204,11 +209,14 @@ the arbitration the flag has waited for.
    worst-case transactions. The per-tx weight cap is derived *from* the zone
    (H3: `zone/2 − 600`), so the zone guarantees ≥ 2 maximal transactions per
    penalty-free block by construction — the real constraint is the typical
-   FCMP++ tx. At the 8-input cap (CEN-I4) with BP+ aggregation and PQC
-   attachments, a large Shekyl tx runs tens of kB; the zone holds on the
-   order of 10–60 typical transactions per free block (≈ 5–30 tx/min at
-   T = 120 s). That is a launch-adequate floor with the penalty pricing
-   expansion beyond it, and demand-driven growth (Q2/Q3) unbounded above.
+   FCMP++ tx. Bounds at the pin (`GENESIS_TX_WIRE_FORMAT.md` §10: 8 inputs,
+   16 outputs): the per-output PQC extra alone is ≈ 1 120 B (0x06 KEM ct)
+   + 32 B (0x07 leaf hash), so a typical 2-output spend runs **≈ 4–8 kB**
+   (an estimate — prefix + extra + BP+ + FCMP proof; not a measured
+   corpus), putting the zone at roughly **35–75 typical transactions per
+   free block** (≈ 17–37 tx/min at T = 120 s). A launch-adequate floor
+   with the penalty pricing expansion beyond it, and demand-driven growth
+   (Q2/Q3) unbounded above.
 2. **Throughput-floor leg.** At T = 120 s the zone yields a guaranteed
    ~2.5 kB/s of penalty-free chain growth (≈ 79 GB/year worst-case at the
    permanent free floor) — storage-viable on the rule-76 floor device's
@@ -217,22 +225,29 @@ the arbitration the flag has waited for.
 3. **Verification-cost leg (GAP-7) — the leg no inherited record has.** The
    zone is also a *work* bound: the largest penalty-free block must verify on
    the Pi 4 floor comfortably inside T. **This leg cannot be discharged at
-   this pin: no floor-provisioned verify-time measurements exist** (§6). The
+   this pin: no floor-provisioned verify-time measurements exist** (§7). The
    two legs above stand on their own; this leg is a named blocker.
 
 **Proposed ruling (Q1):** ratify **300 000**, *conditionally* — the economic
 legs (1–2) support it as a launch value and nothing in Shekyl's design pulls
 toward a different number, but the ratification is **incomplete until the
-GAP-7 floor measurement (§6) is on record**, and the ruling text must carry
+GAP-7 floor measurement (§7) is on record**, and the ruling text must carry
 that condition rather than silently dropping the leg (dropping it would
 re-create the exact `pinned-not-re-derived` state this round exists to end).
-Class on signature: `ratified-conditional(GAP-7)` → `ratified` when §6's
-instrument reports.
+Class on signature: `ratified`, **with the GAP-7 condition recorded in the
+census row's notes column** — no new evidence class is minted (census §2
+owns the taxonomy; a condition is a note on a class, not a class).
+**Fossil-flag discharge, in full:** the flag (`GENESIS_TX_WIRE_FORMAT.md`
+:805–811) is not only the value — it is the **V1/V2/V5 variant lineage**
+(20 000 / 60 000 / 300 000, version-gated getters referencing Monero forks
+that never happened here). The ruling therefore also specifies, for the
+port (rule 60, record-and-specify): **one** `REWARD_ZONE` constant, V1/V2
+variants and the version-gated `get_min_block_weight(version)` deleted.
 
 **Falsifiers:** (defect) a floor-device measurement showing a 300 000-byte
 worst-case block verifying in a substantial fraction of T = 120 s falsifies
 the ratification and forces the zone (or the verifier) to be re-derived —
-this is precisely what §6's instrument can produce; (fix) the ruling is
+this is precisely what §7's instrument can produce; (fix) the ruling is
 falsified as *recorded* if, after signature, `GENESIS_TX_WIRE_FORMAT.md`'s
 fossil-flag passage still reads as an open punt — the same PR must land the
 cross-reference discharging it.
@@ -266,11 +281,12 @@ condition as Q1 attaches to the *ceiling* the clamps govern toward, not to
 the rate itself.
 
 **Falsifier:** the rate claim is checkable by construction — a simulated
-weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉;
-`rust/shekyl-economics-sim/src/swing.rs` already models this machinery
-(consumer sweep, §2) and is the named instrument for the trace. A trace
-exceeding the bound falsifies the governor reading, and therefore the
-ratification's stated reason.
+weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉.
+The instrument is a simulation of the §2 formulas (the same instrument as
+§6's, which was run at draft time; `swing.rs` carries the constants but no
+trace generator — the simulation accompanies the signature record). A
+trace exceeding the bound falsifies the governor reading, and therefore
+the ratification's stated reason.
 
 ### Q3 — the ×50 surge factor and the 100-block short-term window
 
@@ -296,7 +312,7 @@ signal on the hours scale; 51-block hysteresis is what makes the fast
 governor expensive to game — §6); ratify **×50** as the transient ceiling
 **conditional on GAP-7** (same condition as Q1, but binding here at
 `2·50·LTEM`, the actual worst-case parse+verify unit, not at the zone).
-If the §6 measurement shows the floor device cannot verify the transient
+If the §7 measurement shows the floor device cannot verify the transient
 ceiling inside a block interval, the surge factor is the value to re-derive
 (lower), not the zone — the condition names its re-derivation target.
 
@@ -376,7 +392,9 @@ the port (§8) — recorded, not built.
 blob size; weight ≥ blob size holds by `get_transaction_weight`'s
 construction — weight adds BP+ clawback to blob size, never subtracts).
 Exhibiting a well-formed tx with blob size > 1 MB and weight ≤ 149 400
-falsifies the premise and re-opens the ruling.
+falsifies the premise and re-opens the ruling. (Construction verified at
+the pin: `get_transaction_weight` returns `blob_size` or `blob_size +
+bp_clawback`, never less — `cryptonote_format_utils.cpp:321–331`.)
 
 ### Q7 — the tx weight cap 149 400 = zone/2 − 600 (CEN-H3)
 
@@ -462,13 +480,20 @@ jobs stated above**, explicitly *not* consensus (the census's "no consensus
 fee floor" finding stands; see Q9). The fee **median's** own machinery
 (`min(limit/2, LTEM)`) rides R2a's rulings. Class: `examined-disposition` →
 `ratified` (policy). The unpayable-reward reject-all state named in the
-census row is retired by FL-R12′'s build (FL-R16a removed the error arm —
-recorded, evidence pinned `ccfb85c72` §8).
+census row **exists at this pin** (`get_current_fee_per_byte`'s failure-arm
+`return 0` at `blockchain.cpp:4380–4381` → `check_fee` rejects all); its
+removal is FL-R16a, **BUILT on `feat/fee-ladder-impl-1` — a separate PR
+after #614**, so this row's ruling records the retirement as *specified and
+in flight*, not present.
 
-**Falsifier:** claim (2)'s "cannot move a tx between rungs" is arithmetic:
-`1.07 < 4` (total tolerance vs rung ratio). It is falsified if the fee lane
-ever adopts rung spacing < ×1.07 — the reopener is tied to that premise, not
-to a magnitude this round produced.
+**Falsifier:** claim (2)'s "cannot move a tx between rungs" rests on the
+premise **minimum adjacent fee-rung ratio > ×1.07**. At the pin the tier
+contracts (fee-ladder §5.5, pinned `ccfb85c72`; three tiers per FL-R17)
+space rungs at ×4 in the drafted ladder — note the §5.5 area's
+×1.25/×6.7/×20 figures are *candidate-set divisors* (inverse usage
+shares), not fee ratios, and must not be read as rung spacing. The
+reopener is tied to the premise: any fee-lane adoption of adjacent rungs
+closer than ×1.07 falsifies claim (2).
 
 ### Q9 — the census §6 question: is a consensus fee floor wanted?
 
@@ -508,10 +533,14 @@ is bounding chain-storage graffiti and the fee-free data channel at relay,
 while `kept_by_block` exemption keeps historical/reorg blocks valid — the
 consensus side deliberately has no extra bound beyond H1 (a consensus extra
 bound would be a canonical-form rule, and *that* arbitration is the
-credit-wire lane's, per the fence). The value comfortably holds every
-protocol-legitimate payload at the pin (pubkeys, encrypted payment metadata,
-the archival attachments enumerated in the wire format) with an order of
-magnitude of headroom.
+credit-wire lane's, per the fence). Headroom, computed rather than
+asserted (`GENESIS_TX_WIRE_FORMAT.md` §9.6a, §10): the largest
+protocol-legitimate extra at the pin is a 16-output tx's PQC fields —
+16 × ≈ 1 120 B (0x06 KEM ciphertexts) + 16 × 32 B (0x07 leaf hashes)
+≈ **18 432 B**, leaving ≈ **6 100 B (~25 %)** for payment metadata and
+future fields. Adequate, **not** generous: any new per-output extra field
+of ≥ ~380 B exhausts it at 16 outputs, which is exactly why the
+canonical-form arbitration (credit-wire) matters.
 
 **Proposed ruling (Q10):** ratify **24 576** as a relay-policy bound with the
 job stated; the canonical-form question stays deferred to credit-wire
@@ -580,42 +609,59 @@ separate ruling). Let `L_n = 2·EM_n` be the limit after block *n*, and let
 the receiver hold state through block *h* while the announced block's
 parent chain extends `k` blocks past it.
 
-1. **The crossing bound.** EM grows only through the ST-median arm (the
-   LTEM arm is strictly slower in every regime — its window is 100 000 vs
-   100). The median of 100 is the average of the 50th/51st order statistics
-   (`contrib/epee/include/misc_language.h:58–66`), so median ≥ X requires
-   ≥ 51 in-window samples ≥ X (50 samples yield only the midpoint — a
-   half-step the envelope below absorbs). Under maximal saturation each
-   block *i* is limit-bounded at `≤ 2·EM_{i−1}`, and the median at *t*
-   averages the (t−51)th/(t−50)th saturating samples, giving the exact
-   envelope **`EM_t ≤ 2·EM_{t−51}`** (EM nondecreasing under saturation):
-   the limit doubles at most once per **51 blocks**.
-2. **The lag bound.** Over `k` blocks the window changes by `k` samples, so
-   at most `⌈k/51⌉` crossings fit:
-   **`L_{h+k} ≤ L_h · 2^{⌈k/51⌉}`** — i.e. **`margin(k) = 2^{⌈k/51⌉}`**,
-   a flat **×2 for any announce-lag `k ≤ 51`** (≈ 1.7 hours at T = 120 s;
-   any receiver that far behind is syncing, not consuming announces).
-3. **Genesis-era caveat (the one place the constant weakens):** at chain
-   height `H < 100` the ST window is only `H` samples, so the hysteresis is
-   `⌈H/2⌉` blocks, not 51, and `margin(k) = 2^{⌈2k/H⌉}` — e.g. ×4 is
-   reachable at `H = 10, k = 6`. Mitigating structure: in that era EM sits
-   on the 300 000 floor (limit = 600 000 bytes) while real blocks are tiny,
-   so the additive terms in `entry_max` dominate anyway. The P2P row should
-   either state validity as `H ≥ 100` or use the `H`-dependent form for the
-   first 100 blocks.
-4. **Ceiling (for reference, not the announce bound):** `EM ≤ 50·LTEM`, so
-   `L ≤ 100·LTEM` (30 MB at launch LTEM); LTEM moves ≤ ×1.7 per 50 000
-   blocks (Q2).
+1. **The single-step bound, proved:** `EM_{h+1} ≤ 2·EM_h`. One block
+   replaces one window sample; the median of 100 is the average of the
+   50th/51st order statistics (`contrib/epee/include/misc_language.h:58–66`),
+   the shifted order statistics are bounded by their neighbours, and the
+   new sample is limit-bounded at `≤ 2·EM_h` — case analysis shows the new
+   50th/51st statistics never exceed `2·EM_h`. Verified by adversarial
+   search over bimodal windows at draft time: max observed one-step factor
+   **1.961** (approaching 2, never exceeding it).
+2. **The 51-block hysteresis is a *monotone-history* property, NOT the
+   worst case — a draft-time falsifier run killed the naive bound.** An
+   earlier draft claimed `margin(k) = 2^{⌈k/51⌉}` from "the median needs
+   51 fresh samples to cross." The simulation falsified it: a
+   **crash-preloaded window** — 49 stale high-weight samples left in the
+   100-window from a past saturation era, with EM since fallen to a valley
+   — lets each new block climb the median up a ladder *between* the stale
+   highs, no 51-sample wait: observed `margin(k)` = 1.5, 2.5, 4.0, 6.5,
+   10.5, 17.0, 27.5 for k = 1…7, saturating at the stale highs' level.
+   The receiver shares this window (it is chain state, not a sender lie),
+   but its *limit* is the valley limit — so a transport cap derived from
+   the honest-history rate under-admits legal announces after a
+   demand crash. This is recorded prominently because the wrong bound
+   survived one commit and reads plausibly.
+3. **The sound bound, both operands receiver-local:**
+   **`margin(k) = min(2^k, 50·LTEM/EM)`** — the proved single-step bound
+   iterated, cut by the surge clamp's absolute ceiling (`EM ≤ 50·LTEM`,
+   so no legal announce ever exceeds `2·50·LTEM` regardless of lag). The
+   receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
+   and `LTEM` live, so the cap needs no protocol constant beyond the ×50
+   and the lag bound `k` the P2P row states. At typical announce-lag
+   `k ≤ 2`: **×4**, already dominating the observed adversarial ladder
+   (2.5 at k = 2); at the crossover `k ≥ 6`-ish the clamp term takes over.
+4. **Genesis-era note:** at chain height `H < 100` the windows are
+   `H`-sized and the hysteresis reasoning shifts, but bound (1) and the
+   clamp term are window-size-independent, so `min(2^k, 50·LTEM/EM)`
+   holds from block 1 (with `EM` floored at the zone, limit ≥ 600 000
+   while real blocks are tiny — the additive `entry_max` terms dominate).
+5. **Ceiling (reference):** `L ≤ 100·LTEM` (30 MB at launch LTEM); LTEM
+   itself moves ≤ ×1.7 per 50 000 blocks (Q2).
 
-**Handoff:** `margin = 2` with stated validity `k ≤ 51 ∧ H ≥ 100`, or the
-function `2^{⌈k/51⌉}` if the P2P row prefers to carry its lag bound
-explicitly; genesis-era caveat as above. The derivation and any future
-change to it live **here** (single owner); the P2P doc cites this section.
+**Handoff:** `margin(k) = min(2^k, 50·LTEM/EM)`, computed live; the P2P
+row states its assumed announce-lag `k` (for `k = 2`: multiplier 4). The
+derivation and any future change to it live **here** (single owner); the
+P2P doc cites this section.
 
-**Falsifier (run before signature):** the 51-block hysteresis and ×2
-crossing bound are checkable against the same `swing.rs` instrument as Q2 —
-a simulated saturation trace whose limit exceeds `L_0·2^{⌈k/51⌉}` at any
-`k` (chain height ≥ 100) falsifies the derivation.
+**Falsifier (RUN at draft time — this is the instrument that corrected the
+section):** simulate the §2 formulas (ST median over 100, clamps, floor,
+limit = 2·EM) under (i) adversarial bimodal windows for the single-step
+bound and (ii) crash-preloaded windows for the ladder; any trace exceeding
+`min(2^k, 50·LTEM/EM)` at any `k` falsifies the bound. Draft-time run:
+single-step max 1.961 ≤ 2 ✓; ladder ≤ 2^k at every k and saturates at the
+clamp ✓. `swing.rs` is *not* this instrument (it carries the constants and
+throughput helpers, no trace generator) — the simulation must accompany
+the signature record.
 
 ---
 
@@ -637,12 +683,22 @@ artifacts; the only floor-adjacent number on record is research-lab#144's
 
 **The named blocker and its discharge instrument:** floor measurements of
 (i) worst-case penalty-free block verify (300 000 bytes of maximal-input
-FCMP++ txs, batch BP+ path), and (ii) the Q3 transient unit (`2·50·LTEM` at
-launch = 30 MB), both **run on a Pi 4 Model B**, using the existing bench
-entry points (the benches exist; only the machine is missing). Discharge =
-the two numbers recorded beside the constants with the machine named
-(rule 76 §1). Until then: Q1/Q3 sign as `ratified-conditional(GAP-7)` — the
-condition is *in the ruling text*, loud, with this section as its record.
+FCMP++ txs), and (ii) the Q3 transient unit (`2·50·LTEM` at launch =
+30 MB), both **run on a Pi 4 Model B**. Instrument state at the pin,
+precisely: `shekyl-ffi/benches/relay_admission_verify.rs` measures the
+**per-tx pool-admission verify** through the same FFI calls
+`blockchain.cpp` makes, and by its own design (its §72.4 note) treats
+batch depth as an analytical multiplier (`N` for the worst-placed tx), so
+an N-tx block's admission-path cost is derivable from it; but the **block
+path proper is a deliberately cheaper traversal** (admission already
+verified — the bench's own doc comment), and **no full-block traversal
+bench exists** — that instrument is part of what the discharge must
+define, not only run. Discharge = the two numbers recorded beside the
+constants with the machine named
+(rule 76 §1). Until then: Q1/Q3 sign as `ratified` **with the GAP-7
+condition recorded in the census rows' notes column** (no new evidence
+class — census §2 owns the taxonomy) — the condition is *in the ruling
+text and the row*, loud, with this section as its record.
 **What the condition means operationally:** if measurement shows the 30 MB
 transient cannot verify inside a useful fraction of T on the floor, the
 ×50 surge factor is the named re-derivation target (Q3); if even the 300 k
@@ -699,6 +755,20 @@ Ratification-only means these are **specifications the port consumes**:
   premature-clear rationale.
 - Shape request for `margin` sent to the P2P-2 lane (shekyl-core-04);
   §6 records all three characterizations pending the answer.
-- Consumer sweeps and the falsifier instruments named in Q2/Q4/Q6/§6 run at
-  the pin before being cited (§2; the swing.rs trace and the KAT run are
-  gate-time instruments for signature).
+- Consumer sweeps run at the pin before being cited (§2); the KAT suite
+  observed green at the pin (79 passed, `cargo test -p shekyl-economics`);
+  `epee` median, `get_transaction_weight`, the fee-arm `return 0`, and the
+  GTWF §9.6a/§10 byte arithmetic each read at their sites before citation.
+- **Draft-time falsifier run corrected §6:** the first committed margin
+  bound (`2^{⌈k/51⌉}`, from the 51-sample hysteresis) was falsified by its
+  own named simulation — a crash-preloaded window climbs the median
+  between stale high samples with no 51-block wait (observed ×6.5 at
+  k = 4). Replaced with the proved-and-simulated
+  `min(2^k, 50·LTEM/EM)`; the wrong bound and the instrument that killed
+  it are both recorded in §6 point 2.
+- Advisor/steering review corrections folded: conjunct (b) re-grounded as
+  branch-only (header); FL-R16a retirement rephrased to in-flight, not
+  present (Q8); tx_extra headroom computed, not asserted (Q10 — ≈ 25 %,
+  not "an order of magnitude"); no new evidence class minted (Q1/Q3
+  conditions ride the notes column); fossil-flag discharge extended to the
+  V1/V2/V5 variant collapse (Q1).

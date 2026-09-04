@@ -808,7 +808,12 @@ pre-renumber tags until recapture.)*
 genesis has **one** reward zone, not three version-gated ones referencing forks
 that never happened here; freezing V1/V2/V5 would immortalize Monero fork history
 in the block-weight rule. Surfaced in the bounds pass; the arbitration belongs to
-the economics doc.
+the economics doc. **Arbitration landed (census C2-R2):**
+[`CONSENSUS_C2_R2_WEIGHT_FEES.md`](CONSENSUS_C2_R2_WEIGHT_FEES.md) Q1
+proposes ratifying 300,000 (conditional on the GAP-7 floor measurement) and
+specifies the V1/V2 variants + version-gated getter for deletion at the
+port — **proposed, pending maintainer signature**; this flag closes when Q1
+signs.
 
 Each is a §7 negative-corpus reject case (a 9-input / 17-output tx, or an
 over-cap block, must be rejected by both impls).
