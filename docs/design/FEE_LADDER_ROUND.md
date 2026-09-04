@@ -171,8 +171,25 @@ directly. Dispositions:
   naming what restores it if the direction reverses. Answer to the
   direct question, on the record: **no signature from the maintainer
   ever reached this session** — the sole source was the steering lane's
-  "FL-R12′ IS SIGNED" relay; whether anything behind it exists is now a
-  question put back to the steering lane.
+  "FL-R12′ IS SIGNED" relay.
+- **Provenance evidence (steering's answer, recorded):** the word
+  "Signed" was the maintainer's own, in the steering session — after
+  proposing burn-recycling and declining to impose it ("it's your call
+  between them"), he answered steering's plain-perpetual recommendation
+  with, verbatim: *"Your argument holds, and it holds against mine on
+  the merits. Signed: plain perpetual tail."* So the decision statement
+  exists in the maintainer's words, **in-channel to an intermediary** —
+  which is exactly what an in-tree countersignature exists to
+  disambiguate, and why the demoted state ("direction accepted; NOT
+  SIGNED") remains correct until he signs §8 himself: he can confirm or
+  repudiate that exchange either way. Steering's propagation audit:
+  exactly one artifact over-claimed (its headline to this lane); the
+  census routing text and its own queue already said
+  blocked-on-signature. FL-R16's defect is owned on both sides of the
+  relay: steering asserted reachability from a grep without classifying
+  cfg-gate or prose ("consumer confirmed live" — two of its three hits
+  were doc comments); this lane minted the row without
+  source-verifying the relay.
 - **FL-R14 RULED (b) in-channel** — `u64` persisted; binding bound is
   the genesis-frozen 64-bit range-proof width; build-time assertion
   obligation recorded with the wrap-un-saturation failure mode named.
