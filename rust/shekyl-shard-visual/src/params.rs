@@ -10,6 +10,12 @@ pub struct RenderParameters {
     pub algorithm: &'static str,
     pub label: String,
     pub structural_overrides: Vec<(String, String)>,
+    /// `true` only when every input came from the shard's own aggregate.
+    /// A hash override or synthetic feature vector makes the render a
+    /// viewer-chosen artifact, not chain state; the flag flows into
+    /// [`crate::CandidateRecipe`] so exports stay visibly non-canonical
+    /// (ruling A, `docs/V3_SHARD_VISUALIZATION.md`).
+    pub canonical: bool,
 }
 
 impl RenderParameters {
@@ -46,6 +52,7 @@ impl RenderParameters {
             algorithm: self.algorithm,
             label: self.label.clone(),
             structural_overrides: self.structural_overrides.clone(),
+            canonical: self.canonical,
         }
     }
 }
@@ -76,8 +83,9 @@ pub fn parameters_from_aggregate(agg: &ShardAggregate) -> RenderParameters {
         features,
         palette: assign_palette(agg.shard_hash),
         algorithm: assign_algorithm(agg.shard_hash),
-        label: format!("shard #{} ({})", agg.shard_id, agg.dominant_regime),
+        label: format!("shard #{}", agg.shard_id),
         structural_overrides: Vec::new(),
+        canonical: true,
     }
 }
 
@@ -89,6 +97,7 @@ pub fn parameters_from_synthetic(shard_hash: [u8; 32], features: Features) -> Re
         algorithm: assign_algorithm(shard_hash),
         label: "synthetic".into(),
         structural_overrides: Vec::new(),
+        canonical: false,
     }
 }
 
@@ -100,5 +109,6 @@ pub fn parameters_with_hash_override(
     params.shard_hash = hash_override;
     params.palette = assign_palette(hash_override);
     params.algorithm = assign_algorithm(hash_override);
+    params.canonical = false;
     params
 }

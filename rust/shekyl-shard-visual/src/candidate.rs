@@ -29,6 +29,11 @@ pub struct CandidateRecipe {
     pub bg_crystalline_palette: String,
     pub final_mode: String,
     pub final_opacity: f64,
+    /// `false` when any input was viewer-chosen (hash override, synthetic
+    /// features, structural overrides) rather than the shard's own chain
+    /// state. Non-canonical renders must stay visibly non-canonical in
+    /// every export (ruling A, `docs/V3_SHARD_VISUALIZATION.md`).
+    pub canonical: bool,
 }
 
 fn palette_from_entropy(ent: &mut EntropyStream, idx: u32) -> Palette {
@@ -122,6 +127,7 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
         bg_crystalline_palette: bg_crystalline_palette.name.into(),
         final_mode: "difference".into(),
         final_opacity,
+        canonical: params.canonical && params.structural_overrides.is_empty(),
     }
 }
 

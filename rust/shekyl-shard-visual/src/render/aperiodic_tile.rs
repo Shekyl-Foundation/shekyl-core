@@ -12,8 +12,9 @@ const MAX_DEPTH: i32 = 6;
 
 /// Per-algorithm SHAKE256 namespace (see `entropy.rs`). Before this stream
 /// existed the tiling drew zero hash entropy — identical feature vectors
-/// produced identical geometry. The rosette rotation and spread jitter below
-/// give every shard a distinct orientation and palette cut.
+/// produced identical geometry. The structural draws below (rosette
+/// rotation, palette spread, edge strength) give every shard a distinct
+/// orientation and palette cut.
 const NS: &str = "shard.v1.render.aperiodic_tile";
 
 #[derive(Clone, Copy)]
@@ -60,13 +61,13 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let cx_off = (size as f64 - (x_hi - x_lo) * scale) / 2.0 - x_lo * scale;
     let cy_off = (size as f64 - (y_hi - y_lo) * scale) / 2.0 - y_lo * scale;
 
-    let spread = (0.4 + 0.5 * f.value_dispersion + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
+    let spread = (0.4 + 0.5 * ent.unit(2) + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
     let margin_t = (1.0 - spread) / 2.0;
     let sharp_t = margin_t;
     let robust_t = margin_t + spread;
     let sharp_color = params.palette.sample(sharp_t);
     let robust_color = params.palette.sample(robust_t);
-    let edge_strength = 0.3 + 0.7 * f.tier_skew_high;
+    let edge_strength = 0.3 + 0.7 * ent.unit(3);
     let _edge_color = params.palette.sample(if (sharp_t + robust_t) / 2.0 < 0.5 {
         0.95
     } else {

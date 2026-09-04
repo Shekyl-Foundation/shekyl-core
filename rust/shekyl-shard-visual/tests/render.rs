@@ -1,7 +1,7 @@
 use shekyl_shard_visual::fixtures;
 use shekyl_shard_visual::{
-    parameters_from_aggregate, recipe_from_params, render_candidate_png, VisualError,
-    MAX_RENDER_SIZE,
+    parameters_from_aggregate, parameters_with_hash_override, recipe_from_params,
+    render_candidate_png, VisualError, MAX_RENDER_SIZE,
 };
 
 #[test]
@@ -49,4 +49,20 @@ fn all_fixtures_render_at_preview_size() {
         let png = render_candidate_png(&fixture.aggregate, 128).expect(&fixture.id);
         assert!(png.starts_with(b"\x89PNG"), "{}", fixture.id);
     }
+}
+
+#[test]
+fn canonical_flag_tracks_input_provenance() {
+    let fixture = fixtures::by_id("genesis").expect("genesis fixture");
+    let canonical = parameters_from_aggregate(&fixture.aggregate);
+    assert!(recipe_from_params(&canonical).canonical);
+
+    let overridden = parameters_with_hash_override(&fixture.aggregate, [0xAB; 32]);
+    assert!(!recipe_from_params(&overridden).canonical);
+
+    let mut tweaked = parameters_from_aggregate(&fixture.aggregate);
+    tweaked
+        .structural_overrides
+        .push(("candidate_fg_opacity".into(), "0.5".into()));
+    assert!(!recipe_from_params(&tweaked).canonical);
 }
