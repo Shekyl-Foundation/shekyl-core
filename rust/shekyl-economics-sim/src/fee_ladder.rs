@@ -42,9 +42,8 @@ use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     base_block_reward, calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
-    cap_reward_to_remaining_supply, emission_speed_factor, projected_already_generated,
-    tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    effective_emission, emission_speed_factor, projected_already_generated, tail_subsidy_per_block,
+    EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -104,7 +103,7 @@ fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicPar
         v,
         params.tx_volume_baseline,
         circulating,
-        params.money_supply,
+        params.emission_curve_asymptote,
         params.burn_base_rate,
         params.burn_cap,
     );
@@ -375,6 +374,10 @@ pub struct RungTable {
     pub corrected_raw_c: [u64; 4],
     /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
     pub served_ceil_cq: [u64; 4],
+    /// FL-R12′'s literal operand split (`C′_q · ladder(M_r·curve maxed
+    /// with TAIL)`, `M_r` unquantized) — measured for the round-8
+    /// amendment question.
+    pub served_split_operand: [u64; 4],
     /// `check_fee` acceptance bound at this state. Modeled as
     /// `floor − floor/50` per byte: the real check takes 2% off the
     /// *total* and rounds up to the quantization mask
@@ -401,11 +404,26 @@ fn rung_table(
     let accept = floor - floor / 50;
     let corrected = corrected_ladder(raw, corr.c_scaled);
     let served = corrected_ladder(raw, quantize_c_pow2(corr.c_scaled, SnapRule::Ceiling));
+    let tail = tail_subsidy_per_block(params).expect("tail");
+    let r_eff = shekyl_economics::release::apply_release_multiplier(
+        st.base_reward,
+        corr.release_multiplier,
+    )
+    .max(tail);
+    let c_prime = u64::try_from(
+        u128::from(SCALE - corr.emission_share_sigma) * u128::from(SCALE)
+            / u128::from(SCALE - corr.burn_pct),
+    )
+    .expect("c_prime fits");
+    let served_split = corrected_ladder(
+        articmine_ladder_raw(r_eff, median, median),
+        quantize_c_pow2(c_prime, SnapRule::Ceiling),
+    );
     RungTable {
         label,
         age_years,
         supply_ratio_millionths: u64::try_from(
-            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply),
+            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.emission_curve_asymptote),
         )
         .expect("ratio fits"),
         tx_volume_avg: v,
@@ -415,6 +433,7 @@ fn rung_table(
         current: rounded(raw),
         corrected_raw_c: corrected,
         served_ceil_cq: served,
+        served_split_operand: served_split,
         relay_floor_accept: accept,
         corrected_floor_below_relay: corrected[0] < accept,
     }
@@ -495,6 +514,16 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(&'static str),
+    /// FL-R12′'s operand split taken literally: `R_eff = max(M_r·curve,
+    /// TAIL)` carries an UNQUANTIZED `M_r` while only `C′ = (1−σ)/(1−b)`
+    /// is ceiling-snapped. Measured because the split un-quantizes the
+    /// volume-dependent factor the FL-C4a pass rested on quantizing.
+    SplitOperandCeil,
+    /// The amendment candidate: quantize the payer's whole
+    /// volume-dependent scalar — `Q_ceil(C′·M_r)` on the tail-floored
+    /// operand `max(curve, TAIL)`. `C′·M_r ≡ C`, so away from the tail
+    /// this is exactly the adopted `Quantized(ceil)` design.
+    QuantizedWholeCeil,
 }
 
 impl LadderMode {
@@ -503,6 +532,8 @@ impl LadderMode {
             LadderMode::Current => "current".to_owned(),
             LadderMode::CorrectedRaw => "corrected-raw".to_owned(),
             LadderMode::Quantized(rule) => format!("corrected-quantized-pow2-{rule}"),
+            LadderMode::SplitOperandCeil => "split-operand-ceil-cprime".to_owned(),
+            LadderMode::QuantizedWholeCeil => "quantized-whole-scalar-ceil".to_owned(),
         }
     }
 }
@@ -582,6 +613,34 @@ fn dwell_scenario(
                 };
                 let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
                 corrected_ladder(raw, quantize_c_pow2(c, rule))
+            }
+            LadderMode::SplitOperandCeil => {
+                let corr = correction_factor(v_avg, st.ag, st.height, params);
+                let tail = tail_subsidy_per_block(params).expect("tail");
+                let r_eff = shekyl_economics::release::apply_release_multiplier(
+                    st.base_reward,
+                    corr.release_multiplier,
+                )
+                .max(tail);
+                let c_prime = u64::try_from(
+                    u128::from(SCALE - corr.emission_share_sigma) * u128::from(SCALE)
+                        / u128::from(SCALE - corr.burn_pct),
+                )
+                .expect("c_prime fits");
+                corrected_ladder(
+                    articmine_ladder_raw(r_eff, median, median),
+                    quantize_c_pow2(c_prime, SnapRule::Ceiling),
+                )
+            }
+            LadderMode::QuantizedWholeCeil => {
+                // C′·M_r ≡ C, so this is the adopted design on the
+                // tail-floored operand (identical away from the tail).
+                let tail = tail_subsidy_per_block(params).expect("tail");
+                let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+                corrected_ladder(
+                    articmine_ladder_raw(st.base_reward.max(tail), median, median),
+                    quantize_c_pow2(c, SnapRule::Ceiling),
+                )
             }
         };
         for i in 0..4 {
@@ -754,7 +813,7 @@ pub struct DegeneratePins {
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
-    /// At `already_generated == money_supply`: what the 5-arg estimate path
+    /// At `already_generated == emission_curve_asymptote`: what the 5-arg estimate path
     /// still believes the reward is (it has no supply cap) vs what
     /// validation pays. FL-V1's divergence in its terminal form.
     pub estimate_reward_at_exhaustion: u64,
@@ -766,12 +825,18 @@ pub struct DegeneratePins {
 }
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
-    let ratio_09 = params.money_supply / 10 * 9;
+    let ratio_09 = params.emission_curve_asymptote / 10 * 9;
     let esf = emission_speed_factor(params);
     let tail = tail_subsidy_per_block(params).expect("tail subsidy");
-    let s = params.money_supply;
+    let s = params.emission_curve_asymptote;
+    // Post-FL-R12′: both legs are total and agree — the estimate's
+    // M_r-neutral view and the paid pre-penalty quantity at baseline
+    // volume both return the perpetual tail at (and past) the asymptote.
+    // The pre-implementation divergence (estimate tail vs validation 0)
+    // is recorded in the doc's §4.6 as the defect this closed.
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
-    let val_reward = cap_reward_to_remaining_supply(est_reward, s, params);
+    let val_reward =
+        effective_emission(s, params.tx_volume_baseline, params).expect("paid at exhaustion");
     DegeneratePins {
         burn_at_cap: calc_burn_pct(
             500,
@@ -805,7 +870,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
         )),
         validation_ladder_at_exhaustion: rounded(articmine_ladder_raw(
-            val_reward.max(1),
+            val_reward,
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5,
         )),
@@ -930,7 +995,8 @@ pub fn report() -> FeeLadderReport {
     let mut c_surface = Vec::new();
     let (mut c_min, mut c_max) = (u64::MAX, 0u64);
     for &(age, st) in &states {
-        let proj_ratio = u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply);
+        let proj_ratio =
+            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.emission_curve_asymptote);
         for &ratio in &ratios {
             // §1.8 reachability: the release multiplier bounds the real
             // trajectory within [0.8, 1.3]× of the neutral one.
@@ -938,7 +1004,7 @@ pub fn report() -> FeeLadderReport {
             let hi = (proj_ratio * 13 / 10).min(u128::from(SCALE));
             let reachable = u128::from(ratio) >= lo && u128::from(ratio) <= hi;
             let circ = u64::try_from(
-                u128::from(params.money_supply) * u128::from(ratio) / u128::from(SCALE),
+                u128::from(params.emission_curve_asymptote) * u128::from(ratio) / u128::from(SCALE),
             )
             .expect("circ fits");
             for &v in &volumes {
@@ -1002,6 +1068,8 @@ pub fn report() -> FeeLadderReport {
         LadderMode::CorrectedRaw,
         LadderMode::Quantized("nearest"),
         LadderMode::Quantized("ceil"),
+        LadderMode::SplitOperandCeil,
+        LadderMode::QuantizedWholeCeil,
     ] {
         for &(label, m0, m1, median) in DWELL_SCENARIOS {
             dwell.push(dwell_scenario(label, m0, m1, median, st4, mode, &params));
@@ -1077,12 +1145,13 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for t in &r.rung_tables {
         let _ = writeln!(
             out,
-            "fee-ladder: {} C={:.3} current={:?} corrected_raw={:?} served_ceil={:?} floor_accept={} floor_bounce={}",
+            "fee-ladder: {} C={:.3} current={:?} corrected_raw={:?} served_ceil={:?} served_split={:?} floor_accept={} floor_bounce={}",
             t.label,
             f(t.c_scaled),
             t.current,
             t.corrected_raw_c,
             t.served_ceil_cq,
+            t.served_split_operand,
             t.relay_floor_accept,
             t.corrected_floor_below_relay
         );

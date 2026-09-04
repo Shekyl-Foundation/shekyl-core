@@ -28,7 +28,7 @@
 //! parameter layout — the digest is the dominant per-call cost, so this
 //! is *not* a trivial pure-read. The method reads nothing from
 //! `ChainEconomicsSource`. The shim returns the snapshot's
-//! `money_supply_atomic` (`u64`) so the bench consumes an observable
+//! `emission_curve_asymptote_atomic` (`u64`) so the bench consumes an observable
 //! without widening the crate's public API with the `pub(crate)`
 //! snapshot type.
 //!

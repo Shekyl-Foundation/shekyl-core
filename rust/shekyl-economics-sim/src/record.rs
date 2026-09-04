@@ -154,7 +154,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         burn_base_rate: sim.burn_base_rate,
         burn_cap: sim.burn_cap,
         staker_pool_share: sim.staker_pool_share,
-        money_supply: sim.money_supply,
+        emission_curve_asymptote: sim.emission_curve_asymptote,
         emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
         final_subsidy_per_minute: sim.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -165,7 +165,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     let blocks_per_year = sim.blocks_per_year;
     let total_blocks = blocks_per_year * config.sim_years;
-    let money_supply = sim.money_supply as u128;
+    let emission_curve_asymptote = sim.emission_curve_asymptote as u128;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
     let mut already_generated: u128 = 0;
@@ -175,7 +175,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `already_generated` at the start of this block is the
         // `base_block_reward` input — capture before mutating.
         let ag_start = already_generated.min(u128::from(u64::MAX)) as u64;
-        let remaining = money_supply.saturating_sub(already_generated);
+        let remaining = emission_curve_asymptote.saturating_sub(already_generated);
 
         let base_reward = base_block_reward(ag_start, &params)
             .expect("sim neutral trajectory stays within supply bounds");
@@ -254,8 +254,8 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         }
 
         already_generated += u128::from(effective_reward);
-        if already_generated > money_supply {
-            already_generated = money_supply;
+        if already_generated > emission_curve_asymptote {
+            already_generated = emission_curve_asymptote;
         }
     }
 

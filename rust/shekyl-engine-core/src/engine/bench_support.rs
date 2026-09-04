@@ -154,7 +154,7 @@ pub fn engine_economics_base_emission_at_for_bench(
 /// The natural return type is `pub(crate)`
 /// `EconomicsParametersSnapshot`; surfacing it through this `pub fn`
 /// would widen the crate's public API beyond the `bench-internals`
-/// gate. The helper returns the snapshot's `money_supply_atomic`
+/// gate. The helper returns the snapshot's `emission_curve_asymptote_atomic`
 /// (`u64`, a primitive `pub` type) instead — the same API-narrowing
 /// pattern the `KeyEngine` bench's `usize`-summary uses. The trait
 /// call is preserved against compiler elision by the internal
@@ -173,5 +173,5 @@ pub fn engine_economics_parameters_snapshot_for_bench(
 ) -> u64 {
     use crate::engine::traits::EconomicsEngine;
     let snapshot = std::hint::black_box(engine.economics.parameters_snapshot());
-    snapshot.money_supply_atomic
+    snapshot.emission_curve_asymptote_atomic
 }

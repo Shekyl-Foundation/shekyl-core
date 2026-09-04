@@ -99,9 +99,9 @@ block make_block_with_coinbase(uint64_t height, uint64_t coinbase_amount)
   return b;
 }
 
-// ~1% of MONEY_SUPPLY: the burn percentage scales with
+// ~1% of SHEKYL_EMISSION_CURVE_ASYMPTOTE: the burn percentage scales with
 // circulating/total (SCALE 10^6 fixed point), so the circulating supply
-// must clear MONEY_SUPPLY/SCALE or the ratio floors to zero and the fee
+// must clear SHEKYL_EMISSION_CURVE_ASYMPTOTE/SCALE or the ratio floors to zero and the fee
 // split degenerates to miner-takes-all.
 constexpr uint64_t kAlreadyGenerated = UINT64_C(42949672960000000);
 constexpr uint64_t kBlockHeight = 1;

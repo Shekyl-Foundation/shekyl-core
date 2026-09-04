@@ -50,7 +50,7 @@
 /** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
 #define CRYPTONOTE_TX_PRUNE_DEPTH                       5000
 
-// MONEY_SUPPLY/COIN/emission constants are generated from config/economics_params.json.
+// SHEKYL_EMISSION_CURVE_ASYMPTOTE/COIN/emission constants are generated from config/economics_params.json.
 
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size

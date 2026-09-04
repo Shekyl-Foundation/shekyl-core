@@ -26,8 +26,6 @@
 
 use serde::Serialize;
 
-use crate::params::MONEY_SUPPLY;
-
 /// Structural-invariant failure from [`ActivityMetric::new`].
 ///
 /// These are field combinations impossible for **any** single chain
@@ -38,17 +36,6 @@ use crate::params::MONEY_SUPPLY;
 /// which invariant a producer broke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ActivityInvariantViolation {
-    /// `circulating_supply` exceeds the hard coin-supply ceiling
-    /// ([`MONEY_SUPPLY`]) — no chain state can have emitted more than
-    /// the total supply.
-    #[error("circulating_supply {circulating_supply} exceeds MONEY_SUPPLY {money_supply}")]
-    CirculatingExceedsSupply {
-        /// The offending `circulating_supply`.
-        circulating_supply: u64,
-        /// The configured supply ceiling.
-        money_supply: u64,
-    },
-
     /// `total_staked` exceeds `circulating_supply` — more coin cannot be
     /// staked than exists in circulation.
     #[error("total_staked {total_staked} exceeds circulating_supply {circulating_supply}")]
@@ -121,12 +108,11 @@ impl ActivityMetric {
         total_staked: u128,
         as_of_height: u64,
     ) -> Result<Self, ActivityInvariantViolation> {
-        if circulating_supply > MONEY_SUPPLY {
-            return Err(ActivityInvariantViolation::CirculatingExceedsSupply {
-                circulating_supply,
-                money_supply: MONEY_SUPPLY,
-            });
-        }
+        // FL-R16b (FL-R12′): no ceiling check against the emission-curve
+        // asymptote — under the perpetual tail, gross issuance passes it
+        // by design, so "circulating > asymptote" is a legitimate mature
+        // chain state, not a violation. The staked-exceeds-circulating
+        // invariant below is the one that is structural.
         if total_staked > u128::from(circulating_supply) {
             return Err(ActivityInvariantViolation::StakedExceedsCirculating {
                 total_staked,
@@ -176,6 +162,7 @@ impl ActivityMetric {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::EMISSION_CURVE_ASYMPTOTE;
 
     #[test]
     fn new_accepts_steady_state() {
@@ -189,14 +176,13 @@ mod tests {
         let m = ActivityMetric::new(0, 0, 0, 0).unwrap();
         assert_eq!(m.circulating_supply, 0);
     }
-
+    /// FL-R16b (FL-R12′): a circulating supply past the emission-curve
+    /// asymptote is a legitimate perpetual-tail state and constructs
+    /// cleanly — only staked-exceeds-circulating remains structural.
     #[test]
-    fn new_rejects_circulating_over_supply() {
-        let err = ActivityMetric::new(0, MONEY_SUPPLY + 1, 0, 10).unwrap_err();
-        assert!(matches!(
-            err,
-            ActivityInvariantViolation::CirculatingExceedsSupply { .. }
-        ));
+    fn past_asymptote_circulating_is_legitimate() {
+        let m = ActivityMetric::new(10, EMISSION_CURVE_ASYMPTOTE + 1, 0, 10).unwrap();
+        assert_eq!(m.circulating_supply(), EMISSION_CURVE_ASYMPTOTE + 1);
     }
 
     #[test]

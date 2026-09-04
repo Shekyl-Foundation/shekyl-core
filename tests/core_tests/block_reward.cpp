@@ -257,7 +257,7 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
     const int target_minutes = SHEKYL_DAA_TARGET_SECONDS / 60;
     const int esf = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes - 1);
 
-    uint64_t base_reward = MONEY_SUPPLY >> esf;
+    uint64_t base_reward = SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf;
     if (base_reward < FINAL_SUBSIDY_PER_MINUTE * target_minutes)
       base_reward = FINAL_SUBSIDY_PER_MINUTE * target_minutes;
 

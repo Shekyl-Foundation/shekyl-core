@@ -50,11 +50,11 @@ inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
 
 // The independent recompute of verify's modulated base_reward for an empty
 // FAKECHAIN block: 0h curve + release multiplier at tx_volume_avg == 0
-// (empty blocks carry no non-coinbase txs) + the MONEY_SUPPLY cap.
+// (empty blocks carry no non-coinbase txs) + the SHEKYL_EMISSION_CURVE_ASYMPTOTE cap.
 // Deliberately NOT read back from the connect path — this is the
 // conservation identity's independent leg. (tests/core_tests/block_reward.cpp
 // keeps its own hand-rolled base recompute on purpose: it re-derives the raw
-// base from MONEY_SUPPLY >> esf without shekyl_base_block_reward, so it
+// base from SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf without shekyl_base_block_reward, so it
 // stays independent of the FFI this helper trusts.)
 inline uint64_t expected_full_subsidy(uint64_t already_generated)
 {
@@ -62,7 +62,7 @@ inline uint64_t expected_full_subsidy(uint64_t already_generated)
   const uint64_t release_mult = shekyl_calc_release_multiplier(
       /*tx_volume_avg=*/0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
   uint64_t q_full = shekyl_apply_release_multiplier(raw_base, release_mult);
-  const uint64_t remaining = MONEY_SUPPLY - already_generated;
+  const uint64_t remaining = SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated;
   if (q_full > remaining)
     q_full = remaining;
   return q_full;

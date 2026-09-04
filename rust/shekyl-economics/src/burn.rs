@@ -47,7 +47,7 @@ pub struct BurnSplit {
 /// * `tx_volume` - Transaction count over the volume window
 /// * `tx_baseline` - Baseline transaction volume
 /// * `circulating_supply` - Currently circulating atomic units
-/// * `total_supply` - Total MONEY_SUPPLY in atomic units
+/// * `total_supply` - Total EMISSION_CURVE_ASYMPTOTE in atomic units
 /// * `burn_base_rate` - Base burn coefficient (fixed-point SCALE)
 /// * `burn_cap` - Maximum burn percentage (fixed-point SCALE)
 ///
@@ -72,9 +72,14 @@ pub fn calc_burn_pct(
         / u128::from(tx_baseline)) as u64;
     let sqrt_volume = isqrt(volume_ratio_scaled); // result is in SCALE units
 
-    // circulating_supply / total_supply scaled to SCALE
-    let supply_ratio =
-        (u128::from(circulating_supply) * u128::from(SCALE) / u128::from(total_supply)) as u64;
+    // circulating_supply / total_supply scaled to SCALE, saturated at 1.0
+    // (FL-R16c): under the perpetual tail gross issuance passes the
+    // curve's asymptote, and an unsaturated ratio would silently drift
+    // the burn toward its cap on a quantity that stopped meaning
+    // "fraction emitted" at that point.
+    let supply_ratio = (u128::from(circulating_supply) * u128::from(SCALE)
+        / u128::from(total_supply))
+    .min(u128::from(SCALE)) as u64;
 
     // burn_pct = burn_base_rate * sqrt_volume * supply_ratio / SCALE^2
     // We chain mul_scale to keep things in SCALE units:
@@ -95,7 +100,7 @@ pub fn calc_burn_pct_from_activity(
         tx_volume,
         tx_baseline,
         circulating_supply,
-        params.money_supply,
+        params.emission_curve_asymptote,
         params.burn_base_rate,
         params.burn_cap,
     )

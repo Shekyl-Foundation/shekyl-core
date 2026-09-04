@@ -990,7 +990,7 @@ TEST(cryptonote_protocol_handler, race_condition)
         reward_t reward;
         get_block_template(*daemon.alt.core, block, diff, reward);
         stat.diff += diff;
-        stat.reward = stat.reward < (MONEY_SUPPLY - stat.reward) ? stat.reward + reward : MONEY_SUPPLY;
+        stat.reward = stat.reward < (SHEKYL_EMISSION_CURVE_ASYMPTOTE - stat.reward) ? stat.reward + reward : SHEKYL_EMISSION_CURVE_ASYMPTOTE;
         add_block(*daemon.alt.core, block, stat);
         if (daemon.main.core->get_current_blockchain_height() + 1 < CRYPTONOTE_PRUNING_STRIPE_SIZE)
           add_block(*daemon.main.core, block, stat);
