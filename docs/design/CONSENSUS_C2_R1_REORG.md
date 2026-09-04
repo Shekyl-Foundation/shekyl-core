@@ -1069,11 +1069,38 @@ obligation (§5.2) is confirmed necessary by inspection.
   re-request-ancestry (no punishment); the sync path (`:1546`) reads
   the same flag as an offense — `drop_connections(span_origin)` plus a
   scored drop, on the theory that a span block that fails to connect
-  means the peer misrepresented the span. Both arms are defensible;
-  they are **different rules wearing one flag**, and Q3 poses them as a
-  ruled question rather than ratifying "orchestration." The unbounded
-  re-request cost stays GAP-4's question; named here, not answered
-  here.
+  means the peer misrepresented the span. They are **different rules
+  wearing one flag**, and Q3 rules them rather than ratifying
+  "orchestration." The unbounded re-request cost stays GAP-4's
+  question; named here, not answered here.
+
+  **Honest-path enumeration of the sync punish arm (steering's
+  pre-ruling requirement; done 2026-09-04).** The arm is narrower than
+  it first reads: the sync loop PRE-CHECKS the span's first parent
+  (`have_block` at `:1399`) and routes unknown-parent spans away from
+  the punish arm — into wait-for-requested-parent, re-query-hashes, or
+  back-to-download (`:1400–1440`); the one drop inside that region
+  (`:1407`) fires only on a queue-bookkeeping mismatch (the peer's own
+  span data claims the parent at a height inconsistent with the span
+  start — genuinely peer-attributable). So what reaches the `:1546`
+  punish arm is a block **whose parent was known at pre-check and gone
+  at add** — a race window spanning the whole per-span processing time
+  (RandomX verification included). At least one honest filler exists:
+  **local pops**. `pop_blocks` (operator RPC/console) and the
+  checkpoint-rollback discard both remove main-chain blocks WITHOUT
+  re-adding them to the alt store (only `switch_to_alternative_blockchain`
+  re-homes demoted blocks), so a span requested before the pop and
+  processed after it orphans on OUR action — and the sync arm severs
+  and scores the honest peer that served exactly what we asked for.
+  `drop_connections(span_origin)` is plural: every connection from
+  that origin, plus the scored drop on top. **Verdict for the ruling:
+  an honest path exists, so the arm punishes a peer for our state —
+  the watermark bug's second instance, one layer out (a flag meaning
+  "our store lacks the parent" consumed as a claim about the sender).**
+  The fix shape is R1b's: orphan is degradation/re-sync, never
+  misconduct; the `:1407` bookkeeping-mismatch drop is the arm that
+  independently establishes misrepresentation and KEEPS its teeth —
+  each job gets its own signal, one bit stops meaning two things.
 
 ### 5.4 Proposed round structure (no rulings yet)
 
