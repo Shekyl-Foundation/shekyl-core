@@ -170,31 +170,6 @@ conforming peer can complete. **On the verifying side it also deletes the error
 path**: there is no "wrong network" branch to get wrong, only a handshake that
 does not complete.
 
-> **Sixth check — when a decision is already taken, both the argument for it
-> and the argument against the alternative drift toward flattering it.**
->
-> Named after PWD-T5, where the same eight bytes were mispriced **twice, from
-> opposite sides**: PW-9 would have deleted the prefix for an anonymity
-> property we cannot have, and T5's first draft kept it for a
-> resource-exhaustion property it cannot have either. **The second error
-> appeared inside the correction of the first.** The bias has a direction, and
-> it does not care which way the argument runs — an overstated *hazard*
-> justifies a ruling exactly as an overstated *benefit* does (PWD-B3a's first
-> draft called an unknown command "unbounded" when the packet limit still
-> bound it).
->
-> **Mechanical form: name the adversary the property holds against, then ask
-> whether an adaptive one is excluded by construction.** A value derived from
-> public data cannot impose attacker work — that is a **non-property**, not a
-> mitigation with a weak constant, and the two demand different responses:
-> a weak constant invites tuning, a non-property demands re-routing.
->
-> **It survives review because each argument is locally well-formed.** T5's
-> first draft cited a real consumer at a real line and drew a plausible
-> conclusion; nothing in the sentence was false, only its scope. So the check
-> cannot be "read it again" — it has to be the question above, asked against
-> the row's own adversary column.
-
 **The two failures are a pair, and the pair yields the standing form.** Both
 countermeasures were scoped to *a named code path*; both defended that path and
 nothing else. **A countermeasure scoped to a code path defends that path. A
@@ -274,9 +249,73 @@ check**. So:
 **The four checks above all answer *"is this right?"*. This one answers *"is
 this complete?"*** — and unlike the others it cannot be run by reading the
 artifact at all, only by going back to the tree with a wider question. That is
-why it is last, and why it is the one most easily skipped.
+why it is the one most easily skipped.
+
+> **Sixth check — when a decision is already taken, both the argument for it
+> and the argument against the alternative drift toward flattering it.**
+>
+> Named after PWD-T5, where the same eight bytes were mispriced **twice, from
+> opposite sides**: PW-9 would have deleted the prefix for an anonymity
+> property we cannot have, and T5's first draft kept it for a
+> resource-exhaustion property it cannot have either. **The second error
+> appeared inside the correction of the first.** The bias has a direction, and
+> it does not care which way the argument runs — an overstated *hazard*
+> justifies a ruling exactly as an overstated *benefit* does (PWD-B3a's first
+> draft called an unknown command "unbounded" when the packet limit still
+> bound it).
+>
+> **Mechanical form: name the adversary the property holds against, then ask
+> whether an adaptive one is excluded by construction.** A value derived from
+> public data cannot impose attacker work — that is a **non-property**, not a
+> mitigation with a weak constant, and the two demand different responses:
+> a weak constant invites tuning, a non-property demands re-routing.
+>
+> **It survives review because each argument is locally well-formed.** T5's
+> first draft cited a real consumer at a real line and drew a plausible
+> conclusion; nothing in the sentence was false, only its scope. So the check
+> cannot be "read it again" — it has to be the question above, asked against
+> the row's own adversary column.
+
+**The seventh check — *a `file:line` citation has a dependency the diff does
+not show, so it is verified after the merge or not at all*.** (Rick,
+2026-09-04, naming it the third instance of the fifth check's family.)
+
+> **A conflict-free merge proves the two branches did not edit the same lines.
+> It proves nothing about whether one branch moved lines the other points at.**
+
+**The instance:** C2-R1b's fork-choice work shifted `blockchain.cpp`, and
+PWD-B3's citation for `m_current_block_cumul_weight_limit` — the whole argument
+that a block cap cannot be static — came to point at unrelated code. **Neither
+side of the merge had edited the citing document.** The symbol survived, so the
+*claim* held and only the pointer broke, which is the failure mode that looks
+like nothing: nothing turns red, and the citation still resolves to a real line
+in a real file.
+
+**So the ordering is the mechanism, not the diligence.** Verifying citations
+*before* merging verifies an artifact that will not ship. Re-run them on the
+**merged** tree, and check them **by content** — that the cited line contains
+the symbol the claim rests on — because line-in-range is what a drifted
+citation still satisfies. Where a citation is load-bearing, name the symbol
+beside the line so the next drift is greppable rather than silent.
+
+> **This is the fifth check's family, one artifact over.** There the frontier
+> of an *enumeration* was narrower than the claim built on it; here the
+> frontier of a *verification* is — it covered the pre-merge tree while the
+> claim is about the merged one. Same shape in citations, in coverage
+> inventories, and in sum checks, which is why they are stated together: **the
+> frontier of a check is narrower than the claim it is taken to support.**
+
+**Rider, because the pattern has now recurred inside its own fixes three
+times:** correcting referring text tends to reproduce the defect in the
+correction. A cell advertising 2026-09-04 currency against a 2026-09-03
+verification is a stale-currency defect *inside the fix for a stale-currency
+defect*; a sum check corrected from 9 to 8 kept a total that was already wrong;
+a retired concept survived in the paragraph that retired it. **After correcting
+a claim, re-read the correction as if it were the original text** — it is
+subject to the same class it just repaired.
 
 ---
+
 
 ## 2. Cluster I — identity and Sybil resistance
 
