@@ -64,17 +64,21 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+mod alt_window;
 mod check_hash;
 pub mod consts;
 mod error;
+mod fork_choice;
 mod lwma1;
 mod timestamp;
 
+pub use alt_window::{alt_window_plan, AltWindowPlan};
 pub use check_hash::check_hash;
 pub use consts::{
     FTL_SECONDS, GENESIS_DIFFICULTY, MTP_WINDOW, MTP_WINDOW_USIZE, N, N_USIZE, T_SECONDS,
 };
 pub use error::Error;
+pub use fork_choice::{fork_choice, ForkChoiceVerdict};
 pub use lwma1::lwma1_next;
 pub use timestamp::{
     check_timestamp_rule, is_above_mtp, is_timestamp_below_ftl, mtp_median, TimestampRuleVerdict,

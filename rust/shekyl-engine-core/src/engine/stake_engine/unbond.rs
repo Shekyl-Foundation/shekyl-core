@@ -106,7 +106,6 @@ impl UnbondRecordState {
     /// error. Both the record facts and `current_settlement_epoch` come from
     /// this one response, so the settled epoch a refusal quotes is the epoch
     /// the anchors were read against.
-    #[allow(dead_code)] // PR-P4: retires with the `unstake` verb, which fetches the record.
     pub(crate) fn from_claim_source(fetched: &ClaimSourceFor) -> Option<Self> {
         let source = fetched.source();
         let bond = source.bond.as_ref()?;
@@ -194,13 +193,17 @@ impl UnbondRecordState {
 /// Assemble the **full, wire-encoded** `Unbond` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
 ///
-/// "Wire-encoded" is not "reachable". Native `/submit_transaction` **does**
-/// admit an `Unbond` since 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
+/// The exit lane is REACHABLE as of PR-C: native `/submit_transaction`
+/// admits an `Unbond` (2026-08-29, `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
 /// this producer is the construction leg that fired that reopening
-/// criterion). What still holds the exit closed is that nothing dispatches
-/// these bytes and no RPC method or CLI verb reaches this handler — so the
-/// margin is thinner than it was, not the same: admission used to refuse a
-/// dispatched exit as a second line of defence, and no longer would.
+/// criterion), the dispatch seam ([`Engine::submit_unbond`]) exists, and
+/// `StakeFacade::unstake` drives it from wallet-RPC and the CLI. What
+/// protects the irreversible path now is no longer unreachability but the
+/// checks on the path itself — this handler's `ensure_exit_ready` refusal
+/// (consensus's own predicates), the engine-side persona resolution, and
+/// the CLI-side confirmation (`unstake_facade` module docs).
+///
+/// [`Engine::submit_unbond`]: crate::engine::Engine::submit_unbond
 ///
 /// The exit carries no ticket and draws no entry-gap offset. That seam exists
 /// to place a *bond post* at a random remove from the private funding intent
@@ -208,9 +211,9 @@ impl UnbondRecordState {
 /// cooldown expiring on-chain, which is already public. Adding a draw here
 /// would delay an irreversible operation the user asked for, and hide nothing.
 ///
-/// **Not reachable, deliberately.** Nothing on this path is wired to an RPC
-/// method or CLI verb, and wallet-RPC `unstake` stays RESERVED until a regtest
-/// walk has exercised the retire path end to end.
+/// **Reachable as of PR-C** through `StakeFacade::unstake` (wallet-RPC
+/// `unstake` shipped; `docs/api/wallet_rpc.yaml` records the gate's lift
+/// and the shipped-vs-RESERVED reconciliation).
 pub(crate) struct AssembleUnbond {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
@@ -243,7 +246,6 @@ pub(crate) struct AssembleUnbond {
 /// No placement offset, unlike `AssembledBondPost` — see [`AssembleUnbond`] for
 /// why the exit draws none.
 #[derive(Debug)]
-#[allow(dead_code)] // PR-P4: retires with the `unstake` verb; today's readers are tests.
 pub(crate) struct AssembledUnbondPost {
     /// The fully-signed, wire-encoded exit transaction, persona-bound.
     pub bound_tx: PBoundBytes,

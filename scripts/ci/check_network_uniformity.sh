@@ -60,14 +60,10 @@ FENCE=(src/cryptonote_core src/checkpoints src/blockchain_db)
 # owners defend. Exact equality, not prefix match: a prefix would let one
 # entry absorb a second, longer branch that happens to share its opening.
 ALLOWLIST=$(cat <<'EOF'
-src/cryptonote_core/cryptonote_core.cpp	if (m_nettype == MAINNET) {	checkpoint wiring wrapped mainnet-only (inherited); C2-R1b re-homes the operator-override path across all nettypes
-src/cryptonote_core/cryptonote_core.cpp	if (m_nettype != MAINNET) return true;	update_checkpoints periodic-reload guard -- the E5 mechanism's THIRD wiring site (independent of the init block); C2-R1b re-homes it with the init wiring
 src/cryptonote_core/blockchain.cpp	if (m_nettype == FAKECHAIN || m_nettype == STAGENET) m_hardfork = new HardFork(*db, 1, 0);	hard-fork TABLE selection: data-selection written as branches; migration debt toward the parameter table (rule 71 owner: consensus lane)
 src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) m_hardfork = new HardFork(*db, 1, testnet_hard_fork_version_1_till);	hard-fork TABLE selection: data, not control flow; migration debt (consensus lane)
 src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) {	hard-fork schedule selection loop: data, not control flow; migration debt (consensus lane)
 src/cryptonote_core/blockchain.cpp	else if (m_nettype == STAGENET) {	hard-fork schedule selection loop: data, not control flow; migration debt (consensus lane)
-src/checkpoints/checkpoints.cpp	if (nettype == TESTNET) {	init_default_checkpoints no-op arm (zero compiled checkpoints); C2-R1b re-homes or deletes
-src/checkpoints/checkpoints.cpp	if (nettype == STAGENET) {	init_default_checkpoints no-op arm (zero compiled checkpoints); C2-R1b re-homes or deletes
 EOF
 )
 

@@ -941,12 +941,15 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   gains the coupling belts for non-parse callers on BOTH arms (the Unbond arm
   had none) and runs the committed-key pin BEFORE the per-shard cursor scans and
   the FFI verify (an unauthorized attempt no longer pays the LMDB walk). The
-  block-level checkpoint fast-path arm executes the swap its (d) belt named:
-  under `fast_check` it re-pins the debit's pqc auth key against the record's
-  committed `bond_spend_pk` (fail-closed on missing record/keyless record/missing
-  auth slot) instead of blanket-rejecting every debit kind — without the swap, a
-  block carrying a valid `Unbond` was rejected by every node, contradicting (e)'s
-  end-to-end contract; debit-side bond posts now also feed the per-`P`
+  block-level checkpoint fast-path arm (CEN-G8) executed the swap its (d) belt
+  named — under `fast_check` it re-pinned the debit's pqc auth key against the
+  record's committed `bond_spend_pk` instead of blanket-rejecting every debit
+  kind, because without the swap a block carrying a valid `Unbond` was rejected
+  by every node, contradicting (e)'s end-to-end contract. *(That arm was
+  retired with its whole mechanism by C2-R1a, 2026-09-02: per-tx verify is now
+  unconditional at block connect, so the committed-key pin above is the sole
+  and always-on site — [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md)
+  §3.1.)* Debit-side bond posts also feed the per-`P`
   block-unique pass (`Unbond+Unbond` pairs were unreachable before). The gate-4
   lifecycle KAT stops embedding a copy of gate-2's integration section (the copy
   had silently drifted on dev); the serve-at-`E_first` leg reads

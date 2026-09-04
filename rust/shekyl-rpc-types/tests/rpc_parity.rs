@@ -719,27 +719,31 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 }
 
 #[test]
-fn get_version_v2_is_v1_with_only_the_version_bumped() {
-    let mut before = parsed(include_str!("vectors/rpc/get_version_synced_v1.json"));
-    let after = parsed(include_str!("vectors/rpc/get_version_synced_v2.json"));
+fn get_version_v3_is_v2_with_only_the_version_bumped() {
+    // The live pair tracks the LATEST bump (3.26, C2-R1b's
+    // `following_degraded`); each earlier pair's record is the vector
+    // files themselves plus git history — the previous instance of this
+    // test compared v1 to v2 for the 3.25 bump.
+    let mut before = parsed(include_str!("vectors/rpc/get_version_synced_v2.json"));
+    let after = parsed(include_str!("vectors/rpc/get_version_synced_v3.json"));
 
     let old = before
         .as_object_mut()
-        .expect("v1 vector is an object")
+        .expect("v2 vector is an object")
         .insert(
             "version".to_string(),
             serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
         )
-        .expect("v1 carries a version");
+        .expect("v2 carries a version");
 
     assert_ne!(
         old,
         serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
-        "v1 already carries the current constant — the pair has nothing to record"
+        "v2 already carries the current constant — the pair has nothing to record"
     );
     assert_eq!(
         before, after,
-        "v2 must differ from v1 by exactly CORE_RPC_VERSION"
+        "v3 must differ from v2 by exactly CORE_RPC_VERSION"
     );
 }
 

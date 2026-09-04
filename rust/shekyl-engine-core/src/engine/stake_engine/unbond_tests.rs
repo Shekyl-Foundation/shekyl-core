@@ -316,9 +316,10 @@ async fn an_exit_with_no_funding_inputs_is_refused_by_name() {
 
 /// **The exit authorizes under `bond_spend_pk` — never the identity key.**
 ///
-/// This is the one place an `Unbond` diverges from every credit post, and
-/// with the regtest walk landing in its own PR, nothing else in this
-/// repository exercises it. `archival_debit_auth_pin`
+/// This is the one place an `Unbond` diverges from every credit post. The
+/// daemon walk (`e2e_unbond_accepted_and_connected`) now drives the pin
+/// end-to-end over real RPC, but it is `#[ignore]`d and daemon-gated, so
+/// this KAT stays the assertion every `cargo test` run makes. `archival_debit_auth_pin`
 /// (`src/cryptonote_core/blockchain.cpp`) rejects a debit whose `pqc_auths`
 /// slot key is not the record's COMMITTED `bond_spend_pk`, and names the
 /// identity key as forbidden by construction — a compromised serving host

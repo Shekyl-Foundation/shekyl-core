@@ -50,7 +50,9 @@ use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
 
-use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
+use crate::engine::bond_assembly::{
+    sweep_funding_outputs, SpentRecordsDurablyPruned, SweepOverflowPolicy,
+};
 use crate::engine::lifecycle::{Credentials, EngineCreateParams};
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::pscan::exhaustiveness::verify_exhaustive;
@@ -220,6 +222,8 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
         &BTreeSet::new(),
         AtomicUnits::from_raw(1),
         BlockHeight::from_raw(u64::MAX),
+        // The bond path's own policy: this harness drives the bond sweep.
+        SweepOverflowPolicy::RefuseTooMany,
     )
     .is_err();
 

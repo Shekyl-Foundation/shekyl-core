@@ -906,6 +906,41 @@ pub struct DrainResult {
     pub confirmed_height: Option<i64>,
 }
 
+/// `unstake` result (PR-C): the sealed-then-dispatched exit's receipt.
+/// Same dispatch-verdict shape as [`DrainResult`] (both pipelines seal
+/// before dispatch); a type alias so the two cannot drift.
+pub type UnstakeResult = DrainResult;
+
+/// `collect_unstaked` result (PR-C). Internally tagged to match
+/// [`shekyl_engine_core::CollectOutcome`]: a `SWEPT` arm *requires*
+/// `tx_hash` / `swept` / `remainder`, so a missing remainder cannot
+/// deserialize and cannot be rendered as silent completion. **`remainder`
+/// is the completion fact**: `"0"` means nothing remains beyond this
+/// pass; nonzero means call again once the residue matures or this pass
+/// confirms.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CollectUnstakedResult {
+    /// One sweep pass was dispatched.
+    Swept {
+        /// The pass's transaction hash (lowercase hex).
+        tx_hash: String,
+        /// What this pass moves to the principal.
+        swept: AtomicUnitsString,
+        /// What the pool still holds beyond this pass (immature payouts
+        /// plus mature overflow past the input cap). `"0"` is THIS
+        /// persona's completion — see `another_pool_remains` for the lane.
+        remainder: AtomicUnitsString,
+        /// Whether any OTHER exited persona still holds an uncollected pool
+        /// (dust-skipped slots count). `false` + `remainder "0"` = the exit
+        /// lane is fully collected; `true` = call `collect_unstaked` again.
+        another_pool_remains: bool,
+    },
+    /// The exited pool is already empty — collection is complete and the
+    /// funded-gated retirement proceeds on its own.
+    NothingLeft,
+}
+
 /// `get_tx_proof` result (WI-RPC-3 proofs).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetTxProofResult {

@@ -498,10 +498,13 @@ approximately 23 KB. Fees scale with transaction size.
 Shekyl staking is **archival pay-for-service**. You bond SKL as on-chain
 collateral backing archival service, and you earn a share of the block
 reward-emission leg for the archival work your position verifiably performs.
-There are **no duration tiers, no lock period, no claim/unstake transactions,
-and no minimum stake** — those belonged to an earlier claim-based design that
-was retired before genesis. Your principal stays yours the whole time; the
-bond is an honesty anchor (slashable for misbehavior), not a custody transfer.
+There are **no duration tiers, no lock period, no claim transactions, and no
+minimum stake** — those belonged to an earlier claim-based design that was
+retired before genesis. Your principal stays yours the whole time; the bond
+is an honesty anchor (slashable for misbehavior), not a custody transfer.
+When you are done staking, `unstake` posts the permanent exit and
+`collect_unstaked` returns the released collateral to your balance (PR-C,
+2026-09-03).
 
 For the economic model, see
 [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) §Component 3–4 and the canonical
@@ -527,17 +530,22 @@ timing and funding footguns that matter for your privacy.
 
 ### Wallet support today
 
-Archival staking activation and status are driven through the wallet's staking
-surface, **not** through interactive `shekyl-cli` commands yet:
+Staking is split across surfaces today: the **exit verbs are live in
+interactive `shekyl-cli`** (PR-C), while activation and status are not yet:
 
-- **Wallet RPC** exposes staking activation (`stake`) and read-only status
-  (`get_staked_balance`, `get_staked_outputs`, `staking_info`). Reward-related
-  reads never conflate bonded principal with received rewards.
+- **Interactive `shekyl-cli`** carries the exit pair — `unstake` (posts the
+  permanent exit) and `collect_unstaked` (returns the released collateral to
+  your balance), each with the irreversibility confirmation the exit warrants.
+- **Wallet RPC** exposes staking activation (`stake`), the same exit verbs
+  (`unstake`, `collect_unstaked`), and read-only status (`get_staked_balance`,
+  `get_staked_outputs`, `staking_info`). Reward-related reads never conflate
+  bonded principal with received rewards.
 - **The desktop GUI** exposes staker activation directly.
 
-Interactive `shekyl-cli` staking commands are on the roadmap but **not yet
-available**; this section will document them when they land. Until then, the
-above is the honest status — use the GUI or the wallet-RPC methods to stake.
+Interactive `shekyl-cli` **activation** is still on the roadmap and **not yet
+available**; this section will document it when it lands. Until then, stake
+through the GUI or the wallet-RPC `stake` method — and use `shekyl-cli` or
+wallet RPC to exit.
 
 ### Privacy considerations
 
@@ -830,8 +838,10 @@ All methods are called via `POST /json_rpc`. Key groups:
 - **Keys and proofs:** `query_key`, `get_tx_key`, `check_tx_key`,
   `get_tx_proof`, `sign`, `verify`
 - **Staking (archival):** `stake` (activation), `get_staked_balance`,
-  `get_staked_outputs`, `staking_info` (reads). There is no `unstake`/`claim`
-  RPC — archival staking has no claim/unstake wire; those methods are reserved.
+  `get_staked_outputs`, `staking_info` (reads); `stake_in`, `drain`,
+  `get_drain_balance` (WI-RPC-5); `unstake` and `collect_unstaked` (the
+  composed exit, PR-C). There is no `claim` RPC — emission claims are
+  engine-side automation, and that name is rejected, not reserved.
 - **PQC Multisig:** `create_pqc_multisig_group`, `get_pqc_multisig_info`,
   `export_multisig_signing_request`, `sign_multisig_partial`,
   `import_multisig_signatures`

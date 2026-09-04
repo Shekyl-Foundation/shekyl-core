@@ -58,10 +58,10 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{AssembleInput, Gindex};
-use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
 use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
-use shekyl_types::{BlockHeight, GlobalOutputIndex};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
 use super::bond_assembly::{FundingInputContext, SpentRecordsDurablyPruned};
@@ -69,7 +69,9 @@ use super::bond_orchestrator::anchored_reference_block;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::drain_amount::{choose_drain_amount, DrainAmountError, DrainRequest};
 use super::drain_assembly::{AssembleDrain, AssembledDrain, DrainDestination};
-use super::drain_select::{select_for_drain, DrainCandidate, DrainSelectError};
+use super::drain_select::{
+    select_for_drain, select_for_sweep, DrainCandidate, DrainSelectError, SweepSelectError,
+};
 use super::stake_engine::{PersonaHandle, StakeEngineError, StakeEngineHandle};
 
 /// The drain-path `P`-balance surface: a single aggregate spendable scalar
@@ -155,6 +157,29 @@ pub enum DrainError {
     /// otherwise).
     #[error("atomic-unit arithmetic overflowed while planning the drain")]
     AmountOverflow,
+    /// Terminal sweep: no candidate is mature at the reference height —
+    /// nothing is provable yet. The remedy is "wait for the exit payout (or
+    /// the last pass's residue) to mature", distinct from the dust arm.
+    #[error("nothing in the exited persona's pool is spendable yet — wait for maturity")]
+    SweepNothingSpendable,
+    /// Terminal sweep: the mature pool cannot fund a valid pass — the fee
+    /// plus the 2-atomic-unit minimum the zero-change two-output split can
+    /// pay (T-DS-6). The named dust residual (`collect_unstaked` docs): it
+    /// stays in `P`, and the funded retirement gate stays held by it, until
+    /// further value matures into the slot or the fee floor moves.
+    /// Scalar-free.
+    #[error("the exited persona's spendable residue is too small to move")]
+    SweepDustPool,
+}
+
+impl From<SweepSelectError> for DrainError {
+    fn from(e: SweepSelectError) -> Self {
+        match e {
+            SweepSelectError::NothingSpendable => DrainError::SweepNothingSpendable,
+            SweepSelectError::DustPool => DrainError::SweepDustPool,
+            SweepSelectError::Overflow => DrainError::AmountOverflow,
+        }
+    }
 }
 
 impl From<DrainAmountError> for DrainError {
@@ -172,6 +197,95 @@ impl From<DrainSelectError> for DrainError {
             DrainSelectError::Insufficient => DrainError::InsufficientSpendable,
             DrainSelectError::InputCapExceeded => DrainError::InputCapExceeded,
             DrainSelectError::Overflow => DrainError::AmountOverflow,
+        }
+    }
+}
+
+/// Witness that a persona's **terminal exit is already public on-chain**:
+/// its confirmed `Unbond` sits in the sealed P-scan state's
+/// [`pending_unbonds`](PScanState::pending_unbonds) — the same authoritative
+/// "no future `Unbond` is owed" signal the dispatch seam's reserve exemption
+/// reads.
+///
+/// Private field + the one fallible constructor, so a
+/// [`DrainIntent::TerminalSweep`] is **unconstructable for a live persona**
+/// at the type level (the `load_seal_basis` unconstructable-pair pattern):
+/// the witness makes façade-level misuse a compile error, while the
+/// AUTHORITATIVE check stays the dispatch seam's own basis re-resolution —
+/// a witness minted from one seal read can be stale by the seam's, and the
+/// seam refuses the divergence rather than trusting the token
+/// (`submit_drain`).
+#[derive(Clone, Copy)]
+pub(crate) struct TerminalExitObserved {
+    p_canonical_id: PCanonicalId,
+}
+
+impl TerminalExitObserved {
+    /// Mint the witness iff `p_canonical_id`'s terminal `Unbond` has been
+    /// observed confirmed on-chain. `None` for a live persona — the caller
+    /// has no sweep to request.
+    pub(crate) fn for_persona(pscan: &PScanState, p_canonical_id: PCanonicalId) -> Option<Self> {
+        pscan
+            .pending_unbonds()
+            .contains_key(&p_canonical_id)
+            .then_some(Self { p_canonical_id })
+    }
+
+    /// The exited persona the witness names.
+    pub(crate) fn p_canonical_id(&self) -> PCanonicalId {
+        self.p_canonical_id
+    }
+}
+
+impl std::fmt::Debug for TerminalExitObserved {
+    /// The exit itself is public on-chain, but the id still follows the
+    /// persona-key no-clear-`Debug` discipline of the state it was minted
+    /// from.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalExitObserved(<redacted persona>)")
+    }
+}
+
+/// What one drain moves: a user-target payment, or the terminal sweep.
+///
+/// The `Payment` arm is WI-RPC-5's `drain` — the amount is user intent,
+/// validated by the F-D1 amount stage. The `TerminalSweep` arm is
+/// `collect_unstaked`'s — no caller amount exists; the pass's payment is an
+/// output of selection (`Σ selected − fee`,
+/// [`select_for_sweep`]), reachable only under a [`TerminalExitObserved`]
+/// witness. Exactness is the sweep's purpose: the funded retirement gate
+/// needs the slot at zero, and a shaped or user-guessed amount leaves dust
+/// forever (the `unstake_facade` finding).
+#[derive(Debug)]
+pub(crate) enum DrainIntent {
+    /// Move exactly this user-requested amount to the principal; the
+    /// residual returns to `P` as change.
+    Payment(AtomicUnits),
+    /// Sweep the exited persona's pool to the principal, one capped pass at
+    /// a time, zero change by construction.
+    TerminalSweep(TerminalExitObserved),
+}
+
+/// What one orchestrated drain moved — the output twin of [`DrainIntent`].
+/// A payment has no remainder; a sweep's remainder is required. Flattening
+/// that into `Option` made a missing completion fact representable, and
+/// `collect_unstaked` then had to reconstruct the invariant at the façade.
+#[derive(Debug)]
+pub(crate) enum DrainMoved {
+    /// User-target payment; change (if any) returns to `P`.
+    Payment(AtomicUnits),
+    /// Terminal sweep: `payment` is `Σ selected − fee`, `remainder` is the
+    /// unfiltered slot residue (the completion fact).
+    Sweep {
+        payment: AtomicUnits,
+        remainder: AtomicUnits,
+    },
+}
+
+impl DrainMoved {
+    fn payment(&self) -> AtomicUnits {
+        match *self {
+            Self::Payment(p) | Self::Sweep { payment: p, .. } => p,
         }
     }
 }
@@ -392,6 +506,14 @@ pub(crate) enum DrainOrchestrationError {
     /// wraps names the drain-specific reason).
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
+    /// A [`DrainIntent::TerminalSweep`] arrived for a persona the pipeline's
+    /// own `retired` resolution says is still live. The witness certifies an
+    /// *earlier* seal read; the seam's basis re-resolution is authoritative,
+    /// and a divergence fails closed here (belt to the seam's own refusal)
+    /// rather than sweeping a live persona's pool through the reserve it
+    /// still owes.
+    #[error("terminal sweep refused: the persona's exit is not observed confirmed")]
+    SweepOnLivePersona,
 }
 
 /// The read-side operands of one drain assembly, borrowed from their owners
@@ -430,10 +552,13 @@ pub(crate) struct DrainCtx<'a> {
     /// The wallet's own principal destination (vout 0), resolved engine-side
     /// from the primary address (T-DS-3: never caller-supplied).
     pub dest: DrainDestination,
-    /// Value to pay to the principal. The selection covers `payment + fee`;
+    /// What the drain moves. `Payment`: the selection covers `payment + fee`;
     /// the `P`-space change (`input_total − payment − fee`) is computed by the
     /// assembly, and returns to `P` on a partial drain (T-DS-3).
-    pub payment: u64,
+    /// `TerminalSweep`: the payment is an output of selection
+    /// (`Σ selected − fee`), zero change by construction; legal only for a
+    /// retired persona (the witness proposes, [`Self::retired`] disposes).
+    pub intent: DrainIntent,
     /// The fee the drain tx must fund from its swept `P` inputs.
     pub fee: u64,
     /// Whether the persona is **retired** (its terminal `Unbond` has
@@ -449,6 +574,48 @@ pub(crate) struct DrainCtx<'a> {
     pub retired: bool,
     /// The wallet's synced chain tip — the send-path anchor input.
     pub chain_tip: u64,
+}
+
+/// The terminal sweep's pool residue: everything the pass leaves on the
+/// slot — Σ over ALL of the slot's unspent records minus the pass's input
+/// total. Summed over the **unfiltered** slot set on purpose (review-1,
+/// Bugbot HIGH): the selection stage receives only the mature ∧ unreserved
+/// candidates, so a residue summed there silently drops the immature class
+/// — a pass emptying the mature subset would then report `0`, the CLI
+/// would declare the collection complete, and the immature payouts would
+/// sit in the slot holding the funded retirement gate with nothing telling
+/// the caller to return. `0` from THIS sum is the genuine completion fact:
+/// no record of any maturity remains beyond the pass.
+///
+/// A record reserved by another in-flight operation still counts — it is
+/// still in the slot now, and if its holder releases rather than settles it
+/// will still need collecting; the conservative figure is the honest one.
+fn sweep_slot_remainder(
+    records: &[PFundingOutputRecord],
+    slot: super::stake_engine::PSlot,
+    input_total: AtomicUnits,
+) -> Result<AtomicUnits, DrainError> {
+    let slot_total = AtomicUnits::checked_sum(
+        records
+            .iter()
+            .filter(|r| r.p_slot == slot)
+            .map(|r| r.amount),
+    )
+    .ok_or(DrainError::AmountOverflow)?;
+    slot_total
+        .checked_sub(input_total)
+        .ok_or(DrainError::AmountOverflow)
+}
+
+/// One orchestrated drain: the actor's assembled reply plus the pipeline's
+/// own resolution of what it moves ([`DrainMoved`] — the output twin of
+/// [`DrainIntent`], so a sweep receipt cannot forget its remainder and a
+/// payment receipt cannot carry one).
+pub(crate) struct OrchestratedDrain {
+    /// The actor's assembled, unbroadcast reply.
+    pub assembled: AssembledDrain,
+    /// What this drain moved.
+    pub moved: DrainMoved,
 }
 
 /// The exit-fee reserve a drain of a persona in this liveness state must leave
@@ -556,8 +723,10 @@ fn scoped_records(
 ///    A drain anchors identically to a bond, so it reuses the exported helper
 ///    rather than re-deriving `tip − REF_ANCHOR_AGE`.
 /// 2. **Scope + plan** — restrict to the handle slot's unreserved records
-///    ([`scoped_records`]) and run the F-D1 planner ([`plan_drain`]: project →
-///    amount → select, the lineage-blind taint-carve) for `payment + fee`.
+///    ([`scoped_records`]) and plan per the intent: a payment runs the F-D1
+///    amount+select half ([`plan_from_operands`]) for `payment + fee`; a
+///    terminal sweep runs [`select_for_sweep`] (payment is an output of
+///    selection; the F-D1 amount stage is not consulted).
 /// 3. **Re-map** — the planner returns leaf positions (gindexes); this trust
 ///    boundary re-maps them to the full records the path assembly needs
 ///    (`output_key`, `commitment`), preserving the planner's selection order.
@@ -580,7 +749,7 @@ pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
     block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
-) -> Result<AssembledDrain, DrainOrchestrationError> {
+) -> Result<OrchestratedDrain, DrainOrchestrationError> {
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2
     //    F-6). Its refusals are scalar-free; render them into the drain arm.
@@ -591,23 +760,20 @@ pub(crate) async fn orchestrate_drain(
         })?;
     let reference_height = BlockHeight::from_raw(reference.height.0);
 
-    // 2. Scope to the persona's own unreserved records, then run the F-D1
-    //    planner (project → amount → select). The selection target is
-    //    `payment + fee`: both leave `P`, so the swept inputs must cover the
-    //    fee as well as the payment (the residual is the change the assembly
-    //    returns to `P`). `payment + fee` overflow is a corrupt-state signal,
-    //    folded into the planner's own overflow arm.
+    // 2. Scope to the persona's own unreserved records, then plan per the
+    //    intent: the F-D1 planner (project → amount → select) for a payment
+    //    — its selection target is `payment + fee`, both leave `P`, and the
+    //    residual is the change the assembly returns to `P` — or the sweep
+    //    selector for a terminal sweep, whose payment is an output of
+    //    selection and whose change is zero by construction. Arithmetic
+    //    overflow is a corrupt-state signal either way, folded into the
+    //    planner's own overflow arm.
     let scoped = scoped_records(
         ctx.pruning_landed,
         ctx.funding_records,
         handle.p_slot(),
         ctx.reserved,
     );
-    let target = ctx
-        .payment
-        .checked_add(ctx.fee)
-        .ok_or(DrainError::AmountOverflow)?;
-
     // Project the scoped records **once**: the same mature ∧ unreserved pass
     // yields both the aggregate scalar (the reserve gate's input, also the F-D2
     // balance surface) and the stripped candidate vector the planner selects
@@ -619,15 +785,61 @@ pub(crate) async fn orchestrate_drain(
     let operands = project_drain_operands(&scoped, reference_height, ctx.reserved)?;
     let scoped_spendable = operands.balance.spendable.to_raw();
 
-    // DS-4 exit-reserve enforcement (before selection): a **live** persona must
-    // leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its terminal `Unbond` stays
-    // fundable; a **retired** persona reserves nothing and may sweep to zero. A
-    // reserve breach (the payment would eat into the reserve) is distinct from
-    // plain unaffordability (`plan_drain`'s `Unaffordable`), so it surfaces its
-    // own arm.
-    enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
+    let (plan, moved) = match ctx.intent {
+        DrainIntent::Payment(payment) => {
+            let target = payment
+                .to_raw()
+                .checked_add(ctx.fee)
+                .ok_or(DrainError::AmountOverflow)?;
 
-    let plan = plan_from_operands(&operands, reference_height, AtomicUnits::from_raw(target))?;
+            // DS-4 exit-reserve enforcement (before selection): a **live**
+            // persona must leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its
+            // terminal `Unbond` stays fundable; a **retired** persona
+            // reserves nothing and may sweep to zero. A reserve breach (the
+            // payment would eat into the reserve) is distinct from plain
+            // unaffordability (`plan_drain`'s `Unaffordable`), so it
+            // surfaces its own arm.
+            enforce_exit_reserve(scoped_spendable, target, ctx.retired)?;
+
+            let plan =
+                plan_from_operands(&operands, reference_height, AtomicUnits::from_raw(target))?;
+            (plan, DrainMoved::Payment(payment))
+        }
+        DrainIntent::TerminalSweep(_witness) => {
+            // The witness proposes; the seam's own basis resolution disposes
+            // — a stale witness (exit re-orged out between the façade's read
+            // and the seam's) fails closed here rather than sweeping through
+            // the reserve a live persona still owes.
+            if !ctx.retired {
+                return Err(DrainOrchestrationError::SweepOnLivePersona);
+            }
+            let sweep = select_for_sweep(
+                &operands.candidates,
+                AtomicUnits::from_raw(ctx.fee),
+                reference_height,
+            )
+            .map_err(DrainError::from)?;
+            // The remainder is summed over the slot's UNfiltered records —
+            // never the projection's mature-only candidates (its doc).
+            let remainder =
+                sweep_slot_remainder(ctx.funding_records, handle.p_slot(), sweep.input_total)?;
+            let plan = DrainPlan {
+                // `amount` is the selection target (`payment + fee`), which
+                // for a sweep is exactly the pass's input total: zero change.
+                amount: sweep.input_total,
+                inputs: sweep.chosen,
+                input_total: sweep.input_total,
+                change: AtomicUnits::ZERO,
+            };
+            (
+                plan,
+                DrainMoved::Sweep {
+                    payment: sweep.payment,
+                    remainder,
+                },
+            )
+        }
+    };
 
     // 3. Re-map the selected leaf positions to the full records the path
     //    assembly consumes, preserving the planner's (largest-first) order.
@@ -704,280 +916,20 @@ pub(crate) async fn orchestrate_drain(
 
     // 5. Hand the operands to the actor (derivation, proving, signing stay
     //    inside it) and return the reply unbroadcast (CB-3).
-    Ok(ctx
+    let assembled = ctx
         .stake
         .assemble_drain(AssembleDrain {
             handle,
             funding,
             tree_ctx,
             dest: ctx.dest,
-            payment_amount: ctx.payment,
+            payment_amount: moved.payment().to_raw(),
             fee: ctx.fee,
         })
-        .await?)
+        .await?;
+    Ok(OrchestratedDrain { assembled, moved })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::test_support::funding_record;
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
-
-    /// A mature funding record: `funding_record` derives
-    /// `spendable_height = height + SPENDABLE_AGE (10)`, so a record minted at
-    /// height 90 is provable from height 100 onward.
-    fn mature(gindex: u64, amount: u64) -> PFundingOutputRecord {
-        funding_record(0, gindex, 90, amount, MintLineageOutput::BondPostChange)
-    }
-
-    const REF: u64 = 100;
-
-    #[test]
-    fn drain_balance_sums_only_mature_outputs() {
-        let mut immature = mature(3, 1_000_000);
-        immature.spendable_height = BlockHeight::from_raw(REF + 1);
-        let records = [mature(1, 40), mature(2, 60), immature];
-
-        let balance = drain_balance(&records, BlockHeight::from_raw(REF), &BTreeSet::new())
-            .expect("projects");
-
-        // 40 + 60; the immature million is excluded from the spendable scalar.
-        assert_eq!(balance.spendable, AtomicUnits::from_raw(100));
-    }
-
-    #[test]
-    fn drain_balance_excludes_reserved_outputs() {
-        // gindex 2 is committed to an in-flight bond post / claim / drain, so it
-        // is not drainable — it must not count toward the spendable scalar even
-        // though it is mature ("spendable = unreserved mature").
-        let records = [mature(1, 40), mature(2, 60), mature(3, 5)];
-        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
-
-        let balance =
-            drain_balance(&records, BlockHeight::from_raw(REF), &reserved).expect("projects");
-
-        // 40 + 5; the reserved 60 is excluded.
-        assert_eq!(balance.spendable, AtomicUnits::from_raw(45));
-    }
-
-    #[test]
-    fn plan_drain_selects_largest_first_and_returns_change() {
-        let records = [mature(1, 30), mature(2, 100), mature(3, 30)];
-
-        let plan = plan_drain(
-            &records,
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(90),
-            &BTreeSet::new(),
-        )
-        .expect("affordable and coverable");
-
-        // Largest single output (100) covers 90; change is 10.
-        assert_eq!(plan.amount, AtomicUnits::from_raw(90));
-        assert_eq!(plan.inputs, vec![GlobalOutputIndex::from_raw(2)]);
-        assert_eq!(plan.input_total, AtomicUnits::from_raw(100));
-        assert_eq!(plan.change, AtomicUnits::from_raw(10));
-    }
-
-    #[test]
-    fn plan_drain_never_plans_against_or_selects_a_reserved_output() {
-        // The big output (gindex 2, 100) is committed to an in-flight tx. The
-        // plan must (a) size affordability against the unreserved total only —
-        // 30 + 30 = 60, so a target of 90 is Unaffordable — and (b) never select
-        // the reserved output. Both operands must be net, or the read total and
-        // the drainable total disagree and the selector could double-spend an
-        // in-flight input.
-        let records = [mature(1, 30), mature(2, 100), mature(3, 30)];
-        let reserved = BTreeSet::from([GlobalOutputIndex::from_raw(2)]);
-
-        // (a) affordability is against the net scalar (60), not the gross (160).
-        let err = plan_drain(
-            &records,
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(90),
-            &reserved,
-        );
-        assert_eq!(err, Err(DrainError::Unaffordable));
-
-        // (b) an affordable target draws only from the unreserved candidates.
-        let plan = plan_drain(
-            &records,
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(50),
-            &reserved,
-        )
-        .expect("50 <= 60 net spendable");
-        assert!(
-            !plan.inputs.contains(&GlobalOutputIndex::from_raw(2)),
-            "selector chose a reserved (in-flight) output: {:?}",
-            plan.inputs
-        );
-    }
-
-    #[test]
-    fn plan_drain_rejects_zero_target() {
-        let records = [mature(1, 100)];
-        let err = plan_drain(
-            &records,
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(0),
-            &BTreeSet::new(),
-        );
-        assert_eq!(err, Err(DrainError::EmptyRequest));
-    }
-
-    #[test]
-    fn plan_drain_rejects_target_over_spendable_scalar() {
-        // Mature spendable is 100; an immature output cannot lift the ceiling.
-        let mut immature = mature(2, 1_000);
-        immature.spendable_height = BlockHeight::from_raw(REF + 1);
-        let records = [mature(1, 100), immature];
-
-        let err = plan_drain(
-            &records,
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(101),
-            &BTreeSet::new(),
-        );
-        assert_eq!(err, Err(DrainError::Unaffordable));
-    }
-
-    #[test]
-    fn scoped_records_keeps_own_slot_and_drops_reserved() {
-        use shekyl_types::PSlot;
-
-        let s =
-            |slot: u32, g: u64| funding_record(slot, g, 90, 100, MintLineageOutput::BondPostChange);
-        // slot 0: g1 (keep), g2 (reserved → drop), g4 (keep); slot 1: g3 (foreign → drop).
-        let records = [s(0, 1), s(0, 2), s(1, 3), s(0, 4)];
-        let reserved: BTreeSet<GlobalOutputIndex> =
-            [GlobalOutputIndex::from_raw(2)].into_iter().collect();
-
-        let kept = scoped_records(
-            &SpentRecordsDurablyPruned::for_test(),
-            &records,
-            PSlot::from_raw(0),
-            &reserved,
-        );
-        let gindexes: Vec<u64> = kept.iter().map(|r| r.gindex.to_raw()).collect();
-        assert_eq!(
-            gindexes,
-            vec![1, 4],
-            "keep slot-0 unreserved records; drop the reserved g2 and the foreign-slot g3"
-        );
-    }
-
-    #[test]
-    fn exit_reserve_maps_liveness_to_the_floor() {
-        // A live persona holds the pinned reserve; a retired one holds nothing.
-        assert_eq!(exit_reserve_atomic(false), EXIT_FEE_RESERVE_ATOMIC);
-        assert_eq!(exit_reserve_atomic(true), 0);
-    }
-
-    #[test]
-    fn live_drain_must_leave_the_reserve() {
-        let r = EXIT_FEE_RESERVE_ATOMIC;
-        // Pool exactly one payment above the reserve: `payment + fee == r`
-        // clears (leaves the reserve on the nose); one atomic more breaches.
-        let pool = 2 * r;
-        assert!(
-            enforce_exit_reserve(pool, r, false).is_ok(),
-            "target that leaves exactly the reserve is allowed"
-        );
-        assert!(
-            matches!(
-                enforce_exit_reserve(pool, r + 1, false),
-                Err(DrainOrchestrationError::ReserveBreached)
-            ),
-            "one atomic into the reserve is refused"
-        );
-    }
-
-    #[test]
-    fn live_drain_below_reserve_pool_is_wholly_undrainable() {
-        // A pool that cannot even cover the reserve leaves nothing drainable:
-        // every positive target breaches (the `checked_sub` underflow arm).
-        assert!(matches!(
-            enforce_exit_reserve(EXIT_FEE_RESERVE_ATOMIC - 1, 1, false),
-            Err(DrainOrchestrationError::ReserveBreached)
-        ));
-    }
-
-    #[test]
-    fn live_unaffordable_target_defers_to_the_planner_not_the_reserve() {
-        // A live target that exceeds the WHOLE pool is plain unaffordability,
-        // not a reserve breach: the reserve gate must pass it through so the
-        // planner surfaces `Unaffordable` (the actionable "too large" error),
-        // rather than masking it as `ReserveBreached` (Copilot r3626008352).
-        let pool = 2 * EXIT_FEE_RESERVE_ATOMIC;
-        assert!(
-            enforce_exit_reserve(pool, pool + 1, false).is_ok(),
-            "a target over the whole pool defers to the planner's Unaffordable"
-        );
-        // The planner is then the arm that actually rejects it.
-        let r = mature(1, pool);
-        let err = plan_drain(
-            std::slice::from_ref(&r),
-            BlockHeight::from_raw(REF),
-            AtomicUnits::from_raw(pool + 1),
-            &BTreeSet::new(),
-        );
-        assert_eq!(err, Err(DrainError::Unaffordable));
-    }
-
-    #[test]
-    fn retired_sweep_ignores_the_reserve() {
-        // A retired persona reserves nothing: a drain-all to the last atomic is
-        // allowed, and the guard defers unaffordability entirely to the planner.
-        let pool = EXIT_FEE_RESERVE_ATOMIC; // below the live floor, irrelevant here
-        assert!(
-            enforce_exit_reserve(pool, pool, true).is_ok(),
-            "retired sweep of the whole pool clears the reserve gate"
-        );
-        // Even an over-balance target passes *this* gate (retired ⇒ no-op); the
-        // planner's `Unaffordable` is the arm that catches it downstream.
-        assert!(enforce_exit_reserve(pool, pool + 1, true).is_ok());
-    }
-
-    /// Composition + firewall pins (`wire.rs`-tripwire style; the test module
-    /// is split off so the needles cannot self-match):
-    ///
-    /// 1. the drain pipeline is a **free function** over [`DrainCtx`], not an
-    ///    `Engine` method — no `self_arc`, no `Arc<RwLock<Self>>` (the
-    ///    `ENGINE_COMPOSITION_DECOMPOSITION.md` discipline the engine-side
-    ///    entry delegates through);
-    /// 2. selection routes ONLY through the F-D1 planner ([`plan_drain`]) —
-    ///    never the bond sweep (`sweep_funding_outputs`), which would bypass
-    ///    the §12.3 drain-amount taint-carve.
-    #[test]
-    fn orchestrate_drain_is_a_free_function_over_the_fd1_carve() {
-        let (src, _tests) = include_str!("drain_orchestrator.rs")
-            .split_once("\n#[cfg(test)]")
-            .expect("drain_orchestrator.rs has a #[cfg(test)] section to exclude from the scan");
-
-        let free_fn = concat!("pub(crate) async fn orchestrate", "_drain(");
-        assert!(
-            src.contains(free_fn),
-            "the drain pipeline must be a free function over DrainCtx"
-        );
-        assert!(
-            !src.contains("self_arc"),
-            "orchestrate_drain must not be an Engine method (no self_arc)"
-        );
-        assert!(
-            !src.contains("Arc<RwLock"),
-            "orchestrate_drain must not hold the Engine lock"
-        );
-
-        let carve_call = concat!("plan", "_drain(");
-        assert!(
-            src.contains(carve_call),
-            "selection must route through the F-D1 planner (plan_drain)"
-        );
-        let bond_sweep = concat!("sweep", "_funding_outputs(");
-        assert!(
-            !src.contains(bond_sweep),
-            "the drain must not select via the bond sweep (it bypasses the §12.3 carve)"
-        );
-    }
-}
+#[path = "drain_orchestrator_tests.rs"]
+mod tests;

@@ -35,7 +35,8 @@ WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), Phase 4c
 filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
 (`abandon_tx`), SJ-DQ-7 (`get_tx_note` / `set_tx_note`), and WI-RPC-5
 (archival principal staking actions: `stake_in`, `get_drain_balance`,
-`drain`; `get_balance.staked` / `claimable_rewards` are live projections,
+`drain`), and PR-C (the composed exit: `unstake`, `collect_unstaked`;
+`get_balance.staked` / `claimable_rewards` are live projections,
 no longer hardcoded zeros — and structurally absent, never `"0"`, when
 the staking seal is unreadable, with `get_wallet_info.staking` degrading
 alongside while the liquid fields stay served) are live. `stake_in`
@@ -43,17 +44,18 @@ builds under a read lock like `build_pending_tx` (one funding build never
 stalls the read RPCs), and `get_drain_balance` reports the active
 persona's own drainable pool — the set a `drain` can actually spend.
 
-RESERVED methods remain Engine-gated: `unstake` and
-`match_transfer_to_request` (the latter gated on an Engine match
-method). `unstake` is no longer gated on a *missing producer* — PR-P4
-built the `Unbond` producer. Remaining gates: reachability (no RPC
-method, no CLI verb) and dispatch of the assembled bytes. Native
-`/submit_transaction` was a third gate until 2026-08-29 and is not one
-now — the Unbond submit fact set landed
-([`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) §8.7.1.1),
-so a dispatched Unbond would be *accepted*. PR-P4 slice 3's engine walk
-landed and asserts its three named observables; it did **not** lift any
-gate either — the gate is the conditions above, never the walk. The claim-era names `claim`
+One RESERVED method remains Engine-gated: `match_transfer_to_request`
+(gated on an Engine match method). **`unstake` shipped with PR-C
+(2026-09-03), and its reachability gate — held since PR-P4 and narrowed
+by every intervening landing without lifting — is LIFTED**: the composed
+exit landed as two named actions (`unstake` posts the irreversible exit;
+`collect_unstaked` sweeps the released collateral, its `remainder` the
+completion fact), with the RESERVED→shipped reconciliation recorded in
+the OpenAPI census (a single overloaded verb was rejected for
+irreversible-step mis-selection; the sweep could not ride `drain`'s
+firewall-pinned active-persona shape). Codes `-29513..-29529`; the two
+dispatch dispositions (`-29521` released / `-29522` held) are distinct
+because they demand opposite client behavior. The claim-era names `claim`
 and `get_stakes` are REJECTED, not pending (emission claims are
 engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
 edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.
