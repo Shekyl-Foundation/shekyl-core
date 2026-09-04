@@ -293,10 +293,20 @@ mod tests {
     /// penalties apply to the paid quantity — the governance lever must
     /// always bite), `remaining` floored at zero, the supply cap retired.
     ///
-    /// RED TODAY three ways against the shipped composition
+    /// At and past the asymptote the signed value is `max(M_r·0, TAIL) =
+    /// TAIL` on EVERY release-multiplier rail, so legs 1, 2 and the paid
+    /// half of leg 4 run on BOTH rails (round 10, T-3): rail-independence
+    /// is what separates the signed composition from a
+    /// floor-inside-the-operand rebuild — `max(M_r·base(ag), TAIL)`
+    /// agrees on the dormancy rail and pays `1.3·TAIL` on the surge
+    /// rail.
+    ///
+    /// RED TODAY against the shipped composition
     /// (curve → tail floor → penalty → multiplier → cap):
-    /// 1. dormancy at `x = 0`, boundary: shipped pays `M_r·TAIL` =
-    ///    480 000 000 (then remaining-capped) vs the signed 600 000 000;
+    /// 1. floor on the paid emission at `x = 0`, boundary: shipped pays
+    ///    `M_r·TAIL` then remaining-caps — 480 000 000 under dormancy,
+    ///    599 999 999 under surge — vs the signed rail-independent
+    ///    600 000 000;
     /// 2. tail with `x > 0`: shipped applies the penalty before the
     ///    multiplier and cap (360 000 000 at `x = ½` under dormancy) vs
     ///    the signed `TAIL·(1−x²)` = 450 000 000;
@@ -305,11 +315,14 @@ mod tests {
     ///    the quantized scalar): past the asymptote the operand must be
     ///    the tail, and the shipped estimate errors instead (FL-R16a);
     /// 4. the projection leg — `projected_already_generated` BY NAME
-    ///    (the census-R2 reopen conjunct): the neutral trajectory past
-    ///    the tail-headroom boundary must feed the same paid contract —
-    ///    red today twice over (the projection saturates at the
-    ///    asymptote, FL-V10, and the shipped composition pays
-    ///    `M_r`-modulated instead of the floored contract).
+    ///    (the census-R2 reopen conjunct), asserted on ITS OWN AXIS
+    ///    (round 10, T-2): the neutral trajectory must pass the
+    ///    asymptote — a property of `already_generated` itself, red
+    ///    today because the projection saturates AT the asymptote
+    ///    (FL-V10), where the correct paid value is TAIL anyway, so a
+    ///    paid-side assertion alone transports this defect green; then
+    ///    the exact TAIL-per-block accrual rate past the crossing; then
+    ///    the projection-fed paid contract on both rails.
     ///
     /// Un-ignore with the FL-R12′ implementation (build authorized at
     /// round 8 upon the record).
@@ -320,52 +333,90 @@ mod tests {
 
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
-        let esf = emission_speed_factor(&p);
         let s = p.money_supply;
-        // Dormancy pins the release multiplier at its 0.8 rail — the
-        // regime the floor exists for.
-        let m_r = calc_release_multiplier(0, p.tx_volume_baseline, p.release_min, p.release_max);
-        // The signed contract's pre-penalty quantity.
-        let r_eff = |ag: u64| -> u64 {
-            let curve = s.saturating_sub(ag) >> esf;
-            apply_release_multiplier(curve, m_r).max(tail)
-        };
-
-        // Leg 1 — floor on the paid emission at x = 0, both sides of the
-        // boundary and past the asymptote.
         let zone = 300_000; // full-reward zone; weight == median ⇒ no penalty
-        for ag in [s - tail + 1, s, s + tail] {
-            let shipped = {
-                let base = block_reward_with_penalty(zone, zone, ag, zone, &p)
-                    .unwrap_or_else(|e| panic!("shipped leg errored at ag={ag}: {e:?}"));
+
+        // Leg 4's own axis FIRST (round 10, T-2), because the rail loop's
+        // projection-fed limb depends on it: the census-R2 reopen
+        // conjunct says the neutral trajectory accrues THROUGH the
+        // asymptote — a property of `already_generated` itself, so it is
+        // asserted on `ag` directly. Routing it only through the paid
+        // value is lossy: a saturated projection lands exactly on the
+        // asymptote, where the correct composition pays TAIL anyway, and
+        // the defect rides through green.
+        let past_boundary = 19_200_000;
+        let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
+        assert!(
+            ag_proj > s,
+            "the neutral trajectory must pass the asymptote (no saturation): \
+             already_generated={ag_proj} at height {past_boundary}"
+        );
+        // Past the crossing it accrues at EXACTLY the tail rate. The
+        // crossing height itself has no integer closed form independent
+        // of the projection's own recurrence (the tail floor cuts in
+        // while `remaining > 0`, so the trajectory skips past the
+        // asymptote mid-stream), but the through-asymptote RATE is TAIL
+        // per block by FL-R12′ — the delta pins the accrual with a
+        // contract-derived expected, without iterating the subject to
+        // produce it.
+        let k = 1_000u64;
+        assert_eq!(
+            projected_already_generated(past_boundary + k, &p).unwrap(),
+            ag_proj + k * tail,
+            "past the asymptote the neutral trajectory must accrue at exactly TAIL per block"
+        );
+
+        // Legs 1, 2 and the projection-fed paid limb, on BOTH rails
+        // (round 10, T-3). The rail setup is asserted, not assumed.
+        for (rail, v, pinned) in [
+            ("dormancy", 0, p.release_min),
+            ("surge", 2 * p.tx_volume_baseline, p.release_max),
+        ] {
+            let m_r =
+                calc_release_multiplier(v, p.tx_volume_baseline, p.release_min, p.release_max);
+            assert_eq!(m_r, pinned, "rail setup: v={v} must pin the {rail} rail");
+            let shipped = |median: u64, weight: u64, ag: u64| -> u64 {
+                let base = block_reward_with_penalty(median, weight, ag, zone, &p)
+                    .unwrap_or_else(|e| panic!("shipped leg errored at ag={ag} ({rail}): {e:?}"));
                 cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
             };
+
+            // Leg 1 — floor on the paid emission at x = 0, both sides of
+            // the boundary and past the asymptote: TAIL exactly, on this
+            // rail as on the other.
+            for ag in [s - tail + 1, s, s + tail] {
+                assert_eq!(
+                    shipped(zone, zone, ag),
+                    tail,
+                    "paid reward != TAIL on the {rail} rail at already_generated={ag}"
+                );
+            }
+
+            // Leg 2 — penalty applies AFTER the floor: at the tail with
+            // x = 1/2 (weight = 1.5 * median), the signed contract pays
+            // TAIL * (1 - x^2) = TAIL * 3/4, rail-independent like the
+            // floor it composes onto.
+            let (median, weight) = (zone, zone + zone / 2);
+            let expected = {
+                // penalty(x) in the canonical integer form: (2m - c)*c / m^2.
+                let (m, c) = (u128::from(median), u128::from(weight));
+                u64::try_from(u128::from(tail) * (2 * m - c) * c / (m * m)).unwrap()
+            };
             assert_eq!(
-                shipped,
-                r_eff(ag),
-                "paid reward != max(M_r*curve, TAIL) under dormancy at already_generated={ag}"
+                shipped(median, weight, s),
+                expected,
+                "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
+                 penalty must compose AFTER the floor"
+            );
+
+            // Leg 4's paid limb — the projection-fed state pays the same
+            // rail-independent TAIL contract.
+            assert_eq!(
+                shipped(zone, zone, ag_proj),
+                tail,
+                "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
             );
         }
-
-        // Leg 2 — penalty applies AFTER the floor: at the tail with
-        // x = 1/2 (weight = 1.5 * median), the signed contract pays
-        // TAIL * (1 - x^2) = TAIL * 3/4.
-        let ag = s;
-        let (median, weight) = (zone, zone + zone / 2);
-        let shipped = {
-            let base = block_reward_with_penalty(median, weight, ag, zone, &p)
-                .unwrap_or_else(|e| panic!("shipped penalized leg errored: {e:?}"));
-            cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
-        };
-        let expected = {
-            // penalty(x) in the canonical integer form: (2m - c)*c / m^2.
-            let (m, c) = (u128::from(median), u128::from(weight));
-            u64::try_from(u128::from(r_eff(ag)) * (2 * m - c) * c / (m * m)).unwrap()
-        };
-        assert_eq!(
-            shipped, expected,
-            "penalized tail reward != TAIL*(1-x^2): penalty must compose AFTER the floor"
-        );
 
         // Leg 3 — the ESTIMATE operand contract, per the ADOPTED round-8
         // amendment (whole-scalar): the operand is the M_r-NEUTRAL total
@@ -383,22 +434,6 @@ mod tests {
                 .unwrap_or_else(|e| panic!("estimate operand must be total, got {e:?}")),
             tail,
             "estimate operand != TAIL past the asymptote"
-        );
-
-        // Leg 4 — the projection leg, calling the function the census-R2
-        // reopen criterion names: the neutral trajectory past the
-        // 2^21-identity tail-headroom crossing feeds the paid contract.
-        let past_boundary = 19_200_000;
-        let ag = projected_already_generated(past_boundary, &p).unwrap();
-        let shipped = {
-            let base = block_reward_with_penalty(zone, zone, ag, zone, &p)
-                .unwrap_or_else(|e| panic!("projection-fed shipped leg errored: {e:?}"));
-            cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
-        };
-        assert_eq!(
-            shipped,
-            r_eff(ag),
-            "projection-fed paid reward != contract past the boundary (height {past_boundary})"
         );
     }
 

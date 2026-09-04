@@ -214,6 +214,61 @@ visible.
   under known names and a 400-line rename cannot dilute the one
   composition line that matters.
 
+## Review round 10 (maintainer, at the PR #614 head `ccfb85c72`): T-2/T-3/T-4 — the oracle's own failure axes
+
+Scope re-verified independently (design-only against `origin/dev`,
+merge-base `f9ab906`); the PR round-two fixes accepted; two High
+findings against the restored oracle, both ruled in-scope for this PR
+and both landed on this branch:
+
+- **T-2 (High): leg 4 could not fail on the defect it names.** The
+  restored projection leg computed `ag` and asserted only the paid
+  value — but a SATURATED projection lands exactly on the asymptote,
+  where the correct composition pays TAIL anyway, so the census-R2
+  conjunct's property ("accrues THROUGH the asymptote") was invisible
+  to the assertion. Fixed on the projection's own axis: `ag > s`
+  asserted directly, then the exact accrual RATE —
+  `projected(H + k) == ag + k·TAIL`. **One disclosed substitution**:
+  the prescribed stronger form `ag == s + (H − h_exhaust)·TAIL`
+  presumes the trajectory hits the asymptote exactly, but the tail
+  floor cuts in while `remaining > 0`, so `ag` skips PAST `s`
+  mid-stream, and an integer-exact `h_exhaust` has no derivation that
+  is not the projection's own recurrence — the oracle must not iterate
+  its subject to produce its expected. The rate delta pins the same
+  through-asymptote property with a contract-derived expected.
+- **T-3 (High): every leg ran on the dormancy rail only**, so a
+  floor-inside-the-operand rebuild — `max(M_r·base(ag), TAIL)`, a
+  natural misreading once leg 3 pins the tail floor inside
+  `base_block_reward` — would agree at 0.8 (`max(0.8·TAIL, TAIL) =
+  TAIL`) and pay `1.3·TAIL` on the surge rail, unseen. Fixed: legs 1,
+  2 and the projection-fed paid limb run over BOTH rails (`v = 0` and
+  `2·baseline`), the rail setup asserted (`m_r == release_min/max`)
+  rather than assumed, and TAIL asserted exactly — under the signed
+  contract the terminal value is rail-independent, which is precisely
+  the property worth pinning. Leg 2 joins the loop beyond the
+  prescription (penalty-after-floor is rail-independent too; same
+  loop, no extra machinery); leg 3 stays outside — the estimate
+  operand is M_r-NEUTRAL by contract and has no rail.
+- **Per-axis red-by-run** (each new assertion observed firing ALONE,
+  earlier axes temporarily neutralized and then restored — an
+  assertion that can go red for two reasons can go green for the
+  wrong one, so each axis earns its own observation):
+  - axis A (`ag > s`): red, `ag = 4294967296000000000` — exactly the
+    asymptote; the saturation is now visible on its own line;
+  - axis B (accrual rate): red, `4294967296000000000` vs
+    `4294967896000000000` (`+ 1000·TAIL`);
+  - leg 1, dormancy rail: red, `480000000` vs `600000000` (the
+    documented modulated floor);
+  - leg 1, surge rail: red, `599999999` vs `600000000` (the
+    remaining-cap — the same shipped defect's other face).
+
+  The restored full run fires at axis A first; the rest of the
+  economics suite is 79 green with the oracle `#[ignore]`d.
+- **T-4 (Low): §8's BUILT pointer named an unpushed branch.**
+  `feat/fee-ladder-impl-1` pushed (authorized in the same message), so
+  the pointer is verifiable; no doc edit needed. The graduated oracle
+  there carries the same two strengthenings, kept green.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
