@@ -591,8 +591,11 @@ carries the current totals; this prose deliberately does not repeat them).
 **Examined and excluded — CEN-L12's *staked arm* only, not the row:** its
 notes record that the spec's `staked: max(effective_lock_until…)` arm "does not
 exist in code", but that arm is **claim-era and retired**, so its absence is not
-a divergence. **CEN-L12 itself is DIVERGENT** on the spec's universality clause
-— see its §5.4.1 register row.
+a divergence. **CEN-L12 itself was DIVERGENT** on the spec's universality
+clause until CEN-L11's fix (2026-09-04) closed it: with the leaf collector
+aborting instead of skipping, no accepted output can be dropped before it is
+made pending, so universality holds. Both rows are CHECKED-CONFORMANT — see
+their §5.4.1 register rows.
 
 **Coverage vs. set growth — two different claims (updated 2026-09-03).** The
 register was first seeded by this document's 18 store-enforced rows plus a
