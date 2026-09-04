@@ -15,7 +15,14 @@
   Those gates carry reverse pointers warning that relaxing them surfaces as a
   connect-time abort, and a Rust falsifier asserts they accept only what the
   leaf builder can encode. The FOLLOWUPS row that described this as a live
-  fund-loss path is corrected: it was latent.
+  fund-loss path is corrected: it was latent. **Both rows are now promoted
+  CHECKED-CONFORMANT by the follow-up re-review at the merged sha** —
+  register 99 / 1 / 2 over P0f's 102-row snapshot, CEN-B5 the sole DIVERGENT
+  row. For anyone grepping history: PR #609's merge commit carries the title
+  *"register 99/1/2"*, written before that PR's round 6 withdrew the
+  promotion (withdrawn-in-PR, records-was); the register was 97 / 3 / 2 at
+  that merge and reaches 99 / 1 / 2 only with this re-review, one PR later
+  than the title claims.
 
 - **The drain byte-parity e2e pinned a fixture state that never existed.**
   `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
@@ -186,9 +193,9 @@
 
 - **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
   register disposes the **102** bucket-1/2 census rows that existed when it
-  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
-  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
-  whose fix has landed and whose promotion is owed at a merged sha). The
+  ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
+  row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
+  CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
   bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
   2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
