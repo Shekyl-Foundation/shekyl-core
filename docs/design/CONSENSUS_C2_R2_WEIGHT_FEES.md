@@ -210,8 +210,8 @@ the arbitration the flag has waited for.
    (H3: `zone/2 − 600`), so the zone guarantees ≥ 2 maximal transactions per
    penalty-free block by construction — the real constraint is the typical
    FCMP++ tx. Bounds at the pin (`GENESIS_TX_WIRE_FORMAT.md` §10: 8 inputs,
-   16 outputs): the per-output PQC extra alone is ≈ 1 120 B (0x06 KEM ct)
-   + 32 B (0x07 leaf hash), so a typical 2-output spend runs **≈ 4–8 kB**
+   16 outputs): the per-output PQC extra alone is ≈ 1 120 B (0x06 KEM
+   ct) plus 32 B (0x07 leaf hash), so a typical 2-output spend runs **≈ 4–8 kB**
    (an estimate — prefix + extra + BP+ + FCMP proof; not a measured
    corpus), putting the zone at roughly **35–75 typical transactions per
    free block** (≈ 17–37 tx/min at T = 120 s). A launch-adequate floor
@@ -331,32 +331,69 @@ inherited curve, not that the curve is right for Shekyl (Survey A's claimed
 "A3 fee round" examination has no locatable record — census finding, and this
 round does not resurrect it).
 
-**Derivation for Shekyl:** the curve's job under FL-R12′ is permanent —
-`penalty(x)` multiplies the floored paid reward forever, so its shape is the
-*perpetual* price of expansion, not a mining-era artifact. What the quadratic
-gives Shekyl: (i) marginal cost of the first byte past `m` is ~0 and rises
-linearly — small overshoots are nearly free, sustained expansion pays
-`base·x²`; (ii) at `x = 1` (the 2 m cap) the whole reward is forfeit, which
-composed with the *inclusive* bound (CEN-F14's recorded divergence) makes the
-cap economically self-enforcing before it is structurally enforced; (iii) the
-u128 fail-closed arithmetic (checked-mul, `EmissionError::Overflow`) means no
-median the chain can reach wraps the formula — the port already carries the
-correctness half. The fee-ladder round's W5 analysis (pinned `ccfb85c72`, §7)
-depends on exactly this shape surviving at the tail; a different curve
-re-opens FL-R12′'s W5 disposition.
+**What FL-R12′ did and did not examine (steering correction, folded):**
+FL-R12′'s signed content is **placement** — the composition
+`paid = max(M_r·curve, TAIL) · penalty(x)` with the penalty **after** the
+floor — plus, through its W5 disposition, one endpoint of the curve:
+`penalty(1)` forfeits the whole paid reward, so expansion to the cap costs
+the full `TAIL` forever. It did **not** examine the curve's *form* between
+the endpoints; the fee-ladder rung derivation *consumed* the shape as an
+operand (its §5 derives the rungs "from Shekyl's own penalty function" —
+consumption, not examination, the same distinction the census applies to
+CEN-M10's livetime). An earlier draft of this section let the placement
+ruling stand in for the shape examination; that would have closed the
+census's actual charge under cover of a signature. The shape is examined
+here instead.
 
-**Proposed ruling (Q4):** ratify the **quadratic penalty
-`base·(2m−w)·w/m²`** for Shekyl, on the grounds above — the curve is no
-longer merely inherited: FL-R12′'s signed composition was *derived against
-this shape* (penalty-after-floor is an ordering ruling about this curve), so
-the fee-ladder round is the Shekyl examination the class was missing. Class
-on signature: `KAT-port` → `ratified` (evidence: this section + FL-R12′ §8 +
-the 81-vector KAT as the port-fidelity limb).
+**Derivation of the form, for Shekyl.** Write the curve as paid-fraction
+`P(x) = 1 − x²` over `x = (w−m)/m ∈ [0,1]` (algebraically identical to
+`(2m−w)·w/m²`). Three boundary conditions, each independently motivated:
 
-**Falsifier:** the ratification cites the KAT as its fidelity limb — the
-instrument is `cargo test -p shekyl-economics` (the KAT suite), and the
-round's PR gate runs it; a red KAT at the pin falsifies the fidelity limb
-and blocks signature.
+1. **`P(0) = 1`** — a block at the median pays nothing: the zone/median is
+   the *guaranteed* capacity (Q1), so the penalty must vanish there or the
+   guarantee is false.
+2. **`P′(0) = 0`** (smooth entry) — the median is a *noisy order
+   statistic* of 100 samples (§6's machinery): honest miners sit at `m ± ε`
+   through no choice of their own, and any curve with a first-order term at
+   `x = 0` taxes that jitter. The penalty must be second-order small for
+   small overshoots.
+3. **`P(1) = 0`** (cap confiscation) — this is the leg FL-R12′'s W5 *did*
+   examine and now depends on: composed with the inclusive `2m` bound
+   (CEN-F14's recorded divergence), the cap is economically self-enforcing
+   before it is structurally enforced, permanently at the tail.
+
+Within the exactly-integer-computable power family `P(x) = 1 − xⁿ`
+(consensus arithmetic must be exact — u128, checked-mul, no
+transcendentals; the port's fail-closed arithmetic is already the
+correctness half), conditions (2)+(3) admit every `n ≥ 2`, and **`n = 2`
+uniquely maximizes the mid-range congestion price** (`x² ≥ xⁿ` for all
+`n ≥ 2` on `[0,1]` — arithmetic, checkable by inspection): among
+smooth-entry curves that confiscate at the cap, the quadratic is the one
+that prices the surge region hardest, which is exactly where the fast
+governor (Q3) needs the price to live. Scope stated honestly: this selects
+within exact polynomial curves satisfying (1)–(3); it does not compare
+against fundamentally different governance mechanisms, which are out of
+this round's scope.
+
+**Proposed ruling (Q4):** ratify the **quadratic penalty** for Shekyl on
+the derivation above. Class on signature: `KAT-port` → `ratified`, with
+**this section as the shape examination**, FL-R12′ §8 as the placement +
+cap-endpoint examination (pinned `ccfb85c72`), and the 81-vector KAT as
+the port-fidelity limb — three limbs, each named for what it actually
+covers. Coupling recorded both directions: a shape change reopens the
+fee-ladder rung numbers (they are derived from this curve), and FL-R12′'s
+W5 disposition depends on leg (3).
+
+**Falsifiers, per limb:** (fidelity) the KAT — instrument
+`cargo test -p shekyl-economics`, observed green at the pin (79 passed);
+a red run falsifies the port limb and blocks signature. (shape) the
+max-bite claim is arithmetic (`x² ≥ xⁿ` for `n ≥ 2` on `[0,1]`) —
+checkable by inspection, falsified by exhibiting a counterexample.
+(premise reopeners, rule 21, tied to premises not magnitudes) any change
+that makes the effective median noise-free removes condition (2)'s
+motivation and reopens the convexity choice; a measured mainnet episode
+of mid-range expansion the quadratic demonstrably failed to price reopens
+it from the other side.
 
 ---
 
@@ -649,9 +686,22 @@ parent chain extends `k` blocks past it.
    itself moves ≤ ×1.7 per 50 000 blocks (Q2).
 
 **Handoff:** `margin(k) = min(2^k, 50·LTEM/EM)`, computed live; the P2P
-row states its assumed announce-lag `k` (for `k = 2`: multiplier 4). The
-derivation and any future change to it live **here** (single owner); the
-P2P doc cites this section.
+row states its assumed announce-lag `k` (for `k = 2`: multiplier 4).
+**The clamp arm is load-bearing, not a safety belt** (P2P-2 lane's
+grounding, verified at this pin): the announce path ignores announces
+unless `state_normal` and `is_synchronized()`
+(`cryptonote_protocol_handler.inl:536–542`), but `is_synchronized()` is a
+**latched boolean** (`!no_sync() && m_synchronized`,
+`cryptonote_protocol_handler.h:111`), not a within-`k`-of-tip check — a
+synced-then-partitioned node processes announces while arbitrarily far
+behind, so no code enforces a numeric `k` and `50·LTEM/EM` is what holds
+when the lag assumption fails. **Error direction, for the reviewer when
+the falsifier fires:** a bound that is too tight here **rejects a legal
+announce** (the receiver's EM is the crash valley while the announced
+block is legally larger) — a *liveness* failure, not a safety one; an
+oversized hostile announce is rejected downstream by consensus (CEN-A5 /
+F14) regardless of this cap. The derivation and any future change to it
+live **here** (single owner); the P2P doc cites this section.
 
 **Falsifier (RUN at draft time — this is the instrument that corrected the
 section):** simulate the §2 formulas (ST median over 100, clamps, floor,
@@ -772,3 +822,16 @@ Ratification-only means these are **specifications the port consumes**:
   not "an order of magnitude"); no new evidence class minted (Q1/Q3
   conditions ride the notes column); fossil-flag discharge extended to the
   V1/V2/V5 variant collapse (Q1).
+- **Q4 rewritten on steering's placement-vs-shape finding:** FL-R12′
+  examined the penalty's *placement* (and, via W5, the `P(1) = 0`
+  endpoint), never its *form* — the earlier draft let a placement ruling
+  stand in for the shape examination, which would have closed the census's
+  charge under cover of a signature. The shape is now derived for Shekyl
+  in Q4 itself (three boundary conditions + max mid-range bite within the
+  exactly-computable power family), with three evidence limbs each named
+  for what it covers.
+- **P2P-2 lane grounding folded into §6** (their finding, verified at this
+  pin): no code enforces a numeric announce-lag — `is_synchronized()` is a
+  latched boolean, so the clamp arm of `margin` is load-bearing; error
+  direction recorded (too-tight ⇒ liveness failure, legal announce
+  rejected; safety is downstream consensus's regardless).
