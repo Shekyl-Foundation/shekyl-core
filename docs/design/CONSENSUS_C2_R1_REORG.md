@@ -1124,6 +1124,122 @@ is NOT ratified as orchestration** — Q3 rules its two-consumers-one-flag
 split: re-request on the live path vs punish on the sync path, per
 §5.3). Per-ruling falsifiers throughout; ratify-then-build.
 
+### 5.5 Proposed rulings (DRAFT — steering review, then Rick; nothing here is ruled)
+
+**C2-R1c-Q1a — the admission-tier contract (CEN-K4).** Ratify the
+two-tier admission design as deliberate: the cheap tier (claimed-height
+sanity, checkpoint window, version, attestation, rebuild, MTP/FTL,
+checkpoint conformance, alt difficulty, PoW, prevalidate, supplement
+NIC) is paid at admission; the expensive tier
+(`validate_miner_transaction`, `check_tx_inputs`, curve-root) at
+promotion. Under §5.1's interval constraint the tier boundary IS the
+defense economics: PoW-at-alt-difficulty inside the cheap tier means
+every staged block costs the attacker real work priced by the fork
+point's own difficulty, while the victim's per-block admission cost
+stays bounded by the cheap tier — the interval attacker cannot make the
+victim pay promotion prices during the staging phase. What the cheap
+tier does NOT bound — aggregate storage and the `build_alt_chain`
+re-walk under many cheap deep forks — is Q2's and GAP-4's matter, not
+grounds to move validation across the tier boundary. *Falsifier:* a
+demonstrated admission-path cost asymmetry where an attacker spends
+less producing a candidate than the victim spends evaluating the cheap
+tier for it (share-sampling economics, research-lab#144 shape) reopens
+the tier split as its own round.
+
+**C2-R1c-Q1b — CEN-K1's two conditions, ruled separately.**
+(i) *Derived height ≥ 1*: the rule's owner is
+`shekyl_difficulty::alt_window_plan` (R1b crossing); the `:1441` C++
+assert is ratified as a BELT in front of the FFI call — kept because it
+fails loud at the call site with the precondition named, deleted never
+silently (its job: catching a C++ caller bug before it crosses the
+boundary as a refusal that looks like data). (ii) *Claimed height*:
+the full rule is prevalidate's claimed-equals-derived equality; leg 1
+(`:2153`) is ratified as an ORDERING arm — the cheapest exit, before
+checkpoints/attestation/PoW — whose `m_verifivation_failed` polarity is
+**correct**: a miner tx claiming height 0 is a statement about the
+input, not our state (stated against this mechanism's four opposite
+instances so no reader assumes a fifth). The census row splits: K1a
+(derived, bucket 2 on this ruling) and K1b (claimed-ordering arm,
+bucket 2 on this ruling), with the conflation noted as the row's own
+correction. *Falsifier per leg:* (i) any second C++ site re-spelling
+the derived-height comparison (grep gate candidate); (ii) leg 1
+acquiring any job beyond ordering (e.g. a consumer keying on its
+specific error) makes it a rule and reopens the split.
+
+**C2-R1c-Q1c — CEN-K9, the supplement gate and its shared tolerance.**
+Ratify NIC-or-reject: alt admission may not plant unverifiable bytes in
+the pool — a supplement tx enters through the same
+`ver_non_input_consensus` the connect path trusts, or the alt block is
+rejected whole. The `relay_method::block` tolerance this feeds is
+ratified as serving exactly TWO producers — the admission supplement
+(`:2347`) and the pop-return path (`:870`) — and the tolerance's
+meaning is fixed by this ruling: "a block-sourced tx may re-enter the
+pool despite failing relay-tier checks, because chain reorganization
+may re-validate it." Any third producer is a design change, not a call
+site. *Falsifier:* a third `relay_method::block` producer appearing
+(grep-gateable), or either existing producer feeding a tx the connect
+path then skips verification on (M8's gate is the backstop; see Q2a's
+dependency).
+
+**C2-R1c-Q2a — CEN-K10's residue, with its dependency armed.** Ratify
+the `kept_by_block` storage tolerance (input-check failure stores with
+`fcmp_verified = 0`, `last_failed_*` reset) AS COMPOSED WITH CEN-M8's
+hash gate: the stored-unverified tx pays full verification at connect.
+The dependency is explicit and armed: **this disposition assumes M8's
+hash gate; relaxing M8 reopens K10 silently** (nothing at K10's site
+changes). *Falsifier:* the M8 gate weakening in any form — the
+consensus-invariants gate gains a check that `take_tx`'s cache verdict
+is consumed on the connect skip path (subject-asserting, can fail).
+
+**C2-R1c-Q2b — storage floors ratified; bounds routed by name.**
+Ratify what exists: the alt store and the `m_invalid_blocks` set are
+process-scoped (drop-at-restart is the floor; `--keep-alt-blocks`
+opt-in inverts it consciously), and their growth within an uptime is
+bounded today only by PoW cost per admitted block (Q1a). The unbounded
+arms — `build_alt_chain`'s full re-walk per admission, LMDB alt-store
+growth, invalid-set growth — are REAL and are GAP-4's design round by
+name (sync/DoS bounds), with GAP-1's depth question adjacent; minting a
+bound here would be an invented cutover in a round scoped to
+ratification. *Falsifier:* GAP-4's round failing to bound the re-walk
+cost reopens Q2b — the deferral is to a named owner, not to silence.
+
+**C2-R1c-Q3a — topology ratifications (CEN-A1, A2, K2, K3).** Ratify
+as orchestration-with-belts, belts named: A1's three-store membership
+test (main / alt / invalid, the invalid set process-scoped); A2's
+routing with the fail-closed re-check at connect; K2's four rebuild
+asserts (parse, height sanity, connection, parent-in-main); K3's
+triple-layer duplicate rejection (routing leg A1-owned, add-path
+assert, `MDB_NODUPDATA` DB belt). No crossings: every rule-shaped
+member already has an owner; what remains is call ordering and store
+integrity. *Falsifier:* any of these sites acquiring a
+consensus-verdict role beyond membership/integrity (e.g. the invalid
+set consulted for anything but dedup) reopens the orchestration
+classification.
+
+**C2-R1c-Q3b — CEN-A4: one flag stops meaning two things.** The orphan
+flag's two consumers get their own signals. (i) The live-path meaning
+is ratified: orphan = "our store lacks the ancestry" — re-request, no
+punishment, no storage. (ii) The sync-path punish arm (`:1546`) is
+RULED A DEFECT — the honest-path enumeration (§5.3) shows a span
+requested before a local pop and processed after it orphans on OUR
+action, and the arm answers by severing every connection from the
+origin plus a scored drop: the watermark bug's second instance, one
+layer out. The fix shape is R1b's: on in-loop orphan, stop punishing —
+clean up the span and fall back to the live path's re-sync semantics;
+the `:1407` queue-bookkeeping-mismatch drop KEEPS its teeth (it is the
+arm that independently establishes span misrepresentation, and it
+fires before any state race can). Build lands in this round
+(orchestration, C++ protocol handler; rule 20 — no rule content
+crosses). *Falsifier:* a demonstrated dishonest path that reaches the
+in-loop orphan WITHOUT tripping `:1407`'s bookkeeping check — i.e.
+proof that a lying peer can only be caught at the punish arm — reopens
+the split with that evidence.
+
+Row dispositions if ratified as drafted: K4, K1a/K1b (split), K9, K10,
+A1, A2, K2, K3 → bucket 2; A4 → bucket 2 with the Q3b defect fix built
+in-round. Census §4/§12 updates, the line re-anchor, and the
+dangling-anchor sweep ride the round-close PR per §5.2.
+
 ## 6. Round log
 
 - 2026-09-02 — Ground read at `bf317111f`; check-in with steering
