@@ -198,12 +198,13 @@ async fn get_version_omitted_params() {
 /// A method name the OpenAPI contract RESERVES but this build has not
 /// implemented answers `-32601` over the real transport. Pinned at the
 /// HTTP layer (not only in the dispatch unit tests) because the wire code is
-/// what a conforming client branches on. `unstake` is the current RESERVED
-/// stand-in (this case exercised `sign_message` until PR-SM-2 landed it,
-/// when it was still the last SPECIFIED-but-unimplemented method — that
-/// class is empty now); when `unstake` lands, retarget this at another
-/// RESERVED method rather than deleting the case — the property is about
-/// the RESERVED-but-unimplemented class, not about any one method.
+/// what a conforming client branches on. `match_transfer_to_request` is the
+/// current RESERVED stand-in (this case exercised `sign_message` until
+/// PR-SM-2 landed it, then `unstake` until PR-C landed the exit pair — each
+/// landing correctly turned this case red on the old name, per its own
+/// instruction); when it lands too, retarget at another RESERVED method
+/// rather than deleting the case — the property is about the
+/// RESERVED-but-unimplemented class, not about any one method.
 #[tokio::test]
 async fn method_not_found_for_reserved_unimplemented() {
     let (status, json) = post_json(
@@ -211,7 +212,7 @@ async fn method_not_found_for_reserved_unimplemented() {
         json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "unstake",
+            "method": "match_transfer_to_request",
             "params": {}
         }),
     )
