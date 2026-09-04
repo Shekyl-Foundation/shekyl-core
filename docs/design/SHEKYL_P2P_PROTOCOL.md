@@ -3191,13 +3191,36 @@ question for all four conditions**, because all four are `kept_by_block`-gated
 — `:267` and `:276` inline, `:291` by its enclosing `if`, and `:257` by
 short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 
-> **Answer, on three independent legs.** `kept_by_block` **is**
-> `(tx_relay == relay_method::block)` (`src/cryptonote_core/tx_pool.cpp:229`); it is documented as
-> "from a previously-verified block" (`src/cryptonote_core/blockchain.h:585`),
-> so **consensus has already ruled and pool policy is not consensus**; and the
-> pop path passes **`origin = epee::net_utils::zone::invalid`**
-> (`src/cryptonote_core/blockchain.cpp:870`) — **there is no connection to attribute an offense
-> to.** The third leg is what makes it an answer rather than a plausible story.
+> **Answer: there is no peer to punish. That is the whole of it, and it is
+> verified at every call site rather than inferred from one.**
+>
+> `kept_by_block` **is** `(tx_relay == relay_method::block)`
+> (`src/cryptonote_core/tx_pool.cpp:229`), and **every block-owned caller
+> passes `origin = epee::net_utils::zone::invalid`** — the pop path
+> (`src/cryptonote_core/blockchain.cpp:870`), the alt-block pool supplement
+> (`:2347`), the return-taken-transaction path (`:5932`), and the block
+> importer (`src/blockchain_utilities/blockchain_import.cpp:156`), whose own
+> comment says it outright: *"Imported from a block file: nothing arrived over
+> a transport."* **No connection exists to attribute an offense to, so an
+> offense classification has nothing to classify.**
+
+**A leg this row previously rested on was wrong, and it is retracted rather
+than quietly dropped.** It read: *"documented as 'from a previously-verified
+block', so consensus has already ruled."* **`relay_method::block` does not
+prove consensus has accepted the transaction.** The importer calls
+`handle_incoming_tx(..., relay_method::block, ...)` at
+`blockchain_import.cpp:156` and only reaches `handle_incoming_block` at `:181`;
+the alt-block supplement admits before input validation
+(`blockchain.cpp:2336-2348`). **Block connect still performs consensus
+validation** — the transaction is not unvalidated, it is *not yet* validated at
+pool-admission time — but that was never the load-bearing point. *The mistake
+was trusting an inherited doc comment as a statement of invariant; the comment
+describes the common case, not the contract.*
+
+> **What makes this satisfying rather than merely correct: the inherited
+> question is answered by PWD-B7's own rule.** "Drop only when attributable"
+> disposes of it — a block-owned transaction has no attributable party, so the
+> classification the four sites skip is a classification with no subject.
 
 ### PWD-B8 — the timer that is declared and never driven
 
