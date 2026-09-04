@@ -1,9 +1,11 @@
 # FL Round Record — Fee Ladder Derivation
 
-**Status:** OPEN — held at design-doc stage. All substance lives in
-[`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md); this file is the
-thin round-state record only (rule 95 — one owner per claim, no
-restatement). Nothing lands in consensus until that doc's §8 is signed.
+**Status:** OPEN — design round RULED. §8 is signed (FL-R12′ / FL-R17;
+FL-R14 ruled). Implementation is in flight on `feat/fee-ladder-impl-1`.
+All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
+this file is the thin round-state record only (rule 95 — one owner per
+claim, no restatement). Consensus behavior changes live in the
+implementing PRs, not here.
 
 Family: `FL-*` (index row: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)).
 Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
