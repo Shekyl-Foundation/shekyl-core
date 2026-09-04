@@ -1533,6 +1533,22 @@ column. On this close the document moves to `docs/completed/`.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — Review round 4 on #612 (post-close): five findings
+  (three Copilot, two Bugbot MEDIUM), all valid. The orphan arm's
+  cleanup-failure branch early-returned into the exact
+  synchronizing-and-silent stall the fix closes (pre-fix, the drop's
+  reconnect had been the recovery there too) — cleanup failure now
+  logs loudly and the recovery runs regardless, the queue/p2p steps
+  being core-independent; `m_last_known_hash` joined the negotiation
+  reset (request_missing_objects' tail PREPENDS it to later chain
+  requests — a stale anchor restarts the walk from the discarded
+  chain); the gate and rig gained the SCORE channel (`m_score`
+  mutation caught, both contexts' scores pinned); and the census's
+  §3.1/banner figures were reconciled to the 172-row reality after
+  the close updated only the §3 bucket table (re-derived from the
+  rows, not copied from the reviewer — the reviewer's numbers then
+  matched). Both new observables red-first on the pre-fix arm; three
+  vectors green.
 - 2026-09-04 — **Q1c SIGNED on the amendment diff; R1c CLOSED.** The
   close-of-round sweep executed (§5.7): census-wide re-anchor by
   forward validation (18 true flags fixed, four of them this round's

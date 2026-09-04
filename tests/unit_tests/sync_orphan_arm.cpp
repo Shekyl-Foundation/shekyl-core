@@ -61,8 +61,9 @@ public:
   uint64_t get_current_blockchain_height() const { return chain_height; }
   bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry> &blocks_entry, std::vector<cryptonote::block> &blocks)
   { ++prepare_calls; return true; }
+  bool cleanup_ok = true;
   bool cleanup_handle_incoming_blocks(bool force_sync = false)
-  { ++cleanup_calls; return true; }
+  { ++cleanup_calls; return cleanup_ok; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true)
   {
     ++incoming_block_calls;
@@ -205,6 +206,14 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
 
   crypto::hash parent;
   memset(&parent, 0x21, sizeof(parent));
+  // Punishment also has a SCORE channel (context.m_score-- at the idle
+  // kicker; drop_connection_with_score) -- pin that the arm touches
+  // neither context's score, and that the dead negotiation's anchor
+  // hash is cleared (a stale m_last_known_hash gets PREPENDED to later
+  // chain requests, restarting the walk from the discarded chain).
+  r.ctx.m_score = 5;
+  r.p2p.lambda_ctx.m_score = 5;
+  memset(&r.ctx.m_last_known_hash, 0x44, sizeof(r.ctx.m_last_known_hash));
   // Parent "known" at the span pre-check; the scripted orphan verdict at
   // the add is the race's observable (our store lost it in between).
   r.core.have_block_fn = [&](const crypto::hash& id) { return id == parent; };
@@ -244,6 +253,43 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
       << "stale pre-orphan needed-objects must not be re-requested";
   EXPECT_TRUE(r.ctx.m_needed_objects.empty())
       << "the arm must clear the dead negotiation's needed-objects";
+  EXPECT_EQ(5, r.ctx.m_score) << "no score penalty on the processing context";
+  EXPECT_EQ(5, r.p2p.lambda_ctx.m_score) << "no score penalty via uuid-addressed contexts";
+  EXPECT_TRUE(r.ctx.m_last_known_hash == crypto::null_hash)
+      << "the dead negotiation's anchor hash must be cleared, or later chain "
+         "requests re-anchor on the discarded chain";
+}
+
+TEST(sync_orphan_arm, cleanup_failure_still_recovers)
+{
+  // A cleanup failure (the DB batch cleanup can throw --
+  // blockchain.cpp's cleanup path) must not abort the recovery: an
+  // early return would recreate the synchronizing-and-silent stall
+  // this arm exists to close, with no drop left to trigger reconnect.
+  rig r;
+  r.core.chain_height = 100;
+  r.core.target_height = 500;
+  r.core.cleanup_ok = false;
+
+  crypto::hash parent;
+  memset(&parent, 0x77, sizeof(parent));
+  r.core.have_block_fn = [&](const crypto::hash& id) { return id == parent; };
+  r.core.incoming_block_fn = [](cryptonote::block_verification_context& bvc) {
+    bvc.m_marked_as_orphaned = true;
+  };
+  const boost::uuids::uuid span_id = {{4}};
+  const epee::net_utils::network_address addr{};
+  std::vector<cryptonote::block_complete_entry> span{ make_entry(100, parent) };
+  r.handler.m_block_queue.add_blocks(100, span, span_id, addr, 0.0f, span[0].block.size());
+
+  r.handler.try_add_next_blocks(r.ctx);
+
+  EXPECT_EQ(0u, r.p2p.drops.load()) << "still no punishment on cleanup failure";
+  EXPECT_GE(r.p2p.chain_requests.load(), 1u)
+      << "the recovery must run even when the core batch cleanup fails";
+  uint64_t h; std::vector<cryptonote::block_complete_entry> b; boost::uuids::uuid u; epee::net_utils::network_address a;
+  EXPECT_FALSE(r.handler.m_block_queue.get_next_span(h, b, u, a))
+      << "the span must still be removed";
 }
 
 TEST(sync_orphan_arm, bookkeeping_mismatch_keeps_teeth)

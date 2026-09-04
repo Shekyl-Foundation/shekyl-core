@@ -1564,11 +1564,14 @@ namespace cryptonote
               // selects only contexts with a live request time -- the
               // download must be put back in motion here, not assumed.
               LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned -- local chain state moved during span processing; re-syncing without penalizing the origin");
+              // A cleanup failure is logged loudly but must NOT abort the
+              // recovery below: an early return here would recreate the
+              // synchronizing-and-silent stall this arm exists to close
+              // (the request time is already cleared, and pre-fix the
+              // drop-then-reconnect was the recovery). The queue and p2p
+              // steps below do not depend on the core batch state.
               if (!m_core.cleanup_handle_incoming_blocks())
-              {
                 LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-                return 1;
-              }
 
               // remove the span so other threads can wake up and get it,
               // then re-walk the chain DIRECTLY: the pre-orphan
@@ -1580,8 +1583,14 @@ namespace cryptonote
               // which is the punishment coming back one layer up. The
               // shared helper clears the negotiation and requests the
               // chain from the current tip with a live request time.
+              // m_last_known_hash anchored the dead negotiation too:
+              // request_missing_objects' tail PREPENDS it to later chain
+              // requests, which would restart the walk from the chain we
+              // just rolled off -- clear it so the next negotiation
+              // starts from OUR history alone.
               m_block_queue.remove_spans(span_connection_id, start_height);
               context.m_last_response_height = 0;
+              context.m_last_known_hash = crypto::null_hash;
               request_chain_history(context);
               return 1;
             }

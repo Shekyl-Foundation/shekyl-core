@@ -21,7 +21,8 @@ coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per
 FAKECHAIN skip, census R9; CEN-L11 with CEN-L12 coupled, fix landed and
 promotion owed at a merged sha), 2 failed closed (CEN-L8; CEN-I12, split anchor
 source). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
-2026-09-03, so the live bucket-1/2 count is **111** and those nine are
+2026-09-03 and C2-R1c ten more on 2026-09-04 (nine promotions plus the
+CEN-K1 → K1a/K1b split), so the live bucket-1/2 count is **121** and those nineteen are
 UNREVIEWED until P0f reviews them. **Both S-graded findings are fixed and re-verified** — the S0 by
 PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
@@ -200,7 +201,7 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 
 | Subsystem | Rows | B1 | B2 | B3 | B4 | Policy |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| A topology | 7 | 1 | 0 | 0 | 6 | 0 |
+| A topology | 7 | 1 | 3 | 0 | 3 | 0 |
 | B header / version / attestation / root | 7 | 2 | 1 | 0 | 4 | 0 |
 | C timestamps | 3 | 1 | 2 | 0 | 0 | 0 |
 | D PoW / difficulty | 8 | 4 | 2 | 0 | 2 | 0 |
@@ -210,10 +211,10 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | H tx non-input consensus | 24 | 9 | 5 | 1 | 9 | 0 |
 | I FCMP++ inputs / PQC | 18 | 14 | 4 | 0 | 0 | 0 |
 | J archival tx families | 26 | 26 | 0 | 0 | 0 | 0 |
-| K reorg / alt chains | 11 | 1 | 4 | 0 | 6 | 0 |
+| K reorg / alt chains | 12 | 1 | 11 | 0 | 0 | 0 |
 | L storage layer | 15 | 6 | 0 | 1 | 8 | 0 |
 | M mempool admission | 11 | 2 | 1 | 0 | 8 | 9 |
-| **Total** | **171** | **86** | **25** | **5** | **55** | **9** |
+| **Total** | **172** | **86** | **35** | **5** | **46** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 

@@ -268,10 +268,10 @@ if [[ "$Q3B_RC" -ne 0 || -z "$Q3B_ARM" ]]; then
   echo "            or re-indented; re-point this gate, do not delete it."
   FAIL=1
 else
-  Q3B_PUNISH=$(printf '%s' "$Q3B_ARM" | grep -cE "drop_connection|add_host_fail|block_host|hit_score" || true)
+  Q3B_PUNISH=$(printf '%s' "$Q3B_ARM" | grep -cE "drop_connection|add_host_fail|block_host|hit_score|m_score" || true)
   if [[ "${Q3B_PUNISH:-0}" -ne 0 ]]; then
     echo "      FAIL: the sync orphan arm contains a punitive call"
-    echo "            (drop_connection*/add_host_fail/block_host/hit_score) --"
+    echo "            (drop_connection*/add_host_fail/block_host/hit_score/m_score) --"
     echo "            punishment re-entered the arm (C2-R1c-Q3b ruled this a"
     echo "            defect; the fix falsifier in the round doc names the"
     echo "            only evidence that reopens HOW, and nothing reopens"
