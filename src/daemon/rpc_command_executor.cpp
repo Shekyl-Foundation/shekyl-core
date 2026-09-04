@@ -46,26 +46,6 @@
 namespace daemonize {
 
 namespace {
-  void print_block_header(cryptonote::block_header_response const & header)
-  {
-    tools::success_msg_writer()
-      << "timestamp: " << boost::lexical_cast<std::string>(header.timestamp) << " (" << tools::get_human_readable_timestamp(header.timestamp) << ")" << std::endl
-      << "previous hash: " << header.prev_hash << std::endl
-      << "nonce: " << boost::lexical_cast<std::string>(header.nonce) << std::endl
-      << "is orphan: " << header.orphan_status << std::endl
-      << "height: " << boost::lexical_cast<std::string>(header.height) << std::endl
-      << "depth: " << boost::lexical_cast<std::string>(header.depth) << std::endl
-      << "hash: " << header.hash << std::endl
-      << "difficulty: " << cryptonote::difficulty_type(header.wide_difficulty) << std::endl
-      << "cumulative difficulty: " << cryptonote::difficulty_type(header.wide_cumulative_difficulty) << std::endl
-      << "POW hash: " << header.pow_hash << std::endl
-      << "block size: " << header.block_size << std::endl
-      << "block weight: " << header.block_weight << std::endl
-      << "long term weight: " << header.long_term_weight << std::endl
-      << "num txes: " << header.num_txes << std::endl
-      << "reward: " << cryptonote::print_money(header.reward) << std::endl
-      << "miner tx hash: " << header.miner_tx_hash;
-  }
 
   std::string get_human_time_ago(time_t t, time_t now)
   {
@@ -324,127 +304,14 @@ static std::string get_mining_speed(cryptonote::difficulty_type hr)
   return (boost::format("%.2f %cH/s") % hr_d % prefix).str();
 }
 
-static std::string get_fork_extra_info(uint64_t t, uint64_t now, uint64_t block_time)
-{
-  uint64_t blocks_per_day = 86400 / block_time;
-
-  if (t == now)
-    return " (forking now)";
-
-  if (t > now)
-  {
-    uint64_t dblocks = t - now;
-    if (dblocks <= 30)
-      return (boost::format(" (next fork in %u blocks)") % (unsigned)dblocks).str();
-    if (dblocks <= blocks_per_day / 2)
-      return (boost::format(" (next fork in %.1f hours)") % (dblocks / (float)(blocks_per_day / 24))).str();
-    if (dblocks <= blocks_per_day * 30)
-      return (boost::format(" (next fork in %.1f days)") % (dblocks / (float)blocks_per_day)).str();
-    return "";
-  }
-  return "";
-}
-
-static float get_sync_percentage(uint64_t height, uint64_t target_height)
-{
-  target_height = target_height ? target_height < height ? height : target_height : height;
-  float pc = 100.0f * height / target_height;
-  if (height < target_height && pc > 99.9f)
-    return 99.9f; // to avoid 100% when not fully synced
-  return pc;
-}
-static float get_sync_percentage(const cryptonote::COMMAND_RPC_GET_INFO::response &ires)
-{
-  return get_sync_percentage(ires.height, ires.target_height);
-}
 
 bool t_rpc_command_executor::show_status() {
-  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-  cryptonote::COMMAND_RPC_GET_INFO::response ires;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::request hfreq;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::response hfres;
-  cryptonote::COMMAND_RPC_MINING_STATUS::request mreq;
-  cryptonote::COMMAND_RPC_MINING_STATUS::response mres;
-  epee::json_rpc::error error_resp;
-  bool has_mining_info = true;
-
-  std::string fail_message = "Problem fetching info";
-
-  hfreq.version = 0;
-  bool mining_busy = false;
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->json_rpc_request(hfreq, hfres, "hard_fork_info", fail_message.c_str()))
-    {
-      return true;
-    }
-    // mining info is only available non unrestricted RPC mode
-    has_mining_info = m_rpc_client->rpc_request(mreq, mres, "/mining_status", fail_message.c_str());
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, ires.status);
-      return true;
-    }
-    if (!m_rpc_server->on_hard_fork_info(hfreq, hfres, error_resp) || hfres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, hfres.status);
-      return true;
-    }
-    if (!m_rpc_server->on_mining_status(mreq, mres))
-    {
-      tools::fail_msg_writer() << fail_message.c_str();
-      return true;
-    }
-
-    if (mres.status == CORE_RPC_STATUS_BUSY)
-    {
-      mining_busy = true;
-    }
-    else if (mres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, mres.status);
-      return true;
-    }
-  }
-
-  std::time_t uptime = std::time(nullptr) - ires.start_time;
-  uint64_t net_height = ires.target_height > ires.height ? ires.target_height : ires.height;
-
-  std::stringstream str;
-  str << boost::format("Height: %llu/%llu (%.1f%%) on %s, %s, net hash %s, v%u%s, %u(out)+%u(in) connections")
-    % (unsigned long long)ires.height
-    % (unsigned long long)net_height
-    % get_sync_percentage(ires)
-    % (ires.testnet ? "testnet" : ires.stagenet ? "stagenet" : "mainnet")
-    % (!has_mining_info ? "mining info unavailable" : mining_busy ? "syncing" : mres.active ? ( ( mres.is_background_mining_enabled ? "smart " : "" ) + std::string("mining at ") + get_mining_speed(mres.speed)) : "not mining")
-    % get_mining_speed(cryptonote::difficulty_type(ires.wide_difficulty) / ires.target)
-    % (unsigned)hfres.version
-    % get_fork_extra_info(hfres.earliest_height, net_height, ires.target)
-    % (unsigned)ires.outgoing_connections_count
-    % (unsigned)ires.incoming_connections_count
-  ;
-
-  // restricted RPC does not disclose start time
-  if (ires.start_time)
-  {
-    str << boost::format(", uptime %ud %uh %um %us")
-      % (unsigned int)floor(uptime / 60.0 / 60.0 / 24.0)
-      % (unsigned int)floor(fmod((uptime / 60.0 / 60.0), 24.0))
-      % (unsigned int)floor(fmod((uptime / 60.0), 60.0))
-      % (unsigned int)fmod(uptime, 60.0)
-    ;
-  }
-
-  tools::success_msg_writer() << str.str();
-
-  return true;
+  // RK-5b: `hard_fork_info` is served from Rust and the whole line renders
+  // there. `/get_info` (RK-5c) and `/mining_status` (RK-7) are still bridged,
+  // and the "mining info unavailable" arm still belongs to the remote case
+  // only — in-process a `/mining_status` that will not answer is this
+  // daemon's own fault.
+  return run_rust_console({"status"});
 }
 
 bool t_rpc_command_executor::mining_status() {

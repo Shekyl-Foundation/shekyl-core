@@ -651,6 +651,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             };
             alt_chain_info(&source, tip, above, last_blocks, unix_now())
         }
+        "status" => show_status(&source, unix_now()),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -1183,6 +1184,15 @@ struct GetInfoReplyProvisional {
     target: u64,
     wide_difficulty: String,
     wide_cumulative_difficulty: String,
+    target_height: u64,
+    testnet: bool,
+    stagenet: bool,
+    /// Zero on a restricted listener, which does not disclose it. Required
+    /// all the same — the daemon always sends the field — and the zero is
+    /// handled where it is rendered, as the C++ did.
+    start_time: u64,
+    outgoing_connections_count: u64,
+    incoming_connections_count: u64,
 }
 
 /// Fetch `/get_info` over whichever arm this console is running on.
@@ -1760,6 +1770,264 @@ fn alt_chain_info(
         }
     }
     Ok(out.join("\n"))
+}
+
+/// The `/mining_status` reply, as much of it as `show_status` reads.
+///
+/// **A bridged leg, on purpose** (§2.1.1): `/mining_status` is RK-7's and is
+/// still served from the C++ table (`core_rpc_ffi.cpp:180`). Required fields
+/// for the reason [`GetLimitReplyProvisional`] gives — a defaulted `active`
+/// would report a mining daemon as idle.
+#[derive(serde::Deserialize)]
+struct MiningStatusProvisional {
+    status: shekyl_rpc_types::RpcStatus,
+    active: bool,
+    speed: u64,
+    is_background_mining_enabled: bool,
+}
+
+/// What `show_status` could learn about mining.
+enum MiningReadout {
+    /// The daemon answered. `BUSY` is its own arm because a syncing daemon
+    /// answers the question with "ask me later", which is neither idle nor
+    /// mining.
+    Ready(MiningStatusProvisional),
+    Syncing,
+    /// The remote daemon would not say — a restricted listener does not serve
+    /// `/mining_status`. Only reachable on the remote arm; see
+    /// [`fetch_mining_status`].
+    Unavailable,
+}
+
+/// Fetch `/mining_status`, and treat a failure differently on each arm.
+///
+/// **The asymmetry is the C++'s and it is carried on purpose.** In-process
+/// the console *is* the daemon, so a `/mining_status` that will not answer is
+/// a fault in this daemon and the command says so. Remotely the daemon may
+/// simply be running a restricted listener, which does not serve the route at
+/// all — an ordinary posture, not a failure, and the status line says "mining
+/// info unavailable" rather than refusing to print the eight other things it
+/// knows. Unifying the arms would either turn a normal restricted daemon into
+/// an error or hide a real local fault.
+fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
+    let raw = match src {
+        Source::Live(core) => core
+            .json_endpoint("/mining_status", "{}")
+            .ok_or_else(|| "no reply from /mining_status".to_owned())?,
+        Source::Remote { address, timeout } => {
+            match ctl_client::post_blocking(address, "/mining_status", b"{}".to_vec(), *timeout) {
+                // **An empty body is the route declining to exist.** The
+                // control transport does not surface the HTTP status — its
+                // contract is "a response arrived", because every route the
+                // daemon *serves* answers with a JSON body carrying its own
+                // `status`. `/mining_status` is `Visibility::AdminOnly`
+                // (`server.rs`), so a restricted listener has no such route
+                // and axum's fallback answers 404 with no body at all. That
+                // is the only way a zero-length body reaches here, and it is
+                // exactly the case the C++'s `has_mining_info` keyed on.
+                Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
+                Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+                // The daemon is not answering at all — no host, no listener.
+                Err(_) => return Ok(MiningReadout::Unavailable),
+            }
+        }
+    };
+    let reply: MiningStatusProvisional =
+        serde_json::from_str(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
+    if reply.status.0 == shekyl_rpc_types::RpcStatus::BUSY {
+        return Ok(MiningReadout::Syncing);
+    }
+    if !reply.status.is_ok() {
+        return Err(reply.status.0);
+    }
+    Ok(MiningReadout::Ready(reply))
+}
+
+/// Fetch `hard_fork_info` — native here, over `/json_rpc` remotely.
+fn fetch_hard_fork_info(
+    src: &Source,
+    version: Option<u8>,
+) -> Result<shekyl_rpc_types::HardForkInfoResponse, String> {
+    let request = shekyl_rpc_types::HardForkInfoRequest { version };
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = FfiChainFacts::new(core.clone());
+            crate::methods::hard_fork_info(&facts, &request).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "hard_fork_info",
+                "params": request,
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::HardForkInfoResponse>(&raw, "hard_fork_info")?
+        }
+    };
+    if reply.status.is_ok() {
+        Ok(reply)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// A hash rate for a human: `get_metric_prefix` + `get_mining_speed`.
+///
+/// Below 1000 the raw number in `H/s`; otherwise the largest metric prefix
+/// that leaves the value under a million, to two decimals. A rate so large
+/// that eight prefixes do not reach it prints raw — the C++ fell out of its
+/// loop with `prefix = 0` and formatted the *original* value, which this
+/// keeps.
+#[deny(clippy::arithmetic_side_effects)]
+fn mining_speed(rate: u128) -> String {
+    const PREFIXES: [char; 8] = ['k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
+    if rate < 1000 {
+        return format!("{rate} H/s");
+    }
+    let mut scaled = rate;
+    for prefix in PREFIXES {
+        if scaled < 1_000_000 {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a hash rate for a human, below a million by the test above"
+            )]
+            let value = scaled as f64 / 1000.0;
+            return format!("{value:.2} {prefix}H/s");
+        }
+        scaled /= 1000;
+    }
+    format!("{rate} H/s")
+}
+
+/// `get_sync_percentage`, including its refusal to round up to 100.
+#[deny(clippy::arithmetic_side_effects)]
+fn sync_percentage(height: u64, target_height: u64) -> f64 {
+    // A target below our height means we are ahead of it; `max(1)` keeps the
+    // divisor non-zero on a chain with no blocks, which cannot occur but
+    // costs nothing to make impossible here rather than three lines down.
+    let target = target_height.max(height).max(1);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a percentage for a human, from two heights"
+    )]
+    let pc = 100.0 * (height as f64) / (target as f64);
+    // Not yet synced must not read as 100%: the last block is the one an
+    // operator is waiting for.
+    if height < target && pc > 99.9 {
+        99.9
+    } else {
+        pc
+    }
+}
+
+/// `get_fork_extra_info`: what to append after the version, if anything.
+#[deny(clippy::arithmetic_side_effects)]
+fn fork_extra_info(earliest_height: u64, net_height: u64, block_time: u64) -> String {
+    if earliest_height == net_height {
+        return " (forking now)".to_owned();
+    }
+    let Some(blocks) = earliest_height.checked_sub(net_height).filter(|d| *d > 0) else {
+        return String::new();
+    };
+    if blocks <= 30 {
+        return format!(" (next fork in {blocks} blocks)");
+    }
+    // `86400 / block_time`, and `blocks_per_day / 24` below, are the C++'s
+    // integer divisions. Both can be zero — the first if the daemon reports a
+    // target above a day, the second if it reports one above an hour — and
+    // the C++ divided by them regardless. A daemon whose target is that large
+    // is not one this line can say anything useful about, so it says nothing
+    // rather than `inf`.
+    let (Some(per_day), Some(per_hour)) = (
+        86_400u64.checked_div(block_time).filter(|d| *d > 0),
+        86_400u64
+            .checked_div(block_time)
+            .and_then(|d| d.checked_div(24))
+            .filter(|d| *d > 0),
+    ) else {
+        return String::new();
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a countdown for a human, from a block count"
+    )]
+    let (blocks_f, per_day_f, per_hour_f) = (blocks as f64, per_day as f64, per_hour as f64);
+    if blocks <= per_day / 2 {
+        return format!(" (next fork in {:.1} hours)", blocks_f / per_hour_f);
+    }
+    if blocks <= per_day.saturating_mul(30) {
+        return format!(" (next fork in {:.1} days)", blocks_f / per_day_f);
+    }
+    String::new()
+}
+
+/// `status` / `show_status`.
+#[deny(clippy::arithmetic_side_effects)]
+fn show_status(src: &Source, now: u64) -> Result<String, String> {
+    let info = fetch_get_info(src)?;
+    // `hfreq.version = 0` in the C++, i.e. "tell me about the active fork".
+    // The line prints `active_version`, which is what `res.version` was:
+    // `on_hard_fork_info` set it from `get_current_hard_fork_version()`
+    // regardless of the request, while the *voting* fields described the
+    // requested one. Reporting the two apart is why RK-5b split them; reading
+    // `queried_version` here would invert the whole point.
+    let fork = fetch_hard_fork_info(src, None)?;
+    let mining = fetch_mining_status(src)?;
+
+    let net_height = info.target_height.max(info.height);
+    let network = if info.testnet {
+        "testnet"
+    } else if info.stagenet {
+        "stagenet"
+    } else {
+        "mainnet"
+    };
+    let mining_text = match &mining {
+        MiningReadout::Unavailable => "mining info unavailable".to_owned(),
+        MiningReadout::Syncing => "syncing".to_owned(),
+        MiningReadout::Ready(m) if m.active => format!(
+            "{}mining at {}",
+            if m.is_background_mining_enabled {
+                "smart "
+            } else {
+                ""
+            },
+            mining_speed(u128::from(m.speed))
+        ),
+        MiningReadout::Ready(_) => "not mining".to_owned(),
+    };
+    // Network hash rate as difficulty per target second. `checked_div` for
+    // the same reason as everywhere else in this file: `target` is a number
+    // the daemon sent.
+    let net_hash = wide_difficulty_value(&info.wide_difficulty)
+        .and_then(|d| d.checked_div(u128::from(info.target)))
+        .map_or_else(|| "unknown".to_owned(), mining_speed);
+    let mut line = format!(
+        "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
+         v{}{}, {}(out)+{}(in) connections",
+        info.height,
+        sync_percentage(info.height, info.target_height),
+        fork.active_version,
+        fork_extra_info(fork.earliest_height, net_height, info.target),
+        info.outgoing_connections_count,
+        info.incoming_connections_count
+    );
+    // A restricted listener does not disclose the start time, and the C++
+    // omitted the whole clause rather than reporting an uptime of zero.
+    if info.start_time != 0 {
+        let uptime = now.saturating_sub(info.start_time);
+        line.push_str(&format!(
+            ", uptime {}d {}h {}m {}s",
+            uptime / 86_400,
+            (uptime / 3_600) % 24,
+            (uptime / 60) % 60,
+            uptime % 60
+        ));
+    }
+    Ok(line)
 }
 
 /// `sync_info`.
@@ -3495,6 +3763,177 @@ mod tests {
             out.contains("is not the tip of any known alternate chain"),
             "{out}"
         );
+    }
+
+    fn fork_reply(active: u8, queried: u8, earliest: u64) -> String {
+        typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::HardForkInfoResponse {
+                status: RpcStatus::ok(),
+                queried_version: queried,
+                active_version: active,
+                enabled: true,
+                window: 10080,
+                votes: 10080,
+                threshold: 0,
+                voting: active,
+                state: 2,
+                earliest_height: earliest,
+            },
+        }))
+    }
+
+    fn mining_reply(active: bool, speed: u64, background: bool) -> String {
+        serde_json::json!({
+            "status": "OK",
+            "active": active,
+            "speed": speed,
+            "is_background_mining_enabled": background,
+        })
+        .to_string()
+    }
+
+    /// A hash rate for a human, at every prefix boundary the C++ had.
+    #[test]
+    fn a_mining_speed_picks_the_prefix_the_cpp_picked() {
+        assert_eq!(mining_speed(0), "0 H/s");
+        assert_eq!(mining_speed(999), "999 H/s");
+        // 1000 is the first prefixed value: still under a million, so `k`.
+        assert_eq!(mining_speed(1000), "1.00 kH/s");
+        // 999999 / 1000 is 999.999, which `%.2f` rounds up — so the largest
+        // value that still reads in kilohashes prints as `1000.00 kH/s`.
+        // The C++ did this too; it is recorded rather than corrected,
+        // because the alternative is a second rounding rule for a console
+        // line.
+        assert_eq!(mining_speed(999_999), "1000.00 kH/s");
+        // A million divides once, then reads as thousands of thousands.
+        assert_eq!(mining_speed(1_000_000), "1.00 MH/s");
+        assert_eq!(mining_speed(2_500_000_000), "2.50 GH/s");
+        // Past every prefix, the raw number — the C++ fell out of its loop
+        // with `prefix = 0` and formatted the value it started with.
+        assert_eq!(
+            mining_speed(10u128.pow(33)),
+            format!("{} H/s", 10u128.pow(33))
+        );
+    }
+
+    /// The sync percentage, including the 99.9 clamp that exists so a daemon
+    /// one block short does not read as finished.
+    #[test]
+    fn the_sync_percentage_never_rounds_up_to_a_hundred() {
+        assert!((sync_percentage(50, 100) - 50.0).abs() < f64::EPSILON);
+        // Fully synced is a real 100.
+        assert!((sync_percentage(100, 100) - 100.0).abs() < f64::EPSILON);
+        // A target below our height means we are ahead of it.
+        assert!((sync_percentage(100, 50) - 100.0).abs() < f64::EPSILON);
+        // 99999/100000 would print as 100.0%; it must not.
+        assert!((sync_percentage(99_999, 100_000) - 99.9).abs() < f64::EPSILON);
+        // And an empty chain divides by one, not by zero.
+        assert!((sync_percentage(0, 0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    /// The fork countdown, in each of its units and in the cases that say
+    /// nothing.
+    #[test]
+    fn the_fork_countdown_changes_units_where_the_cpp_did() {
+        assert_eq!(fork_extra_info(100, 100, 120), " (forking now)");
+        // Already past: nothing to count down to.
+        assert_eq!(fork_extra_info(50, 100, 120), "");
+        assert_eq!(fork_extra_info(120, 100, 120), " (next fork in 20 blocks)");
+        // 720 blocks/day at a 120 s target, so 30 blocks/hour: 100 blocks is
+        // under half a day and reads in hours.
+        assert_eq!(fork_extra_info(200, 100, 120), " (next fork in 3.3 hours)");
+        assert_eq!(fork_extra_info(1_540, 100, 120), " (next fork in 2.0 days)");
+        // Past thirty days, nothing.
+        assert_eq!(fork_extra_info(100_000, 100, 120), "");
+        // A target the daemon reports as zero, or as longer than an hour,
+        // divided straight through in the C++.
+        assert_eq!(fork_extra_info(200, 100, 0), "");
+        assert_eq!(fork_extra_info(200, 100, 90_000), "");
+    }
+
+    /// The whole status line, on the remote arm, with all three legs.
+    #[test]
+    fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            ("json_rpc:hard_fork_info", fork_reply(3, 7, 100)),
+            ("/mining_status", mining_reply(true, 2500, false)),
+        ]);
+        let (code, out) = run(&["status"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("Height: 100/100 (100.0%) on mainnet"), "{out}");
+        assert!(out.contains("mining at 2.50 kH/s"), "{out}");
+        // net hash = difficulty 123456 / target 120, integer-divided to
+        // 1028 H/s, which reads as 1.03 kH/s.
+        assert!(out.contains("net hash 1.03 kH/s"), "{out}");
+        // **`v3`, not `v7`.** The fixture's queried and active versions
+        // differ on purpose: `on_hard_fork_info` set `res.version` from
+        // `get_current_hard_fork_version()` regardless of the request, so
+        // this line is the active fork. Reading `queried_version` here would
+        // invert the reason RK-5b split the two.
+        assert!(out.contains("v3 (forking now)"), "{out}");
+        assert!(out.contains("8(out)+3(in) connections"), "{out}");
+        assert!(out.contains(", uptime "), "{out}");
+    }
+
+    /// A restricted daemon discloses no start time, and the uptime clause is
+    /// omitted rather than reported as zero.
+    #[test]
+    fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
+        let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+        info["start_time"] = serde_json::json!(0);
+        let address = route_server(vec![
+            ("/get_info", info.to_string()),
+            ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
+            ("/mining_status", mining_reply(false, 0, false)),
+        ]);
+        let (code, out) = run(&["status"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("not mining"), "{out}");
+        assert!(!out.contains("uptime"), "{out}");
+    }
+
+    /// A remote daemon that will not serve `/mining_status` still gets a
+    /// status line.
+    ///
+    /// A restricted listener does not serve the route at all — an ordinary
+    /// posture, not a fault — so the eight other things the line knows are
+    /// still worth printing. The route server has no `/mining_status` row, so
+    /// it answers 404.
+    #[test]
+    fn a_restricted_remote_daemon_still_reports_its_status() {
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
+        ]);
+        let (code, out) = run(&["status"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("mining info unavailable"), "{out}");
+        assert!(out.contains("Height: 100/100"), "{out}");
+    }
+
+    /// A syncing daemon answers `BUSY`, which is neither mining nor idle.
+    #[test]
+    fn a_busy_mining_status_reads_as_syncing() {
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
+            (
+                "/mining_status",
+                serde_json::json!({
+                    "status": "BUSY",
+                    "active": false,
+                    "speed": 0,
+                    "is_background_mining_enabled": false,
+                })
+                .to_string(),
+            ),
+        ]);
+        let (code, out) = run(&["status"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains(", syncing,"), "{out}");
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.
