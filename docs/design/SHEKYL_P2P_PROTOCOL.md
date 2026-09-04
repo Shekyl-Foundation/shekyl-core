@@ -2601,8 +2601,31 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 **Ruled, because the contradiction forces the shape even though it does not
 fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
 cardinality alone.** The responder fills a byte budget and **truncates the
-batch**, leaving the requester to ask for the remainder — which it already
-must handle, since `missed_ids` exists. A cardinality bound multiplies two
+batch**, leaving the requester to ask for the remainder.
+
+> **Corrected 2026-09-04 (review finding, verified at source): the shipped
+> requester does NOT already handle truncation.** An earlier version of this
+> passage claimed it "already must handle" the remainder "since `missed_ids`
+> exists" — but `missed_ids` is filled by the *responder*
+> (`cryptonote_protocol_handler.inl:1053`) and never consumed by the response
+> handler, which erases only the hashes actually delivered and **drops the
+> peer whenever `m_requested_objects` is non-empty afterwards** ("returned
+> not all requested objects", `:1174-1202`). A byte-budgeted responder would
+> be disconnected on every truncated batch by today's code.
+>
+> **Continuation semantics are therefore an explicit implementation action
+> riding this ruling into P2P-3** (FOLLOWUPS carries it), with two
+> constraints ruled here: *(1)* the wire must distinguish
+> **deferred-by-budget** from **genuinely unavailable** — `missed_ids` means
+> "I do not have it" and budget truncation means "I have it and ran out of
+> room"; conflating them poisons availability bookkeeping and re-request
+> routing. *(2)* The not-all-returned drop is **narrowed, never deleted** —
+> it is the withholding detector (a peer silently returning less than asked
+> is the adversary it catches), and it must keep firing whenever a shortfall
+> is not budget-marked. Deleting it to admit truncation would remove a
+> load-bearing defence to fix a wire-shape problem.
+
+A cardinality bound multiplies two
 independent worst cases (every block at maximum weight *and* maximum witness
 simultaneously), producing a buffer no honest exchange ever fills, and here it
 produces one the decompressor is required to reject.
@@ -3218,7 +3241,7 @@ dead surface.
 | PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
 | PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
 | PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Ruled** — retained; both are *our* liveness judgement of a connection, not an offense classification, so PWD-B7's rule does not reach them | PWD-B7 |
-| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — named blocker: it is host-keyed**, and `is_same_host` needs an IP an onion address does not have. It is the *same* address-family problem as the anonymity-zone inbound cap, so it must be re-derived with it rather than twice | PWD-I4 sub-round |
+| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:90-98`) and Tor/I2P compare hostname strings (`src/net/tor_address.cpp:181-184`, `src/net/i2p_address.cpp:165-167`). The real blockers: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compares `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
 | PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
 
 **Sum check: 4 ruled + 0 absorbed + 1 deferred = 5 rows.** ✅
