@@ -633,6 +633,12 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             };
             print_blockchain_info(&source, start, end)
         }
+        "print_blockchain_dynamic_stats" => {
+            let Some(nblocks) = args.get(1).and_then(|a| a.parse::<u64>().ok()) else {
+                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
+            };
+            print_blockchain_dynamic_stats(&source, nblocks)
+        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -1157,6 +1163,14 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 struct GetInfoReplyProvisional {
     status: shekyl_rpc_types::RpcStatus,
     height: u64,
+    /// The DAA's target block time in seconds. Read as **data** rather than
+    /// compiled in from `SHEKYL_DAA_TARGET_SECONDS`: the daemon already
+    /// reports its own target, and a console built against a different value
+    /// than the daemon it is talking to would print a confidently wrong
+    /// number rather than fail.
+    target: u64,
+    wide_difficulty: String,
+    wide_cumulative_difficulty: String,
 }
 
 /// Fetch `/get_info` over whichever arm this console is running on.
@@ -1289,6 +1303,188 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
         ),
     ]
     .join("\n")
+}
+
+/// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
+fn fetch_fee_estimate(
+    src: &Source,
+    grace_blocks: u64,
+) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
+    let request = shekyl_rpc_types::GetFeeEstimateRequest { grace_blocks };
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = FfiChainFacts::new(core.clone());
+            crate::methods::get_fee_estimate(&facts, &request).map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_fee_estimate",
+                "params": request,
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::GetFeeEstimateResponse>(&raw, "get_fee_estimate")?
+        }
+    };
+    if reply.status.is_ok() {
+        Ok(reply)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// The wide difficulty as a number, or `None` if the daemon sent something
+/// unreadable.
+///
+/// [`wide_difficulty_decimal`] is this plus a fallback to the raw string;
+/// the two exist apart because summing needs the number and rendering needs
+/// something to print either way.
+fn wide_difficulty_value(wide: &str) -> Option<u128> {
+    u128::from_str_radix(wide.strip_prefix("0x").unwrap_or(wide), 16).ok()
+}
+
+/// epee's `median`, which is what the C++ printed: the middle element of an
+/// odd-length sample, and the **floor of the mean of the two middle
+/// elements** of an even-length one (`misc_language.h`'s `get_mid`, whose
+/// halve-then-add form exists to avoid overflowing the sum).
+fn median(values: &mut [u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.sort_unstable();
+    let n = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[n]
+    } else {
+        let (a, b) = (values[n.saturating_sub(1)], values[n]);
+        // `a/2 + b/2 + (a%2 + b%2)/2` — the same identity, so the sum is
+        // never formed and cannot overflow.
+        (a / 2)
+            .saturating_add(b / 2)
+            .saturating_add(((a % 2).saturating_add(b % 2)) / 2)
+    }
+}
+
+/// A `count` of `version` byte tallies as the C++ listed them: `"3 v1, 1 v2"`,
+/// ascending by version, versions with no votes omitted.
+fn version_tally(counts: &[u32; 256]) -> String {
+    counts
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n > 0)
+        .map(|(version, n)| format!("{n} v{version}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `print_blockchain_dynamic_stats <nblocks>`.
+///
+/// **The `hard_fork_info` leg is deleted rather than ported.** Its only use
+/// was `hfres.enabled ? "byte" : "kB"` against `HF_VERSION_PER_BYTE_FEE`,
+/// which is `1` (`cryptonote_config.h:282`), and `enabled` is
+/// `get_current_version() >= 1`. `Blockchain` constructs its `HardFork` with
+/// `original_version = 1` on all three networks
+/// (`blockchain.cpp:474`/`:476`/`:478`), `init()` seeds `heights[0]` with
+/// that version at height 0, and `current_fork_index` starts at 0 and only
+/// advances — so the condition is true on every chain this daemon can be
+/// running, and the `kB` arm is unreachable. Shekyl is v3-from-genesis with
+/// no pre-v1 history for it to describe (rule 60). The unit is per byte; the
+/// round trip that asked is gone with the branch it fed.
+#[deny(clippy::arithmetic_side_effects)]
+fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
+    let info = fetch_get_info(src)?;
+    let fees = fetch_fee_estimate(src, 0)?;
+    // `res.fee = res.fees[0]` — `on_get_base_fee_estimate` set the scalar
+    // from the first tier, which is why RK-5b could retire it. The console
+    // read the scalar, so it reads tier 0.
+    let dynamic_fee = AtomicUnits::from_raw(fees.fees.0[0]).to_skl_string();
+    let mut out = vec![format!(
+        "Height: {}, diff {}, cum. diff {}, target {} sec, dyn fee {dynamic_fee}/byte",
+        info.height,
+        wide_difficulty_decimal(&info.wide_difficulty),
+        wide_difficulty_decimal(&info.wide_cumulative_difficulty),
+        info.target
+    )];
+    if nblocks == 0 {
+        return Ok(out.join("\n"));
+    }
+    // The window is the last `nblocks` below the tip; `height` is a count, so
+    // the tip's own height is one below it.
+    let window = nblocks.min(info.height);
+    let headers = fetch_block_headers_range(
+        src,
+        info.height.saturating_sub(window),
+        info.height.saturating_sub(1),
+    )?;
+    let Ok(sample) = u64::try_from(headers.len()) else {
+        return Err("the daemon returned more headers than can be counted".to_owned());
+    };
+    if sample == 0 {
+        return Ok(out.join("\n"));
+    }
+
+    // **Every accumulation below saturates and every divisor is `sample`,
+    // which the guard above proves non-zero.** These are chain values, so
+    // they are as large as a difficulty gets — the C++ summed `avgreward`
+    // and `avgnumtxes` into `double`s, which above 2^53 stops being exact,
+    // and printed the result through `print_money`, an integer renderer. The
+    // means here are integer throughout for the money one and the divisor is
+    // the count of headers actually returned rather than the count asked for.
+    let mut difficulty_sum: u128 = 0;
+    let mut tx_count: u64 = 0;
+    let mut reward_sum: u64 = 0;
+    let mut weights: Vec<u64> = Vec::with_capacity(headers.len());
+    let mut earliest = u64::MAX;
+    let mut latest = 0u64;
+    let mut major = [0u32; 256];
+    let mut minor = [0u32; 256];
+    for h in &headers {
+        // An unreadable wide difficulty contributes nothing rather than
+        // failing the whole listing; `wide_difficulty_decimal` shows the raw
+        // string in the per-block view for the same reason.
+        difficulty_sum =
+            difficulty_sum.saturating_add(wide_difficulty_value(&h.wide_difficulty).unwrap_or(0));
+        tx_count = tx_count.saturating_add(h.num_txes);
+        reward_sum = reward_sum.saturating_add(h.reward);
+        weights.push(h.block_weight);
+        earliest = earliest.min(h.timestamp);
+        latest = latest.max(h.timestamp);
+        major[usize::from(h.major_version)] = major[usize::from(h.major_version)].saturating_add(1);
+        minor[usize::from(h.minor_version)] = minor[usize::from(h.minor_version)].saturating_add(1);
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a transaction count average for a human"
+    )]
+    let average_txes = tx_count as f64 / sample as f64;
+    // The C++ divided the timestamp span by `nblocks` rather than by the
+    // `nblocks - 1` intervals those blocks actually span. Preserved: it is
+    // the number this command has always printed, it is not wrong enough to
+    // have a victim, and an operator's baseline is worth more than a
+    // one-block correction made in passing.
+    // `checked_div` rather than `/`: the guard above already returned on a
+    // zero sample, so the `None` arm is unreachable — but total by
+    // construction is this file's rule for peer-influenced arithmetic, and a
+    // guard three statements away is not construction. Same idiom as
+    // `print_net_stats`; see `methods::average_kib`.
+    let average_seconds = latest
+        .saturating_sub(earliest)
+        .checked_div(sample)
+        .unwrap_or(0);
+    out.push(format!(
+        "Last {window}: avg. diff {}, {average_seconds} avg sec/block, avg num txes {}, \
+         avg. reward {}, median block weight {}",
+        difficulty_sum.checked_div(u128::from(sample)).unwrap_or(0),
+        trimmed(average_txes, 6),
+        AtomicUnits::from_raw(reward_sum.checked_div(sample).unwrap_or(0)).to_skl_string(),
+        median(&mut weights)
+    ));
+    out.push(format!("Block versions: {}", version_tally(&major)));
+    out.push(format!("Voting for: {}", version_tally(&minor)));
+    Ok(out.join("\n"))
 }
 
 /// `sync_info`.
@@ -2635,6 +2831,155 @@ mod tests {
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
         assert!(out.contains("malformed get_info reply"), "{out}");
         assert!(out.contains("height"), "{out}");
+    }
+
+    fn fee_reply(fees: [u64; 4]) -> String {
+        typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::GetFeeEstimateResponse {
+                status: RpcStatus::ok(),
+                fees: shekyl_rpc_types::FeeTiers(fees),
+                quantization_mask: 10_000,
+            },
+        }))
+    }
+
+    /// epee's median, both parities.
+    ///
+    /// The even case is the one with a decision in it: epee averages the two
+    /// middle elements and floors, which a lower-middle median (the usual
+    /// Rust one-liner) would silently change.
+    #[test]
+    fn the_median_is_epees_including_its_even_length_average() {
+        assert_eq!(median(&mut []), 0);
+        assert_eq!(median(&mut [7]), 7);
+        assert_eq!(median(&mut [3, 1, 2]), 2);
+        // (2 + 4) / 2 = 3, not 2.
+        assert_eq!(median(&mut [4, 2, 1, 8]), 3);
+        // Floors: (1 + 2) / 2 = 1.
+        assert_eq!(median(&mut [2, 1]), 1);
+        // And it cannot overflow forming the sum.
+        assert_eq!(median(&mut [u64::MAX, u64::MAX]), u64::MAX);
+    }
+
+    /// The version tallies list ascending, omit versions with no votes, and
+    /// separate with `", "` — the string the C++ built by hand.
+    #[test]
+    fn a_version_tally_lists_only_the_versions_present() {
+        let mut counts = [0u32; 256];
+        assert_eq!(version_tally(&counts), "");
+        counts[2] = 3;
+        counts[1] = 1;
+        assert_eq!(version_tally(&counts), "1 v1, 3 v2");
+    }
+
+    /// `print_blockchain_dynamic_stats` over its four legs, minus the one
+    /// this slice deleted.
+    ///
+    /// The fixture makes every aggregate distinguishable: three blocks with
+    /// weights 100/300/200 (median 200, which a mean would report as 200 too,
+    /// so the weights are chosen with an even sibling case in the median test
+    /// above), one and two transactions, and two block versions.
+    #[test]
+    fn dynamic_stats_reports_the_window_it_summarized() {
+        let mut headers: Vec<shekyl_rpc_types::BlockHeader> =
+            [7u64, 8, 9].iter().map(|h| header_at(*h)).collect();
+        headers[0].block_weight = 100;
+        headers[1].block_weight = 300;
+        headers[2].block_weight = 200;
+        headers[0].num_txes = 1;
+        headers[1].num_txes = 2;
+        headers[2].num_txes = 3;
+        headers[2].minor_version = 2;
+        headers[0].timestamp = 1000;
+        headers[1].timestamp = 1120;
+        headers[2].timestamp = 1300;
+        let range = typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
+                status: RpcStatus::ok(),
+                headers,
+            },
+        }));
+        let (address, log) = route_server_recording(vec![
+            ("/get_info", info_reply(10)),
+            ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+            ("json_rpc:get_block_headers_range", range),
+        ]);
+        let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+
+        // The header line: `wide_difficulty` 0x1e240 is 123456, the
+        // cumulative 0x2dc6c0 is 3000000, and the fee is **tier 0** — the
+        // value the retired `fee` scalar carried.
+        assert!(
+            out.contains("Height: 10, diff 123456, cum. diff 3000000, target 120 sec"),
+            "{out}"
+        );
+        assert!(out.contains("dyn fee 0.000000020/byte"), "{out}");
+
+        // avg diff 1000; span 300 / 3 = 100 sec; (1+2+3)/3 = 2 txes;
+        // reward is constant so its mean is itself; median weight 200.
+        assert!(out.contains("Last 3: avg. diff 1000"), "{out}");
+        assert!(out.contains("100 avg sec/block"), "{out}");
+        assert!(out.contains("avg num txes 2"), "{out}");
+        assert!(out.contains("avg. reward 600.000000000"), "{out}");
+        assert!(out.contains("median block weight 200"), "{out}");
+        assert!(out.contains("Block versions: 3 v1"), "{out}");
+        assert!(out.contains("Voting for: 2 v0, 1 v2"), "{out}");
+
+        // The window: height 10, three blocks, so [7, 9].
+        let asked = log.lock().unwrap();
+        let range_body = asked
+            .iter()
+            .filter(|(path, _)| path == "/json_rpc")
+            .map(|(_, body)| serde_json::from_str::<serde_json::Value>(body).unwrap())
+            .find(|v| v["method"] == "get_block_headers_range")
+            .expect("the range was asked for");
+        assert_eq!(range_body["params"]["start_height"], 7);
+        assert_eq!(range_body["params"]["end_height"], 9);
+
+        // And the deleted leg is not asked for. Asserted, because "the
+        // fixture has no row for it" stops being evidence the moment someone
+        // adds one.
+        assert!(
+            asked
+                .iter()
+                .all(|(path, body)| path != "/hard_fork_info" && !body.contains("hard_fork_info")),
+            "the tautological hard-fork leg must be gone: {asked:?}"
+        );
+    }
+
+    /// A window longer than the chain is clamped to the chain, not refused.
+    ///
+    /// `nblocks.min(height)` — the C++ clamped too, and the difference from
+    /// `print_blockchain_info`'s refusal is deliberate: that command names a
+    /// window and this one asks for "the last N", which a shorter chain still
+    /// answers.
+    #[test]
+    fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
+        let (address, log) = route_server_recording(vec![
+            ("/get_info", info_reply(2)),
+            ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+            (
+                "json_rpc:get_block_headers_range",
+                headers_range_reply(&[0, 1]),
+            ),
+        ]);
+        let (code, out) = run(&["print_blockchain_dynamic_stats", "500"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("Last 2:"), "{out}");
+        let asked = log.lock().unwrap();
+        let range_body = asked
+            .iter()
+            .filter(|(path, _)| path == "/json_rpc")
+            .map(|(_, body)| serde_json::from_str::<serde_json::Value>(body).unwrap())
+            .find(|v| v["method"] == "get_block_headers_range")
+            .expect("the range was asked for");
+        assert_eq!(range_body["params"]["start_height"], 0);
+        assert_eq!(range_body["params"]["end_height"], 1);
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.
