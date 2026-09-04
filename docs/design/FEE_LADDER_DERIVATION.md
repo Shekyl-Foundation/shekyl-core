@@ -91,7 +91,19 @@ boundary.** Conjunct (b) is discharged as of review round 2 and, since
 review round 3, literally: `terminal_reward_legs_agree` lives in
 `shekyl-economics`' `emission.rs` tests and asserts the projection leg —
 `projected_already_generated` by name — against validation past the
-exhaustion height (FL-V10). Conjunct (a) — the FL-R12′ signature — is **OPEN**: an earlier revision recorded it as ruled on a steering relay that review round 4 could not verify; the direction (perpetual tail) is maintainer-accepted in-channel, the signature waits on the F-1 pre-/post-multiplier amendment (§8), and **census-R2 stays blocked on it**. The red oracle is re-oriented to the *amended* contract (paid reward = `TAIL` under dormancy, asserted against the shipped composition) and stays red.
+exhaustion height (FL-V10). Conjunct (a) — the FL-R12′ signature — was
+**OPEN from review round 4** (an earlier revision recorded it as ruled on
+a steering relay that round could not verify; the signature then waited
+on the F-1 pre-/post-multiplier amendment) **until review round 8, when
+FL-R12′ was SIGNED with the amendment adopted** (§8, provenance per-row).
+**Both conjuncts are therefore SATISFIED and census-R2 is unblocked** per
+its own criterion; the resumption routes through the consensus lane
+(C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10), and
+`FEE_LADDER_ROUND.md`'s pending list records the satisfaction. The red
+oracle asserts the *amended* contract (paid reward = `TAIL`,
+rail-independent, asserted against the shipped composition) and stays
+red on this branch; it is graduated green through the one owner on
+`feat/fee-ladder-impl-1`.
 
 ## §1 Pre-registered decision criteria (the brief's pre-registration mandate)
 

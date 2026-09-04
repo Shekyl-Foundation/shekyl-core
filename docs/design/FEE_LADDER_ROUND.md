@@ -265,9 +265,17 @@ and both landed on this branch:
   The restored full run fires at axis A first; the rest of the
   economics suite is 79 green with the oracle `#[ignore]`d.
 - **T-4 (Low): §8's BUILT pointer named an unpushed branch.**
-  `feat/fee-ladder-impl-1` pushed (authorized in the same message), so
-  the pointer is verifiable; no doc edit needed. The graduated oracle
-  there carries the same two strengthenings, kept green.
+  `feat/fee-ladder-impl-1` pushed at `581dc27fc` (authorized in the
+  same message), so the pointer is verifiable; no §8 edit needed. The
+  graduated oracle there carries the same two strengthenings, observed
+  green through the one owner (economics 84/84; full workspace 4,569
+  passed excluding the randomx differential's unlinkable C oracle) —
+  which also settles T-3's hypothesis empirically: the implementation
+  multiplies the curve, not the base. **Tense disclosure:** the first
+  revision of this section (commit `0c2acebb3`) wrote this bullet
+  ahead of the observation — "pushed" and "kept green" before either
+  had happened — the same defect class as round two's "BUILT on this
+  branch." Corrected here in the commit made after both observations.
 
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
