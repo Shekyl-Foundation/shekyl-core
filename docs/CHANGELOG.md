@@ -81,9 +81,13 @@
   drift set); the queue-bookkeeping-mismatch drop keeps its teeth.
   Enforced twice: consensus-invariants **[7/7]** (whole-arm extraction,
   full punitive token set, both failure paths observed firing) and the
-  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam; both
-  vectors red-first; three review rounds hardened the fix through two
-  Bugbot HIGHs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
+  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam, three
+  vectors: the orphan arm's no-punishment-and-healing vector and the
+  cleanup-failure-recovery vector each observed red-first on their
+  pre-fix forms, while the bookkeeping-mismatch vector stays green on
+  both trees BY DESIGN — it guards against over-correction; five
+  review rounds hardened the fix through two Bugbot HIGHs and two
+  Bugbot MEDIUMs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
   the R1 batch is complete and the round doc is closed to completed/.
 
 - **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
