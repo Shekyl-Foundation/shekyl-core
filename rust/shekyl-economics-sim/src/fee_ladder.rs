@@ -817,43 +817,47 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
 // Fee signal bits (FL-C9 — minted post-registration at review round 5)
 // ---------------------------------------------------------------------------
 
-/// FL-C9: the information an observer recovers from `(fee, weight,
-/// inclusion height)` beyond weight alone, for a CONFORMING wallet,
-/// **conditioned on the registered §4.4 dwell measurements** (ceiling-`C_q`
-/// values hold ≥ 20 000 blocks in every registered scenario, so the
-/// stale-quote / height-window term is ≈ 0; under raw `C` it was the
-/// FL-C4a failure, measured there).
+/// FL-C9, as re-labeled at review round 6: **anchored-attack
+/// candidate-set reduction**, not "signal bits as if the chain leaked
+/// identity". FCMP++ puts no linkage primitive on the wire — nothing
+/// on-chain says two transactions share an author — so the attack is:
+/// acquire an anchor OFF-chain (merchant, KYC withdrawal, timing,
+/// submission path), take the height window around it, filter by every
+/// public field. The fee rung's contribution is a multiplier of
+/// ≈ `1/usage_share(rung)` on that one transaction's candidate set,
+/// **applied once per anchored transaction**. Conditioned on the
+/// registered §4.4 dwell measurements (ceiling-`C_q` values hold
+/// ≥ 20 000 blocks, so the stale-quote term is ≈ 0).
 ///
-/// For a rung ladder the recovered signal is the rung choice: `H(rung)`
-/// expected bits per tx, and per-rung surprisal for the persistent-marker
-/// view. For the state-computed single rate the rate is a public function
-/// of chain state at the height, so the recovered signal is 0 bits by
-/// construction. The information-theoretic floor below 0 is confidential
-/// fees (commit the fee, prove `fee − floor ≥ 0`) — out of scope: an
-/// FCMP++ tx-format surface, recorded and not designed here.
+/// The state-computed single rate contributes ×1 (no reduction — every
+/// conforming transaction's set is the full window under the other
+/// fields). Surprisal in bits is kept as the log view of the same
+/// number: `surprisal = log2(reduction)`. The earlier `share^n`
+/// set-measure compounding field was STRUCK at round 6: cross-transaction
+/// linkage requires an adversary who already holds the user's
+/// transactions from outside the chain, at which point tier habit is
+/// weak confirmation on a stronger leak — and tier choice uncorrelated
+/// with identity carries zero cross-transaction information even then.
+/// The floor below ×1 is confidential fees (commit the fee, prove
+/// `fee − floor ≥ 0`) — out of scope: an FCMP++ tx-format surface.
 #[derive(Serialize)]
-pub struct FeeSignalBits {
+pub struct AnchoredReduction {
     pub traffic_model: &'static str,
     /// Tier shares ×1000 (economy / standard / priority).
     pub shares_milli: [u64; 3],
-    /// `H(rung)` — expected bits/tx a rung ladder leaks, ×1000. Identical
-    /// for the inherited 4-rung and proposed 3-rung ladders under
-    /// measured usage (`Fm` carries 0%); the 4th rung is latent surface,
-    /// not measured entropy.
-    pub ladder_bits_per_tx_milli: u64,
-    /// Per-rung surprisal ×1000 — the persistent-marker cost of paying
-    /// that rung once.
+    /// Per-rung candidate-set reduction factor ×1000 (= 1/share): what
+    /// an anchored observer divides the window's candidate set by, once,
+    /// for a transaction in that rung.
+    pub reduction_factor_milli: [u64; 3],
+    /// The same number in log view: `log2(reduction)` ×1000.
     pub rung_surprisal_milli: [u64; 3],
-    /// The state-computed single rate leaks this many bits beyond
-    /// `(weight, height)`: 0 by construction.
-    pub single_rate_bits: u64,
-    /// Set-measure view of habitual-minority linkability (NOT additive
-    /// bits — rung choice is per-user-persistent, so successive txs are
-    /// correlated): each observed priority tx intersects the candidate
-    /// set with a subset of this measure ×1000 (under independence of
-    /// OTHER users' choices), so n observed txs confine a habitual
-    /// priority user to a `share^n`-measure subset of traffic.
-    pub priority_set_measure_milli: u64,
+    /// `H(rung)` ×1000 — expected bits/tx, kept as a summary statistic.
+    /// Identical for the inherited 4-rung and proposed 3-rung ladders
+    /// under measured usage (`Fm` carries 0%).
+    pub ladder_bits_per_tx_milli: u64,
+    /// The state-computed single rate's reduction factor ×1000: 1000
+    /// (×1.0, no reduction) by construction.
+    pub single_rate_reduction_milli: u64,
 }
 
 #[allow(
@@ -861,24 +865,26 @@ pub struct FeeSignalBits {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn fee_signal_bits(traffic_model: &'static str, shares_milli: [u64; 3]) -> FeeSignalBits {
+fn anchored_reduction(traffic_model: &'static str, shares_milli: [u64; 3]) -> AnchoredReduction {
     let mut h = 0.0f64;
     let mut surprisal = [0u64; 3];
+    let mut reduction = [0u64; 3];
     for (i, &m) in shares_milli.iter().enumerate() {
         let p = m as f64 / 1000.0;
         if p > 0.0 {
             let s_bits = -p.log2();
             h += p * s_bits;
             surprisal[i] = (s_bits * 1000.0).round() as u64;
+            reduction[i] = (1000.0 / p).round() as u64;
         }
     }
-    FeeSignalBits {
+    AnchoredReduction {
         traffic_model,
         shares_milli,
-        ladder_bits_per_tx_milli: (h * 1000.0).round() as u64,
+        reduction_factor_milli: reduction,
         rung_surprisal_milli: surprisal,
-        single_rate_bits: 0,
-        priority_set_measure_milli: shares_milli[2],
+        ladder_bits_per_tx_milli: (h * 1000.0).round() as u64,
+        single_rate_reduction_milli: 1000,
     }
 }
 
@@ -897,8 +903,9 @@ pub struct FeeLadderReport {
     feedback: Vec<FeedbackResult>,
     degenerate: DegeneratePins,
     /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
-    /// round 5, after measurement began).
-    fee_signal_bits: Vec<FeeSignalBits>,
+    /// round 5, after measurement began; re-labeled at round 6 to the
+    /// anchored-attack candidate-set reduction).
+    fee_signal_bits: Vec<AnchoredReduction>,
 }
 
 /// Run the FL instrument and build the report.
@@ -1036,9 +1043,9 @@ pub fn report() -> FeeLadderReport {
     // FL-C9 under the registered traffic model and its §1.8 sensitivity
     // variants.
     let fee_signal = vec![
-        fee_signal_bits("registered 50/40/10", [500, 400, 100]),
-        fee_signal_bits("sensitivity 70/25/5", [700, 250, 50]),
-        fee_signal_bits("sensitivity 33/33/33", [334, 333, 333]),
+        anchored_reduction("registered 50/40/10", [500, 400, 100]),
+        anchored_reduction("sensitivity 70/25/5", [700, 250, 50]),
+        anchored_reduction("sensitivity 33/33/33", [334, 333, 333]),
     ];
 
     FeeLadderReport {
@@ -1107,12 +1114,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for fs in &r.fee_signal_bits {
         let _ = writeln!(
             out,
-            "fee-ladder: c9 [{}] ladder_bits/tx={} surprisal={:?} single_rate_bits={} priority_set_measure={}",
+            "fee-ladder: c9 [{}] reduction_x1000={:?} surprisal={:?} ladder_bits/tx={} single_rate_reduction=x1.0",
             fs.traffic_model,
-            fs.ladder_bits_per_tx_milli,
+            fs.reduction_factor_milli,
             fs.rung_surprisal_milli,
-            fs.single_rate_bits,
-            fs.priority_set_measure_milli
+            fs.ladder_bits_per_tx_milli
         );
     }
     let _ = writeln!(

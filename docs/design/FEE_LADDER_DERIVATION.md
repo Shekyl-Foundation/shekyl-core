@@ -263,15 +263,23 @@ fixed before any result existed; C9 was minted post-registration, on a
 measurement** — it exists because review round 5 found the register's
 privacy criteria stopped one rung early, and its weight is assessed
 accordingly (the number is real and plainly bears on the decision; the
-criterion could not have predicted it). Definition:
-**the information an observer recovers from `(fee, weight, inclusion
-height)` beyond weight alone, for a conforming wallet, conditioned on the
-registered §4.4 dwell measurements** (the stale-quote/height-window term
-is ≈ 0 under ceiling-`C_q`, whose values hold ≥ 20 000 blocks; under raw
-`C` it was the FL-C4a failure). Under FCMP++ the per-tx plaintext is
-about five fields and the fee is the only one the user *chooses*; since
-weight is public and fee = rate × weight, the rate — and with it the rung
-— is recovered exactly. Measured in §4.7; consumed by FL-R17.
+criterion could not have predicted it). Definition — **re-labeled at review round 6, at the maintainer's own
+correction, to the honest attack model**: FL-C9 is the **anchored-attack
+candidate-set reduction**, not "signal bits as if the chain leaked
+identity." FCMP++ puts no linkage primitive on the wire (no addresses,
+no ring members; key images reveal only double-spends) — nothing
+on-chain says two transactions share an author; *that is the design
+working*. The attack that exists: acquire an anchor **off-chain**
+(a merchant paid at time T, a KYC'd exchange withdrawal, a
+Dandelion++/Tor timing observation, a compromised submission path), take
+the height window around T, and filter by every public field. The fee
+rung's contribution is a multiplier of ≈ `1/usage_share(rung)` on that
+one transaction's candidate set, **applied once per anchored
+transaction** — this folds back into FL-C4's registered framing (the set
+over `(rung, weight bucket, height window)`), which was the right one
+all along. Conditioned on the registered §4.4 dwell measurements (the
+stale-quote term is ≈ 0 under ceiling-`C_q`). Measured in §4.7; consumed
+by FL-R17.
 
 ---
 
@@ -772,37 +780,45 @@ states the grid may not represent.
   decision row (FL-R12′), because a false monetary-policy promise and a
   missing governance mechanism need different owners and different urgency.
 
-### §4.7 Fee signal bits (FL-C9; measured at review round 5)
+### §4.7 Anchored candidate-set reduction (FL-C9; measured at round 5, re-labeled at round 6)
 
 Instrument section `fee_signal_bits` (analytic, reproducible from the
-registered traffic model):
+registered traffic model). The measured numbers survived the round-6
+re-label unchanged — surprisal is `log2` of the reduction factor — but
+their *meaning* is corrected: these are per-anchored-transaction
+candidate-set divisors, not identity bits the chain leaks.
 
-| Traffic model | rung-ladder bits/tx | per-rung surprisal (eco/std/pri) | single state-computed rate | priority set-measure per tx |
+| Traffic model | per-rung reduction (eco/std/pri) | surprisal (bits) | `H(rung)` bits/tx | single state-computed rate |
 | --- | --- | --- | --- | --- |
-| registered 50/40/10 | **1.361** | 1.00 / 1.32 / **3.32** | **0** | ×0.10 |
-| sensitivity 70/25/5 | 1.076 | 0.51 / 2.00 / **4.32** | 0 | ×0.05 |
-| sensitivity 33/33/33 | 1.585 | ~1.59 each | 0 | ×0.33 |
+| registered 50/40/10 | ×2.0 / ×2.5 / **×10** | 1.00 / 1.32 / 3.32 | 1.361 | **×1.0** |
+| sensitivity 70/25/5 | ×1.4 / ×4.0 / **×20** | 0.51 / 2.00 / 4.32 | 1.076 | ×1.0 |
+| sensitivity 33/33/33 | ~×3 each | ~1.59 each | 1.585 | ×1.0 |
 
-Readings:
+Readings, as corrected at round 6:
 
-- The inherited 4-rung and proposed 3-rung ladders measure **identically**
-  (`Fm` carries 0% usage — the 4th rung is latent surface, not entropy).
-  Both leak ~1.36 bits per transaction under the registered model.
-- The per-rung surprisal is the **persistent-marker** cost: rung choice is
-  per-user-persistent, so successive transactions are correlated — the
-  honest linkability statement is the *set-measure* view, not additive
-  bits: each observed priority transaction intersects the candidate set
-  with a 0.10-measure subset of traffic (under independence of *other*
-  users' choices), so a habitual priority user's n observed transactions
-  confine them to a `0.1ⁿ`-measure subset. A habitual priority payer is a
-  linkable pseudonym in fee-space.
-- The **state-computed single rate leaks 0 bits** beyond
-  `(weight, height)` by construction: the rate is a public function of
-  chain state at the height, identical for every conforming wallet.
-- The information-theoretic floor below 0 is **confidential fees**
+- **The reduction is real, bounded, and minority-borne.** An anchored
+  observer divides the height window's candidate set by ≈ the inverse
+  usage share of the transaction's rung — once, for that transaction. At
+  5% priority usage that is ~20× against the standard-tier set in the
+  same window. It is not a behavior the user can opt out of by
+  randomizing: a priority transaction sits in the priority bucket
+  regardless of why it is there. A uniform rate makes every
+  transaction's candidate set the full window (×1).
+- ~~A habitual priority payer is a linkable pseudonym in fee-space~~ —
+  **struck at round 6 (maintainer's own correction)**: cross-transaction
+  linkage requires an adversary who *already holds* a set of the user's
+  transactions from an external source, at which point fee habit is a
+  weak confirmation signal on a much stronger leak (and if they hold the
+  submission path, fee is irrelevant). Without the anchor, "all priority
+  fees" is a **partition, not a cluster**. Tier choice uncorrelated with
+  identity carries zero cross-transaction information even with an
+  anchor set. The earlier ×0.1ⁿ set-measure compounding is withdrawn
+  with this strike.
+- The inherited 4-rung and proposed 3-rung ladders measure identically
+  (`Fm` carries 0% — latent surface, not entropy).
+- The information-theoretic floor below ×1 is **confidential fees**
   (commit the fee, prove `fee − floor ≥ 0`) — out of scope: an FCMP++
-  transaction-format surface, recorded here as the endpoint and not
-  designed.
+  transaction-format surface, recorded as the endpoint and not designed.
 
 ## §5 The rung ruling (proposed, unsigned) and the anonymity analysis
 
@@ -820,7 +836,7 @@ Readings:
 | FL-C6 relay floor | **clamp** (option i), floor re-derivation deferred to CEN-M3's round | §5.4 |
 | FL-C7 feedback | pass, no smoothing needed beyond `C_q` | §4.5 |
 | FL-C8 degenerates | pinned; exhaustion-era governance deferred FL-D1 | §4.6 |
-| FL-C9 fee signal bits (post-registration, round 5) | measured: rung ladders 1.36 bits/tx + 3.32-bit priority marker; single state-computed rate 0 — **rung-count ruling REOPENED as FL-R17** | §4.7, W7-revised |
+| FL-C9 anchored candidate-set reduction (post-registration, round 5; re-labeled round 6) | measured: minority-rung reduction ×10–×20 once per anchored tx; single state-computed rate ×1.0 — **rung-count ruling REOPENED as FL-R17** | §4.7, W7-revised |
 
 ### §5.2 The proposed ladder
 
@@ -937,7 +953,7 @@ future parameter change pushes reachable `C` below 0.5.
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | Corrected estimate at least reports the truth (zero); the governance gap itself remains | **Open hazard, deferred FL-D1** — post-mining-era block-size governance has no economic mechanism; reopen criteria §9 |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
-| W7 | Fee-tier fingerprint vs **single-tier** — **REVISED at review round 5: the round-2 disposition below the strike evaluated a STATIC single rate and is superseded.** ~~A single price cannot do both registered jobs (floor vs expansion differ 50×–2500×)~~ — that argument assumed the rate is a constant. The round's own machinery (state-computed, pow2-quantized, hysteresis-guarded) yields **one rate that is itself a function of congestion state**: the admission floor when quiet, rising toward `2R/M` as the median expands — *illustrative shape only; the coupling signal (median ratio, backlog depth, filled fraction) is deliberately undesigned here and gets its own pre-registered criteria in the FL-R17 round*. Every conforming wallet at a height pays the identical value; the 200×-at-baseline objection evaporates because the rate is at the expansion price only when there is expansion to price | Observer reads the public fee field | §4.7: rung ladders leak **1.36 bits/tx** (registered model) with the priority marker at **3.32 bits** and a `×0.1ⁿ` set-measure for habitual payers; the single rate leaks **0 bits** beyond `(weight, height)` | **What single-rate gives up, named honestly: selectable urgency** — a user cannot buy ahead of the queue during congestion; low-value users defer rather than choose economy (UX cost, no privacy cost; rate bounded above by `2R/M` since nothing beyond it profits a miner). Under the mission hierarchy: selectable priority is a *feature*, expansion funding is security-adjacent, the anonymity set is *privacy* | The trade is FL-R17's decision, not this row's. Named for the FL-R17 round: (i) the coupling signal is a *manipulable* public — median stuffing at floor cost moves everyone's rate (W4's socialized-cost analysis applies: pow2 plateaus absorb small pushes, nobody is individually marked); (ii) the security-budget effect under elastic demand is **unmeasured** (deferral vs higher-uniform-rate — needs the median-dynamics instrument); (iii) `Custom` survives only as a floor-to-cap corridor and the case for deleting it entirely strengthens |
+| W7 | Fee-tier fingerprint vs **single-tier** — **REVISED at review round 5: the round-2 disposition below the strike evaluated a STATIC single rate and is superseded.** ~~A single price cannot do both registered jobs (floor vs expansion differ 50×–2500×)~~ — that argument assumed the rate is a constant. The round's own machinery (state-computed, pow2-quantized, hysteresis-guarded) yields **one rate that is itself a function of congestion state**: the admission floor when quiet, rising toward `2R/M` as the median expands — *illustrative shape only; the coupling signal (median ratio, backlog depth, filled fraction) is deliberately undesigned here and gets its own pre-registered criteria in the FL-R17 round*. Every conforming wallet at a height pays the identical value; the 200×-at-baseline objection evaporates because the rate is at the expansion price only when there is expansion to price | Observer holds an off-chain anchor and filters the height window by public fields (§1.11's corrected model — the chain itself provides no linkage primitive) | §4.7: a rung divides the anchored transaction's candidate set by ≈ 1/usage-share — **×10** at the registered priority share, **×20** at 5% — once per anchored tx, minority-borne, non-optable; the single rate divides by **×1.0**. ~~1.36 bits/tx + ×0.1ⁿ habitual-payer compounding~~ struck at round 6 | **What single-rate gives up, named honestly: selectable urgency** — a user cannot buy ahead of the queue during congestion; low-value users defer rather than choose economy (UX cost, no privacy cost; rate bounded above by `2R/M` since nothing beyond it profits a miner). Under the mission hierarchy: selectable priority is a *feature*, expansion funding is security-adjacent, the anonymity set is *privacy* | The trade is FL-R17's decision, not this row's. Named for the FL-R17 round: (i) the coupling signal is a *manipulable* public — median stuffing at floor cost moves everyone's rate (W4's socialized-cost analysis applies: pow2 plateaus absorb small pushes, nobody is individually marked); (ii) the security-budget effect under elastic demand is **unmeasured** (deferral vs higher-uniform-rate — needs the median-dynamics instrument); (iii) `Custom` survives only as a floor-to-cap corridor and the case for deleting it entirely strengthens |
 | W8 | Miner fee-rank ordering leak (minted at review round 5; **exists TODAY under any multi-rate ladder, independent of FL-R17's outcome**) | Fee-sorted inclusion order: block position reveals fee rank, so miners publish a partial ordering of user urgency every block | Standing finding against the current and proposed ladders alike | The sharper half is what becomes **possible**, not what stops leaking: under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be constrained without breaking the fee market — under a single rate there is none, which turns deterministic/hash-ordered inclusion from an unenforceable exhortation ("miners should not discriminate") into a **checkable rule** a node can verify. This argument survives a dispute about the bit-count. Rule-71-adjacent surface, not a freebie | Disposition-pointer: rides the FL-R17 round |
 
 ## §7 What changes downstream (proposals with triggers — RK-5 lane untouched)
@@ -979,7 +995,7 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R16a | **Past-asymptote error arm (BUILD-BLOCKING):** `base_block_reward`'s `AlreadyGeneratedExceedsSupply` (`emission.rs:61`) is unreachable-by-design today and load-bearing wrong under the accepted direction. Consequences if the ruled accumulator ships with the arm intact, both at exhaustion ≈ yr 73: (i) the 5-arg estimate path (`blockchain.cpp:4541-4544`) errors → falls to the 10 000-SKL `BLOCK_REWARD_OVERESTIMATE` placeholder → `fee_policy.rs` refuses that snapshot **by design** → **no wallet can quote a fee**; (ii) `get_current_fee_per_byte` (`:4448-4453`) returns its failure-arm 0 → `check_fee` rejects everything → **the mempool refuses every transaction** (`kept_by_block` excepted). Removal ships with the FL-R12′ implementation | **decision folded into the FL-R12′ build** | minted at review round 4 |
 | FL-R16b | **`ActivityMetric::new` cap guard (`activity.rs:124`): non-blocking API cleanup.** False under the accepted direction, but fixture-test-only today — remove with the rename sweep, not on the build's critical path | **record** | minted at review round 4 |
 | FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** | **record — binds the implementing PR** | minted at review round 4 |
-| FL-R17 | **Rung count REOPENED (review round 5): the C9-vs-C2(b) trade, decided under the mission hierarchy.** Candidates: (a) the proposed 3-rung ladder (§5.2) — leaks 1.36 bits/tx + the 3.32-bit priority marker (§4.7); (b) the **state-computed single rate** — 0 bits, both registered jobs done state-wise, at the cost of selectable urgency (a *feature*). FL-C2(b)'s cost under (b) is restated honestly: not "expansion unfunded" (the rate reaches `2R/M` under sustained congestion) but *no user can individually buy full expansion now*. **Recommendation, labeled as such and measured on ONE axis only: (b) *pending* the median-dynamics instrument, not (b) despite it** — privacy has a number (1.36 bits/tx, ×0.1ⁿ), loop stability and revenue-under-elasticity have none yet; the hierarchy resolves feature < privacy, and §5.3's own principle applied one rung further; (a) survives only if the FL-R17 round's instrument finds a concrete security failure in the rate-follows-demand loop. **Empirical gate before either signs:** the median-dynamics instrument (demand → block filling → median evolution → rate), measuring loop stability *and* the security-budget effect under elastic demand — both currently unmeasured; the coupling signal gets its own pre-registered criteria. If (a) still wins, it wins having paid for rungs two and three in anonymity set on the record | **decision required — the maintainer signs; recommendation (b)** | minted at review round 5 |
+| FL-R17 | **Rung count REOPENED (review round 5): the C9-vs-C2(b) trade, decided under the mission hierarchy.** Candidates: (a) the proposed 3-rung ladder (§5.2) — an anchored attacker divides a minority-rung transaction's candidate set by ×10–×20, once per anchored tx (§4.7 as re-labeled at round 6); (b) the **state-computed single rate** — ×1.0, both registered jobs done state-wise, at the cost of selectable urgency (a *feature*). FL-C2(b)'s cost under (b) is restated honestly: not "expansion unfunded" (the rate reaches `2R/M` under sustained congestion) but *no user can individually buy full expansion now*. **Recommendation, DOWNGRADED at round 6 to a weak lean (b), still one-axis-measured and *pending* the median-dynamics instrument:** the privacy side collapsed from "persistent pseudonym" to a bounded, anchored-only, once-per-transaction constant factor (×10–×20, minority-borne, non-optable) — real but an order smaller than round 5 pitched it, and **the maintainer records no strong prior on the trade's direction**. What survives for (b): the reduction falls entirely on minority-tier users who cannot opt out, W8's checkable-inclusion-rule possibility, and one dwell value to hold instead of three; what stands against: selectable urgency is a real capability; (a) survives only if the FL-R17 round's instrument finds a concrete security failure in the rate-follows-demand loop. **Empirical gate before either signs:** the median-dynamics instrument (demand → block filling → median evolution → rate), measuring loop stability *and* the security-budget effect under elastic demand — both currently unmeasured; the coupling signal gets its own pre-registered criteria. If (a) still wins, it wins having paid for rungs two and three in anonymity set on the record | **decision required — the maintainer signs; recommendation (b)** | minted at review round 5 |
 
 Signature line (empty by design): ________________
 

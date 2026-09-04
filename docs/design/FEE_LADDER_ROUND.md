@@ -145,6 +145,35 @@ early. Dispositions:
   — the amendment concerns the floor's composition, FL-R17 concerns how
   many rates sit above it. Two open signatures, separate decisions.
 
+## Review round 6 (maintainer, 2026-09-03): the honest attack model
+
+The maintainer corrected his own round-5 framing downward, with the
+method stated: FCMP++ puts **no linkage primitive on the wire** — you
+cannot cluster a user's transactions from chain data; the real attack is
+**anchored candidate-set reduction** (off-chain anchor → height window →
+filter by public fields), and the fee rung's contribution is a
+`1/usage_share` divisor applied **once per anchored transaction**.
+Dispositions:
+
+- **FL-C9 re-labeled** to "anchored-attack candidate-set reduction."
+  The measured numbers survive (surprisal = log2 of the divisor):
+  ×2/×2.5/×10 at the registered shares, ×20 at 5% priority; single rate
+  ×1.0. The "persistent per-user marker / linkable pseudonym / ×0.1ⁿ"
+  claims are **struck** — cross-transaction linkage requires an
+  adversary who already holds the user's transactions from outside, at
+  which point tier habit is weak confirmation on a stronger leak;
+  without the anchor, "all priority fees" is a partition, not a
+  cluster. FL-C4's original framing is noted as having been right all
+  along.
+- **FL-R17's recommendation downgraded** to a weak lean (b): the
+  privacy side is real but an order smaller than round 5 pitched it —
+  bounded, anchored-only, once-per-transaction, minority-borne,
+  non-optable — and **the maintainer records no strong prior on the
+  trade's direction**. Both axes now carry the honest state: privacy a
+  bounded constant factor, stability/revenue unmeasured pending the
+  median-dynamics instrument. W8's possibility argument survives
+  untouched (it never depended on the bit-count).
+
 ## FL-R12′ (2026-09-03; provenance corrected at review round 4)
 
 **Direction: plain perpetual tail — accepted by the maintainer
@@ -233,9 +262,10 @@ directly. Dispositions:
    drafted in the row and the oracle matches it; the maintainer signs
    the amended row or corrects the draft. Build authorization is **NO**
    until then (review round 4).
-2. **FL-R17** — rung count reopened (review round 5): 3-rung vs
-   state-computed single rate, decided on §4.7's measurements;
-   recommendation (b) recorded; empirical gate = median-dynamics
+2. **FL-R17** — rung count reopened (round 5), attack model corrected
+   (round 6): 3-rung (×10–×20 anchored reduction, minority-borne) vs
+   state-computed single rate (×1.0); recommendation a weak lean (b),
+   maintainer records no strong prior; empirical gate = median-dynamics
    instrument. Independent of the F-1 amendment.
 3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
    pending the amended FL-R12′ signature).
