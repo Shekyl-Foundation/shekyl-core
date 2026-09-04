@@ -4120,6 +4120,51 @@ mod tests {
         assert!(!out.contains("2.06 kH/s"), "{out}");
     }
 
+    /// The warning appears only where T actually changes a number.
+    ///
+    /// `alt_chain_info`'s listing form derives nothing from T, so it stays
+    /// silent even against a daemon reporting a foreign one — the inverse
+    /// direction of the test above, and the reason it exists: a warning
+    /// attached to output it cannot affect is how a reader learns to skip
+    /// the one that matters. The tip form, which computes a hash-rate share,
+    /// does warn.
+    #[test]
+    fn the_target_warning_appears_only_where_t_changes_a_number() {
+        let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+        info["target"] = serde_json::json!(60);
+        let chains = alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)]));
+
+        let address = route_server(vec![
+            ("/get_info", info.to_string()),
+            ("json_rpc:get_alternate_chains", chains.clone()),
+        ]);
+        let (code, listing) = run(&["alt_chain_info", "", "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{listing}");
+        assert!(
+            !listing.contains("WARNING:"),
+            "the listing form uses no T: {listing}"
+        );
+
+        let tip = hash_n(9).to_string();
+        let address = route_server(vec![
+            ("/get_info", info.to_string()),
+            ("json_rpc:get_alternate_chains", chains),
+            (
+                "json_rpc:get_block_header_by_hash",
+                slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
+            ),
+        ]);
+        let (code, detail) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{detail}");
+        assert!(detail.contains("WARNING:"), "{detail}");
+        // And the share is computed with the build's T, not the daemon's 60:
+        // 100 * 120 * 2 / 360 = 66.666667, where 60 would give 33.333333.
+        assert!(
+            detail.contains("Approximated 66.666667% of network hash rate"),
+            "{detail}"
+        );
+    }
+
     /// A route the daemon no longer serves is a request failure, not a zero.
     ///
     /// The other half of §2.1.1: the acceptor answers `404` for an unrouted
