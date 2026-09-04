@@ -913,11 +913,13 @@ pub type UnstakeResult = DrainResult;
 
 /// `collect_unstaked` result (PR-C). Internally tagged to match
 /// [`shekyl_engine_core::CollectOutcome`]: a `SWEPT` arm *requires*
-/// `tx_hash` / `swept` / `remainder`, so a missing remainder cannot
-/// deserialize and cannot be rendered as silent completion. **`remainder`
-/// is the completion fact**: `"0"` means nothing remains beyond this
-/// pass; nonzero means call again once the residue matures or this pass
-/// confirms.
+/// `tx_hash` / `swept` / `remainder` / `another_pool_remains`, so
+/// neither half of the completion fact can be omitted and rendered as
+/// silent completion. **The completion fact is two-part**: `remainder`
+/// is the swept persona's (`"0"` = nothing remains beyond this pass;
+/// nonzero = call again once the residue matures or this pass confirms),
+/// and `another_pool_remains` is the lane's (`true` = another exited
+/// persona still holds an uncollected pool — call again).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CollectUnstakedResult {

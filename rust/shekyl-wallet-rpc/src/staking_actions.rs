@@ -247,8 +247,8 @@ pub(crate) async fn unstake(
 }
 
 /// `collect_unstaked` — sweep one pass of the released exit collateral to
-/// this wallet's principal. The reply's `remainder` is the completion fact
-/// (`"0"` = nothing beyond this pass); `NOTHING_LEFT` means the collection
+/// this wallet's principal. The reply carries the two-part completion fact
+/// (see [`CollectUnstakedResult`]); `NOTHING_LEFT` means the collection
 /// is already complete and the funded-gated retirement proceeds on its own.
 pub(crate) async fn collect_unstaked(
     tenants: &tokio::sync::Mutex<TenantState>,
