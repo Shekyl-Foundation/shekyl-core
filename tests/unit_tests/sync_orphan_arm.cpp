@@ -10,9 +10,11 @@
 // the two) cannot be scheduled deterministically through real state, so
 // the scripted core reproduces its OBSERVABLE instead: have_block
 // answers true at the pre-check and handle_incoming_block returns the
-// orphan verdict, every run, no timing. Two vectors, and the pair is
-// the point: vector 1 alone would pass a fix that stops punishing
-// everywhere; vector 2 is what proves the SPLIT the ruling made.
+// orphan verdict, every run, no timing. Three vectors: vector 1 alone
+// would pass a fix that stops punishing everywhere, vector 2 proves
+// the SPLIT the ruling made (the bookkeeping-mismatch arm keeps its
+// teeth), and vector 3 proves the recovery survives a core cleanup
+// failure instead of re-creating the stall.
 
 #define IN_UNIT_TESTS
 
