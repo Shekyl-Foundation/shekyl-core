@@ -35,8 +35,14 @@ namespace {
 // carry real points rather than byte fills.
 crypto::public_key test_output_key_for_index(size_t i)
 {
+  // The (i+1)*G promise only holds while i+1 fits one scalar byte; past that
+  // a narrowing cast wraps (and at i+1 == 256 yields the zero scalar), so the
+  // bound is asserted rather than left as a reuse trap.
+  if (i + 1 > 255)
+    throw std::runtime_error("fixture: output index " + std::to_string(i)
+      + " exceeds the single-byte scalar this helper promises");
   crypto::secret_key sk{};
-  sk.data[0] = static_cast<char>(i + 1);
+  sk.data[0] = static_cast<char>(static_cast<unsigned char>(i + 1));
   crypto::public_key pk{};
   // Throw rather than EXPECT_TRUE-and-return: a non-fatal expectation would
   // hand back an unset key, which then fails downstream as a curve-tree abort

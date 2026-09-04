@@ -558,13 +558,20 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           // `continue` would drop it from the curve tree: deterministically,
           // permanently unspendable, with no verify-time twin to notice. Skips
           // on this path are silent by construction, so it aborts instead.
-          throw DB_ERROR("curve-tree leaf: unsupported output target at DB add (validated at admission?)");
+          throw DB_ERROR(("curve-tree leaf: unsupported output target (variant "
+            + std::to_string(vout.target.index()) + ") at vout index " + std::to_string(i)
+            + " of tx " + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + " at DB add (validated at admission?)").c_str());
 
         if (i >= tx.ct_signatures.outPk.size())
           // CEN-L11: unreachable — four `outPk.size() != vout.size()` gates
           // cover coinbase and non-coinbase on both paths (cryptonote_core.cpp,
           // cryptonote_format_utils.cpp, blockchain.cpp x2). Same reasoning.
-          throw DB_ERROR("curve-tree leaf: outPk shorter than vout at DB add (validated at admission?)");
+          throw DB_ERROR(("curve-tree leaf: outPk shorter than vout at DB add (vout index "
+            + std::to_string(i) + ", outPk size " + std::to_string(tx.ct_signatures.outPk.size())
+            + ", vout size " + std::to_string(tx.vout.size()) + ", tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + ") (validated at admission?)").c_str());
         ct::key commitment = tx.ct_signatures.outPk[i].mask;
 
         const MaturityHeight mat{maturity_raw};
@@ -579,7 +586,11 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))
-          throw DB_ERROR("curve-tree leaf construction failed at DB add (validated at admission?)");
+          throw DB_ERROR(("curve-tree leaf construction failed at DB add (vout index "
+            + std::to_string(i) + " of tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + "; output key or commitment is not a canonical prime-order point)"
+            " (validated at admission?)").c_str());
 
         add_pending_tree_leaf(mat, this_output, leaf);
         add_block_pending_addition(bh, this_output, mat);
