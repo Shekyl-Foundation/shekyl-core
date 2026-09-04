@@ -3262,7 +3262,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 //
 // Structural (every mask): canonical, prime-order (torsion-free) encoding —
 // the same strictness the FCMP++ leaf builder applies, so no accepted mask is
-// silently skipped from the curve tree. For non-coinbase this is redundant
+// silently skipped from the curve tree. LOAD-BEARING DOWNSTREAM (CEN-L11):
+// blockchain_db.cpp's leaf collector now THROWS on a construct_leaf failure
+// rather than dropping the output, on the strength of this gate and
+// check_outs_valid; weakening either surfaces as an abort at block connect. For non-coinbase this is redundant
 // with shekyl_verify_ct_balance's point gate; for coinbase (CTTypeNull, no
 // balance equation) this is the sole gate.
 //
