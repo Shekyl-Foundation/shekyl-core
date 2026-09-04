@@ -994,6 +994,83 @@ the storage cost of a failed switch. Check-in leans: K2 orchestration
 (store-rebuild integrity asserts), K4 composition-is-call-ordering (member
 rules already have owners), nothing new crosses.
 
+### 5.3 Ground at the pin (dev `012cdece0`, 2026-09-04)
+
+Census anchors for every row in this batch have drifted (the R1b merge
+moved the file); live anchors below, and the close-of-round re-anchor
+obligation (§5.2) is confirmed necessary by inspection.
+
+- **K1 — two conditions wearing one row.** Three enforcement legs,
+  compared predicate-by-predicate (steering's pre-hardening flag): leg 1
+  (`blockchain.cpp:2153–2158`) tests the **self-claimed** miner-tx
+  height (`get_block_height(b) == 0`) as the ladder's first check and
+  rejects with `m_verifivation_failed`; leg 2 (`:1441–1449`) asserts the
+  **derived** `bei.height = prev.height + 1 > 0` — structurally
+  unreachable absent a wrap, failing into the difficulty-0 sentinel;
+  leg 3 (`alt_window.rs:57`, landed R1b) refuses the same **derived**
+  height through the FFI (rc −5). Legs 2+3 share one condition — a Rust
+  owner with a C++ belt in front of it. Leg 1's condition is a special
+  case of prevalidate's claimed-equals-derived equality (`:1560–1565`),
+  and its one distinct job is **ordering**: the cheapest possible exit,
+  before checkpoints, attestation, and PoW. The census row conflated
+  claimed and derived; K1 is therefore **not** a three-leg dedup — the
+  two conditions get ruled separately, jobs enumerated before any leg
+  retires.
+- **K2** (`:2083–2135`) — `build_alt_chain` rebuild integrity: per-blob
+  parse assert, main-height sanity, connection assert
+  (`h == front.prev_id`), `parent_in_main` imperative; all
+  fail-closed false returns. Lean holds: orchestration.
+- **K3** (`:2410` add-path assert; `:3075` A1's routing leg; DB belt
+  `MDB_NODUPDATA` in `db_lmdb.cpp`) — duplicate-alt rejection enforced
+  at three layers. Lean: orchestration + belts; the routing leg is
+  A1-owned.
+- **K4** (`:2153–2500`) — the admission ladder in execution order at
+  the pin: claimed-height-0 → checkpoint window
+  (`is_alternative_block_allowed` `:2164`) → hardfork version →
+  attestation → `build_alt_chain` → newest-11 MTP + FTL → checkpoint
+  conformance → alt-window plan + LWMA difficulty → PoW →
+  `prevalidate_miner_transaction` → pool-supplement NIC (K9) → weight
+  accumulation → store. The deferral set (`validate_miner_transaction`,
+  `check_tx_inputs`, curve-root) pays at promotion — by the victim,
+  per §5.1.
+- **K9** (`:2329–2376`) — supplement txs pass `ver_non_input_consensus`
+  then enter the pool via `add_tx(relay_method::block)` or the alt
+  block is rejected. **Second producer found:** the pop-return path
+  (`:870`, `pop_block_from_blockchain`) feeds the same
+  `relay_method::block` arm — the `kept_by_block` tolerance serves BOTH
+  alt admission and pop-return, so a ruling on one reshapes the other.
+- **K10** (`tx_pool.cpp:304–340`) — `kept_by_block` input-check failure
+  stores anyway with `fcmp_verified = 0` and `last_failed_*` reset.
+  **Post-census composition change:** CEN-M8's hash-gated proof-skip
+  (PR #602) means such a tx now pays **full verification at connect** —
+  the stored-unverified tx can no longer ride the connect skip. The
+  storage-cost wargame seed stands unchanged.
+- **A1** (`:3060–3095`) — three-store membership: main
+  (`block_exists`), alt (`get_alt_block`), and `m_invalid_blocks`, an
+  **in-memory process-lifetime set** — known-invalid re-offers are
+  rejected free until restart, then re-validated from scratch
+  (drop-at-restart symmetry with the alt store).
+- **A2** (`:6631` fail-closed routing re-check at add; template-cache
+  variant `:1797`) — orchestration.
+- **A4** (`:2509–2517`) — parent in neither store → `m_marked_as_orphaned`,
+  **not stored**, `return true` — no `bvc` failure, no peer punishment;
+  the p2p layer re-requests ancestry. The unbounded re-request cost is
+  GAP-4's question; named here, not answered here.
+
+### 5.4 Proposed round structure (no rulings yet)
+
+Decision-grouped, three questions: **Q1 — the admission-tier
+contract** (K4 at center: what must be paid at admission vs promotion
+under the §5.1 interval constraint; K1's two conditions ruled inside
+it — the ordering leg and the derived-height owner separately, jobs
+enumerated). **Q2 — storage and eviction bounds** (K10's
+`verification_impossible` residue, A1's invalid set, alt-store growth
+under cheap deep forks, the drop-at-restart floor; GAP-4's coupling
+named, its bound question not pre-empted here). **Q3 — topology
+ratifications** (A1/A2/A4, K2, K3: orchestration and belts,
+ratify-and-keep with every belt named). Per-ruling falsifiers
+throughout; ratify-then-build.
+
 ## 6. Round log
 
 - 2026-09-02 — Ground read at `bf317111f`; check-in with steering
