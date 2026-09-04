@@ -468,14 +468,9 @@ the same B5 binding plus its own leaf recompute. The two reads name one
 value on every network where B5 runs; the only thing that makes the choice
 observable is B5's FAKECHAIN skip (census R9), and only in tests.
 
-*History:* this section was split from its first commit (`fb047fdc20`,
-2026-04-03): line 2a named the per-height record while this paragraph
-narrated the header read the code performed at the time. `292c00aff7`
-(2026-04-13) moved the code to the record because FAKECHAIN test blocks
-carry placeholder headers, without touching this document, and a dozen
-later edits (through the 2026-04-15 banner) never reconciled the two. That
-in-code FAKECHAIN reason states a *consequence* of the state-not-claim
-rule, not its rationale.
+*Reconciled 2026-09-04:* this paragraph previously narrated a header read
+the code stopped performing on 2026-04-13; the archaeology and the ruling
+are in `CONSENSUS_RULE_CENSUS.md` §7 #16.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 

@@ -774,9 +774,10 @@ input, not fixes.
     `get_block_header(rv.referenceBlock).curve_tree_root` read the code
     performed then); `292c00aff7` (2026-04-13) moved the code to the record
     because FAKECHAIN test blocks carry placeholder headers without touching
-    the doc, and a dozen later doc edits (through the 2026-04-15 banner)
-    never reconciled the two — so the prose has narrated dead code for five
-    months. **Ruling:** the
+    the doc, and none of the later doc edits — four through the 2026-04-15
+    banner, thirty to date (`git log 292c00aff7..d9d27c752 --
+    docs/FCMP_PLUS_PLUS.md`) — reconciled the two, so the prose narrated
+    dead code for five months. **Ruling:** the
     anchor is the curve-tree root *as it stands after `referenceBlock`
     connects* — a state property, of which the header field and the
     per-height record are two witnesses bound to each other by CEN-B5; the
