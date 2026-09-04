@@ -1255,12 +1255,32 @@ incident. The fix shape is R1b's: on in-loop orphan, stop punishing —
 clean up the span and fall back to the live path's re-sync semantics;
 the `:1407` queue-bookkeeping-mismatch drop KEEPS its teeth (it is the
 arm that independently establishes span misrepresentation, and it
-fires before any state race can). Build lands in this round
-(orchestration, C++ protocol handler; rule 20 — no rule content
-crosses). *Falsifier:* a demonstrated dishonest path that reaches the
-in-loop orphan WITHOUT tripping `:1407`'s bookkeeping check — i.e.
-proof that a lying peer can only be caught at the punish arm — reopens
-the split with that evidence.
+fires before any state race can). **The class is a tree-documented
+property of this subsystem, not our assertion:** `core.cpp:255–258` —
+inside `update_checkpoints`, the exact function whose reload detonates
+this race — records a previously FIXED instance in its own comment
+("The former `!= MAINNET` guard returned TRUE — reporting success for
+work it never did"). Three instances, one subsystem, one of them
+fixed-and-annotated in place: the posture inheritance's
+first-in-reading-order ranking claimed a property, and the tree
+agrees. Build lands in this round (orchestration, C++ protocol
+handler; rule 20 — no rule content crosses, and the diff direction is
+stated as an expectation the build is measured against: the fix
+REMOVES a punishment path and falls back to existing live-path
+semantics, so the C++ diff must be net-negative or flat — thickening
+would mean the fix grew a mechanism it does not need).
+
+*Falsifiers, two, reopening different things:* (i) **defect
+falsifier** — the honest-path enumeration being wrong: a demonstration
+that the checkpoint rollback cannot interleave mid-span (a lock or
+ordering not found here), or that popped blocks are re-homed after
+all; that retires the finding. (ii) **fix falsifier** — a demonstrated
+dishonest path reaching the in-loop orphan WITHOUT tripping `:1407`'s
+bookkeeping check, showing the punish arm carries detection value
+`:1407` does not; that reopens HOW to fix, never WHETHER the defect
+exists — a dishonest path existing and honest peers being punished can
+both be true at once, and if they are, the arm still must not punish,
+because it fires on both.
 
 Row dispositions if ratified as drafted: K4, K1a/K1b (split), K9, K10,
 A1, A2, K2, K3 → bucket 2; A4 → bucket 2 with the Q3b defect fix built
