@@ -934,6 +934,8 @@ PR #600". Same round: `origin/dev` merged (CHANGELOG both-sides-add
 resolved keeping both families; dev's CEN-M8 hash-gated skip is
 disjoint from every R1b region).
 
+## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
+
 **R1c now runs after C2-R0** (§1) and inherits its re-scoping note —
 C2-R0's stated deliverable is naming which of these nine rows a
 protocol-level depth rule affects. The census-wide line re-anchor
