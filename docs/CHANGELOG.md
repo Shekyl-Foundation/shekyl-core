@@ -30,6 +30,25 @@
 
 ### Added
 
+- **C2-R0 phase 2 — the census learns to say what is missing.** The
+  consensus census gains **§12, the GAP register**: 8 `GAP-` rows (registered
+  at birth) for consensus rules with no site — 7 grounded from the phase-1
+  corpus study ([`C2_R0_PHASE1_CANDIDATES.md`](design/C2_R0_PHASE1_CANDIDATES.md),
+  landed as the frozen input) and 1 steering-routed carry (GAP-8: the two
+  supply clamps encode **opposite terminal emission policies**, documented
+  on both sides without either comment seeing the other — the register's
+  worked example; resolution rides FL-R12′). Six candidates ground as
+  **present-already** and are recorded with pointers (C3→R3, C4→the
+  unlock_time triple-divergence, C5→no peer-time mechanism, C9→R4,
+  C11→bootstrap arms, C12→R1b). GAP rows sit outside the §3 denominator —
+  site-anchored sums must not absorb siteless rows. External evidence was
+  spot-checked at primary sources before entering any row (the Qubic
+  campaign figures verify verbatim, with the +461.8/−460.0
+  separate-ledger-lines decompression recorded). §10's R2 batch now carries
+  Rick's 2026-09-03 **deferral** in the queue row itself (resumes on
+  FL-R12′; the red-test conjunct is already discharged), with pointers on
+  all 8 member rows.
+
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**
   ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
