@@ -457,13 +457,16 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
-   pending the amended FL-R12′ signature).
-4. **PR** — branch is pushed for review (review round 3); **PR remains
-   unopened** per the maintainer's instruction.
-5. Census-R2: **deferred per review-round-2 ruling** — resumes on
-   FL-R12′ signature (red-test conjunct already discharged). The deferral
-   + resume criteria were also routed by the steering lane to the
-   consensus lane (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md`
-   §10) so the queue itself carries them; with the branch now pushed the
-   criteria are additionally reachable at this file.
+3. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
+   gate is SATISFIED (signed round 8, amendment adopted), so the round is
+   simply open — non-blocking (the perpetual-tail ruling retired the
+   genesis-blocking escalation), scheduled on its own merits.
+4. **PRs** — the design PR is **this PR (#614)**; the implementation
+   follows as the round-9 split: `feat/fee-ladder-impl-1` (atomic
+   bundle, built and gated) then `-impl-2` (mechanical rename), each
+   opened after this document merges.
+5. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
+   (round 8) and the red test extant (graduated green on impl-1). R2 can
+   resume per its own criterion; the routing to the consensus lane
+   (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries
+   the criteria, and this file records their satisfaction.

@@ -356,7 +356,12 @@ mod tests {
     ///    (pre-implementation red: 360 000 000 — penalty before
     ///    multiplier and cap);
     /// 3. the pre-penalty paid quantity equals
-    ///    [`effective_emission`] at every probe, mid-curve included.
+    ///    [`effective_emission`] at every probe, mid-curve included;
+    /// 4. the projection leg — `projected_already_generated` BY NAME
+    ///    (the census-R2 reopen conjunct): the neutral trajectory
+    ///    accrues THROUGH the asymptote and feeds the same paid
+    ///    contract (pre-implementation red: saturation at the asymptote
+    ///    plus the modulated floor).
     #[test]
     fn terminal_reward_legs_agree() {
         let p = EconomicParams::default();
@@ -405,6 +410,22 @@ mod tests {
         assert!(
             effective_emission(mid, dormancy_v, &p).unwrap() < base_block_reward(mid, &p).unwrap(),
             "dormancy must modulate the mid-curve paid quantity below the neutral base"
+        );
+
+        // Leg 4 — the projection leg, calling the function the census-R2
+        // reopen criterion names: past the 2^21-identity tail-headroom
+        // crossing the neutral trajectory accrues THROUGH the asymptote
+        // (FL-R12': no saturation) and feeds the same paid contract.
+        let past_boundary = 19_200_000;
+        let ag = projected_already_generated(past_boundary, &p).unwrap();
+        assert!(
+            ag > s,
+            "the neutral trajectory must pass the asymptote (no saturation)"
+        );
+        assert_eq!(
+            paid_block_reward(zone, 1, ag, zone, dormancy_v, &p).unwrap(),
+            tail,
+            "projection-fed paid reward != TAIL past the boundary (height {past_boundary})"
         );
     }
 
