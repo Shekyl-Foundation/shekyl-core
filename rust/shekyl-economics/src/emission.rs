@@ -410,7 +410,14 @@ mod tests {
         );
 
         // Legs 1, 2 and the projection-fed paid limb, on BOTH rails
-        // (round 10, T-3). The rail setup is asserted, not assumed.
+        // (round 10, T-3). The rail setup is asserted, not assumed — and
+        // so is its discriminating power: T-3's whole point needs a surge
+        // rail that is a REAL multiplier, or `max(M_r·base, TAIL)` and the
+        // signed composition agree everywhere and the loop is tautology.
+        assert!(
+            p.release_max > crate::params::SCALE,
+            "surge rail degenerate: release_max must exceed 1.0 for the rail loop to discriminate"
+        );
         for (rail, v, pinned) in [
             ("dormancy", 0, p.release_min),
             ("surge", 2 * p.tx_volume_baseline, p.release_max),

@@ -97,6 +97,52 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   ASSERT_EQ(base_reward, release_reward);
 }
 
+TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
+{
+  // The 6-arg get_block_reward is a marshaling shim ("C++ computes
+  // nothing"), and the order checks above cannot pin the FL-R12'
+  // composition: at the tail the two rejected orderings differ in VALUE,
+  // not direction. These are the FFI-side pin's probes (legacy_tests.rs
+  // block_reward_marshals_the_signed_composition) taken through the C++
+  // overload, so the shim's own additions — version -> zone threading and
+  // the status -> bool mapping — are inside the tested surface. Written
+  // under the no-test-exists-means-write-the-test rule: this overload
+  // crossed with the FL-R12' bundle carrying only directional coverage.
+  const uint8_t version = HF_VERSION_SHEKYL_NG;
+  const uint64_t tail = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
+  const size_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  uint64_t reward = 0;
+
+  // Tail boundary under dormancy (v = 0 pins M_r at its 0.8 rail), no
+  // penalty: the floor pays TAIL whole. The shipped pre-FL-R12' order
+  // paid 480000000 here (the multiplier applied to the floored base).
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY - tail + 1, reward, version, 0));
+  ASSERT_EQ(reward, tail);
+
+  // Past the asymptote with x = 1/2: penalty AFTER the floor => TAIL*3/4.
+  // Pre-FL-R12' this state was an error arm (FL-R16a).
+  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, MONEY_SUPPLY + tail, reward, version, 0));
+  ASSERT_EQ(reward, tail / 4 * 3);
+
+  // Surge rail (M_r at 1.3) at the asymptote: rail-independent TAIL — the
+  // axis that separates max(M_r*curve, TAIL) from a floor-inside-the-
+  // operand rebuild (FL round 10, T-3).
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY, reward, version, SHEKYL_TX_VOLUME_BASELINE * 100));
+  ASSERT_EQ(reward, tail);
+
+  // Mid-curve dormancy, cross-checked against the DIRECT FFI call: the
+  // marshal identity that pins the tx_volume_avg threading itself. The
+  // three tail probes above are M_r-independent by contract, so only a
+  // mid-curve probe can catch a shim that drops or rewrites the volume
+  // argument on the way through.
+  uint64_t expected = 0;
+  uint64_t limit = 0;
+  ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
+            shekyl_block_reward(0, zone / 2, MONEY_SUPPLY / 2, zone, 0, &expected, &limit));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY / 2, reward, version, 0));
+  ASSERT_EQ(reward, expected);
+}
+
 TEST(mining_parity, pow_registry_is_randomx_only)
 {
   // Phase 3b collapsed get_pow_for_height to RandomX for every block version

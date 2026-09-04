@@ -1071,3 +1071,81 @@ fn advance_already_generated_passes_the_asymptote() {
         u64::MAX
     );
 }
+
+// ─── shekyl_corrected_fee_ladder / shekyl_fee_correction_quantized ──────────
+//
+// Same boundary rationale as `shekyl_block_reward` above: the crate tests
+// own the ladder arithmetic (shekyl-economics `fee.rs`); what only exists
+// here is the null check, the four out-writes, and the fact that the
+// marshal reaches the crate function unchanged. Written under the
+// no-test-exists-means-write-the-test rule: these exports crossed with the
+// FL-R12′ bundle and had no boundary pin of their own.
+
+#[test]
+fn corrected_fee_ladder_null_out_returns_minus_one() {
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        st, -1,
+        "caller misuse is negative, mirroring the reward FFI"
+    );
+}
+
+#[test]
+fn corrected_fee_ladder_marshals_the_heritage_vector() {
+    // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over
+    // the heritage values — the same vector scaling_2021.cpp pins from the
+    // C++ side, so a drift in either marshal direction fails one of the two.
+    let mut fees = [SENTINEL; 4];
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            fees.as_mut_ptr(),
+        )
+    };
+    assert_eq!(st, 0);
+    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+}
+
+#[test]
+fn fee_correction_quantized_ffi_matches_the_crate() {
+    let p = shekyl_economics::EconomicParams::default();
+    let scale = shekyl_economics::params::SCALE;
+    // A decisive surge state (M_r pinned at 1.3, no sigma/burn, no previous
+    // value): C = 1.3 snaps up to the C_q = 2 step.
+    let v = 2 * p.tx_volume_baseline;
+    let got = shekyl_fee_correction_quantized(v, 0, 0, 0);
+    assert_eq!(
+        got,
+        shekyl_economics::fee_correction_quantized(v, 0, 0, 0, &p)
+    );
+    assert_eq!(got, 2 * scale);
+    // And the hysteresis argument is threaded, not dropped — asserted at a
+    // probe where held and fresh DIFFER (v = baseline + 1 puts raw C just
+    // past the 2^0 boundary, inside the 3% band): with the previous step it
+    // holds, without it it snaps up. A probe where both paths agree could
+    // not fail on a dropped argument.
+    let boundary_v = p.tx_volume_baseline + 1;
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 0, 0, scale),
+        scale
+    );
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 0, 0, 0),
+        2 * scale
+    );
+}

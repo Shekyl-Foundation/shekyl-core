@@ -134,6 +134,32 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   ASSERT_EQ(fees[3], 140000u);
 }
 
+TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
+{
+  // The 2-arg wrapper — the path wallets actually reach — computes its C_q
+  // inputs from chain state and then clamps the economy rung at the very
+  // value check_fee prices from (the FL-R12' round-8 rider as an
+  // identity: a conforming wallet's quote can only err toward
+  // acceptance). The 5-arg pins above bypass all of that, so this is the
+  // wrapper's own pin, written under the no-test-exists-means-write-the-
+  // test rule. On this fixture (empty chain: height 0, tx volume 0 =>
+  // dormancy) the ladder's own economy rung sits above the relay floor,
+  // so the clamp is the belt the derivation says it is (FL-C6) — the
+  // identity is asserted, not the clamp's activation, which no reachable
+  // state exercises.
+  PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
+  std::vector<uint64_t> fees;
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
+  ASSERT_EQ(fees.size(), 4);
+  // The FL-R17 signed shape survives the state-computed path: the RK-5
+  // bridge slot mirrors standard, and the rungs ascend.
+  ASSERT_EQ(fees[2], fees[1]);
+  ASSERT_LE(fees[0], fees[1]);
+  ASSERT_LE(fees[1], fees[3]);
+  // The acceptance identity.
+  ASSERT_GE(fees[0], bc->get_current_fee_per_byte());
+}
+
 TEST(fee_2021_scaling, rounding)
 {
   ASSERT_EQ(cryptonote::round_money_up("27810", 3), "27900.000000000");
