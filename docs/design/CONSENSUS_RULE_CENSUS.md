@@ -16,9 +16,13 @@ divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
 regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 §5.4.1 for the three states and the exception register. **DRS-P0f's row
 coverage is complete** as of 2026-09-02 (P0f is the per-row conformance review
-— *not* P0d, which is Digest v0): all 102 bucket-1/2 rows disposed —
-99 CHECKED-CONFORMANT, 1 DIVERGENT (CEN-B5's rule-71 FAKECHAIN skip, census
-R9), 2 failed closed (CEN-L8; CEN-I12, split anchor source). **Both S-graded findings are fixed and re-verified** — the S0 by
+— *not* P0d, which is Digest v0): the **102** bucket-1/2 rows that existed on
+2026-09-02 are disposed — 97 CHECKED-CONFORMANT, 3 DIVERGENT (CEN-B5's rule-71
+FAKECHAIN skip, census R9; CEN-L11 with CEN-L12 coupled, fix landed and
+promotion owed at a merged sha), 2 failed closed (CEN-L8; CEN-I12, split anchor
+source). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
+2026-09-03, so the live bucket-1/2 count is **111** and those nine are
+UNREVIEWED until P0f reviews them. **Both S-graded findings are fixed and re-verified** — the S0 by
 PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.
@@ -395,7 +399,7 @@ All rows here are enforced at **both** pool admission (`ver_non_input_consensus`
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | CEN-H1 | Serialized tx size ≤ `CRYPTONOTE_MAX_TX_SIZE` (1 000 000 bytes) | tx_verification_utils.cpp:66; cryptonote_core.cpp:728; cryptonote_basic_impl.cpp:88–90 | C | 4 | pinned-not-re-derived | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §10 :790 (frozen limit) | RC-53 ⇒ merged. Demoted from CEN's bucket 2 under the §2 bar: frozen, never derived. Constant hand-maintained (cryptonote_config.h:42), not `config/`. **R2 DEFERRED** (Rick 2026-09-03, §10) pending FL-R12′ |
-| CEN-H2 | Tx version must be exactly 3 (the HF-dispatched min/max table collapses to 3..3 at HF1; independently re-enforced at CEN-I3) | tx_verification_utils.cpp:55–78 | C | 2 | ratified | rule 60 v3-from-genesis; [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) :491, Q12 ruling :654–655 (deliberate keep; V4 = future lattice-only) | RC-68 ⇒ merged. The dead 1..1/2..2 dispatch arms are rule-60 deletion residue; the drift-pair with CEN-I3's hardcoded 3..3 is a FOLLOWUPS row **closed 2026-09-04** (repointed here) |
+| CEN-H2 | Tx version must be exactly 3 (the HF-dispatched min/max table collapses to 3..3 at HF1; independently re-enforced at CEN-I3) | tx_verification_utils.cpp:55–78 | C | 2 | ratified | rule 60 v3-from-genesis; [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) :491, Q12 ruling :654–655 (deliberate keep; V4 = future lattice-only) | RC-68 ⇒ merged. The dead 1..1/2..2 dispatch arms are rule-60 deletion residue; the drift-pair with CEN-I3's hardcoded 3..3 is a live FOLLOWUPS row (repointed here) |
 | CEN-H3 | Tx weight ≤ half the minimum block weight minus coinbase reserve (= 149 400) | tx_verification_utils.cpp:82, 203–210 | C | 4 | examined-disposition | [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) §8 row N3 :1271 — examined on the **submit path** only | RC-69 ⇒ merged. Demoted from CEN's bucket 2 under the §2 bar; the block-connect side of the same limit was never separately examined, and the limit formula is inherited scaling. §10 R2. **R2 DEFERRED** (Rick 2026-09-03, §10) pending FL-R12′ |
 | CEN-H4 | Non-coinbase tx must have ≥ 1 input | cryptonote_core.cpp:774–779 | C | 4 | none | — | RC-57 ⇒ merged |
 | CEN-H5 | Input-variant whitelist: `txin_gen` forbidden outside coinbase; only `txin_to_key` and the three archival variants (`serve_credit_response`, `bond_post`, `reward_emission`) are accepted; `txin_to_script`/`txin_to_scripthash` rejected everywhere (incl. the double-spend visitor and the DB whitelist) | cryptonote_format_utils.cpp:773–834; blockchain.cpp:3162–3168; blockchain_db.cpp:398–402 | C | 1 | spec | archival vin taxonomy: [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md) Q3/Q11; rule 60 "Accepted transaction types" | RC-58, RC-59 ⇒ merged. **Promoted from CEN's bucket 4**: the whitelist is the E3-ruled vin taxonomy (RC's reading, evidence located). The script-variant *type fossils* remain rule-60 deletion residue — §10 R5, and the double-spend visitor joins them. **P0f correction (2026-09-03):** the visitor cited here is **dead** (only call commented out at `blockchain.cpp:6106` — as this census's own §5 item 3 and CEN-L1's row already record) and its body accepts `txin_gen`; live enforcement is site 1 (relay admission + pool-supplement connect via `ver_non_input_consensus`), `check_tx_inputs`' typed dispatch at connect, and the DB backstop for script variants — CSR §5.4.1 CEN-H5 carries the corrected walk |

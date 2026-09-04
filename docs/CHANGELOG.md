@@ -161,9 +161,12 @@
   watermark single-writer/no-revert invariant [6/6].
 
 - **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **99
-  CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (CEN-B5's rule-71
-  FAKECHAIN skip, which census R9 owns). **Both S-graded findings ran the
+  register disposes the **102** bucket-1/2 census rows that existed when it
+  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
+  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
+  whose fix has landed and whose promotion is owed at a merged sha). The
+  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
+  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
   no S-graded divergence remains and the register no longer gates DRS-0. Each
