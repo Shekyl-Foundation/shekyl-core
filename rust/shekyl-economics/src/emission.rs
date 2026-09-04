@@ -347,52 +347,113 @@ mod tests {
     /// companion; the contract numbers never moved — only the plumbing
     /// they are asserted through, which now IS the one owner
     /// [`paid_block_reward`]). Asserts the signed composition
-    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`:
+    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`.
     ///
-    /// 1. dormancy floor at `x = 0`: 600 000 000 on both sides of the
-    ///    boundary and PAST the asymptote (pre-implementation red:
-    ///    480 000 000 — the multiplier applied to the floored base);
-    /// 2. penalty AFTER the floor at `x = ½` on the tail: 450 000 000
-    ///    (pre-implementation red: 360 000 000 — penalty before
-    ///    multiplier and cap);
+    /// At and past the asymptote the signed value is `max(M_r·0, TAIL) =
+    /// TAIL` on EVERY release-multiplier rail, so legs 1, 2 and the paid
+    /// half of leg 4 run on BOTH rails (round 10, T-3):
+    /// rail-independence is what separates the signed composition from a
+    /// floor-inside-the-operand rebuild — `max(M_r·base(ag), TAIL)`
+    /// agrees on the dormancy rail and pays `1.3·TAIL` on the surge
+    /// rail.
+    ///
+    /// 1. floor at `x = 0`: 600 000 000 on both sides of the boundary
+    ///    and PAST the asymptote, on both rails (pre-implementation
+    ///    red: 480 000 000 dormancy / 599 999 999 surge — the
+    ///    multiplier applied to the floored base, then remaining-cap);
+    /// 2. penalty AFTER the floor at `x = ½` on the tail: 450 000 000,
+    ///    rail-independent (pre-implementation red: 360 000 000 —
+    ///    penalty before multiplier and cap);
     /// 3. the pre-penalty paid quantity equals
     ///    [`effective_emission`] at every probe, mid-curve included;
     /// 4. the projection leg — `projected_already_generated` BY NAME
-    ///    (the census-R2 reopen conjunct): the neutral trajectory
-    ///    accrues THROUGH the asymptote and feeds the same paid
-    ///    contract (pre-implementation red: saturation at the asymptote
-    ///    plus the modulated floor).
+    ///    (the census-R2 reopen conjunct), on ITS OWN AXIS (round 10,
+    ///    T-2, because a saturated projection lands exactly on the
+    ///    asymptote where the paid value is TAIL anyway): the neutral
+    ///    trajectory passes the asymptote, accrues past the crossing at
+    ///    EXACTLY the tail rate, and feeds the same paid contract on
+    ///    both rails (pre-implementation red: saturation at the
+    ///    asymptote plus the modulated floor).
     #[test]
     fn terminal_reward_legs_agree() {
+        use crate::release::calc_release_multiplier;
+
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
         let s = p.money_supply;
         let zone = 300_000;
         let dormancy_v = 0; // pins the release multiplier at its 0.8 rail
 
-        // Leg 1 — floor on the PAID emission at x = 0, both sides of the
-        // boundary and past the asymptote (total, no error arm: FL-R16a).
-        for ag in [s - tail + 1, s, s + tail] {
+        // Leg 4's own axis FIRST (round 10, T-2), because the rail
+        // loop's projection-fed limb depends on it: the trajectory must
+        // actually pass the asymptote for that limb to probe the far
+        // side.
+        let past_boundary = 19_200_000;
+        let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
+        assert!(
+            ag_proj > s,
+            "the neutral trajectory must pass the asymptote (no saturation): \
+             already_generated={ag_proj} at height {past_boundary}"
+        );
+        // Past the crossing it accrues at EXACTLY the tail rate. The
+        // crossing height itself has no integer closed form independent
+        // of the projection's own recurrence (the tail floor cuts in
+        // while `remaining > 0`, so the trajectory skips past the
+        // asymptote mid-stream), but the through-asymptote RATE is TAIL
+        // per block by FL-R12′ — the delta pins the accrual with a
+        // contract-derived expected.
+        let k = 1_000u64;
+        assert_eq!(
+            projected_already_generated(past_boundary + k, &p).unwrap(),
+            ag_proj + k * tail,
+            "past the asymptote the neutral trajectory must accrue at exactly TAIL per block"
+        );
+
+        // Legs 1, 2 and the projection-fed paid limb, on BOTH rails
+        // (round 10, T-3). The rail setup is asserted, not assumed.
+        for (rail, v, pinned) in [
+            ("dormancy", 0, p.release_min),
+            ("surge", 2 * p.tx_volume_baseline, p.release_max),
+        ] {
+            let m_r =
+                calc_release_multiplier(v, p.tx_volume_baseline, p.release_min, p.release_max);
+            assert_eq!(m_r, pinned, "rail setup: v={v} must pin the {rail} rail");
+
+            // Leg 1 — floor on the PAID emission at x = 0, both sides
+            // of the boundary and past the asymptote (total, no error
+            // arm: FL-R16a): TAIL exactly, on this rail as on the other.
+            for ag in [s - tail + 1, s, s + tail] {
+                assert_eq!(
+                    paid_block_reward(zone, zone, ag, zone, v, &p).unwrap(),
+                    tail,
+                    "paid reward != TAIL on the {rail} rail at already_generated={ag}"
+                );
+            }
+
+            // Leg 2 — penalty applies AFTER the floor: at the tail with
+            // x = 1/2 (weight = 1.5 * median), paid = TAIL * (1 - x^2),
+            // rail-independent like the floor it composes onto.
+            let (median, weight) = (zone, zone + zone / 2);
+            let expected = {
+                let (m, c) = (u128::from(median), u128::from(weight));
+                u64::try_from(u128::from(tail) * (2 * m - c) * c / (m * m)).unwrap()
+            };
+            assert_eq!(expected, 450_000_000);
             assert_eq!(
-                paid_block_reward(zone, zone, ag, zone, dormancy_v, &p).unwrap(),
+                paid_block_reward(median, weight, s, zone, v, &p).unwrap(),
+                expected,
+                "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
+                 penalty must compose AFTER the floor"
+            );
+
+            // Leg 4's paid limb — the projection-fed state pays the same
+            // rail-independent TAIL contract.
+            assert_eq!(
+                paid_block_reward(zone, 1, ag_proj, zone, v, &p).unwrap(),
                 tail,
-                "paid reward != TAIL under dormancy at already_generated={ag}"
+                "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
             );
         }
-
-        // Leg 2 — penalty applies AFTER the floor: at the tail with
-        // x = 1/2 (weight = 1.5 * median), paid = TAIL * (1 - x^2).
-        let (median, weight) = (zone, zone + zone / 2);
-        let expected = {
-            let (m, c) = (u128::from(median), u128::from(weight));
-            u64::try_from(u128::from(tail) * (2 * m - c) * c / (m * m)).unwrap()
-        };
-        assert_eq!(expected, 450_000_000);
-        assert_eq!(
-            paid_block_reward(median, weight, s, zone, dormancy_v, &p).unwrap(),
-            expected,
-            "penalized tail reward != TAIL*(1-x^2): penalty must compose AFTER the floor"
-        );
 
         // Leg 3 — the pre-penalty paid quantity is effective_emission
         // everywhere, mid-curve included (weight = 1 ⇒ no penalty).
@@ -410,22 +471,6 @@ mod tests {
         assert!(
             effective_emission(mid, dormancy_v, &p).unwrap() < base_block_reward(mid, &p).unwrap(),
             "dormancy must modulate the mid-curve paid quantity below the neutral base"
-        );
-
-        // Leg 4 — the projection leg, calling the function the census-R2
-        // reopen criterion names: past the 2^21-identity tail-headroom
-        // crossing the neutral trajectory accrues THROUGH the asymptote
-        // (FL-R12': no saturation) and feeds the same paid contract.
-        let past_boundary = 19_200_000;
-        let ag = projected_already_generated(past_boundary, &p).unwrap();
-        assert!(
-            ag > s,
-            "the neutral trajectory must pass the asymptote (no saturation)"
-        );
-        assert_eq!(
-            paid_block_reward(zone, 1, ag, zone, dormancy_v, &p).unwrap(),
-            tail,
-            "projection-fed paid reward != TAIL past the boundary (height {past_boundary})"
         );
     }
 
