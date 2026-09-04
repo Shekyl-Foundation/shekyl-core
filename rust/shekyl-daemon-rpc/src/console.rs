@@ -1012,11 +1012,19 @@ fn address_type_name(address_type: u8) -> &'static str {
 /// slice that deletes the route turns this red rather than leaving it
 /// answering "no reply" forever. Both are in place; when RK-8 moves the
 /// route, this struct is replaced by the shared type.
+///
+/// **Neither field carries `#[serde(default)]`, and that is the second half
+/// of the guarantee.** Route deletion is the loud failure the `ok_or_else`
+/// above catches; a *rename or removal of a field* is the quiet one, and a
+/// default would absorb it — `print_net_stats` would report `0` up and `0`
+/// down, a real number the daemon does not hold, with no error and no red
+/// test. Required fields turn that into a deserialization error naming the
+/// field that moved. Both are `KV_SERIALIZE` (not `_OPT`) in
+/// `COMMAND_RPC_GET_LIMIT::response_t`, so the reply always carries them and
+/// absence can only mean the contract moved.
 #[derive(serde::Deserialize)]
 struct GetLimitReplyProvisional {
-    #[serde(default)]
     limit_up: u64,
-    #[serde(default)]
     limit_down: u64,
 }
 
@@ -1292,6 +1300,91 @@ mod tests {
             s.write_all(reply.as_bytes()).unwrap();
         });
         address
+    }
+
+    /// A **multi-request** acceptor that routes on what the console asked
+    /// for: by request path for the REST legs, and by the JSON-RPC `method`
+    /// in the body for `/json_rpc`.
+    ///
+    /// Its reason to exist is the bridged legs (§2.1.1). A console command
+    /// that crosses to a route this slice does not serve makes *two or more*
+    /// requests, and `one_shot` can only answer the first — so the commands
+    /// whose safety condition is "the console gate covers this command" were
+    /// the exact commands no gate could reach. Routing rather than replaying
+    /// a queue also means the assertion is on the reply the console asked
+    /// for, not on call order: a command that stopped issuing one of its legs
+    /// gets `no reply`, not a silently shifted answer.
+    ///
+    /// An unrouted request is answered `404` with an empty body, which is
+    /// what a daemon that no longer serves the route would do.
+    fn route_server(routes: Vec<(&'static str, String)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { return };
+                let Some((path, body)) = read_request(&mut s) else {
+                    continue;
+                };
+                // `/json_rpc` carries the name in the body; every other route
+                // *is* the name.
+                let key = if path == "/json_rpc" {
+                    serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("method")?.as_str().map(str::to_owned))
+                        .map_or_else(|| path.clone(), |m| format!("json_rpc:{m}"))
+                } else {
+                    path.clone()
+                };
+                let reply = routes.iter().find(|(k, _)| *k == key).map(|(_, v)| v);
+                let (status, body) = reply.map_or_else(
+                    || ("404 Not Found", String::new()),
+                    |r| ("200 OK", r.clone()),
+                );
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                // One write: a head-then-body pair lets a client that hung
+                // up between them see a truncated reply, which reads as a
+                // malformed daemon rather than a closed socket.
+                let mut response = head.into_bytes();
+                response.extend_from_slice(body.as_bytes());
+                if s.write_all(&response).is_err() {
+                    continue;
+                }
+            }
+        });
+        address
+    }
+
+    /// Read one HTTP request, returning its path and body.
+    ///
+    /// Headers first, then exactly `Content-Length` more bytes — a single
+    /// `read` would truncate a body split across packets, which on loopback
+    /// is rare enough to pass locally and fail in CI.
+    fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        while !buf.ends_with(b"\r\n\r\n") {
+            if s.read(&mut byte).ok()? == 0 {
+                return None;
+            }
+            buf.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&buf).into_owned();
+        let path = head.split_whitespace().nth(1)?.to_owned();
+        let length: usize = head
+            .lines()
+            .find_map(|l| {
+                let (name, value) = l.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().ok())?
+            })
+            .unwrap_or(0);
+        let mut body = vec![0u8; length];
+        s.read_exact(&mut body).ok()?;
+        Some((path, String::from_utf8_lossy(&body).into_owned()))
     }
 
     /// A one-request acceptor that answers by running the **real projection**
@@ -2102,5 +2195,77 @@ mod tests {
         assert_eq!(peer_list_selection(Some("gray")), (false, true));
         assert_eq!(peer_list_selection(Some("0")), (true, true));
         assert_eq!(peer_list_selection(Some("")), (true, true));
+    }
+
+    fn net_stats_reply(status: &str) -> String {
+        typed_reply(&shekyl_rpc_types::GetNetStatsResponse {
+            status: RpcStatus(status.to_owned()),
+            start_time: 1_700_000_000,
+            total_packets_in: 40,
+            total_bytes_in: 4096,
+            total_packets_out: 10,
+            total_bytes_out: 2048,
+        })
+    }
+
+    /// `print_net_stats` over its two legs — the native `/get_net_stats` and
+    /// the bridged `/get_limit`.
+    ///
+    /// The command the §2.1.1 note calls covered, finally covered.
+    ///
+    /// The byte counts come from the native leg and the two limits from the
+    /// **bridged** one, so the assertions below cannot both hold unless both
+    /// legs arrived. The limits are also asymmetric (8 down, 4 up) because a
+    /// single number would pass a renderer that read one field twice — the
+    /// defect a missing `#[serde(default)]` cannot catch. Elapsed time is
+    /// wall-clock here (`unix_now`), so the averages are deliberately not
+    /// asserted; what this test owns is the leg, not the arithmetic.
+    #[test]
+    fn net_stats_renders_the_bridged_limits_beside_the_native_counters() {
+        let address = route_server(vec![
+            ("/get_net_stats", net_stats_reply("OK")),
+            (
+                "/get_limit",
+                r#"{"status":"OK","limit_up":4,"limit_down":8}"#.to_owned(),
+            ),
+        ]);
+        let (code, out) = run(&["print_net_stats"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("Received 4096 bytes"), "{out}");
+        assert!(out.contains("Sent 2048 bytes"), "{out}");
+        assert!(out.contains("limit of 8.00 kB/s"), "{out}");
+        assert!(out.contains("limit of 4.00 kB/s"), "{out}");
+    }
+
+    /// A `/get_limit` reply missing a field is **named**, not defaulted.
+    ///
+    /// This is the assertion that makes `GetLimitReplyProvisional`'s missing
+    /// `#[serde(default)]` load-bearing rather than a style choice. With the
+    /// attribute this test goes green while printing a limit of `0 B/s` — a
+    /// number the daemon never sent — so the failure it guards against is
+    /// precisely a passing run. RK-8 renaming the field gets an error naming
+    /// it instead of four confident zeros.
+    #[test]
+    fn a_get_limit_reply_missing_a_field_is_refused_rather_than_defaulted() {
+        let address = route_server(vec![
+            ("/get_net_stats", net_stats_reply("OK")),
+            ("/get_limit", r#"{"status":"OK","limit_up":4}"#.to_owned()),
+        ]);
+        let (code, out) = run(&["print_net_stats"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(out.contains("malformed get_limit reply"), "{out}");
+        assert!(out.contains("limit_down"), "{out}");
+    }
+
+    /// A route the daemon no longer serves is a request failure, not a zero.
+    ///
+    /// The other half of §2.1.1: the acceptor answers `404` for an unrouted
+    /// path, which is what a daemon that dropped `/get_limit` would do.
+    #[test]
+    fn a_bridged_route_the_daemon_stopped_serving_fails_loudly() {
+        let address = route_server(vec![("/get_net_stats", net_stats_reply("OK"))]);
+        let (code, out) = run(&["print_net_stats"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(!out.contains("limit of 0 B/s"), "{out}");
     }
 }
