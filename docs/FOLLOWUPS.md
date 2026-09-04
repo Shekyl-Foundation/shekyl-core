@@ -985,23 +985,15 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **No-tradeability invariant codification.** **Closed (2026-09-04):**
-  enforcement-point inventory verified against landed code and codified
-  in [`V3_SHARD_VISUALIZATION.md`](V3_SHARD_VISUALIZATION.md) (*Not
-  tradeable*, "Concrete enforcement"); any PR adding an
-  ownership/transfer surface re-opens it by construction.
+- **No-tradeability invariant codification.** **Closed (2026-09-04):** enforcement-point inventory
+  verified against landed code, codified in [`V3_SHARD_VISUALIZATION.md`](V3_SHARD_VISUALIZATION.md)
+  (*Not tradeable*, "Concrete enforcement"); any PR adding an ownership/transfer surface re-opens it.
   - Target: pre-genesis
 
-- **Shard-visual ruling B — candidate.v1 empirical closure + the
-  determinism bar.** Ruling A (2026-09-04) closed parameter
-  admissibility and rewired renderer inputs; B owes the mobile-budget
-  and continuity review of the resulting aesthetics, one determinism
-  bar in place of the spec's two incompatible reproducibility claims,
-  and a test that asserts the property on the axis where it would fail
-  (pixels or a defined perceptual metric — not PNG magic bytes or
-  recipe strings), including the Rust/Python derivation-parity claim
-  (pin it or retract it).
-  - Target: pre-genesis (blocks candidate.v1 final disposition)
+- **Shard-visual ruling B — candidate.v1 empirical closure + the determinism bar.** Owes the
+  mobile-budget/continuity review of ruling A's rewired aesthetics, ONE determinism bar (the spec holds
+  two incompatible claims), a property-axis oracle (pixels/perceptual metric), and Rust/Python parity pinned or retracted.
+  - Target: pre-genesis
 
 - **Transport selection for the staker-archival path (gate 6 /
   - Target: pre-genesis
