@@ -1,0 +1,704 @@
+# C2-R2 — Block-weight / reward-zone / fee constants design round
+
+**Status:** **DRAFT — structure adopted by steering; rulings PROPOSED, nothing
+ruled.** Every "Proposed ruling" below is a proposal to the maintainer; no
+census row changes class until he signs. On close this document moves to
+`docs/completed/` as the round's ruling record (rule 95).
+
+Third design round of the C2 program
+([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R2, 8
+rows). The round is **ratification-only** (steering constraint, program-wide):
+no in-round crossings to Rust, no C++ mechanism changes — docs and gates only.
+Where a ruling implies mechanism, it is **recorded and specified for the Rust
+store port**, which consumes these rows; it is not built ahead of it.
+
+**Pinned sha:** `ab4693d0e8` (`dev` tip at dispatch). Every `file:line` in
+this document was located at this pin.
+
+**Fee-ladder citations:** `FEE_LADDER_DERIVATION.md` lives on
+`design/fee-ladder-derivation` (PR #614, open), **not on dev**, so it is cited
+as plain text pinned to commit `ccfb85c72`. **This round's PR sequences
+AFTER #614's merge** (steering-adopted): lifting the eight `R2 DEFERRED`
+census
+markers is a state change on dev asserting the reopen condition is met, and
+the evidence for that condition must be on dev before the assertion is. The
+plain-text citations convert to links in this same PR at that point.
+
+**Reopen conjuncts, verified at the artifacts (not relayed):**
+(a) FL-R12′ **SIGNED** — FEE_LADDER_DERIVATION.md §8 (commit `6689b0cff`,
+review round 8): composition `paid = max(M_r·curve(remaining), TAIL) ·
+penalty(x)`, penalty **after** the floor, build authorization YES. (A stale
+§0.1 passage in that document still reads "conjunct (a) is OPEN"; `git log -S`
+dates it to review round 4, before the signature. Routed to the fee lane for
+an in-lane fix; it does not gate this draft.)
+(b) The exhaustion-boundary red test `terminal_reward_legs_agree` exists and
+is green through the new owner (`paid_block_reward`, per the §8 BUILT record).
+
+**Identifier family:** `C2-R2-Q1…Q11` (registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) this PR, rule 94).
+
+**Authority chain:** census §10 R2 + rows CEN-G6, G6b, F14b, H1, H3, M3, M4,
+M10; census §12 GAP-6/GAP-7/GAP-8; FEE_LADDER_DERIVATION.md (FL-R12′, FL-R13,
+FL-D4, FL-D5 — pinned `ccfb85c72`); `DAEMON_SUBMIT_VERDICT.md` §8 rows N3, P2,
+P3; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) (round-shape
+precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
+90 / 94 / 95.
+
+**Scope fences (all explicit; see §7 for the GAP-6 decision):**
+
+- **FL-R13** (fee-floor basis calibration — whether `Fl ∝ R` is the right
+  permanent tail-era anti-spam floor) stays in the fee-ladder lane. This round
+  ratifies or re-derives the *relay fee machinery's* constants (CEN-M3); it
+  does not touch the floor-basis question, which has its own pre-registered
+  round.
+- **R7** owns mempool **admission semantics** — census rows CEN-M1, M2, M6,
+  M7, M11 (pool idempotency, NIC caching, relay-side spend pre-checks, U-4's
+  pool-vs-Dandelion++ timing question). This round takes only M10's **numeric
+  policy constants** (livetime, pool weight cap, eviction ordering as an
+  economics choice); the semantics of admission around them are R7's.
+- **Credit-wire lane** keeps M4's canonical-form arbitration (per the SA index
+  row) — deferred there, not done here. This round rules only the 24 576
+  bound.
+- **GAP-6** (launch-phase emission ramp) is not one of the eight rows and is
+  **not ruled here** — §7 records the fence as a decision with reasons, not a
+  default.
+- **A consensus fee floor does not exist today** (CEN-M3: "no consensus fee
+  floor"). Introducing one would **mint a new consensus rule**, which exceeds
+  ratification-only and is the maintainer's ruling to make. §5 Q9 poses and
+  analyses the census §6 question and **stops at a recommendation**.
+
+---
+
+## 1. Round structure — three groups, split by validation surface
+
+The census's own C/P column is the discriminating axis, and the split is a
+**validation-surface split, not a topic split** (rule 19's criterion —
+consensus rows and relay-policy rows fail differently, are tested differently,
+and are ratified against different artifacts). This is stated so a later
+reader does not "tidy" the three groups back into one fee-and-weights topic.
+
+| Group | Rows | Surface | The decision |
+| --- | --- | --- | --- |
+| **R2a** | CEN-G6, G6b, F14b (+ GAP-7 leg, + the `margin` deliverable, §6) | Consensus (block connect / reward function) | The block-size governance contract: zone, clamps, window, surge, penalty curve — one system, ruled as one |
+| **R2b** | CEN-H1, H3 | Consensus (per-tx static caps) | The per-transaction bounds, including the verification-cost leg they were never derived against |
+| **R2c** | CEN-M3, M4, M10 | Relay policy (pool admission values) | The fee-formula and pool-policy constants, plus the census §6 consensus-fee-floor question (analysis → recommendation only) |
+
+Sequencing inside the round: **R2a rules before R2b's H3 is valued**, because
+H3's 149 400 is mechanically derived from R2a's zone
+(`300 000 / 2 − 600`, §4 Q7) — a value ratification of H3 before the zone is
+ruled would be circular.
+
+---
+
+## 2. Ground at the pin (the machinery, verbatim)
+
+All weight/fee machinery constants are hand-maintained in
+`src/cryptonote_config.h`, **not** in `config/consensus_constants.json` — the
+file whose own header declares it "single source of truth for
+consensus-affecting constants whose drift between C++ and Rust would cause
+silent wrong-output." Several already have free-floating Rust mirrors
+(`rust/shekyl-wire/src/transaction.rs:126–150`: `MAX_TX_EXTRA`, `MAX_TX_SIZE`,
+`MIN_BLOCK_WEIGHT`, `COINBASE_BLOB_RESERVED_SIZE`, `TX_WEIGHT_LIMIT`) —
+documented as mirrors but asserted only against themselves, i.e. the exact
+drift-pair class `consensus_constants.json` exists to kill. §8 carries the
+record-and-specify consequence.
+
+**Weight-limit system** (`blockchain.cpp:6540–6597`,
+`cryptonote_config.h:55–61`):
+
+```text
+LTEM  = max(300 000, median(long-term weights over min(100 000, height)))    # long-term effective median
+stored long-term weight = min(max(w, LTEM·10/17), LTEM·17/10)                # the 1.7× clamps (6548–6552)
+EM    = max(min(max(LTEM, ST_median), 50·LTEM), 300 000)                     # effective median (6580–6588)
+        where ST_median = median of the last 100 block weights (CRYPTONOTE_REWARD_BLOCKS_WINDOW)
+limit = 2 · EM                                                               # next block's weight limit (6591)
+```
+
+Constants: zone `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 = 300 000`
+(:58), long-term window `100 000` blocks (:59), surge factor `50` (:60),
+short-term window `100` blocks (:55), coinbase reserve `600` (:61).
+`get_min_block_weight(version)` ignores its argument and always returns the
+V5 zone (`cryptonote_basic_impl.cpp:81–85`) — the vestigial version arm is
+CEN-G6b's recorded residue, rule-60 material for the port.
+
+**Penalty curve** (`rust/shekyl-economics/src/emission.rs:150–176`, the sole
+owner; C++ marshals): median soft-raised to the zone; `w ≤ m` ⇒ full base;
+`m < w ≤ 2m` ⇒ `base·(2m−w)·w/m²` in u128, checked-mul fail-closed;
+`w > 2m` ⇒ `BlockTooBig` (inclusive bound at exactly `2m` — CEN-F14's recorded
+divergence). Under FL-R12′'s signed composition the curve multiplies the
+**floored** paid reward: `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`
+— the penalty never dies at the tail.
+
+**Per-tx caps** (`tx_verification_utils.cpp:66, 82, 203–210`): blob size ≤
+`CRYPTONOTE_MAX_TX_SIZE = 1 000 000` (Rule 1); weight ≤
+`get_transaction_weight_limit` = `300 000/2 − 600 = 149 400` (Rule 4). The
+limit function still carries a dead pre-`HF_VERSION_PER_BYTE_FEE` else-arm
+(:208–209) — rule-60 deletion residue for the port, recorded here.
+
+**Relay fee floor** (`blockchain.cpp:4363–4405`, `tx_pool.cpp:243–259`):
+
+```text
+fee_per_byte = max(1, ⌊ 0.95 · base_reward · 3000 / fee_median² ⌋)           # 0.95 = "lo -= lo/20" (4367)
+               with fee_median = min(limit/2, LTEM)                          # (4377, 4385)
+needed_fee   = ceil(weight · fee_per_byte / mask) · mask,  mask = 1 000 atomic  # 10^(9−6) (blockchain.h:598–601)
+accept iff fee ≥ needed_fee − needed_fee/50                                  # the 2 % buffer (4399)
+kept_by_block exempt (tx_pool.cpp:250) — NO consensus fee floor exists.
+```
+
+Reference weight `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT = 3 000`
+(`cryptonote_config.h:70`); quantization `PER_KB_FEE_QUANTIZATION_DECIMALS =
+6` against display precision 9 (:333).
+
+**tx_extra cap** (`tx_pool.cpp:261–269`): ≤ `MAX_TX_EXTRA_SIZE = 24 576`
+(:353), `kept_by_block` exempt; consensus side has no extra bound beyond H1.
+
+**Pool lifetime/weight** (`tx_pool.cpp:1070–1071, 532, 211`): livetime
+3 days (`86 400·3`, `cryptonote_config.h:97`), `kept_by_block` 7 days (:98),
+pool cap `DEFAULT_TXPOOL_MAX_WEIGHT = 648 000 000` (:336) — the comment says
+"3 days at 300000", which is true **only at a 120 s block target**
+(`648e6 = 2 160 × 300 000`; `2 160 = 3·86 400/120`). Shekyl's target is 120 s
+(`config/consensus_constants.json` `daa_target_seconds: 120`), so the value is
+currently coherent — but the coupling is undocumented at the constant, and a
+target change would silently falsify the "3 days" claim. Eviction: lowest
+fee/byte first (`prune`).
+
+**Consumer sweeps** (run at the pin; the instrument for every "sole consumer"
+claim below): each constant's full file set —
+`SURGE_FACTOR`: config.h, blockchain.cpp, `rust/shekyl-economics-sim/swing.rs`
+(sim-only). `LONG_TERM_WINDOW`: config.h, blockchain.cpp. `ZONE_V5`: config.h,
+cryptonote_basic_impl.cpp, blockchain.cpp + 5 Rust files (sim, wire, ffi
+tests, emission, fee_policy). `MAX_TX_SIZE`: config.h,
+cryptonote_basic_impl.cpp, shekyl-wire. `MAX_TX_EXTRA_SIZE`: config.h,
+cryptonote_tx_utils.cpp, tx_pool.cpp, shekyl-wire. `MEMPOOL_TX_LIVETIME`:
+config.h, tx_pool.cpp, relay-privacy tests, engine submit_watchdog.
+`DEFAULT_TXPOOL_MAX_WEIGHT`: config.h, cryptonote_core.cpp, tx_pool.cpp.
+`REWARD_BLOCKS_WINDOW`: config.h, blockchain.cpp.
+`COINBASE_BLOB_RESERVED_SIZE`: config.h, tx_verification_utils.cpp,
+tx_pool.cpp, shekyl-wire.
+
+---
+
+## 3. R2a — the block-size governance contract (CEN-G6, G6b, F14b)
+
+The five values (zone 300 000; clamps ×1.7 / ×10⁄17; window 100 000; surge
+×50; ST window 100) plus the quadratic penalty are **one control system**:
+the zone sets the guaranteed floor, the penalty prices expansion inside
+`[m, 2m]`, the ST median lets demand raise `m`, the surge cap and the
+long-term clamps bound how fast, and the long-term window sets the era over
+which "normal" is measured. They are ruled as one contract because a value
+change in any one re-derives the others (the census's charge — that they
+"fossilize as Shekyl economics without ever having been derived for Shekyl" —
+is a charge against the *system*, not five separate numbers).
+
+### Q1 — the 300 000-byte penalty-free zone (the "fossil flag" arbitration)
+
+**The punt, located:** `GENESIS_TX_WIRE_FORMAT.md:806–811` explicitly punted
+the zone's arbitration "to the economics doc"; no economics doc, decision-log
+entry, or FOLLOWUPS row (pre-#584) received it. 300 000 is consumed as given
+at `ARCHIVAL_SETTLEMENT_WRITER.md:130` and decision log :4686. This round is
+the arbitration the flag has waited for.
+
+**Derivation for Shekyl (what the zone must satisfy):**
+
+1. **Tx-capacity leg.** The zone must hold a useful number of
+   worst-case transactions. The per-tx weight cap is derived *from* the zone
+   (H3: `zone/2 − 600`), so the zone guarantees ≥ 2 maximal transactions per
+   penalty-free block by construction — the real constraint is the typical
+   FCMP++ tx. At the 8-input cap (CEN-I4) with BP+ aggregation and PQC
+   attachments, a large Shekyl tx runs tens of kB; the zone holds on the
+   order of 10–60 typical transactions per free block (≈ 5–30 tx/min at
+   T = 120 s). That is a launch-adequate floor with the penalty pricing
+   expansion beyond it, and demand-driven growth (Q2/Q3) unbounded above.
+2. **Throughput-floor leg.** At T = 120 s the zone yields a guaranteed
+   ~2.5 kB/s of penalty-free chain growth (≈ 79 GB/year worst-case at the
+   permanent free floor) — storage-viable on the rule-76 floor device's
+   storage class, and the archival-retention economics (bond floor, horizon)
+   were calibrated against chains of this order.
+3. **Verification-cost leg (GAP-7) — the leg no inherited record has.** The
+   zone is also a *work* bound: the largest penalty-free block must verify on
+   the Pi 4 floor comfortably inside T. **This leg cannot be discharged at
+   this pin: no floor-provisioned verify-time measurements exist** (§6). The
+   two legs above stand on their own; this leg is a named blocker.
+
+**Proposed ruling (Q1):** ratify **300 000**, *conditionally* — the economic
+legs (1–2) support it as a launch value and nothing in Shekyl's design pulls
+toward a different number, but the ratification is **incomplete until the
+GAP-7 floor measurement (§6) is on record**, and the ruling text must carry
+that condition rather than silently dropping the leg (dropping it would
+re-create the exact `pinned-not-re-derived` state this round exists to end).
+Class on signature: `ratified-conditional(GAP-7)` → `ratified` when §6's
+instrument reports.
+
+**Falsifiers:** (defect) a floor-device measurement showing a 300 000-byte
+worst-case block verifying in a substantial fraction of T = 120 s falsifies
+the ratification and forces the zone (or the verifier) to be re-derived —
+this is precisely what §6's instrument can produce; (fix) the ruling is
+falsified as *recorded* if, after signature, `GENESIS_TX_WIRE_FORMAT.md`'s
+fossil-flag passage still reads as an open punt — the same PR must land the
+cross-reference discharging it.
+
+### Q2 — the 1.7× long-term clamps and the 100 000-block window
+
+**What they do:** the stored long-term weight is `clamp(w, LTEM·10/17,
+LTEM·1.7)`, so the 100 000-block median (LTEM) can move at most ×1.7 per
+half-window reached — the **slow governor**. Growth to a sustained new level
+is bounded by ×1.7 per ≥ 50 000 blocks (≈ 69 days at T = 120): full
+saturation multiplies capacity by at most ~1.7 every ~10 weeks. The
+symmetric lower clamp (10/17) prevents a withholding miner coalition from
+deflating LTEM faster than it can grow.
+
+**Shekyl-specific check:** the clamps' *rate* interacts with two Shekyl
+surfaces the Monero lineage never had: (i) the archival-retention horizon
+(`retention_horizon_blocks: 420 000`) — a 1.7×/50 k-block growth curve can
+multiply stored-chain size by ≤ 1.7⁸ ≈ 70× inside one horizon, which the
+bond economics must (and per the D3/R2 linear-work record, does) price as
+work rather than assume away; (ii) the P2P lane's `entry_max` (§6), which
+needs exactly this rate.
+
+**Proposed ruling (Q2):** ratify the **×1.7 / ×10⁄17 clamps and the
+100 000-block window** as Shekyl's long-term growth governor, with the reason
+recorded as: a doubling time of ~2 half-windows (≈ 20 weeks sustained) is
+slow enough for node operators at the provisioning floor to react (storage is
+the binding floor resource, and it is provisioned in month-granularity), fast
+enough that organic demand is never rationed for more than one era, and the
+symmetric clamp pair keeps deflation attacks as slow as inflation. Same GAP-7
+condition as Q1 attaches to the *ceiling* the clamps govern toward, not to
+the rate itself.
+
+**Falsifier:** the rate claim is checkable by construction — a simulated
+weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉;
+`rust/shekyl-economics-sim/src/swing.rs` already models this machinery
+(consumer sweep, §2) and is the named instrument for the trace. A trace
+exceeding the bound falsifies the governor reading, and therefore the
+ratification's stated reason.
+
+### Q3 — the ×50 surge factor and the 100-block short-term window
+
+**What they do:** EM may exceed LTEM by up to ×50 on the strength of the
+100-block median alone — the **fast governor**: short bursts (a market
+event, a settlement-epoch boundary, an embargo release) clear at up to 50×
+the long-term norm without waiting weeks, while the long-term clamps keep
+the burst from becoming the new baseline unless sustained. The ST median of
+100 (≈ 3.3 hours) is what makes the burst *demand-priced*: 51 of the last
+100 blocks must actually fill for the median to move (§6 derivation).
+
+**Shekyl-specific check:** ×50 against a 300 000 zone means a worst-case
+transient block of `2·50·LTEM` — at launch (LTEM = zone), 30 MB. The
+pre-parse blob cap admits `limit + 100` (CEN-A5), so the surge factor **is**
+the DoS ceiling on a single block's parse cost at the connect surface. This
+binds the surge ratification to GAP-7's cost model harder than any other
+value in the round: the economics can absorb a 30 MB transient; whether the
+floor device can *verify* one inside useful time is exactly the unmeasured
+leg.
+
+**Proposed ruling (Q3):** ratify the **100-block ST window** (demand
+signal on the hours scale; 51-block hysteresis is what makes the fast
+governor expensive to game — §6); ratify **×50** as the transient ceiling
+**conditional on GAP-7** (same condition as Q1, but binding here at
+`2·50·LTEM`, the actual worst-case parse+verify unit, not at the zone).
+If the §6 measurement shows the floor device cannot verify the transient
+ceiling inside a block interval, the surge factor is the value to re-derive
+(lower), not the zone — the condition names its re-derivation target.
+
+**Falsifier (defect):** the hysteresis claim ("51 full blocks minimum to
+move EM") is falsified by exhibiting a 100-value multiset where fewer than
+51 elements ≥ X yields median ≥ X — impossible for the order-statistic
+median (`epee::misc_utils::median` of 100 averages the 50th/51st order
+statistics; both ≥ X requires ≥ 51 elements ≥ X). Recorded as checked by
+inspection of `median()`'s definition at the pin.
+
+### Q4 — the ArticMine quadratic penalty curve (CEN-F14b)
+
+**Class today:** `KAT-port` — an 81-vector KAT asserts the Rust port equals
+the C++ curve (`docs/CHANGELOG.md:1178`), but a KAT proves fidelity to the
+inherited curve, not that the curve is right for Shekyl (Survey A's claimed
+"A3 fee round" examination has no locatable record — census finding, and this
+round does not resurrect it).
+
+**Derivation for Shekyl:** the curve's job under FL-R12′ is permanent —
+`penalty(x)` multiplies the floored paid reward forever, so its shape is the
+*perpetual* price of expansion, not a mining-era artifact. What the quadratic
+gives Shekyl: (i) marginal cost of the first byte past `m` is ~0 and rises
+linearly — small overshoots are nearly free, sustained expansion pays
+`base·x²`; (ii) at `x = 1` (the 2 m cap) the whole reward is forfeit, which
+composed with the *inclusive* bound (CEN-F14's recorded divergence) makes the
+cap economically self-enforcing before it is structurally enforced; (iii) the
+u128 fail-closed arithmetic (checked-mul, `EmissionError::Overflow`) means no
+median the chain can reach wraps the formula — the port already carries the
+correctness half. The fee-ladder round's W5 analysis (pinned `ccfb85c72`, §7)
+depends on exactly this shape surviving at the tail; a different curve
+re-opens FL-R12′'s W5 disposition.
+
+**Proposed ruling (Q4):** ratify the **quadratic penalty
+`base·(2m−w)·w/m²`** for Shekyl, on the grounds above — the curve is no
+longer merely inherited: FL-R12′'s signed composition was *derived against
+this shape* (penalty-after-floor is an ordering ruling about this curve), so
+the fee-ladder round is the Shekyl examination the class was missing. Class
+on signature: `KAT-port` → `ratified` (evidence: this section + FL-R12′ §8 +
+the 81-vector KAT as the port-fidelity limb).
+
+**Falsifier:** the ratification cites the KAT as its fidelity limb — the
+instrument is `cargo test -p shekyl-economics` (the KAT suite), and the
+round's PR gate runs it; a red KAT at the pin falsifies the fidelity limb
+and blocks signature.
+
+---
+
+## 4. R2b — the per-tx static caps (CEN-H1, H3)
+
+### Q6 — the 1 MB serialized-size cap (CEN-H1)
+
+**What it is:** a pre-semantic parse/DoS cap, three sites
+(`tx_verification_utils.cpp:66`, `cryptonote_core.cpp:728`,
+`cryptonote_basic_impl.cpp:88–90`). It is **not** the binding tx bound —
+H3's 149 400 weight cap binds ~6.7× tighter for any tx whose weight tracks
+its size. The 1 MB cap's live job is bounding the parse of a *malformed or
+padding-heavy* blob before weight is even computed.
+
+**Derivation for Shekyl:** the cap needs to be (i) comfortably above the
+largest well-formed tx (≈ 149 400 weight-limited — margin ~6.7×, so no
+well-formed tx ever meets it: the cap never governs honest traffic); (ii)
+small enough that parsing one costs the floor device negligible work
+relative to T. Parse cost at 1 MB is linear deserialization — orders of
+magnitude below verify cost — so leg (ii) holds on any device that can run
+the node at all; this cap is the one row whose GAP-7 exposure is negligible
+by construction.
+
+**Proposed ruling (Q6):** ratify **1 000 000** with its job stated: a
+parse-bound sanity cap deliberately ~6.7× above the semantic weight cap so
+that exactly one bound (H3) governs well-formed transactions. Class:
+`pinned-not-re-derived` → `ratified`. The hand-maintained constant and its
+free-floating shekyl-wire mirror migrate to `consensus_constants.json` at
+the port (§8) — recorded, not built.
+
+**Falsifier:** the "H3 binds tighter" premise is arithmetic
+(`149 400 · max_weight_to_size_ratio < 1 000 000` for any tx where weight ≥
+blob size; weight ≥ blob size holds by `get_transaction_weight`'s
+construction — weight adds BP+ clawback to blob size, never subtracts).
+Exhibiting a well-formed tx with blob size > 1 MB and weight ≤ 149 400
+falsifies the premise and re-opens the ruling.
+
+### Q7 — the tx weight cap 149 400 = zone/2 − 600 (CEN-H3)
+
+**Formula, not literal:** `get_transaction_weight_limit` computes
+`get_min_block_weight()/2 − CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`
+(`tx_verification_utils.cpp:203–210`); shekyl-wire's `TX_WEIGHT_LIMIT`
+re-derives it and compile-asserts 149 400. The value is **downstream of Q1's
+zone** — this ruling ratifies the *formula* (the "inherited scaling" the
+census flagged) and inherits the value from Q1.
+
+**Derivation of the formula's two terms:** `/2` guarantees any two maximal
+transactions fit one penalty-free block — equivalently, no single tx can
+demand more than half the guaranteed free capacity, so a full-weight tx can
+never be censored-by-arithmetic when a competing full-weight tx exists, and
+no tx *requires* the penalty region to clear at all (a tx that could only
+clear via penalty would price its inclusion off other users' reward, an
+externality). `− 600` reserves the coinbase blob so "two maximal txs +
+coinbase" genuinely fits: 600 bounds the coinbase's weight contribution
+(one tagged-key output + reward-emission structure at genesis rules; the
+constant's adequacy for Shekyl's loud-emission coinbase is checkable at the
+wire format and holds at the pin — a Shekyl coinbase serializes well under
+600 bytes).
+
+**The never-examined block-connect side (the census's finding):** the exam
+on record (`DAEMON_SUBMIT_VERDICT.md` §8 N3) covered the **submit path**.
+The connect-side reachability at the pin: `ver_non_input_consensus` (Rule 4,
+`tx_verification_utils.cpp:82`) runs on relay admission *and* on the
+pool-supplement path at connect (the CEN-H5 corrected walk, census §5.4.1),
+and `kept_by_block` entries bypass `check_fee` but **not** Rule 4 — so the
+weight cap is enforced on every tx that reaches a block through any live
+path at this pin. Recorded here as the missing connect-side statement; the
+port's Rust store must preserve exactly this property (a connect path that
+skips Rule 4 would admit a >149 400 tx into a block whose own weight limit
+still holds, silently shifting the bound from per-tx to per-block).
+
+**Proposed ruling (Q7):** ratify the **formula** `zone/2 −
+coinbase_reserve` with the two-maximal-txs rationale, the value riding Q1;
+ratify **600** as the coinbase reserve with its adequacy stated against
+Shekyl's coinbase wire format. Class: `examined-disposition` → `ratified`
+(both paths now on record). Rule-60 residue recorded: the dead
+pre-per-byte-fee else-arm (:208–209) deletes at the port.
+
+**Falsifier (defect):** the connect-side claim ("no live path reaches a
+block without Rule 4") is the load-bearing statement — its instrument is the
+CEN-H5 corrected walk (census §5.4.1) plus the `kept_by_block` arm at
+`tx_verification_utils.cpp:82` showing Rule 4 carries no `kept_by_block`
+exemption (verified at the pin: the exemption exists only in the fee and
+tx_extra checks, `tx_pool.cpp:250, 262`). Exhibiting a connect path that
+admits a pool-absent tx without `ver_non_input_consensus` falsifies it.
+
+---
+
+## 5. R2c — relay-policy constants (CEN-M3, M4, M10)
+
+### Q8 — the fee-formula constants (CEN-M3)
+
+The four unexamined choices, each now examined **as a choice**:
+
+1. **The 0.95 factor** (`lo -= lo/20`): a deliberate 5 % undershoot of the
+   theoretical fee so that fee-per-byte quotes computed from *slightly stale*
+   reward/median snapshots still clear admission — it prices the snapshot
+   race, not the transaction. Keep: the race it prices is structural
+   (wallet quotes then submits).
+2. **The 2 % acceptance buffer** (`fee ≥ needed − needed/50`): the same
+   tolerance applied at the acceptor's side for quantization boundary cases.
+   Together with (1) the total tolerance is ~7 % — small against the ×4
+   fee-ladder rung spacing (pinned `ccfb85c72` §5), so the buffers cannot
+   move a tx between rungs; they only stop spurious rejects at rung edges.
+3. **The reference weight 3 000**: the normalization making
+   `fee_per_byte · 3000` ≈ the fee of a "reference tx" at one median — a
+   scaling constant whose value cancels out of relative fees; its only
+   requirement is stability, and it is KAT-covered via `check_fee`
+   (`DAEMON_SUBMIT_VERDICT.md` P2).
+4. **The quantization mask 1 000 atomic** (10⁹⁻⁶): fee precision 10⁻⁶ SKL
+   against display precision 10⁻⁹ — a fee-fingerprinting reduction (coarser
+   fees = smaller fee-value anonymity partition) that costs a user at most
+   999 atomic per tx. The privacy direction is right; the magnitude is
+   consistent with the fee-ladder's quantize-the-whole-scalar amendment
+   (FL-R12′ §8, pinned `ccfb85c72`).
+
+**Proposed ruling (Q8):** ratify all four as **relay-policy values with the
+jobs stated above**, explicitly *not* consensus (the census's "no consensus
+fee floor" finding stands; see Q9). The fee **median's** own machinery
+(`min(limit/2, LTEM)`) rides R2a's rulings. Class: `examined-disposition` →
+`ratified` (policy). The unpayable-reward reject-all state named in the
+census row is retired by FL-R12′'s build (FL-R16a removed the error arm —
+recorded, evidence pinned `ccfb85c72` §8).
+
+**Falsifier:** claim (2)'s "cannot move a tx between rungs" is arithmetic:
+`1.07 < 4` (total tolerance vs rung ratio). It is falsified if the fee lane
+ever adopts rung spacing < ×1.07 — the reopener is tied to that premise, not
+to a magnitude this round produced.
+
+### Q9 — the census §6 question: is a consensus fee floor wanted?
+
+**Boundary (restated from the fence):** a "yes" mints a new consensus rule;
+that exceeds this round's ratification-only mandate and is the maintainer's
+ruling. This section analyses and **recommends only**.
+
+**The ground:** today the fee floor exists only at relay admission
+(`kept_by_block` exempt) — a miner may include zero-fee transactions of its
+own choosing. The census §6 notes serve-credit txs *rely* on this exemption.
+What a consensus floor would buy: spam resistance that does not depend on
+every miner's relay policy. What it would cost: (i) it breaks the
+zero-fee-by-design archival families (serve-credit; reward-emission) unless
+they are exempted *in consensus*, which turns a clean vin-taxonomy rule into
+a fee-taxonomy rule; (ii) it hard-couples consensus validity to the reward
+snapshot (a tx valid in one block's fee climate becomes invalid in
+another's — reorg-fragile validity, the exact class the unlock_time rulings
+avoided); (iii) the threat it addresses (miner self-dealing spam) already
+pays the penalty curve past `m` and the storage bond economics below it —
+the attack is priced twice without a floor.
+
+**Recommendation:** **no consensus fee floor.** The relay floor plus the
+penalty curve plus archival bonds price the spam surfaces a floor would
+target, without making tx validity climate-dependent or complicating the
+archival vin taxonomy. **Proposed reopening criteria (rule 21):** (a) a
+measured mainnet episode of miner-included spam at sustained volume the
+penalty curve demonstrably failed to price, or (b) any consensus change that
+removes the `kept_by_block` relay exemption's justification (the archival
+zero-fee families leaving the protocol). Put to the maintainer as a
+recommendation with these reopeners; not ruled here.
+
+### Q10 — the tx_extra relay cap 24 576 (CEN-M4)
+
+**Derivation:** tx_extra is the only unstructured payload surface a
+transaction carries; 24 576 = 24 KiB ≈ 16 % of the weight cap. The cap's job
+is bounding chain-storage graffiti and the fee-free data channel at relay,
+while `kept_by_block` exemption keeps historical/reorg blocks valid — the
+consensus side deliberately has no extra bound beyond H1 (a consensus extra
+bound would be a canonical-form rule, and *that* arbitration is the
+credit-wire lane's, per the fence). The value comfortably holds every
+protocol-legitimate payload at the pin (pubkeys, encrypted payment metadata,
+the archival attachments enumerated in the wire format) with an order of
+magnitude of headroom.
+
+**Proposed ruling (Q10):** ratify **24 576** as a relay-policy bound with the
+job stated; the canonical-form question stays deferred to credit-wire
+(deferred-not-done, restated). Class: `examined-disposition` → `ratified`
+(policy).
+
+**Falsifier:** the headroom claim is falsified if any protocol-legitimate
+extra payload at the pin exceeds 24 576 bytes — instrument: the wire-format
+bounds table (`GENESIS_TX_WIRE_FORMAT.md` §10), whose per-field maxima sum
+well under the cap at the pin.
+
+### Q11 — pool lifetime and weight cap (CEN-M10)
+
+**The livetime pair (3 d / 7 d):** 3 days ≈ 2 160 blocks is the re-relay
+bound the submit round consumed (`DAEMON_SUBMIT_VERDICT.md:942–943`); its
+Shekyl-specific check is against the **FCMP++ reference-age window**
+(`fcmp_reference_block_max_age: 100` blocks ≈ 3.3 h): a spendable tx's proof
+goes stale ~20× faster than the pool evicts it, and the reference-age
+eviction sweep (`tx_pool.cpp:441` area) already handles that — so the 3-day
+value governs only *unmineable residue*, not live transactions, and its
+exact value is load-light. 7 days for `kept_by_block` covers reorg-returned
+txs across the archival reorg depth (720 blocks ≈ 1 day) with margin.
+
+**The pool weight cap (648 000 000):** derived, not arbitrary — `3 days of
+maximal penalty-free blocks at T = 120 s` (`2 160 × 300 000`). It is
+therefore a **function of two other ruled values** (zone, block target) and
+one policy horizon (3 d). Recorded consequence: the port stores it as the
+derivation `livetime_blocks(T) × zone`, not as a literal — a zone or target
+change must move it (rule: indivisible values get derived fields).
+
+**Proposed ruling (Q11):** ratify **3 d / 7 d / derived-648 MB** as
+relay-policy values with the couplings stated (reference-age window makes
+the livetime load-light; the weight cap is a derived quantity). Class:
+`none` → `ratified` (policy). Eviction ordering (lowest fee/byte first) is
+ratified as the economically consistent choice under the ladder — the pool
+sheds exactly what a rational miner would shed last… **admission-semantics
+questions around it stay R7's** (fence).
+
+**Falsifier:** the "load-light" claim rests on the reference-age sweep
+actually evicting stale-proof txs ahead of the 3-day sweep — instrument: the
+sweep's own gate in `tx_pool.cpp` (`remove_stuck_transactions`, :1070) and
+DSV §6 leg 1; a pool observed answering `AlreadyInPool` for a
+stale-reference tx past the reference window (without the sweep firing)
+falsifies it.
+
+---
+
+## 6. The `margin` deliverable (owed to P2P-2 / PWD-B3, blocks PWC-A2)
+
+**The debt** (`docs/FOLLOWUPS.md:715`, input (2)): the P2P lane's
+`entry_max` needs *how fast the block-weight limit can grow per block* — a
+consensus-lane quantity the P2P round correctly refused to invent.
+
+**Shape (per the P2P-2 lane's answer, which also shrank the horizon):**
+`entry_max` has exactly one consumer — the tip announcement
+(`NOTIFY_NEW_FLUFFY_BLOCK`, 2008); the sync path's `n × entry_max` form is
+retired in favor of a byte budget (P2P-2's own correction, recorded on
+`design/p2p2-b-drop-semantics`). The value wanted is a **dimensionless
+multiplier on the receiver's own live limit**, recomputed at evaluation
+time, that must dominate limit growth **across the receiver's announce-lag
+`k`** (a few blocks by construction — an announce is not sync), not across
+all reachable states.
+
+**Derivation from the §2 machinery** (a consequence of Q2/Q3, not a
+separate ruling). Let `L_n = 2·EM_n` be the limit after block *n*, and let
+the receiver hold state through block *h* while the announced block's
+parent chain extends `k` blocks past it.
+
+1. **The crossing bound.** EM grows only through the ST-median arm (the
+   LTEM arm is strictly slower in every regime — its window is 100 000 vs
+   100). The median of 100 is the average of the 50th/51st order statistics
+   (`contrib/epee/include/misc_language.h:58–66`), so median ≥ X requires
+   ≥ 51 in-window samples ≥ X (50 samples yield only the midpoint — a
+   half-step the envelope below absorbs). Under maximal saturation each
+   block *i* is limit-bounded at `≤ 2·EM_{i−1}`, and the median at *t*
+   averages the (t−51)th/(t−50)th saturating samples, giving the exact
+   envelope **`EM_t ≤ 2·EM_{t−51}`** (EM nondecreasing under saturation):
+   the limit doubles at most once per **51 blocks**.
+2. **The lag bound.** Over `k` blocks the window changes by `k` samples, so
+   at most `⌈k/51⌉` crossings fit:
+   **`L_{h+k} ≤ L_h · 2^{⌈k/51⌉}`** — i.e. **`margin(k) = 2^{⌈k/51⌉}`**,
+   a flat **×2 for any announce-lag `k ≤ 51`** (≈ 1.7 hours at T = 120 s;
+   any receiver that far behind is syncing, not consuming announces).
+3. **Genesis-era caveat (the one place the constant weakens):** at chain
+   height `H < 100` the ST window is only `H` samples, so the hysteresis is
+   `⌈H/2⌉` blocks, not 51, and `margin(k) = 2^{⌈2k/H⌉}` — e.g. ×4 is
+   reachable at `H = 10, k = 6`. Mitigating structure: in that era EM sits
+   on the 300 000 floor (limit = 600 000 bytes) while real blocks are tiny,
+   so the additive terms in `entry_max` dominate anyway. The P2P row should
+   either state validity as `H ≥ 100` or use the `H`-dependent form for the
+   first 100 blocks.
+4. **Ceiling (for reference, not the announce bound):** `EM ≤ 50·LTEM`, so
+   `L ≤ 100·LTEM` (30 MB at launch LTEM); LTEM moves ≤ ×1.7 per 50 000
+   blocks (Q2).
+
+**Handoff:** `margin = 2` with stated validity `k ≤ 51 ∧ H ≥ 100`, or the
+function `2^{⌈k/51⌉}` if the P2P row prefers to carry its lag bound
+explicitly; genesis-era caveat as above. The derivation and any future
+change to it live **here** (single owner); the P2P doc cites this section.
+
+**Falsifier (run before signature):** the 51-block hysteresis and ×2
+crossing bound are checkable against the same `swing.rs` instrument as Q2 —
+a simulated saturation trace whose limit exceeds `L_0·2^{⌈k/51⌉}` at any
+`k` (chain height ≥ 100) falsifies the derivation.
+
+---
+
+## 7. GAP rows — the named blocker and the fence
+
+### GAP-7 — the verification-cost leg (named blocker, rule 22)
+
+**The gap:** nothing binds weight to verification time on the rule-76 floor
+(Pi 4). This round's Q1/Q3 ratifications are **conditional** on it.
+
+**Why it cannot be discharged at this pin:** rule 76 §4 — *"Values AND
+INCREMENTS for the floor device are measured ON it, never scaled to it"* — a
+dev-box measurement times a ratio is a diagnostic, not a spec input. No
+floor-provisioned verify-time measurements exist in the tree (the verify
+benches — `shekyl-ffi/benches/relay_admission_verify.rs`,
+`shekyl-pow-randomx/benches/*`, `shekyl-scanner/benches/*` — are dev-box
+artifacts; the only floor-adjacent number on record is research-lab#144's
+~1.5 s RandomX share-verify figure, which covers PoW, not tx verification).
+
+**The named blocker and its discharge instrument:** floor measurements of
+(i) worst-case penalty-free block verify (300 000 bytes of maximal-input
+FCMP++ txs, batch BP+ path), and (ii) the Q3 transient unit (`2·50·LTEM` at
+launch = 30 MB), both **run on a Pi 4 Model B**, using the existing bench
+entry points (the benches exist; only the machine is missing). Discharge =
+the two numbers recorded beside the constants with the machine named
+(rule 76 §1). Until then: Q1/Q3 sign as `ratified-conditional(GAP-7)` — the
+condition is *in the ruling text*, loud, with this section as its record.
+**What the condition means operationally:** if measurement shows the 30 MB
+transient cannot verify inside a useful fraction of T on the floor, the
+×50 surge factor is the named re-derivation target (Q3); if even the 300 k
+zone-block is slow, the verifier (CEN-H19's inherited BP+ path, §10 R6
+territory) is implicated before the zone is.
+
+### GAP-6 — the launch-phase emission ramp (fence, decided not defaulted)
+
+GAP-6 is the **launch** end of the emission curve; FL-R12′ ruled the
+**terminal** end. This round rules weight/fee constants and touches emission
+only through the penalty's *composition* (Q4). **Decision: GAP-6 does not
+merge into this round, and the reasons are:** (i) a subsidy ramp is an
+emission-schedule question with its own stakeholder (the economics lane per
+the census row) and no coupling to any of the eight rows' values — none of
+Q1–Q11 would change under any ramp answer; (ii) merging it here would ride
+it on a weight round's signature, exactly the silent-merge the GAP row was
+written to prevent. It stays an open economics-lane question with its census
+row as owner. This paragraph is the recorded decision the row demanded.
+
+---
+
+## 8. Record-and-specify for the store port (consumed, not built)
+
+Ratification-only means these are **specifications the port consumes**:
+
+1. **Constant migration:** every §2 constant (zone, windows, surge, clamps
+   as 17/10-shaped rationals, tx size, weight-limit formula terms, extra
+   cap, livetimes, pool cap as its derivation) moves from hand-maintained
+   `cryptonote_config.h` + free-floating shekyl-wire mirrors into
+   `config/consensus_constants.json` codegen — one authority, drift pair
+   deleted (the file's own charter). The pool cap is stored as
+   `livetime_blocks(T) × zone`, not a literal (Q11).
+2. **Rule-60 deletions at the port:** `get_min_block_weight`'s vestigial
+   version arg (G6b); the dead pre-per-byte-fee arm in
+   `get_transaction_weight_limit` (Q7).
+3. **Connect-side invariant (Q7):** every path that can place a tx in a
+   block passes Rule 4 (the weight cap carries no `kept_by_block`
+   exemption). The Rust store's admission surface must preserve this
+   property and gate it.
+4. **GAP-7 instrument:** the floor bench run (§7) is a program deliverable
+   with named entry points; its numbers land beside the constants.
+
+---
+
+## 9. Round log
+
+- Dispatch (steering, shekyl-core-43): eight rows + ratification-only
+  constraint + the `margin` cross-lane debt (verified at FOLLOWUPS:715).
+- Reopen conjuncts (a)/(b) verified at the artifacts (header); stale §0.1
+  passage in FEE_LADDER_DERIVATION.md found via `git log -S`, routed to the
+  fee lane.
+- Structure (three groups by validation surface, rule 19) proposed by this
+  round, adopted by steering; sequencing-after-#614 adopted with the
+  premature-clear rationale.
+- Shape request for `margin` sent to the P2P-2 lane (shekyl-core-04);
+  §6 records all three characterizations pending the answer.
+- Consumer sweeps and the falsifier instruments named in Q2/Q4/Q6/§6 run at
+  the pin before being cited (§2; the swing.rs trace and the KAT run are
+  gate-time instruments for signature).
