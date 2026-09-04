@@ -182,8 +182,25 @@ lifting that hold.
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
-20: C++ reduced to marshaling — the C++ diff direction is thinner, not
-thicker):
+20: C++ reduced to marshaling). **The C++ diff direction, as a
+measurement, not a reading** (steering correction — an earlier report
+said "thinner," which does not survive measurement): the formula bodies
+genuinely left C++ (the whole `Fl/Fn/Fm/Fh` ladder computation and its
+rounding deleted; the multiplier/cap/flag block deleted), yet `src/`
+mechanism is **net +19 non-comment lines** (+54/−35; +169/−100 raw with
+the design-sourced comments). The +19 is the cost of the seam: a second
+overload signature, the `c_q` parameter threaded through, the FFI call
+plus its assert, the delegating wrapper, and the mandated clamp.
+**Structural note, bigger than this lane:** this is a *good* crossing —
+real logic deleted, owner in Rust — and C++ still grew, because
+rule-by-rule crossing pays a marshaling seam every time; the C++ tree
+does not shrink until whole surfaces cross and their marshals retire.
+Steering is carrying that number to the maintainer as evidence in the
+crossing-strategy question. (The build commit c89364816's message
+carries the uncorrected "THINNER" claim; commits are additive here — this
+paragraph is the correction of record.)
+
+Bundle contents:
 
 - **Composition (FL-R12′ as signed):** `shekyl-economics` gains the one
   owner `paid_block_reward` = `apply_weight_penalty(effective_emission)`;
