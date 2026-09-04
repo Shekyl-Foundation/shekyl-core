@@ -133,8 +133,11 @@ begins", fired with the crate's first landing; this closes it):
   "claim," or "register" visualizations. *(Verified: the RPC surfaces
   have no visualization methods at all; their only shard references
   are archival-assignment errors.)*
-- Wallet UI has no "trade" button on shard visuals. *(Verified:
-  `ShardIdentityPreview.tsx` has no trade/sell/transfer affordance.)*
+- Wallet UI has no "trade" button on shard visuals. *(Cross-repo
+  claim, verified in the companion `shekyl-gui-wallet` repository —
+  `src/components/staking/ShardIdentityPreview.tsx` has no
+  trade/sell/transfer affordance; reproducible there, not from this
+  tree.)*
 - No wire format for transferring shard visual ownership.
   *(Verified: `ShardSummary` / `ShardRenderHandle` carry no owner.)*
 - No on-chain registry of who "owns" a visual. *(None exists.)*

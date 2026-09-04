@@ -34,10 +34,14 @@ pub fn features_from_aggregate(agg: &ShardAggregate) -> Features {
     } else {
         0.0
     };
+    // A zero-output shard cannot occur on the real chain (every block has a
+    // coinbase output), so this is degenerate synthetic input; like the
+    // other features, it saturates to zero rather than reading as
+    // maximally coinbase-heavy (review #617).
     let coinbase_ratio = if agg.output_count > 0 {
         saturate(agg.coinbase_output_count as f64 / agg.output_count as f64)
     } else {
-        1.0
+        0.0
     };
     let expected_seconds = blocks * 120;
     let time_density = saturate(agg.time_range_seconds as f64 / expected_seconds.max(1) as f64);

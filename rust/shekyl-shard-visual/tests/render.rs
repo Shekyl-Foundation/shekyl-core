@@ -1,7 +1,7 @@
 use shekyl_shard_visual::fixtures;
 use shekyl_shard_visual::{
-    parameters_from_aggregate, parameters_with_hash_override, recipe_from_params,
-    render_candidate_png, VisualError, MAX_RENDER_SIZE,
+    features_from_aggregate, parameters_from_aggregate, parameters_with_hash_override,
+    recipe_from_params, render_candidate_png, VisualError, MAX_RENDER_SIZE,
 };
 
 #[test]
@@ -87,4 +87,22 @@ fn genesis_recipe_matches_the_cross_implementation_pin() {
     assert_eq!(r.bg_truchet_palette, "prismatic");
     assert_eq!(r.bg_crystalline_palette, "earth");
     assert_eq!(r.final_opacity, 0.71);
+}
+
+#[test]
+// Exact zero is the contract for the degenerate fallback, not a computed
+// float — see the KAT's allow above.
+#[allow(clippy::float_cmp)]
+fn zero_output_aggregate_saturates_features_to_zero() {
+    let mut agg = fixtures::by_id("genesis")
+        .expect("genesis fixture")
+        .aggregate;
+    agg.tx_count = 0;
+    agg.output_count = 0;
+    agg.coinbase_output_count = 0;
+    let f = features_from_aggregate(&agg);
+    assert_eq!(f.output_richness, 0.0);
+    // Degenerate synthetic input must not read as maximally
+    // coinbase-heavy (review #617).
+    assert_eq!(f.coinbase_ratio, 0.0);
 }
