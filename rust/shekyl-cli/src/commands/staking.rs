@@ -500,13 +500,24 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                     tx_hash,
                     swept,
                     remainder,
+                    another_pool_remains,
                 } => {
                     println!(
                         "Collection sent: {} ({} SKL on the way to this wallet).",
                         tx_hash,
                         format_amount_str(&swept),
                     );
-                    if remainder == "0" {
+                    if remainder == "0" && another_pool_remains {
+                        // The swept persona is done, but the exit lane is
+                        // not: a previously exited persona still holds
+                        // funds. Per-slot "0" must never read as lane-wide
+                        // completion (review-6).
+                        println!(
+                            "This collection is complete, but released funds from an \
+                             earlier exit still remain."
+                        );
+                        println!("Run \"collect_unstaked\" again once this pass confirms.");
+                    } else if remainder == "0" {
                         println!(
                             "Nothing further remains: once this confirms, the \
                              collection is complete."

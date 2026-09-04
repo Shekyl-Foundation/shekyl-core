@@ -51,8 +51,11 @@
   P-lane floor, CLI carries the irreversibility confirmation), and
   `collect_unstaked` sweeps the released collateral to principal with an
   engine-computed exact payment (`Σ selected − fee`, zero change); a
-  `SWEPT` reply *requires* `remainder` (the completion fact — optional
-  fields cannot forge "done"). A single overloaded verb was
+  `SWEPT` reply *requires* both halves of the completion fact —
+  `remainder` (the swept persona's) and `another_pool_remains` (the
+  lane's, so a per-persona `0` cannot read as lane-wide completion while
+  a rotation-residue exit is uncollected; optional fields cannot forge
+  "done"). A single overloaded verb was
   rejected for irreversible-step mis-selection, and the sweep deliberately
   does not ride `drain`'s firewall-pinned active-persona shape — the
   RESERVED→shipped reconciliation is recorded in the OpenAPI census.

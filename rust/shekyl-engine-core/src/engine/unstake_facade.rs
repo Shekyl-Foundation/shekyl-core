@@ -286,10 +286,24 @@ pub enum CollectOutcome {
         /// What this pass moves to the principal (`Σ selected − fee`).
         swept: AtomicUnits,
         /// What the pool still holds beyond this pass — immature payouts
-        /// plus any mature overflow past the input cap. **`0` is the
-        /// completion fact**: nothing remains beyond this pass. Nonzero:
-        /// call again once the residue matures or this pass confirms.
+        /// plus any mature overflow past the input cap. **`0` is THIS
+        /// SLOT's completion fact**: nothing remains on the swept persona
+        /// beyond this pass. Nonzero: call again once the residue matures
+        /// or this pass confirms. Deliberately per-slot — it is the operand
+        /// the funded retirement gate acts on — and therefore NOT a
+        /// lane-wide claim; `another_pool_remains` carries that (review-6:
+        /// a value whose scope is narrower than its reading forges
+        /// completion).
         remainder: AtomicUnits,
+        /// Whether any OTHER exited persona still holds an uncollected
+        /// pool (a dust-skipped slot counts). The lane-wide fact: `false`
+        /// plus `remainder == 0` means the exit lane is fully collected;
+        /// `true` means run `collect_unstaked` again for the next persona.
+        /// Normally `false` — one persona stakes at a time — and `true`
+        /// only in the rotation-residue exception (sequential exits left
+        /// uncollected), which must not be able to forge lane-wide
+        /// completion.
+        another_pool_remains: bool,
     },
     /// The exited persona's pool is already empty — collection is complete,
     /// and the funded-gated retirement proceeds on its own (`pscan/task.rs`
@@ -561,6 +575,29 @@ fn slot_has_maturing_rows(pscan: &PScanState, slot: PSlot) -> bool {
         .any(|r| r.p_slot == slot && r.spendable_height > reference)
 }
 
+/// Whether any exited persona OTHER than `swept` still holds funding rows —
+/// the lane-wide half of the completion fact (a dust-skipped slot counts:
+/// its pool is uncollected even if unsweepable today). Runs only after
+/// [`resolve_collect_target`] returned a sweep target, so the fail-closed
+/// index-completeness check over the exited set has already passed and a
+/// plain map walk cannot silently miss an exited persona.
+fn other_exited_pools_remain(evidence: &ExitEvidence, swept: PSlot) -> bool {
+    let Some(pscan) = evidence.pscan.as_ref() else {
+        return false;
+    };
+    let exited = pscan.pending_unbonds();
+    evidence
+        .id_by_slot
+        .iter()
+        .filter(|(&slot, id)| PSlot::from_raw(slot) != swept && exited.contains_key(id))
+        .any(|(&slot, _)| {
+            pscan
+                .funding_outputs()
+                .iter()
+                .any(|r| r.p_slot == PSlot::from_raw(slot))
+        })
+}
+
 /// Address a set of persona ids through the slot cache. Fail closed if any
 /// wanted id is missing from the index (the staking-read posture: a bonded
 /// staker must never be told they hold nothing over an incomplete index).
@@ -829,6 +866,11 @@ where
                 tx_hash,
                 swept: payment,
                 remainder,
+                // The lane-wide half of the completion fact, from the same
+                // evidence resolution read: another exited persona's pool
+                // (dust-skipped included) means "run collect_unstaked
+                // again", regardless of this slot's remainder.
+                another_pool_remains: other_exited_pools_remain(&evidence, slot),
             });
         }
     }

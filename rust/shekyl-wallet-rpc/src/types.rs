@@ -928,8 +928,13 @@ pub enum CollectUnstakedResult {
         /// What this pass moves to the principal.
         swept: AtomicUnitsString,
         /// What the pool still holds beyond this pass (immature payouts
-        /// plus mature overflow past the input cap). `"0"` is completion.
+        /// plus mature overflow past the input cap). `"0"` is THIS
+        /// persona's completion — see `another_pool_remains` for the lane.
         remainder: AtomicUnitsString,
+        /// Whether any OTHER exited persona still holds an uncollected pool
+        /// (dust-skipped slots count). `false` + `remainder "0"` = the exit
+        /// lane is fully collected; `true` = call `collect_unstaked` again.
+        another_pool_remains: bool,
     },
     /// The exited pool is already empty — collection is complete and the
     /// funded-gated retirement proceeds on its own.

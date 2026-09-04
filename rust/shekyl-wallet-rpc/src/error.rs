@@ -1208,7 +1208,8 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
 }
 
 impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
-    /// The `collect_unstaked` code table (PR-C): `-29513` + `-29523..-29527`;
+    /// The `collect_unstaked` code table (PR-C): `-29513` + `-29523..-29527` +
+    /// `-29529` (a pre-seal daemon outage, review-5);
     /// the fee arms reuse the send path's `-29102`/`-29109` split and a
     /// post-seal transport failure is `-29107` (the drain precedent — the
     /// sealed pass's fate is the driver's; the client must not re-fire

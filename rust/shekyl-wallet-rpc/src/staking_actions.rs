@@ -263,10 +263,12 @@ pub(crate) async fn collect_unstaked(
             tx_hash,
             swept,
             remainder,
+            another_pool_remains,
         } => CollectUnstakedResult::Swept {
             tx_hash: tx_hash.to_string(),
             swept: atomic_units_string(swept),
             remainder: atomic_units_string(remainder),
+            another_pool_remains,
         },
         CollectOutcome::NothingLeft => CollectUnstakedResult::NothingLeft,
     };
@@ -384,29 +386,45 @@ mod tests {
     }
 
     /// `CollectUnstakedResult` is internally tagged like
-    /// `GetDrainBalanceResult`: SWEPT carries the three required fields
-    /// (a missing remainder cannot deserialize — the completion fact is
-    /// not optional), NOTHING_LEFT carries only the tag.
+    /// `GetDrainBalanceResult`: SWEPT carries its four required fields —
+    /// neither half of the completion fact is optional (a missing
+    /// `remainder` OR a missing `another_pool_remains` cannot deserialize,
+    /// so neither the per-slot nor the lane-wide claim can be forged by
+    /// omission) — and NOTHING_LEFT carries only the tag.
     #[test]
     fn collect_unstaked_result_arms_match_the_contract_shapes() {
         let swept = serde_json::to_value(CollectUnstakedResult::Swept {
             tx_hash: "ab".repeat(32),
             swept: "100".into(),
             remainder: "0".into(),
+            another_pool_remains: true,
         })
         .expect("serialize");
         assert_eq!(swept["status"], "SWEPT");
         assert_eq!(swept["remainder"], "0");
+        assert_eq!(swept["another_pool_remains"], true);
         assert!(swept.get("tx_hash").is_some());
 
         let empty = serde_json::from_value::<CollectUnstakedResult>(json!({
             "status": "SWEPT",
             "tx_hash": "ab".repeat(32),
-            "swept": "100"
+            "swept": "100",
+            "another_pool_remains": false
         }));
         assert!(
             empty.is_err(),
             "SWEPT without remainder must not deserialize: {empty:?}"
+        );
+        let no_lane = serde_json::from_value::<CollectUnstakedResult>(json!({
+            "status": "SWEPT",
+            "tx_hash": "ab".repeat(32),
+            "swept": "100",
+            "remainder": "0"
+        }));
+        assert!(
+            no_lane.is_err(),
+            "SWEPT without another_pool_remains must not deserialize — a \
+             per-slot 0 alone must not read as lane-wide completion: {no_lane:?}"
         );
 
         let done = serde_json::to_value(CollectUnstakedResult::NothingLeft).expect("serialize");

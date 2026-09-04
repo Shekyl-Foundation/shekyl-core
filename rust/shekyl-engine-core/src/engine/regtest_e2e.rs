@@ -3410,6 +3410,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         tx_hash: sweep_hash,
         swept,
         remainder,
+        another_pool_remains,
     } = swept_outcome.expect("collect must sweep within the ladder")
     else {
         panic!("the first collection over a funded exited pool must be Swept");
@@ -3419,6 +3420,11 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         remainder.is_zero(),
         "the pool is exactly the payout pair: one pass collects everything, \
          and the reply's remainder — the completion fact — must say 0"
+    );
+    assert!(
+        !another_pool_remains,
+        "one persona exited: the lane-wide half of the completion fact must \
+         say no other exited pool remains"
     );
     eprintln!("collect SWEPT {swept:?} to principal ({sweep_hash:?}), remainder 0");
 

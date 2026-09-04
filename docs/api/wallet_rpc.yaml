@@ -317,7 +317,10 @@ info:
   # COLLECT_DAEMON_UNREACHABLE, so a pre-seal daemon outage while preparing
   # the sweep is retryable ("check the daemon") rather than an opaque
   # internal -32603; the analogous unstake failure joins the existing
-  # -29520 UNSTAKE_RETRY_TRANSIENT on data.cause "daemon".
+  # -29520 UNSTAKE_RETRY_TRANSIENT on data.cause "daemon". SWEPT gains
+  # required another_pool_remains (the lane-wide half of the completion
+  # fact: a per-persona remainder "0" must not read as lane-wide
+  # completion while another exited persona's pool is uncollected).
   version: 0.3.1
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -2526,18 +2529,23 @@ components:
     CollectUnstakedResult:
       description: >
         Internally tagged (status). A SWEPT reply alone is NOT completion
-        — `remainder` is required on that arm and is the completion fact:
-        "0" means nothing remains beyond this pass; nonzero means call
-        again once the residue matures or this pass confirms. The engine
-        knows the remainder and the caller cannot infer it from any
-        payment figure, which is why it is on the wire rather than
-        implied. NOTHING_LEFT means the exited pool is already empty: the
-        collection is complete and the funded-gated retirement proceeds
-        engine-side on its own (an active persona retires after its next
-        rotation).
+        — the completion fact is TWO required fields on that arm.
+        `remainder` is the SWEPT PERSONA's half: "0" means nothing remains
+        on that persona beyond this pass; nonzero means call again once
+        the residue matures or this pass confirms. `another_pool_remains`
+        is the LANE's half: true means another exited persona (a
+        dust-skipped slot included) still holds an uncollected pool — call
+        collect_unstaked again — so a per-persona "0" can never read as
+        lane-wide completion (normally false: one persona stakes at a
+        time, and true only as rotation residue). The engine knows both
+        and the caller cannot infer either from any payment figure, which
+        is why they are on the wire rather than implied. NOTHING_LEFT
+        means no exited pool holds anything: the collection is complete
+        and the funded-gated retirement proceeds engine-side on its own
+        (an active persona retires after its next rotation).
       oneOf:
         - type: object
-          required: [status, tx_hash, swept, remainder]
+          required: [status, tx_hash, swept, remainder, another_pool_remains]
           additionalProperties: false
           properties:
             status:
@@ -2552,9 +2560,17 @@ components:
             remainder:
               $ref: "#/components/schemas/AtomicUnits"
               description: >
-                What the pool still holds beyond this pass (immature
-                payouts plus mature overflow past the input cap). "0" is
-                completion.
+                What the swept persona's pool still holds beyond this
+                pass (immature payouts plus mature overflow past the
+                input cap). "0" is THAT PERSONA's completion; see
+                another_pool_remains for the lane.
+            another_pool_remains:
+              type: boolean
+              description: >
+                Whether any OTHER exited persona still holds an
+                uncollected pool (dust-skipped slots count). false plus
+                remainder "0" = the exit lane is fully collected; true =
+                call collect_unstaked again.
         - type: object
           required: [status]
           additionalProperties: false

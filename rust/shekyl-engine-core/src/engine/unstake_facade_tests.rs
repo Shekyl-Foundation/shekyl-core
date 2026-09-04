@@ -582,3 +582,68 @@ fn a_slot_still_maturing_is_not_permanent_dust() {
         "all rows spendable at the frontier: no maturing value, dust here is permanent"
     );
 }
+
+/// The completion fact is TWO-part (review-6): `remainder` is per-slot, and
+/// the lane-wide half is `other_exited_pools_remain` — with two exited
+/// personas, sweeping the first to remainder 0 must NOT read as lane-wide
+/// completion while the second still holds funds (including a dust-skipped
+/// slot, whose pool is uncollected even if unsweepable today). Red before
+/// the field existed: the CLI said "nothing further remains" over slot B's
+/// funds.
+#[test]
+fn per_slot_zero_does_not_forge_lane_wide_completion() {
+    let mut exited_both = exited(1);
+    exited_both.insert(persona(2), SettlementEpoch::from_raw(9));
+    // Both exited; both still hold rows.
+    let ev = evidence(
+        Some(pscan(
+            vec![bond_match(1, 0), bond_match(2, 0)],
+            exited_both.clone(),
+            Vec::new(),
+            vec![funding(1, 7, 500), funding(2, 8, 500)],
+        )),
+        None,
+        &[(1, 1), (2, 2)],
+    );
+    assert!(
+        other_exited_pools_remain(&ev, PSlot::from_raw(1)),
+        "sweeping slot 1: slot 2's exited pool remains — the lane is not done"
+    );
+    assert!(
+        other_exited_pools_remain(&ev, PSlot::from_raw(2)),
+        "symmetric: sweeping slot 2 while slot 1 still holds rows"
+    );
+
+    // Slot 2's pool emptied: sweeping slot 1 IS lane-wide completion.
+    let ev_one = evidence(
+        Some(pscan(
+            vec![bond_match(1, 0), bond_match(2, 0)],
+            exited_both,
+            Vec::new(),
+            vec![funding(1, 7, 500)],
+        )),
+        None,
+        &[(1, 1), (2, 2)],
+    );
+    assert!(
+        !other_exited_pools_remain(&ev_one, PSlot::from_raw(1)),
+        "no other exited pool holds rows: the lane completes with this slot"
+    );
+
+    // A LIVE (non-exited) persona's rows never count: persona 2 bonded but
+    // not exited is `unstake`'s concern, not an uncollected pool.
+    let ev_live = evidence(
+        Some(pscan(
+            vec![bond_match(1, 0), bond_match(2, 0)],
+            exited(1),
+            Vec::new(),
+            vec![funding(1, 7, 500), funding(2, 8, 500)],
+        )),
+        None,
+        &[(1, 1), (2, 2)],
+    );
+    assert!(
+        !other_exited_pools_remain(&ev_live, PSlot::from_raw(1)),
+        "a live persona's funding is not an uncollected exit pool"
+    );
+}
