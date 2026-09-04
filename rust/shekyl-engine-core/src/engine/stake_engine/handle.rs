@@ -293,18 +293,15 @@ impl StakeEngineHandle {
     /// returned a bare `UnbondVin` before slice 2b; callers get
     /// [`AssembledUnbondPost`] now.
     ///
-    /// **`pub(crate)`, and deliberately not wired to any RPC method or CLI verb.**
-    /// The gate on this lane is reachability, not existence. Slice 3's engine
-    /// walk asserted the three retire observables without making anything
-    /// user-callable; PR-B's dispatch seam ([`Engine::submit_unbond`]) drives
-    /// this ask from production code and the daemon walk drives THAT — and
-    /// neither made anything user-callable either. What still holds the exit
-    /// closed is the set of missing pieces, not a pending event: no RPC
-    /// method, no CLI verb ("nothing dispatches the assembled bytes" was a
-    /// third piece until the dispatch seam narrowed it to "nothing
-    /// user-facing dispatches"; native `/submit_transaction` refusing
-    /// `Unbond` was a fourth until 2026-08-29, `DAEMON_SUBMIT_VERDICT.md`
-    /// §8.7.1.1).
+    /// **`pub(crate)`; user-reachable through the exit lane as of PR-C.**
+    /// The reachability gate's history: slice 3's engine walk, PR-B's
+    /// dispatch seam ([`Engine::submit_unbond`]) and its daemon walk each
+    /// landed without making anything user-callable; PR-C's
+    /// `StakeFacade::unstake` (wallet-RPC + CLI) is what lifted the last
+    /// two conditions (no RPC method, no CLI verb). The path's protections
+    /// now live on the path itself — the readiness refusal, engine-side
+    /// persona resolution, CLI confirmation, funds-safe seal semantics
+    /// (`unstake_facade` module docs).
     /// This is also the seam an actor-level test uses to prove the handler's
     /// persona-binding refusal is reachable, which a unit test on
     /// `UnbondRecordState` cannot do.

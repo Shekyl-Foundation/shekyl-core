@@ -144,9 +144,10 @@ dispatcher):
 >   (single-source projection of the engine's `predict_weight` byte model
 >   and fee-converge fixpoint).
 > - **Staking reads:** `get_staked_balance`, `get_staked_outputs`,
->   `staking_info` (authoritative staking read view; the action surface —
->   `unstake`, `claim_rewards` — remains engine-gated and RESERVED in the
->   contract).
+>   `staking_info` (authoritative staking read view). The exit actions
+>   `unstake` / `collect_unstaked` shipped with PR-C (2026-09-03);
+>   `claim_rewards` is REJECTED, not pending (emission claims are
+>   engine-side).
 > - **Proofs:** `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`,
 >   `check_reserve_proof` — DLEQ-based transaction and reserve proofs over
 >   `rust/shekyl-proofs/`, Bech32m proof strings. The `check_*` pair is
