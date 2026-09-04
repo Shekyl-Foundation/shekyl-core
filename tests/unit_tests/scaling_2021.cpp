@@ -142,11 +142,21 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   // identity: a conforming wallet's quote can only err toward
   // acceptance). The 5-arg pins above bypass all of that, so this is the
   // wrapper's own pin, written under the no-test-exists-means-write-the-
-  // test rule. On this fixture (empty chain: height 0, tx volume 0 =>
-  // dormancy) the ladder's own economy rung sits above the relay floor,
-  // so the clamp is the belt the derivation says it is (FL-C6) — the
-  // identity is asserted, not the clamp's activation, which no reachable
-  // state exercises.
+  // test rule.
+  //
+  // ARMED DEPENDENCY (the identity is asserted; the clamp's ACTIVATION is
+  // not): activation is untested because no state this fixture can drive
+  // — and, per FL-C6's round-3 measurement, no reachable quiet state —
+  // puts the ladder's economy rung below the relay floor (C_q >= 1 and
+  // the equal-median constants sit 340:317). That is a claim that
+  // ANOTHER result holds, not that activation is impossible: the wrapper
+  // itself ships the clamp because the two pricing functions take
+  // DIFFERENT medians, so divergence is possible by construction, and in
+  // an unmeasured median-divergence state the clamp is load-bearing
+  // while this test still passes. Falsifier: any weakening or
+  // re-derivation of FL-C6 / the relay-floor basis (FL-R13/FL-D5's
+  // calibration round included) reopens this — whoever touches those
+  // owes this test an activation probe, not just a re-read.
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
