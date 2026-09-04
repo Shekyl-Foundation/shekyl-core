@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-15
+> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -436,8 +436,9 @@ Constants from `cryptonote_config.h`:
 
 > **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
 > deferred tree insertion: outputs only enter the curve tree after their
-> type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
-> staked: max(effective_lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> type-specific maturity period (coinbase: 60 blocks; every other output: 10
+> blocks — the claim-era "staked" arm was retired with the confidential-staking
+> cutover and never existed in code, CEN-L12).  MIN_AGE therefore only needs to
 > provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
 > to ensure the referenced tree state is stable.
 
@@ -452,9 +453,29 @@ Constants from `cryptonote_config.h`:
 The tree root and depth at `referenceBlock` height anchor the proof. A
 mismatch in `curve_trees_tree_depth` is a consensus failure.
 
-The per-block tree root is stored in the block header's `curve_tree_root`
-field. The `check_tx_inputs` code retrieves it via
-`m_db->get_block_header(rv.referenceBlock).curve_tree_root`.
+**What the anchor is (ruled 2026-09-04, CEN-I12).** The anchor is the root
+of the curve tree *as it stands after `referenceBlock` connects* — a
+property of chain state, not of any one place that state is written down.
+Two witnesses of it exist, and consensus binds them to each other: the
+block's own `curve_tree_root` header field, which is the block's
+*attestation* of the state and is checked against the node's computed root
+at connect (§5; CEN-B5), and the node's own per-height root record, written
+at that same connect. The verifier reads its **own computed record** — the
+fact it checked the header against — never the header; a rewrite does the
+same in whatever form its store keeps that record. The prover holds no
+store, reads the header (`CURVE_TREE_CLIENT.md` §3.3), and is covered by
+the same B5 binding plus its own leaf recompute. The two reads name one
+value on every network where B5 runs; the only thing that makes the choice
+observable is B5's FAKECHAIN skip (census R9), and only in tests.
+
+*History:* this section was split from its first commit (`fb047fdc20`,
+2026-04-03): line 2a named the per-height record while this paragraph
+narrated the header read the code performed at the time. `292c00aff7`
+(2026-04-13) moved the code to the record because FAKECHAIN test blocks
+carry placeholder headers, without touching this document, and a dozen
+later edits (through the 2026-04-15 banner) never reconciled the two. That
+in-code FAKECHAIN reason states a *consequence* of the state-not-claim
+rule, not its rationale.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 

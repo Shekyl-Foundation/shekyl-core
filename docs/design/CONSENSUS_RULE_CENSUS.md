@@ -439,8 +439,8 @@ Enforced at pool admission (`tx_pool.cpp:304` → `Blockchain::check_tx_inputs`)
 | CEN-I9 | `pseudoOuts` count == input count (regular spend; archival shapes use their spend-subset counts, CEN-H21/H22) | 3645–3654 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-88 ⇒ merged |
 | CEN-I10 | `referenceBlock` must be an existing main-chain block | 4191–4198 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1a | RC-89 ⇒ merged |
 | CEN-I11 | `referenceBlock` age window: ≥ `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) and ≤ `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) blocks old | 4200–4220 | C | 1 | spec | `config/consensus_constants.json`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 (MIN_AGE=5 reorg-margin rationale); value pin = Decision 14 (`docs/CHANGELOG.md` :26404–26407; `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` :69) | RC-90, RC-91 ⇒ merged. **No docs/design pin for the values** — the CHANGELOG Decision-14 entry is the ruling record (enforcement-status caveat carried from §8) |
-| CEN-I12 | The membership anchor is the curve-tree root at `referenceBlock`'s height, read from the per-height root table (not the block header — FAKECHAIN headers carry placeholders) | 4224–4226 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — which says "header field"; table-vs-header doc divergence is a §7 item | |
-| CEN-I13 | `curve_trees_tree_depth` ∈ [1, current tree depth]; layers passed to verify are depth+1 | 4236–4244, 4291–4292 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2c; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-92 ⇒ merged |
+| CEN-I12 | The membership anchor is the curve-tree root **as it stands after `referenceBlock` connects** — a state property with two consensus-bound witnesses: the header's `curve_tree_root` (the block's attestation, checked against the computed root at connect, CEN-B5) and the node's own per-height root record (written at that connect). The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `d9d27c752`) | 4224–4226 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-review owed at the merged sha |
+| CEN-I13 | `curve_trees_tree_depth` ∈ [1, current tree depth]; layers passed to verify are depth+1 | 4236–4244, 4291–4292 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2c; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-92 ⇒ merged. **Found, not ruled (§7 #16):** step 2b/2c's pseudocode says equality with the depth *at `referenceBlock`*; the code range-checks against the *current* depth, and the FFI binds the claimed depth to the proof (`proof.rs`: `proof.tree_depth != tree_depth` rejects; the root is deserialized at that layer count). Same internally-split shape as CEN-I12; the spec column still needs its own reconciliation |
 | CEN-I14 | The FCMP++ proof must be non-empty | 4246–4252 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-93 ⇒ merged |
 | CEN-I15 | FCMP++ membership+spend-auth proof verifies in Rust (`shekyl_fcmp_verify`) over: proof bytes, all key images, all pseudoOuts, per-input PQC leaf hashes (`shekyl_fcmp_pqc_leaf_hash` of each hybrid pubkey — the in-circuit 4th leaf scalar; per-input hash failure rejects), tree root, layers = depth+1, and the tx prefix hash | 4254–4314 (leaf hashes 4265–4274) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 4; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md); PQC leaf KATs | RC-94, RC-95 ⇒ merged. **Inverse spot-check row.** Skippable on block connect only via the pool cache (CEN-M8) — load-bearing for D++ `hop` |
 | CEN-I16 | Per-input hybrid PQC auth structure: `auth_version == 1`; `flags == 0`; `scheme_id` ∈ {1 solo, 2 multisig} (cross-input scheme agreement NOT required — MSW-6 withdrawn); solo key blob exactly `PQC_HYBRID_SINGLE_KEY_LEN` (1996); multisig blob ∈ [3, `PQC_MAX_PUBLIC_KEY_BLOB` 16384] with the exact parse Rust-side | tx_pqc_verify.cpp:161–221; MSW-6 comment blockchain.cpp:4325–4347 | C | 1 | spec | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) §16.3 (MSW-6), MSW-1 | RC-101, RC-102, RC-103, RC-104 ⇒ merged. Inverse spot-check row |
@@ -765,6 +765,47 @@ input, not fixes.
     rule. The pre-change stressnet was measured **genesis-only** (all
     estate peers at height 1, 2026-09-01), so the consensus change
     invalidates no chain with a future.
+16. **CEN-I12's anchor source reconciled — the §7 step-2 prose was stale
+    narration of a dead read path** (2026-09-04; ruled by Rick on merge).
+    Entry 13 carried "header-vs-table root read" as a drift. `git log -S`
+    settles which side was the spec: the section was split from its first
+    commit (`fb047fdc20`, 2026-04-03 — pseudocode 2a named the per-height
+    record, the prose two paragraphs below narrated the
+    `get_block_header(rv.referenceBlock).curve_tree_root` read the code
+    performed then); `292c00aff7` (2026-04-13) moved the code to the record
+    because FAKECHAIN test blocks carry placeholder headers without touching
+    the doc, and a dozen later doc edits (through the 2026-04-15 banner)
+    never reconciled the two — so the prose has narrated dead code for five
+    months. **Ruling:** the
+    anchor is the curve-tree root *as it stands after `referenceBlock`
+    connects* — a state property, of which the header field and the
+    per-height record are two witnesses bound to each other by CEN-B5; the
+    verifier reads its own computed record (the fact it checked the header
+    against), the prover reads the header under the same binding
+    (`CURVE_TREE_CLIENT.md` §3.3). The rejected alternative — the header as
+    the normative source — would make the verifier anchor on a claim it has
+    itself verified against the fact, and would need every block's header
+    checked on every nettype, which B5's FAKECHAIN skip denies today. The
+    in-code FAKECHAIN rationale is a consequence, not the reason, and
+    carrying it as the reason is what made P0f slice 7's promotion
+    rule-71-adjacent: the witnesses differ exactly where B5 is skipped, so
+    R9 is the only thing that makes the choice observable, and only in
+    tests. Nothing in C++ changes; the comment stays as a true statement of
+    a consequence. **Found, not ruled, one row over:** step 2b/2c's
+    pseudocode says `curve_trees_tree_depth ==` the depth at
+    `referenceBlock` while the code (CEN-I13, CHECKED-CONFORMANT)
+    range-checks `[1, current depth]`; at the FFI boundary the claimed
+    depth must equal the proof's embedded depth (`proof.rs`,
+    `proof.tree_depth != tree_depth` → reject) and the root is deserialized
+    at that layer count, so the depth is bound to the proof and the anchor
+    — interior not walked (§3.4). Routed to I13's row; no ruling here.
+    **Also corrected in the same doc:** step 1's design rationale still
+    listed the retired claim-era "staked" maturity arm (CEN-L12's row
+    already records it as never existing in code). The CSR register's
+    CEN-I12 row stays failed-closed until re-reviewed at a sha containing
+    this reconciliation; that re-review must walk all three read sites and
+    rest on the state definition plus B5, not on slice 7's placeholder
+    rationale.
 
 ---
 

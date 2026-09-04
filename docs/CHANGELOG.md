@@ -419,6 +419,20 @@
 
 ### Changed
 
+- **FCMP++ spec: the membership anchor is a state property, not a header
+  read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the
+  verifier reads the reference block's header `curve_tree_root`; that was the
+  pre-2026-04-13 code, replaced by the per-height root record (`292c00aff7`)
+  without the prose following. Ruled: the anchor is the curve-tree root as it
+  stands after `referenceBlock` connects; the header field and the per-height
+  record are two witnesses bound by CEN-B5, the verifier reads its own record,
+  the prover reads the header under the same binding. The in-code FAKECHAIN
+  comment is a consequence, not the rationale. Step 1's rationale also drops
+  the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
+  2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
+  register's CEN-I12 row stays failed-closed pending re-review at the merged
+  sha.
+
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
   2026-09-01).** A candidate timestamp is valid iff it is at most
