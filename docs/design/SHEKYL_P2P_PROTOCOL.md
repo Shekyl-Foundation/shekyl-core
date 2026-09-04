@@ -249,9 +249,73 @@ check**. So:
 **The four checks above all answer *"is this right?"*. This one answers *"is
 this complete?"*** — and unlike the others it cannot be run by reading the
 artifact at all, only by going back to the tree with a wider question. That is
-why it is last, and why it is the one most easily skipped.
+why it is the one most easily skipped.
+
+> **Sixth check — when a decision is already taken, both the argument for it
+> and the argument against the alternative drift toward flattering it.**
+>
+> Named after PWD-T5, where the same eight bytes were mispriced **twice, from
+> opposite sides**: PW-9 would have deleted the prefix for an anonymity
+> property we cannot have, and T5's first draft kept it for a
+> resource-exhaustion property it cannot have either. **The second error
+> appeared inside the correction of the first.** The bias has a direction, and
+> it does not care which way the argument runs — an overstated *hazard*
+> justifies a ruling exactly as an overstated *benefit* does (PWD-B3a's first
+> draft called an unknown command "unbounded" when the packet limit still
+> bound it).
+>
+> **Mechanical form: name the adversary the property holds against, then ask
+> whether an adaptive one is excluded by construction.** A value derived from
+> public data cannot impose attacker work — that is a **non-property**, not a
+> mitigation with a weak constant, and the two demand different responses:
+> a weak constant invites tuning, a non-property demands re-routing.
+>
+> **It survives review because each argument is locally well-formed.** T5's
+> first draft cited a real consumer at a real line and drew a plausible
+> conclusion; nothing in the sentence was false, only its scope. So the check
+> cannot be "read it again" — it has to be the question above, asked against
+> the row's own adversary column.
+
+**The seventh check — *a `file:line` citation has a dependency the diff does
+not show, so it is verified after the merge or not at all*.** (Rick,
+2026-09-04, naming it the third instance of the fifth check's family.)
+
+> **A conflict-free merge proves the two branches did not edit the same lines.
+> It proves nothing about whether one branch moved lines the other points at.**
+
+**The instance:** C2-R1b's fork-choice work shifted `blockchain.cpp`, and
+PWD-B3's citation for `m_current_block_cumul_weight_limit` — the whole argument
+that a block cap cannot be static — came to point at unrelated code. **Neither
+side of the merge had edited the citing document.** The symbol survived, so the
+*claim* held and only the pointer broke, which is the failure mode that looks
+like nothing: nothing turns red, and the citation still resolves to a real line
+in a real file.
+
+**So the ordering is the mechanism, not the diligence.** Verifying citations
+*before* merging verifies an artifact that will not ship. Re-run them on the
+**merged** tree, and check them **by content** — that the cited line contains
+the symbol the claim rests on — because line-in-range is what a drifted
+citation still satisfies. Where a citation is load-bearing, name the symbol
+beside the line so the next drift is greppable rather than silent.
+
+> **This is the fifth check's family, one artifact over.** There the frontier
+> of an *enumeration* was narrower than the claim built on it; here the
+> frontier of a *verification* is — it covered the pre-merge tree while the
+> claim is about the merged one. Same shape in citations, in coverage
+> inventories, and in sum checks, which is why they are stated together: **the
+> frontier of a check is narrower than the claim it is taken to support.**
+
+**Rider, because the pattern has now recurred inside its own fixes three
+times:** correcting referring text tends to reproduce the defect in the
+correction. A cell advertising 2026-09-04 currency against a 2026-09-03
+verification is a stale-currency defect *inside the fix for a stale-currency
+defect*; a sum check corrected from 9 to 8 kept a total that was already wrong;
+a retired concept survived in the paragraph that retired it. **After correcting
+a claim, re-read the correction as if it were the original text** — it is
+subject to the same class it just repaired.
 
 ---
+
 
 ## 2. Cluster I — identity and Sybil resistance
 
@@ -2583,9 +2647,10 @@ with a computable subject rather than a static number to compare against.
 
 **Sum check: 3 ruled + 1 absorbed + 0 deferred = 4 rows.** ✅
 
-**Running total against the round's gate — authoritative:** **22 of 46**
+**Running total as of cluster B's first sub-round — historical:** **22 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + this
-sub-round's 4. **24 rows remain**, all in cluster B's later sub-rounds:
+sub-round's 4. **The authoritative total is at the end of the most recent
+sub-round**; only one is ever current. **24 rows remain**, all in cluster B's later sub-rounds:
 `PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
 `PWC-C1`, `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E1`, `PWC-E2`, `PWC-E3`,
 `PWC-E4`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`, `PWC-E9`, `PWC-E11`,
@@ -2595,6 +2660,366 @@ sub-round's 4. **24 rows remain**, all in cluster B's later sub-rounds:
 > reads as **PWD-B1**, a decision id, not `PWC-B1`, a census row — two live
 > families whose short forms collide. An enumeration exists to be checked
 > mechanically, and an ambiguous id cannot be.
+
+## 3.7 Cluster B, second sub-round — cadence, rate, and the batch nobody bounded
+
+**Three decisions: PWD-B1, PWD-B2, and PWD-B12 (minted here).** The
+validation surface is **connection cadence and rate** (rule 19). It goes second
+because **PWD-B12 is what PWC-A2 is re-blocked on**: PWD-B3 ruled the header
+field must express the largest value the command table can produce, and
+`NOTIFY_NEW_TRANSACTIONS` has no bound at all, so no maximum exists to size to.
+
+> **A premise this round had to correct before costing anything.** Earlier
+> grounding recorded *"no jitter anywhere"*. That is true of the **node-server
+> idle makers** and false of the tree: the relay layer draws fluff delays from
+> `FluffScheduler::memoryless()` — deliberately memoryless rather than the
+> inherited Poisson, which was the F-4 defect — and jitters the noise cadence
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> `:235`). **So this round is not introducing randomised timing to a tree that
+> has none; it is asking why one layer has it and the layer above does not.**
+
+### PWD-B12 — the fluff batch is unbounded, and the census could not see it
+
+**RULED. Minted here rather than routed**, because "cluster B owns it" is not
+an owner if no row names it (rule 22).
+
+`Zone::queue_fluff` appends **every** transaction to each peer's queue, and
+`flush_fluff` releases the whole accumulation — `std::mem::take(&mut
+peer.queued)` — with no cardinality or byte cap
+(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+checks no cardinality either.
+
+> **Why no census row covers it, which is a finding about the instrument.**
+> P2P-1's frontier was **the p2p wire and the connection management around
+> it**. `queue_fluff`/`flush_fluff` are *relay-layer* code that decides what
+> goes on that wire, so the bound sat one layer outside the enumeration — and
+> a census cannot report the absence of something outside its own frontier.
+> **This does not add a 47th row**: the completion gate stays at the census's
+> 46, and this decision is recorded as reaching past it.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Bound the batch in bytes at release, and emit the remainder in the next flush** | The pool-flooder, who makes a victim emit one enormous `NOTIFY_NEW_TRANSACTIONS` — and the path observer, for whom an unbounded batch is a size signal proportional to arrival rate | **Adopted.** A byte bound is what PWD-B3's cap needs as its input, and splitting across flushes costs latency rather than correctness. **Bytes, not count**, for the same reason PWD-B3 rejected cardinality: transactions vary in size, so a count bounds nothing |
+| Bound by transaction count | The same | **Refused, but not because it bounds nothing.** `CRYPTONOTE_MAX_TX_SIZE` is 1 MB, so `n` transactions admit at most `n` MB — a **finite** bound, just a loose one that varies by a factor of thousands with the traffic mix. Bytes are adopted because they are **tighter and a direct input to PWD-B3's cap**, not because count is unbounded. *An earlier version of this cell said the bound would be nominal, which overstates the refused option — §1's sixth check, pointed at an alternative instead of at the adopted rule.* |
+| Leave unbounded; the packet limit catches it | The same | **Refused.** That is the fallback PWD-B3a already refused one surface over: a framing bound is not a statement about what the message is, and here it would make the *relay's* behaviour depend on a *framing* constant it never reads |
+
+**Bounding the release does not bound the queue, and the ruling has to say
+both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
+(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`:868`), with **no bound at either end**. If transactions arrive faster than
+one capped batch per flush interval, the remainder simply accumulates — **once
+per destination peer** — so a release-side cap alone converts the flooder's
+attack from an oversized message into memory exhaustion, which is worse
+because it is invisible on the wire.
+
+> **So PWD-B12 is two bounds, not one: a byte cap on what a flush *releases*,
+> and a byte cap on what a zone *holds*, with admission refused at the second.**
+
+**Admission is refused at the source, not at the destination queue**, and that
+placement is the whole point. `queue_fluff` fans one arrival out to every
+destination, so a single flooding source fills *N* queues; dropping at the
+destination discards transactions that other peers may never see, while
+refusing admission pushes the cost back onto the connection that caused it —
+where **PWD-B1's token bucket charges it** — which is true only because PWD-B1
+covers the **notify** dispatch surface as well as the invoke one. *An earlier
+version of this row asserted that composition while PWD-B1 was scoped to the
+four node-server invoke routes; `NOTIFY_NEW_TRANSACTIONS` does not enter
+through any of them, so a peer could have filled this queue without spending a
+single token.* With B1 corrected, the two rows compose: B1 makes the flood
+expensive per connection, B12 makes it bounded in memory.
+
+**Conceded.** A bounded batch means a burst of transactions takes more than one
+flush to propagate, which slightly lengthens the tail of propagation under
+load. Refused admission is a real loss — a transaction this node never queued
+is one it never relays — but it is bounded, attributable to the connection that
+caused it, and preferable to unbounded growth that degrades the whole node. **That is the correct direction for D++ anyway** — the fluff delay is
+already memoryless, so an extra flush is drawn from the same distribution
+rather than adding a new observable.
+
+**Falsifier.** **Reopen if the batch bound is reached during normal operation
+at the design transaction rate** — that would mean the bound is shaping
+ordinary traffic rather than catching a flood, and its value is wrong.
+
+> **This is the input PWC-A2 needs.** With it, `NOTIFY_NEW_TRANSACTIONS` has a
+> derivable cap and the "largest value the table can produce" question becomes
+> answerable. **The value itself is still owed**, with `margin` and the
+> response byte budget, in the FOLLOWUPS item PWD-B3 re-opened.
+
+### PWD-B1 — rate limiting: adopted, and it is the mechanism PWD-T5 routed here
+
+**RULED.** PWC-E2 records the absence against an enumerated frontier: **no
+token bucket, no per-peer counter, no minimum interval** guards any of the four
+invoke entry points — `handle_get_support_flags`, `handle_timed_sync`,
+`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl:2170`, `:2646`,
+`:2695`, `:2794` **as of this round's pin**; PWC-E2 cites the same four at the
+line numbers its own pin had, and the handlers are named here so the next
+drift is greppable rather than silent).
+
+**Two earlier rows routed their adaptive-adversary case here, and this row
+carries only half of it — which is stated rather than glossed.** PWD-T5
+conceded that a publicly-derivable prefix cannot impose attacker work and sent
+adaptive exhaustion to PWD-B1/PWD-B9; PWD-B3a rejected unknown commands but an
+adversary may send *known* ones at any rate.
+
+> **PWD-B3a's half is carried here. PWD-T5's is not, because it is a different
+> phase.** T5's flooder prepends the correct eight bytes and reaches "the same
+> buffering and KEM path" — **before the handshake completes, and therefore
+> before any of the four invoke entry points this bucket sits on.** A
+> post-transport rate limit cannot bound a pre-transport cost.
+
+**What does bound the pre-handshake phase today, and what does not — and the
+first version of this paragraph named the wrong mechanism, in the wrong
+direction.** PWD-T6 caps the pre-handshake allowance at exactly one flight
+(1256/1160 B), so the *per-connection* buffer is bounded and small.
+
+> **The decapsulation is forced by an *inbound* connection, so the bound that
+> matters is the inbound one — and that is PWC-E11, not PWD-B9.** PWD-B9 is
+> **outbound slot diversity** (`P2P_2_DISPATCH_BRIEF.md:502`), which says
+> nothing about connections a peer opens *to us*. The inbound cap is
+> `has_too_many_connections` (`src/p2p/net_node.inl:3089` **at this round's pin**; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
+> on `cntxt.m_is_income` — and **returns permit for every non-public zone**, so
+> **on Tor there is no inbound per-host cap at all.**
+
+**So two gaps, not one.** Even on clearnet, a per-host *concurrency* cap does
+not bound **churn** — connect, force one decapsulation, disconnect, repeat —
+and on anonymity zones there is no per-host bound of either kind. That is
+precisely PWD-T5's adversary, and neither PWD-T6 nor PWC-E11 reaches it.
+
+> **Given its own owner rather than folded into PWD-B9.** Widening B9 informally
+> would leave the brief, the index and this document disagreeing about what B9
+> means, and a row that means different things in different documents is worse
+> than a missing row. Queued in FOLLOWUPS as **pre-handshake admission rate**,
+> citing PWC-E11 for the current state — with the anonymity-zone gap named,
+> because a cap that exempts Tor is the kind of "bound" that reads as one
+> without being one.
+
+> **Open, and it is *unruled* rather than blocked** — no decision waits on
+> another, so nothing licenses deferring it beyond this sub-round's surface.
+> Recorded in FOLLOWUPS with PWC-E11 as the current state and the
+> anonymity-zone exemption named.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Per-connection token bucket charged at *every* dispatch — invoke and notify alike — before the request is decoded** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced — **and the one who sends malformed ones** | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
+| The same bucket, charged inside the handlers | The same | **Refused — it would not have bounded the work.** See the placement rule below |
+| Global rate limit across all peers | The same | **Refused.** One peer's flood then throttles every honest peer — the attacker buys a shared outage with one connection |
+| Rely on per-host connection caps | The same | **Refused as a substitute, and the cap is not PWD-B9's.** The inbound cap is **PWC-E11** (`has_too_many_connections`, public zone only); **PWD-B9 is outbound slot diversity** and does not face this adversary at all. Even taking E11 at its best, a *concurrency* cap says nothing about the **rate** on a connection a host is entitled to. *An earlier version of this cell named B9, contradicting the corrected paragraph above and making B9 mean two things in one document.* |
+
+**Conceded.** A token bucket adds per-connection state, and a peer that is
+merely fast — a well-connected node during a burst — is throttled the same as
+an attacker.
+
+> **The charge happens at dispatch, before decoding, and the placement is
+> load-bearing rather than an implementation note.**
+
+`HANDLE_INVOKE_T2` tests `COMMAND::ID == command` and then calls
+`buff_to_t_adapter`, which runs `strg.load_from_binary(in_buff, …)` **and**
+`in_struct.load(strg)` *before* it invokes the handler
+(`contrib/epee/include/storages/levin_abstract_invoke2.h:250-252`, `:152-171`).
+A bucket charged inside `handle_timed_sync` and its siblings would therefore
+leave **two** things unmetered:
+
+- **the portable-storage parse itself**, which is the expensive part of
+  servicing a flood and happens before any handler runs;
+- **every malformed request**, which returns `-1` from the adapter and **never
+  reaches a handler at all** — so an attacker who sends deliberate garbage pays
+  nothing against the bucket while still making the victim parse it.
+
+**The command id is already in hand at dispatch**, which is what makes the fix
+free: the same `COMMAND::ID == command` test that selects the handler can
+charge the bucket first. *An earlier version of this row placed the bucket on
+"the four invoke entry points", meaning the handlers — bounding the cheap half
+and calling it resource exhaustion protection.*
+
+> **And the surface is *every* dispatch, not the four p2p invokes.** `HANDLE_NOTIFY_T2`
+> is structurally the same macro — `is_notify && NOTIFY::ID == command`, then
+> the same `buff_to_t_adapter`
+> (`contrib/epee/include/storages/levin_abstract_invoke2.h:259-261`) — so the
+> command id is known at exactly the same point and the parse happens in
+> exactly the same place.
+
+**Scoping the bucket to the four invoke routes would have left the entire
+cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+the blocks and the transaction batches, i.e. **the large payloads and the
+flood vector PWD-B12 exists to bound.** *A second earlier version made that
+mistake, and it is the same one twice: naming the surface I had been reading
+rather than the surface the property needs.*
+
+**Four parameters are owed, not one, because a bucket is not defined by its
+refill rate.** Two conforming implementations given only a rate would diverge
+on burst tolerance and on what a throttled peer experiences:
+
+| Owed | Why it cannot be left to the implementer |
+| --- | --- |
+| **Refill rate** | the honest/attacker boundary; too tight and sync stalls, too loose and it is decoration |
+| **Capacity, and the initial fill** | capacity *is* the burst allowance; a full-at-connect bucket and an empty one differ sharply for a peer that opens and immediately syncs |
+| **Token cost per command** | a handshake and a timed-sync are not the same work — a flat cost prices the cheap one like the expensive one, and an attacker picks whichever is mispriced. **Charged on the command id at dispatch**, which is the only point where the id is known and no work has been done yet |
+| **Action on exhaustion** | throttle, or drop the connection? The two produce **different wire-observable behaviour**, so leaving it open means peers disagree about whether a slow peer is a hostile one |
+
+**Falsifier.** **Reopen if honest initial sync ever exhausts the bucket** —
+concrete, observable at the sync path, and the failure that would mean the rate
+was chosen against the wrong traffic.
+
+### PWD-B2 — jitter, and the discriminator is observability
+
+**RULED.** The five node-server idle makers are fixed-interval
+(`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
+(PWC-E4).
+
+> **Ruled: a cadence a *path* observer can correlate across connections
+> gets an independently drawn per-connection deadline; a cadence that is purely
+> local scheduling stays a single fixed timer.**
+
+**"Jitter the timer" would not have bought the property, and the distinction is
+the whole ruling.** Timed-sync is driven by *one* shared idle maker that walks
+every handshaked connection. Randomising **when that timer fires** still sends
+to every connection **simultaneously** — an observer sees N connections light up
+at the same instant, which is *perfect* cross-connection correlation with a
+randomised offset. The fix is not a jittered shared timer; it is **per-connection
+deadlines, drawn independently**.
+
+> **And the re-draw discipline comes with it, because the relay lane already
+> paid for getting it wrong.** `NoiseSchedule` keeps one deadline per channel,
+> **each drawn once and re-drawn only when *that* channel fires**; a foreign
+> wake must leave every other entry untouched, because re-drawing on a foreign
+> wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
+> effective interval short** — "a privacy defect no count assertion and no
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
+> only when that connection's own sync fires.
+
+**Timed-sync (60 s, to every handshaked connection at once) is the case that
+matters.** A fixed network-wide period means every node's timed-sync traffic is
+phase-locked to its own start time, and an observer watching two connections
+can test whether they belong to the same node by comparing phase. **That is an
+identity signal reconstructed from timing** — precisely the class PWD-I1 spent
+the identity cluster removing from the wire, and it would survive the field's
+deletion.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Per-connection independently drawn deadlines for the observable cadences; purely local timers stay a single fixed timer** | The path observer correlating two connections by phase | **Adopted.** It targets the cadences that produce a cross-connection observable and leaves the ones that do not, so the change is small and each part is justified by its own adversary |
+| Jitter the existing **shared** timer | The same | **Refused — it does not buy the property.** One timer walking every connection still sends to all of them at the same instant; the offset moves and the correlation does not |
+| Jitter everything on a timer | The same | **Refused.** The idle-peer kick and the standby check produce no cross-connection signal; jittering them buys nothing and makes every timing test in the tree probabilistic |
+| Leave all fixed | The same | **Refused.** It preserves a correlation the identity cluster just paid to remove — the wire field goes and the timing tell stays |
+
+**Conceded — and it is the reason this row is small.** Jitter reduces phase
+correlation; it does not eliminate traffic analysis, and against an observer
+who watches long enough the *mean* is still a fingerprint. **The claim is
+narrow deliberately** (§1's sixth check): this is not an anonymity mechanism,
+it is the removal of one cheap correlation.
+
+**The mechanism is not invented here — but "the relay lane's mechanism" is
+two mechanisms, and the row has to say which.** That lane draws **memoryless**
+delays for *fluff* and **bounded-uniform** `min + U(0, jitter)` for the *noise
+cadence*, and they are not interchangeable.
+
+> **Adopted: the bounded-uniform form, `min + U(0, jitter)` — the
+> `NoiseCadence` *shape*, explicitly not its shipped values.**
+
+**Bounded, not memoryless, and the reason is liveness rather than taste.**
+Timed-sync is how a node learns it has fallen behind; an exponential draw is
+unbounded above, so a node could go arbitrarily long without one. Fluff can
+afford that — memorylessness is exactly what defeats timing inference on
+propagation — but a liveness cadence cannot.
+
+> **The window is derived under a fixed constraint: the mean stays at
+> `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
+> load change, and preserving the mean is what keeps the two separable.
+
+**The distribution is uniform, and the criterion is maximum entropy on a
+bounded support — not that uniform is uniquely unbiased.** Two conditions
+select it, in order:
+
+1. **Bounded support**, from the liveness argument above: an unbounded family
+   can delay a sync arbitrarily, and timed-sync is how a node learns it has
+   fallen behind.
+2. **Maximum entropy given that support.** Among bounded families with the same
+   mean, the uniform is the one an observer learns least from per observation;
+   a triangular or otherwise peaked draw has the same mean and a *recoverable
+   shape*, so repeated observation converges on it faster.
+
+> **The claim is that narrow deliberately.** Uniform is not shapeless — bounded
+> support is itself a recognisable signature — and an earlier version of this
+> row said "any other family biases the interval", which is not true of a
+> bounded symmetric family at the same mean. §1's sixth check, on the row's own
+> adopted option.
+
+**What *is* unconditional is that the specified draw must not be distorted.**
+Truncating it, re-rolling a value, or resampling on a foreign event all change
+the distribution actually realised, and that change is a pattern even when the
+family was chosen correctly. The relay lane records the cost when it happens by
+accident, in the CV-3 note above: resampling on a foreign wake and keeping the
+minimum biases the effective interval short, "a privacy defect no count
+assertion and no goodness-of-fit grade can see".
+
+> **`0` is a valid draw from `U(0, jitter)`, and must not be excluded.**
+> Rejecting or re-rolling a zero truncates the distribution, which is exactly
+> the bias flatness exists to remove — and it would be a live defect, since a
+> conformance test asserting "a deadline is never exactly `min`" would both fail
+> at random and, if an implementation were written to satisfy it, introduce the
+> pattern.
+
+**So the conformance condition is on the *window parameter*, never on an
+individual draw**, and an earlier version of this row confused the two — it
+required a "non-zero window" on the grounds that `jitter = 0` preserves the
+fixed phase. **That was wrong, and it mis-stated this row's own mechanism.**
+What removes the cross-connection correlation is the **per-connection
+independent draw**: two connections established at different moments have
+unrelated phases *whatever* the window is, because each deadline is set from
+its own connection's clock and not from a shared timer.
+
+> **What the window buys is narrower and more specific: it decorrelates
+> connections established at nearly the same moment.** That is the common case
+> rather than a corner one — `m_connections_maker_interval` runs every second
+> (`src/p2p/net_node.h:619`), so a node coming up opens several outbound
+> connections in a tight cluster, and with a degenerate window they would tick
+> together for the life of those connections.
+
+**The `min`/`jitter` split is owed**, derived against that clustering rather
+than against an abstract "non-zero" requirement — the trade is worst-case
+staleness against how much establishment-time spread the window has to cover.
+
+> **Copying `NoiseCadence::shipped()` would be the wrong reading and is
+> refused explicitly:** it is `3.333 s + U[0, 3.334 s]`, a mean of **5 s**
+> (`rust/shekyl-relay-privacy/src/schedule.rs:741-753`), which would change
+> timed-sync's frequency by 12× while claiming to change only its phase.
+
+**Falsifier — and "stays distinguishable" is not one, so it is made concrete
+here.** A reopening criterion a reader cannot recognise is the shape §0
+forbids, and the owed `min`/`jitter` split cannot be derived against an
+undefined target.
+
+> **Metric: the pairwise circular correlation of send phases, taken over the
+> emission times of two connections of the same node, tested against the
+> uniform null.** Reopen if that correlation is distinguishable from the null
+> at the sample budget a path observer plausibly has.
+
+**The threshold and the sample budget are owed together with the `min`/`jitter`
+split, in one item and not two**, because they are one measurement: the window
+is chosen so the correlation falls below the threshold, so neither number can
+be picked without the other. Run on the Q12-D6a rig, whose establishment-time
+clustering (`m_connections_maker_interval`, 1 s) is the condition the window
+has to cover.
+
+### Cluster B second sub-round disposition
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-E2 (no rate limit on the invoke entry points) | **Ruled** — per-connection token bucket | PWD-B1 |
+| PWC-E1 (timed-sync fixed 60 s, no jitter) | **Ruled** — jittered; it is the observable case | PWD-B2 |
+| PWC-E3 (five fixed, unjittered idle timers) | **Ruled** — jittered where observable | PWD-B2 |
+| PWC-E4 (three protocol-handler timers, fixed) | **Ruled** — left fixed; no cross-connection observable | PWD-B2 |
+
+**Sum check: 4 ruled + 0 absorbed + 0 deferred = 4 rows.** ✅
+
+**Running total against the round's gate — authoritative:** **26 of 46**
+bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + sub-round 1's 4
++ this sub-round's 4. **20 rows remain**, all in cluster B: `PWC-A7`,
+`PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`, `PWC-C1`,
+`PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`,
+`PWC-E9`, `PWC-E11`, `PWC-E13`, `PWC-E14`, `PWC-F4`.
 
 ## 4. What cluster I does not decide
 
