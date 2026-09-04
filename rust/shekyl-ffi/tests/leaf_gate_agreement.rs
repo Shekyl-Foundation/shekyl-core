@@ -18,6 +18,8 @@
 //! connect. The C++ throw itself is deliberately not the subject: it cannot be
 //! reached without first breaking one of these gates.
 
+use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+use curve25519_dalek::scalar::Scalar;
 use shekyl_fcmp::tree::construct_leaf;
 use shekyl_ffi::ct_balance_ffi::{
     shekyl_check_commitment_masks, shekyl_check_output_keys, SHEKYL_OUTPUT_POINTS_OK,
@@ -42,6 +44,18 @@ fn probe_points() -> Vec<(&'static str, [u8; 32])> {
 
     // All-ones: y above the field modulus — non-canonical.
     out.push(("all ones (non-canonical y)", [0xffu8; 32]));
+
+    // A non-trivial prime-order point: 5*G. Without this the commitment-mask
+    // gate rejects every probe — it refuses bare G and the identity as
+    // amount-leaking trivial forms on top of the canonical/torsion gates — and
+    // the mask implication below would hold vacuously, never once exercising
+    // the accepted branch it exists to constrain.
+    out.push((
+        "5*G (non-trivial prime-order)",
+        (ED25519_BASEPOINT_POINT * Scalar::from(5u8))
+            .compress()
+            .to_bytes(),
+    ));
 
     // A small-order (torsion) point: order 8, on-curve but not prime-order.
     out.push((
@@ -95,29 +109,54 @@ fn commitment_mask_gate_accepts_only_what_the_leaf_builder_encodes() {
     }
 }
 
-/// The suite is only meaningful if the probes actually exercise both verdicts:
-/// an all-rejecting or all-accepting probe set would satisfy the implications
-/// above vacuously.
+/// The suite is only meaningful if the probes exercise both verdicts **for
+/// each gate independently**: an all-rejecting probe set satisfies every
+/// implication above vacuously, and the two gates do not accept the same
+/// inputs — the mask gate additionally refuses bare `G` and the identity as
+/// amount-leaking trivial forms, so a probe set that is non-vacuous for output
+/// keys can still be all-rejecting for masks. Checking only one gate is how
+/// that hole stayed open until review.
 #[test]
-fn probe_set_exercises_both_verdicts() {
+fn probe_set_exercises_both_verdicts_for_each_gate() {
     let good = good_point();
-    let mut accepted = 0usize;
-    let mut rejected = 0usize;
+
+    let mut key_accepted = 0usize;
+    let mut key_rejected = 0usize;
+    let mut mask_accepted = 0usize;
+    let mut mask_rejected = 0usize;
+
     for (_, probe) in probe_points() {
         if unsafe { shekyl_check_output_keys(probe.as_ptr(), 1) } == SHEKYL_OUTPUT_POINTS_OK {
-            accepted += 1;
+            key_accepted += 1;
         } else {
-            rejected += 1;
+            key_rejected += 1;
+        }
+        if unsafe { shekyl_check_commitment_masks(probe.as_ptr(), 1, std::ptr::null(), 0) }
+            == SHEKYL_OUTPUT_POINTS_OK
+        {
+            mask_accepted += 1;
+        } else {
+            mask_rejected += 1;
         }
     }
+
     assert!(
-        accepted > 0,
-        "no probe is accepted — the gate check is vacuous"
+        key_accepted > 0,
+        "no probe is accepted by the output-key gate — its implication is vacuous"
     );
     assert!(
-        rejected > 0,
-        "no probe is rejected — the gate check is vacuous"
+        key_rejected > 0,
+        "no probe is rejected by the output-key gate — its implication is vacuous"
     );
+    assert!(
+        mask_accepted > 0,
+        "no probe is accepted by the commitment-mask gate — its implication is vacuous"
+    );
+    assert!(
+        mask_rejected > 0,
+        "no probe is rejected by the commitment-mask gate — its implication is vacuous"
+    );
+
     // And the known-good point must encode, or every implication above holds
     // for the wrong reason.
     assert!(construct_leaf(&good, &good, &[0u8; 32]).is_some());

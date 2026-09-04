@@ -38,7 +38,12 @@ crypto::public_key test_output_key_for_index(size_t i)
   crypto::secret_key sk{};
   sk.data[0] = static_cast<char>(i + 1);
   crypto::public_key pk{};
-  EXPECT_TRUE(crypto::secret_key_to_public_key(sk, pk));
+  // Throw rather than EXPECT_TRUE-and-return: a non-fatal expectation would
+  // hand back an unset key, which then fails downstream as a curve-tree abort
+  // or a mismatched output — noise pointing away from the real cause.
+  if (!crypto::secret_key_to_public_key(sk, pk))
+    throw std::runtime_error("fixture: secret_key_to_public_key failed for output index "
+      + std::to_string(i));
   return pk;
 }
 
