@@ -2703,9 +2703,31 @@ checks no cardinality either.
 | Bound by transaction count | The same | **Refused.** `CRYPTONOTE_MAX_TX_SIZE` is 1 MB, so any count `n` admits `n` MB — the bound would be nominal |
 | Leave unbounded; the packet limit catches it | The same | **Refused.** That is the fallback PWD-B3a already refused one surface over: a framing bound is not a statement about what the message is, and here it would make the *relay's* behaviour depend on a *framing* constant it never reads |
 
+**Bounding the release does not bound the queue, and the ruling has to say
+both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
+(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`:868`), with **no bound at either end**. If transactions arrive faster than
+one capped batch per flush interval, the remainder simply accumulates — **once
+per destination peer** — so a release-side cap alone converts the flooder's
+attack from an oversized message into memory exhaustion, which is worse
+because it is invisible on the wire.
+
+> **So PWD-B12 is two bounds, not one: a byte cap on what a flush *releases*,
+> and a byte cap on what a zone *holds*, with admission refused at the second.**
+
+**Admission is refused at the source, not at the destination queue**, and that
+placement is the whole point. `queue_fluff` fans one arrival out to every
+destination, so a single flooding source fills *N* queues; dropping at the
+destination discards transactions that other peers may never see, while
+refusing admission pushes the cost back onto the connection that caused it —
+where **PWD-B1's token bucket is already charging it**. The two rows compose:
+B1 makes the flood expensive per connection, B12 makes it bounded in memory.
+
 **Conceded.** A bounded batch means a burst of transactions takes more than one
 flush to propagate, which slightly lengthens the tail of propagation under
-load. **That is the correct direction for D++ anyway** — the fluff delay is
+load. Refused admission is a real loss — a transaction this node never queued
+is one it never relays — but it is bounded, attributable to the connection that
+caused it, and preferable to unbounded growth that degrades the whole node. **That is the correct direction for D++ anyway** — the fluff delay is
 already memoryless, so an extra flush is drawn from the same distribution
 rather than adding a new observable.
 
@@ -2728,10 +2750,31 @@ invoke entry points — `handle_get_support_flags`, `handle_timed_sync`,
 line numbers its own pin had, and the handlers are named here so the next
 drift is greppable rather than silent).
 
-**Two earlier rows routed their adaptive-adversary case here, and this row has
-to actually carry it.** PWD-T5 conceded that a publicly-derivable prefix cannot
-impose attacker work and sent adaptive exhaustion to PWD-B1/PWD-B9; PWD-B3a
-rejected unknown commands but an adversary may send *known* ones at any rate.
+**Two earlier rows routed their adaptive-adversary case here, and this row
+carries only half of it — which is stated rather than glossed.** PWD-T5
+conceded that a publicly-derivable prefix cannot impose attacker work and sent
+adaptive exhaustion to PWD-B1/PWD-B9; PWD-B3a rejected unknown commands but an
+adversary may send *known* ones at any rate.
+
+> **PWD-B3a's half is carried here. PWD-T5's is not, because it is a different
+> phase.** T5's flooder prepends the correct eight bytes and reaches "the same
+> buffering and KEM path" — **before the handshake completes, and therefore
+> before any of the four invoke entry points this bucket sits on.** A
+> post-transport rate limit cannot bound a pre-transport cost.
+
+**What does bound the pre-handshake phase today, and what does not.** PWD-T6
+caps the pre-handshake allowance at exactly one flight (1256/1160 B), so the
+*per-connection* buffer is bounded and small. PWD-B9 caps concurrent
+connections *per host*. **Neither bounds the rate at which new connections —
+each paying one ML-KEM decapsulation — may be opened across many hosts**, and
+that is precisely T5's adversary.
+
+> **Open, with an owner and a reason it is not closed here: connection
+> admission *rate* is PWD-B9's surface, and PWD-B9 as briefed is a *cap*, not a
+> *rate*.** A cap on concurrent connections does not bound churn — connect,
+> force a decapsulation, disconnect, repeat. B9 must carry both or a row must
+> be minted, and **"cluster B owns it" is not an owner** (rule 22). Recorded in
+> FOLLOWUPS against PWD-B9.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -2741,8 +2784,18 @@ rejected unknown commands but an adversary may send *known* ones at any rate.
 
 **Conceded.** A token bucket adds per-connection state, and a peer that is
 merely fast — a well-connected node during a burst — is throttled the same as
-an attacker. **The refill rate is owed**, and it is a genuine trade rather than
-a lookup: too tight and honest sync stalls, too loose and it is decoration.
+an attacker.
+
+**Four parameters are owed, not one, because a bucket is not defined by its
+refill rate.** Two conforming implementations given only a rate would diverge
+on burst tolerance and on what a throttled peer experiences:
+
+| Owed | Why it cannot be left to the implementer |
+| --- | --- |
+| **Refill rate** | the honest/attacker boundary; too tight and sync stalls, too loose and it is decoration |
+| **Capacity, and the initial fill** | capacity *is* the burst allowance; a full-at-connect bucket and an empty one differ sharply for a peer that opens and immediately syncs |
+| **Token cost per command** | a handshake and a timed-sync are not the same work — a flat cost prices the cheap one like the expensive one, and an attacker picks whichever is mispriced |
+| **Action on exhaustion** | throttle, or drop the connection? The two produce **different wire-observable behaviour**, so leaving it open means peers disagree about whether a slow peer is a hostile one |
 
 **Falsifier.** **Reopen if honest initial sync ever exhausts the bucket** —
 concrete, observable at the sync path, and the failure that would mean the rate
@@ -2754,8 +2807,27 @@ was chosen against the wrong traffic.
 (`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
 (PWC-E4).
 
-> **Ruled: a cadence an off-path observer can correlate across peers is
-> jittered; a cadence that is purely local scheduling is not.**
+> **Ruled: a cadence an off-path observer can correlate across connections
+> gets an independently drawn per-connection deadline; a cadence that is purely
+> local scheduling stays a single fixed timer.**
+
+**"Jitter the timer" would not have bought the property, and the distinction is
+the whole ruling.** Timed-sync is driven by *one* shared idle maker that walks
+every handshaked connection. Randomising **when that timer fires** still sends
+to every connection **simultaneously** — an observer sees N connections light up
+at the same instant, which is *perfect* cross-connection correlation with a
+randomised offset. The fix is not a jittered shared timer; it is **per-connection
+deadlines, drawn independently**.
+
+> **And the re-draw discipline comes with it, because the relay lane already
+> paid for getting it wrong.** `NoiseSchedule` keeps one deadline per channel,
+> **each drawn once and re-drawn only when *that* channel fires**; a foreign
+> wake must leave every other entry untouched, because re-drawing on a foreign
+> wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
+> effective interval short** — "a privacy defect no count assertion and no
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
+> only when that connection's own sync fires.
 
 **Timed-sync (60 s, to every handshaked connection at once) is the case that
 matters.** A fixed network-wide period means every node's timed-sync traffic is
@@ -2767,7 +2839,8 @@ deletion.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Jitter the observable cadences; leave purely local timers fixed** | The path observer correlating two connections by phase | **Adopted.** It targets the cadences that produce a cross-connection observable and leaves the ones that do not, so the change is small and each part is justified by its own adversary |
+| **Per-connection independently drawn deadlines for the observable cadences; purely local timers stay a single fixed timer** | The path observer correlating two connections by phase | **Adopted.** It targets the cadences that produce a cross-connection observable and leaves the ones that do not, so the change is small and each part is justified by its own adversary |
+| Jitter the existing **shared** timer | The same | **Refused — it does not buy the property.** One timer walking every connection still sends to all of them at the same instant; the offset moves and the correlation does not |
 | Jitter everything on a timer | The same | **Refused.** The idle-peer kick and the standby check produce no cross-connection signal; jittering them buys nothing and makes every timing test in the tree probabilistic |
 | Leave all fixed | The same | **Refused.** It preserves a correlation the identity cluster just paid to remove — the wire field goes and the timing tell stays |
 
