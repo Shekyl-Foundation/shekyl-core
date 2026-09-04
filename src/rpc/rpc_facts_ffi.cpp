@@ -264,10 +264,10 @@ int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
 }
 
 // Body of `shekyl_rpc_block_header_at`. Carries what the deleted
-// `on_get_block_header_by_height` did together with
-// `fill_block_header_response` (which the header methods still in C++ keep
-// using): one lock, the bound, the block, and every field the wire's header
-// carries.
+// `on_get_block_header_by_height` did together with the equally deleted
+// `fill_block_header_response`: one lock, the bound, the block, and every
+// field the wire's header carries. This is the only header projection left
+// in the tree; `shekyl_rpc_types::BlockHeader` is what it fills.
 int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
   uint64_t height, bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept
 {
@@ -374,11 +374,12 @@ int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
 
       // The block's reward is the sum of its coinbase outputs, and
       // `get_outs_money_amount` is this tree's one definition of that sum.
-      // NB `core_rpc_server::get_block_reward` is a private third copy of the
-      // same loop, and its name collides with the *consensus*
-      // `cryptonote::get_block_reward(median_weight, ...)`, which computes the
-      // subsidy rather than reading a block. It dies with
-      // `fill_block_header_response` in RK-5; nothing new should call it.
+      // NB the name once had three homes. `core_rpc_server::get_block_reward`
+      // was a private third copy of this loop, deleted with
+      // `fill_block_header_response`, its only caller. The two that remain are
+      // the *consensus* `cryptonote::get_block_reward(median_weight, ...)`,
+      // which computes the subsidy rather than reading a block, and
+      // `miner::get_block_reward()`, an accessor — neither is this.
       out->reward = cryptonote::get_outs_money_amount(blk.miner_tx);
 
       out->block_weight = bc.get_db().get_block_weight(height);
@@ -446,7 +447,7 @@ struct block_payload_owner
 };
 
 // Body of `shekyl_rpc_block_at`. Carries what the deleted `on_get_block` did
-// together with `fill_block_header_response`.
+// together with the equally deleted `fill_block_header_response`.
 int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
   uint64_t height, bool fill_pow_hash,
   shekyl_rpc_block_header_facts* out_header,

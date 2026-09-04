@@ -328,7 +328,7 @@ TEST(rpc_facts_shims, in_range_height_the_store_cannot_produce_is_inconsistent)
 }
 
 // The header projection carries what the block and the store say, at the
-// height asked for — the fields the wire's `block_header_response` renders.
+// height asked for — the fields `shekyl_rpc_types::BlockHeader` renders.
 TEST(rpc_facts_shims, header_projection_reads_the_block_at_that_height)
 {
   BlockchainAndPool bap;

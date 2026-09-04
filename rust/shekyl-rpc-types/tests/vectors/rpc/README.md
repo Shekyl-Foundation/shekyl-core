@@ -2,7 +2,7 @@
 
 Each `<method>_<case>_v1.json` is the **byte output of epee's
 `store_t_to_json`** over the C++ `COMMAND_RPC_<METHOD>::response` built from
-fixed facts — captured by `tests/unit_tests/rpc_oracle_vectors.cpp` in the
+fixed facts — captured by a `tests/unit_tests/rpc_oracle_vectors.cpp` that lives only in the
 commit that precedes each method's C++ deletion (RK-1 onward,
 `docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.5). The Rust parity tests
 (`../../rpc_parity.rs`) feed the same fixed facts to the native handlers and
@@ -18,9 +18,14 @@ the contract (RK-D4); the bytes are kept faithful because a vector that is
 oracle's output.
 
 The emitter is deleted with the structs it captures, so each slice writes its
-own and takes it away again; these files are the oracle's memory. **RK-5a was
-the most recent slice to run one** (`sync_info`, `/get_net_stats`,
-`/get_peer_list`, `get_connections`), and it is gone with those structs too.
+own and takes it away again; these files are the oracle's memory. **RK-5b was
+the most recent slice to run one** (`get_last_block_header`,
+`get_block_header_by_hash`, `get_block_headers_range`, `hard_fork_info`,
+`get_fee_estimate`), and it is gone with those structs too. To read one, or
+to see how a capture was set up, check out the commit that added
+`tests/unit_tests/rpc_oracle_vectors.cpp` in the slice you care about —
+`git log --diff-filter=A --follow -- tests/unit_tests/rpc_oracle_vectors.cpp`
+lists every one of them.
 
 Once a method's C++ is deleted there is nothing left to capture from *for that
 method*, so a later shape change to it cannot be re-captured and must be argued

@@ -79,7 +79,6 @@ set(unit_tests_sources
   rpc_target_wire_contract.cpp
   rpc_args_daemon_surface.cpp
   rpc_facts_ffi_roundtrip.cpp
-  rpc_oracle_vectors.cpp
   rpc_facts_shims.cpp
   rpc_restricted_gate.cpp
   rolling_median.cpp
@@ -210,9 +209,6 @@ SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
-SET_PROPERTY(SOURCE rpc_oracle_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  RPC_ORACLE_VECTOR_DIR="${CMAKE_SOURCE_DIR}/rust/shekyl-rpc-types/tests/vectors/rpc")
-
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json")
 SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS

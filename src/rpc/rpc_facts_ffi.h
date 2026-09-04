@@ -69,10 +69,11 @@ typedef struct shekyl_rpc_block_hash_facts {
 int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     shekyl_rpc_block_hash_facts* out);
 
-// The block-header projection (RK-3): every field of the wire's
-// `block_header_response` in raw form — hashes as bytes, the 128-bit
-// difficulties as (lo, hi) pairs — leaving hex and the wide-decimal
-// rendering to Rust. One call per header, so the block, its weights and its
+// The block-header projection (RK-3): every field of the wire's header in
+// raw form — hashes as bytes, the 128-bit difficulties as (lo, hi) pairs —
+// leaving hex and the wide-decimal rendering to Rust. The wire type is
+// `shekyl_rpc_types::BlockHeader`; the C++ `block_header_response` it was
+// first written against is deleted (RK-5b). One call per header, so the block, its weights and its
 // difficulties come from one acquisition of the chain lock.
 typedef struct shekyl_rpc_block_header_facts {
     uint8_t  hash[32];
