@@ -308,8 +308,10 @@ smallest tier's anchored set beats ring-16 for any anchor looser than
   failure-mode UX, bounded 4×-floor cost, and shipped GUI behavior —
   the privacy argument for the default choice explicitly discounted by
   the maintainer and recorded as such).
-- §4.7 gains the **defaulted 80/15/5 operative model** (×1.25 / ×6.7 /
-  ×20; instrument row added).
+- §4.7 gains the **defaulted 15/80/5 operative model** (economy ×6.7 /
+  standard ×1.25 / priority ×20; instrument row added — the invocation
+  originally swapped economy and standard's shares, caught at PR #614
+  review and fixed with the attribution).
 - Candidate (b) rejected with rule-21 reopeners (tier share < 5%;
   anchor precision beating the ring-16 crossover; FL-D6 work showing
   single-rate revenue dominance).

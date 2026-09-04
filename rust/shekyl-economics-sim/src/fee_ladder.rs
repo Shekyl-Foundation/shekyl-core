@@ -140,8 +140,11 @@ fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicPar
 /// below the zone fails loudly instead of printing fees the daemon cannot
 /// emit (and instead of a divide-by-zero in the `Fh` folded divisor).
 fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
-    debug_assert!(mlw >= FULL_REWARD_ZONE_V5, "wrapper guarantees Mlw >= zone");
-    debug_assert!(mnw >= mlw, "wrapper guarantees Mnw >= Mlw");
+    // Hard asserts, not debug_asserts: the instrument runs in --release,
+    // and the doc above promises loud failure — a stripped check would
+    // print fees the daemon cannot emit instead (Copilot PR #614).
+    assert!(mlw >= FULL_REWARD_ZONE_V5, "wrapper guarantees Mlw >= zone");
+    assert!(mnw >= mlw, "wrapper guarantees Mnw >= Mlw");
     let mfw = mnw.min(mlw);
     let fl = base_reward * REF_TX_WEIGHT / (mfw * mfw);
     let fn_ = 4 * base_reward * REF_TX_WEIGHT / (mfw * mfw);
@@ -465,7 +468,10 @@ impl Rng {
     /// Knuth Poisson sampler; exact for the registered means (≤ 500 —
     /// `e^-500 ≈ 7.9e-218` is a normal f64; the real breakdown is ≳ 745).
     fn poisson(&mut self, mean: f64) -> u64 {
-        debug_assert!(mean < 700.0, "Knuth sampler underflows near mean 745");
+        // Hard assert (release-mode instrument): past ~745 the Knuth
+        // product underflows and silently CAPS samples — corrupted
+        // measurements, not an error, if this were stripped.
+        assert!(mean < 700.0, "Knuth sampler underflows near mean 745");
         if mean <= 0.0 {
             return 0;
         }
@@ -1114,8 +1120,10 @@ pub fn report() -> FeeLadderReport {
         anchored_reduction("sensitivity 70/25/5", [700, 250, 50]),
         anchored_reduction("sensitivity 33/33/33", [334, 333, 333]),
         // The operative model once standard ships as the default
-        // (FL-R17 signed (a), §5.5): defaulters concentrate in standard.
-        anchored_reduction("defaulted 80/15/5", [800, 150, 50]),
+        // (FL-R17 signed (a), §5.5): defaulters concentrate in STANDARD —
+        // shares are (economy / standard / priority), so the 80% majority
+        // sits in slot 1 (Bugbot PR #614 caught the swapped invocation).
+        anchored_reduction("defaulted 15/80/5", [150, 800, 50]),
     ];
 
     FeeLadderReport {
