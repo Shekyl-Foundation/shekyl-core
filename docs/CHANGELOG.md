@@ -4,6 +4,42 @@
 
 ### Fixed
 
+- **Consensus hardening: the curve-tree leaf collector aborts instead of
+  silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
+  collector discarded an output on a `continue` or an unchecked construct
+  verdict, and a dropped output is deterministically unspendable with no
+  verify-time twin. All three are unreachable for any validated transaction —
+  CEN-H12/F8's sole-output-type whitelist, four `outPk.size()` gates, and the
+  canonical/prime-order point gates on output keys and commitment masks — so
+  they now abort rather than skip, each naming the gate that forecloses it.
+  Those gates carry reverse pointers warning that relaxing them surfaces as a
+  connect-time abort, and a Rust falsifier asserts they accept only what the
+  leaf builder can encode. The FOLLOWUPS row that described this as a live
+  fund-loss path is corrected: it was latent.
+
+- **The drain byte-parity e2e pinned a fixture state that never existed.**
+  `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
+  sweep-all bond leaves exactly ONE persona funding record; the bond post's
+  change has been a two-output split (`change_lo`/`change_hi`) since before
+  the assertion was written, so the walk was deterministically red on clean
+  `dev` — surfaced by PR-C's full walk battery, verified against a clean
+  dev baseline with the same daemon. Corrected to the assembly's real
+  invariant (two split halves), with the cushion re-sized so the larger
+  half alone funds the drain and the 1-in/2-out byte-parity proposition is
+  preserved; the shared confirmed-bond fixture's wait now also requires
+  the swept records' arm-1 prune before snapshotting (a determinism hole).
+
+- **Consensus: PoW acceptance is gated on the verifier's verdict, not the
+  fail-closed sentinel (CEN-D2/D1 S1).** The `0xff…` hash written on RandomX
+  FFI failure passes `check_hash` at difficulty 1, and the validation sites
+  ignored the verifier's returned bool — so under (verifier failure ∧
+  difficulty 1) a block could connect with its PoW never verified. All three
+  consumer sites (main connect, alt path, longhash worker) now reject on the
+  bool; the sentinel remains as a belt; a local verifier failure rejects
+  without `m_bad_pow` (the block is unproven, not disproven);
+  `get_altblock_longhash` routes through the single `IPowSchema` dispatch
+  point. Five verdict-contract unit tests, two red-observed.
+
 - **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
   (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
   membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
@@ -19,19 +55,130 @@
 
 ### Added
 
-- **DRS-P0f row coverage complete — and it found an S0.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **95
-  CHECKED-CONFORMANT, 5 DIVERGENT, 2 failed closed** (CEN-L11 with L12
-  coupled; CEN-D2 at S1 with CEN-D1 coupled — the PoW-failure sentinel fails
-  open at difficulty 1; CEN-B5's rule-71 FAKECHAIN skip; CEN-M8's S0 was
-  found, ruled FIX, fixed by PR #602, and re-verified with G4/J26 promoted),
-  each with
+- **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
+  the composed verb, wallet-RPC + CLI).** The reachability gate held since
+  PR-P4 (and narrowed, never lifted, by the engine walk, the submit fact
+  set, and PR-B's dispatch seam + daemon walk) is lifted: `unstake` posts
+  the irreversible `Unbond` exit for the first live-bonded persona
+  (engine-resolved — the wire never names a slot, fee is the canonical
+  P-lane floor, CLI carries the irreversibility confirmation), and
+  `collect_unstaked` sweeps the released collateral to principal with an
+  engine-computed exact payment (`Σ selected − fee`, zero change); a
+  `SWEPT` reply *requires* both halves of the completion fact —
+  `remainder` (the swept persona's) and `another_pool_remains` (the
+  lane's, so a per-persona `0` cannot read as lane-wide completion while
+  a rotation-residue exit is uncollected; optional fields cannot forge
+  "done"). A single overloaded verb was
+  rejected for irreversible-step mis-selection, and the sweep deliberately
+  does not ride `drain`'s firewall-pinned active-persona shape — the
+  RESERVED→shipped reconciliation is recorded in the OpenAPI census.
+  Codes `-29513..-29529`, with the released-vs-held dispatch dispositions
+  on distinct codes (`-29521`/`-29522`) because they demand opposite
+  client behavior, a non-loopback daemon named as operator
+  configuration (`-29528`) rather than an internal fault, and a pre-seal
+  daemon outage while preparing the sweep named retryable (`-29529`,
+  `check the daemon`) rather than an opaque internal fault. Both staging `dead_code` allows retired
+  (rule-21 conditions met); `PENDING_POST_VERSION` v9 stands (no
+  persisted-wire change).
+
+- **Finding discharged with it: the funded retirement gate had passing
+  coverage and zero production reach.** Emptying a persona slot requires a
+  drain of exactly `spendable − fee`; the fee is an internal quote over a
+  live daemon estimate — never a parameter, never exposed by any read —
+  and `get_drain_balance` is gross-of-fee, so no user path could produce
+  the zero the gate fires on: the retire engine walk (#575) observed it
+  fire only on synthetically constructed states (a test that constructs a
+  gate's trigger state proves the gate works, and says nothing about
+  whether the state is reachable). The witness-gated terminal sweep is
+  what makes it reachable, and the new composed-arc regtest walk
+  (`e2e_unstake_collect_retire_composed_arc`) retires a persona
+  end-to-end from states produced only by the shipped verbs: post →
+  connect → sweep (remainder 0) → rotation → claim-window expiry →
+  funded-gated retirement on real-chain evidence. The F-D1 amount stage
+  is untouched (the sweep's payment is an output of selection, where
+  per-output amounts already legitimately live); the §12.3 carve
+  exception for the total-shaped exit sweep is recorded in
+  `PRINCIPAL_STAKE_LIFECYCLE.md` and scoped by the `TerminalExitObserved`
+  witness type.
+- **C2-R0 phase 2 — the census learns to say what is missing.** The
+  consensus census gains **§12, the GAP register**: 8 `GAP-` rows (registered
+  at birth) for consensus rules with no site — 7 grounded from the phase-1
+  corpus study ([`C2_R0_PHASE1_CANDIDATES.md`](design/C2_R0_PHASE1_CANDIDATES.md),
+  landed as the frozen input) and 1 steering-routed carry (GAP-8: the two
+  supply clamps encode **opposite terminal emission policies**, documented
+  on both sides without either comment seeing the other — the register's
+  worked example; resolution rides FL-R12′). Six candidates ground as
+  **present-already** and are recorded with pointers (C3→R3, C4→the
+  unlock_time triple-divergence, C5→no peer-time mechanism, C9→R4,
+  C11→bootstrap arms, C12→R1b). GAP rows sit outside the §3 denominator —
+  site-anchored sums must not absorb siteless rows. External evidence was
+  spot-checked at primary sources before entering any row (the Qubic
+  campaign figures verify verbatim, with the +461.8/−460.0
+  separate-ledger-lines decompression recorded). §10's R2 batch now carries
+  Rick's 2026-09-03 **deferral** in the queue row itself (resumes on
+  FL-R12′; the red-test conjunct is already discharged), with pointers on
+  all 8 member rows.
+
+- **C2-R1b implementation — the fork-choice/depth contract and the
+  operator-checkpoint surfaces**
+  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
+  ratified 2026-09-03, §4c execution record). The prune now writes a
+  **monotonic watermark** (its durable receipt, same txn as the
+  deletions; exempt from every revert), and `BlockchainDB::pop_block` —
+  the single funnel all pop writers traverse — **refuses any pop landing
+  below the oldest fully-retained epoch's open height**, converting the
+  silent post-horizon corruption arm into a loud refusal; a
+  watermark-refused network switch leaves the node loudly DEGRADED
+  (sticky flag, new `get_info.following_degraded`, `CORE_RPC_VERSION`
+  3.26) **without penalizing the peer** — the refusal is a local
+  retention limitation, not block invalidity, so the block stays in the
+  alt store and `bvc` carries no failure (a `m_verifivation_failed`
+  refusal would have both P2P paths drop and score every honest peer
+  advertising the heavier chain, isolating the degraded node onto its
+  own fork; core test `gen_reorg_watermark_refused_switch` pins the
+  false→true transition, stickiness, and recurrence, observed red-first
+  on the pre-fix form) — and a watermark-refused checkpoint rollback
+  fail-stops. The
+  fork-choice comparison and the CEN-D5 alt-window selection cross to
+  `shekyl-difficulty` (`fork_choice`, `alt_window_plan`) behind new FFI
+  exports with shared pinned vectors
+  (`docs/test_vectors/FORK_CHOICE_V1.json`, Rust-native + C++ e2e
+  consumers). Checkpoint wiring is **uniform across all public
+  networks** (both nettype guards deleted — the `return true` silent
+  false positive included; rule-71 allowlist 8 → 4); the checkpoint
+  rollback target is floored at the genesis-only chain (the inherited
+  height-1 wrap is unrepresentable, and the saturated-to-zero form
+  aborted on the can't-pop-genesis guard), a conflict at genesis itself
+  fail-stops as unresolvable, the walk stops after an applied rollback
+  (later height-ordered checkpoints would be read against the stale
+  pre-rollback height), and conflict output names file, height, and
+  both hashes; core test `gen_checkpoint_conflict_rollback` pins the
+  completed low-height rollback with a second conflicting checkpoint in
+  the file, observed red-first on both pre-fix forms. Deleted: the
+  unpopulatable difficulty-checkpoint twin and the weekly accidental
+  full-chain difficulty recompute, and the caller-less no-arg
+  `pop_block` overload. `check_consensus_invariants.sh` gains the
+  watermark single-writer/no-revert invariant [6/6].
+
+- **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
+  register disposes the **102** bucket-1/2 census rows that existed when it
+  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
+  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
+  whose fix has landed and whose promotion is owed at a merged sha). The
+  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
+  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
+  full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
+  with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
+  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
-  **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
+  **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
-  tolerance means a tx whose proof failed at pool admission can connect with
-  verification skipped; the exact required check exists unused on that path.
-  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix = PR #602. Detail:
+  tolerance meant a tx whose proof failed at pool admission could connect with
+  verification skipped, while the exact required check sat unused on that path.
+  Ruled FIX per the §7.2 ladder and **fixed by PR #602** (merged): the skip is
+  now hash-gated and CEN-M8 with CEN-G4/J26 is re-reviewed CHECKED-CONFORMANT.
+  Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The
@@ -54,6 +201,62 @@
   regression evidence only. Detail in
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
   §5.4.1.
+
+- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B = #601,
+  2026-09-02) — an
+  `Unbond` has now been assembled by the wallet, accepted by native
+  `/submit_transaction`, and connected on a real regtest chain, for the
+  first time anywhere.** `Engine::submit_unbond`
+  (`shekyl-engine-core/src/engine/unbond_dispatch.rs`, `pub(crate)`) is
+  the claim/drain sibling seam: bond-record facts fetched as one bound
+  read view over the persona-isolated transport
+  (`fetch_claim_source_for`), readiness refused with consensus's own
+  predicates before any curve-tree work, the canonical P-lane floor fee
+  (no knob), sweep-all funding through the bond path's own sweep body,
+  `AssembleUnbond` in the actor, a `PendingUnbond` sealed
+  persist-before-dispatch, then the posture→submitter choke point. The
+  pending-post block gains the fourth reservation-observed kind —
+  **`PENDING_POST_VERSION` v8 → v9** (rule 42; snapshot + paired-bump
+  gate) — deliberately NOT a `PendingBondPost`: the exit draws no
+  decorrelation offset (its trigger, a cooldown expiring, is already
+  public), so it must not enter WI-3's due-check, and it retires by its
+  reservation settling (`remove_settled`), not a pscan match. The
+  **daemon walk** (`e2e_unbond_accepted_and_connected`, the FOLLOWUPS
+  registration it discharges) asserts the RF-D9-class byte proposition —
+  submit-accept via the §8.7.1.1 UB battery, block-connect via the
+  record row read back **present with `bonded_total == 0`** (a
+  transition observed from the pre-submit floor balance) — on the
+  genesis schedule with the cooldown predicates **vacuous by design**
+  (never-served persona; the served-exit arms remain PR-A's unit
+  battery, and the SEB lever cannot cheapen a served exit because the
+  slash watermark advances `CHALLENGE_RESOLUTION_BLOCKS` in blocks).
+  **Reachability is NOT lifted**: no RPC method, no CLI verb, `unstake`
+  RESERVED — the seam's only caller is the `#[cfg(test)]` walk, so
+  "nothing dispatches the assembled bytes" narrowed to "nothing
+  user-facing dispatches"; lifting it is PR-C's composed `unstake`
+  (post + a decorrelated drain), which also inherits the
+  retire-on-a-real-chain arm by its recorded conditional. **Review
+  round 3 hardened the funding sweep with a consensus vin-headroom
+  bound spanning all three retention lanes**: `FCMP_MAX_INPUTS_PER_TX`
+  caps the WHOLE vin, and every tx `sweep_funding_outputs` funds
+  carries exactly one non-funding vin (bond, emission, or Unbond), so
+  an 8-record sweep assembled a 9-vin transaction — accepted on
+  FAKECHAIN (the C++ cap is gated off there, so no regtest walk can
+  observe the boundary) and rejected on every public network. The
+  sweep now owns `MAX_RETENTION_FUNDING_INPUTS` (= 7, pinned by an
+  absolute KAT after a bite proved the relative tests could not see
+  the constant drift) with a per-caller overflow policy: the bond post
+  and the claim's fee sweep refuse by name (their GF-4b
+  consume-everything semantics forbid a silent subset), and the exit
+  caps to the largest subset (no consume-everything obligation;
+  leftovers go to the retired persona's drain). Round 5 classified the
+  refusal on the first-stake surface: `FirstStakeError::FundingFragmented`
+  → wallet-RPC **-29512 STAKE_FUNDING_FRAGMENTED** — its own arm because
+  both standing buckets misdiagnose it (rule 82: "-29500 fund and retry"
+  worsens fragmentation; "-32603 internal" is false, the funding is
+  intact) — rendering the public headroom constant and never the
+  wallet's record count (P-activity volume, the redacted class; the
+  sanitizer reduces the engine arm the same way).
 
 - **Rule 71 (network uniformity) + its CI gate.** On the
   consensus/validation surface, nettype selects data, never control flow;

@@ -79,6 +79,62 @@ struct gen_block_accepted_base : public test_chain_unit_base
   }
 };
 
+// CEN-D2 (PR #604): the two PoW-verdict CONSUMERS reject a block whose
+// longhash the verifier could not compute. The unit tests in
+// pow_longhash_gate.cpp pin what get_block_longhash / get_altblock_longhash
+// *report*; these pin that handle_block_to_main_chain and
+// handle_alternative_block *act* on that report — reverting either consumer
+// to ignore the bool leaves every unit test green.
+//
+// Fidelity to the defect: the harness runs at the test difficulty (1), which
+// is exactly where the 0xff belt fails open — check_hash(0xff…, 1) passes —
+// so a consumer that trusts the sentinel instead of the verdict accepts the
+// block and the test fails. The failing schema is installed by a replay
+// callback, so block GENERATION (which mines a real nonce) is unaffected;
+// only the submission under test sees the failing verifier.
+//
+// The rejection must also be attribution-correct: m_verifivation_failed
+// without m_bad_pow. A local verifier failure is not evidence against the
+// block — it is unproven, not disproven — and m_bad_pow drives peer
+// punishment.
+class gen_block_pow_verifier_failure_base : public test_chain_unit_base
+{
+public:
+  gen_block_pow_verifier_failure_base(size_t invalid_block_idx, uint64_t expected_height);
+  ~gen_block_pow_verifier_failure_base();
+
+  bool install_failing_pow_schema(cryptonote::core& c, size_t ev_index,
+    const std::vector<test_event_entry>& events);
+  bool check_rejected_unproven(cryptonote::core& c, size_t ev_index,
+    const std::vector<test_event_entry>& events);
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc,
+    size_t event_idx, const cryptonote::block& blk);
+
+private:
+  const size_t m_invalid_block_idx;
+  const uint64_t m_expected_height;
+  bool m_saw_expected_rejection = false;
+};
+
+// Event layout: 0 genesis, 1 install-callback, 2 the candidate (rejected),
+// 3 the check/restore callback. Height must still be 1 (genesis only).
+struct gen_block_pow_verifier_failure_main : public gen_block_pow_verifier_failure_base
+{
+  gen_block_pow_verifier_failure_main() : gen_block_pow_verifier_failure_base(2, 1) {}
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
+// Event layout: 0 genesis, 1-2 main blocks, 3 install-callback, 4 the alt
+// candidate forked at blk_1 (rejected), 5 the check/restore callback. The
+// alt candidate is a normal block mined to a second account, so it differs
+// from blk_2 by its miner tx alone -- the ONLY reason it can be rejected is
+// the verifier failure. Main height must still be 3.
+struct gen_block_pow_verifier_failure_alt : public gen_block_pow_verifier_failure_base
+{
+  gen_block_pow_verifier_failure_alt() : gen_block_pow_verifier_failure_base(4, 3) {}
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+
 struct gen_block_big_major_version : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;

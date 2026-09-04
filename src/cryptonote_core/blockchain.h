@@ -338,22 +338,6 @@ namespace cryptonote
     difficulty_type get_difficulty_for_next_block();
 
     /**
-     * @brief check currently stored difficulties against difficulty checkpoints
-     *
-     * @return {flag, height} flag: true if all difficulty checkpoints pass, height: the last checkpoint height before the difficulty drift bug starts
-     */
-    std::pair<bool, uint64_t> check_difficulty_checkpoints() const;
-
-    /**
-     * @brief recalculate difficulties for blocks after the last difficulty checkpoints to circumvent the annoying 'difficulty drift' bug
-     *
-     * @param start_height: if omitted, starts recalculation from the last difficulty checkpoint
-     *
-     * @return number of blocks whose difficulties got corrected
-     */
-    size_t recalculate_difficulties(std::optional<uint64_t> start_height = std::nullopt);
-
-    /**
      * @brief adds a block to the blockchain
      *
      * Adds a new block to the blockchain.  If the block's parent is not the
@@ -780,7 +764,28 @@ namespace cryptonote
      *
      * @param points the checkpoints to check against
      */
-    void check_against_checkpoints(const checkpoints& points);
+    /**
+     * @brief validate the local chain against loaded checkpoints
+     *
+     * @return false iff a conflict exists that could not be resolved by
+     * rollback (the target sits below the prune watermark) — the caller
+     * fail-stops (C2-R1b F-1(b)); true otherwise (no conflict, or the
+     * rollback was applied).
+     */
+    bool check_against_checkpoints(const checkpoints& points);
+
+    /**
+     * @brief sticky degraded-following flag (C2-R1b F-1(a))
+     *
+     * Set when a network-driven chain switch is refused at the prune
+     * watermark: the node is knowingly NOT following the heaviest chain
+     * it has seen. Process-lifetime sticky, re-armed on recurrence; never
+     * cleared (alt blocks drop at restart, so a restarted node re-degrades
+     * only if peers re-send the heavier chain — self-correcting, not a
+     * clear-on-restart bug). Surfaced on get_info; migrates into RK-5c's
+     * node-state hub when that lands.
+     */
+    bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
     /**
      * @brief loads new checkpoints from a file
@@ -1079,7 +1084,17 @@ namespace cryptonote
      *
      * @param nblocks number of blocks to be removed
      */
-    void pop_blocks(uint64_t nblocks);
+    /**
+     * @brief removes blocks from the top of the blockchain
+     *
+     * @return false on either failure arm — a prune-watermark refusal
+     * (nothing was popped; C2-R1b F-1) or a mid-pop exception (SOME
+     * blocks may already be popped: the failure path is not atomic, and
+     * the resulting height tells the caller how far it got). Callers
+     * surface an explicit error either way, never a silent success with
+     * an unchanged height.
+     */
+    bool pop_blocks(uint64_t nblocks);
 
     /**
      * @brief flush the invalid blocks set
@@ -1204,6 +1219,7 @@ namespace cryptonote
     std::unordered_map<crypto::hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>> m_scan_table;
     std::unordered_map<crypto::hash, crypto::hash> m_blocks_longhash_table;
 
+    std::atomic<bool> m_following_degraded{false}; //!< C2-R1b F-1(a): switch refused at the prune watermark
     blockchain_db_sync_mode m_db_sync_mode;
     bool m_show_time_stats;
     bool m_db_default_sync;

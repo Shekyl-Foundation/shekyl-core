@@ -113,6 +113,9 @@ set(unit_tests_sources
   archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
   archival_segment_freeze.cpp
+  checkpoint_uniformity.cpp
+  fork_choice_vectors.cpp
+  reorg_watermark.cpp
   archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
   archival_claim_source_rpc.cpp
@@ -122,6 +125,7 @@ set(unit_tests_sources
   pruned_tx_hash_parity.cpp
   tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
+  pow_longhash_gate.cpp
   txpool_ref_age.cpp
   txpool_origin_zone.cpp
   txpool_relay_timers.cpp
@@ -209,6 +213,8 @@ SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
+SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS
+  FORK_CHOICE_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/FORK_CHOICE_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json")
 SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS

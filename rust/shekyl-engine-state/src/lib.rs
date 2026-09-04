@@ -71,7 +71,7 @@ pub use payment_request::{
 };
 pub use pending_post_block::{
     PendingBondPost, PendingDrain, PendingEmissionClaim, PendingPostBlock, PendingPostState,
-    PENDING_POST_VERSION,
+    PendingUnbond, PENDING_POST_VERSION,
 };
 pub use safety_constants::NetworkSafetyConstants;
 pub use send_journal_block::{

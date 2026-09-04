@@ -5,6 +5,8 @@
 
 #include "gtest/gtest.h"
 
+#include "pqc_spend_fixture.h"
+
 #include <boost/filesystem.hpp>
 #include <cstring>
 #include <fstream>
@@ -27,6 +29,31 @@
 using namespace cryptonote;
 
 namespace {
+
+// A distinct, canonical, prime-order, non-identity output key per index:
+// (i+1)*G. Consensus admission accepts nothing weaker
+// (check_outs_valid -> shekyl_check_output_keys), and the curve-tree leaf
+// collector aborts on an output it cannot encode (CEN-L11), so fixtures must
+// carry real points rather than byte fills.
+crypto::public_key test_output_key_for_index(size_t i)
+{
+  // The (i+1)*G promise only holds while i+1 fits one scalar byte; past that
+  // a narrowing cast wraps (and at i+1 == 256 yields the zero scalar), so the
+  // bound is asserted rather than left as a reuse trap.
+  if (i + 1 > 255)
+    throw std::runtime_error("fixture: output index " + std::to_string(i)
+      + " exceeds the single-byte scalar this helper promises");
+  crypto::secret_key sk{};
+  sk.data[0] = static_cast<char>(static_cast<unsigned char>(i + 1));
+  crypto::public_key pk{};
+  // Throw rather than EXPECT_TRUE-and-return: a non-fatal expectation would
+  // hand back an unset key, which then fails downstream as a curve-tree abort
+  // or a mismatched output — noise pointing away from the real cause.
+  if (!crypto::secret_key_to_public_key(sk, pk))
+    throw std::runtime_error("fixture: secret_key_to_public_key failed for output index "
+      + std::to_string(i));
+  return pk;
+}
 
 // Shared archival-LMDB scaffolding (also driven by the claim-source RPC
 // tests — single-sourced so the fixtures cannot drift).
@@ -2935,13 +2962,21 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    memset(&tagged.key, 0x60 + static_cast<int>(i), sizeof(tagged.key));
+    // Distinct per output, but still a canonical prime-order point: scale the
+    // Ed25519 basepoint by (i+1). Arbitrary byte fills are not curve points,
+    // and the leaf collector now aborts on one it cannot encode (CEN-L11)
+    // rather than dropping the output silently.
+    tagged.key = test_output_key_for_index(i);
     tagged.view_tag.data = 0;
     vout.target = tagged;
     tx.vout.push_back(vout);
 
     ct::ctkey out_pk{};
-    memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
+    // Commitment masks are the leaf builder's second point input, and
+    // check_commitment_mask_valid accepts only canonical prime-order
+    // encodings — so this must be a real point too (CEN-L11).
+    const crypto::public_key mask_pt = test_output_key_for_index(i + 16);
+    memcpy(out_pk.mask.bytes, &mask_pt, sizeof(out_pk.mask.bytes));
     tx.ct_signatures.outPk.push_back(out_pk);
     // The CtSigBase serializer requires one enc_amounts/enc_labels entry per
     // vout regardless of type; filler is fine, nothing decrypts them here.
@@ -2952,6 +2987,181 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
 }
 
 } // namespace
+
+// ─────────────────────────────────────────────────────────────────────────
+// CEN-L11: the leaf collector is FAIL-CLOSED, not silently skipping.
+//
+// The three arms are unreachable through admission — CEN-H12/F8 fix the
+// output type, four outPk.size() gates fix the length, and the canonical
+// prime-order point gates fix both leaf inputs. That is exactly why they need
+// a test that reaches them ANOTHER way: these fixtures call add_block below
+// admission, so they can present the malformed output a validated block never
+// carries, and assert the write refuses it.
+//
+// What each case actually proves is pinned per case, because two of the three
+// arms turn out to be refused EARLIER — a non-tagged-key target fails
+// add_transaction's output-key extraction, and a vout without its outPk entry
+// does not serialize at all. The fail-closed property CEN-L11 needs (such a
+// block cannot connect) holds in every case; only the construct-verdict arm is
+// reachable here, and both of its inputs are covered.
+//
+// The falsifier is direct for that arm: revert it to `continue` and both point
+// cases go green-with-a-connected-block, which is the original CEN-L11 defect —
+// an accepted output silently missing from the curve tree.
+// ─────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+// The single-sourced well-formed v3 spend, which each case then damages in
+// exactly one field. Hand-rolling a tx here failed to serialize — and the
+// control below caught that the four refusal cases were consequently throwing
+// at hash calculation, never reaching the collector. Sharing the fixture keeps
+// the shape honest and the damage isolated.
+transaction make_single_output_tx()
+{
+  return shekyl_test_fixtures::make_pqc_spend();
+}
+
+// Connect `tx` below admission and report whether the DB refused it. Each
+// case asserts the refusal AND that the chain did not grow, so a throw that
+// left a half-written block behind would still fail.
+void expect_connect_refused(const transaction& tx, const char* what,
+  const char* expected_refuser)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // add_transaction writes the tx and its outputs BEFORE the leaf collector
+  // runs (blockchain_db.cpp :465/:473 vs :607), so a refused block leaves a
+  // partial write set inside the batch. Height alone would not notice: the
+  // block row is written later, so it stays unchanged either way. Snapshot the
+  // write set and mirror production's failure path, which ABORTS the batch
+  // (blockchain.cpp:773/:787/:6814) rather than committing it.
+  const uint64_t height_before = db.height();
+  const uint64_t tx_count_before = db.get_tx_count();
+  const uint64_t outputs_before = db.get_num_outputs(0);
+
+  bool threw = false;
+  std::string reason;
+  try
+  {
+    connect_block_with_txs(db, {tx});
+  }
+  catch (const std::exception& e)
+  {
+    threw = true;
+    reason = e.what();
+  }
+  fixture.db.batch_abort();
+
+  EXPECT_TRUE(threw) << what << ": the DB accepted an output the curve tree "
+                        "cannot hold — it would be permanently unspendable";
+  // Pin WHICH guard refuses it. Without this the cases pass on any throw,
+  // including one raised long before the collector — which is how the first
+  // draft of these tests was green while never reaching the code under test.
+  EXPECT_NE(reason.find(expected_refuser), std::string::npos)
+    << what << ": refused, but not by the expected guard (" << expected_refuser
+    << ") — got: " << reason;
+  EXPECT_EQ(height_before, db.height())
+    << what << ": the refused block still advanced the chain";
+  EXPECT_EQ(tx_count_before, db.get_tx_count())
+    << what << ": the refused block left its transaction behind";
+  EXPECT_EQ(outputs_before, db.get_num_outputs(0))
+    << what << ": the refused block left its outputs behind — they would be "
+       "spendable-looking rows with no curve-tree leaf";
+}
+
+} // namespace
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_unsupported_output_target)
+{
+  transaction tx = make_single_output_tx();
+  // A target variant CEN-H12/F8 never admits AND the collector does not
+  // handle. (Not txout_to_key: the collector still has an arm for that legacy
+  // variant, so it would not reach the `else` at all — see the whitelist
+  // comment in cryptonote_format_utils.cpp.)
+  tx.vout[0].target = txout_to_script{};
+  // Refused before the collector: add_transaction's own output-key extraction
+  // rejects a variant it cannot read a public key from. The collector's arm is
+  // the second line for this case, not the first — recorded rather than
+  // over-claimed, since the property CEN-L11 needs is that the block cannot
+  // connect, and it cannot.
+  expect_connect_refused(tx, "unsupported output target",
+    "Could not get an output public key");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_outpk_shorter_than_vout)
+{
+  transaction tx = make_single_output_tx();
+  // Second output with no matching outPk entry: the four size gates make this
+  // impossible through admission, and the collector used to skip it silently.
+  tx_out extra{};
+  extra.amount = 0;
+  txout_to_tagged_key tagged{};
+  tagged.key = test_output_key_for_index(9);
+  tagged.view_tag.data = 0;
+  extra.target = tagged;
+  tx.vout.push_back(extra);
+  tx.ct_signatures.enc_amounts.push_back({});
+  tx.ct_signatures.enc_labels.push_back({});
+  // Refused before the collector too: a vout without its outPk entry does not
+  // serialize, so the block cannot even be hashed. The collector's size arm is
+  // therefore unreachable from here as well — the fail-closed property still
+  // holds, by an earlier guard.
+  expect_connect_refused(tx, "outPk shorter than vout",
+    "Failed to calculate transaction hash");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_output_key_the_leaf_builder_cannot_encode)
+{
+  transaction tx = make_single_output_tx();
+  // Not a decodable point: the leaf builder returns false and the collector
+  // used to discard the output on the unchecked verdict.
+  txout_to_tagged_key tagged = std::get<txout_to_tagged_key>(tx.vout[0].target);
+  memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  tx.vout[0].target = tagged;
+  // This one DOES reach the collector: the shape is serializable and yields an
+  // output public key, so only the leaf builder can catch it.
+  expect_connect_refused(tx, "output key that is not a curve point",
+    "curve-tree leaf");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_commitment_the_leaf_builder_cannot_encode)
+{
+  transaction tx = make_single_output_tx();
+  // The leaf builder's second point input, damaged the same way.
+  memset(tx.ct_signatures.outPk[0].mask.bytes, 0xCC,
+    sizeof(tx.ct_signatures.outPk[0].mask.bytes));
+  // Also reaches the collector, via the leaf builder's second point input.
+  expect_connect_refused(tx, "commitment mask that is not a curve point",
+    "curve-tree leaf");
+}
+
+// Control: the same shape, undamaged, must connect. Without this the four
+// cases above could pass because the fixture never connects anything.
+TEST(archival_substrate_lmdb, cen_l11_accepts_a_well_formed_output)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t height_before = db.height();
+  ASSERT_NO_THROW(connect_block_with_txs(db, {make_single_output_tx()}));
+  fixture.db.batch_stop();
+  EXPECT_EQ(height_before + 1, db.height());
+}
 
 TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_path)
 {

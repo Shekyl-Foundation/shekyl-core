@@ -184,10 +184,62 @@ fi
 echo
 
 # ----------------------------------------------------------------------
+# 6. C2-R1b-Q1c / F-2: the prune watermark has ONE writer and no revert.
+#    The pop floor is the prune's durable receipt: written only inside
+#    prune_archival_epochs_before (same txn as the deletions), monotonic,
+#    and deliberately EXEMPT from pop reversal -- pops cannot restore
+#    pruned rows, so the floor never retreats. A second key site is a
+#    drift twin; a mention inside any revert_* function body is the
+#    walk-down hole reopening through the back door. (Rule 47: writer
+#    presence is asserted before its uniqueness.)
+# ----------------------------------------------------------------------
+echo "[6/6] prune-watermark single-writer + no-revert (C2-R1b F-2)"
+# Exactly two identifier occurrences: the definition and the prune call.
+# A floor (>= 2) would let a THIRD call site ride in under a gate that
+# claims single-writer -- the count is an equality, so an unauthorized
+# second caller of the writer turns this red instead of passing.
+WM_CALLS=$(grep -c "note_archival_prune_watermark_epoch" src/blockchain_db/lmdb/db_lmdb.cpp || true)
+if [[ "${WM_CALLS:-0}" -ne 2 ]]; then
+  echo "      FAIL: expected exactly 2 note_archival_prune_watermark_epoch"
+  echo "            occurrences (definition + the prune call site), found"
+  echo "            ${WM_CALLS:-0} -- fewer means the writer or its call is gone,"
+  echo "            more means an unauthorized second caller."
+  FAIL=1
+else
+  WM_KEY_SITES=$(grep -c '"archival_prune_watermark_epoch"' src/blockchain_db/lmdb/db_lmdb.cpp || true)
+  # Anchored on the prune watermark's own identifiers: the slash revert
+  # legitimately speaks of the slash-fold watermark, a different concept.
+  # Region bound: from each revert_* definition to the NEXT top-level
+  # BlockchainLMDB member -- not the first column-0 '}'. Review asked
+  # about inner-brace truncation (all seven bodies verified to end at
+  # their true '}' today), and checking that surfaced the real adjacent
+  # hole the wider bound closes: anonymous-namespace helpers that sit
+  # BETWEEN reverts (and are called by them) escaped a body-only scan,
+  # so a revert could launder the forbidden reference through a helper.
+  # Close only on a COLUMN-0 definition of a non-revert member: bodies
+  # log their own qualified name (LOG_PRINT_L3("BlockchainLMDB::"...)),
+  # so an unanchored close fires two lines into every function.
+  WM_IN_REVERTS=$(awk '/^void BlockchainLMDB::revert_/{inr=1} inr && /^[A-Za-z_].*BlockchainLMDB::/ && !/BlockchainLMDB::revert_/{inr=0} inr' src/blockchain_db/lmdb/db_lmdb.cpp | grep -c "archival_prune_watermark" || true)
+  if [[ "${WM_KEY_SITES:-0}" -ne 2 ]]; then
+    echo "      FAIL: property key must appear exactly twice (reader + writer);"
+    echo "            found ${WM_KEY_SITES:-0} -- a third site is a drift twin or"
+    echo "            an unauthorized writer."
+    FAIL=1
+  elif [[ "${WM_IN_REVERTS:-0}" -ne 0 ]]; then
+    echo "      FAIL: a revert_* body references the prune watermark -- the floor"
+    echo "            is exempt from pop reversal BY DESIGN (F-2)."
+    FAIL=1
+  else
+    echo "      OK"
+  fi
+fi
+echo
+
+# ----------------------------------------------------------------------
 # Result summary.
 # ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (5/5)"
+echo "consensus-invariants: PASS (6/6)"

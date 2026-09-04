@@ -239,9 +239,9 @@ non-stakers). New staking / drain / claim behavior lands on the façade, not as
 a new inherent `Engine::` method. Inherent methods that already existed keep
 their bodies in the workflow modules; the façade **forwards** so GUI/CLI keep
 compiling. Thinning those to one-liners is a later cut, not claimed done.
-`unstake` / Unbond dispatch is not a product method yet (`assemble_unbond` is
-`pub(crate)`; wallet-RPC `unstake` is RESERVED); when that verb becomes reachable
-it lands on `StakeFacade`.
+`unstake` / `collect_unstaked` landed on `StakeFacade` with PR-C
+(2026-09-03, `engine/unstake_facade.rs`) — the freeze held: the exit verbs
+are façade methods, never inherent `Engine::` ones.
 
 | Claim | Detail |
 |-------|--------|

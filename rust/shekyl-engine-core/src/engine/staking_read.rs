@@ -179,6 +179,28 @@ pub enum StakingReadError {
 /// Compute the [`StakedBalance`] from the authoritative records. Pure —
 /// separated from the sealed-file plumbing so the semantics are unit-testable
 /// against constructed states (including the pin-2 hint-divergence KAT).
+/// The **live-bond set**: distinct personas with a confirmed JoinMarket bond
+/// post (`post_kind == 0`) that are neither pending-unbond nor durably
+/// retired — the set the SP-6 reconcile evidence supports. The single
+/// derivation both the WI-RPC-1 balance and the `unstake` slot resolution
+/// read, so "who still holds a live bond" cannot drift between the query
+/// surface and the exit verb.
+pub(crate) fn live_bonded_personas(state: &PScanState) -> BTreeSet<PCanonicalId> {
+    let mut live: BTreeSet<PCanonicalId> = state
+        .bond_post_matches()
+        .iter()
+        .filter(|m| m.post_kind == 0)
+        .map(|m| m.p_canonical_id)
+        .collect();
+    for unbonded in state.pending_unbonds().keys() {
+        live.remove(unbonded);
+    }
+    for retired in state.retired_records() {
+        live.remove(&retired.p_canonical_id);
+    }
+    live
+}
+
 pub(crate) fn staked_balance_from_records(
     pscan: Option<&PScanState>,
     pending: Option<&PendingPostBlock>,
@@ -205,19 +227,7 @@ pub(crate) fn staked_balance_from_records(
 
     let bonded_principal_confirmed = match pscan {
         None => AtomicUnits::ZERO,
-        Some(state) => {
-            // The live-bond set: confirmed personas that are neither
-            // pending-unbond nor durably retired — the set the SP-6 reconcile
-            // evidence supports.
-            let mut live = confirmed_bonds.clone();
-            for unbonded in state.pending_unbonds().keys() {
-                live.remove(unbonded);
-            }
-            for retired in state.retired_records() {
-                live.remove(&retired.p_canonical_id);
-            }
-            principal_for_bond_count(live.len())?
-        }
+        Some(state) => principal_for_bond_count(live_bonded_personas(state).len())?,
     };
 
     let bonded_principal_pending = match pending {
@@ -332,6 +342,29 @@ impl<
     /// lock).
     pub fn staking_recovery_pending_reopen(&self) -> bool {
         !self.ledger.read().slots_adopted_this_session.is_empty()
+    }
+
+    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
+    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
+    /// than the aggregated view (the `unstake_facade` resolutions). Same
+    /// fail-closed posture as [`Self::staking_read_view`]: an absent seal is
+    /// the ordinary empty case; a corrupt or version-mismatched one errors.
+    /// A plain read, not the dispatch seams' generation-coherent basis —
+    /// callers that only *propose* on it must leave every race to the seam's
+    /// seal admission.
+    pub(crate) fn exit_seal_snapshot(
+        &self,
+    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
+        let wrap_key = self.state_wrap_key().as_bytes();
+        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
+            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        let pending = match self.persistence.open_pending_posts(wrap_key)? {
+            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        Ok((pscan, pending))
     }
 
     pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {

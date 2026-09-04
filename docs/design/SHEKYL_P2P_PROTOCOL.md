@@ -249,9 +249,73 @@ check**. So:
 **The four checks above all answer *"is this right?"*. This one answers *"is
 this complete?"*** — and unlike the others it cannot be run by reading the
 artifact at all, only by going back to the tree with a wider question. That is
-why it is last, and why it is the one most easily skipped.
+why it is the one most easily skipped.
+
+> **Sixth check — when a decision is already taken, both the argument for it
+> and the argument against the alternative drift toward flattering it.**
+>
+> Named after PWD-T5, where the same eight bytes were mispriced **twice, from
+> opposite sides**: PW-9 would have deleted the prefix for an anonymity
+> property we cannot have, and T5's first draft kept it for a
+> resource-exhaustion property it cannot have either. **The second error
+> appeared inside the correction of the first.** The bias has a direction, and
+> it does not care which way the argument runs — an overstated *hazard*
+> justifies a ruling exactly as an overstated *benefit* does (PWD-B3a's first
+> draft called an unknown command "unbounded" when the packet limit still
+> bound it).
+>
+> **Mechanical form: name the adversary the property holds against, then ask
+> whether an adaptive one is excluded by construction.** A value derived from
+> public data cannot impose attacker work — that is a **non-property**, not a
+> mitigation with a weak constant, and the two demand different responses:
+> a weak constant invites tuning, a non-property demands re-routing.
+>
+> **It survives review because each argument is locally well-formed.** T5's
+> first draft cited a real consumer at a real line and drew a plausible
+> conclusion; nothing in the sentence was false, only its scope. So the check
+> cannot be "read it again" — it has to be the question above, asked against
+> the row's own adversary column.
+
+**The seventh check — *a `file:line` citation has a dependency the diff does
+not show, so it is verified after the merge or not at all*.** (Rick,
+2026-09-04, naming it the third instance of the fifth check's family.)
+
+> **A conflict-free merge proves the two branches did not edit the same lines.
+> It proves nothing about whether one branch moved lines the other points at.**
+
+**The instance:** C2-R1b's fork-choice work shifted `blockchain.cpp`, and
+PWD-B3's citation for `m_current_block_cumul_weight_limit` — the whole argument
+that a block cap cannot be static — came to point at unrelated code. **Neither
+side of the merge had edited the citing document.** The symbol survived, so the
+*claim* held and only the pointer broke, which is the failure mode that looks
+like nothing: nothing turns red, and the citation still resolves to a real line
+in a real file.
+
+**So the ordering is the mechanism, not the diligence.** Verifying citations
+*before* merging verifies an artifact that will not ship. Re-run them on the
+**merged** tree, and check them **by content** — that the cited line contains
+the symbol the claim rests on — because line-in-range is what a drifted
+citation still satisfies. Where a citation is load-bearing, name the symbol
+beside the line so the next drift is greppable rather than silent.
+
+> **This is the fifth check's family, one artifact over.** There the frontier
+> of an *enumeration* was narrower than the claim built on it; here the
+> frontier of a *verification* is — it covered the pre-merge tree while the
+> claim is about the merged one. Same shape in citations, in coverage
+> inventories, and in sum checks, which is why they are stated together: **the
+> frontier of a check is narrower than the claim it is taken to support.**
+
+**Rider, because the pattern has now recurred inside its own fixes three
+times:** correcting referring text tends to reproduce the defect in the
+correction. A cell advertising 2026-09-04 currency against a 2026-09-03
+verification is a stale-currency defect *inside the fix for a stale-currency
+defect*; a sum check corrected from 9 to 8 kept a total that was already wrong;
+a retired concept survived in the paragraph that retired it. **After correcting
+a claim, re-read the correction as if it were the original text** — it is
+subject to the same class it just repaired.
 
 ---
+
 
 ## 2. Cluster I — identity and Sybil resistance
 
@@ -262,8 +326,10 @@ parallel with the remaining clusters rather than after them. *(It is the
 gated on PWD-I4. An earlier wording said "closure", which is where PWD-I5's own
 heading drifted from: the ordering rationale was written before the row's scope
 was settled, and then the row was named to match the argument.)* (The *disposition* load runs
-the other way — cluster B carries ~20 bucket-4 rows to cluster I's 10 — so this
-ordering is about latency, not volume.)
+the other way — **cluster B carries all 28 remaining bucket-4 rows** to cluster
+I's 10, because cluster A's only row cites `PWC-X5`, and `PWC-X` records carry
+no bucket — so this ordering is about latency, not volume. *Corrected from
+"~20" on 2026-09-03, with cluster A's zero verified rather than assumed.*)
 
 ### PWD-I1 — no peer identifier on the wire at all; the four jobs it served are replaced
 
@@ -1470,9 +1536,21 @@ claim about what this cluster ruled is not.)*
 **PWC-D7** is bucket-2 (ratified by #587) and is excluded from the bucket-4
 accounting, as are all `PWC-X` rows.
 
-**Running total against the round's gate:** **19 of 46** bucket-4 rows
-dispositioned — cluster I's 10 plus cluster T's 9. **Clusters B (~20) and A
-remain.**
+**Running total as of cluster T:** **18 of 46** bucket-4 rows dispositioned —
+cluster I's 10 plus cluster T's 8. **This is a historical figure; the
+authoritative running total is the one at the end of the most recent
+sub-round.** Two live totals in one document is how the off-by-one below went
+unseen, so only one of them is ever current. As of cluster T, 28 rows remained
+for cluster B — enumerated, not estimated: `PWC-A6`, `PWC-A6a`, `PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`,
+`PWC-B6`, `PWC-B7`, `PWC-C1`, `PWC-C3`, `PWC-C5`, `PWC-C6`, `PWC-C7`,
+`PWC-C8`, `PWC-E1`, `PWC-E2`, `PWC-E3`, `PWC-E4`, `PWC-E4a`, `PWC-E5`,
+`PWC-E7`, `PWC-E8`, `PWC-E9`, `PWC-E11`, `PWC-E13`, `PWC-E14`, `PWC-F4`.
+
+> **Corrected 2026-09-03, from 19.** The old figure inherited cluster T's
+> off-by-one. The remainder is now **listed** rather than given as "~20",
+> because a count with no enumeration behind it cannot be checked by a reader —
+> and the two independent derivations (46 minus the dispositioned rows, and the
+> census's own bucket-4 set) agree on these 28.
 
 ---
 
@@ -2197,7 +2275,18 @@ self-minted set is no longer the strongest evidence obtainable.
 | PWC-A10 (zstd level 1, floor 256) | **Ruled** — kept, with the no-secret invariant stated | PWD-T7 |
 | PWC-F3 (50 MB dead constant; never-sent `network_config` KV map) | **Ruled** — `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size` and the struct's KV serializer are deleted; the struct keeps its live fields. Decidable *because* PWD-T6 names the authoritative limits; implementation is P2P-3 like every other ruling here, queued in FOLLOWUPS | PWD-T6 |
 
-**Sum check: 7 ruled + 1 absorbed + 1 deferred = 9 rows.** ✅
+**Sum check: 6 ruled + 1 absorbed + 1 deferred = 8 rows.** ✅
+
+> **Corrected 2026-09-03: this table has always held 8 rows, and the sum check
+> claimed 9.** The original read *"6 ruled + 1 absorbed + 2 deferred = 9"* —
+> arithmetically true and wrong about its subject, since the table held
+> 5 ruled + 1 absorbed + 2 deferred = 8. **Ruling PWC-F3 then propagated the
+> error rather than exposing it**: the ruled count went 6 → 7 and deferred
+> 2 → 1, preserving a total that was already one too high. **A sum check that
+> is internally consistent is not a check** — it verifies the total against its
+> own addends, never against the rows. The pre-review sweep now compares each
+> claimed count to the table above it, and cluster I's table is the control
+> that shows the comparison discriminates rather than merely passing.
 
 *PWC-F3 moved **deferred → ruled** in review: the recorded blocker — "it is a
 deletion, not a derivation" — is a reason to keep the two legible, not a
@@ -2209,6 +2298,728 @@ the rekey interval (PWD-B3), the `return_code` and unknown-flag questions
 (PWD-B4/B5), and every behavioural cadence (cluster B). **PWD-T6's post-handshake
 limit and PWD-T3's interval both terminate on cluster B** — that is a real
 dependency, stated rather than papered over with a placeholder number.
+
+## 3.6 Cluster B, first sub-round — unrecognised input, and the command table
+
+**Three decisions: PWD-B3a, PWD-B6 and PWD-B3.** Cluster B carries **28** bucket-4 rows
+across four validation surfaces, which is more than one review can hold at the
+attention each row deserves (rule 19). It is therefore split into sub-rounds,
+following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
+first because PWD-B3 is a hub rather than merely a blocker.**
+
+> **Four already-ruled commitments terminate on PWD-B3**, one of them in a
+> merged PR: PWD-T6's post-handshake limit, PWC-A2's deferral (the bucket
+> header's length field cannot be sized before the caps it must express),
+> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table* —
+> and PWD-T7's compression gate, whose named blocker is that nothing in the
+> tree classifies a command as confidentiality-bearing. **B3's command table is
+> what resolves that classification.**
+
+**PWD-B6 is in this sub-round because it decides B3's table membership, not
+because it is convenient.** The two block-propagation commands have **byte-
+identical request structs** — `block_complete_entry b; uint64_t
+current_blockchain_height;`, same KV map (`cryptonote_protocol_defs.h:115-129`
+and `:265-279`) — and inherited caps that differ by **32×** (128 MB vs 4 MB).
+The cap is the *only* thing distinguishing the two paths, so deriving one
+without deciding the other would set a limit for a command that may not exist,
+exactly as it would have for `COMMAND_PING`.
+
+### PWD-B3a — the unknown-input principle, ruled once for the whole cluster
+
+**RULED, and stated at cluster scope deliberately.** The same question is asked
+on two surfaces and today gets two different answers:
+
+| Surface | Unrecognised input | Inherited behaviour |
+| --- | --- | --- |
+| Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
+
+**One question, two answers, and neither was chosen.** That is the drift shape
+that produced the 50 MB / 100 MB packet-limit pair PWD-T6 had to reconcile: two
+rows deriving independently against the same underlying question.
+
+> **Ruled: unrecognised input is rejected at ingress. A field this protocol
+> does not define is not a field it forwards, stores, or sizes a buffer from.**
+
+**The rule is scoped to the *dispatch* surface, and getting that wrong would
+have deleted cover traffic.** `limit_for(head.command)` runs on **every** bucket
+header as it arrives (`rust/shekyl-levin/src/reader.rs:315`), *before* any
+flag-based classification — and **`noise_notify` emits `command = 0`** with
+`BEGIN|END` (`rust/shekyl-levin/src/fragment.rs:47-58`), as does every fragment
+carrier. A rejection keyed on "the id is not in the switch" therefore rejects
+the white-noise and fragmentation paths **cluster T deliberately kept**, which
+PWC-A9 records and PWD-T7's length-leak masking depends on.
+
+> **So the discriminator is the flag class, not the id.** A bucket whose flags
+> carry **neither `Q` nor `S`** is the noise/fragment class: it carries **no
+> command at all** — the zero is a filler, not an identifier — and its bound is
+> the framing bound (`noise_size`), never a command cap. A bucket that *does*
+> carry `Q` or `S` is a dispatch, and **its command must be one this protocol
+> defines**. The reassembled inner message is a dispatch too, and is checked the
+> same way (`reader.rs:425`).
+
+**This is the jobs-not-names rule again** (rule 16): "command id 0" has two jobs
+— filler in a framing bucket, and a genuine id — and a check written against the
+*field* rather than against the *job* silently takes out the first. **Carving
+out the literal `0` would not have been the fix either**: it would admit a
+`Q`-flagged bucket claiming command 0, which is a dispatch of an undefined
+command and exactly what this rule exists to reject.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that falls back to the **global** packet limit instead of a bound sized for what it claims to be, or an undefined flag bit accepted as uninterpreted semantics | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
+| Fall back to the global limit (today's command behaviour) | The same | **Refused.** `DEFAULT_MAX_PACKET_SIZE` is a *framing* bound, not a statement about what the message is — using it as the cap for an unknown command means the only thing sizing the buffer is how big a bucket may be, which is precisely the derivation PWD-T6 refused |
+| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means `COMPRESSED` (0x10) proves the range is one **we allocate from**, and the next Shekyl extension collides with a bit some peer was already permitted to set |
+| Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
+| Cap unknown commands at a per-command default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
+
+**Conceded.** This forecloses in-band extension without a version bump — a peer
+cannot introduce a new command or flag and have old nodes tolerate it. **That is
+intended**, and PWC-A3 already refuses version negotiation for the same reason:
+tolerance is a claim about the future that the tolerating node cannot verify.
+Extensions arrive by the same route consensus changes do.
+
+**Falsifier.** **Reopen if any deployment scenario requires two Shekyl versions
+with different command sets to interoperate on one network without a
+coordinated cutover** — that is the property this ruling trades away, and it is
+checkable against the release plan rather than against a benchmark.
+
+> **PWD-B4 applies this rule; it does not re-derive it.** B4's remaining work is
+> the *ingress check's* placement and its interaction with the framing rows
+> (PWC-A6/A6a/A7), not the policy. Recorded here so the two sub-rounds cannot
+> reach different answers.
+
+### PWD-B6 — one block-propagation path, not two
+
+**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008)
+is the sole block path.**
+
+**The two commands are already one code path.** `handle_notify_new_block`
+builds a fluffy request from its argument and **returns
+`handle_notify_new_fluffy_block(...)`**
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:529`). 2001 is a wire
+alias for 2008, not a second implementation, so deleting it removes a name —
+not a behaviour.
+
+> **An earlier version of this row argued from `pruned`, and that was wrong.**
+> It claimed `block_complete_entry`'s peer-controlled `pruned` bool lets either
+> shape travel on either command. **`pruned` selects the transaction
+> *encoding*** — which branch of the KV map serializes `txs`
+> (`cryptonote_protocol_defs.h:76-95`) — and the announce path passes
+> **`allow_pruned=false`** (`cryptonote_protocol_handler.inl:616`), rejecting
+> pruned entries outright. **Compactness is not a struct property at all**: a
+> compact announce is one that sends a *subset* of `b.txs`, which no field
+> records. The correction strengthens the ruling — the two ids were never
+> distinguished by shape, so there is even less to preserve.
+
+**So the 32× cap gap enforces nothing about the message.** It is two different
+caps on one handler, reachable by choosing an id.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Keep 2008 only** | The peer choosing the path with the weaker bound; and the bandwidth cost of full-block flood on a chain that has a compact path | **Adopted.** Shekyl is v3-from-genesis with **no fluffy transition to be compatible across** (rule 60) — 2001 exists only because Monero needed both during a rollout that is not our history |
+| Keep 2001 only | The same | **Refused.** It is the *more* expensive path, and deleting the compact one to keep the verbose one inverts the reason both exist |
+| Keep both, reconcile the caps | The same | **Refused.** Reconciled caps still leave two commands with one schema, so the choice of command carries no information and the receiver must handle both — cost with no property bought |
+
+**Conceded — very little, and an earlier version of this row conceded
+something that was not true.** It said deleting 2001 costs a missing-tx round
+trip that the full-block path would have avoided. **It does not.** How much of
+`b.txs` a sender includes is **sender policy, independent of the command id**,
+and 2001 already dispatches into 2008's handler — so the round trip is a
+property of what the sender chose to send, before and after this ruling alike.
+*That concession was written under the `pruned`-based model this row has since
+corrected, and it survived the correction.* What is actually given up is a wire
+name; `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is unchanged and still the
+mechanism for whatever the sender omitted.
+
+**Falsifier.** **Reopen if measured block-propagation latency on the compact
+path exceeds the full-block path by more than one round-trip time at the
+95th percentile**, on the Q12-D6a rig — a figure that would mean the missing-tx
+fetch is not the bounded cost this ruling assumes.
+
+### PWD-B3 — per-command caps, and the bound that is not a number
+
+**RULED as a derivation with a named dynamic input, because the honest answer
+is not a table of constants.**
+
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71`) —
+13 arms, and after PWD-B10 and PWD-B6 it is **11**:
+
+| Command | Inherited cap | Disposition |
+| --- | --- | --- |
+| `COMMAND_HANDSHAKE` (1001) | 65536 | Derived from `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × one peerlist entry + `CORE_SYNC_DATA` |
+| `COMMAND_TIMED_SYNC` (1002) | 65536 | Same derivation as 1001 |
+| `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
+| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
+| `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
+| `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | **Not derivable yet — there is no relay batch bound.** See below |
+| `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
+| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
+| `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
+| `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
+| `NOTIFY_NEW_FLUFFY_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
+| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
+| `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010) | 4 MB | A hash list; derives from the pool bound |
+
+> **The block-carrying commands cannot take a static cap, and this is the
+> finding, not a gap in the round.** A block's maximum weight is
+> `m_current_block_cumul_weight_limit` — **dynamic, consensus-derived, and a
+> function of chain state** (`src/cryptonote_core/blockchain.cpp:1846`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
+> therefore either **too small**, rejecting a legitimate block during a growth
+> phase and partitioning the node, or **too large**, in which case it is not a
+> bound. The inherited 128 MB is the second.
+
+**Ruled: the block-carrying cap is computed from the receiver's own consensus
+state**, as a fixed multiple of its current weight limit, so it tracks the chain
+rather than a release.
+
+**The formula, written out, because "a fixed multiple of the weight limit" is
+not one.** A `block_complete_entry` is **not** bounded by block weight alone: it
+also carries `attestation_witness`, an opaque blob capped **independently of
+`pruned` and of weight** at `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` =
+`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × PQC_HYBRID_SINGLE_SIG_LEN` = **866,568
+bytes** (`src/cryptonote_config.h:472-473`, bounded at the codec by
+`archival_attestation_witness_within_transport_cap`).
+
+> **`entry_max` = `margin` × `m_current_block_cumul_weight_limit`
+> + `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` + KV encoding overhead.**
+>
+> - **2008** (one announce): `entry_max`.
+> - **2004** (a batch): `n × entry_max` for the batch cardinality `n`.
+
+**`margin` is the one term this round does not fix, and it is named as owed
+rather than invented.** It exists to absorb the receiver being behind the tip,
+so its value is a function of how fast the consensus weight limit can grow per
+block — **a consensus parameter, and the consensus lane owns it.** Naming it as
+a symbol with a stated job is the honest form; picking a number here would be
+inventing a consensus constant from a p2p round.
+
+> **The witness term dominates at batch size, and that is a design consequence,
+> not a footnote.** At the inherited request bound of 100 blocks, the witness
+> alone contributes 100 × 866,568 ≈ **86.7 MB** — so **PWD-T6's post-handshake
+> limit is set primarily by the attestation witness, not by block weight.** Any
+> future change to `ARCHIVAL_MAX_ATTESTATION_RECORDS` moves the p2p packet
+> limit with it.
+
+> **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
+> `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
+> payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
+> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
+> for one block plus a tip-lag margin either rejects legitimate multi-block
+> sync responses or, if widened to fit a batch, hands the single-block announce
+> path a batch-sized bound. *An earlier version of this table gave both
+> commands the same disposition and would have done one or the other.*
+>
+> **Its bound is the batch this node asked for.** `NOTIFY_REQUEST_GET_OBJECTS`
+> (2003) carries `std::vector<crypto::hash> blocks` (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
+> receiver **already knows the cardinality it requested** — the cap is that
+> count times the per-block bound, and it needs nothing from the peer.
+> §1's fourth check again: the bound comes from this node's own record of what
+> it sent, not from a claim in the response. **A response to a request this node
+> did not make has a batch size of zero**, which the same rule rejects without a
+> separate mechanism.
+
+**Enforced in two layers, because the ingress seam cannot see per-connection
+state — and it does not need to.** `BucketReader`'s hook is
+`fn(u32) -> u64` (`rust/shekyl-levin/src/reader.rs:177-185`), command-only, and
+the requested cardinality lives in per-connection handler state. Rather than
+widen the framing seam to carry connection state — which would push protocol
+policy into the framing crate, against `25-rust-architecture` — the bound
+splits along the boundary that already exists:
+
+| Layer | Bound | Why it fits there |
+| --- | --- | --- |
+| **Ingress** (`fn(u32) -> u64`) | `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT × entry_max` — **100 × entry_max** (`src/cryptonote_protocol/cryptonote_protocol_handler.h:58`) | Depends only on the receiver's own consensus state and a compile-time constant, so it is expressible in the existing signature. Bounds the allocation before any handler runs |
+| **Handler** (per connection) | the **exact** requested cardinality × `entry_max` | The request state is already there; this is a tightening, not the only bound, so nothing is unbounded if the handler check is reached late |
+
+**The static layer is what makes the claim safe**; the per-request layer is what
+makes it tight. *An earlier version of this row asserted only the tight bound,
+which the framing seam cannot express — so it named a cap that nothing could
+enforce at ingress.* The multiple absorbs the receiver being behind the tip;
+it is a consensus-adjacent constant and is **named as owed to the consensus
+lane**, not invented here.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim |
+| A static ceiling picked to survive expected growth | The same | **Refused.** It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does |
+| Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
+
+> **Two inputs this round does not have, and the ruling says so rather than
+> implying a table of finished numbers.**
+>
+> **(a) `NOTIFY_NEW_TRANSACTIONS` (2002) has no batch bound to derive from.**
+> `Zone::queue_fluff` appends every transaction to each peer's queue and
+> `flush_fluff` releases the whole accumulated batch —
+> `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
+> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> side checks no cardinality either. **So 2002's cap has no derivation input,
+> and until one exists 2002 is not bounded below 2004.** *An earlier version of
+> this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
+> that bound existed.* Ruling it is cluster B's own work and belongs with the
+> relay cadence rows (PWD-B1/PWD-B2), not here.
+>
+> **(b) The cardinality-derived batch bound exceeds the plaintext ceiling,
+> which contradicts PWD-T6.** The consensus weight limit **floors** at
+> `2 × get_min_block_weight` = **600,000 bytes**
+> (`src/cryptonote_core/blockchain.cpp:6564-6567`; the median is clamped up to
+> `full_reward_zone` at `:6543` before doubling). So even at `margin = 1`,
+> `100 × (600,000 + 866,568)` = **146,656,800 bytes**, above
+> `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
+> (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
+> ceiling to sit **above** the post-handshake limit; this inverts it, so a
+> conforming compressed 2004 could be legal on the wire and rejected after
+> inflation.
+
+**Ruled, because the contradiction forces the shape even though it does not
+fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
+cardinality alone.** The responder fills a byte budget and **truncates the
+batch**, leaving the requester to ask for the remainder — which it already
+must handle, since `missed_ids` exists. A cardinality bound multiplies two
+independent worst cases (every block at maximum weight *and* maximum witness
+simultaneously), producing a buffer no honest exchange ever fills, and here it
+produces one the decompressor is required to reject.
+
+> **The budget is chosen at or below the plaintext ceiling, so PWD-T6's
+> ordering holds by construction rather than by arithmetic that has to be
+> re-checked whenever a consensus constant moves.** The budget's value is
+> **owed**, with the same discipline as `margin`: it is a bandwidth/latency
+> trade for initial sync, and picking it needs the sync measurements this round
+> does not have.
+
+**What this discharges — and what it does NOT, which is the correction this
+round owes:**
+
+- **PWD-T6's post-handshake limit** takes its *shape* from this table — the
+  maximum over it, which is `NOTIFY_RESPONSE_GET_OBJECTS`'s byte budget and
+  **not** the single-block bound a reader would take from the more visible row.
+  **Its value is not discharged**: the budget is owed, and 2002 is unbounded
+  until (a) above is ruled, so "2004 is the maximum" is a claim about shape,
+  not yet a proven ordering.
+- **PWC-A2** (bucket header length field) is **not** sized by this round. It
+  must express 2004's byte budget, and that budget does not have a value yet.
+  *An earlier version of this bullet declared it sized; that was premature, and
+  premature-clear is the more expensive direction — nobody re-checks a gate
+  that says it is closed.*
+- **PWD-T7's compression gate** gets its classification — **but from the
+  *route*, not from this table, and the difference matters.** *An earlier
+  version of this bullet said "every command in this table carries public
+  consensus data", which is false: `COMMAND_HANDSHAKE` and
+  `COMMAND_TIMED_SYNC` carry peerlists and support flags
+  (`src/p2p/p2p_protocol_defs.h:172-250`) — peer metadata, not consensus data,
+  and peerlist disclosure is a thing PWD-I2 deliberately controls.*
+
+  **The set is empty because of what can reach the compressor, which is a
+  narrower question than what is in the table.** All three call sites finalize
+  as **notifications** — `levin_notify.cpp:437`, and
+  `src/p2p/net_node.inl:2186` / `:2503`, both via `finalize_notify(command)`.
+  **Every p2p command is an *invoke***: `COMMAND_HANDSHAKE`
+  (`net_node.inl:1078`), `COMMAND_TIMED_SYNC` (`:1165`), `COMMAND_PING`
+  (`:2581`) and `COMMAND_REQUEST_SUPPORT_FLAGS` (`:2623`) all go through
+  `async_invoke_remote_command2`, so **they cannot reach the compressor at
+  all** — structurally, not by convention. What remains is the cryptonote
+  notify family, which carries blocks and transactions.
+
+  > **So the confidentiality-bearing set is empty today, and the gate is a
+  > check on the *routes into `try_compress_message`*, not on the command
+  > table.** A gate written against the table would pass while a future
+  > invoke-carried secret was quietly re-routed through a notify.
+
+**Conceded, and it is a real cost.** A dynamic cap means two nodes at different
+heights admit different maxima, so a node far behind the tip rejects a block a
+synced node accepts. **That is correct behaviour** — it will fetch the
+intervening chain first — but it makes "the limit" a per-node quantity rather
+than a protocol constant, which every implementation must reproduce identically
+or interoperate poorly.
+
+**Falsifier.** **Reopen if a legitimate block is ever rejected by the derived
+cap at any reachable chain state** — the same falsifier PWD-T6 carries, now
+with a computable subject rather than a static number to compare against.
+
+### Cluster B first sub-round disposition — the census rows this sub-round accounts for
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-C7 (`get_max_bytes` unknown-command fallthrough to `size_t::max`) | **Ruled** — rejected at ingress, not defaulted | PWD-B3a, PWD-B3 |
+| PWC-C3 (two block-propagation paths) | **Ruled** — 2001 deleted, 2008 is the sole path | PWD-B6 |
+| PWC-A6 (codec round-trips unknown flag bits) | **Ruled** — the policy is set here; PWD-B4 places the check | PWD-B3a |
+| PWC-A6a (no relay carries unknown bits today) | **Absorbed** | PWD-B3a (it is the reason the change is safe now) |
+
+**Sum check: 3 ruled + 1 absorbed + 0 deferred = 4 rows.** ✅
+
+**Running total as of cluster B's first sub-round — historical:** **22 of 46**
+bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + this
+sub-round's 4. **The authoritative total is at the end of the most recent
+sub-round**; only one is ever current. **24 rows remain**, all in cluster B's later sub-rounds:
+`PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
+`PWC-C1`, `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E1`, `PWC-E2`, `PWC-E3`,
+`PWC-E4`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`, `PWC-E9`, `PWC-E11`,
+`PWC-E13`, `PWC-E14`, `PWC-F4`.
+
+> **Every id is spelled in full deliberately.** A bare `B1` in this document
+> reads as **PWD-B1**, a decision id, not `PWC-B1`, a census row — two live
+> families whose short forms collide. An enumeration exists to be checked
+> mechanically, and an ambiguous id cannot be.
+
+## 3.7 Cluster B, second sub-round — cadence, rate, and the batch nobody bounded
+
+**Three decisions: PWD-B1, PWD-B2, and PWD-B12 (minted here).** The
+validation surface is **connection cadence and rate** (rule 19). It goes second
+because **PWD-B12 is what PWC-A2 is re-blocked on**: PWD-B3 ruled the header
+field must express the largest value the command table can produce, and
+`NOTIFY_NEW_TRANSACTIONS` has no bound at all, so no maximum exists to size to.
+
+> **A premise this round had to correct before costing anything.** Earlier
+> grounding recorded *"no jitter anywhere"*. That is true of the **node-server
+> idle makers** and false of the tree: the relay layer draws fluff delays from
+> `FluffScheduler::memoryless()` — deliberately memoryless rather than the
+> inherited Poisson, which was the F-4 defect — and jitters the noise cadence
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> `:235`). **So this round is not introducing randomised timing to a tree that
+> has none; it is asking why one layer has it and the layer above does not.**
+
+### PWD-B12 — the fluff batch is unbounded, and the census could not see it
+
+**RULED. Minted here rather than routed**, because "cluster B owns it" is not
+an owner if no row names it (rule 22).
+
+`Zone::queue_fluff` appends **every** transaction to each peer's queue, and
+`flush_fluff` releases the whole accumulation — `std::mem::take(&mut
+peer.queued)` — with no cardinality or byte cap
+(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+checks no cardinality either.
+
+> **Why no census row covers it, which is a finding about the instrument.**
+> P2P-1's frontier was **the p2p wire and the connection management around
+> it**. `queue_fluff`/`flush_fluff` are *relay-layer* code that decides what
+> goes on that wire, so the bound sat one layer outside the enumeration — and
+> a census cannot report the absence of something outside its own frontier.
+> **This does not add a 47th row**: the completion gate stays at the census's
+> 46, and this decision is recorded as reaching past it.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Bound the batch in bytes at release, and emit the remainder in the next flush** | The pool-flooder, who makes a victim emit one enormous `NOTIFY_NEW_TRANSACTIONS` — and the path observer, for whom an unbounded batch is a size signal proportional to arrival rate | **Adopted.** A byte bound is what PWD-B3's cap needs as its input, and splitting across flushes costs latency rather than correctness. **Bytes, not count**, for the same reason PWD-B3 rejected cardinality: transactions vary in size, so a count bounds nothing |
+| Bound by transaction count | The same | **Refused, but not because it bounds nothing.** `CRYPTONOTE_MAX_TX_SIZE` is 1 MB, so `n` transactions admit at most `n` MB — a **finite** bound, just a loose one that varies by a factor of thousands with the traffic mix. Bytes are adopted because they are **tighter and a direct input to PWD-B3's cap**, not because count is unbounded. *An earlier version of this cell said the bound would be nominal, which overstates the refused option — §1's sixth check, pointed at an alternative instead of at the adopted rule.* |
+| Leave unbounded; the packet limit catches it | The same | **Refused.** That is the fallback PWD-B3a already refused one surface over: a framing bound is not a statement about what the message is, and here it would make the *relay's* behaviour depend on a *framing* constant it never reads |
+
+**Bounding the release does not bound the queue, and the ruling has to say
+both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
+(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`:868`), with **no bound at either end**. If transactions arrive faster than
+one capped batch per flush interval, the remainder simply accumulates — **once
+per destination peer** — so a release-side cap alone converts the flooder's
+attack from an oversized message into memory exhaustion, which is worse
+because it is invisible on the wire.
+
+> **So PWD-B12 is two bounds, not one: a byte cap on what a flush *releases*,
+> and a byte cap on what a zone *holds*, with admission refused at the second.**
+
+**Admission is refused at the source, not at the destination queue**, and that
+placement is the whole point. `queue_fluff` fans one arrival out to every
+destination, so a single flooding source fills *N* queues; dropping at the
+destination discards transactions that other peers may never see, while
+refusing admission pushes the cost back onto the connection that caused it —
+where **PWD-B1's token bucket charges it** — which is true only because PWD-B1
+covers the **notify** dispatch surface as well as the invoke one. *An earlier
+version of this row asserted that composition while PWD-B1 was scoped to the
+four node-server invoke routes; `NOTIFY_NEW_TRANSACTIONS` does not enter
+through any of them, so a peer could have filled this queue without spending a
+single token.* With B1 corrected, the two rows compose: B1 makes the flood
+expensive per connection, B12 makes it bounded in memory.
+
+**Conceded.** A bounded batch means a burst of transactions takes more than one
+flush to propagate, which slightly lengthens the tail of propagation under
+load. Refused admission is a real loss — a transaction this node never queued
+is one it never relays — but it is bounded, attributable to the connection that
+caused it, and preferable to unbounded growth that degrades the whole node. **That is the correct direction for D++ anyway** — the fluff delay is
+already memoryless, so an extra flush is drawn from the same distribution
+rather than adding a new observable.
+
+**Falsifier.** **Reopen if the batch bound is reached during normal operation
+at the design transaction rate** — that would mean the bound is shaping
+ordinary traffic rather than catching a flood, and its value is wrong.
+
+> **This is the input PWC-A2 needs.** With it, `NOTIFY_NEW_TRANSACTIONS` has a
+> derivable cap and the "largest value the table can produce" question becomes
+> answerable. **The value itself is still owed**, with `margin` and the
+> response byte budget, in the FOLLOWUPS item PWD-B3 re-opened.
+
+### PWD-B1 — rate limiting: adopted, and it is the mechanism PWD-T5 routed here
+
+**RULED.** PWC-E2 records the absence against an enumerated frontier: **no
+token bucket, no per-peer counter, no minimum interval** guards any of the four
+invoke entry points — `handle_get_support_flags`, `handle_timed_sync`,
+`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl:2170`, `:2646`,
+`:2695`, `:2794` **as of this round's pin**; PWC-E2 cites the same four at the
+line numbers its own pin had, and the handlers are named here so the next
+drift is greppable rather than silent).
+
+**Two earlier rows routed their adaptive-adversary case here, and this row
+carries only half of it — which is stated rather than glossed.** PWD-T5
+conceded that a publicly-derivable prefix cannot impose attacker work and sent
+adaptive exhaustion to PWD-B1/PWD-B9; PWD-B3a rejected unknown commands but an
+adversary may send *known* ones at any rate.
+
+> **PWD-B3a's half is carried here. PWD-T5's is not, because it is a different
+> phase.** T5's flooder prepends the correct eight bytes and reaches "the same
+> buffering and KEM path" — **before the handshake completes, and therefore
+> before any of the four invoke entry points this bucket sits on.** A
+> post-transport rate limit cannot bound a pre-transport cost.
+
+**What does bound the pre-handshake phase today, and what does not — and the
+first version of this paragraph named the wrong mechanism, in the wrong
+direction.** PWD-T6 caps the pre-handshake allowance at exactly one flight
+(1256/1160 B), so the *per-connection* buffer is bounded and small.
+
+> **The decapsulation is forced by an *inbound* connection, so the bound that
+> matters is the inbound one — and that is PWC-E11, not PWD-B9.** PWD-B9 is
+> **outbound slot diversity** (`P2P_2_DISPATCH_BRIEF.md:502`), which says
+> nothing about connections a peer opens *to us*. The inbound cap is
+> `has_too_many_connections` (`src/p2p/net_node.inl:3089` **at this round's pin**; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
+> on `cntxt.m_is_income` — and **returns permit for every non-public zone**, so
+> **on Tor there is no inbound per-host cap at all.**
+
+**So two gaps, not one.** Even on clearnet, a per-host *concurrency* cap does
+not bound **churn** — connect, force one decapsulation, disconnect, repeat —
+and on anonymity zones there is no per-host bound of either kind. That is
+precisely PWD-T5's adversary, and neither PWD-T6 nor PWC-E11 reaches it.
+
+> **Given its own owner rather than folded into PWD-B9.** Widening B9 informally
+> would leave the brief, the index and this document disagreeing about what B9
+> means, and a row that means different things in different documents is worse
+> than a missing row. Queued in FOLLOWUPS as **pre-handshake admission rate**,
+> citing PWC-E11 for the current state — with the anonymity-zone gap named,
+> because a cap that exempts Tor is the kind of "bound" that reads as one
+> without being one.
+
+> **Open, and it is *unruled* rather than blocked** — no decision waits on
+> another, so nothing licenses deferring it beyond this sub-round's surface.
+> Recorded in FOLLOWUPS with PWC-E11 as the current state and the
+> anonymity-zone exemption named.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Per-connection token bucket charged at *every* dispatch — invoke and notify alike — before the request is decoded** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced — **and the one who sends malformed ones** | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
+| The same bucket, charged inside the handlers | The same | **Refused — it would not have bounded the work.** See the placement rule below |
+| Global rate limit across all peers | The same | **Refused.** One peer's flood then throttles every honest peer — the attacker buys a shared outage with one connection |
+| Rely on per-host connection caps | The same | **Refused as a substitute, and the cap is not PWD-B9's.** The inbound cap is **PWC-E11** (`has_too_many_connections`, public zone only); **PWD-B9 is outbound slot diversity** and does not face this adversary at all. Even taking E11 at its best, a *concurrency* cap says nothing about the **rate** on a connection a host is entitled to. *An earlier version of this cell named B9, contradicting the corrected paragraph above and making B9 mean two things in one document.* |
+
+**Conceded.** A token bucket adds per-connection state, and a peer that is
+merely fast — a well-connected node during a burst — is throttled the same as
+an attacker.
+
+> **The charge happens at dispatch, before decoding, and the placement is
+> load-bearing rather than an implementation note.**
+
+`HANDLE_INVOKE_T2` tests `COMMAND::ID == command` and then calls
+`buff_to_t_adapter`, which runs `strg.load_from_binary(in_buff, …)` **and**
+`in_struct.load(strg)` *before* it invokes the handler
+(`contrib/epee/include/storages/levin_abstract_invoke2.h:250-252`, `:152-171`).
+A bucket charged inside `handle_timed_sync` and its siblings would therefore
+leave **two** things unmetered:
+
+- **the portable-storage parse itself**, which is the expensive part of
+  servicing a flood and happens before any handler runs;
+- **every malformed request**, which returns `-1` from the adapter and **never
+  reaches a handler at all** — so an attacker who sends deliberate garbage pays
+  nothing against the bucket while still making the victim parse it.
+
+**The command id is already in hand at dispatch**, which is what makes the fix
+free: the same `COMMAND::ID == command` test that selects the handler can
+charge the bucket first. *An earlier version of this row placed the bucket on
+"the four invoke entry points", meaning the handlers — bounding the cheap half
+and calling it resource exhaustion protection.*
+
+> **And the surface is *every* dispatch, not the four p2p invokes.** `HANDLE_NOTIFY_T2`
+> is structurally the same macro — `is_notify && NOTIFY::ID == command`, then
+> the same `buff_to_t_adapter`
+> (`contrib/epee/include/storages/levin_abstract_invoke2.h:259-261`) — so the
+> command id is known at exactly the same point and the parse happens in
+> exactly the same place.
+
+**Scoping the bucket to the four invoke routes would have left the entire
+cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+the blocks and the transaction batches, i.e. **the large payloads and the
+flood vector PWD-B12 exists to bound.** *A second earlier version made that
+mistake, and it is the same one twice: naming the surface I had been reading
+rather than the surface the property needs.*
+
+**Four parameters are owed, not one, because a bucket is not defined by its
+refill rate.** Two conforming implementations given only a rate would diverge
+on burst tolerance and on what a throttled peer experiences:
+
+| Owed | Why it cannot be left to the implementer |
+| --- | --- |
+| **Refill rate** | the honest/attacker boundary; too tight and sync stalls, too loose and it is decoration |
+| **Capacity, and the initial fill** | capacity *is* the burst allowance; a full-at-connect bucket and an empty one differ sharply for a peer that opens and immediately syncs |
+| **Token cost per command** | a handshake and a timed-sync are not the same work — a flat cost prices the cheap one like the expensive one, and an attacker picks whichever is mispriced. **Charged on the command id at dispatch**, which is the only point where the id is known and no work has been done yet |
+| **Action on exhaustion** | throttle, or drop the connection? The two produce **different wire-observable behaviour**, so leaving it open means peers disagree about whether a slow peer is a hostile one |
+
+**Falsifier.** **Reopen if honest initial sync ever exhausts the bucket** —
+concrete, observable at the sync path, and the failure that would mean the rate
+was chosen against the wrong traffic.
+
+### PWD-B2 — jitter, and the discriminator is observability
+
+**RULED.** The five node-server idle makers are fixed-interval
+(`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
+(PWC-E4).
+
+> **Ruled: a cadence a *path* observer can correlate across connections
+> gets an independently drawn per-connection deadline; a cadence that is purely
+> local scheduling stays a single fixed timer.**
+
+**"Jitter the timer" would not have bought the property, and the distinction is
+the whole ruling.** Timed-sync is driven by *one* shared idle maker that walks
+every handshaked connection. Randomising **when that timer fires** still sends
+to every connection **simultaneously** — an observer sees N connections light up
+at the same instant, which is *perfect* cross-connection correlation with a
+randomised offset. The fix is not a jittered shared timer; it is **per-connection
+deadlines, drawn independently**.
+
+> **And the re-draw discipline comes with it, because the relay lane already
+> paid for getting it wrong.** `NoiseSchedule` keeps one deadline per channel,
+> **each drawn once and re-drawn only when *that* channel fires**; a foreign
+> wake must leave every other entry untouched, because re-drawing on a foreign
+> wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
+> effective interval short** — "a privacy defect no count assertion and no
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
+> only when that connection's own sync fires.
+
+**Timed-sync (60 s, to every handshaked connection at once) is the case that
+matters.** A fixed network-wide period means every node's timed-sync traffic is
+phase-locked to its own start time, and an observer watching two connections
+can test whether they belong to the same node by comparing phase. **That is an
+identity signal reconstructed from timing** — precisely the class PWD-I1 spent
+the identity cluster removing from the wire, and it would survive the field's
+deletion.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Per-connection independently drawn deadlines for the observable cadences; purely local timers stay a single fixed timer** | The path observer correlating two connections by phase | **Adopted.** It targets the cadences that produce a cross-connection observable and leaves the ones that do not, so the change is small and each part is justified by its own adversary |
+| Jitter the existing **shared** timer | The same | **Refused — it does not buy the property.** One timer walking every connection still sends to all of them at the same instant; the offset moves and the correlation does not |
+| Jitter everything on a timer | The same | **Refused.** The idle-peer kick and the standby check produce no cross-connection signal; jittering them buys nothing and makes every timing test in the tree probabilistic |
+| Leave all fixed | The same | **Refused.** It preserves a correlation the identity cluster just paid to remove — the wire field goes and the timing tell stays |
+
+**Conceded — and it is the reason this row is small.** Jitter reduces phase
+correlation; it does not eliminate traffic analysis, and against an observer
+who watches long enough the *mean* is still a fingerprint. **The claim is
+narrow deliberately** (§1's sixth check): this is not an anonymity mechanism,
+it is the removal of one cheap correlation.
+
+**The mechanism is not invented here — but "the relay lane's mechanism" is
+two mechanisms, and the row has to say which.** That lane draws **memoryless**
+delays for *fluff* and **bounded-uniform** `min + U(0, jitter)` for the *noise
+cadence*, and they are not interchangeable.
+
+> **Adopted: the bounded-uniform form, `min + U(0, jitter)` — the
+> `NoiseCadence` *shape*, explicitly not its shipped values.**
+
+**Bounded, not memoryless, and the reason is liveness rather than taste.**
+Timed-sync is how a node learns it has fallen behind; an exponential draw is
+unbounded above, so a node could go arbitrarily long without one. Fluff can
+afford that — memorylessness is exactly what defeats timing inference on
+propagation — but a liveness cadence cannot.
+
+> **The window is derived under a fixed constraint: the mean stays at
+> `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
+> load change, and preserving the mean is what keeps the two separable.
+
+**The distribution is uniform, and the criterion is maximum entropy on a
+bounded support — not that uniform is uniquely unbiased.** Two conditions
+select it, in order:
+
+1. **Bounded support**, from the liveness argument above: an unbounded family
+   can delay a sync arbitrarily, and timed-sync is how a node learns it has
+   fallen behind.
+2. **Maximum entropy given that support.** Among bounded families with the same
+   mean, the uniform is the one an observer learns least from per observation;
+   a triangular or otherwise peaked draw has the same mean and a *recoverable
+   shape*, so repeated observation converges on it faster.
+
+> **The claim is that narrow deliberately.** Uniform is not shapeless — bounded
+> support is itself a recognisable signature — and an earlier version of this
+> row said "any other family biases the interval", which is not true of a
+> bounded symmetric family at the same mean. §1's sixth check, on the row's own
+> adopted option.
+
+**What *is* unconditional is that the specified draw must not be distorted.**
+Truncating it, re-rolling a value, or resampling on a foreign event all change
+the distribution actually realised, and that change is a pattern even when the
+family was chosen correctly. The relay lane records the cost when it happens by
+accident, in the CV-3 note above: resampling on a foreign wake and keeping the
+minimum biases the effective interval short, "a privacy defect no count
+assertion and no goodness-of-fit grade can see".
+
+> **`0` is a valid draw from `U(0, jitter)`, and must not be excluded.**
+> Rejecting or re-rolling a zero truncates the distribution, which is exactly
+> the bias flatness exists to remove — and it would be a live defect, since a
+> conformance test asserting "a deadline is never exactly `min`" would both fail
+> at random and, if an implementation were written to satisfy it, introduce the
+> pattern.
+
+**So the conformance condition is on the *window parameter*, never on an
+individual draw**, and an earlier version of this row confused the two — it
+required a "non-zero window" on the grounds that `jitter = 0` preserves the
+fixed phase. **That was wrong, and it mis-stated this row's own mechanism.**
+What removes the cross-connection correlation is the **per-connection
+independent draw**: two connections established at different moments have
+unrelated phases *whatever* the window is, because each deadline is set from
+its own connection's clock and not from a shared timer.
+
+> **What the window buys is narrower and more specific: it decorrelates
+> connections established at nearly the same moment.** That is the common case
+> rather than a corner one — `m_connections_maker_interval` runs every second
+> (`src/p2p/net_node.h:619`), so a node coming up opens several outbound
+> connections in a tight cluster, and with a degenerate window they would tick
+> together for the life of those connections.
+
+**The `min`/`jitter` split is owed**, derived against that clustering rather
+than against an abstract "non-zero" requirement — the trade is worst-case
+staleness against how much establishment-time spread the window has to cover.
+
+> **Copying `NoiseCadence::shipped()` would be the wrong reading and is
+> refused explicitly:** it is `3.333 s + U[0, 3.334 s]`, a mean of **5 s**
+> (`rust/shekyl-relay-privacy/src/schedule.rs:741-753`), which would change
+> timed-sync's frequency by 12× while claiming to change only its phase.
+
+**Falsifier — and "stays distinguishable" is not one, so it is made concrete
+here.** A reopening criterion a reader cannot recognise is the shape §0
+forbids, and the owed `min`/`jitter` split cannot be derived against an
+undefined target.
+
+> **Metric: the pairwise circular correlation of send phases, taken over the
+> emission times of two connections of the same node, tested against the
+> uniform null.** Reopen if that correlation is distinguishable from the null
+> at the sample budget a path observer plausibly has.
+
+**The threshold and the sample budget are owed together with the `min`/`jitter`
+split, in one item and not two**, because they are one measurement: the window
+is chosen so the correlation falls below the threshold, so neither number can
+be picked without the other. Run on the Q12-D6a rig, whose establishment-time
+clustering (`m_connections_maker_interval`, 1 s) is the condition the window
+has to cover.
+
+### Cluster B second sub-round disposition
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-E2 (no rate limit on the invoke entry points) | **Ruled** — per-connection token bucket | PWD-B1 |
+| PWC-E1 (timed-sync fixed 60 s, no jitter) | **Ruled** — jittered; it is the observable case | PWD-B2 |
+| PWC-E3 (five fixed, unjittered idle timers) | **Ruled** — jittered where observable | PWD-B2 |
+| PWC-E4 (three protocol-handler timers, fixed) | **Ruled** — left fixed; no cross-connection observable | PWD-B2 |
+
+**Sum check: 4 ruled + 0 absorbed + 0 deferred = 4 rows.** ✅
+
+**Running total against the round's gate — authoritative:** **26 of 46**
+bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + sub-round 1's 4
++ this sub-round's 4. **20 rows remain**, all in cluster B: `PWC-A7`,
+`PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`, `PWC-C1`,
+`PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`,
+`PWC-E9`, `PWC-E11`, `PWC-E13`, `PWC-E14`, `PWC-F4`.
 
 ## 4. What cluster I does not decide
 

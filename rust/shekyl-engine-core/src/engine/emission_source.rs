@@ -687,7 +687,6 @@ impl ClaimSourceFor {
 /// pair cannot drift, and the bare form stays for consumers (the claim
 /// orchestrator, the serve-set pinner) that already carry `P` in their own
 /// context and read only the record's contents.
-#[allow(dead_code)] // PR-P4: retires with the `unstake` verb, which fetches the record.
 pub async fn fetch_claim_source_for<R: Rpc>(
     rpc: &R,
     p_id: PCanonicalId,

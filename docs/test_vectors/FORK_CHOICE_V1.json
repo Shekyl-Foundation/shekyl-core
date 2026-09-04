@@ -1,0 +1,61 @@
+{
+  "comment": [
+    "Shared vectors for the C2-R1b ruled fork-choice comparison and the",
+    "CEN-D5 alt-window selection (docs/design/CONSENSUS_C2_R1_REORG.md §4b,",
+    "ratified 2026-09-03):",
+    "",
+    "Fork choice: the best chain is decided at alt admission by STRICTLY",
+    "greater cumulative difficulty — equality keeps the incumbent; an",
+    "operator-checkpoint match on the alternative forces the switch",
+    "regardless of difficulty. verdict 0 = keep current, 1 = switch.",
+    "Cumulative difficulties are given as lo/hi u64 halves (the FFI ABI).",
+    "",
+    "Alt window: for a candidate at bei_height whose stored alt ancestry",
+    "has alt_len blocks starting at first_alt_height, the LWMA window is",
+    "filled from the main-chain range [main_start, main_stop) plus the",
+    "newest alt_take entries of the alt chain, totalling",
+    "min(N + 1, bei_height) with N = 90. refused = true marks the",
+    "fail-closed preconditions (height-0 candidate; discontiguous",
+    "ancestry).",
+    "",
+    "Consumers: rust/shekyl-difficulty/tests/fork_choice_vectors.rs pins",
+    "the ONE implementation natively over both sections, and C++",
+    "tests/unit_tests/fork_choice_vectors.cpp pins the same sections",
+    "end-to-end through the FFI (shekyl_difficulty_fork_choice /",
+    "shekyl_difficulty_alt_window_plan) the block-connect machinery",
+    "consumes.",
+    "",
+    "Vectors are pinned per rule 30: a change here is a consensus change",
+    "and requires review + a CHANGELOG entry."
+  ],
+  "constants": {
+    "daa_window_n": 90,
+    "window_entries": 91
+  },
+  "fork_choice_cases": {
+    "comment": "checkpoint_match forces switch; otherwise strictly-greater-only.",
+    "cases": [
+      { "name": "strictly_greater_switches", "current_lo": 10, "current_hi": 0, "alternative_lo": 11, "alternative_hi": 0, "checkpoint_match": false, "verdict": 1 },
+      { "name": "equality_keeps_incumbent", "current_lo": 11, "current_hi": 0, "alternative_lo": 11, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
+      { "name": "lighter_keeps_incumbent", "current_lo": 11, "current_hi": 0, "alternative_lo": 10, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
+      { "name": "checkpoint_forces_even_when_lighter", "current_lo": 18446744073709551615, "current_hi": 18446744073709551615, "alternative_lo": 0, "alternative_hi": 0, "checkpoint_match": true, "verdict": 1 },
+      { "name": "hi_word_decides_switch", "current_lo": 18446744073709551615, "current_hi": 0, "alternative_lo": 0, "alternative_hi": 1, "checkpoint_match": false, "verdict": 1 },
+      { "name": "hi_word_decides_keep", "current_lo": 0, "current_hi": 1, "alternative_lo": 18446744073709551615, "alternative_hi": 0, "checkpoint_match": false, "verdict": 0 },
+      { "name": "equality_across_halves_keeps", "current_lo": 5, "current_hi": 7, "alternative_lo": 5, "alternative_hi": 7, "checkpoint_match": false, "verdict": 0 }
+    ]
+  },
+  "alt_window_cases": {
+    "comment": "Selection plans; totals always min(91, bei_height) unless refused.",
+    "cases": [
+      { "name": "main_parent_short_chain", "bei_height": 5, "alt_len": 0, "first_alt_height": 0, "refused": false, "main_start": 0, "main_stop": 5, "alt_take": 0 },
+      { "name": "main_parent_exact_window", "bei_height": 91, "alt_len": 0, "first_alt_height": 0, "refused": false, "main_start": 0, "main_stop": 91, "alt_take": 0 },
+      { "name": "main_parent_tall_chain", "bei_height": 910, "alt_len": 0, "first_alt_height": 0, "refused": false, "main_start": 819, "main_stop": 910, "alt_take": 0 },
+      { "name": "short_alt_stitch", "bei_height": 913, "alt_len": 3, "first_alt_height": 910, "refused": false, "main_start": 822, "main_stop": 910, "alt_take": 3 },
+      { "name": "alt_exactly_window", "bei_height": 1001, "alt_len": 91, "first_alt_height": 910, "refused": false, "main_start": 0, "main_stop": 0, "alt_take": 91 },
+      { "name": "long_alt_newest_window", "bei_height": 1183, "alt_len": 273, "first_alt_height": 910, "refused": false, "main_start": 0, "main_stop": 0, "alt_take": 91 },
+      { "name": "near_genesis_fork_short_total", "bei_height": 5, "alt_len": 3, "first_alt_height": 2, "refused": false, "main_start": 0, "main_stop": 2, "alt_take": 3 },
+      { "name": "height_zero_refused", "bei_height": 0, "alt_len": 0, "first_alt_height": 0, "refused": true },
+      { "name": "discontiguous_ancestry_refused", "bei_height": 100, "alt_len": 3, "first_alt_height": 90, "refused": true }
+    ]
+  }
+}

@@ -31,7 +31,7 @@ use shekyl_curve_tree::ClientError;
 
 use super::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned,
+    SpentRecordsDurablyPruned, SweepOverflowPolicy,
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
@@ -175,6 +175,12 @@ fn funding_refusal_detail(e: &BondAssemblyError) -> String {
         BondAssemblyError::InsufficientFunding { .. } => {
             "insufficient persona funding for the bond floor + fee".to_owned()
         }
+        // Count-free: the wallet's spendable-record count is P-activity
+        // volume (the same class the pending-block Debug redacts); the
+        // headroom itself is a public constant and survives.
+        BondAssemblyError::TooManyFundingInputs { max, .. } => format!(
+            "persona funding is fragmented across more than {max} spendable              outputs — more than one bond post can carry"
+        ),
         BondAssemblyError::OutputNotYetDrained { .. } => {
             "a persona funding output is not yet drained into the reference tree; \
              wait for the tree to catch up and retry"
@@ -213,6 +219,13 @@ fn preflight_error(e: &BondAssemblyError) -> FirstStakeError {
         | BondAssemblyError::ReferenceResyncing { .. }
         | BondAssemblyError::OutputNotYetDrained { .. } => {
             FirstStakeError::Funding(funding_refusal_detail(e))
+        }
+        // Its own arm, because BOTH standing buckets misdiagnose it
+        // (rule 82): "fund and retry" makes fragmentation worse, and
+        // "corrupt state" is false — the funding is intact, there is just
+        // more of it than one bond post's vin headroom carries.
+        BondAssemblyError::TooManyFundingInputs { max, .. } => {
+            FirstStakeError::FundingFragmented { max: *max }
         }
         _ => FirstStakeError::State(funding_refusal_detail(e)),
     }
@@ -320,6 +333,25 @@ pub enum FirstStakeError {
     /// P-scan catch up, then retry.
     #[error("first-stake funding not ready: {0}")]
     Funding(String),
+    /// The persona's spendable funding is fragmented across more than the
+    /// per-transaction vin headroom
+    /// ([`MAX_RETENTION_FUNDING_INPUTS`](super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS))
+    /// — W1-clean, and NEITHER standing remedy applies: the funding is
+    /// intact (not [`Self::State`]) and funding more makes it worse (not
+    /// [`Self::Funding`]). The bond sweep must consume everything (GF-4b),
+    /// so it refuses rather than silently bonding a subset; no
+    /// consolidation verb exists yet for un-bonded persona funding, so the
+    /// actionable half is avoidance — do not split persona funding across
+    /// more `stake_in` transfers than the headroom. Carries the headroom
+    /// (a public constant), never the wallet's record count (P-activity
+    /// volume, the redacted class).
+    #[error(
+        "persona funding is fragmented across more than {max} spendable outputs —          more than one bond post can carry; consolidate before retrying          (avoid splitting persona funding across more than {max} stake_in transfers)"
+    )]
+    FundingFragmented {
+        /// The per-transaction funding-input headroom (public constant).
+        max: usize,
+    },
     /// A wallet-state read/decode failed **before** the durable point
     /// (pending seal, pscan seal, persona id, funding arithmetic) —
     /// W1-clean like a funding refusal, but **not** one: funding cannot fix
@@ -733,6 +765,10 @@ where
             .checked_add(fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;
 
+        // RefuseTooMany: the bond post's consume-everything semantics
+        // (GF-4b structural emptiness) forbid a silent subset, and the post
+        // carries its own bond vin inside the consensus vin cap — see
+        // `MAX_RETENTION_FUNDING_INPUTS`.
         let selection = sweep_funding_outputs(
             pruning_landed,
             &funding_records,
@@ -740,6 +776,7 @@ where
             &reserved,
             required,
             reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )?;
         Ok((selection, reference, snapshot_generation))
     }

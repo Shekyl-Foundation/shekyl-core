@@ -85,6 +85,11 @@ Staking:
   drain <amount>                      Move staking funds back to this wallet
                                       (fee and destination are automatic; no
                                       flags exist)
+  unstake                             Post the permanent exit for the staked
+                                      bond (irreversible; confirms first)
+  collect_unstaked                    Collect the released exit funds back
+                                      into this wallet (one pass at a time;
+                                      the reply says what remains)
   chain_health                        Show daemon/chain health (separate conn)
 
 Proofs (multi-word [message] binds into the proof; the verifier must
@@ -269,6 +274,8 @@ pub fn repl(
                     ResolvedCommand::StakeIn { amount } => staking::cmd_stake_in(&rpc, amount),
                     ResolvedCommand::DrainBalance => staking::cmd_drain_balance(&rpc),
                     ResolvedCommand::Drain { amount } => staking::cmd_drain(&rpc, amount),
+                    ResolvedCommand::Unstake => staking::cmd_unstake(&rpc),
+                    ResolvedCommand::CollectUnstaked => staking::cmd_collect_unstaked(&rpc),
 
                     // Fees (WI-RPC-1 surface)
                     ResolvedCommand::Fee {

@@ -219,10 +219,12 @@ dispatches `verify_unbond_bond_post`, so `/submit_transaction` **accepts** a
 well-formed `Unbond`. `Rebond` and `HoldingsUpdate` fact sets remain
 deliberately unbuilt (rule 21: no producer) and are not on arm #2's trigger
 path, so the blocker is discharged for everything arm #2 needs. **Still
-blocking: the wallet-side unbond entry** — nothing dispatches the assembled
-bytes, so arm #2's confirmed-`Unbond` trigger still cannot be produced through
-a production path, and the armed settlement-epoch override now rides that entry
-alone rather than "whichever lands last". Arm #3's production-discharge leg, by
+blocking: the wallet-side unbond entry** — the dispatch seam exists as of PR-B
+(`Engine::submit_unbond`, `pub(crate)`, and the daemon walk has produced a
+confirmed `Unbond` on a regtest chain through it), but no user-facing entry
+reaches it, so arm #2's confirmed-`Unbond` trigger still cannot be produced
+through a user-reachable path, and the armed settlement-epoch override now
+rides that entry alone rather than "whichever lands last". Arm #3's production-discharge leg, by
 contrast, needs no post at all and **LANDED 2026-07-19**
 (`e2e_arm3_phantom_slot_collected_at_open`: the SA-DQ-3 persist-then-no-broadcast
 crash against the live chain, collected by the production open; SHEKYLD_BIN

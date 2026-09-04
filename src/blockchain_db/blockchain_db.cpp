@@ -244,13 +244,6 @@ void BlockchainDB::init_options(boost::program_options::options_description& des
   command_line::add_arg(desc, arg_db_salvage);
 }
 
-void BlockchainDB::pop_block()
-{
-  block blk;
-  std::vector<transaction> txs;
-  pop_block(blk, txs);
-}
-
 void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& txp, uint64_t block_height, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
 {
   const transaction &tx = txp.first;
@@ -559,21 +552,48 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
               : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
         else
-          continue;
+          // CEN-L11: unreachable — CEN-H12/F8 make txout_to_tagged_key the sole
+          // accepted output type on both the relay and connect paths. Reaching
+          // here means an unvalidated output arrived at the write path, and a
+          // `continue` would drop it from the curve tree: deterministically,
+          // permanently unspendable, with no verify-time twin to notice. Skips
+          // on this path are silent by construction, so it aborts instead.
+          throw DB_ERROR(("curve-tree leaf: unsupported output target (variant "
+            + std::to_string(vout.target.index()) + ") at vout index " + std::to_string(i)
+            + " of tx " + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + " at DB add (validated at admission?)").c_str());
 
         if (i >= tx.ct_signatures.outPk.size())
-          continue;
+          // CEN-L11: unreachable — four `outPk.size() != vout.size()` gates
+          // cover coinbase and non-coinbase on both paths (cryptonote_core.cpp,
+          // cryptonote_format_utils.cpp, blockchain.cpp x2). Same reasoning.
+          throw DB_ERROR(("curve-tree leaf: outPk shorter than vout at DB add (vout index "
+            + std::to_string(i) + ", outPk size " + std::to_string(tx.ct_signatures.outPk.size())
+            + ", vout size " + std::to_string(tx.vout.size()) + ", tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + ") (validated at admission?)").c_str());
         ct::key commitment = tx.ct_signatures.outPk[i].mask;
 
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
-        if (shekyl_construct_curve_tree_leaf(
+        // CEN-L11: the verdict is checked, not discarded. construct_leaf fails
+        // only when the output key or the commitment is not a canonical,
+        // prime-order, non-identity point — and both are gated upstream on
+        // both paths (shekyl_check_output_keys via check_outs_valid;
+        // shekyl_check_commitment_masks via check_commitment_mask_valid, with
+        // the coinbase legs in prevalidate_miner_transaction). So this is
+        // unreachable, and it aborts rather than silently omitting the output.
+        if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))
-        {
-          add_pending_tree_leaf(mat, this_output, leaf);
-          add_block_pending_addition(bh, this_output, mat);
-        }
+          throw DB_ERROR(("curve-tree leaf construction failed at DB add (vout index "
+            + std::to_string(i) + " of tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + "; output key or commitment is not a canonical prime-order point)"
+            " (validated at admission?)").c_str());
+
+        add_pending_tree_leaf(mat, this_output, leaf);
+        add_block_pending_addition(bh, this_output, mat);
       }
     };
 
@@ -664,8 +684,39 @@ void BlockchainDB::set_hard_fork(HardFork* hf)
   m_hardfork = hf;
 }
 
+bool BlockchainDB::pop_target_allowed(uint64_t target_tip_height) const
+{
+  const uint64_t watermark = get_archival_prune_watermark_epoch();
+  if (watermark == 0)
+    return true;
+  return target_tip_height >= shekyl_archival_epoch_open_height(watermark);
+}
+
 void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 {
+  // C2-R1b-Q1c belt: the single funnel every pop writer traverses. Refuse
+  // any pop landing below the open height of the oldest fully-retained
+  // epoch -- past it, the retention prune has destroyed (un-journaled) the
+  // accrual rows a later re-close would range-sum, and the daemon would
+  // silently reconstruct wrong epoch state. The floor comes from the
+  // prune's own persisted receipt (get_archival_prune_watermark_epoch),
+  // never from the current tip: a tip-derived floor retreats with the tip
+  // and reopens the hole across iterated pops or a restart.
+  {
+    const uint64_t h = height();
+    const uint64_t resulting_tip = h >= 2 ? h - 2 : 0;
+    if (!pop_target_allowed(resulting_tip))
+    {
+      const uint64_t watermark = get_archival_prune_watermark_epoch();
+      throw DB_ERROR((std::string("pop refused at the prune watermark: popping to height ")
+        + std::to_string(resulting_tip) + " would cross below epoch "
+        + std::to_string(watermark) + "'s open height "
+        + std::to_string(shekyl_archival_epoch_open_height(watermark))
+        + ", where the retention prune has already destroyed the rows a "
+          "revert needs; remedy: resync this node").c_str());
+    }
+  }
+
   blk = get_top_block();
 
   // Capture the height of the block being removed BEFORE remove_block()
