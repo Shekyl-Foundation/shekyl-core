@@ -82,6 +82,24 @@
   exception for the total-shaped exit sweep is recorded in
   `PRINCIPAL_STAKE_LIFECYCLE.md` and scoped by the `TerminalExitObserved`
   witness type.
+- **C2-R0 phase 2 — the census learns to say what is missing.** The
+  consensus census gains **§12, the GAP register**: 8 `GAP-` rows (registered
+  at birth) for consensus rules with no site — 7 grounded from the phase-1
+  corpus study ([`C2_R0_PHASE1_CANDIDATES.md`](design/C2_R0_PHASE1_CANDIDATES.md),
+  landed as the frozen input) and 1 steering-routed carry (GAP-8: the two
+  supply clamps encode **opposite terminal emission policies**, documented
+  on both sides without either comment seeing the other — the register's
+  worked example; resolution rides FL-R12′). Six candidates ground as
+  **present-already** and are recorded with pointers (C3→R3, C4→the
+  unlock_time triple-divergence, C5→no peer-time mechanism, C9→R4,
+  C11→bootstrap arms, C12→R1b). GAP rows sit outside the §3 denominator —
+  site-anchored sums must not absorb siteless rows. External evidence was
+  spot-checked at primary sources before entering any row (the Qubic
+  campaign figures verify verbatim, with the +461.8/−460.0
+  separate-ledger-lines decompression recorded). §10's R2 batch now carries
+  Rick's 2026-09-03 **deferral** in the queue row itself (resumes on
+  FL-R12′; the red-test conjunct is already discharged), with pointers on
+  all 8 member rows.
 
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**
@@ -124,19 +142,22 @@
   `pop_block` overload. `check_consensus_invariants.sh` gains the
   watermark single-writer/no-revert invariant [6/6].
 
-- **DRS-P0f row coverage complete — and it found an S0.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **95
-  CHECKED-CONFORMANT, 5 DIVERGENT, 2 failed closed** (CEN-L11 with L12
-  coupled; CEN-D2 at S1 with CEN-D1 coupled — the PoW-failure sentinel fails
-  open at difficulty 1; CEN-B5's rule-71 FAKECHAIN skip; CEN-M8's S0 was
-  found, ruled FIX, fixed by PR #602, and re-verified with G4/J26 promoted),
-  each with
+- **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
+  register now disposes **all 102** bucket-1/2 census rows: **97
+  CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-L11 with L12
+  coupled; CEN-B5's rule-71 FAKECHAIN skip). **Both S-graded findings ran the
+  full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
+  with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
+  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
-  **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
+  **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
-  tolerance means a tx whose proof failed at pool admission can connect with
-  verification skipped; the exact required check exists unused on that path.
-  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix = PR #602. Detail:
+  tolerance meant a tx whose proof failed at pool admission could connect with
+  verification skipped, while the exact required check sat unused on that path.
+  Ruled FIX per the §7.2 ladder and **fixed by PR #602** (merged): the skip is
+  now hash-gated and CEN-M8 with CEN-G4/J26 is re-reviewed CHECKED-CONFORMANT.
+  Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The
