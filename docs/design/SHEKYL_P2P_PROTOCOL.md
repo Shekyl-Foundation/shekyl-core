@@ -2527,39 +2527,49 @@ inventing a consensus constant from a p2p round.
 > path a batch-sized bound. *An earlier version of this table gave both
 > commands the same disposition and would have done one or the other.*
 >
-> **Its bound is the batch this node asked for.** `NOTIFY_REQUEST_GET_OBJECTS`
-> (2003) carries `std::vector<crypto::hash> blocks` (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
-> receiver **already knows the cardinality it requested** — the cap is that
-> count times the per-block bound, and it needs nothing from the peer.
-> §1's fourth check again: the bound comes from this node's own record of what
-> it sent, not from a claim in the response. **A response to a request this node
-> did not make has a batch size of zero**, which the same rule rejects without a
-> separate mechanism.
+> **Its resource bound is the byte budget; the requested cardinality survives
+> as correctness.** `NOTIFY_REQUEST_GET_OBJECTS` (2003) carries
+> `std::vector<crypto::hash> blocks`
+> (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
+> receiver **already knows the count it requested** — *the original form of
+> this passage made that count times the per-block bound the cap; that form
+> is retired by the dated correction above.* What the count still buys, at
+> the handler: **a response carrying more entries than requested is wrong
+> regardless of size**, and **a response to a request this node did not make
+> has a requested count of zero**, which the same check rejects without a
+> separate mechanism. §1's fourth check holds in its new role — the
+> correctness check comes from this node's own record of what it sent, not
+> from a claim in the response.
 
-**Enforced in two layers, because the ingress seam cannot see per-connection
-state — and it does not need to.** `BucketReader`'s hook is
-`fn(u32) -> u64` (`rust/shekyl-levin/src/reader.rs:177-185`), command-only, and
-the requested cardinality lives in per-connection handler state. Rather than
-widen the framing seam to carry connection state — which would push protocol
-policy into the framing crate, against `25-rust-architecture` — the bound
-splits along the boundary that already exists:
+**One resource bound at ingress, one correctness check at the handler — no
+longer two bounds.** `BucketReader`'s hook is `fn(u32) -> u64`
+(`rust/shekyl-levin/src/reader.rs:177-185`), command-only; with the byte
+budget the ingress cap is static and needs no per-connection state, and the
+requested cardinality — which does live in per-connection handler state —
+survives only as a correctness rule. Nothing widens the framing seam to carry
+connection state, which would push protocol policy into the framing crate
+against `25-rust-architecture`. *The original two-layer split (two resource
+bounds) is retired with the cardinality cap it existed to serve — the dated
+correction above; what remains splits by KIND:*
 
 | Layer | Bound | Why it fits there |
 | --- | --- | --- |
 | **Ingress** (`fn(u32) -> u64`) | **the byte budget** — a static value, since PWD-B3's cap for 2004 is byte-derived rather than cardinality-derived | Expressible in the existing signature *without* consensus state, and it bounds the allocation before any handler runs. *Originally stated as `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT × entry_max`; that form is retired with the cardinality bound it came from* |
 | **Handler** (per connection) | the **exact** requested cardinality | A **correctness** check — a response carrying more entries than we asked for is wrong regardless of size — and no longer a resource bound, which the ingress layer now carries alone |
 
-**The static layer is what makes the claim safe**; the per-request layer is what
-makes it tight. *An earlier version of this row asserted only the tight bound,
-which the framing seam cannot express — so it named a cap that nothing could
-enforce at ingress.* The multiple absorbs the receiver being behind the tip;
-it is a consensus-adjacent constant and is **named as owed to the consensus
-lane**, not invented here.
+**The static budget is what makes the bound safe**; the per-request check is
+what makes over-delivery detectable. *An earlier version of this passage
+asserted only a tight cardinality cap, which the framing seam cannot express
+— it named a cap nothing could enforce at ingress — and its closing sentence
+gave the tip-lag multiple a role in 2004's bound. Both are retired: `margin`
+belongs to the announce path (2008) alone, per the dated correction above,
+and nothing in 2004's byte budget is owed to the consensus lane — the budget's
+own value is owed to sync measurements instead (FOLLOWUPS).*
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim |
-| A static ceiling picked to survive expected growth | The same | **Refused.** It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does |
+| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted — for the single-block announce (2008), where it is `entry_max`.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim. *Scope narrowed by the 2026-09-04 correction: 2004's batch does NOT take a cardinality multiple of this bound; it takes the byte budget of the Ruled block below* |
+| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's own plaintext ceiling with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
 | Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
 
 > **Two inputs this round does not have, and the ruling says so rather than
@@ -3093,6 +3103,46 @@ special-cases them; they drop because the carve-out does not reach them.
 **PWD-B7 states that as a rule** — form failures are context-free, universal,
 and the sender chose to send those bytes — so a future condition is decidable
 rather than inheriting whatever the default happens to be.
+
+> **Corrected 2026-09-04 (review finding, verified at source): omission does
+> not identify *form* — it identifies everything that is not one of the four
+> carve-outs, and that set includes our own failures.** Two paths return false
+> with the flag unset while the failure describes **our own state**, not the
+> input: `insert_key_images`' pool-bookkeeping invariant
+> (`src/cryptonote_core/tx_pool.cpp:785-787` — a `CHECK_AND_ASSERT_MES` whose
+> message begins "internal error"; reached from `add_tx` at `:337`/`:496`) and
+> `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
+> transaction to txpool"). Both fall through the same
+> `!tvc.m_no_drop_offense` gate
+> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:928-932`) and
+> disconnect the sender — **our own storage throwing severs an innocent
+> peer**, the exact outcome the rule forbids. The ruling stands; the
+> mechanism does not satisfy it.
+>
+> **Implementation action (rides PWD-B7 into the implementing PR; P2P-3, per
+> this round's charter):** the drop decision must key on an **affirmative**
+> input-attributable verdict, not on flag-absence. The verdict surface is
+> tri-state — *attributable form failure* (drop) / *policy-or-state
+> rejection* (no drop) / *internal failure* (no drop, loud log) — typed so
+> that an unset or newly added arm defaults to **no drop**: mis-classifying a
+> form failure as internal keeps one hostile connection alive for PWD-B1's
+> token bucket to charge, while the opposite default partitions the network
+> on our own bugs. A boolean whose absence means "droppable" is the unsound
+> surface; the type is the gate. The FOLLOWUPS queue carries this action.
+>
+> **The announce path, checked rather than assumed (same review round).** The
+> parse arm of `handle_notify_new_fluffy_block`
+> (`cryptonote_protocol_handler.inl:554-566`) is genuine *form* —
+> input-describing, universal — and its drop stands. The size arm
+> (`check_incoming_block_size`, `:545-549`) is **state-describing**: it
+> compares the blob against **our** current weight limit + 100
+> (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
+> heights ahead can legally exceed ours (how fast is the consensus lane's
+> derivation — the same `margin` question, owed above). The false-drop window
+> is narrow in practice — the announce blob is header + tx hashes, far
+> smaller than the weight the limit bounds — but the test is on the wrong
+> axis for a drop under this rule, so the same implementation action carries
+> it: decline to process, do not sever.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
