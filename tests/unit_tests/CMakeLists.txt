@@ -116,6 +116,7 @@ set(unit_tests_sources
   checkpoint_uniformity.cpp
   fork_choice_vectors.cpp
   reorg_watermark.cpp
+  sync_orphan_arm.cpp
   archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
   archival_claim_source_rpc.cpp

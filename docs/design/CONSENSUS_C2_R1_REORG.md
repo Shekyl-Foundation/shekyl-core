@@ -1361,11 +1361,30 @@ pre-fix tree (it failed closed on the missing marker), green after.
 Suites on the built tree: core_tests 39/39; unit_tests 1122 OK with
 the one known-environmental `ban.file_banlist` port collision (live
 daemons from sibling sessions on this box; CI arbitrates, as in the
-three prior rounds). No behavioral rig can drive
-`handle_response_get_objects` today — that gap is recorded as its own
-FOLLOWUPS row with the first two vectors named for whoever builds the
-rig, rather than being papered over by the structural gate (a seal is
-not coverage; the gate pins the arm's shape, not its behavior).
+three prior rounds).
+
+**The behavioral rig exists (built in-round after Rick rejected the
+"no rig" FOLLOWUPS row — "no rig exists" is unbuilt work, not a named
+blocker; steering's five-method enumeration held).**
+`tests/unit_tests/sync_orphan_arm.cpp` drives `try_add_next_blocks`
+directly over a scripted core (the repo's `IN_UNIT_TESTS` seam, the
+same pattern `blockchain.h`/`tx_pool.h` already carry) and a recording
+p2p endpoint. The race's observable is reproduced deterministically —
+`have_block` answers true at the span pre-check and the scripted add
+returns the orphan verdict, no timing needed. **Two vectors, and the
+pair pins the SPLIT the ruling made:** (1) orphan ⇒ no drop, no
+host-fail, batch cleaned, span removed for re-request — observed RED
+on the pre-fix arm (it severed) and green after; (2) the
+`:1407` bookkeeping-mismatch arm keeps its teeth — self-inconsistent
+peer span data draws its consequence before any add runs, green on
+BOTH trees (it guards against over-correcting: a fix that stopped
+punishing everywhere would pass vector 1 and fail this). Vector 2's
+oracle was hardened during construction: its first green came from a
+downstream skip-path drop, not the mismatch arm — the confound was
+removed (non-empty scripted history) and the bookkeeping planted
+through the queue's real fill path, so the assertion now sits on the
+defect's axis. The structural [7/7] gate stays as the cheap always-on
+pin; the rig is the behavioral one.
 
 ## 6. Round log
 
