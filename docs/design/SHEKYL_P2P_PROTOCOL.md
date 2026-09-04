@@ -2720,8 +2720,13 @@ placement is the whole point. `queue_fluff` fans one arrival out to every
 destination, so a single flooding source fills *N* queues; dropping at the
 destination discards transactions that other peers may never see, while
 refusing admission pushes the cost back onto the connection that caused it —
-where **PWD-B1's token bucket is already charging it**. The two rows compose:
-B1 makes the flood expensive per connection, B12 makes it bounded in memory.
+where **PWD-B1's token bucket charges it** — which is true only because PWD-B1
+covers the **notify** dispatch surface as well as the invoke one. *An earlier
+version of this row asserted that composition while PWD-B1 was scoped to the
+four node-server invoke routes; `NOTIFY_NEW_TRANSACTIONS` does not enter
+through any of them, so a peer could have filled this queue without spending a
+single token.* With B1 corrected, the two rows compose: B1 makes the flood
+expensive per connection, B12 makes it bounded in memory.
 
 **Conceded.** A bounded batch means a burst of transactions takes more than one
 flush to propagate, which slightly lengthens the tail of propagation under
@@ -2795,10 +2800,10 @@ precisely PWD-T5's adversary, and neither PWD-T6 nor PWC-E11 reaches it.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Per-connection token bucket charged at *dispatch*, before the request is decoded** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced — **and the one who sends malformed ones** | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
+| **Per-connection token bucket charged at *every* dispatch — invoke and notify alike — before the request is decoded** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced — **and the one who sends malformed ones** | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
 | The same bucket, charged inside the handlers | The same | **Refused — it would not have bounded the work.** See the placement rule below |
 | Global rate limit across all peers | The same | **Refused.** One peer's flood then throttles every honest peer — the attacker buys a shared outage with one connection |
-| Rely on per-host connection caps (PWD-B9) | The same | **Refused as a substitute, kept as a complement.** B9 bounds how many *connections* a host gets; it says nothing about the rate on a connection it is entitled to |
+| Rely on per-host connection caps | The same | **Refused as a substitute, and the cap is not PWD-B9's.** The inbound cap is **PWC-E11** (`has_too_many_connections`, public zone only); **PWD-B9 is outbound slot diversity** and does not face this adversary at all. Even taking E11 at its best, a *concurrency* cap says nothing about the **rate** on a connection a host is entitled to. *An earlier version of this cell named B9, contradicting the corrected paragraph above and making B9 mean two things in one document.* |
 
 **Conceded.** A token bucket adds per-connection state, and a peer that is
 merely fast — a well-connected node during a burst — is throttled the same as
@@ -2825,6 +2830,21 @@ free: the same `COMMAND::ID == command` test that selects the handler can
 charge the bucket first. *An earlier version of this row placed the bucket on
 "the four invoke entry points", meaning the handlers — bounding the cheap half
 and calling it resource exhaustion protection.*
+
+> **And the surface is *every* dispatch, not the four p2p invokes.** `HANDLE_NOTIFY_T2`
+> is structurally the same macro — `is_notify && NOTIFY::ID == command`, then
+> the same `buff_to_t_adapter`
+> (`contrib/epee/include/storages/levin_abstract_invoke2.h:259-261`) — so the
+> command id is known at exactly the same point and the parse happens in
+> exactly the same place.
+
+**Scoping the bucket to the four invoke routes would have left the entire
+cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+the blocks and the transaction batches, i.e. **the large payloads and the
+flood vector PWD-B12 exists to bound.** *A second earlier version made that
+mistake, and it is the same one twice: naming the surface I had been reading
+rather than the surface the property needs.*
 
 **Four parameters are owed, not one, because a bucket is not defined by its
 refill rate.** Two conforming implementations given only a rate would diverge
@@ -2949,10 +2969,22 @@ staleness against how much establishment-time spread the window has to cover.
 > (`rust/shekyl-relay-privacy/src/schedule.rs:741-753`), which would change
 > timed-sync's frequency by 12× while claiming to change only its phase.
 
-**Falsifier.** **Reopen if measured phase correlation between two connections
-of the same node stays distinguishable after jitter** — the property is
-directly measurable on the Q12-D6a rig, so this falsifier is expected to be
-run, not merely stated.
+**Falsifier — and "stays distinguishable" is not one, so it is made concrete
+here.** A reopening criterion a reader cannot recognise is the shape §0
+forbids, and the owed `min`/`jitter` split cannot be derived against an
+undefined target.
+
+> **Metric: the pairwise circular correlation of send phases, taken over the
+> emission times of two connections of the same node, tested against the
+> uniform null.** Reopen if that correlation is distinguishable from the null
+> at the sample budget a path observer plausibly has.
+
+**The threshold and the sample budget are owed together with the `min`/`jitter`
+split, in one item and not two**, because they are one measurement: the window
+is chosen so the correlation falls below the threshold, so neither number can
+be picked without the other. Run on the Q12-D6a rig, whose establishment-time
+clustering (`m_connections_maker_interval`, 1 s) is the condition the window
+has to cover.
 
 ### Cluster B second sub-round disposition
 
