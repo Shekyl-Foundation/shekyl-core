@@ -39,8 +39,11 @@ fn probe_points() -> Vec<(&'static str, [u8; 32])> {
     identity[0] = 1;
     out.push(("identity", identity));
 
-    // All-zero bytes: not a valid compressed point encoding.
-    out.push(("all zero", [0u8; 32]));
+    // All-zero bytes decode fine — y = 0 is a canonical encoding of a
+    // small-order point (x^2 = -1) — so this probe is rejected for TORSION,
+    // not for being undecodable. Named precisely because the distinction is
+    // the whole point of the gate: on-curve is not the bar, prime-order is.
+    out.push(("all zero (canonical small-order)", [0u8; 32]));
 
     // All-ones: y above the field modulus — non-canonical.
     out.push(("all ones (non-canonical y)", [0xffu8; 32]));

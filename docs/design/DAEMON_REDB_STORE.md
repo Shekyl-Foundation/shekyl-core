@@ -33,9 +33,9 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > default, and demotes the C++ from *trusted* oracle to a differential
 > reference for rules that are **both** ratified on record **and** carry an
 > **affirmative conformance record** (**CSR-3a**). Two things are insufficient:
-> ratification alone — CEN-L11 is bucket-1 ratified with an implementation that
-> silently omits an accepted output, so a bucket-only rule would score
-> reproducing that defect as correctness — and *absence of a recorded
+> ratification alone — CEN-L11 was bucket-1 ratified with an implementation
+> that silently omitted an accepted output (fixed 2026-09-04), so a bucket-only
+> rule would have scored reproducing that defect as correctness — and *absence of a recorded
 > divergence*, which means **unreviewed**, not conformant — stated when the
 > register was explicitly incomplete, and still the rule now that coverage is
 > complete over the bucket-1/2 set: the set itself grows (bucket promotions
@@ -90,7 +90,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
-**DRS-0 is blocked** until **DRS-P0** lands. The register's S-graded condition is **satisfied as of 2026-09-03**: the S0 (CEN-M8, PR #602) and the S1 (CEN-D2/D1, PR #604) are both fixed, merged and re-verified, so no S-graded divergence remains. The residual divergences — CEN-L11/L12, and CEN-B5's rule-71 FAKECHAIN skip (census R9 owns) — carry no S-grade and do not gate DRS-0.
+**DRS-0 is blocked** until **DRS-P0** lands. The register's S-graded condition is **satisfied as of 2026-09-03**: the S0 (CEN-M8, PR #602) and the S1 (CEN-D2/D1, PR #604) are both fixed, merged and re-verified, so no S-graded divergence remains. The residual divergence — CEN-B5's rule-71 FAKECHAIN skip (census R9 owns) — carries no S-grade and does not gate DRS-0. CEN-L11/L12 were fixed and promoted 2026-09-04.
 
 ---
 
@@ -123,7 +123,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | # | Shekyl is better when … | Mission | Lands by |
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
-| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 is bucket-1 ratified with an implementation that silently omits an accepted output, so a digest match there records reproduction of the defect. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence) | Security | DRS-P0 → C |
+| **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence) | Security | DRS-P0 → C |
 | **A3** | Known durable-state **warts** are call-graph-traced; default **RECORD-AND-SPECIFY** (countermand 2026-09-01; FIX-IN-CPP only where the defect blocks the C++ from serving as an interim oracle for a *ratified, conformance-checked* row) (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |

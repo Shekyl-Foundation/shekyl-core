@@ -63,7 +63,7 @@ ruling cites evidence rather than sentiment:
 
 | Census row / finding | What it establishes |
 | --- | --- |
-| **CEN-L11** (b1) | The leaf-**construct** verdict is not checked: a false return at `blockchain_db.cpp:570–576` (and the `continue` arms at :562–565) **silently omits an accepted output from the curve tree**, with no verify-time twin. Deterministic, and a permanently unspendable output. |
+| **CEN-L11** (b1) | *(Historical — **fixed 2026-09-04**, see §5.4.1.)* The leaf-**construct** verdict was not checked: a false return, and two `continue` arms beside it, **dropped an output from the curve tree** with no verify-time twin. Re-walked at the fix: all three arms were unreachable through admission, so this was a latent silent-failure surface rather than the live fund-loss path recorded here. They now abort. |
 | **CEN-B3** (b4) | `HardFork::add`'s **reject verdict is discarded** at the DB call site; the voting machinery runs on every connect and is inert. |
 | **CEN-L1** (b4) | Block-connect key-image uniqueness is enforced **solely** as an LMDB `MDB_NODUPDATA` exception caught two frames up; the pre-DB `check_for_double_spend` is **dead**. |
 | **CEN-L15** (b3) | A dead Monero-v4 RCT-era dispatch arm still sits on the write path (`if (blk.major_version >= 4)`, live major is 1). |
@@ -160,7 +160,7 @@ is ruled.
 | CEN-L8 | 1 | Epoch close at settlement boundary; accrual overflow aborts | **S-ARCH** | ratified — **"the DB is the enforcement site"** |
 | CEN-L9 | 1 | Slash processing per height; fatal on interval-decision failure | **S-ARCH** | ratified |
 | CEN-L10 | 1 | Segment freeze; registry row CREATE-only (`MDB_NOOVERWRITE`) | **S-ARCH** | ratified; redb needs an explicit CREATE-only equivalent |
-| CEN-L11 | 1 | Curve-tree growth; **construct verdict unchecked → silent omission** | **S-CURVE** | ratified spec, defective implementation — §0.1 |
+| CEN-L11 | 1 | Curve-tree growth; construct verdict now checked → **fail-closed** (was a silent omission; fixed 2026-09-04) | **S-CURVE** | ratified spec, implementation conformant since the fix — §5.4.1 |
 | CEN-L12 | 1 | Deferred-insertion maturity **is** the spend-maturity rule (60/10) | **S-CURVE** | ratified; third leg of the unlock_time divergence |
 | CEN-L15 | 3 | Dead Monero-v4 RCT accumulation arm on the write path | S-CHAIN-W | delete, do not port |
 | *(post-map mint)* C2-R1b-Q1c | 2 | **Prune watermark** (`m_properties` key `archival_prune_watermark_epoch`): the prune's monotonic same-txn receipt; `pop_block` refuses below its epoch's open height; exempt from every revert (F-2) | **S-CHAIN-W** (pop path) | Minted 2026-09-03, after this map landed — named here so the DRS decomposition carries the floor with the pop path; the refusal predicate (`pop_target_allowed`) must survive any store re-home at the same single-funnel property |
@@ -324,7 +324,10 @@ rule is *specified and ratified on record* — they say nothing about whether th
 C++ **implements** the spec it was ratified against. Those are different axes,
 and collapsing them is how a defect gets laundered into correctness evidence.
 
-**CEN-L11 is the proof that the bucket-only rule is unsound**, and this document
+**CEN-L11 is the proof that the bucket-only rule is unsound** — it was
+bucket-1 ratified while its implementation silently dropped an accepted output
+(fixed 2026-09-04, but the point is that ratification alone never showed it) —
+and this document
 already carried the counterexample two sections above its own rule: it is
 **bucket 1** (ratified spec — [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md),
 [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md)) *and* its implementation silently
@@ -626,8 +629,12 @@ enough that the Rust implementation gets it right, and fixed in C++ only where
 the defect blocks the C++ from serving as a *bucket-1/2* oracle in the interim.
 Fixing C++ that is scheduled for deletion is the debt rule 20 and
 [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) exist to
-prevent. CEN-L11 is the test case: a live FOLLOWUPS row, a ratified spec, and a
-defective implementation on a file being deleted.
+prevent. CEN-L11 was the test case: a live FOLLOWUPS row, a ratified spec, and a
+defective implementation on a file being deleted. It was ultimately fixed in
+place (2026-09-04) because the change is three aborts and their falsifier, and
+leaving a silent surface in the oracle the rewrite is differentially checked
+against costs more than the debt it avoids — the narrow §6.4 FIX-IN-CPP
+reasoning, recorded here so the rule's boundary stays visible.
 
 ### 5.6 DRS-D4 — substantially discharged
 
@@ -644,8 +651,9 @@ defective implementation on a file being deleted.
 **Corrected 2026-09-02 (CSR-3a) — the clause needed extending, not just
 propagating.** The census's hedge was the right direction and much better than
 DRS's unhedged phrasing, which is why §5.4 reached for it. But ratification is
-**necessary, not sufficient**: CEN-L11 is bucket-1 ratified with an
-implementation that does not meet its spec. The census header now carries the
+**necessary, not sufficient**: CEN-L11 was bucket-1 ratified with an
+implementation that did not meet its spec (fixed 2026-09-04; the argument for
+the conformance condition stands on the fact that the gap existed at all). The census header now carries the
 conformance condition as well, so the rewrite's specification input cannot be
 cited for the unsafe rule.
 
