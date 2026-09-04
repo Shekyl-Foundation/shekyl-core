@@ -145,6 +145,30 @@ early. Dispositions:
   — the amendment concerns the floor's composition, FL-R17 concerns how
   many rates sit above it. Two open signatures, separate decisions.
 
+## Review round 7 (maintainer, 2026-09-03): FL-R17 SIGNED — three tiers
+
+**Signed in-channel, this session, direct message** ("sign it as three
+tier") — the provenance class the FL-R12′ episode established as the
+consumable one. Rationale as signed: no privacy argument applies to the
+default case, and the non-default case does not significantly degrade
+privacy — a smaller set that is still, arguably, much larger than Monero
+RingCT's ring-16, the de facto standard (the round's arithmetic: the
+smallest tier's anchored set beats ring-16 for any anchor looser than
+~13 minutes at baseline volume). Recorded with the signature:
+
+- §5.5 tier contracts + **standard as the default** (on rule-82
+  failure-mode UX, bounded 4×-floor cost, and shipped GUI behavior —
+  the privacy argument for the default choice explicitly discounted by
+  the maintainer and recorded as such).
+- §4.7 gains the **defaulted 80/15/5 operative model** (×1.25 / ×6.7 /
+  ×20; instrument row added).
+- Candidate (b) rejected with rule-21 reopeners (tier share < 5%;
+  anchor precision beating the ring-16 crossover; FL-D6 work showing
+  single-rate revenue dominance).
+- FL-R4 resolved (confirmed via FL-R17); W8 re-homed as **FL-D7**
+  (fee-rank ordering leak stands under three tiers; ladder-compatible
+  mitigation—intra-tier shuffle—named as a reopener path).
+
 ## Review round 6 (maintainer, 2026-09-03): the honest attack model
 
 The maintainer corrected his own round-5 framing downward, with the
@@ -262,11 +286,8 @@ directly. Dispositions:
    drafted in the row and the oracle matches it; the maintainer signs
    the amended row or corrects the draft. Build authorization is **NO**
    until then (review round 4).
-2. **FL-R17** — rung count reopened (round 5), attack model corrected
-   (round 6): 3-rung (×10–×20 anchored reduction, minority-borne) vs
-   state-computed single rate (×1.0); recommendation a weak lean (b),
-   maintainer records no strong prior; empirical gate = median-dynamics
-   instrument. Independent of the F-1 amendment.
+2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
+   as default (§5.5); single-rate rejected with named reopeners.
 3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
    pending the amended FL-R12′ signature).
 4. **PR** — branch is pushed for review (review round 3); **PR remains

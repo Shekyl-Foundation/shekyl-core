@@ -1046,6 +1046,9 @@ pub fn report() -> FeeLadderReport {
         anchored_reduction("registered 50/40/10", [500, 400, 100]),
         anchored_reduction("sensitivity 70/25/5", [700, 250, 50]),
         anchored_reduction("sensitivity 33/33/33", [334, 333, 333]),
+        // The operative model once standard ships as the default
+        // (FL-R17 signed (a), §5.5): defaulters concentrate in standard.
+        anchored_reduction("defaulted 80/15/5", [800, 150, 50]),
     ];
 
     FeeLadderReport {
