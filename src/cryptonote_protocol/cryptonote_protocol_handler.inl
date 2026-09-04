@@ -301,16 +301,7 @@ namespace cryptonote
 
     if(context.m_state == cryptonote_connection_context::state_synchronizing && context.m_last_request_time == boost::posix_time::not_a_date_time)
     {
-      NOTIFY_REQUEST_CHAIN::request r = {};
-      context.m_needed_objects.clear();
-      m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
-      handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
-      r.prune = m_sync_pruned_blocks;
-      context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
-      context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
-      MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
-      post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
-      MLOG_PEER_STATE("requesting chain");
+      request_chain_history(context);
     }
     else if(context.m_state == cryptonote_connection_context::state_standby)
     {
@@ -694,17 +685,7 @@ namespace cryptonote
     }
     else if( bvc.m_marked_as_orphaned )
     {
-      context.m_needed_objects.clear();
-      context.m_state = cryptonote_connection_context::state_synchronizing;
-      NOTIFY_REQUEST_CHAIN::request r = {};
-      m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
-      handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
-      r.prune = m_sync_pruned_blocks;
-      context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
-      context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
-      MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
-      post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
-      MLOG_PEER_STATE("requesting chain");
+      request_chain_history(context);
     }
 
     // load json & DNS checkpoints every 10min/hour respectively,
@@ -1319,6 +1300,28 @@ namespace cryptonote
     return text;
   }
 
+  //------------------------------------------------------------------------------------------------------------------------
+  template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::request_chain_history(cryptonote_connection_context& context)
+  {
+    // The one chain re-walk entry: clear the dead negotiation, mark the
+    // context synchronizing, and request NOTIFY_REQUEST_CHAIN from the
+    // node's CURRENT short history with a live request time (the idle
+    // kicker's visibility condition). Shared by the fresh-block orphan
+    // arm, on_callback's resume, and the sync-loop orphan arm (C2-R1c
+    // Q3b) -- three hand-written copies of this block were a drift set.
+    context.m_needed_objects.clear();
+    context.m_state = cryptonote_connection_context::state_synchronizing;
+    NOTIFY_REQUEST_CHAIN::request r = {};
+    m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
+    handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
+    r.prune = m_sync_pruned_blocks;
+    context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
+    context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
+    MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
+    post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
+    MLOG_PEER_STATE("requesting chain");
+  }
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::try_add_next_blocks(cryptonote_connection_context& context)
   {
@@ -1565,9 +1568,20 @@ namespace cryptonote
                 return 1;
               }
 
-              // remove the span so other threads can wake up and get it
+              // remove the span so other threads can wake up and get it,
+              // then re-walk the chain DIRECTLY: the pre-orphan
+              // negotiation is dead (its needed-objects window descends
+              // from a chain state we no longer hold), and
+              // request_missing_objects' preconditions assume a live one
+              // -- with the state reset and the span gone, its
+              // nothing-to-request arm answers by dropping the peer,
+              // which is the punishment coming back one layer up. The
+              // shared helper clears the negotiation and requests the
+              // chain from the current tip with a live request time.
               m_block_queue.remove_spans(span_connection_id, start_height);
-              goto skip;
+              context.m_last_response_height = 0;
+              request_chain_history(context);
+              return 1;
             }
 
             TIME_MEASURE_FINISH(block_process_time);

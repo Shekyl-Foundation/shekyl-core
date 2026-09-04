@@ -1346,12 +1346,14 @@ dangling-anchor sweep ride the round-close PR per §5.2.
 The fix landed as ruled, measured as required. The sync orphan arm
 (`cryptonote_protocol_handler.inl`, the in-loop
 `bvc.m_marked_as_orphaned` branch) no longer severs or scores: it logs
-the local-state cause loudly, cleans up, drops the span, and **takes
-the shared back-to-download path (`goto skip` →
-`request_missing_objects`)**, which resumes span-adding if work
-remains and otherwise re-requests the chain from the current tip with
-a live request time; the `:1407` bookkeeping-mismatch drop is
-untouched. **The re-entry is a review correction, owned:** the fix's
+the local-state cause loudly, cleans up, drops the span, and **re-walks the chain directly through the shared
+`request_chain_history` helper** (round 2's final form: the dead
+negotiation is cleared, the context marked synchronizing, and
+NOTIFY_REQUEST_CHAIN sent from the node's current short history with a
+live request time — the idle kicker's visibility condition); the
+`:1407` bookkeeping-mismatch drop is untouched. The helper retired a
+three-copy drift set (the fresh-block orphan arm and `on_callback`'s
+resume now call it too). **The re-entry is a review correction, owned:** the fix's
 first form ended in a bare `return 1` on my claim that "the sync
 machinery re-requests" — an untested assertion phrased as observation.
 Bugbot's review-round finding (HIGH, confirmed at source) showed the
@@ -1492,6 +1494,25 @@ pin; the rig is the behavioral one.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — Review round 2 on #612: one Bugbot HIGH, valid,
+  addressed — and it re-shaped the fix into its final, cleaner form.
+  The goto-skip re-entry carried the dead negotiation with it (stale
+  `m_needed_objects` + high `m_last_response_height`), so
+  `request_missing_objects` resumed the DETACHED window instead of
+  re-walking; and with the state properly reset, that function's
+  nothing-to-request precondition answers by DROPPING the peer — its
+  contract assumes a live negotiation, so delegating to it was the
+  wrong shape entirely. Final form: the arm re-walks DIRECTLY through
+  a new shared helper (`request_chain_history`) that unifies what were
+  three hand-written copies of the chain-request block (the fresh-block
+  orphan arm, `on_callback`'s resume, and now the sync orphan arm) — a
+  drift set retired, net-negative on the legacy sites. The rig's
+  vector 1 now seeds a LIVE mid-sync context (stale hashes + high
+  response watermark) and additionally asserts no stale
+  object-requests and a cleared negotiation — observed red against the
+  goto-skip form on exactly Bugbot's axis. `request_missing_objects`'
+  richer tail copy (the `m_last_known_hash` variant) is deliberately
+  NOT folded in — it does a different job.
 - 2026-09-04 — Review round 1 on the R1c PR (#612): two Copilot
   findings + one Bugbot HIGH, all valid, all addressed. Bugbot caught
   a real liveness defect IN THE Q3B FIX: the orphan arm's bare return

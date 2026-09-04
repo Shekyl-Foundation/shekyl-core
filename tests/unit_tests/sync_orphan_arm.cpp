@@ -130,6 +130,7 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
   std::atomic<size_t> drops{0};
   std::atomic<size_t> host_fails{0};
   std::atomic<size_t> chain_requests{0};
+  std::atomic<size_t> object_requests{0};
   cryptonote::cryptonote_connection_context lambda_ctx{};
 
   bool drop_connection(const epee::net_utils::connection_context_base& context) override
@@ -138,6 +139,8 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
   {
     if (command == cryptonote::NOTIFY_REQUEST_CHAIN::ID)
       ++chain_requests;
+    if (command == cryptonote::NOTIFY_REQUEST_GET_OBJECTS::ID)
+      ++object_requests;
     return true;
   }
   bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
@@ -186,6 +189,20 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
   r.core.chain_height = 100;
   r.core.target_height = 500; // mid-IBD: the arm must put the download BACK in motion
 
+  // A LIVE mid-sync context, not a fresh one: the pre-orphan negotiation
+  // left needed-object hashes and a high last-response watermark behind.
+  // If the arm re-enters the download without resetting them,
+  // request_missing_objects continues requesting the detached window
+  // instead of re-walking the chain from the current tip.
+  r.ctx.m_remote_blockchain_height = 500;
+  r.ctx.m_last_response_height = 460;
+  for (int i = 0; i < 5; ++i)
+  {
+    crypto::hash stale;
+    memset(&stale, 0x50 + i, sizeof(stale));
+    r.ctx.m_needed_objects.emplace_back(stale, 101 + i);
+  }
+
   crypto::hash parent;
   memset(&parent, 0x21, sizeof(parent));
   // Parent "known" at the span pre-check; the scripted orphan verdict at
@@ -220,6 +237,13 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
       << "the orphan arm must re-request the chain from the current tip";
   EXPECT_TRUE(r.ctx.m_last_request_time != boost::date_time::not_a_date_time)
       << "a live request time is what keeps the idle kicker able to see this context";
+  // Round-2 Bugbot finding: without the sibling arm's context reset, the
+  // stale pre-orphan hashes are requested as objects instead of the
+  // chain being re-walked -- the download resumes on the detached window.
+  EXPECT_EQ(0u, r.p2p.object_requests.load())
+      << "stale pre-orphan needed-objects must not be re-requested";
+  EXPECT_TRUE(r.ctx.m_needed_objects.empty())
+      << "the arm must clear the dead negotiation's needed-objects";
 }
 
 TEST(sync_orphan_arm, bookkeeping_mismatch_keeps_teeth)
