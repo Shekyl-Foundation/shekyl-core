@@ -39,11 +39,10 @@ use crate::release::calc_release_multiplier;
 /// `CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES = 2`:
 /// `round_money_up(v, 2)` — round UP to 2 significant decimal digits.
 ///
-/// First Rust *production* owner of this rule (the wallet-side
-/// `fee_policy.rs` copy and the sim instrument's copy single-source from
-/// here when they next move — FL round record, review round 3 deferral).
-/// The C++ original throws on overflow; saturation here is unreachable for
-/// any fee the ladder can emit and documented as the fail-safe.
+/// Production owner of this rule. Wallet cap and the FL instrument
+/// import this function rather than carrying a third copy. The C++
+/// original throws on overflow; saturation here is unreachable for any
+/// fee the ladder can emit and documented as the fail-safe.
 #[must_use]
 pub fn round_money_up_2(v: u64) -> u64 {
     if v < 100 {
@@ -152,7 +151,26 @@ pub fn fee_correction_quantized(
     }
 }
 
-/// The corrected four-slot ladder (three tiers + the RK-5 bridge slot).
+/// The three priced rungs. The RK-5 wire shape is a derived view
+/// ([`Self::as_slots`]): slot 2 mirrors `standard` so the vector length
+/// does not change before the RPC cutover. Named fields mean the bridge
+/// slot cannot drift from `standard` independently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeLadder {
+    pub economy: u64,
+    pub standard: u64,
+    pub priority: u64,
+}
+
+impl FeeLadder {
+    /// Wire shape `[economy, standard, standard, priority]`.
+    #[must_use]
+    pub const fn as_slots(self) -> [u64; 4] {
+        [self.economy, self.standard, self.standard, self.priority]
+    }
+}
+
+/// The corrected three-tier ladder (FL-R17) plus the RK-5 bridge slot.
 ///
 /// `base_reward` is the **M_r-neutral** total reward
 /// ([`crate::base_block_reward`] — `max(curve(remaining), TAIL)`, total
@@ -160,16 +178,20 @@ pub fn fee_correction_quantized(
 /// The rung formulas are the derived ones (`FEE_LADDER_DERIVATION.md`
 /// §3.2/§5.2):
 ///
-/// * `fees[0] = C_q · R·w_ref/Mfw²` — single-reference-tx self-funding
+/// * `economy  = C_q · R·w_ref/Mfw²` — single-reference-tx self-funding
 ///   (the caller clamps this at the unbuffered relay floor, which is what
 ///   makes the estimate err only toward acceptance);
-/// * `fees[1] = C_q · 4·R·w_ref/Mfw²`;
-/// * `fees[2] = fees[1]` — wire bridge (see module docs);
-/// * `fees[3] = C_q · 2·R/Mfw` — the `Fh` main arm, UNCONDITIONAL: no
+/// * `standard = C_q · 4·R·w_ref/Mfw²`;
+/// * `priority = C_q · 2·R/Mfw` — the `Fh` main arm, UNCONDITIONAL: no
 ///   surge discount, full expansion is funded in every state.
 ///
-/// All arithmetic in `u128` intermediates; each rung is scaled unrounded,
-/// then daemon-rounded to 2 significant digits.
+/// `C_q` lives in the numerator before the median division (`(C_q·R·w)/M²`,
+/// not `(R·w/M²)·C_q`). Truncating the rung first throws away a remainder
+/// that `C_q > 1` would have scaled over a rounding step (10 SKL / 1.5 MB
+/// / `C_q = 16` is 220 vs 210). Amount arithmetic, so the formula is the
+/// integer reading of the signed expression, not a post-hoc rescale.
+///
+/// Each rung is then daemon-rounded to 2 significant digits.
 #[must_use]
 pub fn corrected_fee_ladder(
     base_reward: u64,
@@ -178,19 +200,22 @@ pub fn corrected_fee_ladder(
     full_reward_zone: u64,
     ref_tx_weight: u64,
     c_q: u64,
-) -> [u64; 4] {
+) -> FeeLadder {
     let mfw = mnw.min(mlw).max(full_reward_zone).max(1);
-    let scale = |raw: u128| -> u64 {
-        let scaled = raw * u128::from(c_q) / u128::from(SCALE);
-        round_money_up_2(u64::try_from(scaled).unwrap_or(u64::MAX))
+    let round_scaled = |num: u128, den: u128| -> u64 {
+        round_money_up_2(u64::try_from(num / den).unwrap_or(u64::MAX))
     };
     let base = u128::from(base_reward);
     let w_ref = u128::from(ref_tx_weight);
     let m = u128::from(mfw);
-    let economy = scale(base * w_ref / (m * m));
-    let standard = scale(4 * base * w_ref / (m * m));
-    let priority = scale(2 * base / m);
-    [economy, standard, standard, priority]
+    let cq = u128::from(c_q);
+    let s = u128::from(SCALE);
+    let m2s = m * m * s;
+    FeeLadder {
+        economy: round_scaled(base * w_ref * cq, m2s),
+        standard: round_scaled(4 * base * w_ref * cq, m2s),
+        priority: round_scaled(2 * base * cq, m * s),
+    }
 }
 
 #[cfg(test)]
@@ -207,35 +232,47 @@ mod tests {
     fn neutral_ladder_matches_heritage_vectors_with_signed_shape() {
         let coin = 1_000_000_000u64;
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 300_000, 300_000, 300_000, 3_000, SCALE),
+            corrected_fee_ladder(10 * coin, 300_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
             [340, 1400, 1400, 67_000]
         );
         // Heritage case 2: Mnw = 15 MB surge over a 300 kB long-term
         // median. Was 22 000 under the surge discount; the unconditional
         // main arm prices full expansion here too.
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 15_000_000, 300_000, 300_000, 3_000, SCALE),
+            corrected_fee_ladder(10 * coin, 15_000_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
             [340, 1400, 1400, 67_000]
         );
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, SCALE),
+            corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, SCALE).as_slots(),
             [13, 53, 53, 14_000]
         );
     }
 
-    /// Genesis-condition top rung with `C_q = 1` is the wallet cap's
-    /// 14,000,000 anchor; at the genesis-congested `C_q = 2` it is the
-    /// 28,000,000 FL-R9 bound.
+    /// `C_q` in the numerator before the median division, not a rescale of
+    /// an already-truncated rung. The 10 SKL / 1.5 MB / `C_q = 16` case is
+    /// the measured divergence (220 vs the post-truncation 210).
+    #[test]
+    fn correction_lives_in_the_numerator() {
+        let coin = 1_000_000_000u64;
+        let ladder =
+            corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, 16 * SCALE);
+        assert_eq!(ladder.economy, 220);
+        assert_eq!(ladder.as_slots()[2], ladder.standard);
+    }
+
+    /// Genesis-condition top rung with `C_q = 1` is the uncongested
+    /// genesis `Fh` (14,000,000); at the genesis-congested `C_q = 2` it is
+    /// the 28,000,000 FL-R9 wallet-cap bound.
     #[test]
     fn genesis_top_rung_anchors() {
         let p = EconomicParams::default();
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
-            corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, SCALE)[3],
+            corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, SCALE).priority,
             14_000_000
         );
         assert_eq!(
-            corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, 2 * SCALE)[3],
+            corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, 2 * SCALE).priority,
             28_000_000
         );
     }

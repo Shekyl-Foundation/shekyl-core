@@ -1,7 +1,9 @@
-//! Base block subsidy curve (0h) and neutral-trajectory projection (0h′).
+//! Emission curve, paid composition, and accumulator.
 //!
-//! Matches `get_block_reward` base path in `cryptonote_basic_impl.cpp` before
-//! weight penalty and release multiplier.
+//! The one owner of the paid block reward is [`paid_block_reward`]:
+//! `max(M_r·curve(remaining), TAIL) · penalty(x)`. [`base_block_reward`] is
+//! the M_r-neutral view (`max(curve, TAIL)`) used as the fee-ladder operand,
+//! not a stage of the paid pipeline.
 
 use crate::params::EconomicParams;
 
@@ -114,7 +116,7 @@ pub fn effective_emission(
 /// `max(median_weight, full_reward_zone)`; at or below it no penalty;
 /// above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
 /// otherwise `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow.
-pub fn apply_weight_penalty(
+pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
     current_block_weight: u64,
@@ -135,8 +137,10 @@ pub fn apply_weight_penalty(
     }
 
     let current = u128::from(current_block_weight);
-    // Cannot overflow and so is deliberately unguarded: see the domain
-    // notes on [`block_reward_with_penalty`].
+    // Cannot overflow and so is deliberately unguarded: `double_median -
+    // current` is below `median` (we are past the `current <= median`
+    // return), and `current <= 2 * median`, so the product stays under
+    // `2 * u64::MAX^2 < u128::MAX`.
     let multiplicand = (double_median - current) * current;
     let median = u128::from(median);
 
@@ -202,55 +206,13 @@ pub fn base_emission_at(height: u64, params: &EconomicParams) -> Result<u64, Emi
     base_block_reward(ag, params)
 }
 
-/// Block reward after the median-weight penalty (0h + penalty).
+/// M_r-neutral paid reward: [`paid_block_reward`] at baseline volume
+/// (`M_r = 1`).
 ///
-/// Ports the arithmetic that lived in `get_block_reward`
-/// (`cryptonote_basic_impl.cpp`) — the last economics calculation C++ still
-/// performed itself. C++ now marshals to this function through
-/// `shekyl_block_reward`.
-///
-/// The shape, preserved exactly:
-///
-/// 1. `base = base_block_reward(already_generated_coins)`;
-/// 2. the effective median is `max(median_weight, full_reward_zone)` — the
-///    "make it soft" clamp;
-/// 3. at or below the effective median there is no penalty;
-/// 4. above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
-/// 5. otherwise `base * (2m - current) * current / m / m`.
-///
-/// `full_reward_zone` is a PARAMETER rather than a constant read here.
-/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` is a block-policy constant
-/// with ~40 consumers across the C++ tree and none in Rust; copying it into a
-/// Rust-side constant would create exactly the C++/Rust drift pair that
-/// `config/consensus_constants.json` exists to prevent. Passing it keeps one
-/// authority. If a second Rust consumer ever appears, it earns an entry in
-/// that JSON and this parameter goes away.
-///
-/// DOMAIN. Step 5 evaluates in `u128` and is EXACT wherever
-/// `base * (2m - c) * c` fits there. `base` is bounded by the subsidy curve at
-/// ~2^41, and `(2m - c) * c < m^2`, so every median below ~2^43 — block
-/// weights around 8 TB, against a 300 KB free zone — is exact. Beyond that the
-/// product needs up to ~192 bits and the function returns
-/// [`EmissionError::Overflow`] rather than wrapping or panicking. It never
-/// panics for any `u64` input; "total" in that sense only.
-///
-/// WHY NOT REPRODUCE THE C++ WRAP. The original formed `(2m - c) * c` in
-/// `uint64_t`, so it wrapped once the median passed ~2^32 and produced a
-/// reward derived from truncated garbage. This function does not reproduce
-/// that. Pre-genesis there is no chain whose history the wrap defines, so
-/// there is nothing to stay bit-compatible WITH — and reproducing it is
-/// exactly the failure §5.8's H1 exists to prevent, where a C++-only oracle
-/// certifies a latent bug and makes it canonical once the original is
-/// deleted. Rule 16: inherited code is not inherited architecture. Rule 20's
-/// fourth Rust criterion names silent overflow on amounts as the bug class.
-/// `c2a_prime_layer1_penalty_diverges_from_the_legacy_u64_wrap` pins the
-/// divergence point so the choice stays visible rather than implicit.
-///
-/// Beyond the exact domain the result is fail-closed: `Overflow` surfaces as
-/// `SHEKYL_BLOCK_REWARD_INVALID` and the block is rejected. A block whose
-/// median is measured in terabytes is unreachable under every other weight
-/// limit in the system; rejecting is the safe reading of an impossible input,
-/// where wrapping would silently mint from truncation.
+/// Kept as the 81-vector KAT's call shape so those pins stay on one
+/// function. C++ marshals [`paid_block_reward`] through `shekyl_block_reward`,
+/// not this alias. Domain and overflow behaviour are those of
+/// [`apply_weight_penalty`].
 pub fn block_reward_with_penalty(
     median_weight: u64,
     current_block_weight: u64,
@@ -258,13 +220,6 @@ pub fn block_reward_with_penalty(
     full_reward_zone: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    // The M_r-neutral view of the one owner: at baseline volume the
-    // release multiplier is exactly 1, so `max(1·curve, TAIL)·penalty`
-    // equals the pre-FL-R12′ `penalty(max(curve, TAIL))` bit-for-bit for
-    // every `ag ≤ asymptote` — which is what keeps the 81-vector
-    // cross-language KAT's pins valid without re-derivation. Past the
-    // asymptote this now returns the penalized tail instead of erroring
-    // (FL-R16a). ONE arithmetic owner: `paid_block_reward`.
     paid_block_reward(
         median_weight,
         current_block_weight,
@@ -286,33 +241,14 @@ pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
     median_weight.max(full_reward_zone).saturating_mul(2)
 }
 
-/// Advance `already_generated_coins` by a block's base reward, capped at supply.
+/// Advance `already_generated_coins` by a block reward.
 ///
-/// The supply-advance clamp, previously written out at two C++ call sites
-/// (`blockchain.cpp` main-chain connect and alt-chain). Past the cap the total
-/// would overflow `u64`; `already_generated_coins` only feeds the subsidy
-/// curve, and the curve yields the tail floor at full emission, so saturating
-/// is the correct behaviour rather than a defensive guard.
-///
-/// One entry point for both call sites on purpose — the same
-/// division-one-site discipline `config/consensus_constants.json` records for
-/// `segment_leaf_count`. Two copies of a consensus clamp are a drift pair
-/// waiting to happen.
-pub fn advance_already_generated(
-    already_generated_coins: u64,
-    block_reward: u64,
-    _params: &EconomicParams,
-) -> u64 {
-    // FL-R12′: the accumulator does NOT saturate at the emission-curve
-    // asymptote — the old clamp encoded a Monero rationale ("the base
-    // formula pays the tail at MONEY_SUPPLY") whose policy conclusion the
-    // capped composition then contradicted (FL-V8, the twins that were
-    // not). Under the perpetual tail the accumulator legitimately passes
-    // the asymptote and keeps growing by `tail` per block; `remaining`
-    // floors at zero on the read side. The `u64` rail is FL-R14's
-    // documented, build-asserted bound (~89,750 years away), and
-    // saturating there — rather than wrapping — is precisely what keeps
-    // `remaining` at zero instead of un-saturating it.
+/// One entry point for both C++ connect paths. Under FL-R12′ the
+/// accumulator passes the emission-curve asymptote (perpetual tail);
+/// the only saturation is the u64 rail (FL-R14), which keeps `remaining`
+/// floored at zero instead of wrapping into a huge headroom.
+#[must_use]
+pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64) -> u64 {
     already_generated_coins.saturating_add(block_reward)
 }
 
@@ -545,7 +481,6 @@ mod tests {
         use crate::emission_share::{calc_effective_emission_share, split_block_emission};
         use crate::escalation::ScaledShare;
         use crate::params::SCALE;
-        use crate::release::{apply_release_multiplier, calc_release_multiplier};
 
         // Canonical staker-emission constants (mirror config/economics_params.json;
         // not in EconomicParams, stated here as spec-oracle literals per the
@@ -555,7 +490,12 @@ mod tests {
         const BLOCKS_PER_YEAR: u64 = 262_800;
 
         let p = EconomicParams::default();
-        let ag_grid = [0_u64, 2_048_000_000_000, 2_756_434_948_434_199_641];
+        let ag_grid = [
+            0_u64,
+            2_048_000_000_000,
+            2_756_434_948_434_199_641,
+            p.money_supply,
+        ];
         let height_grid = [
             1_u64,
             BLOCKS_PER_YEAR / 2,
@@ -564,12 +504,10 @@ mod tests {
         ];
 
         for ag in ag_grid {
-            // Q_subsidy → Q_full_emission. Empty-block volume 0 clamps the release
-            // multiplier to RELEASE_MIN, matching the live chain's accumulation.
-            let q_subsidy = base_block_reward(ag, &p).unwrap();
-            let mult =
-                calc_release_multiplier(0, p.tx_volume_baseline, p.release_min, p.release_max);
-            let q_full = apply_release_multiplier(q_subsidy, mult);
+            // Q_subsidy → Q_full_emission. Empty-block volume 0 pins M_r at
+            // RELEASE_MIN. The paid quantity is the one owner, not
+            // M_r · max(curve, TAIL).
+            let q_full = effective_emission(ag, 0, &p).unwrap();
 
             for h in height_grid {
                 let share = calc_effective_emission_share(
@@ -633,7 +571,7 @@ mod tests {
         for height in 0..1000 {
             assert_eq!(ag, projected_already_generated(height, &p).unwrap());
             let q_full = base_block_reward(ag, &p).unwrap();
-            ag = ag.saturating_add(q_full).min(p.money_supply);
+            ag = advance_already_generated(ag, q_full);
         }
     }
 
@@ -923,17 +861,17 @@ mod tests {
     #[test]
     fn advance_already_generated_passes_the_asymptote() {
         let p = EconomicParams::default();
-        assert_eq!(advance_already_generated(0, 100, &p), 100);
+        assert_eq!(advance_already_generated(0, 100), 100);
         // Through the asymptote, not clamped to it.
         assert_eq!(
-            advance_already_generated(p.money_supply, 1, &p),
+            advance_already_generated(p.money_supply, 1),
             p.money_supply + 1
         );
         assert_eq!(
-            advance_already_generated(p.money_supply - 1, 50, &p),
+            advance_already_generated(p.money_supply - 1, 50),
             p.money_supply + 49
         );
         // The only saturation is the u64 rail.
-        assert_eq!(advance_already_generated(u64::MAX, u64::MAX, &p), u64::MAX);
+        assert_eq!(advance_already_generated(u64::MAX, u64::MAX), u64::MAX);
     }
 }

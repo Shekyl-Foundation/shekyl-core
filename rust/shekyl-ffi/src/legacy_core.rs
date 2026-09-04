@@ -625,7 +625,8 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
         full_reward_zone,
         ref_tx_weight,
         c_q,
-    );
+    )
+    .as_slots();
     for (i, f) in fees.iter().enumerate() {
         // SAFETY: non-null per the check; caller guarantees 4 writable u64s.
         unsafe { out_fees.add(i).write(*f) };
@@ -644,8 +645,7 @@ pub extern "C" fn shekyl_advance_already_generated(
     already_generated_coins: u64,
     block_reward: u64,
 ) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
-    shekyl_economics::advance_already_generated(already_generated_coins, block_reward, &params)
+    shekyl_economics::advance_already_generated(already_generated_coins, block_reward)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────

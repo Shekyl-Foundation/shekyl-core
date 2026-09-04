@@ -358,9 +358,10 @@ int32_t shekyl_block_reward(
     uint64_t *out_weight_limit);
 
 
-/// Advance already_generated_coins by a block reward, saturating at money_supply.
-/// One entry point for the main-chain and alt-chain connect paths, which each
-/// carried their own copy of this clamp.
+/// Advance already_generated_coins by a block reward. Under FL-R12' the
+/// accumulator passes the emission-curve asymptote (perpetual tail); the
+/// only saturation is the u64 rail (FL-R14). One entry point for both
+/// C++ connect paths.
 uint64_t shekyl_advance_already_generated(
     uint64_t already_generated_coins,
     uint64_t block_reward);

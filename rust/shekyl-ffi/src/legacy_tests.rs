@@ -983,11 +983,11 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
 }
 
 #[test]
-fn block_reward_clamps_already_generated_like_the_base_export() {
+fn block_reward_past_the_asymptote_pays_the_tail() {
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
-    // Past the supply cap the input is clamped rather than rejected, matching
-    // shekyl_base_block_reward's documented behaviour.
+    // A past-asymptote accumulator is a legitimate perpetual-tail state,
+    // not a clamp and not an error (FL-R16a).
     let status = unsafe {
         shekyl_block_reward(
             0,
