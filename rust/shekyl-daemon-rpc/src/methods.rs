@@ -32,7 +32,8 @@ use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
 use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
-    GetFeeEstimateResponse, GetLastBlockHeaderResponse, HardForkInfoRequest, HardForkInfoResponse,
+    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
+    HardForkInfoRequest, HardForkInfoResponse,
 };
 
 /// Why a native method could not answer. Maps onto the transport's existing
@@ -180,13 +181,36 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not a shape this method accepts.
 pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcFault> {
+    object_params(params, WRONG_BLOCK_PARAMS)
+}
+
+/// Read a JSON-RPC `params` value as this method's request object.
+///
+/// One shape per method: absent params are the request's own defaults, an
+/// object is deserialized, and **anything else is refused** — an array
+/// included. serde's derive would happily read a struct out of a sequence,
+/// which would give every method here a second, undesigned positional form;
+/// `on_get_block_hash` is the one method whose params are deliberately
+/// positional (`[height]`, RK-2), and it does not come through here.
+///
+/// `expected` is the refusal's wording, and it belongs to the caller rather
+/// than to this function: a message naming the wrong method's fields sends
+/// its reader looking in the wrong place, which is the whole value a refusal
+/// has over a parse error.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not an object this method accepts.
+fn object_params<T: serde::de::DeserializeOwned + Default>(
+    params: &serde_json::Value,
+    expected: &str,
+) -> Result<T, RpcFault> {
     match params {
-        serde_json::Value::Null => Ok(GetBlockRequest::default()),
+        serde_json::Value::Null => Ok(T::default()),
         serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_BLOCK_PARAMS))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
-            WRONG_BLOCK_PARAMS,
-        ))),
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
     }
 }
 
@@ -322,19 +346,7 @@ const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected an object with opt
 pub fn block_header_request(
     params: &serde_json::Value,
 ) -> Result<GetBlockHeaderByHeightRequest, RpcFault> {
-    match params {
-        serde_json::Value::Null => Ok(GetBlockHeaderByHeightRequest::default()),
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS))),
-        // Anything else, an array included. serde's derive would happily read
-        // a struct out of a sequence, which would give this method a second,
-        // undesigned positional form — and `on_get_block_hash` is the method
-        // whose params are deliberately positional (`[height]`, RK-2). One
-        // method, one shape.
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
-            WRONG_HEADER_PARAMS,
-        ))),
-    }
+    object_params(params, WRONG_HEADER_PARAMS)
 }
 
 /// `on_get_block_hash` (alias `on_getblockhash`): the hash of the block at
@@ -661,6 +673,84 @@ fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFaul
         }));
     }
     Ok(requested)
+}
+
+/// The request parsers for the five RK-5b methods.
+///
+/// Each names **its own** fields, because a caller that sent the wrong shape
+/// needs to know what this method wanted, not what the last one did.
+/// `get_last_block_header` and `hard_fork_info` accept absent params — the
+/// tip and the active fork are what they answer with no arguments — and so
+/// does `get_block_headers_range`, whose C++ default-initialized both heights
+/// to zero and answered for block 0 (RK-D8: the shape is preserved, however
+/// odd, because changing it is a separate decision from moving it).
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not an object this method accepts.
+pub fn last_block_header_request(
+    params: &serde_json::Value,
+) -> Result<GetLastBlockHeaderRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn block_header_by_hash_request(
+    params: &serde_json::Value,
+) -> Result<GetBlockHeaderByHashRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with hashes (an array of 64-character \
+         hex strings) and optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn block_headers_range_request(
+    params: &serde_json::Value,
+) -> Result<GetBlockHeadersRangeRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with start_height and end_height \
+         (non-negative integers) and optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfoRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional version (0-255)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimateRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional grace_blocks \
+         (a non-negative integer)",
+    )
 }
 
 /// `get_last_block_header` (alias `getlastblockheader`).
@@ -1791,6 +1881,80 @@ pub(crate) mod tests {
                 "{bad} must be refused, naming this method's own params shape"
             );
         }
+    }
+
+    /// The five RK-5b params parsers each accept absent params and their own
+    /// object, and refuse every other shape — an array included.
+    ///
+    /// The array rows are the ones with a defect behind them: serde's derive
+    /// reads a struct out of a sequence, so without the explicit arm
+    /// `getblockheadersrange` would have quietly gained a positional form
+    /// `[start, end]` that nothing designed and nothing else in the daemon
+    /// accepts.
+    #[test]
+    fn the_rk5b_params_parsers_take_one_shape_each() {
+        assert_eq!(
+            last_block_header_request(&json!(null)).unwrap(),
+            GetLastBlockHeaderRequest::default()
+        );
+        assert!(
+            last_block_header_request(&json!({"fill_pow_hash": true}))
+                .unwrap()
+                .fill_pow_hash
+        );
+
+        let range = block_headers_range_request(&json!({"start_height": 3, "end_height": 9}))
+            .expect("an object with both heights");
+        assert_eq!((range.start_height, range.end_height), (3, 9));
+
+        assert_eq!(
+            hard_fork_info_request(&json!(null)).unwrap().version,
+            None,
+            "absent params ask about the active fork"
+        );
+        assert_eq!(
+            hard_fork_info_request(&json!({"version": 7}))
+                .unwrap()
+                .version,
+            Some(7)
+        );
+        assert_eq!(
+            fee_estimate_request(&json!({"grace_blocks": 5}))
+                .unwrap()
+                .grace_blocks,
+            5
+        );
+        assert_eq!(
+            block_header_by_hash_request(&json!({"hashes": []}))
+                .unwrap()
+                .hashes
+                .len(),
+            0
+        );
+
+        // Every parser, every non-object shape. The refusal each carries is
+        // its own wording, so this asserts the code and leaves the message to
+        // the parser that owns it.
+        for bad in [json!([0]), json!([3, 9]), json!("0"), json!(0), json!(true)] {
+            for refusal in [
+                last_block_header_request(&bad).err(),
+                block_header_by_hash_request(&bad).err(),
+                block_headers_range_request(&bad).err(),
+                hard_fork_info_request(&bad).err(),
+                fee_estimate_request(&bad).err(),
+            ] {
+                let RpcFault::Refused(refusal) =
+                    refusal.unwrap_or_else(|| panic!("{bad} is not a usable params value"))
+                else {
+                    panic!("{bad} must be refused as a bad request, not a facts fault");
+                };
+                assert_eq!(refusal.code, CORE_RPC_ERROR_CODE_WRONG_PARAM);
+            }
+        }
+
+        // And a field of the wrong type inside a well-shaped object.
+        assert!(hard_fork_info_request(&json!({"version": "7"})).is_err());
+        assert!(block_headers_range_request(&json!({"start_height": -1})).is_err());
     }
 
     fn block_req(hash: &str, height: u64) -> GetBlockRequest {

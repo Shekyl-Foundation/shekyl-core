@@ -42,7 +42,19 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.25: `get_transactions` drops `txs_as_hex` and
+/// `CORE_RPC_VERSION_MINOR`. 3.26: three of the header methods change shape
+/// (RK-5b). `get_block_header_by_hash` answers **per element** — a
+/// `block_headers` array of `{hash, block_header?}` slots rather than a bare
+/// header array — and drops the singular `hash` request field, whose only
+/// effect beside `hashes` was to slip one request past the restricted cap;
+/// `hard_fork_info` reports `queried_version` and `active_version` in place
+/// of one `version` that meant whichever the request had implied; and
+/// `get_fee_estimate` drops the `fee` scalar, which the handler set to
+/// `fees[0]` (`core_rpc_server.cpp`, `on_get_base_fee_estimate`) and so
+/// carried no information the tiers did not. A changed member is a wire
+/// change, so it bumps this; the deltas are pinned test-by-test against the
+/// captured `_v1` vectors in `rust/shekyl-rpc-types/tests/vectors/rpc/`.
+/// 3.25: `get_transactions` drops `txs_as_hex` and
 /// `txs_as_json` — the handler filled them "in case an old wallet asks" and
 /// the old wallet is `src/wallet/`, deleted, so they duplicated
 /// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
@@ -57,7 +69,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 25;
+pub const CORE_RPC_VERSION_MINOR: u32 = 26;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -329,13 +341,19 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 25) == 0x0003_0019 == 196633. The captured
-        // get_version vectors carry 196632 (3.24), which is what they emitted
-        // before RK-4c removed `txs_as_hex` / `txs_as_json`; a vector is not
-        // edited to follow a constant, so `assert_version_parity` compares
-        // every other field against them and this pins the constant itself.
-        assert_eq!(CORE_RPC_VERSION, 196_633);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 25);
+        // MAKE_CORE_RPC_VERSION(3, 26) == 0x0003_001A == 196634. The captured
+        // get_version vector carries 196632 (3.24), which is what the C++
+        // emitted before RK-4c removed `txs_as_hex` / `txs_as_json`; a
+        // captured vector is not edited to follow a constant, so
+        // `assert_version_parity` compares every other field against it, the
+        // derived `_v2` carries the current value, and this pins the constant
+        // itself. Two spellings on purpose: the literal catches a bump that
+        // forgot this test, and the packing expression catches a bump that
+        // edited the literal without the fields it is made of.
+        assert_eq!(CORE_RPC_VERSION, 196_634);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 26);
+        assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 26);
     }
 
     #[test]

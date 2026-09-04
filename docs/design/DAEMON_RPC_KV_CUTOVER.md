@@ -613,14 +613,15 @@ downstream depends on it either way.
   are preserved, and a slice that changes one reopens per method with its own
   bump and CHANGELOG operator-impact line.
 
-  **Baseline as of 2026-08-29: `CORE_RPC_VERSION` is 3.25**, not the 3.22 this
-  clause first recorded. Two slices took the reopen this clause offers rather
-  than breaking it: RK-3 (→ 3.24) and RK-4c (→ 3.25, retiring
+  **Baseline as of 2026-09-04: `CORE_RPC_VERSION` is 3.26**, not the 3.22 this
+  clause first recorded. Three slices took the reopen this clause offers rather
+  than breaking it: RK-3 (→ 3.24), RK-4c (→ 3.25, retiring
   `get_transactions`' `txs_as_hex` / `txs_as_json` under rule 60 — the handler
   filled them "in case an old wallet asks" and that wallet, `src/wallet/`, is
-  deleted). A stated baseline that stops tracking the constant reads as a
-  freeze, so it is updated here rather than left for a future slice to trip
-  over.
+  deleted) and RK-5b (→ 3.26, the three header-method shape changes ruled in
+  the 2026-09-01 log row). A stated baseline that stops tracking the constant
+  reads as a freeze, so it is updated here rather than left for a future slice
+  to trip over.
 - **Not** the P2P path. `portable_storage` on Levin, `cryptonote_protocol_defs.h`'s
   P2P structs and the peerlist are LV-2/LV-3's.
 - **Not** the chain store. Facts shims read today's LMDB through core; the

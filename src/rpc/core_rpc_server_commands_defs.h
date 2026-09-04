@@ -86,8 +86,11 @@ namespace cryptonote
 // whether they can talk to a given daemon without having to know in
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
-// CORE_RPC_VERSION (3.25) lives in rust/shekyl-rpc-types/src/chain.rs since
-// RK-1: get_version, its only reader, is served natively.
+// CORE_RPC_VERSION lives in rust/shekyl-rpc-types/src/chain.rs since RK-1:
+// get_version, its only reader, is served natively. The value is deliberately
+// not repeated here — a second copy of a constant that bumps per wire change
+// is a copy that goes stale silently, and this one had (it said 3.25 through
+// RK-5b's bump to 3.26).
 
   struct rpc_request_base
   {

@@ -158,6 +158,28 @@
 
 ### Changed
 
+- **Daemon RPC: three header methods change shape; `CORE_RPC_VERSION` is now
+  3.26 (RK-5b).** `get_last_block_header`, `get_block_header_by_hash`,
+  `get_block_headers_range`, `hard_fork_info` and `get_fee_estimate` (and the
+  `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **Operator impact — three replies a
+  client parses differently.** `get_block_header_by_hash` answers **per
+  element**: `block_headers` is now an array of `{hash, block_header?}` slots
+  rather than a bare header array, so a client learns *which* hash was
+  unknown instead of receiving zero headers and an error string, and one
+  unknown hash no longer discards the other nine hundred; the request's
+  singular `hash` field is gone (it had no in-tree caller, and its only
+  effect beside `hashes` was to slip one lookup past the restricted cap of
+  1000). `hard_fork_info` reports `queried_version` **and**
+  `active_version` in place of a single `version` that silently meant
+  whichever the request implied. `get_fee_estimate` drops the `fee` scalar,
+  which the C++ handler set to `fees[0]` and which therefore carried nothing
+  the tier array did not. Also corrected while porting: the restricted
+  header-range cap bounded `end - start` rather than the count, so a
+  restricted caller could obtain 1001 headers against a cap of 1000; and a
+  restricted caller asking for `fill_pow_hash` is now refused rather than
+  handed an empty field with status OK.
+
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
   2026-09-01).** A candidate timestamp is valid iff it is at most

@@ -208,6 +208,11 @@ enum NativeMethod {
     Block,
     SyncInfo,
     Connections,
+    LastBlockHeader,
+    BlockHeaderByHash,
+    BlockHeadersRange,
+    HardForkInfo,
+    FeeEstimate,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -228,6 +233,14 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         "get_block" | "getblock" => NativeMethod::Block,
         "sync_info" => NativeMethod::SyncInfo,
         "get_connections" => NativeMethod::Connections,
+        // RK-5b. Both spellings of each, as the C++ table carried them
+        // (`core_rpc_ffi.cpp:269-283`); `hard_fork_info` and
+        // `get_fee_estimate` had only one apiece there and gain none here.
+        "get_last_block_header" | "getlastblockheader" => NativeMethod::LastBlockHeader,
+        "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
+        "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,
+        "hard_fork_info" => NativeMethod::HardForkInfo,
+        "get_fee_estimate" => NativeMethod::FeeEstimate,
         _ => return None,
     })
 }
@@ -303,6 +316,82 @@ async fn native_method(
             let out = tokio::task::spawn_blocking(move || {
                 let facts = crate::chain_facts::FfiP2pFacts::new(core);
                 crate::methods::get_connections(&facts)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        // ── RK-5b ───────────────────────────────────────────────────────
+        //
+        // These five take `state.restricted` itself rather than a
+        // pre-computed `fill_pow_hash`, because they **refuse** a restricted
+        // caller that asked for a pow hash instead of blanking the field —
+        // see `methods::pow_hash_or_refuse`. `pow_hash_entitled` above stays
+        // the policy for RK-2's methods, whose C++ shape this slice does not
+        // reopen.
+        NativeMethod::LastBlockHeader => {
+            let request = match crate::methods::last_block_header_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let restricted = state.restricted;
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_last_block_header(&facts, request.fill_pow_hash, restricted)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::BlockHeaderByHash => {
+            let request = match crate::methods::block_header_by_hash_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let restricted = state.restricted;
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_header_by_hash(&facts, &request, restricted)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::BlockHeadersRange => {
+            let request = match crate::methods::block_headers_range_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let restricted = state.restricted;
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_block_headers_range(&facts, &request, restricted)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::HardForkInfo => {
+            let request = match crate::methods::hard_fork_info_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::hard_fork_info(&facts, &request)
+            })
+            .await;
+            Some(frame_native(out))
+        }
+        NativeMethod::FeeEstimate => {
+            let request = match crate::methods::fee_estimate_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_fee_estimate(&facts, &request)
             })
             .await;
             Some(frame_native(out))
@@ -427,6 +516,34 @@ mod tests {
         ("getblock", NativeMethod::Block, false),
         ("sync_info", NativeMethod::SyncInfo, true),
         ("get_connections", NativeMethod::Connections, true),
+        (
+            "get_last_block_header",
+            NativeMethod::LastBlockHeader,
+            false,
+        ),
+        ("getlastblockheader", NativeMethod::LastBlockHeader, false),
+        (
+            "get_block_header_by_hash",
+            NativeMethod::BlockHeaderByHash,
+            false,
+        ),
+        (
+            "getblockheaderbyhash",
+            NativeMethod::BlockHeaderByHash,
+            false,
+        ),
+        (
+            "get_block_headers_range",
+            NativeMethod::BlockHeadersRange,
+            false,
+        ),
+        (
+            "getblockheadersrange",
+            NativeMethod::BlockHeadersRange,
+            false,
+        ),
+        ("hard_fork_info", NativeMethod::HardForkInfo, false),
+        ("get_fee_estimate", NativeMethod::FeeEstimate, false),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and
@@ -447,7 +564,8 @@ mod tests {
         // handler that does not exist yet.
         for name in [
             "get_info",
-            "hard_fork_info",
+            "get_alternate_chains",
+            "mining_status",
             "get_block_by_hash",
             "getblockcount2",
             "",
