@@ -976,11 +976,22 @@ the rule gets to decide in.
 C2-R0's stated deliverable is naming which of these nine rows a
 protocol-level depth rule affects. The census-wide line re-anchor
 stays this round's obligation at R1c close (C2-R0 is docs-and-schema
-only and moves no line numbers) — and that re-anchor pass now carries a
-second leg: **a dangling-anchor sweep of the census's §-citations into
-this doc**, because the links gate resolves files, not anchors (the
-consumed-§5-heading defect survived to dev exactly that way — a
-collapsed observable no gate can currently see).
+only and moves no line numbers) — and that re-anchor pass now carries
+two more legs. (1) **A dangling-anchor sweep of the census's
+§-citations into this doc**, because the links gate resolves files,
+not anchors (the consumed-§5-heading defect survived to dev exactly
+that way — a collapsed observable no gate can currently see).
+(2) **The census §10 R2-row restatement**: FL-R12′ is SIGNED (relayed
+by steering 2026-09-04; recorded at `6689b0cff` on the fee lane's
+design branch — signed composition
+`paid = max(M_r·curve(remaining), TAIL) · penalty(x)`), so "Conjunct
+(a) is open" on dev is now stale — both conjuncts of the R2 reopen
+criterion are met. The restatement carries the fragility as plain
+text: the signature lives on a design branch a dev-only reader cannot
+see (the doc is still not on dev; a markdown link would fail the links
+gate); that parenthetical retires when the fee lane's PR lands.
+Criterion-met and batch-dispatched are different facts — R2's
+sequencing stays Rick's.
 
 Rows: CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4. Banked wargame seeds:
 near-tip cycle cost (a 1-block fork needs ~2 blocks of real PoW to force a
