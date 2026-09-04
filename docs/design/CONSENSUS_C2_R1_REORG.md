@@ -1341,6 +1341,32 @@ A1, A2, K2, K3 → bucket 2; A4 → bucket 2 with the Q3b defect fix built
 in-round. Census §4/§12 updates, the line re-anchor, and the
 dangling-anchor sweep ride the round-close PR per §5.2.
 
+### 5.6 Q3b execution record (built 2026-09-04, on the six ratifications)
+
+The fix landed as ruled, measured as required. The sync orphan arm
+(`cryptonote_protocol_handler.inl`, the in-loop
+`bvc.m_marked_as_orphaned` branch) no longer severs or scores: it logs
+the local-state cause loudly, cleans up, drops the span, and lets the
+sync machinery re-request from the current chain state; the `:1407`
+bookkeeping-mismatch drop is untouched. **Diff measurement (the rule-20
+expectation, measured not assumed): mechanism −9/+2, net −7** — the
+two added mechanism lines are the replacement log statement and its
+brace; raw is +2 only from the design-comment block, which is
+documentation, not mechanism. Enforcement:
+`check_consensus_invariants.sh` gains **[7/7]** — subject-asserting
+(the arm's marker must exist exactly once; its absence is a gate
+error, never a pass) and punishment-rejecting (any `drop_connection`
+within the arm turns it red) — **observed red-first** against the
+pre-fix tree (it failed closed on the missing marker), green after.
+Suites on the built tree: core_tests 39/39; unit_tests 1122 OK with
+the one known-environmental `ban.file_banlist` port collision (live
+daemons from sibling sessions on this box; CI arbitrates, as in the
+three prior rounds). No behavioral rig can drive
+`handle_response_get_objects` today — that gap is recorded as its own
+FOLLOWUPS row with the first two vectors named for whoever builds the
+rig, rather than being papered over by the structural gate (a seal is
+not coverage; the gate pins the arm's shape, not its behavior).
+
 ## 6. Round log
 
 - 2026-09-02 — Ground read at `bf317111f`; check-in with steering

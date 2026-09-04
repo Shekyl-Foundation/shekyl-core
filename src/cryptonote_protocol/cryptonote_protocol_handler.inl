@@ -1545,21 +1545,23 @@ namespace cryptonote
             }
             if(bvc.m_marked_as_orphaned)
             {
-              drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
-                LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned, dropping connection");
-                drop_connection(context, true, true);
-                return 1;
-              }))
-                LOG_ERROR_CCONTEXT("span connection id not found");
-
+              // C2-R1c-Q3b: an in-loop orphan here means OUR store lost the
+              // parent between the span's parent pre-check and this add --
+              // every enumerated path is local (the 600s checkpoint-reload
+              // rollback discard, an operator pop_blocks, the Q1a flip-flop
+              // discard), so this is degradation and re-sync, never peer
+              // misconduct. A peer that actually misrepresents a span is
+              // caught at the queue bookkeeping-mismatch arm above, which
+              // fires before any state race can. Drop the span and let the
+              // sync machinery re-request from the CURRENT chain state.
+              LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned -- local chain state moved during span processing; re-syncing without penalizing the origin");
               if (!m_core.cleanup_handle_incoming_blocks())
               {
                 LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
                 return 1;
               }
 
-              // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
+              // remove the span so other threads can wake up and get it
               m_block_queue.remove_spans(span_connection_id, start_height);
               return 1;
             }

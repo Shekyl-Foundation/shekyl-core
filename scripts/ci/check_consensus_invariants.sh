@@ -236,10 +236,42 @@ fi
 echo
 
 # ----------------------------------------------------------------------
+# 7. C2-R1c-Q3b: the sync-loop orphan arm re-syncs; it never punishes.
+#    An in-loop orphan during span processing means OUR store lost the
+#    parent between the span pre-check and the add (checkpoint-rollback
+#    discard, operator pop, Q1a flip-flop discard) -- degradation, not
+#    peer misconduct. Misrepresentation is caught at the queue
+#    bookkeeping-mismatch arm instead. Rule 47: the arm's own marker is
+#    asserted present before its content is judged.
+# ----------------------------------------------------------------------
+echo "[7/7] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
+INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
+Q3B_MARK=$(grep -c "re-syncing without penalizing the origin" "$INL" || true)
+if [[ "${Q3B_MARK:-0}" -ne 1 ]]; then
+  echo "      FAIL: the Q3b orphan-arm marker is missing (found ${Q3B_MARK:-0},"
+  echo "            expected exactly 1) -- the arm was removed or reworded;"
+  echo "            re-point this gate at the arm, do not delete it."
+  FAIL=1
+else
+  Q3B_DROPS=$(grep -A 15 "re-syncing without penalizing the origin" "$INL" | grep -c "drop_connection" || true)
+  if [[ "${Q3B_DROPS:-0}" -ne 0 ]]; then
+    echo "      FAIL: the sync orphan arm contains a drop_connection call --"
+    echo "            punishment re-entered the arm (C2-R1c-Q3b ruled this a"
+    echo "            defect; the fix falsifier in the round doc names the"
+    echo "            only evidence that reopens HOW, and nothing reopens"
+    echo "            WHETHER)."
+    FAIL=1
+  else
+    echo "      OK"
+  fi
+fi
+echo
+
+# ----------------------------------------------------------------------
 # Result summary.
 # ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (6/6)"
+echo "consensus-invariants: PASS (7/7)"

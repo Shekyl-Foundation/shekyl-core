@@ -14,6 +14,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **The protocol handler's sync loop has no test surface (C2-R1c-Q3b's build could not carry a behavioral test).** The Q3b fix (orphan-during-span = re-sync, never punishment) is a deletion falling back to the sibling add-fail arm's existing semantics, pinned by the consensus-invariants [7/7] structural gate (subject-asserting, observed red-first) and the ruling's two falsifiers -- but no rig can DRIVE `handle_response_get_objects` today: `tests/unit_tests/node_server.cpp`'s `test_core` stubs handshake-level members only, and core_tests bypass the handler entirely. Whoever builds a scripted-core sync-loop rig should pin the orphan arm's no-drop behavior and the `:1407` bookkeeping-mismatch drop as its first two vectors. Owner: the test-seams design round (census §10 R9) or a dedicated rig PR.
 - **The block-weight penalty-free-zone arbitration was punted and never landed.** `GENESIS_TX_WIRE_FORMAT.md` :806–811 flagged the `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` V1/V2/V5 lineage (300 000 consumed as given) as "the arbitration belongs to the economics doc"; no doc ever received it, and the long-term 1.7× clamps ride along unexamined (owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G6b; C2 batch R2).
   - Target: pre-genesis
 
