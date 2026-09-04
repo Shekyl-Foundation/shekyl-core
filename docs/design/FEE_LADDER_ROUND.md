@@ -179,6 +179,41 @@ remains un-PR'd per the maintainer's standing "no PR just yet" — the
 natural order (design PR merges, implementation cites it) waits on him
 lifting that hold.
 
+## Review round 9 (maintainer, at the design tip `6689b0c`): T-1, hold lifted, two-PR split
+
+Verified the signed record in full (composition verbatim, every §8 row
+disposed, FL-D1's undeferrable counterfactual, the 360/450 arithmetic
+re-derived by hand). Red-by-reading confirmed; **red-by-run is owed
+before the implementing PR merges** — the runs exist in this branch's
+commit messages, and the reviewer re-runs them once the branches are
+visible.
+
+- **T-1 (Moderate): oracle leg 3 pinned a function, not a contract** —
+  as written at the design tip it forced folding `M_r` into
+  `base_block_reward`, dragging every caller. **Resolved in the build by
+  exactly the prescribed shape**: a *named operand function* exists —
+  `effective_emission(ag, v)` is the payer's pre-penalty quantity, and
+  leg 3 asserts `paid_block_reward(…, weight 1) == effective_emission`
+  plus the dormancy-modulation inequality; no caller was dragged. One
+  deliberate divergence from the in-message prescription, disclosed:
+  `base_block_reward` did NOT become the pure curve — under the ADOPTED
+  round-8 amendment the estimator's operand is the **M_r-neutral view**
+  `max(curve, TAIL)`, which is what `base_block_reward` now is (totalized,
+  documented as not-a-pipeline-stage); the pure curve exists as the
+  private `curve_emission`. The floor stays in the neutral view because
+  the amendment made that view the operand.
+- **Sequencing ruled: hold LIFTED, design PR first** — the implementing
+  diff cites a merged document at `dev`.
+- **The bundle splits in two after the design PR** (the built branch had
+  interleaved them and is being restructured): **PR one, atomic (rule
+  07)**: the signed composition + one owner + no flag path; the ladder
+  operand move; FL-R16c (consensus via `compute_fee_burn`); the FL-R14
+  assertion; the FL-V7 doc corrections (under the names the reviewer
+  knows); the oracle graduated. **PR two, mechanical, after**: the
+  FL-R15 rename sweep + FL-R16b — so the consensus diff is reviewed
+  under known names and a 400-line rename cannot dilute the one
+  composition line that matters.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -414,8 +449,10 @@ directly. Dispositions:
 1. ~~FL-R12′ signature~~ — **SIGNED at round 8**; FL-D1 closed; build
    authorized and **EXECUTED** (§Build above) on
    `feat/fee-ladder-r12-impl`, stacked on this design branch, local
-   only. Remaining sequencing gates: the standing "no PR just yet", and
-   steering review of the build before anything goes to the maintainer.
+   only; steering reviewed. **Round 9: hold LIFTED — design PR opened
+   against dev; the implementation restructures into the ruled two-PR
+   split (atomic composition under old names, then the mechanical
+   rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
 3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
