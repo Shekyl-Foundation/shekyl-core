@@ -286,62 +286,88 @@ mod tests {
     /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
     /// the terminal state — they are descriptions of one chain.
     ///
-    /// The FL-R12′ oracle, in its review-round-4 AMENDED form (the
-    /// direction — perpetual tail — is maintainer-accepted; the
-    /// signature waits on this amendment): `TAIL` floors the **PAID**
-    /// reward, i.e. `paid = max(M_r·curve(remaining), TAIL)`. The
-    /// pre-multiplier alternative was rejected by the ruling's own
-    /// dormancy argument — the shipped order floors `base` *before* the
-    /// release multiplier, so under dormancy (`M_r = 0.8`) the chain
-    /// pays 0.48 SKL/block against the named 0.6 floor, in exactly the
-    /// regime the floor exists for.
+    /// The FL-R12′ oracle in its SIGNED form (review round 8):
+    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)` — floor on
+    /// the paid emission (the multiplier has no object at a perpetual
+    /// tail), penalty AFTER the floor (floors belong to emission;
+    /// penalties apply to the paid quantity — the governance lever must
+    /// always bite), `remaining` floored at zero, the supply cap retired.
     ///
-    /// Composes the SHIPPED path (tail-floored base → release
-    /// multiplier → supply cap) at dormancy volume and asserts the
-    /// amended contract. RED TODAY three ways: 480 000 000 vs
-    /// 600 000 000 at the first sub-tail-headroom block, 0 vs
-    /// 600 000 000 at the asymptote (the cap clamps to remaining = 0),
-    /// and an error past the asymptote (`AlreadyGeneratedExceedsSupply`,
-    /// FL-R16a). Un-ignore with the signed amendment's implementation.
-    /// Sits beside `base_block_reward_tail_floor` deliberately: that
-    /// test pins the pre-cap floor in a state where today's composition
-    /// pays a fraction of it, and this is the missing composition
-    /// oracle.
+    /// RED TODAY three ways against the shipped composition
+    /// (curve → tail floor → penalty → multiplier → cap):
+    /// 1. dormancy at `x = 0`, boundary: shipped pays `M_r·TAIL` =
+    ///    480 000 000 (then remaining-capped) vs the signed 600 000 000;
+    /// 2. tail with `x > 0`: shipped applies the penalty before the
+    ///    multiplier and cap (360 000 000 at `x = ½` under dormancy) vs
+    ///    the signed `TAIL·(1−x²)` = 450 000 000;
+    /// 3. ladder-operand equality: the 5-arg estimate base must equal
+    ///    the payer's pre-penalty quantity `R_eff` at every point —
+    ///    red mid-curve, where the estimate is unmodulated while the
+    ///    payer's quantity carries `M_r`.
+    ///
+    /// Un-ignore with the FL-R12′ implementation (build authorized at
+    /// round 8 upon the record).
     #[test]
-    #[ignore = "FL-R12' amendment pending signature: the shipped composition pays M_r*remaining-then-errors instead of flooring the PAID reward at TAIL"]
+    #[ignore = "FL-R12' signed (round 8) but not yet implemented: shipped composition floors the base, penalizes before the multiplier, and caps at remaining"]
     fn terminal_reward_legs_agree() {
         use crate::release::{apply_release_multiplier, calc_release_multiplier};
 
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
+        let esf = emission_speed_factor(&p);
         let s = p.money_supply;
-        // Dormancy: the regime the floor exists for pins the release
-        // multiplier at its 0.8 rail.
+        // Dormancy pins the release multiplier at its 0.8 rail — the
+        // regime the floor exists for.
         let m_r = calc_release_multiplier(0, p.tx_volume_baseline, p.release_min, p.release_max);
+        // The signed contract's pre-penalty quantity.
+        let r_eff = |ag: u64| -> u64 {
+            let curve = s.saturating_sub(ag) >> esf;
+            apply_release_multiplier(curve, m_r).max(tail)
+        };
 
-        // Both sides of the boundary and PAST the asymptote (reachable
-        // under the amended non-saturating accumulator).
+        // Leg 1 — floor on the paid emission at x = 0, both sides of the
+        // boundary and past the asymptote.
+        let zone = 300_000; // full-reward zone; weight == median ⇒ no penalty
         for ag in [s - tail + 1, s, s + tail] {
-            let base_leg = base_block_reward(ag, &p)
-                .unwrap_or_else(|e| panic!("paid floor must be TAIL at ag={ag}, got {e:?}"));
-            let modulated = apply_release_multiplier(base_leg, m_r);
-            let paid = cap_reward_to_remaining_supply(modulated, ag, &p);
+            let shipped = {
+                let base = block_reward_with_penalty(zone, zone, ag, zone, &p)
+                    .unwrap_or_else(|e| panic!("shipped leg errored at ag={ag}: {e:?}"));
+                cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
+            };
             assert_eq!(
-                paid, tail,
-                "paid reward != TAIL under dormancy at already_generated={ag}"
+                shipped,
+                r_eff(ag),
+                "paid reward != max(M_r*curve, TAIL) under dormancy at already_generated={ag}"
             );
         }
 
-        // The projection leg — the function the census-R2 reopen
-        // criterion names — must also floor the paid reward at TAIL.
-        let past_boundary = 19_200_000; // > the 2^21-identity tail-headroom crossing
-        let ag = projected_already_generated(past_boundary, &p).unwrap();
-        let projection = base_block_reward(ag, &p).unwrap();
-        let paid =
-            cap_reward_to_remaining_supply(apply_release_multiplier(projection, m_r), ag, &p);
+        // Leg 2 — penalty applies AFTER the floor: at the tail with
+        // x = 1/2 (weight = 1.5 * median), the signed contract pays
+        // TAIL * (1 - x^2) = TAIL * 3/4.
+        let ag = s;
+        let (median, weight) = (zone, zone + zone / 2);
+        let shipped = {
+            let base = block_reward_with_penalty(median, weight, ag, zone, &p)
+                .unwrap_or_else(|e| panic!("shipped penalized leg errored: {e:?}"));
+            cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
+        };
+        let expected = {
+            // penalty(x) in the canonical integer form: (2m - c)*c / m^2.
+            let (m, c) = (u128::from(median), u128::from(weight));
+            u64::try_from(u128::from(r_eff(ag)) * (2 * m - c) * c / (m * m)).unwrap()
+        };
         assert_eq!(
-            paid, tail,
-            "projection-leg paid reward != TAIL past the boundary (height {past_boundary})"
+            shipped, expected,
+            "penalized tail reward != TAIL*(1-x^2): penalty must compose AFTER the floor"
+        );
+
+        // Leg 3 — the ladder's operand equals the payer's pre-penalty
+        // quantity everywhere, mid-curve included (kills the V1 class).
+        let mid = s / 2;
+        assert_eq!(
+            base_block_reward(mid, &p).unwrap(),
+            r_eff(mid),
+            "estimate operand != payer pre-penalty quantity (R_eff) mid-curve under dormancy"
         );
     }
 

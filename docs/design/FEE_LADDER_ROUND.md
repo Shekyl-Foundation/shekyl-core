@@ -145,6 +145,40 @@ early. Dispositions:
   — the amendment concerns the floor's composition, FL-R17 concerns how
   many rates sit above it. Two open signatures, separate decisions.
 
+## Review round 8 (maintainer, 2026-09-04): FL-R12′ SIGNED — the full composition
+
+The maintainer verified the shipped composition
+(curve → tail floor → penalty → multiplier → cap), found the F-1 draft
+right in direction and silent on the penalty's placement — the operator
+that decides whether block-size governance survives the ruling — and
+signed the complete form in-channel, verbatim:
+**`paid = max(M_r·curve(remaining), TAIL) · penalty(x)`**, `remaining`
+floored at zero, cap retired. Placed on the record with it: the
+multiplier-pacing rationale (nothing to defer at a perpetual tail; a
+tail-modulated floor pays least when fees are lowest), the ordering rule
+(**floors belong to emission; penalties apply to the paid quantity**),
+the pre-split-total note, the ladder-operand redefinition
+(`R_eff = max(M_r·curve, TAIL)`, `C′ = (1−σ)/(1−b)` — no double-counted
+multiplier, no `[0,0,0]` ladder at exhaustion; FL-R1/R3/R5 updated),
+**FL-D1 closed as answered** (the ruling abolishes the era it deferred
+to; the signed order penalizes the tail like any other reward — had the
+penalty composed before the floor, D1 would have been undeferrable),
+and W5 resolved. Oracle re-oriented to the signed contract, red three
+ways: 480 000 000 vs 600 000 000 (floor at `x = 0` under dormancy),
+360 000 000 vs 450 000 000 (penalty-after-floor at `x = ½` on the
+tail), and the operand-equality leg mid-curve.
+
+**Build authorization: YES from the maintainer, upon this record.**
+The implementing PR's bundle (one validation surface — the reward
+path): the signed composition with one owner and no flag path
+(FL-V8/V9/FL-R16a), the FL-R14 build-time assertion, the FL-R15 rename
+sweep with FL-R16b/c, the FL-V7 doc corrections (`:18` rewritten;
+`:35/:49-50/:162/:667` become true), the ladder-operand change, and the
+graduated (un-ignored) oracle. Sequencing note: the design branch
+remains un-PR'd per the maintainer's standing "no PR just yet" — the
+natural order (design PR merges, implementation cites it) waits on him
+lifting that hold.
+
 ## Review round 7 (maintainer, 2026-09-03): FL-R17 SIGNED — three tiers
 
 **Signed in-channel, this session, direct message** ("sign it as three
@@ -298,10 +332,10 @@ directly. Dispositions:
 
 ## Decisions pending (all with the maintainer)
 
-1. **FL-R12′ signature** — the F-1 amendment (pre-/post-multiplier) is
-   drafted in the row and the oracle matches it; the maintainer signs
-   the amended row or corrects the draft. Build authorization is **NO**
-   until then (review round 4).
+1. ~~FL-R12′ signature~~ — **SIGNED at round 8** with the full
+   composition; FL-D1 closed; **build authorization YES**. The one
+   remaining sequencing gate is the standing "no PR just yet" on this
+   design branch.
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
 3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
