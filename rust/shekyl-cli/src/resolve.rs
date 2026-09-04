@@ -122,6 +122,14 @@ pub enum ResolvedCommand {
     Drain {
         amount: u64,
     },
+    /// `unstake` — post the permanent exit for the staked bond (PR-C).
+    /// No arguments exist, by contract: the persona, fee, and amount are
+    /// all engine-resolved, and the CLI's job is the irreversibility
+    /// confirmation.
+    Unstake,
+    /// `collect_unstaked` — sweep the released exit collateral back to
+    /// this wallet, one pass at a time. No arguments, by contract.
+    CollectUnstaked,
 
     // -- Fees (WI-RPC-1) --
     Fee {
@@ -457,6 +465,23 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 "drain: need exactly <amount>; the command takes no flags — \
                  the network fee and the destination (this wallet) are set \
                  automatically (usage: drain <amount>)",
+            ),
+        },
+        // The exit pair takes NO arguments, by contract: an amount or slot
+        // token here would be a steering attempt the server rejects with
+        // -32602 (F-1) — say so at the front door with more context.
+        "unstake" => match args {
+            [] => ResolvedCommand::Unstake,
+            _ => diag(
+                "unstake: takes no arguments — the exit releases the whole \
+                 bond and the fee is set automatically (usage: unstake)",
+            ),
+        },
+        "collect_unstaked" => match args {
+            [] => ResolvedCommand::CollectUnstaked,
+            _ => diag(
+                "collect_unstaked: takes no arguments — each pass collects \
+                 everything currently spendable (usage: collect_unstaked)",
             ),
         },
         "fee" => {
@@ -1279,6 +1304,46 @@ mod tests {
                 matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
                 "{line:?} should be a Diagnostic"
             );
+        }
+    }
+
+    /// PR-C exit pair: no arguments, by contract. Extra slot/amount/fee
+    /// tokens are a hard diagnostic naming the no-steering grammar — the
+    /// CLI-side half of the F-1 `-32602` pin. Bitten red by accepting a
+    /// trailing token.
+    #[test]
+    fn unstake_and_collect_unstaked_parse_no_args() {
+        assert!(matches!(parse("unstake"), ResolvedCommand::Unstake));
+        assert!(matches!(
+            parse("collect_unstaked"),
+            ResolvedCommand::CollectUnstaked
+        ));
+        for line in [
+            "unstake 1",
+            "unstake 1.0",
+            "unstake --slot 0",
+            "unstake --fee 1",
+            "unstake extra",
+            "collect_unstaked 1",
+            "collect_unstaked 1.0",
+            "collect_unstaked --slot 0",
+            "collect_unstaked --amount 5",
+            "collect_unstaked extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    let verb = if line.starts_with("collect") {
+                        "collect_unstaked"
+                    } else {
+                        "unstake"
+                    };
+                    assert!(
+                        message.contains(verb) && message.contains("no arguments"),
+                        "{line:?} diagnostic must name the no-argument grammar: {message}"
+                    );
+                }
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
+            }
         }
     }
 

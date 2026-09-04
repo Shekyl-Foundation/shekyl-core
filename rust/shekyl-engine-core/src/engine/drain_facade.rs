@@ -47,6 +47,7 @@ use tokio::sync::RwLock;
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::bond_orchestrator::p_lane_floor_fee;
 use super::drain_dispatch::DrainRequestError;
+use super::drain_orchestrator::DrainIntent;
 use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
@@ -210,6 +211,14 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                 detail: detail.to_string(),
             },
             DrainRequestError::State { context, detail } => Self::State { context, detail },
+            // The seam now types the pre-seal daemon-tip failure separately
+            // (review-5), but that split serves the exit verbs; this WI-RPC-5
+            // façade keeps its prior disposition (the failure was `State`
+            // before) — retyping `drain_to_principal`'s daemon-outage remedy is
+            // its own concern, out of this finding's scope.
+            DrainRequestError::DaemonUnreachable { context, detail } => {
+                Self::State { context, detail }
+            }
             DrainRequestError::DrainPending => Self::InFlight,
             DrainRequestError::InputRaced => Self::InputRaced,
             DrainRequestError::Drain(orch) => match orch {
@@ -235,6 +244,13 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                 },
                 DrainOrchestrationError::Stake(e) => Self::State {
                     context: "drain assembly",
+                    detail: e.to_string(),
+                },
+                // Unreachable through this façade (it only ever sends a
+                // `Payment` intent — the structural test pins that); mapped
+                // for totality, as a defect rather than a user remedy.
+                e @ DrainOrchestrationError::SweepOnLivePersona => Self::State {
+                    context: "drain intent",
                     detail: e.to_string(),
                 },
             },
@@ -349,8 +365,14 @@ where
         // orchestrator mints it; then the crate-internal dispatch seam owns
         // everything else (reserve gate, seal, transport).
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
-        let receipt =
-            Engine::submit_drain(self_arc, identity.p_slot, payment, fee, &witness).await?;
+        let receipt = Engine::submit_drain(
+            self_arc,
+            identity.p_slot,
+            DrainIntent::Payment(payment),
+            fee,
+            &witness,
+        )
+        .await?;
 
         Ok(match receipt.submit {
             SubmitSuccess::Broadcast { hash, .. } => DrainOutcome::Broadcast { tx_hash: hash },
@@ -427,6 +449,15 @@ mod tests {
         assert!(
             code.contains("Engine::submit_drain("),
             "the one dispatch route is the crate-internal seam"
+        );
+        assert!(
+            code.contains("DrainIntent::Payment(")
+                && !code.contains("TerminalSweep")
+                && !code.contains("TerminalExitObserved"),
+            "this façade sends the user-target Payment intent ONLY — the \
+             terminal sweep and its witness mint belong to collect_unstaked \
+             (unstake_facade), whose exited-persona resolution this \
+             active-persona façade must never inherit"
         );
     }
 

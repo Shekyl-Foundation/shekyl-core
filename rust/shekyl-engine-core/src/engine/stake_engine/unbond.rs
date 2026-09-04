@@ -193,16 +193,15 @@ impl UnbondRecordState {
 /// Assemble the **full, wire-encoded** `Unbond` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
 ///
-/// "Wire-encoded" is not "reachable". Native `/submit_transaction` **does**
-/// admit an `Unbond` since 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
+/// The exit lane is REACHABLE as of PR-C: native `/submit_transaction`
+/// admits an `Unbond` (2026-08-29, `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
 /// this producer is the construction leg that fired that reopening
-/// criterion), and the dispatch seam ([`Engine::submit_unbond`]) now exists —
-/// `pub(crate)`, with no caller outside `#[cfg(test)]` (the daemon walk).
-/// What still holds the exit closed is that no RPC method or CLI verb
-/// reaches that seam — the margin is thinner than it was, not the same:
-/// admission used to refuse a dispatched exit as a second line of defence,
-/// and no longer would, and "nothing dispatches" has narrowed to "nothing
-/// user-facing dispatches".
+/// criterion), the dispatch seam ([`Engine::submit_unbond`]) exists, and
+/// `StakeFacade::unstake` drives it from wallet-RPC and the CLI. What
+/// protects the irreversible path now is no longer unreachability but the
+/// checks on the path itself — this handler's `ensure_exit_ready` refusal
+/// (consensus's own predicates), the engine-side persona resolution, and
+/// the CLI-side confirmation (`unstake_facade` module docs).
 ///
 /// [`Engine::submit_unbond`]: crate::engine::Engine::submit_unbond
 ///
@@ -212,11 +211,9 @@ impl UnbondRecordState {
 /// cooldown expiring on-chain, which is already public. Adding a draw here
 /// would delay an irreversible operation the user asked for, and hide nothing.
 ///
-/// **Not reachable, deliberately.** Nothing on this path is wired to an RPC
-/// method or CLI verb; wallet-RPC `unstake` stays RESERVED while those two
-/// conditions hold (`docs/api/wallet_rpc.yaml` — the gate is those
-/// conditions, never a walk having run: the daemon walk landed and lifted
-/// neither).
+/// **Reachable as of PR-C** through `StakeFacade::unstake` (wallet-RPC
+/// `unstake` shipped; `docs/api/wallet_rpc.yaml` records the gate's lift
+/// and the shipped-vs-RESERVED reconciliation).
 pub(crate) struct AssembleUnbond {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,

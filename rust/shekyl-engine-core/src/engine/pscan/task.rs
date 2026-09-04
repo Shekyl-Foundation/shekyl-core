@@ -42,17 +42,14 @@ use crate::engine::stake_engine::{
 ///
 /// Unbond is a genesis-valid archival bond-post kind (wire `Other(2)` ==
 /// [`BondPostKind::Unbond`]). This retire path fires when pscan sees a
-/// confirmed Unbond. The producer exists (`AssembleUnbond`), the dispatch
-/// seam exists (`Engine::submit_unbond`, `pub(crate)`, driven only by the
-/// daemon walk under `#[cfg(test)]`), and the lane stays deliberately
-/// unreachable from RPC/CLI — no RPC method, no CLI verb. Native
-/// `/submit_transaction` refusing `Unbond` stopped being a condition on
-/// 2026-08-29 (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1) and "nothing dispatches
-/// the assembled bytes" narrowed to "nothing user-facing dispatches" with
-/// PR-B, so the retire path this module drives is now two layers closer to
-/// live evidence, not the same distance. None of that lifted the gate; the
-/// consumer here is live and waits. The byte equivalence is pinned by a
-/// `scan_step` test so the two crates' assignments cannot drift.
+/// confirmed Unbond, and with PR-C the whole arc feeding it is live: the
+/// producer (`AssembleUnbond`), the dispatch seam (`Engine::submit_unbond`),
+/// and the user-facing verbs (`StakeFacade::unstake` posts the exit;
+/// `collect_unstaked`'s terminal sweep is what finally empties a slot so
+/// the funded gate below can clear — until PR-C no user path could produce
+/// that zero, so this consumer had passing coverage and no production
+/// reach). The byte equivalence is pinned by a `scan_step` test so the two
+/// crates' assignments cannot drift.
 const UNBOND_POST_KIND: u8 = BondPostKind::Unbond as u8;
 
 /// Default per-step batch size — the bounded `ScanStep` the actor offloads (DQ6).

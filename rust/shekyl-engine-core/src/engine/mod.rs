@@ -379,6 +379,8 @@ pub(crate) mod stake_timing;
 /// Transfer / pending-tx workflow (extracted from the former monofile
 /// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
 pub mod transfer;
+/// PR-C: the composed `unstake` — two named actions on `StakeFacade`.
+pub mod unstake_facade;
 // WI-RPC-1: read-only staked-balance/staked-output aggregation over the
 // authoritative sealed pscan/pending records, for the wallet-RPC surface.
 pub mod staking_read;
@@ -413,7 +415,7 @@ pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
 /// The `submit_unbond` dispatch seam (PR-P4): seal a `PendingUnbond`, then
-/// the persona-transport choke point — no decorrelation plan; gate narrowed.
+/// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
 pub(crate) mod unbond_dispatch;
 pub mod view_material;
 
@@ -487,6 +489,7 @@ pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
 pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
+pub use unstake_facade::{CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome};
 pub use view_material::ViewMaterial;
 
 use std::marker::PhantomData;
