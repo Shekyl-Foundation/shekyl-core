@@ -477,8 +477,8 @@ pub fn cmd_unstake(rpc: &RpcSession) {
 /// sweeps everything currently spendable (the engine computes the exact
 /// figure so nothing is left stranded), and the reply says what moved and
 /// what still remains. **A success is not completion** — the reply's
-/// two-part completion fact (this persona's remainder, plus whether an
-/// earlier exit's pool remains) is what this command renders explicitly
+/// two-part completion fact (this persona's remainder, plus whether
+/// another exit's pool remains) is what this command renders explicitly
 /// rather than letting "sent" read as "done".
 pub fn cmd_collect_unstaked(rpc: &RpcSession) {
     if !require_open(rpc) {
@@ -510,12 +510,13 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                     );
                     if remainder == "0" && another_pool_remains {
                         // The swept persona is done, but the exit lane is
-                        // not: a previously exited persona still holds
-                        // funds. Per-slot "0" must never read as lane-wide
+                        // not: another exited persona still holds funds (the
+                        // flag encodes no ordering between the exits).
+                        // Per-slot "0" must never read as lane-wide
                         // completion.
                         println!(
-                            "This collection is complete, but released funds from an \
-                             earlier exit still remain."
+                            "This collection is complete, but released funds from \
+                             another exit still remain."
                         );
                         println!("Run \"collect_unstaked\" again once this pass confirms.");
                     } else if remainder == "0" {
