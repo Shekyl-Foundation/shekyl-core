@@ -2928,12 +2928,29 @@ propagation — but a liveness cadence cannot.
 > `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
 > load change, and preserving the mean is what keeps the two separable.
 
-**The distribution is uniform, and that is a decision rather than a default.**
-A flat draw is the only one with no shape for an observer to fit: **any other
-family biases the interval and a bias is itself a pattern** — long-tailed,
-peaked, or truncated, each imprints a signature on the emission times that
-survives averaging. The relay lane already records what this costs when it goes
-wrong, in the CV-3 note above: resampling on a foreign wake and keeping the
+**The distribution is uniform, and the criterion is maximum entropy on a
+bounded support — not that uniform is uniquely unbiased.** Two conditions
+select it, in order:
+
+1. **Bounded support**, from the liveness argument above: an unbounded family
+   can delay a sync arbitrarily, and timed-sync is how a node learns it has
+   fallen behind.
+2. **Maximum entropy given that support.** Among bounded families with the same
+   mean, the uniform is the one an observer learns least from per observation;
+   a triangular or otherwise peaked draw has the same mean and a *recoverable
+   shape*, so repeated observation converges on it faster.
+
+> **The claim is that narrow deliberately.** Uniform is not shapeless — bounded
+> support is itself a recognisable signature — and an earlier version of this
+> row said "any other family biases the interval", which is not true of a
+> bounded symmetric family at the same mean. §1's sixth check, on the row's own
+> adopted option.
+
+**What *is* unconditional is that the specified draw must not be distorted.**
+Truncating it, re-rolling a value, or resampling on a foreign event all change
+the distribution actually realised, and that change is a pattern even when the
+family was chosen correctly. The relay lane records the cost when it happens by
+accident, in the CV-3 note above: resampling on a foreign wake and keeping the
 minimum biases the effective interval short, "a privacy defect no count
 assertion and no goodness-of-fit grade can see".
 
