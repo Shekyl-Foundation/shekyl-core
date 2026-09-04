@@ -199,7 +199,48 @@ the shard rather than being a pure hash visualization. A shard from a
 high-activity chain period looks visibly different from a quiet-period
 shard; experienced stakers learn to read this.
 
-## Candidate compositor (candidate.v1) — leading V3.x design
+## Parameter admissibility (ruling A)
+
+### The admissibility criterion (pre-registered 2026-09-04)
+
+This criterion is registered **before** the feature-by-feature sweep, so
+that every feature is judged against the same standard rather than one
+derived while walking the list. It is the design-review checkpoint from
+*Privacy considerations* below, stated as a testable rule:
+
+> **A feature is admissible iff it is a deterministic function of data
+> any holder of the shard can read from the shard's serialized blocks —
+> no key, no wallet state, no holder-specific privilege — so that a
+> rendering publishes nothing about the shard that holding the shard
+> does not.**
+
+Two clarifications that do work:
+
+- **"Holder" is the population, not the network.** Complete shards are
+  visible only to those who hold them (or otherwise have them on their
+  machine); the criterion is *holder-computability from held block
+  bytes*, not queryability over the network. This matches the original
+  framing ("computable by anyone holding the shard") and is what makes
+  the rendering an integrity check between holders.
+- **Aggregation is a design preference, not the privacy criterion.**
+  Features should be shard-wide aggregates for legibility and
+  continuity, but aggregation is neither necessary nor sufficient for
+  admissibility — an aggregate over data the chain hides (e.g. a mean
+  of confidential amounts) fails the criterion however aggregated.
+
+### The closed-world artifact property
+
+The criterion above is the feature-level application of a closed-world
+rule over the whole rendering:
+
+> **A rendering is a deterministic function of
+> (shard content, spec version) — and of nothing else.**
+
+The *and of nothing else* is load-bearing: any future input to the
+rendering — a new feature, a wallet setting, a locale, a device
+property — is a violation **by default** and must pass this section's
+criterion (and re-ratify this section) to be admitted. The burden runs
+toward exclusion; nothing is grandfathered by being convenient.
 
 Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
 **two-stage difference compositor** rather than the single-algorithm 3-bit
