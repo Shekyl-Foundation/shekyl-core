@@ -72,14 +72,14 @@ round's subject, flagged by the umbrella lane at round start:
   (the 1.7×/×50 clamps are consumed as boundary here, not derived — see
   §1.8 and §9).
 
-**Sequencing is Rick's decision, put to him by the umbrella lane:** either
+**Sequencing was Rick's decision, put to him by the umbrella lane:** either
 `FL-*` is registered as the substance of C2-R2 (and §8's signatures
 disposition those census rows), or FL runs separately and R2's fee rows are
-dispositioned by pointing at FL's ruling. This round therefore **holds at
-the design-doc stage**: §8 stays unsigned, and no CEN-M3 / CEN-F14b /
-CEN-G6b-shaped question is *ruled* here before the sequencing answer.
-Derivation, findings, and the unsigned table proceed — they are inputs to
-whichever sequencing wins, not rulings.
+dispositioned by pointing at FL's ruling. Until that answer the round
+**held at the design-doc stage** — §8 unsigned, no CEN-M3 / CEN-F14b /
+CEN-G6b-shaped question ruled here — with derivation, findings, and the
+then-unsigned table proceeding as inputs to whichever sequencing won, not
+rulings. The ruling below ended that hold.
 
 **Sequencing ruled at review round 2 (maintainer, 2026-09-03): census-R2
 is deferred, not silently.** FL-V8/FL-V9 are consensus-surface,
@@ -126,6 +126,23 @@ Priority order throughout: **privacy > security > correctness > performance
 > features**. Where an economic criterion and a privacy criterion conflict,
 the conflict is surfaced in §5/§8 as its own row; it is not resolved
 silently in either direction.
+
+**Post-registration correction (PR #614 review; the registered line above
+is kept, not rewritten — the register is committed history):** the line
+inverts the repository's canonical hierarchy.
+[`00-mission`](../../.cursor/rules/00-mission.mdc) makes **security &
+quantum resilience the precondition** and privacy second ("privacy is the
+product"), and declares that ordering the single source of truth; where
+this document and the rule disagree, the rule wins. Audit of every place
+the registered order was invoked — §1.1 FL-C1 (continuous schedules
+rejected on privacy), §1.11 FL-C9 (the anchored-reduction criterion), and
+§5.3's "privacy is lexicographically prior" resolution (rung count,
+re-applied at FL-R17) — shows each adjudicated conflict was
+**privacy-vs-economics**, a pair 00-mission resolves the same way this
+round did (privacy is the product; ladder economics is not a security
+precondition). No disposition in this document resolved a
+privacy-vs-security conflict, so none is contaminated by the inversion;
+any future round that meets that pair takes 00-mission's order.
 
 ### §1.1 FL-C1 — Continuous-schedule precommitment (privacy)
 
@@ -835,7 +852,7 @@ Readings, as corrected at round 6:
   (commit the fee, prove `fee − floor ≥ 0`) — out of scope: an FCMP++
   transaction-format surface, recorded as the endpoint and not designed.
 
-## §5 The rung ruling (proposed, unsigned) and the anonymity analysis
+## §5 The rung ruling (FL-R17 SIGNED at review round 7) and the anonymity analysis
 
 ### §5.1 Criteria disposition
 
@@ -962,9 +979,9 @@ estimate→admission state drift. Rationale: the clamp is correct
 *unconditionally* — whatever
 the floor is ruled to be later, serving an estimate below it dead-letters
 wallets (FL-V5, three of six states). Re-deriving the floor itself (scaling
-`get_dynamic_base_fee` by `C_q`, principled endpoint) **is CEN-M3's row**
-and is held for the §0.1 sequencing decision; deferral FL-D2 carries the
-reopen criteria. Until then the floor stays a lower bound the estimate
+`get_dynamic_base_fee` by `C_q`, principled endpoint) **is CEN-M3's row**,
+owed to the resumed census round now that census-R2 is unblocked (§0.1);
+deferral FL-D2 carries the routing. Until then the floor stays a lower bound the estimate
 respects, and the quiet-chain overpricing that survives the clamp is
 bounded by the measured 1.5× worst case. Measured status (review round 3):
 with the adopted ceiling `C_q` the clamp is **never live on the reachable
@@ -1080,8 +1097,8 @@ maintainer chooses to add: ________________
 
 | # | Deferred | Named blocker | Reopen when |
 | --- | --- | --- | --- |
-| FL-D1 | ~~Post-mining-era block-size governance~~ **CLOSED AS ANSWERED at round 8**: FL-R12′'s signed composition abolishes the `R = 0` era this row deferred to, and places the penalty AFTER the floor — the tail is penalized like any other reward, so the governance lever never dies. (Had the penalty composed before the floor, this row would have been *undeferrable*: the failure state would arrive at tail onset and never leave.) | *Historical (pre-signature) reopeners, retained as record:* (a) any round touches tail-era economics, or (b) the V4 lattice-only transition round opens. Residue after close is the FL-R13 calibration of a permanent ~20·`C_q`/byte floor, not a governance vacuum |
-| FL-D2 | Relay-floor re-derivation (scale `get_dynamic_base_fee` by `C_q`) | CEN-M3 is a queued census-R2 row; ruling it here would create the double-ratification §0.1 forbids | the §0.1 sequencing decision lands; or CEN-M3's round opens; or the clamp is observed binding in > 50% of mainnet estimate calls over a 30-day window (evidence the floor, not the ladder, is setting prices) |
+| FL-D1 | ~~Post-mining-era block-size governance~~ **CLOSED AS ANSWERED at round 8**: FL-R12′'s signed composition abolishes the `R = 0` era this row deferred to, and places the penalty AFTER the floor — the tail is penalized like any other reward, so the governance lever never dies. (Had the penalty composed before the floor, this row would have been *undeferrable*: the failure state would arrive at tail onset and never leave.) | *Historical (pre-signature) reopeners, retained as record:* (a) any round touches tail-era economics, or (b) the V4 lattice-only transition round opens | Closed — residue is the FL-R13 calibration of a permanent ~20·`C_q`/byte floor, not a governance vacuum |
+| FL-D2 | Relay-floor re-derivation (scale `get_dynamic_base_fee` by `C_q`) | CEN-M3 is a queued census-R2 row; ruling it here would create the double-ratification §0.1 forbids | *First criterion FIRED (the §0.1 sequencing landed at round 2; both resume conjuncts satisfied at round 8):* the item is routed, not reopened here — it lands in CEN-M3's resumed round. Early trigger unchanged: the clamp observed binding in > 50% of mainnet estimate calls over a 30-day window (evidence the floor, not the ladder, is setting prices) |
 | FL-D3 | A fourth tier, if UX ever wants one | No engine tier addresses one (FL-V3: `Elevated` has zero production callers); a rung without users is fingerprint surface | an engine/GUI round proposes a user-facing tier with a predicted ≥ 5% usage share under FL-C4b's test |
 | FL-D4 | Zone value (300 000) and the 1.7×/×50 clamps | CEN-G6b/G6 own them; this round consumed them as boundary (§1.8) | census-R2 may resume (both §0.1 conjuncts satisfied: FL-R12′ signed, red-test discharged); FL-R11 records the partial discharge so R2 inherits a smaller question |
 | FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 3 413× reward decay as the anti-spam floor, on a chain where stakers store what the floor admits | Its own pre-registered round: criteria must be committed before the floor model is chosen | Open on its own merits (FL-R12′ signature satisfied): the floor's long-run role is the *permanent tail-era floor* and the genesis-blocking escalation is retired; the round opens as FL-R13's calibration |

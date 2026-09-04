@@ -279,6 +279,35 @@ and both landed on this branch:
   had happened — the same defect class as round two's "BUILT on this
   branch." Corrected here in the commit made after both observations.
 
+## Review round 11 (PR #614 bot cycle three + maintainer sweep, 2026-09-04)
+
+Copilot's third pass: 9 open threads + 23 suppressed comments
+(deduplicating to one code finding and two clusters). Dispositions:
+
+- **Record currency (the largest cluster).** The round-8 signature had
+  outrun the doc in a dozen more places than the round-two/round-10
+  passes swept — §4.6's caveat, the §8 preamble, the FL-R13/FL-D1/
+  FL-D4/FL-D5 rows, the round-record banner, and the index FL row were
+  **fixed by the maintainer directly** (`2917de8e0`, which also closed
+  the corresponding open threads). This commit takes the remainder the
+  same class-sweep found: §0.1's pre-ruling hold paragraph (present
+  tense on a hold the round-2 ruling ended), the §5 heading (still
+  "proposed, unsigned" over a signed ruling), §5.4's "held for the
+  sequencing decision", and FL-D2 (its first reopen criterion FIRED at
+  rounds 2/8 — re-routed to CEN-M3's resumed round rather than left as
+  a deferral whose trigger already fired). Lesson honored from the
+  morning: each hit classified asserts-is / records-was — the round-4
+  provenance narrative, commit-log rows, and measured tables stay.
+- **Registered priority order (suppressed, VALID, High):** §1's
+  "privacy > security" line inverts `00-mission`'s canonical hierarchy.
+  The register is committed history, so the line stays and a
+  post-registration correction paragraph lands under it, with the audit
+  Copilot asked for: all three invocation sites adjudicated
+  privacy-vs-economics; no privacy-vs-security conflict was ever
+  resolved here; no disposition changes.
+- **One table repair:** the maintainer's FL-D1 rewrite dropped a cell
+  (MD056); re-split into blocker/reopen without content change.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
