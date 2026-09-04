@@ -775,7 +775,7 @@ input, not fixes.
     performed then); `292c00aff7` (2026-04-13) moved the code to the record
     because FAKECHAIN test blocks carry placeholder headers without touching
     the doc, and none of the later doc edits — four through the 2026-04-15
-    banner, thirty to date (`git log 292c00aff7..d9d27c752 --
+    banner, twenty-nine to date (`git rev-list --count 292c00aff7..d9d27c752 --
     docs/FCMP_PLUS_PLUS.md`) — reconciled the two, so the prose narrated
     dead code for five months. **Ruling:** the
     anchor is the curve-tree root *as it stands after `referenceBlock`
