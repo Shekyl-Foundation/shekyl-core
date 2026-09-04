@@ -13,7 +13,7 @@
 //! and is reused unchanged.
 //!
 //! **This module deliberately diverges from the C++ in four places**, which is
-//! why RK-5b carries `CORE_RPC_VERSION` 3.26. Each is recorded in the design
+//! why RK-5b carries `CORE_RPC_VERSION` 3.27. Each is recorded in the design
 //! doc's §7 with the evidence that settled it; the short forms are on the
 //! types below.
 

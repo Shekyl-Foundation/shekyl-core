@@ -873,6 +873,10 @@ pub(crate) async fn stake(
                 E::BondInFlight => WalletRpcError::StakeInFlight,
                 E::AlreadyStaked => WalletRpcError::AlreadyStaked,
                 E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+                // Neither -29500 ("fund and retry" — funding more worsens
+                // fragmentation) nor an internal fault (the funding is
+                // intact): its own code, rule 82.
+                E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
                 // Daemon-side fee failure: the build-path code whose remedy
                 // (check the daemon, retry) actually matches — never the
                 // "fund and retry" misdiagnosis (rule 82).

@@ -42,7 +42,7 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.26: three of the header methods change shape
+/// `CORE_RPC_VERSION_MINOR`. 3.27: three of the header methods change shape
 /// (RK-5b). `get_block_header_by_hash` answers **per element** — a
 /// `block_headers` array of `{hash, block_header?}` slots rather than a bare
 /// header array — and drops the singular `hash` request field, whose only
@@ -54,7 +54,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// carried no information the tiers did not. A changed member is a wire
 /// change, so it bumps this; the deltas are pinned test-by-test against the
 /// captured `_v1` vectors in `rust/shekyl-rpc-types/tests/vectors/rpc/`.
-/// 3.25: `get_transactions` drops `txs_as_hex` and
+/// **RK-5b drafted this as 3.26 and took 3.27 on merge**: `following_degraded`
+/// landed on `dev` first and claimed 26 while this branch was in flight, and
+/// the two edits agreed *character for character* on the constant's own line,
+/// so git merged it silently — the conflict appeared only in the prose above
+/// it. A number that two independent changes can both write is not protected
+/// by the fact that changing it is deliberate.
+/// 3.26: `get_info` gains `following_degraded`
+/// (C2-R1b F-1(a): sticky watermark-refusal flag; migrates into RK-5c's
+/// node-state hub). 3.25: `get_transactions` drops `txs_as_hex` and
 /// `txs_as_json` — the handler filled them "in case an old wallet asks" and
 /// the old wallet is `src/wallet/`, deleted, so they duplicated
 /// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
@@ -69,7 +77,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 26;
+pub const CORE_RPC_VERSION_MINOR: u32 = 27;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -341,19 +349,26 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 26) == 0x0003_001A == 196634. The captured
-        // get_version vector carries 196632 (3.24), which is what the C++
-        // emitted before RK-4c removed `txs_as_hex` / `txs_as_json`; a
-        // captured vector is not edited to follow a constant, so
-        // `assert_version_parity` compares every other field against it, the
-        // derived `_v2` carries the current value, and this pins the constant
-        // itself. Two spellings on purpose: the literal catches a bump that
-        // forgot this test, and the packing expression catches a bump that
-        // edited the literal without the fields it is made of.
-        assert_eq!(CORE_RPC_VERSION, 196_634);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 26);
+        // MAKE_CORE_RPC_VERSION(3, 27) == 0x0003_001B == 196635 (3.27:
+        // RK-5b's three header-method shape changes; 3.26 was
+        // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 the RK-4c
+        // `txs_as_hex`/`txs_as_json` removal). Captured vectors are never
+        // edited to follow a constant — each bump mints a sibling vector —
+        // so `assert_version_parity` compares every other field against
+        // them and this pins the constant itself.
+        //
+        // Four spellings, and the last two are why. The literal catches a
+        // bump that forgot this test; the packing expression catches a bump
+        // that edited the literal without the fields it is made of; and the
+        // two component assertions catch what actually happened between 3.26
+        // and 3.27 — **two branches wrote the same new value for different
+        // reasons and git merged the line clean**, because a one-line change
+        // from 25 to 26 is textually identical whoever makes it. The minor
+        // number is not a lock.
+        assert_eq!(CORE_RPC_VERSION, 196_635);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 27);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 26);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 27);
     }
 
     #[test]

@@ -1,5 +1,19 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-09-04) — `engine_trait_bench_key_merge_projection_iai`
+> converted; third cell to hit the deterministic form.** On PR #607 this
+> cell captured green on head `5e56fefad`, then reported `instructions=0`
+> on all 3 in-run attempts across two CI runs (the original and a fresh
+> rerun, run `33838623180`) once the next head (`f90e9ea2d`) shifted
+> engine-core enough to tip the wrapper fold — while measuring ~5.16M
+> instructions locally under valgrind 3.24.0. The 2026-08-30 remedy
+> applied verbatim: `client_requests` + `--instr-atstart=no` +
+> `EntryPoint::None`, `black_box` inside the measured region. Converted
+> count 5,157,997 vs toggle-based 5,158,026 (−0.00056%, well inside the
+> ±10% warn band). Anti-symmetry clause honoured: only the cell that
+> demonstrably zeroed was converted; the remaining toggle-based `_iai`
+> cells stay until one of them fails.
+
 > **Update (2026-08-30) — the flake has a deterministic form, and "re-run
 > the workflow" cannot clear it; `key_dispatch_baseline_iai` converted to
 > client requests.** On PR #576 the `engine_trait_bench_key_dispatch_baseline_iai`

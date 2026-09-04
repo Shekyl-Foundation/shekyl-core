@@ -87,10 +87,10 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 // CORE_RPC_VERSION lives in rust/shekyl-rpc-types/src/chain.rs since RK-1:
-// get_version, its only reader, is served natively. The value is deliberately
-// not repeated here — a second copy of a constant that bumps per wire change
-// is a copy that goes stale silently, and this one had (it said 3.25 through
-// RK-5b's bump to 3.26).
+// get_version, the only thing that *emits* it, is served natively. (No number
+// here on purpose: a prose copy of a moving constant only goes stale. This one
+// had — it said 3.25 through two bumps. Both branches in flight deleted it
+// independently, which is the tell.)
 
   struct rpc_request_base
   {
@@ -250,6 +250,7 @@ namespace cryptonote
       std::string version;
       uint32_t protocol_version;
       bool synchronized;
+      bool following_degraded;
       bool restricted;
 
       // Shekyl NG four-component economics fields
@@ -297,6 +298,7 @@ namespace cryptonote
         KV_SERIALIZE(version)
         KV_SERIALIZE(protocol_version)
         KV_SERIALIZE(synchronized)
+        KV_SERIALIZE(following_degraded)
         KV_SERIALIZE(restricted)
         KV_SERIALIZE(release_multiplier)
         KV_SERIALIZE(burn_pct)

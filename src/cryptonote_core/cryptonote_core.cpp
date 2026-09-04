@@ -251,8 +251,11 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::update_checkpoints()
   {
-    if (m_nettype != MAINNET) return true;
-
+    // Uniform across every network (C2-R1b-Q2a, rule 71): the periodic
+    // checkpoint reload runs wherever a checkpoints.json exists, so an
+    // operator can rehearse an override on testnet before touching
+    // mainnet. The former `!= MAINNET` guard returned TRUE — reporting
+    // success for work it never did.
     if (m_checkpoints_updating.test_and_set()) return true;
 
     bool res = true;
@@ -323,7 +326,11 @@ namespace cryptonote
 
     auto data_dir = boost::filesystem::path(m_config_folder);
 
-    if (m_nettype == MAINNET)
+    // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
+    // wiring — the points object AND the json reload path — is
+    // identical on mainnet, testnet and stagenet. Data may differ per
+    // network (the compiled-in list, when one ever exists); the code
+    // path may not.
     {
       cryptonote::checkpoints checkpoints;
       if (!checkpoints.init_default_checkpoints(m_nettype))
@@ -1567,7 +1574,6 @@ namespace cryptonote
     m_check_disk_space_interval.do_call(boost::bind(&core::check_disk_space, this));
     m_block_rate_interval.do_call(boost::bind(&core::check_block_rate, this));
     m_blockchain_pruning_interval.do_call(boost::bind(&core::update_blockchain_pruning, this));
-    m_diff_recalc_interval.do_call(boost::bind(&core::recalculate_difficulties, this));
     m_miner.on_idle();
     m_mempool.on_idle();
     return true;
@@ -1687,12 +1693,6 @@ namespace cryptonote
       }
     }
 
-    return true;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::recalculate_difficulties()
-  {
-    m_blockchain_storage.recalculate_difficulties();
     return true;
   }
   //-----------------------------------------------------------------------------------------------

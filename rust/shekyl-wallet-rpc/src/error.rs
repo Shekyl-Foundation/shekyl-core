@@ -158,6 +158,11 @@ pub enum WalletRpcErrorCode {
     /// Stake: the foundation posture was requested without the
     /// acknowledgment; the refusal message is the warning itself (D-4).
     StakeFoundationUnacknowledged = -29506,
+    /// Stake: the persona's spendable funding is fragmented across more
+    /// outputs than one bond post's vin headroom carries (the consensus
+    /// vin cap minus the post's own bond input). W1-clean; funding is
+    /// intact — neither "fund and retry" nor an internal fault.
+    StakeFundingFragmented = -29512,
     /// Drain: this wallet runs no stake engine — it is not an archival
     /// staker, and the drain path does not exist here (WI-RPC-5;
     /// `stake_in`'s equivalent refusal is `-29500`).
@@ -176,6 +181,69 @@ pub enum WalletRpcErrorCode {
     /// Drain: the one-live-drain-per-persona seal (a pending drain exists,
     /// or a concurrent post raced this drain's inputs — retry).
     DrainInFlight = -29511,
+    /// Unstake/collect: this wallet runs no stake engine — the exit lane
+    /// does not exist here (the drain's `-29507` sibling; shared by both
+    /// exit verbs, which are one lane).
+    UnstakeNotStaker = -29513,
+    /// Unstake: no persona holds a live confirmed bond and nothing is
+    /// mid-exit — there is nothing to unstake.
+    UnstakeNothingStaked = -29514,
+    /// Unstake: the only bond activity is a confirming bond post — wait
+    /// for it to confirm, then unstake.
+    UnstakeBondConfirming = -29515,
+    /// Unstake: an exit is already in progress (dispatched or awaiting
+    /// collection) — wait, then `collect_unstaked`.
+    UnstakeExitInProgress = -29516,
+    /// Unstake: consensus's readiness predicates refuse the exit for now
+    /// (cooldown / slash watermark / interval log); `data.detail` carries
+    /// the operands that say when the refusal lifts.
+    UnstakeNotReady = -29517,
+    /// Unstake: the daemon holds no bond record for the resolved persona —
+    /// wallet and chain disagree; resync and retry.
+    UnstakeNoBondRecord = -29518,
+    /// Unstake: the exit's floor fee cannot be funded from the persona pool
+    /// yet — wait for outputs to mature or land.
+    UnstakeNotFundable = -29519,
+    /// Unstake: a transient condition (reference view syncing, or a
+    /// concurrent operation raced the exit's inputs); nothing was sent —
+    /// retry. `data.cause` distinguishes `"syncing"` / `"raced"`.
+    UnstakeRetryTransient = -29520,
+    /// Unstake: the daemon refused the exit with a definite first-send
+    /// verdict and the sealed record was RELEASED — nothing propagated;
+    /// address the named refusal and retry at will.
+    UnstakeRefusedReleased = -29521,
+    /// Unstake: the exit's network fate is unknown (or retryable-refused);
+    /// its sealed record is HELD funds-safe and the one-live-exit lane
+    /// stays shut until it settles or the recovery slice disposes of it.
+    /// Do NOT retry blindly; the stall alarm names the record.
+    UnstakeFateUnknown = -29522,
+    /// Collect: no confirmed exit awaits collection — unstake first, or
+    /// wait for the exit to confirm and be observed.
+    CollectNoExit = -29523,
+    /// Collect: the released collateral is not spendable yet — wait for
+    /// maturity and retry.
+    CollectNotSpendableYet = -29524,
+    /// Collect: the remaining residue cannot fund the fee plus a payable
+    /// amount (the 2-atomic-unit two-output split floor) — the named dust
+    /// residual; it stays in the persona's pool.
+    CollectDustRemainder = -29525,
+    /// Collect: a sweep pass is already in flight for this persona (or a
+    /// concurrent operation raced this pass's inputs — `data.cause`).
+    CollectPassInFlight = -29526,
+    /// Collect: no submittable curve-tree reference can be anchored yet —
+    /// transient; sync and retry.
+    CollectSyncing = -29527,
+    /// Unstake: the exit's record fetch rides the wallet's OWN node on
+    /// loopback only (the local transport posture; remote posture for the
+    /// exit lands with posture selection, DQ-T2.3) — this server's daemon
+    /// address is not loopback. Operator-actionable configuration, never an
+    /// internal fault.
+    UnstakeLocalNodeRequired = -29528,
+    /// Collect: a daemon query needed to prepare the sweep failed (the
+    /// dispatch-tip clock read) before anything was sealed — the daemon is
+    /// unreachable, not the wallet out of sync (`-29527`) nor an internal
+    /// fault (`-32603`). Check the daemon and retry.
+    CollectDaemonUnreachable = -29529,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -368,6 +436,17 @@ pub enum WalletRpcError {
     /// scheduled broadcast; no action needed.
     #[error("stake already in flight: the bond will broadcast at its scheduled time")]
     StakeInFlight,
+    /// Stake: the persona's spendable funding is fragmented across more
+    /// outputs than one bond post can carry (W1-clean; the funding is
+    /// intact). Carries the public headroom constant, never the wallet's
+    /// record count.
+    #[error(
+        "stake refused: persona funding is fragmented across more than {max} spendable          outputs — more than one bond post can carry; avoid splitting persona funding          across more than {max} stake_in transfers"
+    )]
+    StakeFundingFragmented {
+        /// The per-transaction funding-input headroom (public constant).
+        max: usize,
+    },
     /// Stake: the wallet already staked (a confirmed bond exists).
     #[error("already staking")]
     AlreadyStaked,
@@ -492,6 +571,119 @@ pub enum WalletRpcError {
     )]
     DrainInputRaced,
 
+    /// `unstake`/`collect_unstaked` (`-29513`): no stake engine runs here.
+    #[error("this wallet is not a staker: no stake engine is running")]
+    UnstakeNotStaker,
+    /// `unstake` (`-29514`): nothing is staked.
+    #[error("nothing is staked: no persona holds a live bond")]
+    UnstakeNothingStaked,
+    /// `unstake` (`-29515`): the bond post is still confirming.
+    #[error(
+        "your stake is still confirming: a bond post is in flight — wait for \
+         it to confirm, then unstake"
+    )]
+    UnstakeBondConfirming,
+    /// `unstake` (`-29516`): an exit is already in progress.
+    #[error(
+        "an exit is already in progress — wait for it to confirm, then \
+         collect the released collateral with collect_unstaked"
+    )]
+    UnstakeExitInProgress,
+    /// `unstake` (`-29517`): consensus readiness refuses for now;
+    /// `data.detail` carries the predicate's own operands (when it lifts).
+    #[error("the exit is not ready yet — see data.detail for when it lifts")]
+    UnstakeNotReady {
+        /// The readiness predicate's own rendering.
+        detail: String,
+    },
+    /// `unstake` (`-29518`): the daemon holds no bond record.
+    #[error(
+        "the daemon holds no bond record for this persona — the wallet and \
+         chain disagree; resync and retry"
+    )]
+    UnstakeNoBondRecord,
+    /// `unstake` (`-29519`): the exit fee cannot be funded from the pool yet.
+    #[error("the exit cannot be funded from the persona pool yet — see data.detail")]
+    UnstakeNotFundable {
+        /// The assembly's own reason.
+        detail: String,
+    },
+    /// `unstake` (`-29520`): transient — retry. `data.cause` says which.
+    #[error("a transient condition refused the exit; nothing was sent — retry")]
+    UnstakeRetryTransient {
+        /// `"syncing"` or `"raced"`.
+        cause: &'static str,
+        /// The refusing stage's own rendering.
+        detail: String,
+    },
+    /// `unstake` (`-29521`): definite refusal, seal released — retry at will
+    /// after addressing `data.detail`.
+    #[error("the daemon refused the exit and nothing was sent — see data.detail, then retry")]
+    UnstakeRefusedReleased {
+        /// The daemon's verdict rendering.
+        detail: String,
+    },
+    /// `unstake` (`-29522`): fate unknown; sealed record held funds-safe.
+    #[error(
+        "the exit's network fate is unknown; its record is held funds-safe \
+         and the exit lane stays shut until it settles — do not retry blindly"
+    )]
+    UnstakeFateUnknown {
+        /// The transport/verdict rendering.
+        detail: String,
+    },
+    /// `collect_unstaked` (`-29523`): nothing awaits collection.
+    #[error(
+        "no confirmed exit awaits collection — unstake first, or wait for \
+         the exit to confirm and the wallet to observe it"
+    )]
+    CollectNoExit,
+    /// `collect_unstaked` (`-29524`): not spendable yet — wait for maturity.
+    #[error("the released collateral is not spendable yet — wait for maturity and retry")]
+    CollectNotSpendableYet,
+    /// `collect_unstaked` (`-29525`): the dust residual, named (scalar-free).
+    #[error(
+        "the remaining residue is too small to move (it cannot fund the fee \
+         plus a payable amount); it stays in the persona's pool"
+    )]
+    CollectDustRemainder,
+    /// `collect_unstaked` (`-29526`): one live pass per persona (or the
+    /// pass's inputs raced — `data.cause`, the `-29511` precedent).
+    #[error("a sweep pass is already in flight for this persona; wait for it to settle")]
+    CollectPassInFlight,
+    /// `collect_unstaked` (`-29526`, retry remedy): inputs raced — retry.
+    #[error(
+        "a concurrent staking operation changed this pass's inputs; nothing \
+         was sent — retry"
+    )]
+    CollectInputRaced,
+    /// `collect_unstaked` (`-29527`): reference view syncing — retry later.
+    #[error("no submittable reference can be anchored yet — sync and retry")]
+    CollectSyncing {
+        /// The anchoring helper's own (scalar-free) reason.
+        detail: String,
+    },
+    /// `collect_unstaked` (`-29529`): a daemon query needed to prepare the
+    /// sweep failed before sealing — the daemon is unreachable; check it and
+    /// retry.
+    #[error("the daemon could not be reached to prepare the sweep — check the daemon and retry")]
+    CollectDaemonUnreachable {
+        /// Which daemon query failed, and the transport's own reason.
+        detail: String,
+    },
+    /// `unstake` (`-29528`): the exit lane needs the wallet's own loopback
+    /// node; this server points at a non-loopback daemon.
+    #[error(
+        "unstake needs this wallet's own node: the exit's record fetch runs \
+         over loopback only — point the wallet server's daemon address at a \
+         local node (remote-daemon support for the exit arrives with \
+         transport-posture selection)"
+    )]
+    UnstakeLocalNodeRequired {
+        /// The transport constructor's own refusal.
+        detail: String,
+    },
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -552,6 +744,7 @@ impl WalletRpcError {
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
+            Self::StakeFundingFragmented { .. } => WalletRpcErrorCode::StakeFundingFragmented,
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
             Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
@@ -564,6 +757,25 @@ impl WalletRpcError {
             Self::DrainReserveBreached => WalletRpcErrorCode::DrainReserveBreached,
             Self::DrainUnanchorable { .. } => WalletRpcErrorCode::DrainUnanchorable,
             Self::DrainInFlight | Self::DrainInputRaced => WalletRpcErrorCode::DrainInFlight,
+            Self::UnstakeNotStaker => WalletRpcErrorCode::UnstakeNotStaker,
+            Self::UnstakeNothingStaked => WalletRpcErrorCode::UnstakeNothingStaked,
+            Self::UnstakeBondConfirming => WalletRpcErrorCode::UnstakeBondConfirming,
+            Self::UnstakeExitInProgress => WalletRpcErrorCode::UnstakeExitInProgress,
+            Self::UnstakeNotReady { .. } => WalletRpcErrorCode::UnstakeNotReady,
+            Self::UnstakeNoBondRecord => WalletRpcErrorCode::UnstakeNoBondRecord,
+            Self::UnstakeNotFundable { .. } => WalletRpcErrorCode::UnstakeNotFundable,
+            Self::UnstakeRetryTransient { .. } => WalletRpcErrorCode::UnstakeRetryTransient,
+            Self::UnstakeRefusedReleased { .. } => WalletRpcErrorCode::UnstakeRefusedReleased,
+            Self::UnstakeFateUnknown { .. } => WalletRpcErrorCode::UnstakeFateUnknown,
+            Self::CollectNoExit => WalletRpcErrorCode::CollectNoExit,
+            Self::CollectNotSpendableYet => WalletRpcErrorCode::CollectNotSpendableYet,
+            Self::CollectDustRemainder => WalletRpcErrorCode::CollectDustRemainder,
+            Self::CollectPassInFlight | Self::CollectInputRaced => {
+                WalletRpcErrorCode::CollectPassInFlight
+            }
+            Self::CollectSyncing { .. } => WalletRpcErrorCode::CollectSyncing,
+            Self::CollectDaemonUnreachable { .. } => WalletRpcErrorCode::CollectDaemonUnreachable,
+            Self::UnstakeLocalNodeRequired { .. } => WalletRpcErrorCode::UnstakeLocalNodeRequired,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -587,13 +799,23 @@ impl WalletRpcError {
             Self::SubmitRejected { data } => Some(data.clone()),
             Self::StakeNotReady { detail }
             | Self::RescanBlocked { detail }
-            | Self::DrainUnanchorable { detail } => Some(json!({ "detail": detail })),
+            | Self::DrainUnanchorable { detail }
+            | Self::UnstakeNotReady { detail }
+            | Self::UnstakeNotFundable { detail }
+            | Self::UnstakeRefusedReleased { detail }
+            | Self::UnstakeFateUnknown { detail }
+            | Self::CollectSyncing { detail }
+            | Self::CollectDaemonUnreachable { detail }
+            | Self::UnstakeLocalNodeRequired { detail } => Some(json!({ "detail": detail })),
             // The `-29511` pair shares one code with two remedies; the
             // structured discriminant is what lets automation branch
             // wait-vs-retry without parsing prose (the -29500 `data.detail`
             // precedent, F-2).
-            Self::DrainInFlight => Some(json!({ "cause": "pending" })),
-            Self::DrainInputRaced => Some(json!({ "cause": "raced" })),
+            Self::DrainInFlight | Self::CollectPassInFlight => Some(json!({ "cause": "pending" })),
+            Self::DrainInputRaced | Self::CollectInputRaced => Some(json!({ "cause": "raced" })),
+            Self::UnstakeRetryTransient { cause, detail } => {
+                Some(json!({ "cause": cause, "detail": detail }))
+            }
             Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
             Self::DaemonFeeUnreasonable {
                 reason,
@@ -923,6 +1145,108 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
                 Self::SubmitAmbiguous
             }
+        }
+    }
+}
+
+impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
+    /// The `unstake` code table (PR-C): `-29513..-29522`, every arm named —
+    /// no engine refusal falls through to `-32603` (the round-5 lesson from
+    /// `-29512`). The two dispatch dispositions stay distinct because they
+    /// demand opposite client behavior: `-29521` (seal released — retry at
+    /// will) vs `-29522` (seal held — do not re-fire).
+    fn from(err: shekyl_engine_core::UnstakeError) -> Self {
+        use shekyl_engine_core::UnstakeError as E;
+        match err {
+            E::NotStaker => Self::UnstakeNotStaker,
+            E::NothingStaked => Self::UnstakeNothingStaked,
+            E::BondConfirming => Self::UnstakeBondConfirming,
+            E::ExitInProgress => Self::UnstakeExitInProgress,
+            E::NotReady { detail } => Self::UnstakeNotReady { detail },
+            E::NoBondRecord => Self::UnstakeNoBondRecord,
+            E::ExitNotFundable { detail } => Self::UnstakeNotFundable { detail },
+            E::Resyncing { detail } => Self::UnstakeRetryTransient {
+                cause: "syncing",
+                detail,
+            },
+            E::InputRaced => Self::UnstakeRetryTransient {
+                cause: "raced",
+                detail: "a concurrent operation raced the exit's inputs".into(),
+            },
+            // A pre-seal daemon outage is transient like the two above, on the
+            // same generic retry code with its own cause; NOT -32603.
+            E::DaemonUnreachable { detail } => Self::UnstakeRetryTransient {
+                cause: "daemon",
+                detail,
+            },
+            E::FeeEstimate { detail } => {
+                tracing::warn!(detail = %detail, "unstake fee estimate failed");
+                Self::FeeEstimationFailed
+            }
+            E::FeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            },
+            E::ExitRefusedAndReleased { detail } => Self::UnstakeRefusedReleased { detail },
+            E::ExitFateUnknown { detail } => {
+                tracing::warn!(detail = %detail, "unstake dispatch fate unknown; seal held");
+                Self::UnstakeFateUnknown { detail }
+            }
+            // NOT -32603: a non-loopback daemon address
+            // is operator-fixable configuration — every other verb works over
+            // a remote daemon, so "internal error" on exactly this one is the
+            // hard-to-diagnose shape rule 82 forbids. Named code + remedy.
+            E::Transport { detail } => Self::UnstakeLocalNodeRequired { detail },
+            E::Engine { context, detail } => internal_detail(context, detail),
+        }
+    }
+}
+
+impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
+    /// The `collect_unstaked` code table (PR-C): `-29513` + `-29523..-29527` +
+    /// `-29529` (a pre-seal daemon outage);
+    /// the fee arms reuse the send path's `-29102`/`-29109` split and a
+    /// post-seal transport failure is `-29107` (the drain precedent — the
+    /// sealed pass's fate is the driver's; the client must not re-fire
+    /// blindly).
+    fn from(err: shekyl_engine_core::CollectUnstakedError) -> Self {
+        use shekyl_engine_core::CollectUnstakedError as E;
+        match err {
+            E::NotStaker => Self::UnstakeNotStaker,
+            E::NoExitToCollect => Self::CollectNoExit,
+            E::NothingSpendableYet => Self::CollectNotSpendableYet,
+            E::DustRemainder => Self::CollectDustRemainder,
+            E::PassInFlight => Self::CollectPassInFlight,
+            E::InputRaced => Self::CollectInputRaced,
+            E::Unanchorable { detail } => Self::CollectSyncing { detail },
+            // A pre-seal daemon outage is retryable, but its remedy ("check the
+            // daemon") is not `CollectSyncing`'s ("wait for sync"), so it gets
+            // its own code rather than borrowing one with the wrong text
+            // NOT -32603.
+            E::DaemonUnreachable { detail } => Self::CollectDaemonUnreachable { detail },
+            E::FeeEstimate { detail } => {
+                tracing::warn!(detail = %detail, "collect_unstaked fee estimate failed");
+                Self::FeeEstimationFailed
+            }
+            E::FeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            },
+            E::Submit { detail } => {
+                tracing::warn!(detail = %detail, "collect_unstaked dispatch failed at the choke point");
+                Self::SubmitAmbiguous
+            }
+            E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
 }
@@ -1416,6 +1740,198 @@ mod tests {
         }
         .into();
         assert_eq!(wire.code().as_i32(), -32603);
+    }
+
+    /// The fragmented-funding stake refusal mints `-29512` and renders the
+    /// public headroom constant, never the wallet's record count (which the
+    /// arm does not even carry) — the classification whose absence routed
+    /// this condition to `-32603` "internal error" (review #601 r5).
+    #[test]
+    fn stake_funding_fragmented_is_29512_and_count_free() {
+        let err = WalletRpcError::StakeFundingFragmented { max: 7 };
+        assert_eq!(err.code().as_i32(), -29512);
+        assert!(err.to_string().contains('7'), "the headroom renders");
+        assert!(
+            err.to_string().contains("fragmented"),
+            "names the condition"
+        );
+    }
+
+    /// This bites against any `unstake` refusal falling through to `-32603`
+    /// (the classification gap `-29512` was minted to close, #601 r5): every
+    /// user-recoverable façade arm maps to its own `-295xx` code, and the two
+    /// dispatch dispositions get DIFFERENT codes because they demand opposite
+    /// client behavior (released ⇒ retry at will; held ⇒ do not re-fire).
+    /// It does NOT cover the engine's own arm selection.
+    #[test]
+    fn every_unstake_refusal_has_a_named_code_and_dispositions_differ() {
+        use shekyl_engine_core::UnstakeError as E;
+        let cases: Vec<(WalletRpcError, i32)> = vec![
+            (E::NotStaker.into(), -29513),
+            (E::NothingStaked.into(), -29514),
+            (E::BondConfirming.into(), -29515),
+            (E::ExitInProgress.into(), -29516),
+            (
+                E::NotReady {
+                    detail: "cooldown".into(),
+                }
+                .into(),
+                -29517,
+            ),
+            (E::NoBondRecord.into(), -29518),
+            (
+                E::ExitNotFundable {
+                    detail: "immature".into(),
+                }
+                .into(),
+                -29519,
+            ),
+            (
+                E::Resyncing {
+                    detail: "lagging".into(),
+                }
+                .into(),
+                -29520,
+            ),
+            (E::InputRaced.into(), -29520),
+            (
+                E::DaemonUnreachable {
+                    detail: "connection refused".into(),
+                }
+                .into(),
+                -29520,
+            ),
+            (
+                E::ExitRefusedAndReleased {
+                    detail: "refused".into(),
+                }
+                .into(),
+                -29521,
+            ),
+            (
+                E::ExitFateUnknown {
+                    detail: "timeout".into(),
+                }
+                .into(),
+                -29522,
+            ),
+        ];
+        for (err, code) in &cases {
+            assert_eq!(err.code().as_i32(), *code, "{err}");
+            assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
+        }
+        let fee_query: WalletRpcError = E::FeeEstimate {
+            detail: "daemon down".into(),
+        }
+        .into();
+        assert_eq!(
+            fee_query.code().as_i32(),
+            -29102,
+            "a failed fee QUERY keeps the shared retry-the-daemon code"
+        );
+        let fee_refused: WalletRpcError = E::FeeUnreasonable {
+            reason: "per-weight rate above ceiling",
+            rate: 9,
+            bound: 3,
+        }
+        .into();
+        assert_eq!(
+            fee_refused.code().as_i32(),
+            -29109,
+            "a refused fee ANSWER keeps the shared sanity-ceiling code"
+        );
+        let transport: WalletRpcError = E::Transport {
+            detail: "not loopback".into(),
+        }
+        .into();
+        assert_eq!(
+            transport.code().as_i32(),
+            -29528,
+            "a non-loopback daemon is operator config, never -32603"
+        );
+        // The shared-transient pair splits on data.cause, the -29511 shape.
+        let syncing: WalletRpcError = E::Resyncing {
+            detail: "lagging".into(),
+        }
+        .into();
+        assert_eq!(syncing.data().expect("data")["cause"], "syncing");
+        let raced: WalletRpcError = E::InputRaced.into();
+        assert_eq!(raced.data().expect("data")["cause"], "raced");
+        // A pre-seal daemon outage joins the same generic retry code on its
+        // own cause — retryable, never -32603.
+        let daemon: WalletRpcError = E::DaemonUnreachable {
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(daemon.data().expect("data")["cause"], "daemon");
+    }
+
+    /// The `collect_unstaked` table: named codes for the exit-collection
+    /// states, the drain's shared fee/ambiguous codes for the shared
+    /// machinery, and a scalar-free dust rendering (the sweep IS the
+    /// P→principal value-out leg, so its refusals carry no amounts).
+    #[test]
+    fn collect_unstaked_codes_and_scalar_free_dust() {
+        use shekyl_engine_core::CollectUnstakedError as E;
+        let cases: Vec<(WalletRpcError, i32)> = vec![
+            (E::NotStaker.into(), -29513),
+            (E::NoExitToCollect.into(), -29523),
+            (E::NothingSpendableYet.into(), -29524),
+            (E::DustRemainder.into(), -29525),
+            (E::PassInFlight.into(), -29526),
+            (E::InputRaced.into(), -29526),
+            (
+                E::Unanchorable {
+                    detail: "tree behind tip".into(),
+                }
+                .into(),
+                -29527,
+            ),
+            (
+                E::DaemonUnreachable {
+                    detail: "connection refused".into(),
+                }
+                .into(),
+                -29529,
+            ),
+            (
+                E::FeeEstimate {
+                    detail: "daemon down".into(),
+                }
+                .into(),
+                -29102,
+            ),
+            (
+                E::Submit {
+                    detail: "transport".into(),
+                }
+                .into(),
+                -29107,
+            ),
+        ];
+        for (err, code) in &cases {
+            assert_eq!(err.code().as_i32(), *code, "{err}");
+            assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
+        }
+        // A pre-seal daemon outage is its own retryable code, not the
+        // sync-remedy `-29527` nor an opaque internal fault.
+        let unreachable: WalletRpcError = E::DaemonUnreachable {
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(
+            unreachable.data().expect("data")["detail"],
+            "connection refused"
+        );
+        let dust: WalletRpcError = E::DustRemainder.into();
+        assert!(
+            !dust.to_string().chars().any(|c| c.is_ascii_digit()),
+            "the dust rendering is scalar-free: {dust}"
+        );
+        let pending: WalletRpcError = E::PassInFlight.into();
+        assert_eq!(pending.data().expect("data")["cause"], "pending");
+        let raced: WalletRpcError = E::InputRaced.into();
+        assert_eq!(raced.data().expect("data")["cause"], "raced");
     }
 
     /// `stake_in` mints no new codes: the no-persona arms are `-29500`

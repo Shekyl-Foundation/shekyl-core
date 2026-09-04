@@ -250,6 +250,9 @@ namespace cryptonote
     res.version = restricted ? "" : SHEKYL_VERSION_FULL;
     res.protocol_version = SHEKYL_PROTOCOL_VERSION;
     res.synchronized = check_core_ready();
+    // C2-R1b F-1(a): sticky watermark-refusal flag -- monitoring must see a
+    // node that is knowingly not following the heaviest chain it has seen.
+    res.following_degraded = m_core.get_blockchain_storage().is_following_degraded();
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 
@@ -1443,7 +1446,15 @@ namespace cryptonote
   {
     RPC_TRACKER(pop_blocks);
 
-    m_core.get_blockchain_storage().pop_blocks(req.nblocks);
+    if (!m_core.get_blockchain_storage().pop_blocks(req.nblocks))
+    {
+      // C2-R1b F-1: a watermark refusal (or a mid-pop failure) must reach
+      // the caller as an explicit error, never as OK with an unchanged
+      // height an operator has to notice.
+      res.height = m_core.get_current_blockchain_height();
+      res.status = "Refused or failed: rollback would cross the prune watermark floor (or popping failed part-way); see the daemon log; remedy for a watermark refusal: resync this node";
+      return true;
+    }
 
     res.height = m_core.get_current_blockchain_height();
     res.status = CORE_RPC_STATUS_OK;

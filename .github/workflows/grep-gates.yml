@@ -129,6 +129,8 @@ jobs:
             scripts/ci/check_debit_auth_single_source.sh
           run_one "Rule 71: nettype selects data, not control flow" \
             scripts/ci/check_network_uniformity.sh
+          run_one "PoW test-seam containment (CEN-D2)" \
+            scripts/ci/check_pow_test_seam.sh
           run_one "LV-1: levin wire-constant parity" \
             ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \

@@ -719,28 +719,78 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
     );
 }
 
+/// The whole `get_version` vector chain, not just its newest pair.
+///
+/// **This used to pin one pair and was renamed at each bump**, on the
+/// reasoning that "each earlier pair's record is the vector files themselves
+/// plus git history". RK-5b's merge showed what that leaves unguarded: this
+/// branch bumped `_v2` from 196633 to 196634 for a 3.26 it drafted, `dev`
+/// independently minted `_v3` at 196634 for a *different* 3.26, and the merge
+/// took both — leaving `_v2` and `_v3` carrying the same number with no test
+/// able to see it, because a one-pair test overwrites the `version` field
+/// before comparing. The chain is the subject; every link is now checked.
+///
+/// A bump adds a file and a row here. It does not rename this test.
 #[test]
-fn get_version_v2_is_v1_with_only_the_version_bumped() {
-    let mut before = parsed(include_str!("vectors/rpc/get_version_synced_v1.json"));
-    let after = parsed(include_str!("vectors/rpc/get_version_synced_v2.json"));
+fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
+    // One row per bump, oldest first. Each is (the vector before the bump,
+    // the vector after it).
+    let links: [(&str, &str); 3] = [
+        (
+            include_str!("vectors/rpc/get_version_synced_v1.json"),
+            include_str!("vectors/rpc/get_version_synced_v2.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v2.json"),
+            include_str!("vectors/rpc/get_version_synced_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v3.json"),
+            include_str!("vectors/rpc/get_version_synced_v4.json"),
+        ),
+    ];
 
-    let old = before
-        .as_object_mut()
-        .expect("v1 vector is an object")
-        .insert(
-            "version".to_string(),
-            serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
-        )
-        .expect("v1 carries a version");
+    let version_of = |raw: &str| -> u64 {
+        parsed(raw)
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .expect("every get_version vector carries a version")
+    };
 
-    assert_ne!(
-        old,
-        serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION),
-        "v1 already carries the current constant — the pair has nothing to record"
-    );
+    let mut previous = 0u64;
+    for (i, (before_raw, after_raw)) in links.iter().enumerate() {
+        let (lo, hi) = (version_of(before_raw), version_of(after_raw));
+        assert!(
+            hi > lo,
+            "link {i}: the version must increase across a bump ({lo} -> {hi})"
+        );
+        assert!(
+            lo > previous || i == 0,
+            "link {i}: the chain must be contiguous — {lo} does not follow {previous}"
+        );
+        previous = lo;
+
+        // The pair differs by the version and by nothing else.
+        let mut before = parsed(before_raw);
+        before
+            .as_object_mut()
+            .expect("vector is an object")
+            .insert("version".to_string(), serde_json::json!(hi));
+        assert_eq!(
+            before,
+            parsed(after_raw),
+            "link {i}: the newer vector must be the older one with only the \
+             version changed"
+        );
+    }
+
+    // And the head of the chain is what the daemon actually emits today. This
+    // is the assertion that would have caught two branches claiming one
+    // number: whichever landed second would find the head already taken.
     assert_eq!(
-        before, after,
-        "v2 must differ from v1 by exactly CORE_RPC_VERSION"
+        version_of(links[links.len() - 1].1),
+        u64::from(shekyl_rpc_types::CORE_RPC_VERSION),
+        "the newest vector must carry the current CORE_RPC_VERSION"
     );
 }
 

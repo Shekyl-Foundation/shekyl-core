@@ -2009,14 +2009,24 @@ async fn stake_persona_to_confirmed_bond(
     let state = pscan_until(
         &arc,
         &pscan_seal,
-        "the bond-post match + BondPostChange change funding",
+        "the bond-post match + BondPostChange change funding + swept-record prune",
         |s| {
+            // The swept-prune leg makes the wait deterministic: the arm-1
+            // prune can land a seal batch AFTER the match does, and a
+            // fixture snapshot taken between the two would carry the swept
+            // pre-post record alongside the change — a phantom extra row
+            // that would flake any consumer counting the slot's records
+            // (the bond e2e's own prune assertion included). Wait for all
+            // three writes before snapshotting.
             s.bond_post_matches()
                 .iter()
                 .any(|m| m.p_canonical_id == persona_id)
                 && s.funding_outputs()
                     .iter()
                     .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+                && s.funding_outputs()
+                    .iter()
+                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
         },
     )
     .await;
@@ -2803,10 +2813,14 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use shekyl_wire::{Ct, Input, Transaction};
 
     const SLOT: u32 = 0;
-    /// The persona's `BondPostChange` record ≈ this cushion; sized well above
-    /// `payment + fee + reserve` so a PARTIAL drain selects the single record
-    /// and leaves change ≥ the exit-fee reserve (both txs stay 1-in/2-out).
-    const FUNDING_CUSHION: u64 = 12_000_000_000;
+    /// The bond's change — ≈ this cushion — returns to `P` as **two** split
+    /// halves (`bond.rs` `change_lo`/`change_hi`: every tx carries two
+    /// nonzero outputs, and the bond post's non-change vout is the bond vin's
+    /// side, not a spendable output). Sized so the LARGER half alone covers
+    /// `payment + fee + reserve`: largest-first selection then takes exactly
+    /// one input and the drain stays a 1-in/2-out partial — the shape the
+    /// byte-diff below compares against the 1-in/2-out transfer.
+    const FUNDING_CUSHION: u64 = 40_000_000_000;
 
     let daemon = RegtestDaemon::start().await;
     // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
@@ -2830,8 +2844,15 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     .await;
     let principal = fixture.principal.clone();
 
-    // The confirmed sweep-all bond leaves exactly one persona funding record
-    // (the `BondPostChange` change) — the drain's single input.
+    // The confirmed sweep-all bond leaves exactly TWO persona funding
+    // records — the change's split halves (`change_lo`/`change_hi`). This
+    // assertion said "exactly one" from its birth (2026-07-21) against an
+    // assembly that has split the change since 2026-07-05, so the count it
+    // pinned was never this fixture's real state — the mismatch surfaced
+    // only when this walk was next run (2026-09-03, the PR-C battery).
+    // Corrected to the assembly's actual invariant; the 1-in/2-out drain
+    // shape below is preserved by the cushion sizing (the larger half alone
+    // covers payment + fee, so largest-first selection takes one input).
     let persona_records = fixture
         .state
         .funding_outputs()
@@ -2839,8 +2860,9 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         .filter(|r| r.p_slot == slot)
         .count();
     assert_eq!(
-        persona_records, 1,
-        "the confirmed sweep-all bond must leave exactly one persona funding record to drain"
+        persona_records, 2,
+        "the confirmed sweep-all bond must leave exactly the two split \
+         change halves as persona funding records"
     );
 
     // ── A real 1-in/2-out transfer: capture its build-time wire bytes ──
@@ -2904,19 +2926,21 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         estimates.economy.calculate_fee_from_weight(32_768)
     };
     let drain_payment = AtomicUnits::from_raw(2_000_000_000);
+    // The 1-input guarantee: the LARGER change half (≥ cushion/2) must alone
+    // cover payment + fee (+ the reserve headroom the whole pool keeps).
     assert!(
-        FUNDING_CUSHION > drain_payment.to_raw() + drain_fee + EXIT_FEE_RESERVE_ATOMIC,
+        FUNDING_CUSHION / 2 > drain_payment.to_raw() + drain_fee + EXIT_FEE_RESERVE_ATOMIC,
         "fixture must keep the partial drain's change ≥ the exit-fee reserve \
          (payment {} + fee {drain_fee} + reserve {EXIT_FEE_RESERVE_ATOMIC} < cushion \
          {FUNDING_CUSHION})",
         drain_payment.to_raw(),
     );
     let mut receipt = None;
-    for attempt in 0..4 {
+    for attempt in 0..24 {
         match super::Engine::submit_drain(
             fixture.arc.clone(),
             slot,
-            drain_payment,
+            super::drain_orchestrator::DrainIntent::Payment(drain_payment),
             AtomicUnits::from_raw(drain_fee),
             &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
         )
@@ -2926,12 +2950,20 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
                 receipt = Some(r);
                 break;
             }
-            // Resync-and-retry: the tree or header window lags the tip.
+            // Resync-and-retry: the tree or header window lags the tip, OR
+            // the change halves are not yet mature/provable at the anchored
+            // reference — the aggregate the affordability check reads is the
+            // MATURE subset, so `Unaffordable` is transient here exactly
+            // like the reference lag (the same maturity ladder every other
+            // walk stage runs).
             Err(DrainRequestError::Drain(
-                e @ DrainOrchestrationError::ReferenceUnanchorable { .. },
+                e @ (DrainOrchestrationError::ReferenceUnanchorable { .. }
+                | DrainOrchestrationError::Plan(
+                    super::drain_orchestrator::DrainError::Unaffordable,
+                )),
             )) => {
-                eprintln!("drain attempt {attempt}: {e}; resyncing");
-                daemon.generate_blocks(1, &principal).await;
+                eprintln!("drain attempt {attempt}: {e}; mining and resyncing");
+                daemon.generate_blocks(3, &principal).await;
                 refresh(&fixture.arc).await;
             }
             Err(e) => panic!("submit_drain: {e}"),
@@ -3004,6 +3036,486 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     eprintln!(
         "T-DS-6 ∧ T-DS-7 e2e: a real drain is byte-identical to a real transfer \
          (normalized skeleton), both daemon-accepted"
+    );
+}
+
+/// The **daemon walk** (`PRINCIPAL_STAKE_LIFECYCLE.md` PR-P4; the FOLLOWUPS
+/// registration this discharges): the byte-level proposition the engine walk
+/// (`retire_walk.rs`) structurally cannot judge — *the `Unbond` bytes the
+/// wallet assembles are the bytes consensus accepts*. Before this test,
+/// nothing had ever put an `Unbond` on a wire; `RF-D9` is the precedent for
+/// why that is a proposition only building can settle (a serve-credit wire
+/// that round-tripped in Rust and had never been through the C++ oracle
+/// failed on first contact, twice, with misattributed errors).
+///
+/// The walk drives the **production dispatch seam**
+/// ([`Engine::submit_unbond`]) — never a test shim: record fetch over the
+/// persona-isolated transport, readiness via consensus's own predicates,
+/// sweep-all funding, `AssembleUnbond` in the actor, the `PendingUnbond`
+/// persist-before-dispatch seal, and the posture→submitter choke point —
+/// against a real daemon over real RPC. Two assertions ARE the proposition:
+///
+/// - **submit-accept**: native `/submit_transaction` (the §8.7.1.1 UB
+///   battery, `verify_unbond_bond_post` — the same function the block path
+///   calls) admits the wallet-built exit;
+/// - **block-connect**: after mining, the daemon's bond-record row is
+///   **present with `bonded_total == 0`** — presence plus zero, the
+///   connect's own write (`apply_archival_unbond` preserves the row and
+///   zeroes the balance; the debit arm's terminal fact is the *balance*,
+///   never row absence), observed as a transition from the pre-submit
+///   read's positive balance.
+///
+/// **The cooldown predicates are vacuous on this walk, by design.** The
+/// persona never serves (serve credit exists only via the explicit
+/// `inject_serve_credit` lever, which this walk never calls), so
+/// `release_cooldown_elapsed(None, _)` and `slashes_settled_through(_, None)`
+/// are both `true`, and the walk runs on the **genesis schedule** — no
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, no arming. This is not a
+/// shortcut but the only faithful cheap point: a *served* persona's exit
+/// waits on the slash watermark, which advances `CHALLENGE_RESOLUTION_BLOCKS`
+/// (10 000, block-denominated — the lever never shortens it) past the
+/// anchor epoch's close, and at a levered SEB the L16 pin
+/// (`RELEASE_COOLDOWN_EPOCHS · SEB > CHALLENGE_RESOLUTION_BLOCKS`) inverts,
+/// so a levered served-exit run would exercise a regime the real chain
+/// cannot reach. The served-exit arms (cooldown, watermark, interval log)
+/// are PR-A's unit battery (`submit_verifier.rs`), NOT this walk — "the
+/// walk ran" must never be read as "the served-exit arc is covered".
+///
+/// Reachability history: when this walk landed (PR-B) the seam's only
+/// caller was this test and wallet-RPC `unstake` was RESERVED; PR-C's
+/// composed verb (`StakeFacade::unstake` / `collect_unstaked`) lifted that
+/// gate, and the composed-arc walk below
+/// (`e2e_unstake_collect_retire_composed_arc`) drives those product
+/// façades end-to-end. This walk keeps the seam-level byte proposition:
+/// it exists so a façade-layer regression can never mask a wire one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_unbond_accepted_and_connected() {
+    use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
+    use super::emission_source::fetch_claim_source_for;
+    use super::prpc::LocalNodeRpc;
+    use super::stake_engine::{PSlot, StakeEngineError};
+    use super::unbond_dispatch::UnbondRequestError;
+    use shekyl_archival_retention::bond_floor;
+
+    const SLOT: u32 = 0;
+    const SHARD_ID: u64 = 0;
+    /// Persona funding above `floor + bond fee`: becomes the sweep-all bond's
+    /// `BondPostChange` change output — the funding record the exit then
+    /// sweeps (its fee is covered by the released collateral, so the cushion
+    /// only needs to exist, not to price anything).
+    const FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+
+    // A MARKET bond (the ordinary staker shape); the persona never serves,
+    // so its exit is cooldown-vacuous (doc comment) and the record's bonded
+    // total is exactly the holdings floor.
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let expected_bonded = bond_floor(&market_holdings);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
+
+    // Pre-read: the daemon's bond-record row over the persona-isolated
+    // transport — the SAME fetch the seam rides. The positive balance here
+    // is what makes the post-connect zero an observed *transition* rather
+    // than a state that could have held all along.
+    let unbond_rpc = LocalNodeRpc::new(
+        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("loopback exit transport");
+    let before = fetch_claim_source_for(&unbond_rpc, fixture.persona_id)
+        .await
+        .expect("pre-submit record fetch");
+    let bonded_before = before
+        .source()
+        .bond
+        .as_ref()
+        .expect("the confirmed bond must have a daemon-side record")
+        .bonded_total_atomic;
+    assert_eq!(
+        bonded_before, expected_bonded,
+        "the confirmed market bond's record must hold exactly the holdings floor"
+    );
+
+    // Dispatch through the production seam, with the bond path's own
+    // reference-spendability retry ladder (the BondPostChange output must be
+    // in the curve tree at the anchored reference, which lags the tip).
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    for attempt in 0..24 {
+        match super::Engine::submit_unbond(fixture.arc.clone(), &unbond_rpc, slot, &pruning_landed)
+            .await
+        {
+            Ok(r) => {
+                receipt = Some(r);
+                break;
+            }
+            Err(UnbondRequestError::Stake(StakeEngineError::Assembly(
+                e @ (BondAssemblyError::ReferenceResyncing { .. }
+                | BondAssemblyError::NoSpendableFunding
+                | BondAssemblyError::OutputNotYetDrained { .. }
+                | BondAssemblyError::InsufficientFunding { .. }),
+            ))) => {
+                eprintln!("unbond attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(10, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("submit_unbond: {e}"),
+        }
+    }
+    let receipt = receipt.expect("the exit must assemble and dispatch within the retry budget");
+    eprintln!(
+        "unbond exit ACCEPTED by the daemon submit engine: {} B, {} funding input(s), {:?}",
+        receipt.unbond.bound_tx.bytes().len(),
+        receipt.unbond.funding_gindexes.len(),
+        receipt.submit,
+    );
+
+    // Block-connect: mine the accepted exit out of the pool, then read the
+    // terminal fact back from the daemon. Pool-drain alone proves only that
+    // the tx LEFT the pool (a terminal reject leaves it too); the
+    // discriminating observable is the connect's own write.
+    mine_until_pool_drains(&daemon, &fixture.principal, "accepted unbond exit", 1).await;
+    let after = fetch_claim_source_for(&unbond_rpc, fixture.persona_id)
+        .await
+        .expect("post-connect record fetch");
+    let bond_after = after
+        .source()
+        .bond
+        .as_ref()
+        .expect("the exit PRESERVES the record row — presence plus zero, never absence");
+    assert_eq!(
+        bond_after.bonded_total_atomic, 0,
+        "block-connect must zero the record's bonded total (apply_archival_unbond); \
+         a positive balance here means the exit left the pool WITHOUT connecting"
+    );
+    eprintln!(
+        "unbond exit CONNECTED: bonded total {bonded_before} → 0, row preserved — \
+         the assembled bytes are the bytes consensus accepts (the RF-D9 proposition \
+         for the exit wire)"
+    );
+}
+
+/// The **composed-arc walk** (PR-C): the retire-on-a-real-chain arm the
+/// PR-B ruling deferred here by its recorded conditional, driven through
+/// the PRODUCT façades — [`StakeFacade::unstake`] posts the exit,
+/// [`StakeFacade::collect_unstaked`]'s terminal sweep empties the slot, and
+/// the pscan task's funded-gated retirement fires on **real-chain
+/// evidence**. Until PR-C that gate had passing coverage and zero
+/// production reach (the engine walk #575 constructed its trigger states
+/// synthetically; no user path could produce the exact-zero pool) — this
+/// walk is the reachability check the synthetic one structurally could not
+/// be: every state it retires from was produced by the shipped verbs
+/// against a real daemon.
+///
+/// The `SHEKYL_SETTLEMENT_EPOCH_BLOCKS = 2` lever is what makes the claim
+/// window affordable (`MAX_CLAIM_AGE_W` = 26 epochs ⇒ ~54 blocks; at the
+/// genesis SEB the wait would be tens of thousands) — legitimate here
+/// because the persona never serves: the cooldown predicates are vacuous
+/// exactly as on the PR-B walk, and the claim-window expiry the retire
+/// waits on is epoch-denominated (the lever's own unit), not the
+/// block-denominated slash watermark the PR-B doc warns the lever cannot
+/// faithfully shorten. Run in its own process (the schedule latch is
+/// irreversible; sibling e2es guard the genesis pin).
+///
+/// Sequenced observables, each a distinct write:
+/// 1. `unstake` → Broadcast; an immediate second `unstake` refuses
+///    `ExitInProgress` (the one-live-exit lane, through the public verb).
+/// 2. Connect: the daemon row reads back present with `bonded_total == 0`.
+/// 3. The production P-scan observes the exit (`pending_unbonds`) and the
+///    payout pair as slot funding.
+/// 4. `collect_unstaked` → `Swept` with **`remainder == 0`** (the pool is
+///    exactly the payout pair, one pass) and a nonzero `swept`.
+/// 5. After the pass confirms and its spent rows prune, `collect_unstaked`
+///    again → `NothingLeft` (the completion contract, end-to-end).
+/// 6. Active moves away (slot 1 activation — retirement skips the active
+///    slot by design), the claim window expires on-chain, and the sweep
+///    retires the persona: `pending_unbonds` empties into
+///    `retired_records`, and the wipe is observed through a DIFFERENT
+///    handler (`persona_canonical_id` refuses) — never graded by the
+///    retire call's own return.
+/// 7. The daemon row is STILL present with `bonded_total == 0`:
+///    retirement is a wallet-side act; the chain record outlives it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-C composed-arc walk; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_unstake_collect_retire_composed_arc() {
+    use super::emission_source::fetch_claim_source_for;
+    use super::prpc::LocalNodeRpc;
+    use super::stake_engine::PSlot;
+    use super::unstake_facade::{
+        CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome,
+    };
+    use crate::StakeFacade;
+    use shekyl_archival_retention::bond_floor;
+
+    const SLOT: u32 = 0;
+    const SHARD_ID: u64 = 0;
+    const SEB: u64 = 2;
+    /// Cushion above `floor + bond fee` (the PR-B walk's shape): becomes the
+    /// bond's `BondPostChange` output, which the exit sweeps.
+    const FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
+    // claim e2e's arming shape, and its containment caveats verbatim: the
+    // latch is irreversible and per-process — run this walk alone).
+    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
+    std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
+    let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
+        .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
+    assert_eq!(armed, SEB, "armed schedule must be the lever value");
+
+    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let expected_bonded = bond_floor(&market_holdings);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
+    let daemon_address = format!("http://127.0.0.1:{}", daemon.rpc_port);
+
+    // Pre-read: the positive balance that makes the post-connect zero a
+    // transition (the PR-B walk's discipline).
+    let record_rpc = LocalNodeRpc::new(daemon_address.clone(), Duration::from_secs(10))
+        .await
+        .expect("loopback record transport");
+    let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("pre-unstake record fetch");
+    assert_eq!(
+        before
+            .source()
+            .bond
+            .as_ref()
+            .expect("confirmed bond row")
+            .bonded_total_atomic,
+        expected_bonded,
+        "fixture must start at the holdings floor"
+    );
+
+    // 1. The PRODUCT verb posts the exit, with the bond path's own
+    //    reference-spendability retry ladder (mining until the wallet's
+    //    reference view can prove the funding).
+    let mut posted = None;
+    for attempt in 0..24 {
+        match StakeFacade::unstake(fixture.arc.clone(), &daemon_address).await {
+            Ok(outcome) => {
+                posted = Some(outcome);
+                break;
+            }
+            Err(e @ (UnstakeError::Resyncing { .. } | UnstakeError::ExitNotFundable { .. })) => {
+                eprintln!("unstake attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(3, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("unstake: {e}"),
+        }
+    }
+    let posted = posted.expect("unstake must post within the retry ladder");
+    let (UnstakeOutcome::Broadcast { tx_hash: exit_hash }
+    | UnstakeOutcome::AlreadyInChain {
+        tx_hash: exit_hash, ..
+    }) = posted;
+    eprintln!("unstake POSTED via the product facade: {exit_hash:?}");
+
+    // The one-live-exit lane, observed through the public verb: a second
+    // unstake refuses with guidance, never a second irreversible post.
+    match StakeFacade::unstake(fixture.arc.clone(), &daemon_address).await {
+        Err(UnstakeError::ExitInProgress) => {}
+        other => panic!("a second unstake must refuse ExitInProgress, got {other:?}"),
+    }
+
+    // 2. Connect: presence + zero (the PR-B observable, now behind the verb).
+    mine_until_pool_drains(&daemon, &fixture.principal, "posted exit", 1).await;
+    let after = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("post-connect record fetch");
+    assert_eq!(
+        after
+            .source()
+            .bond
+            .as_ref()
+            .expect("the exit PRESERVES the record row")
+            .bonded_total_atomic,
+        0,
+        "block-connect must zero the bonded total"
+    );
+
+    // 3. The production P-scan observes the exit and the payout pair.
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the observed exit + payout funding",
+        |s| {
+            s.pending_unbonds().contains_key(&fixture.persona_id)
+                && s.funding_outputs().iter().any(|r| r.p_slot == slot)
+        },
+    )
+    .await;
+    let payout_rows = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot)
+        .count();
+    eprintln!("exit observed by pscan; {payout_rows} payout funding row(s) on the slot");
+
+    // 4. The terminal sweep, through the product verb, with its own
+    //    maturity ladder (payouts must enter the reference tree).
+    let mut swept_outcome = None;
+    for attempt in 0..24 {
+        match StakeFacade::collect_unstaked(fixture.arc.clone()).await {
+            Ok(outcome) => {
+                swept_outcome = Some(outcome);
+                break;
+            }
+            Err(
+                e @ (CollectUnstakedError::NothingSpendableYet
+                | CollectUnstakedError::Unanchorable { .. }),
+            ) => {
+                eprintln!("collect attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(3, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("collect_unstaked: {e}"),
+        }
+    }
+    let CollectOutcome::Swept {
+        tx_hash: sweep_hash,
+        swept,
+        remainder,
+        another_pool_remains,
+    } = swept_outcome.expect("collect must sweep within the ladder")
+    else {
+        panic!("the first collection over a funded exited pool must be Swept");
+    };
+    assert!(!swept.is_zero(), "the sweep moves the released collateral");
+    assert!(
+        remainder.is_zero(),
+        "the pool is exactly the payout pair: one pass collects everything, \
+         and the reply's remainder — the completion fact — must say 0"
+    );
+    assert!(
+        !another_pool_remains,
+        "one persona exited: the lane-wide half of the completion fact must \
+         say no other exited pool remains"
+    );
+    eprintln!("collect SWEPT {swept:?} to principal ({sweep_hash:?}), remainder 0");
+
+    // 5. Pass confirms; spent rows prune; the completion arm answers.
+    mine_until_pool_drains(&daemon, &fixture.principal, "sweep pass", 1).await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the swept rows pruned (empty slot)",
+        |s| !s.funding_outputs().iter().any(|r| r.p_slot == slot),
+    )
+    .await;
+    match StakeFacade::collect_unstaked(fixture.arc.clone()).await {
+        Ok(CollectOutcome::NothingLeft) => {}
+        other => panic!("an emptied exited pool must answer NothingLeft, got {other:?}"),
+    }
+
+    // 6. Move active away (retirement skips the active slot by design),
+    //    expire the claim window on-chain, and let the production sweep
+    //    retire the persona on real evidence.
+    {
+        let g = fixture.arc.read().await;
+        let stake = g.stake_handle().expect("staker fixture");
+        let h = stake
+            .mint_handle(PSlot::from_raw(1))
+            .await
+            .expect("slot 1 within the lookahead");
+        stake
+            .activate_persona(h)
+            .await
+            .expect("activate the successor persona");
+    }
+    // MAX_CLAIM_AGE_W (26) epochs past the exit epoch, plus settlement lag
+    // and the pscan horizon; at SEB=2 this is cheap — the recorded
+    // conditional that routed this arm to PR-C.
+    let window_blocks =
+        (shekyl_archival_retention::MAX_CLAIM_AGE_W + 4) * SEB + PSCAN_TEST_REORG_DEPTH + 4;
+    daemon
+        .generate_blocks(window_blocks, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let retired_state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the funded-gated retirement on real-chain evidence",
+        |s| {
+            s.retired_records()
+                .iter()
+                .any(|r| r.p_canonical_id == fixture.persona_id)
+        },
+    )
+    .await;
+    assert!(
+        !retired_state
+            .pending_unbonds()
+            .contains_key(&fixture.persona_id),
+        "retirement must move the exit out of pending_unbonds"
+    );
+
+    // The wipe, observed through a DIFFERENT handler than the retire path
+    // (the retire_walk discipline): the slot no longer resolves an id.
+    {
+        let g = fixture.arc.read().await;
+        let stake = g.stake_handle().expect("staker fixture");
+        assert!(
+            stake.persona_canonical_id(slot).await.is_err(),
+            "the retired slot's persona must be wiped from the held union"
+        );
+    }
+
+    // 7. Retirement is wallet-side: the chain record outlives it.
+    let final_read = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("post-retire record fetch");
+    assert_eq!(
+        final_read
+            .source()
+            .bond
+            .as_ref()
+            .expect("the record row persists past wallet retirement")
+            .bonded_total_atomic,
+        0,
+    );
+    eprintln!(
+        "composed arc COMPLETE: unstake -> connect -> collect (remainder 0) -> \
+         NothingLeft -> funded-gated retire on real-chain evidence — the gate \
+         that had coverage without reach is now reached by the shipped verbs"
     );
 }
 

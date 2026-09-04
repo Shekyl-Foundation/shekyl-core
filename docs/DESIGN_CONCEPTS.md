@@ -11,7 +11,8 @@
 > pay-for-service**: stakers post on-chain bonds, join the archival market, and
 > earn reward emission recomputed from **public serve-work** — there is no
 > duration tier, no `staked_amount × duration_multiplier` weighting, and no
-> claim/unstake wire. Component 3 and the participant lifecycle below have been
+> claim wire (the exit is the `Unbond` bond-post kind, reachable via
+> `unstake` since PR-C). Component 3 and the participant lifecycle below have been
 > rewritten to the live model. The canonical archival specs are
 > [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
 > [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
@@ -262,7 +263,9 @@ earns reward emission. There are no votes, proposals, or governance forums — t
 protocol reads aggregate staking participation as a confidence signal and adjusts
 the burn rate algorithmically. Staking is **not** a passive lock: there is no
 duration tier, no `staked_amount × duration_multiplier` weighting, and no
-claim/unstake transaction. The mechanism is specified in
+claim transaction — rewards arrive by consensus emission, never a user
+claim cycle (exiting is the single permanent `unstake`, not a recurring
+obligation). The mechanism is specified in
 [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (design home) and
 [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (consensus
 reward leg).
@@ -301,7 +304,9 @@ market participation rather than a duration lock.
   service was actually performed.
 - **Liquidity:** Funds at `P` may be spent freely between settlement epochs — the
   bond, not a protocol lock, is the honesty anchor. A misbehaving staker is
-  slashable against the bond (gate 4). There is no unstake lock to wait out.
+  slashable against the bond (gate 4). Earned funds carry no unstake lock;
+  the bond itself releases via the permanent `unstake` exit (a served
+  position first waits out the slash-settlement watermark).
 - **Compensation:** Two streams — (1) a share of the fee burn pool (Component 2),
   and (2) a decaying share of block emission (Component 4) — flow into a staker
   reward pool distributed by **verified serve-work** (below).
@@ -713,7 +718,7 @@ burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circula
 | Reward basis | Verified serve-work | Recomputed from public archival state; no duration tier |
 | Reward division | Anti-concentration curve (form C), `g` band `[1.5, 2.5]`, target ≈ 2 | Caps whale share; see `REWARD_EMISSION_LEG.md` |
 | Principal liquidity | Spendable between settlement epochs | Bond (not a lock) is the honesty anchor; slashable on misbehavior |
-| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim/unstake wire |
+| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim wire; the exit is a bond-post kind (`Unbond`), reachable via `unstake` since PR-C — not a bespoke wire class |
 
 ### Staker emission share (Component 4)
 

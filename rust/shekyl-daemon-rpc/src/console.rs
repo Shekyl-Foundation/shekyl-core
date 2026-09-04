@@ -1185,11 +1185,14 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 struct GetInfoReplyProvisional {
     status: shekyl_rpc_types::RpcStatus,
     height: u64,
-    /// The DAA's target block time in seconds. Read as **data** rather than
-    /// compiled in from `SHEKYL_DAA_TARGET_SECONDS`: the daemon already
-    /// reports its own target, and a console built against a different value
-    /// than the daemon it is talking to would print a confidently wrong
-    /// number rather than fail.
+    /// The DAA's target block time, as **this daemon** reports it.
+    ///
+    /// **Not the authority.** `T` is genesis-frozen and single-sourced
+    /// through `config/consensus_constants.json`, which generates both the
+    /// C++ `shekyl/consensus_constants_generated.h` and this crate's
+    /// [`crate::consensus::DAA_TARGET_SECONDS`]. The console renders from the
+    /// generated value; this field exists so a disagreement can be *reported*
+    /// rather than silently rendered from — see [`daa_target_seconds`].
     target: u64,
     wide_difficulty: String,
     wide_cumulative_difficulty: String,
@@ -1224,6 +1227,44 @@ fn fetch_get_info(src: &Source) -> Result<GetInfoReplyProvisional, String> {
         Ok(reply)
     } else {
         Err(reply.status.0)
+    }
+}
+
+/// The DAA target this console renders with, and what to do when the daemon
+/// disagrees.
+///
+/// **The authority is the generated constant, never the reply.** `T` is
+/// genesis-frozen: `config/consensus_constants.json` generates the C++ header
+/// and this crate's constant from one source, so a value arriving over the
+/// wire is a second source for something that has exactly one — and on the
+/// remote arm it is a second source supplied by a daemon that could report
+/// anything.
+///
+/// The reported value is not ignored, though. If it differs, the interesting
+/// fact is the *disagreement*: a daemon running a different `T` is running
+/// different consensus rules, which is a different chain, not a display
+/// difference. So this returns the authority plus a warning to print, and the
+/// caller renders the warning beside its numbers rather than quietly using
+/// one value or the other.
+///
+/// This is a narrow, local check. The general instrument — a version
+/// handshake at connect, and a digest over the whole constants file so a
+/// constant nobody thought to compare is still covered — is a separate round;
+/// it is not built here, and this comment is not a claim that it is.
+fn daa_target_seconds(reported: u64) -> (u64, Option<String>) {
+    let authority = crate::consensus::DAA_TARGET_SECONDS;
+    if reported == authority {
+        (authority, None)
+    } else {
+        (
+            authority,
+            Some(format!(
+                "WARNING: this daemon reports a block target of {reported}s, but this \
+                 build's consensus constants say {authority}s. Those are different \
+                 consensus rules, so this is very likely a different chain or a \
+                 mismatched binary. Figures below use {authority}s."
+            )),
+        )
     }
 }
 
@@ -1432,13 +1473,15 @@ fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, 
     // from the first tier, which is why RK-5b could retire it. The console
     // read the scalar, so it reads tier 0.
     let dynamic_fee = AtomicUnits::from_raw(fees.fees.0[0]).to_skl_string();
-    let mut out = vec![format!(
-        "Height: {}, diff {}, cum. diff {}, target {} sec, dyn fee {dynamic_fee}/byte",
+    let (target, target_warning) = daa_target_seconds(info.target);
+    let mut out = Vec::new();
+    out.extend(target_warning);
+    out.push(format!(
+        "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
         info.height,
         wide_difficulty_decimal(&info.wide_difficulty),
         wide_difficulty_decimal(&info.wide_cumulative_difficulty),
-        info.target
-    )];
+    ));
     if nblocks == 0 {
         return Ok(out.join("\n"));
     }
@@ -1687,6 +1730,7 @@ fn alt_chain_info(
     now: u64,
 ) -> Result<String, String> {
     let info = fetch_get_info(src)?;
+    let (target, target_warning) = daa_target_seconds(info.target);
     let mut chains = fetch_alt_chains(src)?;
     // The alt chain's first block. Saturating: an alt chain longer than our
     // own height is not something this console gets to be surprised by.
@@ -1696,6 +1740,9 @@ fn alt_chain_info(
         |c: &AltChainProvisional| info.height.saturating_sub(start_of(c)).saturating_sub(1);
 
     if tip.is_empty() {
+        // The listing form derives nothing from T, so a disagreement is not
+        // reported there — a warning attached to output it cannot affect
+        // would train its reader to ignore the one that matters.
         chains.sort_by_key(|c| c.height);
         let shown: Vec<&AltChainProvisional> = chains
             .iter()
@@ -1722,7 +1769,8 @@ fn alt_chain_info(
         ));
     };
     let start_height = start_of(chain);
-    let mut out = vec![
+    let mut out: Vec<String> = target_warning.into_iter().collect();
+    out.extend([
         format!("Found alternate chain with tip {tip}"),
         format!(
             "{} blocks long, from height {start_height} ({} deep), diff {}:",
@@ -1730,7 +1778,7 @@ fn alt_chain_info(
             depth_of(chain),
             wide_difficulty_decimal(&chain.wide_difficulty)
         ),
-    ];
+    ]);
     for hash in &chain.block_hashes {
         out.push(format!("  {hash}"));
     }
@@ -1771,7 +1819,7 @@ fn alt_chain_info(
                 clippy::cast_precision_loss,
                 reason = "a percentage for a human, from a block count and a timespan"
             )]
-            let share = 100.0 * (info.target as f64) * (chain.length as f64) / (span as f64);
+            let share = 100.0 * (target as f64) * (chain.length as f64) / (span as f64);
             out.push(format!(
                 "Approximated {}% of network hash rate",
                 trimmed(share, 6)
@@ -2023,6 +2071,7 @@ fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // `queried_version` here would invert the whole point.
     let fork = fetch_hard_fork_info(src, None)?;
     let mining = fetch_mining_status(src)?;
+    let (target, target_warning) = daa_target_seconds(info.target);
 
     let net_height = info.target_height.max(info.height);
     let network = if info.testnet {
@@ -2050,7 +2099,7 @@ fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // the same reason as everywhere else in this file: `target` is a number
     // the daemon sent.
     let net_hash = wide_difficulty_value(&info.wide_difficulty)
-        .and_then(|d| d.checked_div(u128::from(info.target)))
+        .and_then(|d| d.checked_div(u128::from(target)))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
@@ -2058,7 +2107,7 @@ fn show_status(src: &Source, now: u64) -> Result<String, String> {
         info.height,
         sync_percentage(info.height, info.target_height),
         fork.active_version,
-        fork_extra_info(fork.earliest_height, net_height, info.target),
+        fork_extra_info(fork.earliest_height, net_height, target),
         info.outgoing_connections_count,
         info.incoming_connections_count
     );
@@ -2074,7 +2123,10 @@ fn show_status(src: &Source, now: u64) -> Result<String, String> {
             uptime % 60
         ));
     }
-    Ok(line)
+    Ok(match target_warning {
+        Some(warning) => format!("{warning}\n{line}"),
+        None => line,
+    })
 }
 
 /// `sync_info`.
@@ -3258,7 +3310,7 @@ mod tests {
             "status": "OK",
             "height": height,
             "target_height": 0,
-            "target": 120,
+            "target": crate::consensus::DAA_TARGET_SECONDS,
             "wide_difficulty": "0x1e240",
             "wide_cumulative_difficulty": "0x2dc6c0",
             "testnet": false,
@@ -4019,6 +4071,53 @@ mod tests {
                 "current version 3, voting for version 9",
             ]
         );
+    }
+
+    /// T comes from the generated authority, and a daemon that disagrees is
+    /// reported rather than believed.
+    ///
+    /// The C++ read `ires.target` and computed from it. That is one source
+    /// too many for a genesis-frozen constant that
+    /// `config/consensus_constants.json` already single-sources into both
+    /// languages — and on the remote arm the extra source is a daemon that
+    /// can report anything. The reply is still read, because a disagreement
+    /// means different consensus rules, i.e. a different chain, which is
+    /// worth saying out loud.
+    #[test]
+    fn the_daa_target_comes_from_the_build_not_the_wire() {
+        let authority = crate::consensus::DAA_TARGET_SECONDS;
+        assert_eq!(
+            daa_target_seconds(authority),
+            (authority, None),
+            "agreement is silent"
+        );
+        let (used, warning) = daa_target_seconds(authority.saturating_add(1));
+        assert_eq!(used, authority, "the authority wins, never the wire");
+        let warning = warning.expect("a disagreement must be reported");
+        assert!(warning.contains("different chain"), "{warning}");
+        assert!(warning.contains(&format!("{authority}s")), "{warning}");
+    }
+
+    /// A daemon reporting a foreign T gets the warning printed above the
+    /// figures, and the figures are still computed with the build's T.
+    #[test]
+    fn a_foreign_target_warns_and_does_not_change_the_arithmetic() {
+        let mut info: serde_json::Value = serde_json::from_str(&info_reply(10)).unwrap();
+        // The fixture already carries the real T; make this daemon claim 60.
+        info["target"] = serde_json::json!(60);
+        let address = route_server(vec![
+            ("/get_info", info.to_string()),
+            ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
+            ("/mining_status", mining_reply(false, 0, false)),
+        ]);
+        let (code, out) = run(&["status"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("WARNING:"), "{out}");
+        assert!(out.contains("reports a block target of 60s"), "{out}");
+        // net hash = 123456 / 120 = 1028 -> 1.03 kH/s, the build's T. Under
+        // the daemon's 60 it would be 2057 -> 2.06 kH/s.
+        assert!(out.contains("net hash 1.03 kH/s"), "{out}");
+        assert!(!out.contains("2.06 kH/s"), "{out}");
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.

@@ -12,11 +12,30 @@
 #pragma once
 
 #include <cstring>
+#include <stdexcept>
 
+#include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 
 namespace shekyl_test_fixtures
 {
+
+// n*G as a compressed point: canonical, prime-order, non-identity for
+// 1 <= n <= 255. Consensus admission accepts nothing weaker for output keys
+// (check_outs_valid), and for commitment masks it additionally rejects the
+// *trivial amount-leaking forms* — the identity and bare G — so a fixture
+// mask must use n >= 2 to be a shape the pool would actually admit.
+inline crypto::public_key basepoint_multiple(unsigned n)
+{
+  if (n == 0 || n > 255)
+    throw std::runtime_error("basepoint_multiple: n must be in [1, 255]");
+  crypto::secret_key sk{};
+  sk.data[0] = static_cast<char>(static_cast<unsigned char>(n));
+  crypto::public_key pk{};
+  if (!crypto::secret_key_to_public_key(sk, pk))
+    throw std::runtime_error("basepoint_multiple: secret_key_to_public_key failed");
+  return pk;
+}
 
 inline cryptonote::transaction make_pqc_spend()
 {
@@ -32,7 +51,13 @@ inline cryptonote::transaction make_pqc_spend()
   cryptonote::tx_out txout{};
   txout.amount = 0;
   cryptonote::txout_to_tagged_key tagged{};
-  std::memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  // A canonical, prime-order, non-identity point. Consensus admission
+  // (check_outs_valid -> shekyl_check_output_keys) accepts nothing weaker, and
+  // the curve-tree leaf collector now ABORTS on an output it cannot encode
+  // (CEN-L11) instead of silently skipping it. Arbitrary bytes here used to
+  // leave this tx's output out of the tree with no signal, so the fixture only
+  // appeared to exercise the block path.
+  tagged.key = basepoint_multiple(3);
   tagged.view_tag.data = 0;
   txout.target = tagged;
   tx.vout.push_back(txout);
@@ -42,9 +67,13 @@ inline cryptonote::transaction make_pqc_spend()
   rv.txnFee = 1000000;
   std::memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);
-  // A decodable curve point: the Ed25519 basepoint's compressed encoding.
-  std::memset(rv.outPk[0].mask.bytes, 0x66, sizeof(rv.outPk[0].mask.bytes));
-  rv.outPk[0].mask.bytes[0] = 0x58;
+  // NOT bare G: shekyl_check_commitment_masks rejects the identity and G as
+  // trivial amount-leaking forms (mask=0 and mask=1) on top of the
+  // canonical/prime-order gate, so a G mask would make this fixture a shape
+  // the pool refuses — invisible today only because these tests call the DB
+  // below admission. 5*G is a commitment the gates accept.
+  const crypto::public_key mask_pt = basepoint_multiple(5);
+  std::memcpy(rv.outPk[0].mask.bytes, &mask_pt, sizeof(rv.outPk[0].mask.bytes));
   rv.enc_amounts.resize(1);
   rv.enc_amounts[0].fill(0x42);
   rv.enc_labels.resize(1);
