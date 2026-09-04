@@ -71,7 +71,7 @@
   `pop_block` overload. `check_consensus_invariants.sh` gains the
   watermark single-writer/no-revert invariant [6/6].
 
-- **DRS-P0f row coverage complete — and it found an S0.** The conformance
+- **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
   register now disposes **all 102** bucket-1/2 census rows: **97
   CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-L11 with L12
   coupled; CEN-B5's rule-71 FAKECHAIN skip). **Both S-graded findings ran the
