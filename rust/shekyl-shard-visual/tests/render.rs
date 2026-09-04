@@ -1,7 +1,8 @@
 use shekyl_shard_visual::fixtures;
 use shekyl_shard_visual::{
     features_from_aggregate, parameters_from_aggregate, parameters_with_hash_override,
-    recipe_from_params, render_candidate_png, VisualError, MAX_RENDER_SIZE,
+    recipe_from_params, render_candidate_png, render_candidate_png_from_params, VisualError,
+    MAX_RENDER_SIZE,
 };
 
 #[test]
@@ -61,9 +62,7 @@ fn canonical_flag_tracks_input_provenance() {
     assert!(!recipe_from_params(&overridden).canonical);
 
     let mut tweaked = parameters_from_aggregate(&fixture.aggregate);
-    tweaked
-        .structural_overrides
-        .push(("candidate_fg_opacity".into(), "0.5".into()));
+    tweaked.push_structural_override("candidate_fg_opacity", "0.5");
     assert!(!recipe_from_params(&tweaked).canonical);
 }
 
@@ -105,4 +104,32 @@ fn zero_output_aggregate_saturates_features_to_zero() {
     // Degenerate synthetic input must not read as maximally
     // coinbase-heavy (review #617).
     assert_eq!(f.coinbase_ratio, 0.0);
+}
+
+/// The PNG bytes themselves carry provenance (`tEXt` chunks), so a saved
+/// file stays self-describing without its recipe — the "visibly
+/// non-canonical export" enforcement from ruling A (review #617).
+#[test]
+fn png_bytes_carry_provenance_chunks() {
+    fn text_chunks(png_bytes: &[u8]) -> Vec<(String, String)> {
+        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+        let reader = decoder.read_info().expect("readable png");
+        reader
+            .info()
+            .uncompressed_latin1_text
+            .iter()
+            .map(|t| (t.keyword.clone(), t.text.clone()))
+            .collect()
+    }
+    let fixture = fixtures::by_id("genesis").expect("genesis fixture");
+
+    let canonical_png = render_candidate_png(&fixture.aggregate, 64).expect("png");
+    let chunks = text_chunks(&canonical_png);
+    assert!(chunks.contains(&("shekyl.spec_version".into(), "candidate.v1".into())));
+    assert!(chunks.contains(&("shekyl.canonical".into(), "true".into())));
+
+    let overridden = parameters_with_hash_override(&fixture.aggregate, [0xAB; 32]);
+    let overridden_png = render_candidate_png_from_params(&overridden, 64).expect("png");
+    let chunks = text_chunks(&overridden_png);
+    assert!(chunks.contains(&("shekyl.canonical".into(), "false".into())));
 }

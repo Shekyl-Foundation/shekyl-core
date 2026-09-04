@@ -30,7 +30,6 @@ pub use params::{parameters_from_aggregate, parameters_with_hash_override, Rende
 
 pub mod fixtures;
 
-use image::ImageEncoder;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -68,34 +67,71 @@ pub fn check_render_size(size: u32) -> Result<(), VisualError> {
     Ok(())
 }
 
-/// Render candidate.v1 for an aggregate at `size`×`size` and return PNG bytes.
-pub fn render_candidate_png(agg: &ShardAggregate, size: u32) -> Result<Vec<u8>, VisualError> {
-    let params = parameters_from_aggregate(agg);
-    let image = render_candidate(&params, size)?;
-    encode_png(&image)
+/// Pixel-derivation revision of this crate. Bump on ANY change that can
+/// alter rendered bytes for the same parameters (a renderer draw, a
+/// palette value, the compositor); consumers must include it in any
+/// cache key for rendered images, or a cached PNG can pair with a recipe
+/// the current code would not produce (review #617). Revision 1 was the
+/// pre-ruling-A derivation. Once a spec version freezes, a revision bump
+/// within it is a defect — pixel changes then require a new spec version.
+pub const RENDER_REVISION: u32 = 2;
+
+/// PNG `tEXt` keyword carrying [`CandidateRecipe::spec_version`].
+pub const PNG_KEY_SPEC_VERSION: &str = "shekyl.spec_version";
+/// PNG `tEXt` keyword carrying [`CandidateRecipe::canonical`].
+pub const PNG_KEY_CANONICAL: &str = "shekyl.canonical";
+
+/// Render candidate.v1 from a parameter bundle and return PNG bytes.
+///
+/// This is the one render entry point: the same `params` that produce
+/// the pixels also stamp the PNG's provenance `tEXt` chunks
+/// ([`PNG_KEY_SPEC_VERSION`], [`PNG_KEY_CANONICAL`]) and feed
+/// [`recipe_from_params`], so bytes, chunks, and recipe cannot disagree.
+/// The saved file stays self-describing even without its recipe
+/// (ruling A: exports are visibly non-canonical).
+pub fn render_candidate_png_from_params(
+    params: &RenderParameters,
+    size: u32,
+) -> Result<Vec<u8>, VisualError> {
+    let recipe = recipe_from_params(params);
+    let image = render_candidate(params, size)?;
+    encode_png(&image, &recipe)
 }
 
-/// Render from a 32-byte hash and feature vector (tweak / hash-override path).
+/// Render candidate.v1 for an aggregate at `size`×`size` and return PNG bytes.
+pub fn render_candidate_png(agg: &ShardAggregate, size: u32) -> Result<Vec<u8>, VisualError> {
+    render_candidate_png_from_params(&parameters_from_aggregate(agg), size)
+}
+
+/// Render from a 32-byte hash and feature vector (tweak / synthetic path).
+/// The output is non-canonical and its PNG chunks say so.
 pub fn render_candidate_png_from_features(
     shard_hash: &[u8; 32],
     features: Features,
     size: u32,
 ) -> Result<Vec<u8>, VisualError> {
     let params = params::parameters_from_synthetic(*shard_hash, features);
-    let image = render_candidate(&params, size)?;
-    encode_png(&image)
+    render_candidate_png_from_params(&params, size)
 }
 
-fn encode_png(image: &image::RgbImage) -> Result<Vec<u8>, VisualError> {
+fn encode_png(image: &image::RgbImage, recipe: &CandidateRecipe) -> Result<Vec<u8>, VisualError> {
     let mut buf = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(&mut buf);
+    let mut encoder = png::Encoder::new(&mut buf, image.width(), image.height());
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
     encoder
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            image::ExtendedColorType::Rgb8,
-        )
+        .add_text_chunk(PNG_KEY_SPEC_VERSION.into(), recipe.spec_version.clone())
         .map_err(|e| VisualError::PngEncode(e.to_string()))?;
+
+    encoder
+        .add_text_chunk(PNG_KEY_CANONICAL.into(), recipe.canonical.to_string())
+        .map_err(|e| VisualError::PngEncode(e.to_string()))?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| VisualError::PngEncode(e.to_string()))?;
+    writer
+        .write_image_data(image.as_raw())
+        .map_err(|e| VisualError::PngEncode(e.to_string()))?;
+    drop(writer);
     Ok(buf)
 }

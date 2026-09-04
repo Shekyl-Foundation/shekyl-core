@@ -135,7 +135,7 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
         bg_crystalline_palette: bg_crystalline_palette.name.into(),
         final_mode: "difference".into(),
         final_opacity,
-        canonical: params.canonical && params.structural_overrides.is_empty(),
+        canonical: params.is_canonical(),
         spec_version: SPEC_VERSION.into(),
     }
 }

@@ -985,11 +985,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **No-tradeability invariant codification.** **Closed (2026-09-04):** enforcement-point inventory
-  verified against landed code, codified in [`V3_SHARD_VISUALIZATION.md`](V3_SHARD_VISUALIZATION.md)
-  (*Not tradeable*, "Concrete enforcement"); any PR adding an ownership/transfer surface re-opens it.
-  - Target: pre-genesis
-
 - **Shard-visual ruling B — candidate.v1 empirical closure + the determinism bar.** Owes the
   mobile-budget/continuity review of ruling A's rewired aesthetics, ONE determinism bar (the spec holds
   two incompatible claims), a property-axis oracle (pixels/perceptual metric), and Rust/Python parity pinned or retracted.

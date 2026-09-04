@@ -21,8 +21,7 @@ The crate (`shekyl-shard-visual`) is referenced by:
 `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 — Engine architecture*
 (domain-primitive library crate, "stays as-is" in the rename scope);
 `docs/V3_STAKER_ARCHIVAL.md` (companion archival design that produces
-the shards); `docs/FOLLOWUPS.md` V3.x no-tradeability invariant
-codification.
+the shards).
 
 **Author / decision context:** Emerged in Phase 1 wallet-rewrite
 session (2026-04-26) while exploring gamification of the shard
@@ -113,11 +112,10 @@ designed.
 
 **The discipline: visualizations exist because they make archival
 legible, and for no other reason.** Anything that turns them into a
-separate economic asset breaks the model. The no-tradeability
-invariant is tracked in `docs/FOLLOWUPS.md` (V3.x — *No-tradeability
-invariant codification*) as a placeholder for the enforcement-point
-inventory that lands when archival/visualization implementation
-begins.
+separate economic asset breaks the model. The enforcement-point
+inventory below codifies the invariant (verified against landed code
+2026-09-04; the FOLLOWUPS placeholder that scheduled it is removed
+per rule 95 — resolved items are removed).
 
 Concrete enforcement — **inventory verified against landed code
 2026-09-04** (the FOLLOWUPS placeholder's trigger, "when implementation
@@ -323,13 +321,18 @@ synthetic feature vectors) produces **viewer-chosen artifacts, not
 chain state**. That category is acceptable *because it is stated*: an
 override render indistinguishable from a canonical one would poison
 the same integrity check the feature exists to serve. Enforcement is
-typed, not conventional: `RenderParameters.canonical` is `true` only
-when every input came from the shard's own aggregate, and
-`CandidateRecipe.canonical` derives from it (and from the absence of
-structural overrides), so every exported recipe carries the marker.
-Any surface that exports an image without its recipe must render the
-non-canonical state visibly or must not offer export for overridden
-renders.
+typed, not conventional, and unforgeable from outside the crate
+(review #617): `RenderParameters`' fields are crate-private, its
+constructors decide `canonical`, and the only public mutation
+(`push_structural_override`) can weaken the claim but never restore
+it. `CandidateRecipe.canonical` derives from
+`RenderParameters::is_canonical`, so every exported recipe carries the
+marker — and the PNG bytes themselves carry it too: every render stamps
+`tEXt` provenance chunks (`shekyl.spec_version`, `shekyl.canonical`),
+so a saved file stays self-describing with no recipe attached. The one
+render entry point (`render_candidate_png_from_params`) derives pixels,
+chunks, and recipe from the same parameter bundle, so they cannot
+disagree.
 
 Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
 **two-stage difference compositor** rather than the single-algorithm 3-bit
@@ -784,8 +787,12 @@ Renderings are deterministic, so they're cacheable. A staker's wallet
 holding 100 shards renders each once on first display, caches the
 result, and re-renders only if the shard content changes (reorg).
 
-Cache invalidation: keyed on (shard_id, shard_content_hash). When the
-content hash changes, the cached render is invalidated.
+Cache invalidation: keyed on (shard_id, shard_content_hash, and the
+crate's exported `RENDER_REVISION`). The content hash changes on a
+reorg; the revision changes when the pixel derivation itself changes
+pre-freeze (review #617: a cache keyed without it can serve a stale
+PNG alongside a recipe the current code would not produce). Once a
+spec version freezes, a revision bump within it is a defect.
 
 This makes the rendering performance budget less critical for
 steady-state use — the user pays the cost once. But initial wallet-load
@@ -852,9 +859,8 @@ V3.0's design surface forecloses nothing here. The
 domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
 in the rename entry's "stays as-is" list; the crate has no V3.0
 dependency and is purely additive when V3.x activates it. The
-no-tradeability invariant has a placeholder FOLLOWUPS item (V3.x)
-that codifies the enforcement-point inventory when implementation
-begins.
+no-tradeability enforcement-point inventory is codified above (*Not
+tradeable*, "Concrete enforcement", verified 2026-09-04).
 
 ---
 
@@ -921,7 +927,8 @@ The mechanism is:
    transferable, exist only as renderings of chain state. This is a
    hard architectural constraint that prevents introducing economic
    dimensions the V3 simulations didn't validate. Codification of the
-   enforcement-point inventory tracked in `docs/FOLLOWUPS.md` (V3.x).
+   enforcement-point inventory codified in *Not tradeable* (verified
+   2026-09-04).
 6. **No NFT framing** in public communication — this is data art, not
    a separate asset class.
 7. **Library crate, not actor.** `shekyl-shard-visual` is a domain-
@@ -944,8 +951,8 @@ resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
 (stakers see their portfolios). V3.0 ships the architectural surface
 that makes V3.x activation purely additive (rename entry pre-commits
-the `shekyl-shard-visual` crate name; FOLLOWUPS V3.x tracks the
-no-tradeability invariant codification).
+the `shekyl-shard-visual` crate name; the no-tradeability
+enforcement-point inventory is codified in *Not tradeable*).
 
 ---
 
@@ -958,9 +965,9 @@ no-tradeability invariant codification).
   `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —
   `Wallet<S>` renamed to `Engine<S>`* ("stays as-is" pre-commit of
   the crate name)
-- `docs/FOLLOWUPS.md` — V3.x *No-tradeability invariant codification*
-  (placeholder for the enforcement-point inventory); V3.x *Stage 5
-  ArchivalEngine native build* (companion archival ship)
+- `docs/FOLLOWUPS.md` — V3.x *Stage 5 ArchivalEngine native build*
+  (companion archival ship); the no-tradeability enforcement-point
+  inventory closed 2026-09-04 (codified in *Not tradeable* above)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure (the model this
   must not undermine)
 - Future: `docs/PUBLIC_NARRATIVE_FAQ.md` — should grow a "shard

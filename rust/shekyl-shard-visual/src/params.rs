@@ -3,19 +3,29 @@ use crate::entropy::EntropyStream;
 use crate::features::{features_from_aggregate, Features};
 use crate::palette::{palette_by_index, Palette};
 
+/// The complete deterministic input bundle a renderer consumes.
+///
+/// Fields are crate-private so provenance is unforgeable from outside
+/// (review #617): `canonical` is decided by the constructor that built
+/// the bundle and no public path can flip it back or swap a
+/// render-determining input afterward. The only public mutation is
+/// [`RenderParameters::push_structural_override`], which can only
+/// *weaken* the claim (an override makes the render non-canonical in
+/// [`crate::recipe_from_params`], never the reverse).
 pub struct RenderParameters {
-    pub shard_hash: [u8; 32],
-    pub features: Features,
-    pub palette: Palette,
-    pub algorithm: &'static str,
-    pub label: String,
-    pub structural_overrides: Vec<(String, String)>,
+    pub(crate) shard_hash: [u8; 32],
+    pub(crate) features: Features,
+    pub(crate) palette: Palette,
+    pub(crate) algorithm: &'static str,
+    pub(crate) label: String,
+    pub(crate) structural_overrides: Vec<(String, String)>,
     /// `true` only when every input came from the shard's own aggregate.
     /// A hash override or synthetic feature vector makes the render a
     /// viewer-chosen artifact, not chain state; the flag flows into
-    /// [`crate::CandidateRecipe`] so exports stay visibly non-canonical
-    /// (ruling A, `docs/V3_SHARD_VISUALIZATION.md`).
-    pub canonical: bool,
+    /// [`crate::CandidateRecipe`] and the PNG's provenance chunks so
+    /// exports stay visibly non-canonical (ruling A,
+    /// `docs/V3_SHARD_VISUALIZATION.md`).
+    pub(crate) canonical: bool,
 }
 
 impl RenderParameters {
@@ -30,16 +40,29 @@ impl RenderParameters {
             .map(|(_, v)| v.as_str())
     }
 
-    pub fn with_palette(&self, palette: Palette) -> Self {
-        Self {
-            palette,
-            ..self.clone_fields()
-        }
+    /// Whether every input came from the shard's own aggregate with no
+    /// overrides applied.
+    #[must_use]
+    pub fn is_canonical(&self) -> bool {
+        self.canonical && self.structural_overrides.is_empty()
     }
 
-    pub fn with_algorithm(&self, algorithm: &'static str) -> Self {
+    /// Human-facing label for this render.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Apply a tweak-view structural override. Add-only by design: an
+    /// override can make a render non-canonical but nothing public can
+    /// clear the set or restore the canonical claim.
+    pub fn push_structural_override(&mut self, axis: impl Into<String>, value: impl Into<String>) {
+        self.structural_overrides.push((axis.into(), value.into()));
+    }
+
+    pub(crate) fn with_palette(&self, palette: Palette) -> Self {
         Self {
-            algorithm,
+            palette,
             ..self.clone_fields()
         }
     }
