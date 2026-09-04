@@ -119,20 +119,32 @@ invariant codification*) as a placeholder for the enforcement-point
 inventory that lands when archival/visualization implementation
 begins.
 
-Concrete enforcement:
+Concrete enforcement — **inventory verified against landed code
+2026-09-04** (the FOLLOWUPS placeholder's trigger, "when implementation
+begins", fired with the crate's first landing; this closes it):
 
 - `shekyl-shard-visual` library API surface has no functions that
   mint, register, sign, or otherwise endorse an instance of a
   visualization. Pure
-  `(shard_content) -> deterministic_image` only.
+  `(shard_content) -> deterministic_image` only. *(Verified: no
+  mint/transfer/register/owner symbol in `shekyl-shard-visual` or
+  `shekyl-shard-source`.)*
 - Wallet/daemon RPC surface has no methods that "own," "transfer,"
-  "claim," or "register" visualizations.
-- Wallet UI has no "trade" button on shard visuals.
+  "claim," or "register" visualizations. *(Verified: the RPC surfaces
+  have no visualization methods at all; their only shard references
+  are archival-assignment errors.)*
+- Wallet UI has no "trade" button on shard visuals. *(Verified:
+  `ShardIdentityPreview.tsx` has no trade/sell/transfer affordance.)*
 - No wire format for transferring shard visual ownership.
-- No on-chain registry of who "owns" a visual.
-- Anyone running an archival client can render any shard's visual at
-  any time (no scarcity of *rendering*; scarcity is in *active
-  archival*).
+  *(Verified: `ShardSummary` / `ShardRenderHandle` carry no owner.)*
+- No on-chain registry of who "owns" a visual. *(None exists.)*
+- Anyone holding a shard can render its visual at any time (no
+  scarcity of *rendering*; scarcity is in *active archival*; complete
+  shards are visible only to their holders, per ruling A's criterion).
+
+A future PR that adds any such surface re-opens this inventory by
+construction; the verification is a statement about the tree at the
+date above, not a permanent property.
 
 If a community proposal in V3.x or beyond suggests adding tradeability,
 it gets evaluated against the simulation work that validated the
@@ -810,11 +822,12 @@ RPC methods.
 
 The dependencies and timing:
 
-- **V3.0 ships without visualization machinery.** V3.0 wallets that
-  encounter shards (if any) render shards as plain hash strings or
-  "Shard #4712" text labels. There is no `shekyl-shard-visual` crate
-  surface in V3.0; the crate either doesn't exist yet or exists in
-  unpublished/unintegrated form awaiting V3.x activation.
+- **V3.0 ships without production visualization.** The
+  `shekyl-shard-visual` crate exists and is integrated today, but only
+  behind the pre-archival GUI preview (fixture aggregates on the
+  Staking tab, per the preview exception above); no production shard
+  surface renders visuals until `ArchivalEngine` (Stage 5) provides
+  real shards.
 - **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
   together.** They are companion features: archival produces the
   shards; visualization makes them legible. Both gate on the
