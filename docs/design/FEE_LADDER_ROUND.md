@@ -178,6 +178,12 @@ smallest tier's anchored set beats ring-16 for any anchor looser than
   the kind the priority order was written for"), and the remaining
   three-tier mechanics (`C_q`, `Fm` deletion, unconditional `Fh` main
   arm, unbuffered floor clamp) endorsed as read-sound.
+- **Obligation created and handed off (steering flag):** the ruling puts
+  a privacy cost behind a user-facing choice, so the tier-picker surface
+  owes a rule-81 disclosure in non-protocol terms — §7 row added, owner
+  = wallet/GUI lane, carried with the engine tier-mapping change. An
+  obligation with no owner is how a ruling's consequence goes
+  unimplemented while the ruling reads as complete.
 
 ## Review round 6 (maintainer, 2026-09-03): the honest attack model
 
