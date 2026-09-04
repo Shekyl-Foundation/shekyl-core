@@ -211,11 +211,11 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                 detail: detail.to_string(),
             },
             DrainRequestError::State { context, detail } => Self::State { context, detail },
-            // The seam now types the pre-seal daemon-tip failure separately
-            // (review-5), but that split serves the exit verbs; this WI-RPC-5
-            // façade keeps its prior disposition (the failure was `State`
-            // before) — retyping `drain_to_principal`'s daemon-outage remedy is
-            // its own concern, out of this finding's scope.
+            // The seam types the pre-seal daemon-tip failure separately for
+            // the exit verbs' retry contract; this WI-RPC-5 façade keeps its
+            // prior disposition (the failure was `State` before) — retyping
+            // `drain_to_principal`'s daemon-outage remedy is its own concern,
+            // not the exit lane's.
             DrainRequestError::DaemonUnreachable { context, detail } => {
                 Self::State { context, detail }
             }

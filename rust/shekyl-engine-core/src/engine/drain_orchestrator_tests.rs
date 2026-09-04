@@ -23,7 +23,7 @@ fn mature(gindex: u64, amount: u64) -> PFundingOutputRecord {
 const REF: u64 = 100;
 
 /// This bites against the remainder being summed over the projection's
-/// mature-only candidates (review-1, Bugbot HIGH): a pass that empties
+/// mature-only candidates: a pass that empties
 /// the mature subset while an IMMATURE payout still sits on the slot
 /// must report that payout as remainder — never `0`, which the CLI
 /// renders as "collection complete" while the immature output holds the

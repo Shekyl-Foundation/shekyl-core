@@ -49,8 +49,8 @@ One RESERVED method remains Engine-gated: `match_transfer_to_request`
 (2026-09-03), and its reachability gate — held since PR-P4 and narrowed
 by every intervening landing without lifting — is LIFTED**: the composed
 exit landed as two named actions (`unstake` posts the irreversible exit;
-`collect_unstaked` sweeps the released collateral, its `remainder` the
-completion fact), with the RESERVED→shipped reconciliation recorded in
+`collect_unstaked` sweeps the released collateral, its reply carrying the
+two-part completion fact), with the RESERVED→shipped reconciliation recorded in
 the OpenAPI census (a single overloaded verb was rejected for
 irreversible-step mis-selection; the sweep could not ride `drain`'s
 firewall-pinned active-persona shape). Codes `-29513..-29529`; the two

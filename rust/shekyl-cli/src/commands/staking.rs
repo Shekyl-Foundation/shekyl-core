@@ -455,7 +455,7 @@ pub fn cmd_unstake(rpc: &RpcSession) {
                     println!("the released funds back into this wallet's balance.");
                 }
                 // Already confirmed: "wait for confirmation" would contradict
-                // the line above it (review-2) — the wait here is for the
+                // the line above it — the wait here is for the
                 // wallet's own scan to observe the existing confirmation.
                 DrainVerdictView::AlreadyInChain => {
                     println!("An identical exit is already confirmed: {}", result.tx_hash);
@@ -476,8 +476,9 @@ pub fn cmd_unstake(rpc: &RpcSession) {
 /// The amount is not asked for and cannot be shown up front: each pass
 /// sweeps everything currently spendable (the engine computes the exact
 /// figure so nothing is left stranded), and the reply says what moved and
-/// what still remains. **A success is not completion** — the remainder
-/// line is the completion fact, and this command says so explicitly
+/// what still remains. **A success is not completion** — the reply's
+/// two-part completion fact (this persona's remainder, plus whether an
+/// earlier exit's pool remains) is what this command renders explicitly
 /// rather than letting "sent" read as "done".
 pub fn cmd_collect_unstaked(rpc: &RpcSession) {
     if !require_open(rpc) {
@@ -511,7 +512,7 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
                         // The swept persona is done, but the exit lane is
                         // not: a previously exited persona still holds
                         // funds. Per-slot "0" must never read as lane-wide
-                        // completion (review-6).
+                        // completion.
                         println!(
                             "This collection is complete, but released funds from an \
                              earlier exit still remain."

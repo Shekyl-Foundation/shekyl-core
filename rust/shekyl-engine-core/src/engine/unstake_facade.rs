@@ -28,9 +28,10 @@
 //!
 //! Both verbs resolve their persona engine-side (the `first_stake`
 //! precedent: the user never names a slot). `unstake` picks the **first
-//! live-bonded slot** — the [`live_bonded_personas`] set (confirmed
-//! JoinMarket bond, not pending-unbond, not retired) intersected with the
-//! persisted slot↔id cache, lowest slot first; a multi-bonded wallet exits
+//! eligible live-bonded slot** — the [`live_bonded_personas`] set (confirmed
+//! JoinMarket bond, not pending-unbond, not retired), minus any persona
+//! whose exit is already sealed in flight, intersected with the persisted
+//! slot↔id cache, lowest slot first; a multi-bonded wallet exits
 //! one persona per invocation. `collect_unstaked` picks the first slot
 //! whose persona has an **observed confirmed exit**
 //! ([`PScanState::pending_unbonds`]). Neither verb copies
@@ -61,10 +62,13 @@
 //!
 //! One sweep pass spends at most `MAX_INPUTS` inputs, and immature payouts
 //! wait — so a pass may not finish the collection. The verb's name claims
-//! collection, not completion, and [`CollectOutcome::Swept`] carries
-//! `remainder`: `0` means nothing beyond this pass; nonzero means call
-//! again once the residue matures or this pass confirms. The engine knows
-//! the remainder; the caller cannot infer it from any payment figure.
+//! collection, not completion, and [`CollectOutcome::Swept`] carries the
+//! completion fact in two required halves: `remainder` (the swept
+//! persona's — `0` means nothing beyond this pass) and
+//! `another_pool_remains` (the lane's — another exited persona's
+//! uncollected pool means call again, so a per-persona `0` can never read
+//! as lane-wide completion). The engine knows both; the caller cannot
+//! infer either from any payment figure.
 //!
 //! ## Failure disposition (the irreversible-path posture)
 //!
@@ -208,7 +212,7 @@ pub enum UnstakeError {
     /// A daemon query needed to prepare the exit failed transiently — a
     /// connection/status failure fetching the bond record, or the dispatch-tip
     /// clock read. All are pre-seal, so nothing propagated: check the daemon
-    /// and retry. NOT an internal fault (review-5): every other P-lane verb
+    /// and retry. NOT an internal fault: every other P-lane verb
     /// keeps working over a reachable daemon, so an opaque `-32603` on exactly
     /// this one is the hard-to-diagnose shape rule 82 forbids.
     #[error("the daemon could not be reached to prepare the exit: {detail}")]
@@ -291,9 +295,8 @@ pub enum CollectOutcome {
         /// beyond this pass. Nonzero: call again once the residue matures
         /// or this pass confirms. Deliberately per-slot — it is the operand
         /// the funded retirement gate acts on — and therefore NOT a
-        /// lane-wide claim; `another_pool_remains` carries that (review-6:
-        /// a value whose scope is narrower than its reading forges
-        /// completion).
+        /// lane-wide claim; `another_pool_remains` carries that (a value
+        /// whose scope is narrower than its reading forges completion).
         remainder: AtomicUnits,
         /// Whether any OTHER exited persona still holds an uncollected
         /// pool (a dust-skipped slot counts). The lane-wide fact: `false`
@@ -367,7 +370,7 @@ pub enum CollectUnstakedError {
     /// dispatch-tip clock read. Pre-seal, so nothing propagated: check the
     /// daemon and retry. Distinct from `Unanchorable` (the wallet's reference
     /// is syncing) and from `Engine` (an internal fault): the remedy here is
-    /// "the daemon is unreachable", not "wait for sync" (review-5).
+    /// "the daemon is unreachable", not "wait for sync".
     #[error("the daemon could not be reached to prepare the sweep: {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed, and the transport's own reason.
@@ -460,7 +463,7 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     // not be an unstake target. Re-resolving it re-posts nothing (the seam
     // refuses `ExitInProgress`), and while its seal is outstanding it would
     // block every OTHER live bond from exiting; a held seal (-29522) on the
-    // lowest slot would strand them with no recovery verb (Bugbot r5). Exclude
+    // lowest slot would strand them with no recovery verb. Exclude
     // the mid-exit personas and target the lowest ELIGIBLE bond — the ladder's
     // order is unchanged, the candidate set is not. When every live bond is
     // already sealing, `candidates` is empty and the `sealed_exit` fall-through
@@ -550,7 +553,7 @@ fn resolve_collect_target(
     // permanently unsweepable this call (a dust pool with no maturing rows).
     // Resolution stays fee-blind — it cannot tell dust from a real pool — so
     // the skip set, not a fee check here, is what lets a stuck low slot fall
-    // through to a higher collectable one (Bugbot r5).
+    // through to a higher collectable one.
     for (slot, id) in &exited_slots {
         if skip.contains(slot) {
             continue;
@@ -706,7 +709,7 @@ where
     /// payment is `Σ selected − fee` — exactly zero change, which is what
     /// lets the funded retirement gate finally fire — computed by the
     /// selection stage under a [`TerminalExitObserved`] witness; no caller
-    /// amount exists to get wrong. The reply's `remainder` is the
+    /// amount exists to get wrong. The reply carries the two-part
     /// completion fact: see [`CollectOutcome::Swept`].
     pub async fn collect_unstaked(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
@@ -727,8 +730,7 @@ where
                 })?;
         // The fee is the canonical P-lane floor — persona-independent, so it
         // is quoted once and reused across the loop. It is memoised (quoted on
-        // first need) so a `PassInFlight` answer still lands before any fee I/O
-        // (review-4).
+        // first need) so a `PassInFlight` answer still lands before any fee I/O.
         let mut fee: Option<AtomicUnits> = None;
         // Exited slots proven permanently unsweepable this call — a dust pool
         // with no maturing rows. Skipping them lets a lower stuck slot fall
@@ -825,7 +827,7 @@ where
                 // maturing into it, the dust is transient — wait, do not skip
                 // past a slot about to become collectable. Only permanent dust
                 // (no maturing rows) is skipped, so a lower stuck slot cannot
-                // strand a higher pool (Bugbot r5). DustPool refuses in
+                // strand a higher pool. DustPool refuses in
                 // planning, before the seal, so a skipped attempt leaves no
                 // record.
                 Err(DrainRequestError::Drain(DrainOrchestrationError::Plan(
@@ -913,7 +915,7 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         UnbondRequestError::NotStaker => UnstakeError::NotStaker,
         UnbondRequestError::NoBondRecord => UnstakeError::NoBondRecord,
         UnbondRequestError::UnbondPending => UnstakeError::ExitInProgress,
-        // NOT ExitInProgress (review-1, Bugbot): a confirming bond post is
+        // NOT ExitInProgress: a confirming bond post is
         // not an exit, and the remedies point at different verbs — wait then
         // UNSTAKE, never "wait then collect_unstaked" (a collect here answers
         // NoExit). Resolution normally catches this state first, but the
@@ -944,7 +946,7 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
             context: "exit assembly",
             detail: e.to_string(),
         },
-        // Typed through, never Engine/-32603 (review-2): the two fee
+        // Typed through, never Engine/-32603: the two fee
         // failure classes keep the remedy split every other P-lane verb
         // already carries — a refused ANSWER is -29109 (reconnecting cannot
         // help), a failed QUERY is -29102 (check the daemon and retry).
@@ -958,7 +960,7 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         UnbondRequestError::Fee(e) => UnstakeError::FeeEstimate {
             detail: e.to_string(),
         },
-        // The fetch's inner class decides the disposition (review-5): a
+        // The fetch's inner class decides the disposition: a
         // connection/status failure is a reachable daemon outage (retryable),
         // a malformed response is an untrusted-input rejection (internal).
         UnbondRequestError::Fetch(e) => match e {
@@ -973,7 +975,7 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
             },
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
-        // -32603 a sealed-store read gets (review-5).
+        // -32603 a sealed-store read gets.
         UnbondRequestError::DaemonUnreachable { context, detail } => {
             UnstakeError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
@@ -1032,7 +1034,7 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
             detail: detail.to_string(),
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
-        // -32603 a sealed-store read gets (review-5).
+        // -32603 a sealed-store read gets.
         DrainRequestError::DaemonUnreachable { context, detail } => {
             CollectUnstakedError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
