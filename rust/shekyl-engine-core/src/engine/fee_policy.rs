@@ -19,8 +19,8 @@
 //!    inversion is a defect or a lie, not a market condition.
 //! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
 //!    named tier, `fee_from_weight(rate, 1) ≤`
-//!    [`absolute_fee_rate_cap()`] (the daemon-rounded genesis-condition
-//!    `Fh` = 14,000,000 atomic units — derived, KAT-pinned; a 100,000
+//!    [`absolute_fee_rate_cap()`] (the served genesis-congested priority
+//!    rung = 28,000,000 atomic units — derived, KAT-pinned; a 100,000
 //!    mid-regime literal was caught in review refusing honest
 //!    young-chain snapshots whose economy tier alone is ~68,266).
 //!    The effective charge, not the raw `per_weight`: every fee is
@@ -64,25 +64,6 @@ const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 /// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
 const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
-/// `round_money_up(x, 2)` (`cryptonote_format_utils.cpp`): round UP to
-/// two significant decimal digits — the daemon applies this to every
-/// tier it returns, so the legitimate maximum must be computed
-/// post-rounding. (The C++ comment says "5 or more"; the code bumps on
-/// ANY nonzero remainder, and the code is the contract.)
-const fn round_money_up_2(x: u64) -> u64 {
-    if x < 100 {
-        return x;
-    }
-    // unit = 10^(digit_count - 2)
-    let mut unit: u64 = 1;
-    let mut probe = x;
-    while probe >= 100 {
-        probe /= 10;
-        unit *= 10;
-    }
-    x.div_ceil(unit).saturating_mul(unit)
-}
-
 /// Absolute cap (atomic units) on every named tier's — and `Custom`'s —
 /// **effective weight-1 charge**: the maximum fee an honest daemon can
 /// legitimately quote over the whole emission era.
@@ -101,11 +82,11 @@ const fn round_money_up_2(x: u64) -> u64 {
 /// ~1.105 at genesis congestion, ceiling-quantized to 2):
 ///
 /// ```text
-/// priority₀ = 2·R₀ / Zm                    (the Fh main arm at Mfw = Zm)
-/// cap       = round_money_up(2·priority₀, 2) = 28,000,000
+/// cap = corrected_fee_ladder(R₀, Zm, Zm, Zm, w_ref, C_q=2).priority
+///     = 28,000,000
 /// ```
 ///
-/// Pinned by `absolute_cap_is_the_rounded_genesis_fh`, so an
+/// Pinned by `absolute_cap_is_the_swept_served_maximum`, so an
 /// economics-parameter change moves this loudly. Deliberately NOT
 /// covering `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL
 /// placeholder when its own reward computation fails): a daemon that
@@ -121,13 +102,15 @@ pub fn absolute_fee_rate_cap() -> u64 {
     let r0 = shekyl_economics::emission::base_block_reward(0, &params)
         .expect("genesis reward is defined for already_generated = 0");
     let zm = PENALTY_FREE_ZONE;
-    let brw = DYNAMIC_FEE_REFERENCE_TX_WEIGHT;
-    // The C++ folded integer expressions, verbatim, at Mfw = Mnw = Zm.
-    let _ = brw; // the priority rung is w_ref-free: 2·R/M exactly
-    let genesis_priority = 2 * r0 / zm;
-    // FL-R9: the largest reachable young-chain correction step.
-    let max_young_cq = 2;
-    round_money_up_2(max_young_cq * genesis_priority)
+    shekyl_economics::corrected_fee_ladder(
+        r0,
+        zm,
+        zm,
+        zm,
+        DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+        2 * shekyl_economics::params::SCALE,
+    )
+    .priority
 }
 
 /// Failures from fee estimation / snapshot validation.
@@ -548,8 +531,11 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
             .expect("raw genesis-condition tiers are honest and must pass");
         // Daemon-rounded (round_money_up, 2 significant digits): the
-        // wire form. Priority lands exactly on the cap.
+        // wire form at C_q = 1. Priority is the uncongested genesis Fh,
+        // half the C_q = 2 cap.
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
-            .expect("rounded genesis-condition tiers are honest and must pass");
+            .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
+        ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))
+            .expect("rounded genesis-congested C_q=2 tiers sit on the cap");
     }
 }
