@@ -991,7 +991,14 @@ text: the signature lives on a design branch a dev-only reader cannot
 see (the doc is still not on dev; a markdown link would fail the links
 gate); that parenthetical retires when the fee lane's PR lands.
 Criterion-met and batch-dispatched are different facts — R2's
-sequencing stays Rick's.
+sequencing stays Rick's. (3) **Grade the candidate fourth instance
+explicitly** (Rick, 2026-09-04): `core.cpp:259`'s
+`if (m_checkpoints_updating.test_and_set()) return true;` — the
+re-entrancy guard also reports success for work it skipped, in the
+very function whose comment names the class. Almost certainly benign
+for a periodic reload (the next 600 s tick retries), but the sweep
+grades it rather than letting it pass by being harmless — absence of
+harm is not absence of the shape.
 
 Rows: CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4. Banked wargame seeds:
 near-tip cycle cost (a 1-block fork needs ~2 blocks of real PoW to force a
@@ -1103,8 +1110,23 @@ obligation (§5.2) is confirmed necessary by inspection.
   re-homes demoted blocks), so a span requested before the pop and
   processed after it orphans on OUR action — and the sync arm severs
   and scores the honest peer that served exactly what we asked for.
-  `drop_connections(span_origin)` is plural: every connection from
-  that origin, plus the scored drop on top. **Verdict for the ruling:
+  `drop_connections(span_origin)` is plural — every connection from
+  that origin — and the `drop_connection(context, true, true)` on top
+  is `add_fail` + `flush_all_spans`: it penalizes toward the ban
+  threshold AND discards every span from that origin, not merely
+  disconnects. **The strongest entry is one R1b itself created (Rick's
+  own verification, 2026-09-04): the Q1a flip-flop terminator.** A
+  checkpoint-forced switch DISCARDS the demoted chain (the ratified
+  discard-vs-readmit asymmetry) so re-admission cannot oscillate. An
+  honest peer still on that chain — merely unlucky — sends its next
+  extension: parent not in main (demoted), not in alt (discarded) →
+  orphan → during sync, the arm severs and penalizes it. The ratified
+  fork-choice rule *manufactures* a class of honest orphans, and the
+  inherited sync arm converts every one into a severed, penalized
+  peer. This entry is derivable from our own ruling rather than a
+  network-timing story: the defect falsifier ("the enumeration is
+  wrong") now has an entry that cannot be wrong without Q1a being
+  wrong. **Verdict for the ruling:
   an honest path exists, so the arm punishes a peer for our state —
   the watermark bug's second instance, one layer out (a flag meaning
   "our store lacks the parent" consumed as a claim about the sender).**
@@ -1227,7 +1249,12 @@ consensus-verdict role beyond membership/integrity (e.g. the invalid
 set consulted for anything but dedup) reopens the orchestration
 classification.
 
-**C2-R1c-Q3b — CEN-A4: one flag stops meaning two things.** The orphan
+**C2-R1c-Q3b — CEN-A4: one flag stops meaning two things.**
+*Status: defect finding + fix direction RATIFIED ON SOURCE by Rick,
+2026-09-04 (his own verification of :2512, :1546–1556's
+`add_fail`+`flush_all_spans` semantics, and the :695 arm — plus the
+Q1a-derived honest path above, his addition); formal signature lands
+against this pushed text. Q1a–Q3a held for his read.* The orphan
 flag's two consumers get their own signals. (i) The live-path meaning
 is ratified: orphan = "our store lacks the ancestry" — re-request, no
 punishment, no storage. (ii) The sync-path punish arm (`:1546`) is
