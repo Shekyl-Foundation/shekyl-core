@@ -2795,13 +2795,36 @@ precisely PWD-T5's adversary, and neither PWD-T6 nor PWC-E11 reaches it.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Per-connection token bucket on the invoke entry points, refilled on a fixed rate** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
+| **Per-connection token bucket charged at *dispatch*, before the request is decoded** | The adaptive flooder who sends well-formed, correctly-prefixed, known-command messages faster than they can be serviced — **and the one who sends malformed ones** | **Adopted.** It is the only mechanism here that imposes *cost* on the attacker rather than merely classifying it, which is what PWD-T5 could not do. Per-connection, so it needs no identity (PW-19a) |
+| The same bucket, charged inside the handlers | The same | **Refused — it would not have bounded the work.** See the placement rule below |
 | Global rate limit across all peers | The same | **Refused.** One peer's flood then throttles every honest peer — the attacker buys a shared outage with one connection |
 | Rely on per-host connection caps (PWD-B9) | The same | **Refused as a substitute, kept as a complement.** B9 bounds how many *connections* a host gets; it says nothing about the rate on a connection it is entitled to |
 
 **Conceded.** A token bucket adds per-connection state, and a peer that is
 merely fast — a well-connected node during a burst — is throttled the same as
 an attacker.
+
+> **The charge happens at dispatch, before decoding, and the placement is
+> load-bearing rather than an implementation note.**
+
+`HANDLE_INVOKE_T2` tests `COMMAND::ID == command` and then calls
+`buff_to_t_adapter`, which runs `strg.load_from_binary(in_buff, …)` **and**
+`in_struct.load(strg)` *before* it invokes the handler
+(`contrib/epee/include/storages/levin_abstract_invoke2.h:250-252`, `:152-171`).
+A bucket charged inside `handle_timed_sync` and its siblings would therefore
+leave **two** things unmetered:
+
+- **the portable-storage parse itself**, which is the expensive part of
+  servicing a flood and happens before any handler runs;
+- **every malformed request**, which returns `-1` from the adapter and **never
+  reaches a handler at all** — so an attacker who sends deliberate garbage pays
+  nothing against the bucket while still making the victim parse it.
+
+**The command id is already in hand at dispatch**, which is what makes the fix
+free: the same `COMMAND::ID == command` test that selects the handler can
+charge the bucket first. *An earlier version of this row placed the bucket on
+"the four invoke entry points", meaning the handlers — bounding the cheap half
+and calling it resource exhaustion protection.*
 
 **Four parameters are owed, not one, because a bucket is not defined by its
 refill rate.** Two conforming implementations given only a rate would diverge
@@ -2811,7 +2834,7 @@ on burst tolerance and on what a throttled peer experiences:
 | --- | --- |
 | **Refill rate** | the honest/attacker boundary; too tight and sync stalls, too loose and it is decoration |
 | **Capacity, and the initial fill** | capacity *is* the burst allowance; a full-at-connect bucket and an empty one differ sharply for a peer that opens and immediately syncs |
-| **Token cost per command** | a handshake and a timed-sync are not the same work — a flat cost prices the cheap one like the expensive one, and an attacker picks whichever is mispriced |
+| **Token cost per command** | a handshake and a timed-sync are not the same work — a flat cost prices the cheap one like the expensive one, and an attacker picks whichever is mispriced. **Charged on the command id at dispatch**, which is the only point where the id is known and no work has been done yet |
 | **Action on exhaustion** | throttle, or drop the connection? The two produce **different wire-observable behaviour**, so leaving it open means peers disagree about whether a slow peer is a hostile one |
 
 **Falsifier.** **Reopen if honest initial sync ever exhausts the bucket** —
@@ -2883,10 +2906,20 @@ propagation — but a liveness cadence cannot.
 
 > **The window is derived under a fixed constraint: the mean stays at
 > `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
-> load change, and preserving the mean is what keeps the two separable. **The
-> `min`/`jitter` split is owed** (any pair with `min + jitter/2 = 60 s`
-> satisfies the constraint; which pair is a trade between worst-case staleness
-> and how much phase separation the window actually buys).
+> load change, and preserving the mean is what keeps the two separable.
+
+**The mean constraint is necessary and *not* sufficient, and saying "any pair
+satisfying it" would have admitted the status quo.** `min = 60 s, jitter = 0`
+satisfies `min + jitter/2 = 60 s` exactly — and is the fixed phase this row
+exists to remove. A sufficiently small window fails the falsifier below for the
+same reason, less obviously.
+
+> **So conformance is two conditions: the mean is preserved, *and* the window
+> is non-zero and wide enough that measured phase correlation falls below the
+> falsifier's threshold.** The second is a measurement, not an algebraic
+> choice, which is why the split is owed rather than picked here — the trade is
+> between worst-case staleness and how much phase separation the window
+> actually buys.
 
 > **Copying `NoiseCadence::shipped()` would be the wrong reading and is
 > refused explicitly:** it is `3.333 s + U[0, 3.334 s]`, a mean of **5 s**
