@@ -15,7 +15,7 @@ that the C++ implements the spec it was ratified against. **Absence of a recorde
 divergence is not conformance:** it means *unreviewed*, and unreviewed rows are
 regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 §5.4.1 for the three states and the exception register. **DRS-P0f's row
-coverage is complete** as of 2026-09-02 (P0f is the per-row conformance review
+coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per-row conformance review
 — *not* P0d, which is Digest v0): the **102** bucket-1/2 rows that existed on
 2026-09-02 are disposed — 97 CHECKED-CONFORMANT, 3 DIVERGENT (CEN-B5's rule-71
 FAKECHAIN skip, census R9; CEN-L11 with CEN-L12 coupled, fix landed and
