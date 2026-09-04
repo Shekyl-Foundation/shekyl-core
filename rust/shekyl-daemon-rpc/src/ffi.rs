@@ -985,6 +985,14 @@ mod unit_test_link_stubs {
         std::ptr::null_mut()
     }
     #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_json_rpc(
+        _h: *mut CoreRpcHandle,
+        _method: *const std::os::raw::c_char,
+        _params: *const std::os::raw::c_char,
+    ) -> *mut std::os::raw::c_char {
+        std::ptr::null_mut()
+    }
+    #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_hard_fork_info(

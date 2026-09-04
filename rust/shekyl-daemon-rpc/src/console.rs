@@ -639,6 +639,18 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             };
             print_blockchain_dynamic_stats(&source, nblocks)
         }
+        // The C++ parser resolves the single optional argument into three:
+        // a tip hash, a `>above` filter, or a `-last_blocks` filter.
+        "alt_chain_info" => {
+            let (Some(tip), Some(above), Some(last_blocks)) = (
+                args.get(1),
+                args.get(2).and_then(|a| a.parse::<u64>().ok()),
+                args.get(3).and_then(|a| a.parse::<u64>().ok()),
+            ) else {
+                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
+            };
+            alt_chain_info(&source, tip, above, last_blocks, unix_now())
+        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -1484,6 +1496,269 @@ fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, 
     ));
     out.push(format!("Block versions: {}", version_tally(&major)));
     out.push(format!("Voting for: {}", version_tally(&minor)));
+    Ok(out.join("\n"))
+}
+
+/// Unwrap the in-process bridge's own envelope.
+///
+/// `dispatch_jsonrpc_we` answers `{"ok":true,"result":…}` or
+/// `{"ok":false,"error_code":…,"error_message":…}` — **not** a JSON-RPC 2.0
+/// envelope, which is what the remote arm gets from the HTTP listener. Two
+/// shapes for one method because the bridge is not the transport; keeping the
+/// unwrapping in two named functions is what stops the difference being
+/// rediscovered at each new bridged leg.
+fn ffi_json_rpc_result<T: serde::de::DeserializeOwned>(
+    raw: &str,
+    method: &str,
+) -> Result<T, String> {
+    let envelope: crate::types::FfiJsonRpcResult =
+        serde_json::from_str(raw).map_err(|e| format!("malformed {method} reply: {e}"))?;
+    if !envelope.ok {
+        return Err(envelope
+            .error_message
+            .unwrap_or_else(|| format!("{method} failed")));
+    }
+    let result = envelope
+        .result
+        .ok_or_else(|| format!("malformed {method} reply: ok with no result"))?;
+    serde_json::from_value(result).map_err(|e| format!("malformed {method} reply: {e}"))
+}
+
+/// One entry of the `get_alternate_chains` reply.
+///
+/// **A bridged leg, on purpose** (§2.1.1): `get_alternate_chains` is RK-8's
+/// and is still served from the C++ table (`core_rpc_ffi.cpp:284`). Required
+/// fields for the reason [`GetLimitReplyProvisional`] gives — a defaulted
+/// `length` would make every alt chain read as zero blocks long, which is a
+/// sentence about the chain rather than about the reply.
+#[derive(serde::Deserialize)]
+struct AltChainProvisional {
+    block_hash: shekyl_rpc_types::HashHex,
+    height: u64,
+    length: u64,
+    wide_difficulty: String,
+    block_hashes: Vec<shekyl_rpc_types::HashHex>,
+    main_chain_parent_block: shekyl_rpc_types::HashHex,
+}
+
+/// The `get_alternate_chains` reply. See [`AltChainProvisional`].
+#[derive(serde::Deserialize)]
+struct AltChainsReplyProvisional {
+    status: shekyl_rpc_types::RpcStatus,
+    chains: Vec<AltChainProvisional>,
+}
+
+/// Fetch `get_alternate_chains` — bridged on both arms.
+fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
+    let reply: AltChainsReplyProvisional = match src {
+        Source::Live(core) => {
+            let raw = core
+                .json_rpc("get_alternate_chains", "{}")
+                .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
+            ffi_json_rpc_result(&raw, "get_alternate_chains")?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_alternate_chains",
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<AltChainsReplyProvisional>(&raw, "get_alternate_chains")?
+        }
+    };
+    if reply.status.is_ok() {
+        Ok(reply.chains)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// Fetch `get_block_header_by_hash` — native here, over `/json_rpc` remotely.
+fn fetch_block_headers_by_hash(
+    src: &Source,
+    hashes: Vec<shekyl_rpc_types::HashHex>,
+) -> Result<Vec<shekyl_rpc_types::BlockHeaderSlot>, String> {
+    let request = shekyl_rpc_types::GetBlockHeaderByHashRequest {
+        hashes,
+        fill_pow_hash: false,
+    };
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = FfiChainFacts::new(core.clone());
+            crate::methods::get_block_header_by_hash(&facts, &request, false)
+                .map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_block_header_by_hash",
+                "params": request,
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::GetBlockHeaderByHashResponse>(
+                &raw,
+                "get_block_header_by_hash",
+            )?
+        }
+    };
+    if reply.status.is_ok() {
+        Ok(reply.block_headers)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// Read the headers for `requested`, insisting each slot answers the hash it
+/// was asked about.
+///
+/// **This is the check the C++ `bhres.block_headers.size() != chain.length + 1`
+/// became**, and it is a different kind of check. A count could only say "the
+/// daemon returned the wrong number of headers"; against the per-element
+/// reply it can say *which hash* has no header — and it also catches a reply
+/// of the right length whose slots are in the wrong order or answer hashes
+/// nobody asked about, which the count could not see at all.
+///
+/// A missing slot is normal rather than exceptional here: `alt_chain_info`
+/// asks `get_alternate_chains` for hashes and then asks for their headers, so
+/// a reorg between the two calls makes one vanish. That is the case the old
+/// batching could not express — it returned zero headers and an error string
+/// naming nothing.
+fn headers_in_correspondence(
+    slots: &[shekyl_rpc_types::BlockHeaderSlot],
+    requested: &[shekyl_rpc_types::HashHex],
+) -> Result<Vec<shekyl_rpc_types::BlockHeader>, String> {
+    if slots.len() != requested.len() {
+        return Err(format!(
+            "the daemon answered {} of {} block hashes",
+            slots.len(),
+            requested.len()
+        ));
+    }
+    let mut headers = Vec::with_capacity(slots.len());
+    for (slot, asked) in slots.iter().zip(requested) {
+        if slot.hash != *asked {
+            return Err(format!(
+                "the daemon answered about {} where {asked} was asked",
+                slot.hash
+            ));
+        }
+        let Some(header) = slot.block_header.as_ref() else {
+            return Err(format!(
+                "no block header for {asked} — the chain may have moved since it was listed"
+            ));
+        };
+        headers.push(header.clone());
+    }
+    Ok(headers)
+}
+
+/// `alt_chain_info [<tip> | >above | -last_blocks]`.
+#[deny(clippy::arithmetic_side_effects)]
+fn alt_chain_info(
+    src: &Source,
+    tip: &str,
+    above: u64,
+    last_blocks: u64,
+    now: u64,
+) -> Result<String, String> {
+    let info = fetch_get_info(src)?;
+    let mut chains = fetch_alt_chains(src)?;
+    // The alt chain's first block. Saturating: an alt chain longer than our
+    // own height is not something this console gets to be surprised by.
+    let start_of = |c: &AltChainProvisional| c.height.saturating_sub(c.length).saturating_add(1);
+    // "deep" as the C++ computed it: how far below our tip the fork point is.
+    let depth_of =
+        |c: &AltChainProvisional| info.height.saturating_sub(start_of(c)).saturating_sub(1);
+
+    if tip.is_empty() {
+        chains.sort_by_key(|c| c.height);
+        let shown: Vec<&AltChainProvisional> = chains
+            .iter()
+            .filter(|c| c.length > above)
+            .filter(|c| last_blocks == 0 || depth_of(c) < last_blocks)
+            .collect();
+        let mut out = vec![format!("{} alternate chains found:", shown.len())];
+        for c in shown {
+            out.push(format!(
+                "{} blocks long, from height {} ({} deep), diff {}: {}",
+                c.length,
+                start_of(c),
+                depth_of(c),
+                wide_difficulty_decimal(&c.wide_difficulty),
+                c.block_hash
+            ));
+        }
+        return Ok(out.join("\n"));
+    }
+
+    let Some(chain) = chains.iter().find(|c| c.block_hash.to_string() == tip) else {
+        return Err(format!(
+            "Block hash {tip} is not the tip of any known alternate chain"
+        ));
+    };
+    let start_height = start_of(chain);
+    let mut out = vec![
+        format!("Found alternate chain with tip {tip}"),
+        format!(
+            "{} blocks long, from height {start_height} ({} deep), diff {}:",
+            chain.length,
+            depth_of(chain),
+            wide_difficulty_decimal(&chain.wide_difficulty)
+        ),
+    ];
+    for hash in &chain.block_hashes {
+        out.push(format!("  {hash}"));
+    }
+    out.push(format!(
+        "Chain parent on main chain: {}",
+        chain.main_chain_parent_block
+    ));
+
+    // The chain's own blocks, then its parent on the main chain — the parent
+    // last, because the difficulty read below is `.back()`.
+    let mut requested = chain.block_hashes.clone();
+    requested.push(chain.main_chain_parent_block);
+    let slots = fetch_block_headers_by_hash(src, requested.clone())?;
+    let headers = headers_in_correspondence(&slots, &requested)?;
+
+    let (earliest, latest) = headers.iter().fold((u64::MAX, 0u64), |(lo, hi), h| {
+        (lo.min(h.timestamp), hi.max(h.timestamp))
+    });
+    let span = latest.saturating_sub(earliest);
+    let age = span.max(now.saturating_sub(earliest));
+    out.push(format!("Age: {}", human_readable_timespan(age)));
+    if chain.length > 1 {
+        out.push(format!("Time span: {}", human_readable_timespan(span)));
+        // **The guard is on the span, not on the difficulty.** The C++
+        // required `block_headers.back().difficulty > 0` and then computed a
+        // percentage the difficulty does not appear in — a check standing in
+        // front of a formula it is not part of, whose message named
+        // `cumulative difficulty` while reading `difficulty`. The hazard the
+        // site actually has is `dt == 0`: two or more blocks sharing a
+        // timestamp, which is reachable and which made the C++ print `inf%`.
+        if span == 0 {
+            out.push(
+                "Cannot estimate the network hash rate: the chain's blocks share a timestamp"
+                    .to_owned(),
+            );
+        } else {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a percentage for a human, from a block count and a timespan"
+            )]
+            let share = 100.0 * (info.target as f64) * (chain.length as f64) / (span as f64);
+            out.push(format!(
+                "Approximated {}% of network hash rate",
+                trimmed(share, 6)
+            ));
+        }
+    }
     Ok(out.join("\n"))
 }
 
@@ -2980,6 +3255,246 @@ mod tests {
             .expect("the range was asked for");
         assert_eq!(range_body["params"]["start_height"], 0);
         assert_eq!(range_body["params"]["end_height"], 1);
+    }
+
+    fn hash_n(n: u8) -> HashHex {
+        HashHex::from_bytes([n; 32])
+    }
+
+    fn alt_chains_reply(chains: &serde_json::Value) -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": {"status": "OK", "chains": chains},
+        })
+        .to_string()
+    }
+
+    fn one_alt_chain(
+        tip: u8,
+        height: u64,
+        length: u64,
+        hashes: &[u8],
+        parent: u8,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "block_hash": hash_n(tip),
+            "height": height,
+            "length": length,
+            "difficulty": 1000,
+            "wide_difficulty": "0x3e8",
+            "difficulty_top64": 0,
+            "block_hashes": hashes.iter().map(|h| hash_n(*h)).collect::<Vec<_>>(),
+            "main_chain_parent_block": hash_n(parent),
+        })
+    }
+
+    fn slots_reply(slots: Vec<shekyl_rpc_types::BlockHeaderSlot>) -> String {
+        typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::GetBlockHeaderByHashResponse {
+                status: RpcStatus::ok(),
+                block_headers: slots,
+            },
+        }))
+    }
+
+    fn slot(hash: u8, timestamp: u64) -> shekyl_rpc_types::BlockHeaderSlot {
+        let mut header = header_at(0);
+        header.timestamp = timestamp;
+        header.hash = hash_n(hash);
+        shekyl_rpc_types::BlockHeaderSlot {
+            hash: hash_n(hash),
+            block_header: Some(header),
+        }
+    }
+
+    /// The listing form: sorted by height, filtered, and each line carrying
+    /// the fork point and its depth below our tip.
+    #[test]
+    fn alt_chain_info_lists_and_filters() {
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([
+                    one_alt_chain(9, 90, 2, &[8, 9], 7),
+                    one_alt_chain(5, 50, 1, &[5], 4),
+                ])),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", "", "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.starts_with("2 alternate chains found:"), "{out}");
+        // Sorted by height: the height-50 chain first.
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[1].contains("from height 50"), "{out}");
+        assert!(lines[2].contains("from height 89"), "{out}");
+        // 100 - 89 - 1 = 10 deep; 100 - 50 - 1 = 49.
+        assert!(lines[1].contains("(49 deep)"), "{out}");
+        assert!(lines[2].contains("(10 deep)"), "{out}");
+
+        // `>1` keeps only chains longer than one block.
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([
+                    one_alt_chain(9, 90, 2, &[8, 9], 7),
+                    one_alt_chain(5, 50, 1, &[5], 4),
+                ])),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", "", "1", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.starts_with("1 alternate chains found:"), "{out}");
+        assert!(out.contains("from height 89"), "{out}");
+    }
+
+    /// The tip form: the chain's blocks, its parent, and the derived age,
+    /// span and hash-rate share.
+    #[test]
+    fn alt_chain_info_reports_one_chain_by_tip() {
+        let tip = hash_n(9).to_string();
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)])),
+            ),
+            (
+                "json_rpc:get_block_header_by_hash",
+                // Asked in this order: the chain's blocks, then the parent.
+                slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(
+            out.contains(&format!("Found alternate chain with tip {tip}")),
+            "{out}"
+        );
+        assert!(
+            out.contains("2 blocks long, from height 89 (10 deep)"),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("Chain parent on main chain: {}", hash_n(7))),
+            "{out}"
+        );
+        // Span 1240 - 880 = 360 s; share = 100 * 120 * 2 / 360 = 66.666667%.
+        assert!(out.contains("Time span:"), "{out}");
+        assert!(
+            out.contains("Approximated 66.666667% of network hash rate"),
+            "{out}"
+        );
+    }
+
+    /// A hash whose header the daemon does not hold is named.
+    ///
+    /// This is the case the C++ could not express. Its check was
+    /// `block_headers.size() != chain.length + 1`, so a reorg between
+    /// `get_alternate_chains` and the header batch produced "Failed to get
+    /// block header info for alt chain" — true, and naming nothing. The
+    /// per-element reply carries a slot for the missing hash, so the console
+    /// can say which one moved.
+    #[test]
+    fn a_hash_with_no_header_is_named_rather_than_counted() {
+        let tip = hash_n(9).to_string();
+        let missing = hash_n(9).to_string();
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)])),
+            ),
+            (
+                "json_rpc:get_block_header_by_hash",
+                slots_reply(vec![
+                    slot(8, 1000),
+                    shekyl_rpc_types::BlockHeaderSlot {
+                        hash: hash_n(9),
+                        block_header: None,
+                    },
+                    slot(7, 880),
+                ]),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(
+            out.contains(&format!("no block header for {missing}")),
+            "{out}"
+        );
+    }
+
+    /// A reply of the right length whose slots answer different hashes is
+    /// refused — which the count check could not see at all.
+    #[test]
+    fn a_slot_answering_a_different_hash_is_refused() {
+        let requested = vec![hash_n(1), hash_n(2)];
+        let slots = vec![slot(1, 10), slot(3, 20)];
+        let err = headers_in_correspondence(&slots, &requested)
+            .expect_err("slot 1 answers hash 3, not hash 2");
+        assert!(err.contains(&hash_n(3).to_string()), "{err}");
+        assert!(err.contains(&hash_n(2).to_string()), "{err}");
+
+        // And the length disagreement it replaces.
+        let err = headers_in_correspondence(&slots[..1], &requested)
+            .expect_err("one slot for two hashes");
+        assert!(err.contains("1 of 2"), "{err}");
+
+        // The agreeing case, so this is not a test that only knows how to
+        // refuse.
+        let good = headers_in_correspondence(&[slot(1, 10), slot(2, 20)], &requested)
+            .expect("both slots answer what was asked");
+        assert_eq!(good.len(), 2);
+    }
+
+    /// Blocks sharing a timestamp get a sentence, not `inf%`.
+    ///
+    /// The C++ guarded this site with `back().difficulty > 0` — a check on a
+    /// value the percentage does not contain, whose message named
+    /// `cumulative difficulty` while reading `difficulty`. The reachable
+    /// hazard is a zero span, which divided straight through.
+    #[test]
+    fn a_zero_span_reports_why_rather_than_dividing() {
+        let tip = hash_n(9).to_string();
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)])),
+            ),
+            (
+                "json_rpc:get_block_header_by_hash",
+                slots_reply(vec![slot(8, 1000), slot(9, 1000), slot(7, 1000)]),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("share a timestamp"), "{out}");
+        assert!(!out.contains("inf"), "{out}");
+    }
+
+    /// A tip that is not a known alt chain says so.
+    #[test]
+    fn an_unknown_tip_is_named() {
+        let tip = hash_n(200).to_string();
+        let address = route_server(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                alt_chains_reply(&serde_json::json!([])),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(
+            out.contains("is not the tip of any known alternate chain"),
+            "{out}"
+        );
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.
