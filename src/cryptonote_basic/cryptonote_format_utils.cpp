@@ -856,6 +856,12 @@ namespace cryptonote
     // — the same strictness the FCMP++ leaf builder applies, so nothing
     // accepted here is silently skipped from the curve tree. Replaces the
     // inherited crypto::check_key, which only checked on-curve.
+    //
+    // LOAD-BEARING DOWNSTREAM (CEN-L11): blockchain_db.cpp's leaf collector
+    // now THROWS on a construct_leaf failure instead of dropping the output,
+    // on the strength of this gate and its commitment-mask twin. Weakening
+    // either turns an unspendable-output bug into an abort at block connect —
+    // safer, but only if you meant it.
     const uint8_t rc = shekyl_check_output_keys(keys_flat.data(), tx.vout.size());
     if (rc != SHEKYL_OUTPUT_POINTS_OK)
     {
@@ -977,6 +983,12 @@ namespace cryptonote
         // txout_to_tagged_key is the sole output type from genesis (the
         // claim-era txout_to_staked_key was retired with the confidential-
         // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
+        //
+        // LOAD-BEARING DOWNSTREAM (CEN-L11/H12): blockchain_db.cpp's
+        // curve-tree leaf collector treats a non-tagged-key target as
+        // impossible and THROWS rather than skipping the output. Relaxing
+        // this whitelist without teaching that collector the new target type
+        // turns a widened rule into an abort at block connect.
         CHECK_AND_ASSERT_MES(
           std::holds_alternative<txout_to_tagged_key>(o.target),
           false, "wrong variant type (index " << o.target.index()

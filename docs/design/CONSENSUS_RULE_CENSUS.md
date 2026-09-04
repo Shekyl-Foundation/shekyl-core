@@ -17,9 +17,8 @@ regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECON
 §5.4.1 for the three states and the exception register. **DRS-P0f's row
 coverage is complete** as of 2026-09-02 (P0f is the per-row conformance review
 — *not* P0d, which is Digest v0): all 102 bucket-1/2 rows disposed —
-97 CHECKED-CONFORMANT, 3 DIVERGENT (CEN-L11 with CEN-L12 coupled; CEN-B5's
-rule-71 FAKECHAIN skip), 2 failed closed (CEN-L8; CEN-I12, split anchor
-source). **Both S-graded findings are fixed and re-verified** — the S0 by
+99 CHECKED-CONFORMANT, 1 DIVERGENT (CEN-B5's rule-71 FAKECHAIN skip, census
+R9), 2 failed closed (CEN-L8; CEN-I12, split anchor source). **Both S-graded findings are fixed and re-verified** — the S0 by
 PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.

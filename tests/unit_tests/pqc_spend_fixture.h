@@ -32,7 +32,15 @@ inline cryptonote::transaction make_pqc_spend()
   cryptonote::tx_out txout{};
   txout.amount = 0;
   cryptonote::txout_to_tagged_key tagged{};
-  std::memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  // A canonical, prime-order, non-identity point — the Ed25519 basepoint's
+  // compressed encoding. Consensus admission (check_outs_valid ->
+  // shekyl_check_output_keys) accepts nothing weaker, and the curve-tree leaf
+  // collector now ABORTS on an output it cannot encode (CEN-L11) instead of
+  // silently skipping it. Arbitrary bytes here used to leave this tx's output
+  // out of the tree with no signal, so the fixture only appeared to exercise
+  // the block path.
+  std::memset(&tagged.key, 0x66, sizeof(tagged.key));
+  tagged.key.data[0] = 0x58;
   tagged.view_tag.data = 0;
   txout.target = tagged;
   tx.vout.push_back(txout);

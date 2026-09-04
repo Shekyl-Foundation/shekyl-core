@@ -28,6 +28,20 @@ using namespace cryptonote;
 
 namespace {
 
+// A distinct, canonical, prime-order, non-identity output key per index:
+// (i+1)*G. Consensus admission accepts nothing weaker
+// (check_outs_valid -> shekyl_check_output_keys), and the curve-tree leaf
+// collector aborts on an output it cannot encode (CEN-L11), so fixtures must
+// carry real points rather than byte fills.
+crypto::public_key test_output_key_for_index(size_t i)
+{
+  crypto::secret_key sk{};
+  sk.data[0] = static_cast<char>(i + 1);
+  crypto::public_key pk{};
+  EXPECT_TRUE(crypto::secret_key_to_public_key(sk, pk));
+  return pk;
+}
+
 // Shared archival-LMDB scaffolding (also driven by the claim-source RPC
 // tests — single-sourced so the fixtures cannot drift).
 using archival_test::kServeCreditTestBlockHeight;
@@ -2935,13 +2949,21 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    memset(&tagged.key, 0x60 + static_cast<int>(i), sizeof(tagged.key));
+    // Distinct per output, but still a canonical prime-order point: scale the
+    // Ed25519 basepoint by (i+1). Arbitrary byte fills are not curve points,
+    // and the leaf collector now aborts on one it cannot encode (CEN-L11)
+    // rather than dropping the output silently.
+    tagged.key = test_output_key_for_index(i);
     tagged.view_tag.data = 0;
     vout.target = tagged;
     tx.vout.push_back(vout);
 
     ct::ctkey out_pk{};
-    memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
+    // Commitment masks are the leaf builder's second point input, and
+    // check_commitment_mask_valid accepts only canonical prime-order
+    // encodings — so this must be a real point too (CEN-L11).
+    const crypto::public_key mask_pt = test_output_key_for_index(i + 16);
+    memcpy(out_pk.mask.bytes, &mask_pt, sizeof(out_pk.mask.bytes));
     tx.ct_signatures.outPk.push_back(out_pk);
     // The CtSigBase serializer requires one enc_amounts/enc_labels entry per
     // vout regardless of type; filler is fine, nothing decrypts them here.

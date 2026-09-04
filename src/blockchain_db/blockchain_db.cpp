@@ -552,21 +552,37 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
               : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
         else
-          continue;
+          // CEN-L11: unreachable — CEN-H12/F8 make txout_to_tagged_key the sole
+          // accepted output type on both the relay and connect paths. Reaching
+          // here means an unvalidated output arrived at the write path, and a
+          // `continue` would drop it from the curve tree: deterministically,
+          // permanently unspendable, with no verify-time twin to notice. Skips
+          // on this path are silent by construction, so it aborts instead.
+          throw DB_ERROR("curve-tree leaf: unsupported output target at DB add (validated at admission?)");
 
         if (i >= tx.ct_signatures.outPk.size())
-          continue;
+          // CEN-L11: unreachable — four `outPk.size() != vout.size()` gates
+          // cover coinbase and non-coinbase on both paths (cryptonote_core.cpp,
+          // cryptonote_format_utils.cpp, blockchain.cpp x2). Same reasoning.
+          throw DB_ERROR("curve-tree leaf: outPk shorter than vout at DB add (validated at admission?)");
         ct::key commitment = tx.ct_signatures.outPk[i].mask;
 
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
-        if (shekyl_construct_curve_tree_leaf(
+        // CEN-L11: the verdict is checked, not discarded. construct_leaf fails
+        // only when the output key or the commitment is not a canonical,
+        // prime-order, non-identity point — and both are gated upstream on
+        // both paths (shekyl_check_output_keys via check_outs_valid;
+        // shekyl_check_commitment_masks via check_commitment_mask_valid, with
+        // the coinbase legs in prevalidate_miner_transaction). So this is
+        // unreachable, and it aborts rather than silently omitting the output.
+        if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))
-        {
-          add_pending_tree_leaf(mat, this_output, leaf);
-          add_block_pending_addition(bh, this_output, mat);
-        }
+          throw DB_ERROR("curve-tree leaf construction failed at DB add (validated at admission?)");
+
+        add_pending_tree_leaf(mat, this_output, leaf);
+        add_block_pending_addition(bh, this_output, mat);
       }
     };
 
