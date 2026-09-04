@@ -15,6 +15,12 @@ const BG_TRUCHET: Algorithm = Algorithm::Truchet;
 const BG_CRYSTALLINE: Algorithm = Algorithm::Crystalline;
 const CANDIDATE_BLEND: BlendMode = BlendMode::Difference;
 
+/// Rendering-spec version stamped into every recipe. Ruling A pins spec
+/// versions as chain data (a shard renders under the spec active at its
+/// creation height); until Stage 5 supplies creation heights a single
+/// version exists, and this stamp is what a future comparison keys on.
+const SPEC_VERSION: &str = "candidate.v1";
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CandidateRecipe {
     pub fg_tile: String,
@@ -34,6 +40,8 @@ pub struct CandidateRecipe {
     /// state. Non-canonical renders must stay visibly non-canonical in
     /// every export (ruling A, `docs/V3_SHARD_VISUALIZATION.md`).
     pub canonical: bool,
+    /// Rendering-spec version that produced this recipe ([`SPEC_VERSION`]).
+    pub spec_version: String,
 }
 
 fn palette_from_entropy(ent: &mut EntropyStream, idx: u32) -> Palette {
@@ -128,6 +136,7 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
         final_mode: "difference".into(),
         final_opacity,
         canonical: params.canonical && params.structural_overrides.is_empty(),
+        spec_version: SPEC_VERSION.into(),
     }
 }
 

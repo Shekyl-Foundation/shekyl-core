@@ -306,6 +306,13 @@ property (a rendering would be a function of wallet state). Cost of
 (a): conforming implementations carry superseded renderers; spec
 versions are expected to be rare enough that this is bounded.
 
+Enforcement of the height pin lands with the Stage 5 cutover, when
+shards acquire creation heights — the named blocker (rule 22): no
+height exists for a fixture aggregate, and only one spec version
+exists today. What lands now is the operand: every `CandidateRecipe`
+carries `spec_version` (`"candidate.v1"`), so exports are
+self-describing and the future comparison has its field.
+
 ### Overridden renders are visibly non-canonical (hash-override ruling)
 
 The preview tweak path (`hash_override`, structural overrides,
