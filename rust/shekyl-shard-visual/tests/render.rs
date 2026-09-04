@@ -73,6 +73,9 @@ fn canonical_flag_tracks_input_provenance() {
 /// that breaks Rust/Python recipe parity breaks one of the two pins.
 /// Pixel-level parity is ruling B's oracle; this pins the derivation.
 #[test]
+// Opacities are quantized to a 2-decimal grid at derivation time, so exact
+// equality is the pin's contract: any drift, however small, must fail.
+#[allow(clippy::float_cmp)]
 fn genesis_recipe_matches_the_cross_implementation_pin() {
     let fixture = fixtures::by_id("genesis").expect("genesis fixture");
     let r = recipe_from_params(&parameters_from_aggregate(&fixture.aggregate));
