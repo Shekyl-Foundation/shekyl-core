@@ -1552,8 +1552,12 @@ namespace cryptonote
               // discard), so this is degradation and re-sync, never peer
               // misconduct. A peer that actually misrepresents a span is
               // caught at the queue bookkeeping-mismatch arm above, which
-              // fires before any state race can. Drop the span and let the
-              // sync machinery re-request from the CURRENT chain state.
+              // fires before any state race can. Drop the span, then take
+              // the shared back-to-download path: a bare return would leave
+              // THIS context synchronizing with its request time already
+              // cleared by the response handler, and the idle kicker
+              // selects only contexts with a live request time -- the
+              // download must be put back in motion here, not assumed.
               LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned -- local chain state moved during span processing; re-syncing without penalizing the origin");
               if (!m_core.cleanup_handle_incoming_blocks())
               {
@@ -1563,7 +1567,7 @@ namespace cryptonote
 
               // remove the span so other threads can wake up and get it
               m_block_queue.remove_spans(span_connection_id, start_height);
-              return 1;
+              goto skip;
             }
 
             TIME_MEASURE_FINISH(block_process_time);

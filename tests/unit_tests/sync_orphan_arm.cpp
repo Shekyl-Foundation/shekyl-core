@@ -19,7 +19,9 @@
 #include "gtest/gtest.h"
 
 #include <atomic>
+#include <cstring>
 #include <functional>
+#include <stdexcept>
 
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/nil_generator.hpp>
@@ -47,6 +49,7 @@ public:
   std::function<bool(const crypto::hash&)> have_block_fn;
   std::function<void(cryptonote::block_verification_context&)> incoming_block_fn;
   uint64_t chain_height = 1;
+  uint64_t target_height = 1;
   size_t prepare_calls = 0;
   size_t cleanup_calls = 0;
   size_t incoming_block_calls = 0;
@@ -94,7 +97,7 @@ public:
   bool get_test_drop_download_height() const { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
-  uint64_t get_target_blockchain_height() const { return chain_height; }
+  uint64_t get_target_blockchain_height() const { return target_height; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
   void on_stem_propagated(epee::span<const crypto::hash>) {}
@@ -126,10 +129,17 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
 {
   std::atomic<size_t> drops{0};
   std::atomic<size_t> host_fails{0};
+  std::atomic<size_t> chain_requests{0};
   cryptonote::cryptonote_connection_context lambda_ctx{};
 
   bool drop_connection(const epee::net_utils::connection_context_base& context) override
   { ++drops; return true; }
+  bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) override
+  {
+    if (command == cryptonote::NOTIFY_REQUEST_CHAIN::ID)
+      ++chain_requests;
+    return true;
+  }
   bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
   { ++host_fails; return true; }
   bool for_connection(const boost::uuids::uuid&, std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
@@ -174,6 +184,7 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
 {
   rig r;
   r.core.chain_height = 100;
+  r.core.target_height = 500; // mid-IBD: the arm must put the download BACK in motion
 
   crypto::hash parent;
   memset(&parent, 0x21, sizeof(parent));
@@ -199,6 +210,16 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
   EXPECT_GE(r.core.cleanup_calls, 1u) << "the arm must still clean up the incoming-blocks batch";
   uint64_t h; std::vector<cryptonote::block_complete_entry> b; boost::uuids::uuid u; epee::net_utils::network_address a;
   EXPECT_FALSE(r.handler.m_block_queue.get_next_span(h, b, u, a)) << "the span must be removed for re-request";
+  // The Bugbot finding: not punishing is only half the arm's job -- the
+  // download must be put BACK IN MOTION on this context, because the
+  // response handler cleared m_last_request_time and the idle kicker
+  // selects only contexts with a live request time; a bare return leaves
+  // the connection synchronizing-and-silent forever. The arm must
+  // re-enter the shared back-to-download path.
+  EXPECT_GE(r.p2p.chain_requests.load(), 1u)
+      << "the orphan arm must re-request the chain from the current tip";
+  EXPECT_TRUE(r.ctx.m_last_request_time != boost::date_time::not_a_date_time)
+      << "a live request time is what keeps the idle kicker able to see this context";
 }
 
 TEST(sync_orphan_arm, bookkeeping_mismatch_keeps_teeth)

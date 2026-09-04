@@ -1346,9 +1346,23 @@ dangling-anchor sweep ride the round-close PR per §5.2.
 The fix landed as ruled, measured as required. The sync orphan arm
 (`cryptonote_protocol_handler.inl`, the in-loop
 `bvc.m_marked_as_orphaned` branch) no longer severs or scores: it logs
-the local-state cause loudly, cleans up, drops the span, and lets the
-sync machinery re-request from the current chain state; the `:1407`
-bookkeeping-mismatch drop is untouched. **Diff measurement (the rule-20
+the local-state cause loudly, cleans up, drops the span, and **takes
+the shared back-to-download path (`goto skip` →
+`request_missing_objects`)**, which resumes span-adding if work
+remains and otherwise re-requests the chain from the current tip with
+a live request time; the `:1407` bookkeeping-mismatch drop is
+untouched. **The re-entry is a review correction, owned:** the fix's
+first form ended in a bare `return 1` on my claim that "the sync
+machinery re-requests" — an untested assertion phrased as observation.
+Bugbot's review-round finding (HIGH, confirmed at source) showed the
+opposite: the response handler had already cleared
+`m_last_request_time`, the 8-second idle kicker selects ONLY contexts
+with a live request time, and `on_callback`'s healing arm runs only on
+a requested callback — so the context sat synchronizing-and-silent
+forever, and the pre-fix arm's severing had BEEN the recovery
+mechanism. The behavioral rig now pins the healing (a chain request
+observed on the context, request time live again), observed red-first
+against the bare-return form. **Diff measurement (the rule-20
 expectation, measured not assumed): mechanism −9/+2, net −7** — the
 two added mechanism lines are the replacement log statement and its
 brace; raw is +2 only from the design-comment block, which is
@@ -1478,6 +1492,21 @@ pin; the rig is the behavioral one.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — Review round 1 on the R1c PR (#612): two Copilot
+  findings + one Bugbot HIGH, all valid, all addressed. Bugbot caught
+  a real liveness defect IN THE Q3B FIX: the orphan arm's bare return
+  left the context synchronizing with no live request time — invisible
+  to the idle kicker, unreachable by on_callback's healing —
+  so severing had been the recovery and the fix had removed both.
+  One-word repair (`return 1` → `goto skip`, the sibling arms' own
+  back-to-download path), rig extended to pin the healing red-first.
+  Copilot: the [7/7] gate's fixed 15-line window and single-token grep
+  hardened to whole-arm extraction with the full punitive token set,
+  all three mutation classes observed caught; the rig's transitive
+  includes made explicit. Lesson, same heading as Q1c's: "the sync
+  machinery re-requests" was an untested assertion phrased as
+  observation — the recovering mechanism must be NAMED and OBSERVED,
+  and the rig's healing assertions are that observation.
 - 2026-09-04 — **R1c ratifications (Rick, against the pushed §5):**
   Q1a, Q1b, Q2a, Q2b, Q3a ratified with his anchors re-verified;
   **Q3b formally signed** (defect + fix direction had been ratified on

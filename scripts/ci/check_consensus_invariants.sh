@@ -246,16 +246,28 @@ echo
 # ----------------------------------------------------------------------
 echo "[7/7] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
 INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
-Q3B_MARK=$(grep -c "re-syncing without penalizing the origin" "$INL" || true)
-if [[ "${Q3B_MARK:-0}" -ne 1 ]]; then
-  echo "      FAIL: the Q3b orphan-arm marker is missing (found ${Q3B_MARK:-0},"
-  echo "            expected exactly 1) -- the arm was removed or reworded;"
-  echo "            re-point this gate at the arm, do not delete it."
+# Capture each WHOLE m_marked_as_orphaned arm (its if-line through the
+# closing brace at the same indent) and keep the one carrying the Q3b
+# marker -- a fixed post-marker line count missed both a punitive call
+# placed before the marker and the arm growing past the window (review
+# round 1 on the R1c PR). Punitive tokens: every drop_* spelling plus
+# host scoring and host blocking.
+Q3B_ARM=$(awk '
+  /if\(bvc\.m_marked_as_orphaned\)/ { cap=1; buf="" }
+  cap { buf = buf $0 "\n";
+        if ($0 ~ /^            \}$/) { cap=0;
+          if (buf ~ /re-syncing without penalizing the origin/) { print buf; found++ } } }
+  END { if (found != 1) exit 3 }' "$INL"); Q3B_RC=$?
+if [[ "$Q3B_RC" -ne 0 || -z "$Q3B_ARM" ]]; then
+  echo "      FAIL: could not extract exactly one marker-carrying orphan arm"
+  echo "            (extractor rc $Q3B_RC) -- the arm was removed, reworded,"
+  echo "            or re-indented; re-point this gate, do not delete it."
   FAIL=1
 else
-  Q3B_DROPS=$(grep -A 15 "re-syncing without penalizing the origin" "$INL" | grep -c "drop_connection" || true)
-  if [[ "${Q3B_DROPS:-0}" -ne 0 ]]; then
-    echo "      FAIL: the sync orphan arm contains a drop_connection call --"
+  Q3B_PUNISH=$(printf '%s' "$Q3B_ARM" | grep -cE "drop_connection|add_host_fail|block_host" || true)
+  if [[ "${Q3B_PUNISH:-0}" -ne 0 ]]; then
+    echo "      FAIL: the sync orphan arm contains a punitive call"
+    echo "            (drop_connection*/add_host_fail/block_host) --"
     echo "            punishment re-entered the arm (C2-R1c-Q3b ruled this a"
     echo "            defect; the fix falsifier in the round doc names the"
     echo "            only evidence that reopens HOW, and nothing reopens"
