@@ -1270,11 +1270,13 @@ set consulted for anything but dedup) reopens the orchestration
 classification.
 
 **C2-R1c-Q3b — CEN-A4: one flag stops meaning two things.**
-*Status: defect finding + fix direction RATIFIED ON SOURCE by Rick,
-2026-09-04 (his own verification of :2512, :1546–1556's
-`add_fail`+`flush_all_spans` semantics, and the :695 arm — plus the
-Q1a-derived honest path above, his addition); formal signature lands
-against this pushed text. Q1a–Q3a held for his read.* The orphan
+*Status: **FORMALLY SIGNED by Rick, 2026-09-04**, against the pushed
+§5 text (the defect + fix direction had been ratified on source
+earlier the same day, on his own verification of :2512, the
+`add_fail`+`flush_all_spans` hammer semantics, and the :695 arm — plus
+the Q1a-derived honest path above, his addition). Of the seven
+rulings, only **Q1c remains pending** — amended pre-signature after
+its executed falsifier fired; signature on the amendment diff.* The orphan
 flag's two consumers get their own signals. (i) The live-path meaning
 is ratified: orphan = "our store lacks the ancestry" — re-request, no
 punishment, no storage. (ii) The sync-path punish arm (`:1546`) is
