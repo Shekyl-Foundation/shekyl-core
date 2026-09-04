@@ -114,10 +114,15 @@ and a sim→engine-core dependency is the wrong direction; the daemon-side
 Rust rounding gets a real owner in the §7 implementation, which is where
 one home for all three copies is decided).
 
-## FL-R12′ ruling (2026-09-03, relayed via steering)
+## FL-R12′ (2026-09-03; provenance corrected at review round 4)
 
-**Signed: plain perpetual tail** — reversing the earlier recorded cap
-lean. Hard cap rejected on the priority-order derivation; the fee-fed
+**Direction: plain perpetual tail — accepted by the maintainer
+in-channel at review round 4; NOT SIGNED.** An earlier revision of this
+section recorded "signed, relayed via steering"; review round 4 could
+not confirm that signature, and the record is demoted accordingly (the
+empty §8 signature line — kept empty precisely because a relayed ruling
+is not a signature — is what made this a wording correction rather than
+a retraction). Hard cap rejected on the priority-order derivation; the fee-fed
 burn-recycling floor declined, with the maintainer's dormancy rationale
 on the record (a maturing monetary asset is mostly high-value/low-volume
 — exactly when the opportunity-cost attacker is cheapest and a fee-fed
@@ -132,16 +137,54 @@ sides of the boundary; observed red against the capped path:
 the in-tree countersignature; provenance of this entry is the steering
 relay.*
 
+## Review round 4 (maintainer, on the pushed branch, 2026-09-03)
+
+Verified the branch (14 commits, signed; consensus-crate delta = two
+`fn → pub fn`, one generated const, one `#[ignore]`d red test — "no
+consensus code touched" holds), then found two queued items built on
+claims that did not survive source, and asked the provenance question
+directly. Dispositions:
+
+- **F-1 (High) → FL-R12′ amendment drafted:** the shipped order floors
+  `base` *before* the release multiplier, so under dormancy the chain
+  pays 0.48 SKL/block against the ruling's named 0.6 floor — in exactly
+  the regime the dormancy argument exists for. Drafted:
+  `paid = max(M_r·curve(remaining), TAIL)` (floor on the PAID reward);
+  oracle re-oriented to assert that contract against the shipped
+  composition; signature waits on the amendment.
+- **F-2 (High) → FL-R16 rejected as written, re-minted FL-R16a/b/c:**
+  the original row's live-consumer claim was a `#[cfg(test)]` fixture,
+  the burn never touches `ActivityMetric`, and the date conflated onset
+  with exhaustion. **Ownership, precisely: three relayed claims entered
+  a §8 row unverified — the one row in this round that skipped the
+  ground-cross-session-claims discipline is the one that was
+  demolished.** The real build-blocker (FL-R16a) is the past-asymptote
+  error arm: estimator dead-letter (no wallet can quote) *and* relay
+  dead-letter (`get_current_fee_per_byte` → 0 → `check_fee` rejects the
+  mempool) at ≈ yr 73.
+- **F-3 (Moderate) → FL-R16c:** `supply_ratio` saturation +
+  the `circulating = gross emission` definitional bug named for the
+  sweep.
+- **F-4 (process) → provenance corrected everywhere:** every "since
+  FL-R12′" downgrade was consuming a signature not in the tree; all
+  consumer rows re-scoped to "pending the amended signature," each
+  naming what restores it if the direction reverses. Answer to the
+  direct question, on the record: **no signature from the maintainer
+  ever reached this session** — the sole source was the steering lane's
+  "FL-R12′ IS SIGNED" relay; whether anything behind it exists is now a
+  question put back to the steering lane.
+- **FL-R14 RULED (b) in-channel** — `u64` persisted; binding bound is
+  the genesis-frozen 64-bit range-proof width; build-time assertion
+  obligation recorded with the wrap-un-saturation failure mode named.
+- **Build authorization: NO** until the row text matches the number the
+  chain pays.
+
 ## Decisions pending (all with the maintainer)
 
-1. **FL-R12′ implementation authorization** — the ruling is signed
-   (above) but building the consensus change (clamp reconciliation,
-   flag-path removal, rename sweep per FL-R15) is a separate
-   authorization; **FL-R14** (persisted `u128` + V13 resync vs
-   documented-`u64`-bound) and **FL-R16** (the two cap-asserting guards —
-   the activity invariant that fires forever after tail onset, and the
-   past-asymptote error arm) are answered together, before build — same
-   files, one pass.
+1. **FL-R12′ signature** — the F-1 amendment (pre-/post-multiplier) is
+   drafted in the row and the oracle matches it; the maintainer signs
+   the amended row or corrects the draft. Build authorization is **NO**
+   until then (review round 4).
 2. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
    since the ruling).
 3. **PR** — branch is pushed for review (review round 3); **PR remains

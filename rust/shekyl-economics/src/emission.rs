@@ -286,46 +286,62 @@ mod tests {
     /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
     /// the terminal state — they are descriptions of one chain.
     ///
-    /// Since the FL-R12′ ruling (2026-09-03, perpetual tail) this is the
-    /// RULED oracle, no longer the direction-neutral leg-agreement form:
-    /// the reward is `TAIL` on **both** sides of the exhaustion boundary,
-    /// on every leg. RED TODAY against the shipped code — the capped
-    /// 6-arg path pays `remaining` (then 0) instead of `TAIL`, and the
-    /// uncapped path errors once `ag` passes the asymptote. Un-ignore
-    /// with the FL-R12′ implementation. Sits beside
-    /// `base_block_reward_tail_floor` deliberately: that test pins the
-    /// pre-cap floor in a state where today's capped composition pays
-    /// ~1/286th of it, and this is the missing composition oracle.
+    /// The FL-R12′ oracle, in its review-round-4 AMENDED form (the
+    /// direction — perpetual tail — is maintainer-accepted; the
+    /// signature waits on this amendment): `TAIL` floors the **PAID**
+    /// reward, i.e. `paid = max(M_r·curve(remaining), TAIL)`. The
+    /// pre-multiplier alternative was rejected by the ruling's own
+    /// dormancy argument — the shipped order floors `base` *before* the
+    /// release multiplier, so under dormancy (`M_r = 0.8`) the chain
+    /// pays 0.48 SKL/block against the named 0.6 floor, in exactly the
+    /// regime the floor exists for.
+    ///
+    /// Composes the SHIPPED path (tail-floored base → release
+    /// multiplier → supply cap) at dormancy volume and asserts the
+    /// amended contract. RED TODAY three ways: 480 000 000 vs
+    /// 600 000 000 at the first sub-tail-headroom block, 0 vs
+    /// 600 000 000 at the asymptote (the cap clamps to remaining = 0),
+    /// and an error past the asymptote (`AlreadyGeneratedExceedsSupply`,
+    /// FL-R16a). Un-ignore with the signed amendment's implementation.
+    /// Sits beside `base_block_reward_tail_floor` deliberately: that
+    /// test pins the pre-cap floor in a state where today's composition
+    /// pays a fraction of it, and this is the missing composition
+    /// oracle.
     #[test]
-    #[ignore = "FL-R12' ruled (perpetual tail) but not yet implemented: the capped path pays remaining-then-zero instead of TAIL; un-ignore with the implementation"]
+    #[ignore = "FL-R12' amendment pending signature: the shipped composition pays M_r*remaining-then-errors instead of flooring the PAID reward at TAIL"]
     fn terminal_reward_legs_agree() {
+        use crate::release::{apply_release_multiplier, calc_release_multiplier};
+
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
         let s = p.money_supply;
+        // Dormancy: the regime the floor exists for pins the release
+        // multiplier at its 0.8 rail.
+        let m_r = calc_release_multiplier(0, p.tx_volume_baseline, p.release_min, p.release_max);
 
-        // Both sides of the boundary: last sub-tail-headroom block,
-        // asymptote itself, and PAST the asymptote (reachable under the
-        // ruled non-saturating accumulator).
+        // Both sides of the boundary and PAST the asymptote (reachable
+        // under the amended non-saturating accumulator).
         for ag in [s - tail + 1, s, s + tail] {
             let base_leg = base_block_reward(ag, &p)
-                .unwrap_or_else(|e| panic!("base leg must pay TAIL at ag={ag}, got {e:?}"));
-            assert_eq!(base_leg, tail, "base leg != TAIL at already_generated={ag}");
-            let validation_leg = cap_reward_to_remaining_supply(base_leg, ag, &p);
+                .unwrap_or_else(|e| panic!("paid floor must be TAIL at ag={ag}, got {e:?}"));
+            let modulated = apply_release_multiplier(base_leg, m_r);
+            let paid = cap_reward_to_remaining_supply(modulated, ag, &p);
             assert_eq!(
-                validation_leg, tail,
-                "validation leg != TAIL at already_generated={ag}"
+                paid, tail,
+                "paid reward != TAIL under dormancy at already_generated={ag}"
             );
         }
 
         // The projection leg — the function the census-R2 reopen
-        // criterion names — must also report TAIL past the boundary.
+        // criterion names — must also floor the paid reward at TAIL.
         let past_boundary = 19_200_000; // > the 2^21-identity tail-headroom crossing
         let ag = projected_already_generated(past_boundary, &p).unwrap();
-        let projection_leg = base_block_reward(ag, &p).unwrap();
+        let projection = base_block_reward(ag, &p).unwrap();
+        let paid =
+            cap_reward_to_remaining_supply(apply_release_multiplier(projection, m_r), ag, &p);
         assert_eq!(
-            cap_reward_to_remaining_supply(projection_leg, ag, &p),
-            tail,
-            "projection→validation != TAIL past the boundary (height {past_boundary})"
+            paid, tail,
+            "projection-leg paid reward != TAIL past the boundary (height {past_boundary})"
         );
     }
 
