@@ -347,14 +347,17 @@ where
         let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
 
-        // Canonical P-lane floor fee — the shared single fee decision
-        // (doc comment); typed refusal preserved for the RPC layer's
-        // -29109 vs -29102 remedy split.
+        // Canonical P-lane floor fee — the shared single fee decision (doc
+        // comment). BOTH halves stay typed through the `Fee` arm so the RPC
+        // layer keeps the -29109 (refused answer) vs -29102 (failed query)
+        // remedy split: the query-transport failure was previously wrapped
+        // as a `State` read error, which routed a reachable daemon-down
+        // condition to -32603 (review-2).
         let fee = p_lane_floor_fee(
             daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|e| UnbondRequestError::state("fee estimates", e.into()))?,
+                .map_err(|_| UnbondRequestError::Fee(FeeEstimatorError::DaemonUnreachable))?,
         )?;
 
         // Two independent reads, joined: the persona canonical id (a pure

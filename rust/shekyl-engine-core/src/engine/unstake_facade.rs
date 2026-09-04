@@ -213,6 +213,27 @@ pub enum UnstakeError {
         /// The assembly's own reason (bond-parity rendering).
         detail: String,
     },
+    /// The daemon fee-estimate query failed — check the daemon connection
+    /// and retry (the shared `-29102` remedy shape `drain` and
+    /// `collect_unstaked` already use).
+    #[error("exit fee estimate failed: {detail}")]
+    FeeEstimate {
+        /// The query failure's rendering.
+        detail: String,
+    },
+    /// The daemon *answered* the fee query and the wallet refused the
+    /// answer (sanity ceiling) — retrying the connection does not help (the
+    /// shared `-29109` remedy shape). Carries the violation's public chain
+    /// facts, never wallet amounts.
+    #[error("exit fee estimate refused by the wallet's sanity ceiling ({reason})")]
+    FeeUnreasonable {
+        /// Which interim check refused.
+        reason: &'static str,
+        /// Offending per-weight rate (atomic units).
+        rate: u64,
+        /// The violated bound (atomic units per weight).
+        bound: u64,
+    },
     /// The network refused the exit with a **definite first-send verdict**,
     /// and the seam has already released its seal — nothing propagated, and
     /// retrying (after addressing the named refusal) is safe.
@@ -711,19 +732,18 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
             context: "exit assembly",
             detail: e.to_string(),
         },
+        // Typed through, never Engine/-32603 (review-2): the two fee
+        // failure classes keep the remedy split every other P-lane verb
+        // already carries — a refused ANSWER is -29109 (reconnecting cannot
+        // help), a failed QUERY is -29102 (check the daemon and retry).
         UnbondRequestError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(v)) => {
-            UnstakeError::Engine {
-                context: "P-lane floor fee",
-                detail: format!(
-                    "daemon fee refused by the wallet's sanity ceiling ({}: rate {} > bound {})",
-                    v.reason(),
-                    v.rate(),
-                    v.bound()
-                ),
+            UnstakeError::FeeUnreasonable {
+                reason: v.reason(),
+                rate: v.rate(),
+                bound: v.bound(),
             }
         }
-        UnbondRequestError::Fee(e) => UnstakeError::Engine {
-            context: "P-lane floor fee",
+        UnbondRequestError::Fee(e) => UnstakeError::FeeEstimate {
             detail: e.to_string(),
         },
         UnbondRequestError::Fetch(e) => UnstakeError::Engine {

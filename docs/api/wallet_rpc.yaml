@@ -308,7 +308,11 @@ info:
   # over an unreadable staking seal, with get_wallet_info.staking degrading
   # alongside), the stake_in bounded-cover disclosure, -29511 data.cause,
   # zero-drain -32602, claim-era RESERVED→REJECTED rewrite.
-  version: 0.2.0
+  # 0.3.0: PR-C — the composed exit: unstake / collect_unstaked (the
+  # RESERVED unstake entry became the shipped contract; reconciliation in
+  # the census), codes -29513..-29528, the {swept, remainder} completion
+  # contract, and the released-vs-held dispatch dispositions.
+  version: 0.3.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -920,8 +924,11 @@ components:
                                           mature at the reference height) —
                                           wait and retry
           -29525 COLLECT_DUST_REMAINDER   collect_unstaked: the spendable
-                                          residue is smaller than the fee to
-                                          move it — the NAMED dust residual:
+                                          residue is too small to move — it
+                                          cannot fund the fee plus the
+                                          2-atomic-unit minimum the
+                                          two-output payment can carry.
+                                          The NAMED dust residual:
                                           it stays in the persona's pool
                                           (and holds the funded retirement
                                           gate) until further value matures

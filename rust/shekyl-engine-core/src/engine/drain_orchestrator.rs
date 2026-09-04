@@ -162,11 +162,13 @@ pub enum DrainError {
     /// the last pass's residue) to mature", distinct from the dust arm.
     #[error("nothing in the exited persona's pool is spendable yet — wait for maturity")]
     SweepNothingSpendable,
-    /// Terminal sweep: the mature pool cannot fund the pass's own fee — the
-    /// named dust residual (`collect_unstaked` docs). It stays in `P`, and
-    /// the funded retirement gate stays held by it, until further value
-    /// matures into the slot or the fee floor moves. Scalar-free.
-    #[error("the exited persona's spendable residue is smaller than the fee to move it")]
+    /// Terminal sweep: the mature pool cannot fund a valid pass — the fee
+    /// plus the 2-atomic-unit minimum the zero-change two-output split can
+    /// pay (T-DS-6). The named dust residual (`collect_unstaked` docs): it
+    /// stays in `P`, and the funded retirement gate stays held by it, until
+    /// further value matures into the slot or the fee floor moves.
+    /// Scalar-free.
+    #[error("the exited persona's spendable residue is too small to move")]
     SweepDustPool,
 }
 

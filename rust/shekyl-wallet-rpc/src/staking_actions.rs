@@ -8,7 +8,7 @@
 //! `collect_unstaked`.
 //!
 //! Its own module rather than growth on [`crate::staking`] (which stays the
-//! read-only projection surface): these three methods move money or read the
+//! read-only projection surface): every method here moves money or reads the
 //! value-out leg, and their params discipline is the F-1 pin — every params
 //! struct here carries `#[serde(deny_unknown_fields)]`, so a client sending
 //! `fee` / `destination` / `p_slot` next to `amount` gets `-32602` instead of

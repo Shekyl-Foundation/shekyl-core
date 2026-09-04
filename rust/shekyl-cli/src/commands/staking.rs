@@ -448,18 +448,22 @@ pub fn cmd_unstake(rpc: &RpcSession) {
     println!("Posting the exit (this may take a while)...");
     match rpc.call("unstake", json!({})) {
         Ok(val) => match serde_json::from_value::<UnstakeResult>(val.clone()) {
-            Ok(result) => {
-                match result.verdict {
-                    DrainVerdictView::Broadcast => {
-                        println!("Exit posted: {}", result.tx_hash);
-                    }
-                    DrainVerdictView::AlreadyInChain => {
-                        println!("An identical exit is already confirmed: {}", result.tx_hash);
-                    }
+            Ok(result) => match result.verdict {
+                DrainVerdictView::Broadcast => {
+                    println!("Exit posted: {}", result.tx_hash);
+                    println!("When the network confirms it, run \"collect_unstaked\" to move");
+                    println!("the released funds back into this wallet's balance.");
                 }
-                println!("When the network confirms it, run \"collect_unstaked\" to move");
-                println!("the released funds back into this wallet's balance.");
-            }
+                // Already confirmed: "wait for confirmation" would contradict
+                // the line above it (review-2) — the wait here is for the
+                // wallet's own scan to observe the existing confirmation.
+                DrainVerdictView::AlreadyInChain => {
+                    println!("An identical exit is already confirmed: {}", result.tx_hash);
+                    println!("Run \"collect_unstaked\" to move the released funds back into");
+                    println!("this wallet's balance (it may take a moment for the wallet's");
+                    println!("own scan to observe the confirmation).");
+                }
+            },
             Err(_) => eprintln!("Malformed unstake response: {val}"),
         },
         Err(e) => rpc.report("Failed to unstake", &e),

@@ -637,8 +637,8 @@ pub enum WalletRpcError {
     CollectNotSpendableYet,
     /// `collect_unstaked` (`-29525`): the dust residual, named (scalar-free).
     #[error(
-        "the remaining residue is smaller than the fee to move it; it stays \
-         in the persona's pool"
+        "the remaining residue is too small to move (it cannot fund the fee \
+         plus a payable amount); it stays in the persona's pool"
     )]
     CollectDustRemainder,
     /// `collect_unstaked` (`-29526`): one live pass per persona (or the
@@ -1156,6 +1156,19 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
             E::InputRaced => Self::UnstakeRetryTransient {
                 cause: "raced",
                 detail: "a concurrent operation raced the exit's inputs".into(),
+            },
+            E::FeeEstimate { detail } => {
+                tracing::warn!(detail = %detail, "unstake fee estimate failed");
+                Self::FeeEstimationFailed
+            }
+            E::FeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
             },
             E::ExitRefusedAndReleased { detail } => Self::UnstakeRefusedReleased { detail },
             E::ExitFateUnknown { detail } => {
@@ -1772,6 +1785,26 @@ mod tests {
             assert_eq!(err.code().as_i32(), *code, "{err}");
             assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
         }
+        let fee_query: WalletRpcError = E::FeeEstimate {
+            detail: "daemon down".into(),
+        }
+        .into();
+        assert_eq!(
+            fee_query.code().as_i32(),
+            -29102,
+            "a failed fee QUERY keeps the shared retry-the-daemon code (review-2)"
+        );
+        let fee_refused: WalletRpcError = E::FeeUnreasonable {
+            reason: "per-weight rate above ceiling",
+            rate: 9,
+            bound: 3,
+        }
+        .into();
+        assert_eq!(
+            fee_refused.code().as_i32(),
+            -29109,
+            "a refused fee ANSWER keeps the shared sanity-ceiling code (review-2)"
+        );
         let transport: WalletRpcError = E::Transport {
             detail: "not loopback".into(),
         }

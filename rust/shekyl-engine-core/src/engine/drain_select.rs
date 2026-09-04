@@ -205,9 +205,13 @@ pub(crate) enum SweepSelectError {
     /// yet. Distinct from [`Self::DustPool`]: the remedy is "wait for
     /// maturity", not "the residue is uncollectable".
     NothingSpendable,
-    /// The mature candidates cannot fund the pass's own fee
-    /// (`input_total <= fee`) — the pool residue is smaller than the cost of
-    /// moving it. The named dust residual: it stays in `P`, and the funded
+    /// The mature candidates cannot fund a valid pass: `input_total − fee`
+    /// is below **2 atomic units** — the minimum the zero-change assembly
+    /// can pay, since T-DS-6 requires every tx to carry two nonzero outputs
+    /// and a drain-all splits its payment into both (`PaymentUnsplittable`
+    /// is the assembly's own refusal of net < 2; classifying it HERE keeps a
+    /// user-reachable dust state out of the internal-error bucket —
+    /// review-2). The named dust residual: it stays in `P`, and the funded
     /// retirement gate stays held by it, until further value matures into
     /// the slot or the fee floor moves.
     DustPool,
@@ -280,9 +284,14 @@ pub(crate) fn select_for_sweep(
             .ok_or(SweepSelectError::Overflow)?;
     }
 
+    // Net below 2 is dust, not merely net zero: the zero-change assembly
+    // must split the payment into two nonzero principal outputs (T-DS-6),
+    // so 1 atomic unit is as unpayable as 0 — refuse it here as the named
+    // dust condition rather than let the assembly's PaymentUnsplittable
+    // surface a user-reachable state as an internal fault (review-2).
     let payment = input_total
         .checked_sub(fee)
-        .filter(|p| !p.is_zero())
+        .filter(|p| p.to_raw() >= 2)
         .ok_or(SweepSelectError::DustPool)?;
 
     Ok(SweepSelection {
@@ -487,10 +496,12 @@ mod tests {
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
     }
 
-    /// This bites against the dust arm collapsing into an empty selection or
-    /// a zero payment (the prover rejects zero-value outputs; the caller
-    /// needs the named residual, not a downstream fault). Boundary exact:
-    /// `Σ == fee` is dust, `Σ == fee + 1` pays 1.
+    /// This bites against the dust arm collapsing into an empty selection,
+    /// a zero payment, or a 1-atomic payment the two-output assembly cannot
+    /// split (the caller needs the named residual, not a downstream
+    /// `PaymentUnsplittable` internal — review-2). Boundary exact:
+    /// `Σ == fee + 1` is still dust (net 1 < the 2-unit split floor);
+    /// `Σ == fee + 2` pays 2.
     #[test]
     fn sweep_dust_and_nothing_spendable_refuse_distinctly() {
         let none = select_for_sweep(
@@ -515,8 +526,19 @@ mod tests {
             &[candidate(1, 51, 10)],
             AtomicUnits::from_raw(50),
             BlockHeight::from_raw(10),
+        );
+        assert_eq!(
+            one_over,
+            Err(SweepSelectError::DustPool),
+            "net 1 cannot form the two nonzero outputs a drain-all pays"
+        );
+
+        let two_over = select_for_sweep(
+            &[candidate(1, 52, 10)],
+            AtomicUnits::from_raw(50),
+            BlockHeight::from_raw(10),
         )
-        .expect("one atomic unit over the fee is a payable sweep");
-        assert_eq!(one_over.payment, AtomicUnits::from_raw(1));
+        .expect("net 2 is the smallest splittable sweep");
+        assert_eq!(two_over.payment, AtomicUnits::from_raw(2));
     }
 }
