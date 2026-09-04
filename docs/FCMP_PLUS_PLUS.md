@@ -463,14 +463,14 @@ at connect (§5; CEN-B5), and the node's own per-height root record, written
 at that same connect. The verifier reads its **own computed record** — the
 fact it checked the header against — never the header; a rewrite does the
 same in whatever form its store keeps that record. The prover holds no
-store, reads the header (`CURVE_TREE_CLIENT.md` §3.3), and is covered by
+store, reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3), and is covered by
 the same B5 binding plus its own leaf recompute. The two reads name one
 value on every network where B5 runs; the only thing that makes the choice
 observable is B5's FAKECHAIN skip (census R9), and only in tests.
 
 *Reconciled 2026-09-04:* this paragraph previously narrated a header read
 the code stopped performing on 2026-04-13; the archaeology and the ruling
-are in `CONSENSUS_RULE_CENSUS.md` §7 #16.
+are in [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §7 #16.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 
