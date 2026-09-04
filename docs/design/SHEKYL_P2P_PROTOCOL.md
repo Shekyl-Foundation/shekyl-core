@@ -2908,18 +2908,41 @@ propagation — but a liveness cadence cannot.
 > `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
 > load change, and preserving the mean is what keeps the two separable.
 
-**The mean constraint is necessary and *not* sufficient, and saying "any pair
-satisfying it" would have admitted the status quo.** `min = 60 s, jitter = 0`
-satisfies `min + jitter/2 = 60 s` exactly — and is the fixed phase this row
-exists to remove. A sufficiently small window fails the falsifier below for the
-same reason, less obviously.
+**The distribution is uniform, and that is a decision rather than a default.**
+A flat draw is the only one with no shape for an observer to fit: **any other
+family biases the interval and a bias is itself a pattern** — long-tailed,
+peaked, or truncated, each imprints a signature on the emission times that
+survives averaging. The relay lane already records what this costs when it goes
+wrong, in the CV-3 note above: resampling on a foreign wake and keeping the
+minimum biases the effective interval short, "a privacy defect no count
+assertion and no goodness-of-fit grade can see".
 
-> **So conformance is two conditions: the mean is preserved, *and* the window
-> is non-zero and wide enough that measured phase correlation falls below the
-> falsifier's threshold.** The second is a measurement, not an algebraic
-> choice, which is why the split is owed rather than picked here — the trade is
-> between worst-case staleness and how much phase separation the window
-> actually buys.
+> **`0` is a valid draw from `U(0, jitter)`, and must not be excluded.**
+> Rejecting or re-rolling a zero truncates the distribution, which is exactly
+> the bias flatness exists to remove — and it would be a live defect, since a
+> conformance test asserting "a deadline is never exactly `min`" would both fail
+> at random and, if an implementation were written to satisfy it, introduce the
+> pattern.
+
+**So the conformance condition is on the *window parameter*, never on an
+individual draw**, and an earlier version of this row confused the two — it
+required a "non-zero window" on the grounds that `jitter = 0` preserves the
+fixed phase. **That was wrong, and it mis-stated this row's own mechanism.**
+What removes the cross-connection correlation is the **per-connection
+independent draw**: two connections established at different moments have
+unrelated phases *whatever* the window is, because each deadline is set from
+its own connection's clock and not from a shared timer.
+
+> **What the window buys is narrower and more specific: it decorrelates
+> connections established at nearly the same moment.** That is the common case
+> rather than a corner one — `m_connections_maker_interval` runs every second
+> (`src/p2p/net_node.h:619`), so a node coming up opens several outbound
+> connections in a tight cluster, and with a degenerate window they would tick
+> together for the life of those connections.
+
+**The `min`/`jitter` split is owed**, derived against that clustering rather
+than against an abstract "non-zero" requirement — the trade is worst-case
+staleness against how much establishment-time spread the window has to cover.
 
 > **Copying `NoiseCadence::shipped()` would be the wrong reading and is
 > refused explicitly:** it is `3.333 s + U[0, 3.334 s]`, a mean of **5 s**
