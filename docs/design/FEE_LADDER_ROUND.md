@@ -168,6 +168,16 @@ smallest tier's anchored set beats ring-16 for any anchor looser than
 - FL-R4 resolved (confirmed via FL-R17); W8 re-homed as **FL-D7**
   (fee-rank ordering leak stands under three tiers; ladder-compatible
   mitigation—intra-tier shuffle—named as a reopener path).
+- **Follow-up in the same round:** W7's rationale REPLACED on the
+  maintainer's direction (the static-rate argument is retired; the
+  durable reason is partition-without-linkage + bounded inverse-share
+  cost + urgency as a widely used feature), the FL-R17 reopeners
+  replaced with his canonical two (FL-C4b's registered mechanism; any
+  on-chain linkage primitive), the proportionality frame recorded in
+  the row ("the kind of cost a proportionality judgment handles, not
+  the kind the priority order was written for"), and the remaining
+  three-tier mechanics (`C_q`, `Fm` deletion, unconditional `Fh` main
+  arm, unbuffered floor clamp) endorsed as read-sound.
 
 ## Review round 6 (maintainer, 2026-09-03): the honest attack model
 
