@@ -92,16 +92,17 @@ const fn round_money_up_2(x: u64) -> u64 {
 /// genesis-era `Fh`**, which would have refused every honest snapshot
 /// from block 1 (young-chain `economy` alone is ~68,266; `standard`
 /// is 4× that). The 2021-scaling fees rise with the block reward and
-/// fall with the weight medians; the reward is maximal at genesis
-/// (`base_block_reward(0)` — the estimate path uses the 5-arg reward,
-/// no release multiplier) and both medians floor at the penalty-free
-/// zone, so the era maximum is `Fh` at genesis conditions,
-/// daemon-rounded:
+/// fall with the weight medians; the operand reward is maximal at
+/// genesis (`base_block_reward(0)` — the served ladder's M_r-neutral
+/// operand per the FL-R12′ round-8 amendment) and both medians floor at
+/// the penalty-free zone, so the era maximum of the SERVED top rung is
+/// the genesis priority rung at the largest reachable young-chain
+/// correction step, `C_q = 2` (FL-R9: `C = (1−σ)·M_r/(1−b)` reaches
+/// ~1.105 at genesis congestion, ceiling-quantized to 2):
 ///
 /// ```text
-/// Fm  = 16·R₀·Brw / Zm²                      (Mfw = Zm)
-/// Fh  = max(4·Fm, 4·Fm·Zm / (32·Brw·Zm/Zm))  (Mnw = Zm) = 12.5·Fm
-/// cap = round_money_up(Fh, 2) = 14,000,000
+/// priority₀ = 2·R₀ / Zm                    (the Fh main arm at Mfw = Zm)
+/// cap       = round_money_up(2·priority₀, 2) = 28,000,000
 /// ```
 ///
 /// Pinned by `absolute_cap_is_the_rounded_genesis_fh`, so an
@@ -122,9 +123,11 @@ pub fn absolute_fee_rate_cap() -> u64 {
     let zm = PENALTY_FREE_ZONE;
     let brw = DYNAMIC_FEE_REFERENCE_TX_WEIGHT;
     // The C++ folded integer expressions, verbatim, at Mfw = Mnw = Zm.
-    let fm = 16 * r0 * brw / (zm * zm);
-    let fh = std::cmp::max(4 * fm, 4 * fm * zm / (32 * brw * zm / zm));
-    round_money_up_2(fh)
+    let _ = brw; // the priority rung is w_ref-free: 2·R/M exactly
+    let genesis_priority = 2 * r0 / zm;
+    // FL-R9: the largest reachable young-chain correction step.
+    let max_young_cq = 2;
+    round_money_up_2(max_young_cq * genesis_priority)
 }
 
 /// Failures from fee estimation / snapshot validation.
@@ -522,26 +525,16 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(cap, cap, cap))
             .expect("exactly the absolute cap is within the ceiling");
     }
-
-    /// The cap IS the daemon-rounded genesis-condition `Fh` — pinned as
-    /// a literal so an economics-parameter change moves it loudly, and
-    /// cross-checked against the folded formula so a cap edit that
-    /// bypasses the derivation fails here.
+    /// FL-R9 (FL round, signed shape): the cap is the swept maximum of
+    /// the SERVED top rung over the reachable young-chain grid — the
+    /// genesis priority rung (`2·R₀/Zm`, the unconditional `Fh` main
+    /// arm) at the largest reachable young-chain quantized correction,
+    /// `C_q = 2`. Twice the old 14,000,000 genesis-`Fh` anchor, which
+    /// was a raw-`C` lower bound.
     #[test]
-    fn absolute_cap_is_the_rounded_genesis_fh() {
+    fn absolute_cap_is_the_swept_served_maximum() {
         let cap = absolute_fee_rate_cap();
-        assert_eq!(cap, 14_000_000, "economics params moved the era-max fee");
-
-        let params = shekyl_economics::params::EconomicParams::default();
-        let r0 = shekyl_economics::emission::base_block_reward(0, &params).expect("r0");
-        assert_eq!(r0, 2_048_000_000_000, "genesis base reward moved");
-        let fm = 16 * r0 * 3_000 / (300_000u64 * 300_000);
-        let fh = 4 * fm * 300_000 / (32 * 3_000);
-        assert_eq!(
-            cap,
-            round_money_up_2(fh),
-            "cap must equal rounded genesis Fh"
-        );
+        assert_eq!(cap, 28_000_000, "economics params moved the era-max fee");
     }
 
     /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN

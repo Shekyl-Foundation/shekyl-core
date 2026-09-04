@@ -91,24 +91,44 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    // Marshaling shim. The base subsidy curve, the "make it soft" median
-    // clamp, the 2*median rejection and the 128-bit weight-penalty arithmetic
-    // are all canonical in `shekyl-economics` and reached through
-    // `shekyl_block_reward` (STAGE_1_PR_7 §5.8, C2c cutover). Nothing is
-    // computed here.
+    // The M_r-NEUTRAL view: baseline volume pins the release multiplier at
+    // exactly 1, so this equals the pre-FL-R12' unmodulated reward
+    // bit-for-bit for every state at or below the emission-curve asymptote.
+    // Production consumers are the fee/relay floors that must not track
+    // demand (CEN-M3's held machinery); everything reward-paying calls the
+    // volume-aware overload below.
+    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, SHEKYL_TX_VOLUME_BASELINE);
+  }
+  //-----------------------------------------------------------------------------------------------
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, uint64_t tx_volume_avg)
+  {
+    // Marshaling shim for THE one owner of the paid reward
+    // (shekyl-economics `paid_block_reward`, FL-R12' signed composition):
     //
-    // The penalty was the last economics ARITHMETIC C++ performed itself —
-    // `mul128` plus two `div128_64` on an amount, which is rule 20's "integer
-    // arithmetic on amounts" category verbatim. Its values are pinned across
-    // the boundary by the 81-vector KAT asserted from BOTH languages
-    // (EconomicsC2aPrime.Layer1WeightPenaltyPinnedVectors and
-    // shekyl-economics' c2a_prime_layer1_weight_penalty_pinned_vectors).
+    //   paid = max(M_r * curve(remaining), TAIL) * penalty(x)
     //
-    // `get_min_block_weight` stays on this side and crosses as an argument:
-    // CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 is a block-policy constant
-    // with ~40 C++ consumers and no Rust consumer, so copying it into a Rust
-    // constant would manufacture the C++/Rust drift pair that
-    // config/consensus_constants.json exists to prevent.
+    // The ordering is the ruling's most easily lost detail, so it is
+    // stated here from the DESIGN, not the code: the release multiplier
+    // applies to the CURVE (at a perpetual tail there is nothing to pace,
+    // so the floor is not modulated — a multiplied floor would pay least
+    // exactly when fees are lowest), and the weight penalty applies to the
+    // PAID quantity, after the floor (floors belong to emission; penalties
+    // apply to the paid quantity — a penalty composed before the floor
+    // would be dead at the tail permanently, and there is no post-tail
+    // era). Reversing either pair still compiles and still passes most
+    // tests; the terminal_reward_legs_agree oracle and the FFI marshal
+    // pins are what go red.
+    //
+    // There is no C++-side multiplier, supply cap, or flag path any more:
+    // the former SHEKYL_TX_VOLUME_BASELINE > 0 gate silently flipped
+    // terminal emission policy from a pacing knob (FL-V9) and the retired
+    // cap encoded the losing side of FL-V8's twin clamps. C++ computes
+    // nothing here.
+    //
+    // Values are pinned across the boundary by the 81-vector KAT asserted
+    // from BOTH languages (M_r-neutral vectors, unchanged by FL-R12') and
+    // the signed-composition marshal pins (M_r != 1 and both tail
+    // boundaries).
     uint64_t computed = 0;
     uint64_t weight_limit = 0;
     const int32_t status = shekyl_block_reward(
@@ -116,6 +136,7 @@ namespace cryptonote {
         current_block_weight,
         already_generated_coins,
         get_min_block_weight(version),
+        tx_volume_avg,
         &computed,
         &weight_limit);
 
@@ -142,32 +163,6 @@ namespace cryptonote {
     }
 
     reward = computed;
-    return true;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, uint64_t tx_volume_avg)
-  {
-    if (!get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version))
-      return false;
-
-    if (SHEKYL_TX_VOLUME_BASELINE > 0)
-    {
-      uint64_t multiplier = shekyl_calc_release_multiplier(
-          tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-      reward = shekyl_apply_release_multiplier(reward, multiplier);
-
-      // The supply-headroom cap. Was `MONEY_SUPPLY - already_generated_coins`
-      // in uint64_t here, which UNDERFLOWS to a near-UINT64_MAX headroom once
-      // already_generated_coins passes the cap — silently disabling the clamp
-      // it computed. Both Rust reward entry points already defend against an
-      // out-of-range total; this was the one member of the family that did
-      // not. Now saturating, and Rust-side with the rest of the amount
-      // arithmetic (rule 20's fourth criterion) — leaving the last multiply
-      // and subtract of this function on the C++ side would have made
-      // "get_block_reward computes nothing" untrue in the 6-arg overload.
-      reward = shekyl_cap_reward_to_remaining_supply(reward, already_generated_coins);
-    }
-
     return true;
   }
   //------------------------------------------------------------------------------------

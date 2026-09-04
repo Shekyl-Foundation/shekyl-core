@@ -7,8 +7,6 @@ use crate::params::EconomicParams;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EmissionError {
-    #[error("already_generated_coins exceeds money_supply")]
-    AlreadyGeneratedExceedsSupply,
     #[error("arithmetic overflow projecting emission")]
     Overflow,
     /// The block exceeds twice the effective median and earns no reward.
@@ -52,22 +50,131 @@ pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionEr
         .ok_or(EmissionError::Overflow)
 }
 
-/// Base block reward before weight penalty and release multiplier (0h).
+/// The raw emission curve: `remaining >> esf`, with `remaining` floored at
+/// zero (FL-R12′: the accumulator does not saturate and may exceed the
+/// asymptote; a past-asymptote state is a legitimate perpetual-tail state,
+/// not an error — the old `AlreadyGeneratedExceedsSupply` arm was FL-R16a's
+/// build-blocking defect, dead-lettering the fee estimator and the relay
+/// floor at exhaustion).
+#[inline]
+fn curve_emission(already_generated_coins: u64, params: &EconomicParams) -> u64 {
+    params.money_supply.saturating_sub(already_generated_coins) >> emission_speed_factor(params)
+}
+
+/// The M_r-neutral emission view: `max(curve, TAIL)` (0h).
+///
+/// Since FL-R12′ this is NOT a stage of the paid pipeline: the signed
+/// composition floors the *paid* quantity AFTER the release multiplier
+/// (`paid = max(M_r·curve, TAIL)·penalty`), so `M_r·base_block_reward(ag)`
+/// reproduces the 0.48-under-dormancy defect the ruling closed — multiply
+/// the CURVE, then floor, never the reverse. This function equals
+/// [`effective_emission`] at baseline volume (`M_r = 1`) and is total: past
+/// the asymptote it returns the tail, permanently.
 pub fn base_block_reward(
     already_generated_coins: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    if already_generated_coins > params.money_supply {
-        return Err(EmissionError::AlreadyGeneratedExceedsSupply);
+    Ok(curve_emission(already_generated_coins, params).max(tail_subsidy_per_block(params)?))
+}
+
+/// The pre-penalty PAID emission (FL-R12′, signed round 8):
+/// `max(M_r·curve(remaining), TAIL)`.
+///
+/// The release multiplier is applied to the CURVE and the tail floors the
+/// result — not the other way around — because the multiplier exists to
+/// pace a *finite remaining* toward demand: at a perpetual tail there is
+/// nothing to defer, and a multiplied floor would pay least exactly when
+/// fees are lowest (the dormancy case the floor exists for).
+pub fn effective_emission(
+    already_generated_coins: u64,
+    tx_volume_avg: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    let m_r = crate::release::calc_release_multiplier(
+        tx_volume_avg,
+        params.tx_volume_baseline,
+        params.release_min,
+        params.release_max,
+    );
+    let modulated = crate::release::apply_release_multiplier(
+        curve_emission(already_generated_coins, params),
+        m_r,
+    );
+    Ok(modulated.max(tail_subsidy_per_block(params)?))
+}
+
+/// The quadratic median-weight penalty applied to an already-composed
+/// PAID amount (FL-R12′'s ordering rule: **floors belong to emission;
+/// penalties apply to the paid quantity**). Applying this before the tail
+/// floor would kill block-size governance at the tail permanently — there
+/// is no post-tail era in which it would recover — which is why the
+/// penalty is the LAST operator, not an emission stage.
+///
+/// Shape (per the C2a port, arithmetic unchanged): the effective median is
+/// `max(median_weight, full_reward_zone)`; at or below it no penalty;
+/// above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
+/// otherwise `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow.
+pub fn apply_weight_penalty(
+    amount: u64,
+    median_weight: u64,
+    current_block_weight: u64,
+    full_reward_zone: u64,
+) -> Result<u64, EmissionError> {
+    // "make it soft" — a median below the free zone is raised to it.
+    let median = median_weight.max(full_reward_zone);
+
+    if current_block_weight <= median {
+        return Ok(amount);
     }
-    let remaining = params.money_supply - already_generated_coins;
-    let esf = emission_speed_factor(params);
-    let mut base_reward = remaining >> esf;
-    let tail = tail_subsidy_per_block(params)?;
-    if base_reward < tail {
-        base_reward = tail;
+    // `2 * median` in u128: the comparison must not wrap for medians above
+    // u64::MAX / 2, which consensus never produces but the FFI edge cannot
+    // assume away.
+    let double_median = u128::from(median) * 2;
+    if u128::from(current_block_weight) > double_median {
+        return Err(EmissionError::BlockTooBig);
     }
-    Ok(base_reward)
+
+    let current = u128::from(current_block_weight);
+    // Cannot overflow and so is deliberately unguarded: see the domain
+    // notes on [`block_reward_with_penalty`].
+    let multiplicand = (double_median - current) * current;
+    let median = u128::from(median);
+
+    let numerator = u128::from(amount)
+        .checked_mul(multiplicand)
+        .ok_or(EmissionError::Overflow)?;
+    let reward = numerator / median / median;
+
+    let capped = reward.min(u128::from(amount));
+    Ok(u64::try_from(capped).unwrap_or(amount))
+}
+
+/// **THE one owner of the paid block reward** (FL-R12′, signed round 8):
+///
+/// ```text
+/// paid = max(M_r·curve(remaining), TAIL) · penalty(x)
+/// ```
+///
+/// `remaining` floors at zero (non-saturating accumulator), the retired
+/// supply cap has no successor (the tail is perpetual by ruling), and
+/// there is no flag path — the release multiplier is inside this
+/// composition unconditionally (FL-V9). C++ reaches this through
+/// `shekyl_block_reward` and computes nothing itself. The floor names the
+/// PRE-SPLIT total; the emission split takes `σ` off the result downstream.
+pub fn paid_block_reward(
+    median_weight: u64,
+    current_block_weight: u64,
+    already_generated_coins: u64,
+    full_reward_zone: u64,
+    tx_volume_avg: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    apply_weight_penalty(
+        effective_emission(already_generated_coins, tx_volume_avg, params)?,
+        median_weight,
+        current_block_weight,
+        full_reward_zone,
+    )
 }
 
 /// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
@@ -80,10 +187,11 @@ pub fn projected_already_generated(
     let mut ag = 0u64;
     for _ in 0..height {
         let base = base_block_reward(ag, params)?;
+        // No saturation at the asymptote (FL-R12′): the neutral trajectory
+        // keeps accruing the perpetual tail past it, exactly as consensus
+        // does. The FL-R14 build assertion in `params.rs` documents why
+        // this cannot overflow on any realistic horizon.
         ag = ag.checked_add(base).ok_or(EmissionError::Overflow)?;
-        if ag >= params.money_supply {
-            return Ok(params.money_supply);
-        }
     }
     Ok(ag)
 }
@@ -150,46 +258,21 @@ pub fn block_reward_with_penalty(
     full_reward_zone: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    let base = base_block_reward(already_generated_coins, params)?;
-
-    // "make it soft" — a median below the free zone is raised to it.
-    let median = median_weight.max(full_reward_zone);
-
-    if current_block_weight <= median {
-        return Ok(base);
-    }
-    // `2 * median` in u128: the comparison must not wrap for medians above
-    // u64::MAX / 2, which consensus never produces but the FFI edge cannot
-    // assume away.
-    let double_median = u128::from(median) * 2;
-    if u128::from(current_block_weight) > double_median {
-        return Err(EmissionError::BlockTooBig);
-    }
-
-    let current = u128::from(current_block_weight);
-    // Cannot overflow and so is deliberately unguarded: `double_median -
-    // current` is below `median <= u64::MAX` (we are past the `current <=
-    // median` return), and `current <= 2 * median`, so the product stays under
-    // `2 * u64::MAX^2 < u128::MAX`. A `checked_mul` here would add an arm no
-    // input can reach, which is untestable by construction.
-    let multiplicand = (double_median - current) * current;
-    let median = u128::from(median);
-
-    // This one CAN overflow — `base * multiplicand` needs up to ~192 bits once
-    // the median passes ~2^43 — so it is checked. Fail closed; do not wrap.
-    let numerator = u128::from(base)
-        .checked_mul(multiplicand)
-        .ok_or(EmissionError::Overflow)?;
-    let reward = numerator / median / median;
-
-    // `reward < base` always: `multiplicand = (2m - c) * c` is strictly below
-    // `m^2` for every `c` in `(m, 2m]` (it would peak at `c == m`, which the
-    // branch above already returned), so dividing by `m^2` cannot reach
-    // `base`. `min` makes that bound structural instead of a comment, and
-    // `try_from` means a future change to the bound fails loudly rather than
-    // wrapping silently — the fallback arm is unreachable today.
-    let capped = reward.min(u128::from(base));
-    Ok(u64::try_from(capped).unwrap_or(base))
+    // The M_r-neutral view of the one owner: at baseline volume the
+    // release multiplier is exactly 1, so `max(1·curve, TAIL)·penalty`
+    // equals the pre-FL-R12′ `penalty(max(curve, TAIL))` bit-for-bit for
+    // every `ag ≤ asymptote` — which is what keeps the 81-vector
+    // cross-language KAT's pins valid without re-derivation. Past the
+    // asymptote this now returns the penalized tail instead of erroring
+    // (FL-R16a). ONE arithmetic owner: `paid_block_reward`.
+    paid_block_reward(
+        median_weight,
+        current_block_weight,
+        already_generated_coins,
+        full_reward_zone,
+        params.tx_volume_baseline,
+        params,
+    )
 }
 
 /// The block weight limit implied by an effective median: `2 * max(median, zone)`.
@@ -201,31 +284,6 @@ pub fn block_reward_with_penalty(
 /// saturated value is only ever used for diagnostics.
 pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
     median_weight.max(full_reward_zone).saturating_mul(2)
-}
-
-/// Cap a block reward at the supply headroom still unminted.
-///
-/// The emission-side twin of [`advance_already_generated`]: that one stops the
-/// running total at `money_supply`, this one stops a single block from
-/// exceeding what remains. Both express the same invariant — total emission
-/// never passes the cap — so they live together rather than one being C++-side
-/// arithmetic and the other Rust.
-///
-/// `saturating_sub`, not `-`. The C++ this replaces computed
-/// `MONEY_SUPPLY - already_generated_coins` in `uint64_t`, which UNDERFLOWS to
-/// a near-`u64::MAX` headroom when `already_generated_coins` exceeds the cap,
-/// silently disabling the clamp it was written to be. The connect path caps
-/// the stored total, so no production caller reaches that today — but
-/// `shekyl_base_block_reward` and `shekyl_block_reward` both defend against an
-/// out-of-range total explicitly, and leaving one member of the family
-/// undefended is how the next caller finds the edge. Rule 20's fourth
-/// criterion: this is integer arithmetic on an amount.
-pub fn cap_reward_to_remaining_supply(
-    reward: u64,
-    already_generated_coins: u64,
-    params: &EconomicParams,
-) -> u64 {
-    reward.min(params.money_supply.saturating_sub(already_generated_coins))
 }
 
 /// Advance `already_generated_coins` by a block's base reward, capped at supply.
@@ -243,11 +301,19 @@ pub fn cap_reward_to_remaining_supply(
 pub fn advance_already_generated(
     already_generated_coins: u64,
     block_reward: u64,
-    params: &EconomicParams,
+    _params: &EconomicParams,
 ) -> u64 {
-    already_generated_coins
-        .saturating_add(block_reward)
-        .min(params.money_supply)
+    // FL-R12′: the accumulator does NOT saturate at the emission-curve
+    // asymptote — the old clamp encoded a Monero rationale ("the base
+    // formula pays the tail at MONEY_SUPPLY") whose policy conclusion the
+    // capped composition then contradicted (FL-V8, the twins that were
+    // not). Under the perpetual tail the accumulator legitimately passes
+    // the asymptote and keeps growing by `tail` per block; `remaining`
+    // floors at zero on the read side. The `u64` rail is FL-R14's
+    // documented, build-asserted bound (~89,750 years away), and
+    // saturating there — rather than wrapping — is precisely what keeps
+    // `remaining` at zero instead of un-saturating it.
+    already_generated_coins.saturating_add(block_reward)
 }
 
 #[cfg(test)]
@@ -277,97 +343,68 @@ mod tests {
         assert_eq!(base_block_reward(near_max, &p).unwrap(), tail);
     }
 
-    /// FL-V10's red companion, and conjunct (b) of the census-R2 reopen
-    /// criterion (`docs/design/FEE_LADDER_DERIVATION.md` §0.1): the
-    /// estimate leg (uncapped [`base_block_reward`], the C++ 5-arg path),
-    /// the projection leg ([`projected_already_generated`] →
-    /// [`base_block_reward`], which saturates clean past exhaustion), and
-    /// the validation leg (the same reward through
-    /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
-    /// the terminal state — they are descriptions of one chain.
+    /// The FL-R12′ oracle, GRADUATED at the implementation (was the red
+    /// companion; the contract numbers never moved — only the plumbing
+    /// they are asserted through, which now IS the one owner
+    /// [`paid_block_reward`]). Asserts the signed composition
+    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`:
     ///
-    /// The FL-R12′ oracle in its SIGNED form (review round 8):
-    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)` — floor on
-    /// the paid emission (the multiplier has no object at a perpetual
-    /// tail), penalty AFTER the floor (floors belong to emission;
-    /// penalties apply to the paid quantity — the governance lever must
-    /// always bite), `remaining` floored at zero, the supply cap retired.
-    ///
-    /// RED TODAY three ways against the shipped composition
-    /// (curve → tail floor → penalty → multiplier → cap):
-    /// 1. dormancy at `x = 0`, boundary: shipped pays `M_r·TAIL` =
-    ///    480 000 000 (then remaining-capped) vs the signed 600 000 000;
-    /// 2. tail with `x > 0`: shipped applies the penalty before the
-    ///    multiplier and cap (360 000 000 at `x = ½` under dormancy) vs
-    ///    the signed `TAIL·(1−x²)` = 450 000 000;
-    /// 3. ladder-operand equality: the 5-arg estimate base must equal
-    ///    the payer's pre-penalty quantity `R_eff` at every point —
-    ///    red mid-curve, where the estimate is unmodulated while the
-    ///    payer's quantity carries `M_r`.
-    ///
-    /// Un-ignore with the FL-R12′ implementation (build authorized at
-    /// round 8 upon the record).
+    /// 1. dormancy floor at `x = 0`: 600 000 000 on both sides of the
+    ///    boundary and PAST the asymptote (pre-implementation red:
+    ///    480 000 000 — the multiplier applied to the floored base);
+    /// 2. penalty AFTER the floor at `x = ½` on the tail: 450 000 000
+    ///    (pre-implementation red: 360 000 000 — penalty before
+    ///    multiplier and cap);
+    /// 3. the pre-penalty paid quantity equals
+    ///    [`effective_emission`] at every probe, mid-curve included.
     #[test]
-    #[ignore = "FL-R12' signed (round 8) but not yet implemented: shipped composition floors the base, penalizes before the multiplier, and caps at remaining"]
     fn terminal_reward_legs_agree() {
-        use crate::release::{apply_release_multiplier, calc_release_multiplier};
-
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
-        let esf = emission_speed_factor(&p);
         let s = p.money_supply;
-        // Dormancy pins the release multiplier at its 0.8 rail — the
-        // regime the floor exists for.
-        let m_r = calc_release_multiplier(0, p.tx_volume_baseline, p.release_min, p.release_max);
-        // The signed contract's pre-penalty quantity.
-        let r_eff = |ag: u64| -> u64 {
-            let curve = s.saturating_sub(ag) >> esf;
-            apply_release_multiplier(curve, m_r).max(tail)
-        };
+        let zone = 300_000;
+        let dormancy_v = 0; // pins the release multiplier at its 0.8 rail
 
-        // Leg 1 — floor on the paid emission at x = 0, both sides of the
-        // boundary and past the asymptote.
-        let zone = 300_000; // full-reward zone; weight == median ⇒ no penalty
+        // Leg 1 — floor on the PAID emission at x = 0, both sides of the
+        // boundary and past the asymptote (total, no error arm: FL-R16a).
         for ag in [s - tail + 1, s, s + tail] {
-            let shipped = {
-                let base = block_reward_with_penalty(zone, zone, ag, zone, &p)
-                    .unwrap_or_else(|e| panic!("shipped leg errored at ag={ag}: {e:?}"));
-                cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
-            };
             assert_eq!(
-                shipped,
-                r_eff(ag),
-                "paid reward != max(M_r*curve, TAIL) under dormancy at already_generated={ag}"
+                paid_block_reward(zone, zone, ag, zone, dormancy_v, &p).unwrap(),
+                tail,
+                "paid reward != TAIL under dormancy at already_generated={ag}"
             );
         }
 
         // Leg 2 — penalty applies AFTER the floor: at the tail with
-        // x = 1/2 (weight = 1.5 * median), the signed contract pays
-        // TAIL * (1 - x^2) = TAIL * 3/4.
-        let ag = s;
+        // x = 1/2 (weight = 1.5 * median), paid = TAIL * (1 - x^2).
         let (median, weight) = (zone, zone + zone / 2);
-        let shipped = {
-            let base = block_reward_with_penalty(median, weight, ag, zone, &p)
-                .unwrap_or_else(|e| panic!("shipped penalized leg errored: {e:?}"));
-            cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
-        };
         let expected = {
-            // penalty(x) in the canonical integer form: (2m - c)*c / m^2.
             let (m, c) = (u128::from(median), u128::from(weight));
-            u64::try_from(u128::from(r_eff(ag)) * (2 * m - c) * c / (m * m)).unwrap()
+            u64::try_from(u128::from(tail) * (2 * m - c) * c / (m * m)).unwrap()
         };
+        assert_eq!(expected, 450_000_000);
         assert_eq!(
-            shipped, expected,
+            paid_block_reward(median, weight, s, zone, dormancy_v, &p).unwrap(),
+            expected,
             "penalized tail reward != TAIL*(1-x^2): penalty must compose AFTER the floor"
         );
 
-        // Leg 3 — the ladder's operand equals the payer's pre-penalty
-        // quantity everywhere, mid-curve included (kills the V1 class).
+        // Leg 3 — the pre-penalty paid quantity is effective_emission
+        // everywhere, mid-curve included (weight = 1 ⇒ no penalty).
+        for ag in [0, s / 2, s - tail + 1, s, s + tail] {
+            assert_eq!(
+                paid_block_reward(zone, 1, ag, zone, dormancy_v, &p).unwrap(),
+                effective_emission(ag, dormancy_v, &p).unwrap(),
+                "pre-penalty paid quantity != effective_emission at ag={ag}"
+            );
+        }
+        // And mid-curve under dormancy the paid quantity carries M_r
+        // (0.8·curve), which the M_r-neutral base does NOT — the old
+        // estimate operand really was a different number (FL-V1).
         let mid = s / 2;
-        assert_eq!(
-            base_block_reward(mid, &p).unwrap(),
-            r_eff(mid),
-            "estimate operand != payer pre-penalty quantity (R_eff) mid-curve under dormancy"
+        assert!(
+            effective_emission(mid, dormancy_v, &p).unwrap() < base_block_reward(mid, &p).unwrap(),
+            "dormancy must modulate the mid-curve paid quantity below the neutral base"
         );
     }
 
@@ -701,10 +738,13 @@ mod tests {
             base_block_reward(0, &p).unwrap()
         );
 
-        // already_generated_coins beyond the supply cap is the FFI's clamp
-        // responsibility, not this function's: it reports the domain error
-        // rather than silently saturating.
-        assert!(block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).is_err());
+        // FL-R16a/FL-R12′: a past-asymptote accumulator is a legitimate
+        // perpetual-tail state, not an error — the old error arm was the
+        // build-blocking dead-letter. Totalized: pays the tail.
+        assert_eq!(
+            block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).unwrap(),
+            tail_subsidy_per_block(&p).unwrap()
+        );
 
         // Past the exact domain: `base * (2m - c) * c` needs more than 128
         // bits. Before this was checked it PANICKED here in debug builds and
@@ -802,53 +842,25 @@ mod tests {
         assert_eq!(block_weight_limit(u64::MAX, 300_000), u64::MAX);
     }
 
+    /// FL-R12′: the accumulator advances THROUGH the emission-curve
+    /// asymptote (no saturation there — the perpetual tail keeps
+    /// accruing) and saturates only at the u64 rail, which keeps
+    /// `remaining` floored at zero instead of un-saturated by a wrap
+    /// (FL-R14's documented failure mode).
     #[test]
-    fn cap_reward_to_remaining_supply_does_not_underflow_past_the_cap() {
-        let p = EconomicParams::default();
-        // Normal: plenty of headroom, the reward passes through.
-        assert_eq!(cap_reward_to_remaining_supply(100, 0, &p), 100);
-        // At the headroom exactly.
-        assert_eq!(
-            cap_reward_to_remaining_supply(100, p.money_supply - 100, &p),
-            100
-        );
-        // Above it: capped to what remains.
-        assert_eq!(
-            cap_reward_to_remaining_supply(100, p.money_supply - 10, &p),
-            10
-        );
-        // AT the cap: nothing remains, so nothing is paid.
-        assert_eq!(cap_reward_to_remaining_supply(100, p.money_supply, &p), 0);
-        // PAST the cap — the case the C++ `MONEY_SUPPLY - ag` got wrong. There
-        // it underflowed to a near-u64::MAX headroom and the clamp silently
-        // did nothing; here it saturates to zero headroom and pays nothing.
-        assert_eq!(
-            cap_reward_to_remaining_supply(100, p.money_supply + 1, &p),
-            0
-        );
-        assert_eq!(cap_reward_to_remaining_supply(u64::MAX, u64::MAX, &p), 0);
-    }
-
-    /// The supply-advance clamp, pinned at the boundary the two former C++
-    /// copies had to agree on.
-    #[test]
-    fn advance_already_generated_saturates_at_money_supply() {
+    fn advance_already_generated_passes_the_asymptote() {
         let p = EconomicParams::default();
         assert_eq!(advance_already_generated(0, 100, &p), 100);
-        // Exactly at the cap with a nonzero reward stays at the cap.
+        // Through the asymptote, not clamped to it.
         assert_eq!(
             advance_already_generated(p.money_supply, 1, &p),
-            p.money_supply
+            p.money_supply + 1
         );
-        // Crossing the cap lands on it, not past it.
         assert_eq!(
             advance_already_generated(p.money_supply - 1, 50, &p),
-            p.money_supply
+            p.money_supply + 49
         );
-        // u64 overflow saturates before the supply cap is applied.
-        assert_eq!(
-            advance_already_generated(u64::MAX, u64::MAX, &p),
-            p.money_supply
-        );
+        // The only saturation is the u64 rail.
+        assert_eq!(advance_already_generated(u64::MAX, u64::MAX, &p), u64::MAX);
     }
 }
