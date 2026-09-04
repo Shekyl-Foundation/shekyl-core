@@ -307,6 +307,41 @@ Copilot's third pass: 9 open threads + 23 suppressed comments
   resolved here; no disposition changes.
 - **One table repair:** the maintainer's FL-D1 rewrite dropped a cell
   (MD056); re-split into blocker/reopen without content change.
+- **Instrument findings (suppressed cluster, VALID — and the sweep found
+  a real registered-gate failure).** Verified at source, fixed, and
+  re-measured (all numbers below are from the re-run at this commit):
+  - *Served-order pin (the one open code thread — proposed fix
+    REJECTED with evidence):* the instrument's correction scales the
+    already-truncated rung, which is bit-exact with the SERVED
+    arithmetic (`corrected_fee_ladder` truncates first; 210-vs-220 at
+    10 SKL/1.5 MB/`C_q` = 16 discriminates, the `C_q` = 2 KAT does
+    not). The real defect was the comment's false one-atomic-unit
+    bound (< `C_q` atomic pre-rounding is the true bound); a
+    discriminating pin now fails any "fix" toward the algebraic form,
+    falsifier observed.
+  - *Genesis parity:* `GENESIS_NG_HEIGHT = 1` (production's hardfork
+    table), replacing a hard-coded 0 — σ was one fixed-point unit low
+    (135000 vs 135001 at age 1); no reported value moves at the doc's
+    precision; declared exception naming the C++ authority.
+  - *Penalty coupling:* §1.9 registered the KAT-pinned penalty via the
+    crate's block-reward entry point; the instrument never called it.
+    `degenerate_pins` now pins `block_reward_with_penalty` at the
+    FL-C8 tail state, `x = ½` → 450 000 000.
+  - *Interior-grid sweep — the substantive one:* dwell and feedback
+    were pinned to (age 4, zone median) while §1.8/FL-C7 register the
+    interior grid, and the pow2-boundary demand probe was hard-coded at
+    the age-4 value 230. Swept (200 dwell runs, 2 400 feedback cells,
+    boundary scale computed per state: 59/55/221/60/52), the
+    **un-hysteretic served map 2-cycles at 18 boundary cells at full
+    `C_q`-step amplitude — failing FL-C7's registered bar** that the
+    round-3 single-state grid had reported clean. §1.7's registered
+    remedy applied: the §7 hysteresis construction (impl-1's
+    `fee_correction_quantized`, transliterated as a declared
+    exception) converges **all 800 cells** and passes every dwell gate
+    (min in-ramp 274 ≥ 240). §4.4/§4.5/W3/§7 regenerated; hysteresis
+    promoted from belt to **load-bearing**. The cross-age ramp claim
+    is honest now: zero steps at ages ≤ 4, 2–3 steps at ages 12/30
+    within the gate.
 
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 

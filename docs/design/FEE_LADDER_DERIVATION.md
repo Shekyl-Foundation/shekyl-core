@@ -733,11 +733,16 @@ starting inside the ramp window* — the statistic the ramp criterion
 actually gates on, because the whole-trace median is dominated by the
 stationary tail and structurally cannot fail for ≤ 2 posted values.
 20 000-block runs, Poisson traffic over the full §1.8 stationary grid
-(`v ∈ {0, 5, 50, 100, 200, 500}` and `M = 10·Zm`), 720-block window;
-"current" is the churn baseline (medians and reward quasi-static), so the
-table isolates the marginal churn `C` adds. **Both pow2 snap rules are
-modes of the shipped instrument**, so the register-vs-adopted comparison
-is reproducible from the branch:
+(`v ∈ {0, 5, 50, 100, 200, 500}` and `M = 10·Zm`), 720-block window,
+**swept at round 11 over every registered age at its projected (coupled)
+supply state** — `{0, 1, 4, 12, 30}` years; earlier revisions measured
+the single age-4 state, and age moves `C` relative to every pow2
+boundary (200 runs total); "current" is the churn baseline (medians and
+reward quasi-static per scenario), so the table isolates the marginal
+churn `C` adds. **Both pow2 snap rules and the §7 hysteresis
+construction are modes of the shipped instrument**, so the
+register-vs-adopted comparison is reproducible from the branch (table:
+the age-4 extract; cross-age results below it):
 
 | Scenario | current | corrected, raw `C` | quantized, nearest (§1.4a registered) | quantized, ceiling (§5.2 adopted) |
 | --- | --- | --- | --- | --- |
@@ -747,43 +752,73 @@ is reproducible from the branch:
 | stationary `v ∈ {0, 5, 500}`, `v=50@10·Zm` | no change | no change (rounding plateaus) | no change | no change |
 | ramp `v: 50→200` | no change | median 3–17 blocks; min in-ramp run **10 blocks** | one step; min in-ramp run 19 717 | **zero steps** (value held through the whole ramp — vacuous pass, reported as such) |
 
-**Raw `C` fails FL-C4a catastrophically**, and the honest statistic
-sharpens the failure mode: the wire alphabet stays tiny (2–3 values) while
-the *value flickers* every 3–6 blocks — so the fingerprint is not "which
-rare value" but "which side of a flicker", cohorts of ~150–300 txs vs
-~10⁶ for a stable value. **Both quantized rules pass every scenario**; the
-*adopted* ceiling variant (`2^ceil(log2 C)` — a post-registration
-refinement selected by the already-registered FL-C2(b), because
-round-to-nearest under-funds the top rung's marginal pricing by up to √2)
-additionally rides the 4× ramp with zero steps where the registered
-nearest rule steps once. The §1.4a register itself is not rewritten; this
-paragraph is the disclosure. FL-C4a verdict: `C` enters the formula only
-as `C_q` (ceiling). Residual risk: a state sitting exactly on a pow2
-boundary could flicker at 2× amplitude — no registered scenario exhibits
-it (the boundary-straddling feedback case in §4.5 converges), and §7
-carries a hysteresis construction requirement with the dwell gate as its
-acceptance test.
+**Raw `C` fails FL-C4a catastrophically at every age**, and the honest
+statistic sharpens the failure mode: the wire alphabet stays tiny (2–3
+values) while the *value flickers* every 3–6 blocks — so the fingerprint
+is not "which rare value" but "which side of a flicker", cohorts of
+~150–300 txs vs ~10⁶ for a stable value. **Both quantized rules and the
+hysteresis mode pass the ≥ 240-block gate in every scenario at every
+age.** Cross-age honesty on the ramp claim (round 11): the ceiling
+rule's "zero steps through the whole 4× ramp" holds at ages ≤ 4; at ages
+12 and 30 the same ramp legitimately crosses 2–3 pow2 boundaries (`C` is
+larger there and the boundaries sit closer together along `v`), with
+minimum in-ramp dwell **644 blocks (age 12)** and **274 blocks
+(age 30)** — above the 240-block gate, and worst-case ramp cohorts of
+~1.4–5.5 × 10⁴ txs/value (274 blocks at 50–200 tx/block), two orders
+above raw-`C`'s 150–300 though below the stationary ~10⁶. The *adopted*
+ceiling variant (`2^ceil(log2 C)` — a post-registration refinement
+selected by the already-registered FL-C2(b), because round-to-nearest
+under-funds the top rung's marginal pricing by up to √2) still rides the
+young-age ramps with zero steps where the registered nearest rule steps
+once. The §1.4a register itself is not rewritten; this paragraph is the
+disclosure. FL-C4a verdict: `C` enters the formula only as `C_q`
+(ceiling, behind the §7 hysteresis). Residual risk, re-measured at
+round 11: a state sitting exactly on a pow2 boundary **does** flicker at
+2× amplitude on the un-hysteretic map — the swept interior exhibits it
+(18 feedback cells, §4.5) — and the §7 hysteresis construction closes
+it, measured, which promotes that requirement from belt to load-bearing.
 
-### §4.5 Feedback (FL-C7) — measured on the SERVED map (re-run at review round 3)
+### §4.5 Feedback (FL-C7) — measured on the SERVED map (re-run at round 3; swept over the reachable interior at round 11)
 
 An earlier revision measured this criterion on the raw-`C` ladder with the
 demand fixed point pinned at baseline — a map the §5.2 proposal does not
 serve, anchored where the quantization discontinuity cannot bite (review
 finding). Re-measured: deterministic fee↔volume iteration
-(`v = D·(f/f_D)^(−ε)`, `ε ∈ {0…3}`), on **both** the raw-`C` map and the
-served ceiling-`C_q` map — whose pow2 step is exactly the limit-cycle
-mechanism FL-C7 exists to exclude — with the demand scale swept
-`D ∈ {50, 100, 230, 400}` so the fixed-point `C` *crosses* the pow2
-boundary (`C(v)` passes 2.0 near `v ≈ 230` at the reference state), each
-cell run from the fixed point and from a displaced (up to 8×) start.
-**All 80 cells converged to a single tail fee value**, including the
-boundary-straddling `D = 230` quantized cells (tail pins at
-`v = 230`, one fee value). The 720-block window plus fee rounding plus the
-rail clamps damp the loop; no hysteresis was needed. (The instrument
-answers *stability*, not equilibrium location — each cell's fixed point is
-at its own `D` by construction.) FL-C7: **pass, on the map the proposal
-serves**; the §7 hysteresis requirement remains as belt for boundary
-states the grid may not represent.
+(`v = D·(f/f_D)^(−ε)`, `ε ∈ {0…3}`), on the raw-`C` map, the served
+ceiling-`C_q` map — whose pow2 step is exactly the limit-cycle mechanism
+FL-C7 exists to exclude — and (round 11) the **§7 hysteresis
+construction** over that map; swept over the reachable §1.8 interior:
+every registered age at its projected (coupled) supply, all four
+medians, `D ∈ {50, 100, v*, 400}` with the pow2-boundary scale `v*`
+**computed per state** (59 / 55 / 221 / 60 / 52 at ages 0/1/4/12/30 —
+round 3's fixed `D = 230` was read off the age-4 curve and sat
+off-boundary at every other state), each cell run from the fixed point
+and from a displaced (up to 8×) start. 2 400 cells.
+
+**The interior sweep found the limit cycle the round-3 grid missed**
+(the single-state run had honestly reported "all 80 cells converge" —
+of a grid whose one boundary probe was off-boundary): at each state's
+true boundary demand the **un-hysteretic** ceiling map 2-cycles — 18
+cells, fee amplitude a full `C_q` step (e.g. 37 000 ↔ 74 000 at age 4,
+`M = 3·Zm`): `v_avg` oscillates one tx/block around the boundary and
+`C_q` flips between adjacent powers. **That fails FL-C7's adoption bar
+as registered** (convergence, or cycles ≤ one fee-rounding step). The
+§1.7 registered remedy — hysteresis on `C`, then re-test — was applied:
+under the §7 construction (3% band around the previous step; the
+implementing branch's `fee_correction_quantized`, transliterated into
+the instrument as a declared exception until that branch merges) **all
+800 hysteresis cells converge to a single tail fee value**, and every
+hysteresis dwell run passes the §4.4 gate (min in-ramp 274 blocks).
+Raw-`C` cycles at ≤ one rounding step in 49 cells — within C7's letter,
+and raw is already rejected by FL-C4a.
+
+FL-C7: **pass — on the CONSTRUCTED map, and only there.** The §7
+hysteresis requirement is thereby **load-bearing, not belt**: the
+boundary states round 3 guessed "the grid may not represent" are on the
+reachable interior, the un-constructed map fails there, and the built
+mechanism is what closes it. (The instrument answers *stability*, not
+equilibrium location — each cell's fixed point is at its own `D` by
+construction.)
 
 ### §4.6 Degenerate pins (FL-C8)
 
@@ -1029,7 +1064,7 @@ registered 50/40/10 remains the pre-signature reference.
 | --- | --- | --- | --- | --- | --- |
 | W1 | Miner who ignores the ladder and mines only the penalty-free zone | Refuses all expansion regardless of fees | Individually rational whenever `C > 1` (fees at the served ladder genuinely don't cover cost — measured 5.6–12.9× short in congestion): congestion persists *because* the ladder lies | Forgoes real profit: corrected rungs actually clear the miner's cost, so a refusing miner cedes fee income to competitors; expansion market functions | The ladder is an offer curve; no defence needed beyond pricing it honestly |
 | W2 | User pays the top rung, gets no expansion | Buys priority during mature-chain congestion | **Real and measured**: top rung offers as little as 8% of the miner's cost; rational miners take queue-jumping money and never expand; the product sold does not exist | Top rung = exact marginal cost of full expansion in every state incl. surge (§5.2); a rational miner expands | Residual: collusive non-expansion cartel is a mining-cartel question (out of scope, unchanged by this round) |
-| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell with ceiling `C_q`: no value change in any registered scenario, the 4× ramp included — sets of ~10⁶ txs/rung-value vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a; custom-fee users remain self-marked (pre-existing, out of scope) |
+| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell with the served (hysteresis-constructed) `C_q`, swept over every registered age at round 11: no value change in any stationary scenario; the 4× ramp holds one value at ages ≤ 4 and legitimately steps 2–3× at ages 12/30 with min in-ramp dwell ≥ 274 blocks (gate: 240) — cohorts ~10⁶ txs/rung-value stationary, worst-case ~1.4–5.5 × 10⁴ inside an old-age ramp window, vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a; custom-fee users remain self-marked (pre-existing, out of scope) |
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | RESOLVED at round 8: FL-R12′'s signed composition (`paid = max(M_r·curve, TAIL)·penalty(x)`) keeps the penalty biting at the tail permanently — expansion to the cap costs the full `TAIL` at `x = 1` | ~~FL-D1~~ closed as answered (§9) |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
@@ -1047,7 +1082,7 @@ registered 50/40/10 remains the pre-signature reference.
 | `shekyl-rpc-client` | unify to the engine mapping; **delete** the dead `[1, 5, 25, 1000]` fallback ladder (`lib.rs:471-486`, impossible daemon shape, rule 60) | No | fallback deletion any time; mapping with the vector change |
 | `fee_policy.rs` absolute cap | `Fh` moves ⇒ the KAT-pinned 14 000 000 genesis-condition cap is re-derived as the swept maximum of the **served** (`C_q`) top rung over the reachable young-chain grid — measured: young-congested serves 25 000 000; the genesis-congested bound is 28 000 000 (`C_q = 2` reachable at genesis for `v ≥ 65`, i.e. 2× the 13 653 333 unrounded genesis `Fh`, daemon-rounded); exact value pinned by KAT in the implementing PR | No | with the daemon value change |
 | `check_fee` / `get_dynamic_base_fee` | **unchanged** this round (clamp absorbs the collision); re-derivation is CEN-M3's | — | FL-D2 |
-| Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin; the §4.4 dwell scenarios are the acceptance gate | No | implementing PR |
+| Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin. **Measured at round 11 (§4.5): LOAD-BEARING, not belt** — the un-hysteretic served map 2-cycles at 18 reachable boundary cells (full `C_q`-step amplitude, failing FL-C7's bar); the constructed map converges in all 800 cells. The mechanism is the implementing branch's `fee_correction_quantized` (3% band around the previous step); the §4.4 ramp runs and the §4.5 boundary cells are the acceptance gate | No | implementing PR (built on `feat/fee-ladder-impl-1`; the instrument's transliterated copy retires at that merge) |
 | Wallet/CLI tier-picker disclosure (rule-81 obligation **created by FL-R17's signature**, flagged at steering) | Three tiers put a privacy cost behind a user-facing choice (×1.25 default / ×6.7 / ×20 operative divisors, §4.7) — a user selecting "priority" cannot be expected to price a candidate-set divisor, so the surface must disclose the trade in terms a non-protocol user can act on, or the choice is uninformed by construction. Copy is owned by the wallet/GUI lane (rules 80/81/82), **not this round** — handed off via the round record; the engine mapping change is the natural carrier | No | with the engine tier-mapping change; owner: wallet/GUI surfaces |
 
 ## §8 Ratification table — FL-R12′/FL-R17 SIGNED, FL-R14 RULED (per-row provenance); census overlap per §0.1
