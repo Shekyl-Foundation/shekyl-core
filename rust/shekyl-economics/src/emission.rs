@@ -300,10 +300,16 @@ mod tests {
     /// 2. tail with `x > 0`: shipped applies the penalty before the
     ///    multiplier and cap (360 000 000 at `x = ½` under dormancy) vs
     ///    the signed `TAIL·(1−x²)` = 450 000 000;
-    /// 3. ladder-operand equality: the 5-arg estimate base must equal
-    ///    the payer's pre-penalty quantity `R_eff` at every point —
-    ///    red mid-curve, where the estimate is unmodulated while the
-    ///    payer's quantity carries `M_r`.
+    /// 3. estimate-operand totality (the adopted whole-scalar contract:
+    ///    the operand is the M_r-NEUTRAL total view, `M_r` only inside
+    ///    the quantized scalar): past the asymptote the operand must be
+    ///    the tail, and the shipped estimate errors instead (FL-R16a);
+    /// 4. the projection leg — `projected_already_generated` BY NAME
+    ///    (the census-R2 reopen conjunct): the neutral trajectory past
+    ///    the tail-headroom boundary must feed the same paid contract —
+    ///    red today twice over (the projection saturates at the
+    ///    asymptote, FL-V10, and the shipped composition pays
+    ///    `M_r`-modulated instead of the floored contract).
     ///
     /// Un-ignore with the FL-R12′ implementation (build authorized at
     /// round 8 upon the record).
@@ -377,6 +383,22 @@ mod tests {
                 .unwrap_or_else(|e| panic!("estimate operand must be total, got {e:?}")),
             tail,
             "estimate operand != TAIL past the asymptote"
+        );
+
+        // Leg 4 — the projection leg, calling the function the census-R2
+        // reopen criterion names: the neutral trajectory past the
+        // 2^21-identity tail-headroom crossing feeds the paid contract.
+        let past_boundary = 19_200_000;
+        let ag = projected_already_generated(past_boundary, &p).unwrap();
+        let shipped = {
+            let base = block_reward_with_penalty(zone, zone, ag, zone, &p)
+                .unwrap_or_else(|e| panic!("projection-fed shipped leg errored: {e:?}"));
+            cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
+        };
+        assert_eq!(
+            shipped,
+            r_eff(ag),
+            "projection-fed paid reward != contract past the boundary (height {past_boundary})"
         );
     }
 
