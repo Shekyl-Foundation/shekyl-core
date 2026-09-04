@@ -71,19 +71,22 @@
   `pop_block` overload. `check_consensus_invariants.sh` gains the
   watermark single-writer/no-revert invariant [6/6].
 
-- **DRS-P0f row coverage complete — and it found an S0.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **95
-  CHECKED-CONFORMANT, 5 DIVERGENT, 2 failed closed** (CEN-L11 with L12
-  coupled; CEN-D2 at S1 with CEN-D1 coupled — the PoW-failure sentinel fails
-  open at difficulty 1; CEN-B5's rule-71 FAKECHAIN skip; CEN-M8's S0 was
-  found, ruled FIX, fixed by PR #602, and re-verified with G4/J26 promoted),
-  each with
+- **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
+  register now disposes **all 102** bucket-1/2 census rows: **97
+  CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-L11 with L12
+  coupled; CEN-B5's rule-71 FAKECHAIN skip). **Both S-graded findings ran the
+  full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
+  with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
+  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
-  **CEN-M8** — block connect's FCMP++ proof-skip is **presence-gated** where
+  **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
   the ratified rule requires **hash-gated**, and the `kept_by_block` admission
-  tolerance means a tx whose proof failed at pool admission can connect with
-  verification skipped; the exact required check exists unused on that path.
-  Fix-or-risk-accept per the §7.2 ladder (FOLLOWUPS carries it); **ruled FIX 2026-09-03**, fix = PR #602. Detail:
+  tolerance meant a tx whose proof failed at pool admission could connect with
+  verification skipped, while the exact required check sat unused on that path.
+  Ruled FIX per the §7.2 ladder and **fixed by PR #602** (merged): the skip is
+  now hash-gated and CEN-M8 with CEN-G4/J26 is re-reviewed CHECKED-CONFORMANT.
+  Detail:
   [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
 
 - **DRS-P0f slice 1 — the conformance register's first verdicts.** The
