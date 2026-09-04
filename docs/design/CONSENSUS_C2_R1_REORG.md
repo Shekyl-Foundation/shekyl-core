@@ -1015,7 +1015,11 @@ obligation (§5.2) is confirmed necessary by inspection.
   before checkpoints, attestation, and PoW. The census row conflated
   claimed and derived; K1 is therefore **not** a three-leg dedup — the
   two conditions get ruled separately, jobs enumerated before any leg
-  retires.
+  retires. One polarity note for the ruling (steering): leg 1's
+  `m_verifivation_failed` is **correct** — a miner tx claiming height 0
+  is a statement about the *input*, not about our state — and worth
+  saying explicitly, because this mechanism carries the opposite bug
+  four times over and a future reader will assume a fifth.
 - **K2** (`:2083–2135`) — `build_alt_chain` rebuild integrity: per-blob
   parse assert, main-height sanity, connection assert
   (`h == front.prev_id`), `parent_in_main` imperative; all
@@ -1041,10 +1045,14 @@ obligation (§5.2) is confirmed necessary by inspection.
   alt admission and pop-return, so a ruling on one reshapes the other.
 - **K10** (`tx_pool.cpp:304–340`) — `kept_by_block` input-check failure
   stores anyway with `fcmp_verified = 0` and `last_failed_*` reset.
-  **Post-census composition change:** CEN-M8's hash-gated proof-skip
+  **Post-census composition change, recorded as a DEPENDENCY with a
+  falsifier, not a resolved risk:** CEN-M8's hash-gated proof-skip
   (PR #602) means such a tx now pays **full verification at connect** —
-  the stored-unverified tx can no longer ride the connect skip. The
-  storage-cost wargame seed stands unchanged.
+  the stored-unverified tx can no longer ride the connect skip. K10's
+  disposition therefore **assumes M8's hash gate; relaxing M8 reopens
+  K10 silently**, because nothing at K10's own site would change
+  (retirement-blast-radius shape). The storage-cost wargame seed stands
+  unchanged.
 - **A1** (`:3060–3095`) — three-store membership: main
   (`block_exists`), alt (`get_alt_block`), and `m_invalid_blocks`, an
   **in-memory process-lifetime set** — known-invalid re-offers are
@@ -1053,23 +1061,41 @@ obligation (§5.2) is confirmed necessary by inspection.
 - **A2** (`:6631` fail-closed routing re-check at add; template-cache
   variant `:1797`) — orchestration.
 - **A4** (`:2509–2517`) — parent in neither store → `m_marked_as_orphaned`,
-  **not stored**, `return true` — no `bvc` failure, no peer punishment;
-  the p2p layer re-requests ancestry. The unbounded re-request cost is
-  GAP-4's question; named here, not answered here.
+  **not stored**, `return true`. The posture question ("can any caller
+  distinguish this `true` from stored-and-connected?") grounds to: the
+  **flag carries the distinction, not the return value** — and the flag
+  has **two consumers with opposite peer-consequences**. The live path
+  (`cryptonote_protocol_handler.inl:695`) reads it as
+  re-request-ancestry (no punishment); the sync path (`:1546`) reads
+  the same flag as an offense — `drop_connections(span_origin)` plus a
+  scored drop, on the theory that a span block that fails to connect
+  means the peer misrepresented the span. Both arms are defensible;
+  they are **different rules wearing one flag**, and Q3 poses them as a
+  ruled question rather than ratifying "orchestration." The unbounded
+  re-request cost stays GAP-4's question; named here, not answered
+  here.
 
 ### 5.4 Proposed round structure (no rulings yet)
 
-Decision-grouped, three questions: **Q1 — the admission-tier
-contract** (K4 at center: what must be paid at admission vs promotion
-under the §5.1 interval constraint; K1's two conditions ruled inside
-it — the ordering leg and the derived-height owner separately, jobs
-enumerated). **Q2 — storage and eviction bounds** (K10's
-`verification_impossible` residue, A1's invalid set, alt-store growth
-under cheap deep forks, the drop-at-restart floor; GAP-4's coupling
-named, its bound question not pre-empted here). **Q3 — topology
-ratifications** (A1/A2/A4, K2, K3: orchestration and belts,
-ratify-and-keep with every belt named). Per-ruling falsifiers
-throughout; ratify-then-build.
+Decision-grouped, three questions — all nine rows walked to a home
+(K1→Q1, K4→Q1, K9→Q1, K10→Q2, A1→Q2+Q3, A2→Q3, A4→Q3, K2→Q3, K3→Q3):
+**Q1 — the admission-tier contract** (K4 at center: what must be paid
+at admission vs promotion under the §5.1 interval constraint; K1's two
+conditions ruled inside it — the ordering leg and the derived-height
+owner separately, jobs enumerated; **K9 homed here deliberately** — the
+NIC-or-reject gate is an admission-tier cost, and its
+`relay_method::block` tolerance is shared with the pop-return producer
+(`:870`), so Q1's ruling on the arm names both flows; what the pool
+then *stores* under that tolerance is K10's Q2 matter). **Q2 — storage
+and eviction bounds** (K10's `verification_impossible` residue with its
+M8 dependency-falsifier, A1's process-lifetime invalid set, alt-store
+growth under cheap deep forks, the drop-at-restart floor; GAP-4's
+coupling named, its bound question not pre-empted here). **Q3 —
+topology ratifications and the one posed question** (A1/A2, K2, K3:
+orchestration and belts, ratify-and-keep with every belt named; **A4
+is NOT ratified as orchestration** — Q3 rules its two-consumers-one-flag
+split: re-request on the live path vs punish on the sync path, per
+§5.3). Per-ruling falsifiers throughout; ratify-then-build.
 
 ## 6. Round log
 
