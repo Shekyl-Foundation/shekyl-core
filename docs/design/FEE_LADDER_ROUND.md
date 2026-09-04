@@ -179,6 +179,68 @@ remains un-PR'd per the maintainer's standing "no PR just yet" — the
 natural order (design PR merges, implementation cites it) waits on him
 lifting that hold.
 
+## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
+
+The reward-path bundle, one validation surface, built Rust-first (rule
+20: C++ reduced to marshaling — the C++ diff direction is thinner, not
+thicker):
+
+- **Composition (FL-R12′ as signed):** `shekyl-economics` gains the one
+  owner `paid_block_reward` = `apply_weight_penalty(effective_emission)`;
+  `effective_emission = max(M_r·curve(remaining), TAIL)`; `remaining`
+  saturating at zero; `cap_reward_to_remaining_supply` DELETED;
+  accumulator advances through the asymptote (u64-rail saturation only).
+  `block_reward_with_penalty` survives as the documented M_r-neutral
+  delegation, which keeps the 81-vector cross-language KAT pinned without
+  re-derivation. C++ `get_block_reward`: 6-arg = marshal only (no
+  multiplier, no cap, **no flag path** — FL-V9 discharged); 5-arg = the
+  documented neutral view (relay floor's deliberate operand, CEN-M3
+  held).
+- **FL-R16a first, as instructed:** the past-asymptote error arm is
+  gone; both dead-letters closed (estimate path returns the tail via
+  totality; relay floor tail-derived instead of failure-arm 0). FL-R16b
+  (ActivityMetric guard) and FL-R16c (supply-ratio saturation +
+  the gross-emission note) landed with it. FL-R14's build-time
+  assertion lives in `params.rs` (≥10 000-year headroom floor,
+  range-proof width and wrap-un-saturation named).
+- **Estimate side (round-8 amendment as adopted):** `fee.rs` —
+  `corrected_fee_ladder` (three tiers, `fees[2]` bridge, `Fh` main arm
+  unconditional) + `fee_correction_quantized` (whole-scalar `C_q`,
+  exact-integer ceiling snap, 3% hysteresis band) + `round_money_up_2`
+  (first Rust production owner). C++ 4-arg = marshal; the 2-arg wrapper
+  computes `C_q` inputs from the SAME sources validation uses and
+  **clamps the served economy rung at `get_current_fee_per_byte()`** —
+  the round-8 rider as an identity: *the estimate can only err toward
+  acceptance* (relay tier, per CEN-M3: there is no consensus floor).
+- **Oracles:** `terminal_reward_legs_agree` graduated (un-ignored, green
+  through the one owner; contract values unchanged — 600 000 000 /
+  450 000 000 / operand-equality; the pre-implementation reds are in the
+  commit history). New FFI marshal pin with `M_r ≠ 1` and both tail
+  boundaries. Heritage `scaling_2021` pins updated to the signed shape
+  (`[340, 1400, 1400, 67000]`-class; the surge case's 22 000 → 67 000
+  deliberately) + a `C_q = 2` case. Wallet cap re-derived (FL-R9):
+  14 000 000 → **28 000 000** (served sweep max), KAT re-pinned.
+- **FL-R15 rename executed:** `money_supply` →
+  `emission_curve_asymptote` across the JSON authority, both codegen
+  paths, the Rust field/const surface (incl. the engine snapshot field
+  `emission_curve_asymptote_atomic` — no out-of-workspace consumer), and
+  the C++ macro (`SHEKYL_EMISSION_CURVE_ASYMPTOTE`, rule 93 prefix).
+  Doc hits classified: asserting-is updated (`DESIGN_CONCEPTS`
+  constants/mechanism, `ECONOMY_EXPLAINED` big-picture + Loop 1 to the
+  signed composition, readiness matrix, perf baseline);
+  records-was left standing with a rename note (`GENESIS_TRANSPARENCY`
+  genesis derivation); census/CHANGELOG untouched (records-was).
+- **FL-V7 resolution as ruled:** `ECONOMY_EXPLAINED.md` big-picture now
+  carries the exactly-true sentence (asymptotic gross issuance +
+  perpetual tail + burn-governed net supply); Loop 1 states the signed
+  order; the emission table is marked neutral-trajectory.
+
+Gates at the build tip: rustfmt; CI-exact workspace clippy `-D warnings`;
+full Rust workspace suite; C++ configured with tests, full `unit_tests`
+battery (31-test reward path incl. re-pinned KATs verified first);
+`check_archival_reward_gates.sh`; all four doc gates. The dwell/feedback
+instrument re-run unchanged (the adopted design is the measured one).
+
 ## Review round 7 (maintainer, 2026-09-03): FL-R17 SIGNED — three tiers
 
 **Signed in-channel, this session, direct message** ("sign it as three
@@ -332,10 +394,11 @@ directly. Dispositions:
 
 ## Decisions pending (all with the maintainer)
 
-1. ~~FL-R12′ signature~~ — **SIGNED at round 8** with the full
-   composition; FL-D1 closed; **build authorization YES**. The one
-   remaining sequencing gate is the standing "no PR just yet" on this
-   design branch.
+1. ~~FL-R12′ signature~~ — **SIGNED at round 8**; FL-D1 closed; build
+   authorized and **EXECUTED** (§Build above) on
+   `feat/fee-ladder-r12-impl`, stacked on this design branch, local
+   only. Remaining sequencing gates: the standing "no PR just yet", and
+   steering review of the build before anything goes to the maintainer.
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
 3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
