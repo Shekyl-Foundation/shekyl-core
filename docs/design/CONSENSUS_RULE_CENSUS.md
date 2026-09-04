@@ -17,7 +17,7 @@ regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECON
 §5.4.1 for the three states and the exception register. **DRS-P0f's row
 coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per-row conformance review
 — *not* P0d, which is Digest v0): the **102** bucket-1/2 rows that existed on
-2026-09-02 are disposed — 98 CHECKED-CONFORMANT, 1 DIVERGENT (CEN-B5's rule-71
+2026-09-02 are disposed — 99 CHECKED-CONFORMANT, 1 DIVERGENT (CEN-B5's rule-71
 FAKECHAIN skip, census R9), 2 failed closed (CEN-L8; CEN-I12, split anchor
 source). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
 2026-09-03, so the live bucket-1/2 count is **111** and those nine are
