@@ -44,17 +44,19 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **99 CHECKED-CONFORMANT**, 1 DIVERGENT (CEN-B5's rule-71 FAKECHAIN skip — census R9 owns it), 2 failed closed (CEN-L8, CEN-I12) — over the **102** bucket-1/2 rows that existed then. The set is now **111** (C2-R1b promoted nine rows 2026-09-03); those nine are UNREVIEWED pending P0f review. **Both S-graded findings are FIXED and re-verified:** the S0 by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted, 2026-09-03); **CEN-L11/L12 promoted at PR #609's merged fix (2026-09-04).** P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. **No §7.2 S-graded divergence remains** — the S0 (PR #602) and the S1 (PR #604) are both merged and re-verified, so the register no longer gates DRS-0. This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
-> **Ruled 2026-09-01 and applied in this document:** **CSR-3** (the oracle
-> clause is propagated into A2 / D11 / E2 — the digest is an oracle only where a
-> rule is **both** ratified **and** carries an **affirmative conformance record**
-> — absence of a recorded divergence means *unreviewed*, not conformant, and the
-> conformance register is **complete over the 102 bucket-1/2 rows P0f reviewed, not the current 111** (99 / 1 / 2
-> — via **DRS-P0f**); outside the 99 the digest is a *regression* instrument,
-> and **both S-grades are fixed and re-verified** — the S0 by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (D2/D1 promoted) — so no S-graded divergence gates DRS-0 — **CSR-3a**; register seeded
-> with CEN-L11) and
-> **CSR-4** (DRS-C is **analysis-only**; §3.5's PR shape amended). **CSR-1** and
-> **CSR-2** are ruled and recorded in the reconciliation; **CSR-5** is ruled in
-> direction only, with no queue slot fixed.
+> **Ruled 2026-09-01 and applied in this document — CSR-3:** the oracle
+> clause is propagated into A2 / D11 / E2. The digest is an oracle only where a
+> rule is **both** ratified **and** carries an **affirmative conformance record**;
+> absence of a recorded divergence means *unreviewed*, not conformant. The
+> conformance register that supplies that record (**CSR-3a**, seeded with
+> CEN-L11) is **complete over the 102 bucket-1/2 rows P0f reviewed, not the
+> current 111** — 99 / 1 / 2, via **DRS-P0f** — so outside the 99 the digest is
+> a *regression* instrument. **Both S-grades are fixed and re-verified** — the S0
+> by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (D2/D1 promoted) — so no
+> S-graded divergence gates DRS-0. **Also applied — CSR-4:** DRS-C is
+> **analysis-only**; §3.5's PR shape amended. **CSR-1** and **CSR-2** are ruled
+> and recorded in the reconciliation; **CSR-5** is ruled in direction only,
+> with no queue slot fixed.
 > Blast radius, the row-level census map, and the work items are in
 > [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 > (`CSR-*`). Individual decision cells below are **not** rewritten in place —
