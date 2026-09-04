@@ -985,10 +985,13 @@ namespace cryptonote
         // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
         //
         // LOAD-BEARING DOWNSTREAM (CEN-L11/H12): blockchain_db.cpp's
-        // curve-tree leaf collector treats a non-tagged-key target as
-        // impossible and THROWS rather than skipping the output. Relaxing
-        // this whitelist without teaching that collector the new target type
-        // turns a widened rule into an abort at block connect.
+        // curve-tree leaf collector handles exactly txout_to_tagged_key and
+        // the retained legacy txout_to_key arm, and THROWS on any other target
+        // rather than skipping the output. Admitting a variant outside those
+        // two without teaching the collector to build its leaf turns a widened
+        // rule into an abort at block connect. (The legacy arm is itself
+        // rule-60 deletion residue owned by the census §10 R5 queue; deleting
+        // it there narrows this pair to one.)
         CHECK_AND_ASSERT_MES(
           std::holds_alternative<txout_to_tagged_key>(o.target),
           false, "wrong variant type (index " << o.target.index()

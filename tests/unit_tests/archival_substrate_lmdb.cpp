@@ -3038,7 +3038,16 @@ void expect_connect_refused(const transaction& tx, const char* what,
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
+  // add_transaction writes the tx and its outputs BEFORE the leaf collector
+  // runs (blockchain_db.cpp :465/:473 vs :607), so a refused block leaves a
+  // partial write set inside the batch. Height alone would not notice: the
+  // block row is written later, so it stays unchanged either way. Snapshot the
+  // write set and mirror production's failure path, which ABORTS the batch
+  // (blockchain.cpp:773/:787/:6814) rather than committing it.
   const uint64_t height_before = db.height();
+  const uint64_t tx_count_before = db.get_tx_count();
+  const uint64_t outputs_before = db.get_num_outputs(0);
+
   bool threw = false;
   std::string reason;
   try
@@ -3050,7 +3059,7 @@ void expect_connect_refused(const transaction& tx, const char* what,
     threw = true;
     reason = e.what();
   }
-  fixture.db.batch_stop();
+  fixture.db.batch_abort();
 
   EXPECT_TRUE(threw) << what << ": the DB accepted an output the curve tree "
                         "cannot hold — it would be permanently unspendable";
@@ -3062,6 +3071,11 @@ void expect_connect_refused(const transaction& tx, const char* what,
     << ") — got: " << reason;
   EXPECT_EQ(height_before, db.height())
     << what << ": the refused block still advanced the chain";
+  EXPECT_EQ(tx_count_before, db.get_tx_count())
+    << what << ": the refused block left its transaction behind";
+  EXPECT_EQ(outputs_before, db.get_num_outputs(0))
+    << what << ": the refused block left its outputs behind — they would be "
+       "spendable-looking rows with no curve-tree leaf";
 }
 
 } // namespace
@@ -3069,12 +3083,10 @@ void expect_connect_refused(const transaction& tx, const char* what,
 TEST(archival_substrate_lmdb, cen_l11_refuses_unsupported_output_target)
 {
   transaction tx = make_single_output_tx();
-  // A target variant CEN-H12/F8 never admits. The collector used to `continue`
-  // past it, dropping the output from the tree while the block connected.
-  txout_to_key legacy{};
-  memset(&legacy.key, 0, sizeof(legacy.key));
-  const crypto::public_key key_pt = test_output_key_for_index(7);
-  memcpy(&legacy.key, &key_pt, sizeof(legacy.key));
+  // A target variant CEN-H12/F8 never admits AND the collector does not
+  // handle. (Not txout_to_key: the collector still has an arm for that legacy
+  // variant, so it would not reach the `else` at all — see the whitelist
+  // comment in cryptonote_format_utils.cpp.)
   tx.vout[0].target = txout_to_script{};
   // Refused before the collector: add_transaction's own output-key extraction
   // rejects a variant it cannot read a public key from. The collector's arm is
