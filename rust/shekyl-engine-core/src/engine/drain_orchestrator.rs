@@ -550,6 +550,37 @@ pub(crate) struct DrainCtx<'a> {
     pub chain_tip: u64,
 }
 
+/// The terminal sweep's pool residue: everything the pass leaves on the
+/// slot — Σ over ALL of the slot's unspent records minus the pass's input
+/// total. Summed over the **unfiltered** slot set on purpose (review-1,
+/// Bugbot HIGH): the selection stage receives only the mature ∧ unreserved
+/// candidates, so a residue summed there silently drops the immature class
+/// — a pass emptying the mature subset would then report `0`, the CLI
+/// would declare the collection complete, and the immature payouts would
+/// sit in the slot holding the funded retirement gate with nothing telling
+/// the caller to return. `0` from THIS sum is the genuine completion fact:
+/// no record of any maturity remains beyond the pass.
+///
+/// A record reserved by another in-flight operation still counts — it is
+/// still in the slot now, and if its holder releases rather than settles it
+/// will still need collecting; the conservative figure is the honest one.
+fn sweep_slot_remainder(
+    records: &[PFundingOutputRecord],
+    slot: super::stake_engine::PSlot,
+    input_total: AtomicUnits,
+) -> Result<AtomicUnits, DrainError> {
+    let slot_total = AtomicUnits::checked_sum(
+        records
+            .iter()
+            .filter(|r| r.p_slot == slot)
+            .map(|r| r.amount),
+    )
+    .ok_or(DrainError::AmountOverflow)?;
+    slot_total
+        .checked_sub(input_total)
+        .ok_or(DrainError::AmountOverflow)
+}
+
 /// One orchestrated drain: the actor's assembled reply plus the pipeline's
 /// own resolution of what it moves.
 ///
@@ -768,6 +799,10 @@ pub(crate) async fn orchestrate_drain(
                 reference_height,
             )
             .map_err(DrainError::from)?;
+            // The remainder is summed over the slot's UNfiltered records —
+            // never the projection's mature-only candidates (its doc).
+            let remainder =
+                sweep_slot_remainder(ctx.funding_records, handle.p_slot(), sweep.input_total)?;
             let plan = DrainPlan {
                 // `amount` is the selection target (`payment + fee`), which
                 // for a sweep is exactly the pass's input total: zero change.
@@ -776,7 +811,7 @@ pub(crate) async fn orchestrate_drain(
                 input_total: sweep.input_total,
                 change: AtomicUnits::ZERO,
             };
-            (plan, sweep.payment.to_raw(), Some(sweep.remainder))
+            (plan, sweep.payment.to_raw(), Some(remainder))
         }
     };
 
@@ -887,6 +922,44 @@ mod tests {
     }
 
     const REF: u64 = 100;
+
+    /// This bites against the remainder being summed over the projection's
+    /// mature-only candidates (review-1, Bugbot HIGH): a pass that empties
+    /// the mature subset while an IMMATURE payout still sits on the slot
+    /// must report that payout as remainder — never `0`, which the CLI
+    /// renders as "collection complete" while the immature output holds the
+    /// funded retirement gate with nothing telling the caller to return.
+    /// Another slot's record must not leak into the figure. It does NOT
+    /// cover the wire rendering (the facade's).
+    #[test]
+    fn sweep_remainder_counts_the_immature_residue_never_zero() {
+        use super::super::stake_engine::PSlot;
+
+        let mut immature = mature(3, 1_000_000);
+        immature.spendable_height = BlockHeight::from_raw(REF + 1);
+        let mut other_slot = mature(9, 777);
+        other_slot.p_slot = PSlot::from_raw(1);
+        // The pass swept the two mature records (40 + 60).
+        let records = [mature(1, 40), mature(2, 60), immature, other_slot];
+
+        let remainder =
+            sweep_slot_remainder(&records, PSlot::from_raw(0), AtomicUnits::from_raw(100))
+                .expect("sums are small");
+        assert_eq!(
+            remainder,
+            AtomicUnits::from_raw(1_000_000),
+            "the immature payout IS the remainder; a zero here forges completion"
+        );
+
+        // Completion is exactly the whole slot swept — the genuine zero.
+        let remainder = sweep_slot_remainder(
+            &[mature(1, 40), mature(2, 60)],
+            PSlot::from_raw(0),
+            AtomicUnits::from_raw(100),
+        )
+        .expect("sums are small");
+        assert_eq!(remainder, AtomicUnits::ZERO);
+    }
 
     #[test]
     fn drain_balance_sums_only_mature_outputs() {

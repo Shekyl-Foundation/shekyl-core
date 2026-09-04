@@ -53,7 +53,7 @@ exit landed as two named actions (`unstake` posts the irreversible exit;
 completion fact), with the RESERVED→shipped reconciliation recorded in
 the OpenAPI census (a single overloaded verb was rejected for
 irreversible-step mis-selection; the sweep could not ride `drain`'s
-firewall-pinned active-persona shape). Codes `-29513..-29527`; the two
+firewall-pinned active-persona shape). Codes `-29513..-29528`; the two
 dispatch dispositions (`-29521` released / `-29522` held) are distinct
 because they demand opposite client behavior. The claim-era names `claim`
 and `get_stakes` are REJECTED, not pending (emission claims are

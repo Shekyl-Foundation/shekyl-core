@@ -161,8 +161,18 @@ pub(crate) fn select_for_drain(
     })
 }
 
-/// The outcome of the terminal-sweep select stage: the pass's inputs, the
-/// payment they fund after the fee, and the pool residue this pass leaves.
+/// The outcome of the terminal-sweep select stage: the pass's inputs and
+/// the payment they fund after the fee.
+///
+/// Deliberately NO remainder here: this stage receives the **mature ∧
+/// unreserved** candidate subset (the projection strips the rest before
+/// selection), so any residue summed at this stage would silently drop the
+/// immature class — a pass emptying the mature subset would then report
+/// completion while immature payouts still hold the slot (the review-1
+/// finding). The remainder is the orchestrator's, computed over the slot's
+/// UNfiltered record set ([`sweep_slot_remainder`]).
+///
+/// [`sweep_slot_remainder`]: super::drain_orchestrator
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SweepSelection {
     /// The selected outputs' global indices — the same largest-first,
@@ -174,11 +184,6 @@ pub(crate) struct SweepSelection {
     /// construction, so the assembly's change is zero and its drain-all arm
     /// (the T-DS-6 two-output principal split) is the shape that fires.
     pub(crate) payment: AtomicUnits,
-    /// What this pass leaves in the pool: every candidate **not** chosen —
-    /// immature outputs plus any mature overflow past the input cap. An
-    /// aggregate scalar (the same class `get_drain_balance` serves); `"0"`
-    /// is the completion fact the caller cannot infer from a payment amount.
-    pub(crate) remainder: AtomicUnits,
 }
 
 impl std::fmt::Debug for SweepSelection {
@@ -189,7 +194,6 @@ impl std::fmt::Debug for SweepSelection {
             .field("chosen", &"<redacted spend-set>")
             .field("input_total", &self.input_total)
             .field("payment", &self.payment)
-            .field("remainder", &self.remainder)
             .finish()
     }
 }
@@ -245,9 +249,10 @@ pub(crate) enum SweepSelectError {
 /// `PRINCIPAL_STAKE_LIFECYCLE.md`, recorded for countersign, not silently
 /// assumed.
 ///
-/// Unlike [`select_for_drain`] there is no `Insufficient` / cap refusal: the
-/// pass takes what it can and reports the rest as `remainder` — a capped or
-/// immature residue is "call again once it matures/confirms", not an error.
+/// Unlike [`select_for_drain`] there is no `Insufficient` / cap refusal:
+/// the pass takes what it can — a capped or immature residue is "call again
+/// once it matures/confirms" (reported through the orchestrator's
+/// remainder), not an error.
 pub(crate) fn select_for_sweep(
     candidates: &[DrainCandidate],
     fee: AtomicUnits,
@@ -280,19 +285,10 @@ pub(crate) fn select_for_sweep(
         .filter(|p| !p.is_zero())
         .ok_or(SweepSelectError::DustPool)?;
 
-    // Everything not chosen — mature overflow past the cap plus every
-    // immature candidate — is what the pool still holds after this pass.
-    let all_total = AtomicUnits::checked_sum(candidates.iter().map(|c| c.amount))
-        .ok_or(SweepSelectError::Overflow)?;
-    let remainder = all_total
-        .checked_sub(input_total)
-        .ok_or(SweepSelectError::Overflow)?;
-
     Ok(SweepSelection {
         chosen,
         input_total,
         payment,
-        remainder,
     })
 }
 
@@ -465,19 +461,19 @@ mod tests {
             AtomicUnits::from_raw(450),
             "the payment is exactly Σ selected − fee: zero change by construction"
         );
-        assert_eq!(
-            sel.remainder,
-            AtomicUnits::from_raw(400),
-            "the immature candidate is reported as residue, not dropped"
-        );
+        // The immature candidate's residue is NOT this stage's to report:
+        // production hands this function the pre-filtered mature subset, so
+        // a remainder summed here would drop the immature class (review-1);
+        // the orchestrator's sweep_slot_remainder owns the figure.
     }
 
     /// This bites against the sweep refusing (or panicking) at the input cap
-    /// instead of taking a full pass and reporting the mature overflow as
-    /// remainder — the multi-pass contract `collect_unstaked` documents. It
-    /// does NOT cover pass sequencing (the one-live-drain gate's).
+    /// instead of taking a full capped pass — the multi-pass contract
+    /// `collect_unstaked` documents (the overflow's residue is the
+    /// orchestrator remainder's to report). It does NOT cover pass
+    /// sequencing (the one-live-drain gate's).
     #[test]
-    fn sweep_caps_at_max_inputs_and_reports_the_overflow_as_remainder() {
+    fn sweep_caps_at_max_inputs_and_takes_a_full_pass() {
         // Nine mature candidates of 10 each: one pass spends the cap (80).
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
         let sel = select_for_sweep(
@@ -489,11 +485,6 @@ mod tests {
         assert_eq!(sel.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
-        assert_eq!(
-            sel.remainder,
-            AtomicUnits::from_raw(10),
-            "the ninth output stays in the pool and the reply must say so"
-        );
     }
 
     /// This bites against the dust arm collapsing into an empty selection or

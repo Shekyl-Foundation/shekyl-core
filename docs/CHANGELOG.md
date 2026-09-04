@@ -55,9 +55,10 @@
   rejected for irreversible-step mis-selection, and the sweep deliberately
   does not ride `drain`'s firewall-pinned active-persona shape — the
   RESERVED→shipped reconciliation is recorded in the OpenAPI census.
-  Codes `-29513..-29527`, with the released-vs-held dispatch dispositions
+  Codes `-29513..-29528`, with the released-vs-held dispatch dispositions
   on distinct codes (`-29521`/`-29522`) because they demand opposite
-  client behavior. Both staging `dead_code` allows retired
+  client behavior, and a non-loopback daemon named as operator
+  configuration (`-29528`) rather than an internal fault. Both staging `dead_code` allows retired
   (rule-21 conditions met); `PENDING_POST_VERSION` v9 stands (no
   persisted-wire change).
 

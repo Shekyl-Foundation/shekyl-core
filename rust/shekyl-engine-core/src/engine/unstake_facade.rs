@@ -679,12 +679,16 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
     match e {
         UnbondRequestError::NotStaker => UnstakeError::NotStaker,
         UnbondRequestError::NoBondRecord => UnstakeError::NoBondRecord,
-        UnbondRequestError::UnbondPending | UnbondRequestError::BondPostPending => {
-            // Both mean "this persona's exit lane is occupied"; resolution
-            // normally refuses first, but the seam's own admission is
-            // authoritative under races.
-            UnstakeError::ExitInProgress
-        }
+        UnbondRequestError::UnbondPending => UnstakeError::ExitInProgress,
+        // NOT ExitInProgress (review-1, Bugbot): a confirming bond post is
+        // not an exit, and the remedies point at different verbs — wait then
+        // UNSTAKE, never "wait then collect_unstaked" (a collect here answers
+        // NoExit). Resolution normally catches this state first, but the
+        // seam's admission is authoritative in the GC-bridge window — a
+        // confirmed match whose pending-post seal has not yet retired — and
+        // the seam's refusal must land on the same arm resolution would have
+        // picked.
+        UnbondRequestError::BondPostPending => UnstakeError::BondConfirming,
         UnbondRequestError::InputRaced => UnstakeError::InputRaced,
         UnbondRequestError::Stake(StakeEngineError::UnbondNotReady(not_ready)) => {
             UnstakeError::NotReady {
@@ -1036,6 +1040,25 @@ mod tests {
             resolve_collect_target(&ev).expect("resolvable"),
             CollectTarget::NoExit
         );
+    }
+
+    /// This bites against the seam's two pending refusals collapsing onto
+    /// one façade arm (review-1, Bugbot: `BondPostPending` mapped to
+    /// `ExitInProgress` sent a just-bonded wallet to `collect_unstaked`,
+    /// which answers `NoExit` — the GC-bridge window makes the seam arm
+    /// reachable past resolution). The two remedies point at different
+    /// verbs, so the arms must stay distinct. It does NOT cover the RPC
+    /// code mapping (error.rs's table test).
+    #[test]
+    fn the_two_pending_refusals_flatten_to_their_own_arms() {
+        assert!(matches!(
+            flatten_unstake_error(UnbondRequestError::UnbondPending),
+            UnstakeError::ExitInProgress
+        ));
+        assert!(matches!(
+            flatten_unstake_error(UnbondRequestError::BondPostPending),
+            UnstakeError::BondConfirming
+        ));
     }
 
     /// The façade's structural pins, `drain_facade`-tripwire style (comment

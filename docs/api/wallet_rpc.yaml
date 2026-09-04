@@ -273,10 +273,11 @@
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (-29500..-29506 and -29512 live on
 #                            `stake`; -29507..-29511 live on `drain`
-#                            (WI-RPC-5); -29513..-29522 live on `unstake`
-#                            and -29523..-29527 on `collect_unstaked`
-#                            (PR-C; -29513 is shared by the exit pair);
-#                            rest reserved — never reuse an allocated code)
+#                            (WI-RPC-5); -29513..-29522 and -29528 live on
+#                            `unstake` and -29523..-29527 on
+#                            `collect_unstaked` (PR-C; -29513 is shared by
+#                            the exit pair); rest reserved — never reuse an
+#                            allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
 #                            not pending work. A4 (2026-08-06) descoped
@@ -533,6 +534,7 @@ components:
         - -29525   # COLLECT_DUST_REMAINDER
         - -29526   # COLLECT_PASS_IN_FLIGHT
         - -29527   # COLLECT_SYNCING
+        - -29528   # UNSTAKE_LOCAL_NODE_REQUIRED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -938,6 +940,24 @@ components:
                                           reference can be anchored yet —
                                           transient; sync and retry (the
                                           -29510 sibling for the sweep)
+          -29528 UNSTAKE_LOCAL_NODE_REQUIRED unstake: the exit's record
+                                          fetch rides the wallet's OWN node
+                                          over loopback only (the local
+                                          transport posture; remote-daemon
+                                          support for the exit arrives with
+                                          transport-posture selection,
+                                          DQ-T2.3) — this server's daemon
+                                          address is not loopback.
+                                          Operator-actionable configuration
+                                          (repoint the wallet server at a
+                                          local node), deliberately NOT
+                                          -32603: every other verb works
+                                          over a remote daemon, so an
+                                          internal-category answer on
+                                          exactly this one would be
+                                          undiagnosable from the client
+                                          side. data.detail carries the
+                                          transport constructor's refusal
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over

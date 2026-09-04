@@ -232,6 +232,12 @@ pub enum WalletRpcErrorCode {
     /// Collect: no submittable curve-tree reference can be anchored yet —
     /// transient; sync and retry.
     CollectSyncing = -29527,
+    /// Unstake: the exit's record fetch rides the wallet's OWN node on
+    /// loopback only (the local transport posture; remote posture for the
+    /// exit lands with posture selection, DQ-T2.3) — this server's daemon
+    /// address is not loopback. Operator-actionable configuration, never an
+    /// internal fault.
+    UnstakeLocalNodeRequired = -29528,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -651,6 +657,18 @@ pub enum WalletRpcError {
         /// The anchoring helper's own (scalar-free) reason.
         detail: String,
     },
+    /// `unstake` (`-29528`): the exit lane needs the wallet's own loopback
+    /// node; this server points at a non-loopback daemon.
+    #[error(
+        "unstake needs this wallet's own node: the exit's record fetch runs \
+         over loopback only — point the wallet server's daemon address at a \
+         local node (remote-daemon support for the exit arrives with \
+         transport-posture selection)"
+    )]
+    UnstakeLocalNodeRequired {
+        /// The transport constructor's own refusal.
+        detail: String,
+    },
 
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
@@ -742,6 +760,7 @@ impl WalletRpcError {
                 WalletRpcErrorCode::CollectPassInFlight
             }
             Self::CollectSyncing { .. } => WalletRpcErrorCode::CollectSyncing,
+            Self::UnstakeLocalNodeRequired { .. } => WalletRpcErrorCode::UnstakeLocalNodeRequired,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -770,7 +789,8 @@ impl WalletRpcError {
             | Self::UnstakeNotFundable { detail }
             | Self::UnstakeRefusedReleased { detail }
             | Self::UnstakeFateUnknown { detail }
-            | Self::CollectSyncing { detail } => Some(json!({ "detail": detail })),
+            | Self::CollectSyncing { detail }
+            | Self::UnstakeLocalNodeRequired { detail } => Some(json!({ "detail": detail })),
             // The `-29511` pair shares one code with two remedies; the
             // structured discriminant is what lets automation branch
             // wait-vs-retry without parsing prose (the -29500 `data.detail`
@@ -1142,7 +1162,11 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "unstake dispatch fate unknown; seal held");
                 Self::UnstakeFateUnknown { detail }
             }
-            E::Transport { detail } => internal_detail("exit transport", detail),
+            // NOT -32603 (review-1, Copilot): a non-loopback daemon address
+            // is operator-fixable configuration — every other verb works over
+            // a remote daemon, so "internal error" on exactly this one is the
+            // hard-to-diagnose shape rule 82 forbids. Named code + remedy.
+            E::Transport { detail } => Self::UnstakeLocalNodeRequired { detail },
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -1748,6 +1772,15 @@ mod tests {
             assert_eq!(err.code().as_i32(), *code, "{err}");
             assert_ne!(err.code().as_i32(), -32603, "no fall-through: {err}");
         }
+        let transport: WalletRpcError = E::Transport {
+            detail: "not loopback".into(),
+        }
+        .into();
+        assert_eq!(
+            transport.code().as_i32(),
+            -29528,
+            "a non-loopback daemon is operator config, never -32603 (review-1)"
+        );
         // The shared-transient pair splits on data.cause, the -29511 shape.
         let syncing: WalletRpcError = E::Resyncing {
             detail: "lagging".into(),
