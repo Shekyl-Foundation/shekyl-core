@@ -548,6 +548,17 @@ where
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
         daemon_address: &str,
     ) -> Result<UnstakeOutcome, UnstakeError> {
+        // A wallet with no stake engine owns no exit. Answer the seam's
+        // `NotStaker` (-29513) here: a non-staker's empty snapshot resolves
+        // to `NothingStaked` (-29514), so without this the seam's `NotStaker`
+        // arm is façade-unreachable and one state gets two names. This is the
+        // same `self.stake.is_some()` predicate `submit_unbond`'s
+        // `stake_handle().ok_or(NotStaker)` rests on (lifted, not restated),
+        // and the drain façade rejects a non-staker before reading evidence
+        // for the same reason.
+        if !engine.read().await.has_stake_engine() {
+            return Err(UnstakeError::NotStaker);
+        }
         let evidence = read_exit_evidence(&engine)
             .await
             .map_err(|e| UnstakeError::Engine {
@@ -600,6 +611,13 @@ where
     pub async fn collect_unstaked(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
     ) -> Result<CollectOutcome, CollectUnstakedError> {
+        // Non-staker first, exactly as `unstake` and the drain façade do: an
+        // empty snapshot otherwise resolves to `NoExitToCollect` (-29523) and
+        // the seam's shared `NotStaker` (-29513) never lands. Same lifted
+        // `has_stake_engine` predicate `submit_drain`'s NotStaker rests on.
+        if !engine.read().await.has_stake_engine() {
+            return Err(CollectUnstakedError::NotStaker);
+        }
         let evidence =
             read_exit_evidence(&engine)
                 .await
@@ -630,6 +648,21 @@ where
                 context: "sweep witness",
                 detail: "the resolved persona lost its observed exit between reads".to_owned(),
             })?;
+
+        // A sweep already in flight is visible in the evidence we already
+        // loaded; surface `PassInFlight` (-29526) here rather than after a
+        // daemon fee round trip whose failure would mask it as -29102 and
+        // send the person to debug a healthy daemon. The sibling drain façade
+        // prechecks the seal before its fee I/O for exactly this reason; the
+        // seam still rechecks atomically under the write lock, so this is an
+        // advisory fast-answer, not the authoritative serialization.
+        if evidence
+            .pending
+            .as_ref()
+            .is_some_and(|b| b.has_live_drain_for(&p_id))
+        {
+            return Err(CollectUnstakedError::PassInFlight);
+        }
 
         // Canonical P-lane floor fee — the same single fee decision every
         // P-lane spend quotes; no caller override exists.

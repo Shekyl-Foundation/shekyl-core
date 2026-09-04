@@ -530,17 +530,22 @@ timing and funding footguns that matter for your privacy.
 
 ### Wallet support today
 
-Archival staking activation and status are driven through the wallet's staking
-surface, **not** through interactive `shekyl-cli` commands yet:
+Staking is split across surfaces today: the **exit verbs are live in
+interactive `shekyl-cli`** (PR-C), while activation and status are not yet:
 
-- **Wallet RPC** exposes staking activation (`stake`) and read-only status
-  (`get_staked_balance`, `get_staked_outputs`, `staking_info`). Reward-related
-  reads never conflate bonded principal with received rewards.
+- **Interactive `shekyl-cli`** carries the exit pair — `unstake` (posts the
+  permanent exit) and `collect_unstaked` (returns the released collateral to
+  your balance), each with the irreversibility confirmation the exit warrants.
+- **Wallet RPC** exposes staking activation (`stake`), the same exit verbs
+  (`unstake`, `collect_unstaked`), and read-only status (`get_staked_balance`,
+  `get_staked_outputs`, `staking_info`). Reward-related reads never conflate
+  bonded principal with received rewards.
 - **The desktop GUI** exposes staker activation directly.
 
-Interactive `shekyl-cli` staking commands are on the roadmap but **not yet
-available**; this section will document them when they land. Until then, the
-above is the honest status — use the GUI or the wallet-RPC methods to stake.
+Interactive `shekyl-cli` **activation** is still on the roadmap and **not yet
+available**; this section will document it when it lands. Until then, stake
+through the GUI or the wallet-RPC `stake` method — and use `shekyl-cli` or
+wallet RPC to exit.
 
 ### Privacy considerations
 

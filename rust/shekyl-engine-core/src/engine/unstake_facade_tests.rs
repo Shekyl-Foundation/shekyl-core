@@ -10,7 +10,9 @@
 //! on its own.
 
 use std::collections::BTreeMap;
+use std::sync::Arc as StdArc;
 
+use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_state::pending_post_block::{PendingUnbond, SealAdmission};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
 use shekyl_engine_state::pscan_state::{
@@ -18,6 +20,11 @@ use shekyl_engine_state::pscan_state::{
 };
 use shekyl_engine_state::{PendingBondPost, PendingPostState};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, SettlementEpoch};
+use tokio::sync::RwLock as TokioRwLock;
+
+use crate::engine::test_support::{dummy_daemon, fixed_seed};
+use crate::engine::{Credentials, EngineCreateParams, SoloSigner};
+use crate::StakeFacade;
 
 use super::*;
 
@@ -374,5 +381,92 @@ fn dust_remainder_names_the_split_floor_not_just_the_fee() {
     assert!(
         !msg.contains("smaller than the fee"),
         "fee+1 is dust and larger than the fee: {msg}"
+    );
+}
+
+// --- The NotStaker / NothingStaked discrimination (review-4) --------------
+//
+// `unstake`/`collect_unstaked` reject a wallet with no stake engine as
+// `NotStaker` (-29513) BEFORE reading exit evidence, matching the seam's own
+// `stake_handle().ok_or(NotStaker)`. Without the gate a non-staker's empty
+// snapshot resolves to `NothingStaked`/`NoExit` and the seam's documented
+// `NotStaker` arm is façade-unreachable — one state under two names. The pair
+// below pins both directions: no actor -> NotStaker; actor present with
+// nothing bonded -> the resolution's own verdict still lands, un-swallowed.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_staker_reads_not_staker_never_nothing_staked() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base_path = tmp.path().join("wallet");
+    let creds = Credentials::password_only(b"review-4 non-staker");
+    let seed = fixed_seed(1);
+    let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+    assert!(
+        !engine.has_stake_engine(),
+        "fixture: a fresh wallet has no stake engine"
+    );
+    let arc = StdArc::new(TokioRwLock::new(engine));
+
+    // The daemon address is never dialed — the gate returns before transport.
+    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
+        .await
+        .expect_err("a non-staker cannot unstake");
+    assert!(
+        matches!(err, UnstakeError::NotStaker),
+        "no stake engine is NotStaker (-29513), not NothingStaked: {err:?}"
+    );
+    let cerr = StakeFacade::collect_unstaked(arc)
+        .await
+        .expect_err("a non-staker has nothing to collect");
+    assert!(
+        matches!(cerr, CollectUnstakedError::NotStaker),
+        "no stake engine is NotStaker (-29513), not NoExitToCollect: {cerr:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base_path = tmp.path().join("wallet");
+    let creds = Credentials::password_only(b"review-4 idle staker");
+    let seed = fixed_seed(2);
+    let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+    let network = params.network;
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+    // A durable bond record makes the reopen spawn the actor (Model D), so
+    // `has_stake_engine()` is true; with no pscan/pending the resolution still
+    // concludes NothingStaked/NoExit. The gate must NOT swallow that as
+    // NotStaker — actor-present-and-idle and never-a-staker are two states.
+    engine
+        .persist_bond_record(PSlot::from_raw(3))
+        .expect("persist bond record");
+    engine.close(&creds).expect("close");
+    let opened = Engine::<SoloSigner>::open_full(
+        &base_path,
+        &creds,
+        network,
+        dummy_daemon(),
+        SafetyOverrides::none(),
+    )
+    .expect("staker reopen")
+    .into_wallet();
+    assert!(
+        opened.has_stake_engine(),
+        "fixture: a reopened staker spawns the actor"
+    );
+    let arc = StdArc::new(TokioRwLock::new(opened));
+
+    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
+        .await
+        .expect_err("nothing is bonded to exit");
+    assert!(
+        matches!(err, UnstakeError::NothingStaked),
+        "actor present, nothing bonded is NothingStaked, not NotStaker: {err:?}"
+    );
+    let cerr = StakeFacade::collect_unstaked(arc).await;
+    assert!(
+        matches!(cerr, Err(CollectUnstakedError::NoExitToCollect)),
+        "actor present, no exited pool is NoExitToCollect, not NotStaker: {cerr:?}"
     );
 }
