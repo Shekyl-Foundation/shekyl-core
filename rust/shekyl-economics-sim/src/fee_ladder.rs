@@ -814,6 +814,75 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
 }
 
 // ---------------------------------------------------------------------------
+// Fee signal bits (FL-C9 — minted post-registration at review round 5)
+// ---------------------------------------------------------------------------
+
+/// FL-C9: the information an observer recovers from `(fee, weight,
+/// inclusion height)` beyond weight alone, for a CONFORMING wallet,
+/// **conditioned on the registered §4.4 dwell measurements** (ceiling-`C_q`
+/// values hold ≥ 20 000 blocks in every registered scenario, so the
+/// stale-quote / height-window term is ≈ 0; under raw `C` it was the
+/// FL-C4a failure, measured there).
+///
+/// For a rung ladder the recovered signal is the rung choice: `H(rung)`
+/// expected bits per tx, and per-rung surprisal for the persistent-marker
+/// view. For the state-computed single rate the rate is a public function
+/// of chain state at the height, so the recovered signal is 0 bits by
+/// construction. The information-theoretic floor below 0 is confidential
+/// fees (commit the fee, prove `fee − floor ≥ 0`) — out of scope: an
+/// FCMP++ tx-format surface, recorded and not designed here.
+#[derive(Serialize)]
+pub struct FeeSignalBits {
+    pub traffic_model: &'static str,
+    /// Tier shares ×1000 (economy / standard / priority).
+    pub shares_milli: [u64; 3],
+    /// `H(rung)` — expected bits/tx a rung ladder leaks, ×1000. Identical
+    /// for the inherited 4-rung and proposed 3-rung ladders under
+    /// measured usage (`Fm` carries 0%); the 4th rung is latent surface,
+    /// not measured entropy.
+    pub ladder_bits_per_tx_milli: u64,
+    /// Per-rung surprisal ×1000 — the persistent-marker cost of paying
+    /// that rung once.
+    pub rung_surprisal_milli: [u64; 3],
+    /// The state-computed single rate leaks this many bits beyond
+    /// `(weight, height)`: 0 by construction.
+    pub single_rate_bits: u64,
+    /// Set-measure view of habitual-minority linkability (NOT additive
+    /// bits — rung choice is per-user-persistent, so successive txs are
+    /// correlated): each observed priority tx intersects the candidate
+    /// set with a subset of this measure ×1000 (under independence of
+    /// OTHER users' choices), so n observed txs confine a habitual
+    /// priority user to a `share^n`-measure subset of traffic.
+    pub priority_set_measure_milli: u64,
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn fee_signal_bits(traffic_model: &'static str, shares_milli: [u64; 3]) -> FeeSignalBits {
+    let mut h = 0.0f64;
+    let mut surprisal = [0u64; 3];
+    for (i, &m) in shares_milli.iter().enumerate() {
+        let p = m as f64 / 1000.0;
+        if p > 0.0 {
+            let s_bits = -p.log2();
+            h += p * s_bits;
+            surprisal[i] = (s_bits * 1000.0).round() as u64;
+        }
+    }
+    FeeSignalBits {
+        traffic_model,
+        shares_milli,
+        ladder_bits_per_tx_milli: (h * 1000.0).round() as u64,
+        rung_surprisal_milli: surprisal,
+        single_rate_bits: 0,
+        priority_set_measure_milli: shares_milli[2],
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Driver (renders; the binary performs the writes)
 // ---------------------------------------------------------------------------
 
@@ -827,6 +896,9 @@ pub struct FeeLadderReport {
     dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
     degenerate: DegeneratePins,
+    /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
+    /// round 5, after measurement began).
+    fee_signal_bits: Vec<FeeSignalBits>,
 }
 
 /// Run the FL instrument and build the report.
@@ -961,6 +1033,14 @@ pub fn report() -> FeeLadderReport {
 
     let degenerate = degenerate_pins(&params);
 
+    // FL-C9 under the registered traffic model and its §1.8 sensitivity
+    // variants.
+    let fee_signal = vec![
+        fee_signal_bits("registered 50/40/10", [500, 400, 100]),
+        fee_signal_bits("sensitivity 70/25/5", [700, 250, 50]),
+        fee_signal_bits("sensitivity 33/33/33", [334, 333, 333]),
+    ];
+
     FeeLadderReport {
         c_surface,
         c_reachable_min: c_min,
@@ -970,6 +1050,7 @@ pub fn report() -> FeeLadderReport {
         dwell,
         feedback,
         degenerate,
+        fee_signal_bits: fee_signal,
     }
 }
 
@@ -1021,6 +1102,17 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             fb.v_avg_tail_max,
             fb.fee_tail_min,
             fb.fee_tail_max
+        );
+    }
+    for fs in &r.fee_signal_bits {
+        let _ = writeln!(
+            out,
+            "fee-ladder: c9 [{}] ladder_bits/tx={} surprisal={:?} single_rate_bits={} priority_set_measure={}",
+            fs.traffic_model,
+            fs.ladder_bits_per_tx_milli,
+            fs.rung_surprisal_milli,
+            fs.single_rate_bits,
+            fs.priority_set_measure_milli
         );
     }
     let _ = writeln!(

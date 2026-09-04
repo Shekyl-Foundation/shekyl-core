@@ -254,6 +254,20 @@ the tables in §4 come from the instrument.
 | dwell < threshold after quantization remedy | surface in §8 |
 | any rung usage < 5% | delete or rule emergency-lane, own §8 row |
 
+### §1.11 FL-C9 — fee signal bits (POST-REGISTRATION: minted at maintainer direction, review round 5, after measurement began)
+
+Birth stamp carried per the ceil-quantization precedent — this criterion
+was **not** in the rule-11 register; it exists because review round 5
+found the register's privacy criteria stopped one rung early. Definition:
+**the information an observer recovers from `(fee, weight, inclusion
+height)` beyond weight alone, for a conforming wallet, conditioned on the
+registered §4.4 dwell measurements** (the stale-quote/height-window term
+is ≈ 0 under ceiling-`C_q`, whose values hold ≥ 20 000 blocks; under raw
+`C` it was the FL-C4a failure). Under FCMP++ the per-tx plaintext is
+about five fields and the fee is the only one the user *chooses*; since
+weight is public and fee = rate × weight, the rate — and with it the rung
+— is recovered exactly. Measured in §4.7; consumed by FL-R17.
+
 ---
 
 ## §2 Verification findings (pre-model; each anchored)
@@ -753,6 +767,38 @@ states the grid may not represent.
   decision row (FL-R12′), because a false monetary-policy promise and a
   missing governance mechanism need different owners and different urgency.
 
+### §4.7 Fee signal bits (FL-C9; measured at review round 5)
+
+Instrument section `fee_signal_bits` (analytic, reproducible from the
+registered traffic model):
+
+| Traffic model | rung-ladder bits/tx | per-rung surprisal (eco/std/pri) | single state-computed rate | priority set-measure per tx |
+| --- | --- | --- | --- | --- |
+| registered 50/40/10 | **1.361** | 1.00 / 1.32 / **3.32** | **0** | ×0.10 |
+| sensitivity 70/25/5 | 1.076 | 0.51 / 2.00 / **4.32** | 0 | ×0.05 |
+| sensitivity 33/33/33 | 1.585 | ~1.59 each | 0 | ×0.33 |
+
+Readings:
+
+- The inherited 4-rung and proposed 3-rung ladders measure **identically**
+  (`Fm` carries 0% usage — the 4th rung is latent surface, not entropy).
+  Both leak ~1.36 bits per transaction under the registered model.
+- The per-rung surprisal is the **persistent-marker** cost: rung choice is
+  per-user-persistent, so successive transactions are correlated — the
+  honest linkability statement is the *set-measure* view, not additive
+  bits: each observed priority transaction intersects the candidate set
+  with a 0.10-measure subset of traffic (under independence of *other*
+  users' choices), so a habitual priority user's n observed transactions
+  confine them to a `0.1ⁿ`-measure subset. A habitual priority payer is a
+  linkable pseudonym in fee-space.
+- The **state-computed single rate leaks 0 bits** beyond
+  `(weight, height)` by construction: the rate is a public function of
+  chain state at the height, identical for every conforming wallet.
+- The information-theoretic floor below 0 is **confidential fees**
+  (commit the fee, prove `fee − floor ≥ 0`) — out of scope: an FCMP++
+  transaction-format surface, recorded here as the endpoint and not
+  designed.
+
 ## §5 The rung ruling (proposed, unsigned) and the anonymity analysis
 
 ### §5.1 Criteria disposition
@@ -769,6 +815,7 @@ states the grid may not represent.
 | FL-C6 relay floor | **clamp** (option i), floor re-derivation deferred to CEN-M3's round | §5.4 |
 | FL-C7 feedback | pass, no smoothing needed beyond `C_q` | §4.5 |
 | FL-C8 degenerates | pinned; exhaustion-era governance deferred FL-D1 | §4.6 |
+| FL-C9 fee signal bits (post-registration, round 5) | measured: rung ladders 1.36 bits/tx + 3.32-bit priority marker; single state-computed rate 0 — **rung-count ruling REOPENED as FL-R17** | §4.7, W7-revised |
 
 ### §5.2 The proposed ladder
 
@@ -813,6 +860,12 @@ conclusion is now derived rather than inherited.
 The economics arithmetic (C2+C3, §4.3) wants 4–5 rungs at large medians;
 the anonymity criterion supports 3 and zeroes one existing rung. The two
 disagree; per §1 the resolution is argued, not smoothed:
+
+*(Superseded-in-part at review round 5: the resolution below is the
+historical record of what the round believed at round 2 and why. The same
+principle it applies — privacy is lexicographically prior — applied one
+rung further is FL-R17's question, argued at W7-revised with §4.7's
+measurements.)*
 
 **Resolution: privacy wins; 3 rungs; the C3 uniform-spacing premise is
 named as misfitting a two-family ladder.**
@@ -879,7 +932,8 @@ future parameter change pushes reachable `C` below 0.5.
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | Corrected estimate at least reports the truth (zero); the governance gap itself remains | **Open hazard, deferred FL-D1** — post-mining-era block-size governance has no economic mechanism; reopen criteria §9 |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
-| W7 | Fee-tier fingerprint adversary vs the **single-tier** alternative (review round 2, maintainer F-6) | One canonical rate + coarse quantization: every conforming tx pays the identical fee value — the tier signal vanishes entirely | (n/a — option, not attack) | Privacy upside is real and larger here than in Monero: with FCMP++ removing ring heuristics, fee tier is a proportionally bigger share of the remaining public metadata, and the tier count is a free variable while the ladder is being re-derived anyway | Dispositioned through registered FL-C2, not rubber-stamped: a single price cannot do both registered jobs — the relay/admission floor and full-expansion (`2R/M`) pricing differ by ~50×–2500× across medians, so one tier either prices everyone at the cap (users pay ~200× at baseline) or abandons expansion pricing (the block-scaling mechanism the rungs exist for goes unfunded under congestion). 3 tiers is the registered minimum that funds expansion at all; if a future round relaxes FL-C2(b) (e.g. expansion priced only via `Custom`), single-tier reopens — noted in FL-D3's neighborhood, criterion: a round proposing to retire daemon-served expansion pricing |
+| W7 | Fee-tier fingerprint vs **single-tier** — **REVISED at review round 5: the round-2 disposition below the strike evaluated a STATIC single rate and is superseded.** ~~A single price cannot do both registered jobs (floor vs expansion differ 50×–2500×)~~ — that argument assumed the rate is a constant. The round's own machinery (state-computed, pow2-quantized, hysteresis-guarded) yields **one rate that is itself a function of congestion state**: the admission floor when quiet, rising toward `2R/M` as the median expands — *illustrative shape only; the coupling signal (median ratio, backlog depth, filled fraction) is deliberately undesigned here and gets its own pre-registered criteria in the FL-R17 round*. Every conforming wallet at a height pays the identical value; the 200×-at-baseline objection evaporates because the rate is at the expansion price only when there is expansion to price | Observer reads the public fee field | §4.7: rung ladders leak **1.36 bits/tx** (registered model) with the priority marker at **3.32 bits** and a `×0.1ⁿ` set-measure for habitual payers; the single rate leaks **0 bits** beyond `(weight, height)` | **What single-rate gives up, named honestly: selectable urgency** — a user cannot buy ahead of the queue during congestion; low-value users defer rather than choose economy (UX cost, no privacy cost; rate bounded above by `2R/M` since nothing beyond it profits a miner). Under the mission hierarchy: selectable priority is a *feature*, expansion funding is security-adjacent, the anonymity set is *privacy* | The trade is FL-R17's decision, not this row's. Named for the FL-R17 round: (i) the coupling signal is a *manipulable* public — median stuffing at floor cost moves everyone's rate (W4's socialized-cost analysis applies: pow2 plateaus absorb small pushes, nobody is individually marked); (ii) the security-budget effect under elastic demand is **unmeasured** (deferral vs higher-uniform-rate — needs the median-dynamics instrument); (iii) `Custom` survives only as a floor-to-cap corridor and the case for deleting it entirely strengthens |
+| W8 | Miner fee-rank ordering leak (minted at review round 5; **exists TODAY under any multi-rate ladder, independent of FL-R17's outcome**) | Fee-sorted inclusion order: block position reveals fee rank, so miners publish a partial ordering of user urgency every block | Standing finding against the current and proposed ladders alike | Under uniform rates the signal vanishes and deterministic/hash-ordered inclusion becomes cheap to *require* — but that is a relay/consensus-adjacent change (rule-71 surface), not a freebie | Disposition-pointer: rides the FL-R17 round |
 
 ## §7 What changes downstream (proposals with triggers — RK-5 lane untouched)
 
@@ -904,7 +958,7 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R1 | The ladder derives from the validation-path miner economics (`C = (1−σ)·M_r/(1−b)`), not the 5-arg estimate reward | adopt | ⚖ (F14b-adjacent) |
 | FL-R2 | Rung values are state-computed daemon-side each estimate | adopt | |
 | FL-R3 | `C` enters only pow2-quantized (`C_q`), hysteresis-guarded | adopt | |
-| FL-R4 | Rung count = 3; `Fm` deleted; FL-C3-vs-C4b conflict resolved for privacy per §5.3 | adopt | |
+| FL-R4 | Rung count = 3; `Fm` deleted; FL-C3-vs-C4b conflict resolved for privacy per §5.3 | ~~adopt~~ **CONTESTED at review round 5 — reopened as FL-R17** (`Fm` deletion stands under every candidate) | reopened round 5 |
 | FL-R5 | Top rung = `C_q·2R/Mfw` unconditional (surge discount removed) | adopt | |
 | FL-R6 | `fees[0]` clamped to the unbuffered relay floor (`blockchain.h:682` seam) | adopt | ⚖ CEN-M3 |
 | FL-R7 | Wire shape (vector 3), `CORE_RPC_VERSION`, both client mappings | adopt **post-RK-5**; bridge = duplicate `fees[2]=fees[1]` | |
@@ -920,6 +974,7 @@ sequencing decision; nothing in this table is ruled by this document.
 | FL-R16a | **Past-asymptote error arm (BUILD-BLOCKING):** `base_block_reward`'s `AlreadyGeneratedExceedsSupply` (`emission.rs:61`) is unreachable-by-design today and load-bearing wrong under the accepted direction. Consequences if the ruled accumulator ships with the arm intact, both at exhaustion ≈ yr 73: (i) the 5-arg estimate path (`blockchain.cpp:4541-4544`) errors → falls to the 10 000-SKL `BLOCK_REWARD_OVERESTIMATE` placeholder → `fee_policy.rs` refuses that snapshot **by design** → **no wallet can quote a fee**; (ii) `get_current_fee_per_byte` (`:4448-4453`) returns its failure-arm 0 → `check_fee` rejects everything → **the mempool refuses every transaction** (`kept_by_block` excepted). Removal ships with the FL-R12′ implementation | **decision folded into the FL-R12′ build** | minted at review round 4 |
 | FL-R16b | **`ActivityMetric::new` cap guard (`activity.rs:124`): non-blocking API cleanup.** False under the accepted direction, but fixture-test-only today — remove with the rename sweep, not on the build's critical path | **record** | minted at review round 4 |
 | FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** | **record — binds the implementing PR** | minted at review round 4 |
+| FL-R17 | **Rung count REOPENED (review round 5): the C9-vs-C2(b) trade, decided under the mission hierarchy.** Candidates: (a) the proposed 3-rung ladder (§5.2) — leaks 1.36 bits/tx + the 3.32-bit priority marker (§4.7); (b) the **state-computed single rate** — 0 bits, both registered jobs done state-wise, at the cost of selectable urgency (a *feature*). FL-C2(b)'s cost under (b) is restated honestly: not "expansion unfunded" (the rate reaches `2R/M` under sustained congestion) but *no user can individually buy full expansion now*. **Recommendation, labeled as such: (b)** — the hierarchy resolves feature < privacy, and §5.3's own principle applied one rung further; (a) survives only if the FL-R17 round's instrument finds a concrete security failure in the rate-follows-demand loop. **Empirical gate before either signs:** the median-dynamics instrument (demand → block filling → median evolution → rate), measuring loop stability *and* the security-budget effect under elastic demand — both currently unmeasured; the coupling signal gets its own pre-registered criteria. If (a) still wins, it wins having paid for rungs two and three in anonymity set on the record | **decision required — the maintainer signs; recommendation (b)** | minted at review round 5 |
 
 Signature line (empty by design): ________________
 

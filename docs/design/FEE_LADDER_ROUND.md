@@ -114,6 +114,37 @@ and a sim→engine-core dependency is the wrong direction; the daemon-side
 Rust rounding gets a real owner in the §7 implementation, which is where
 one home for all three copies is decided).
 
+## Review round 5 (maintainer, 2026-09-03): the single-tier re-argument
+
+The record dispositioned the wrong single-tier design: W7 assumed a
+*static* rate, and the round's own machinery yields a state-computed
+single rate that does both registered jobs. The same principle that
+deleted `Fm` — privacy is lexicographically prior — stopped one rung
+early. Dispositions:
+
+- **FL-C9 minted** (post-registration, birth-stamped): fee signal bits —
+  what an observer recovers from `(fee, weight, height)` beyond weight,
+  conditioned on the registered dwell measurements. Measured on the
+  instrument (§4.7): rung ladders 1.361 bits/tx under the registered
+  traffic model (4-rung ≡ 3-rung — `Fm` is 0%), priority marker 3.32
+  bits with a ×0.1ⁿ set-measure for habitual payers; the state-computed
+  single rate **0 bits** by construction; confidential fees recorded as
+  the theoretical floor (FCMP++ surface, out of scope).
+- **W7 revised** (round-2 text struck, kept as record) + **W8 minted**
+  (miner fee-rank ordering leak — exists today under any multi-rate
+  ladder; uniform rates make hash-ordered inclusion cheap to require,
+  flagged rule-71-adjacent).
+- **FL-R4 contested → FL-R17**: rung count reopened as the explicit
+  C9-vs-C2(b) trade, C2(b)'s cost restated as selectable urgency (a
+  feature), recommendation (b) single-rate *labeled as a
+  recommendation*; empirical gate = the median-dynamics instrument
+  (loop stability + security budget under elastic demand, both
+  unmeasured; coupling signal deliberately undesigned pending its own
+  criteria).
+- **Independence note:** FL-R17 does not gate the FL-R12′ F-1 amendment
+  — the amendment concerns the floor's composition, FL-R17 concerns how
+  many rates sit above it. Two open signatures, separate decisions.
+
 ## FL-R12′ (2026-09-03; provenance corrected at review round 4)
 
 **Direction: plain perpetual tail — accepted by the maintainer
@@ -202,11 +233,15 @@ directly. Dispositions:
    drafted in the row and the oracle matches it; the maintainer signs
    the amended row or corrects the draft. Build authorization is **NO**
    until then (review round 4).
-2. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
-   since the ruling).
-3. **PR** — branch is pushed for review (review round 3); **PR remains
+2. **FL-R17** — rung count reopened (review round 5): 3-rung vs
+   state-computed single rate, decided on §4.7's measurements;
+   recommendation (b) recorded; empirical gate = median-dynamics
+   instrument. Independent of the F-1 amendment.
+3. **FL-R13 / FL-D5** — fee-floor basis calibration round (non-blocking
+   pending the amended FL-R12′ signature).
+4. **PR** — branch is pushed for review (review round 3); **PR remains
    unopened** per the maintainer's instruction.
-4. Census-R2: **deferred per review-round-2 ruling** — resumes on
+5. Census-R2: **deferred per review-round-2 ruling** — resumes on
    FL-R12′ signature (red-test conjunct already discharged). The deferral
    + resume criteria were also routed by the steering lane to the
    consensus lane (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md`
