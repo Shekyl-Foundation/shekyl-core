@@ -346,8 +346,21 @@ census's actual charge under cover of a signature. The shape is examined
 here instead.
 
 **Derivation of the form, for Shekyl.** Write the curve as paid-fraction
-`P(x) = 1 − x²` over `x = (w−m)/m ∈ [0,1]` (algebraically identical to
-`(2m−w)·w/m²`). Three boundary conditions, each independently motivated:
+`P(x)` over the expansion ratio `x = (w−m)/m ∈ [0,1]`. **The derived curve
+and the shipped formula are identical, not merely compatible** —
+substituting `w = m(1+x)` into the inherited form:
+
+```text
+(2m − w)·w/m² = (2m − m(1+x)) · m(1+x) / m² = m(1−x) · m(1+x) / m² = 1 − x²
+```
+
+This identity is load-bearing twice: it is the bridge from the derivation
+to the code it ratifies (the curve derived in `x`-space *is* the formula
+at `emission.rs:150–176`, checkable by the substitution above), and it
+makes the verdict **"examined, value unchanged"** — no consensus change,
+no migration, no rule-42 trigger; the strongest outcome a
+`pinned-not-re-derived` row can reach. Three boundary conditions on
+`P(x) = 1 − x²`, each independently motivated:
 
 1. **`P(0) = 1`** — a block at the median pays nothing: the zone/median is
    the *guaranteed* capacity (Q1), so the penalty must vanish there or the
