@@ -619,6 +619,20 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         "print_connections" => print_connections(&source),
         "print_net_stats" => print_net_stats(&source, unix_now()),
         "sync_info" => sync_info(&source),
+        // RK-5b. The C++ parser has already validated and normalized these
+        // arguments (`command_parser_executor.cpp`), and the executor
+        // forwards them as strings — so a value that does not parse here is
+        // the bridge disagreeing with itself, not an operator typo, and it
+        // refuses rather than defaulting.
+        "print_blockchain_info" => {
+            let (Some(start), Some(end)) = (
+                args.get(1).and_then(|a| a.parse::<i64>().ok()),
+                args.get(2).and_then(|a| a.parse::<u64>().ok()),
+            ) else {
+                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
+            };
+            print_blockchain_info(&source, start, end)
+        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -1103,6 +1117,180 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     ))
 }
 
+// ── RK-5b: the header console commands ──────────────────────────────────────
+//
+// Four commands, and every one of them crosses to a route this slice does not
+// serve. All four read `/get_info`, which is RK-5c's; `alt_chain_info` also
+// reads `get_alternate_chains` and `show_status` also reads `/mining_status`,
+// which belong to RK-8 and RK-7. Every one of those three names is still in
+// the C++ dispatch tables (`core_rpc_ffi.cpp:174`, `:180`, `:284`) — §2.1.1's
+// condition — and the tests at the bottom of this file drive all four
+// commands on their remote arm, which is the other half of it.
+//
+// The slice plan said "one bridged `/get_info` leg per crosser", and two of
+// the four carry a second leg. Recorded rather than quietly absorbed: a
+// bridged leg is a dated liability, and the count is what says how much comes
+// home when RK-7 and RK-8 land.
+
+/// The `/get_info` reply, as much of it as the four commands above read.
+///
+/// **A bridged leg, on purpose** (§2.1.1). One struct rather than four,
+/// because RK-5c changes this reply and one struct means one place to fix and
+/// four commands that go red together rather than one that goes red and three
+/// that go quiet.
+///
+/// **No field carries `#[serde(default)]`, and RK-5c is the reason.** Route
+/// deletion is caught by the `ok_or_else` in [`fetch_get_info`]; a *renamed
+/// or removed field* is the quiet failure, and a default would turn it into a
+/// confident zero — `show_status` reporting height 0 on a synced daemon. The
+/// failure this slice must hand RK-5c is a deserialization error naming the
+/// field that moved. Every field below is `KV_SERIALIZE` (not `_OPT`) in
+/// `COMMAND_RPC_GET_INFO::response_t`, so absence can only mean the contract
+/// moved. Unknown fields are ignored on purpose — RK-5c *adding* a field is
+/// not a break, and `/get_info` carries about thirty this console never reads.
+///
+/// It holds exactly the fields that have a reader, and gains one when a
+/// command that reads it lands: a field with no reader is a claim about the
+/// reply that nothing checks, and it would make the "four go red together"
+/// property above weaker than it looks.
+#[derive(serde::Deserialize)]
+struct GetInfoReplyProvisional {
+    status: shekyl_rpc_types::RpcStatus,
+    height: u64,
+}
+
+/// Fetch `/get_info` over whichever arm this console is running on.
+fn fetch_get_info(src: &Source) -> Result<GetInfoReplyProvisional, String> {
+    let reply: GetInfoReplyProvisional = match src {
+        Source::Live(core) => {
+            let raw = core
+                .json_endpoint("/get_info", "{}")
+                .ok_or_else(|| "no reply from /get_info".to_owned())?;
+            serde_json::from_str(&raw)
+        }
+        Source::Remote { address, timeout } => {
+            let raw = ctl_client::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
+                .map_err(|(_, reason)| reason)?;
+            serde_json::from_slice(&raw)
+        }
+    }
+    .map_err(|e| format!("malformed get_info reply: {e}"))?;
+    if reply.status.is_ok() {
+        Ok(reply)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// Fetch `get_block_headers_range` — native here, over `/json_rpc` remotely.
+fn fetch_block_headers_range(
+    src: &Source,
+    start_height: u64,
+    end_height: u64,
+) -> Result<Vec<shekyl_rpc_types::BlockHeader>, String> {
+    let request = shekyl_rpc_types::GetBlockHeadersRangeRequest {
+        start_height,
+        end_height,
+        fill_pow_hash: false,
+    };
+    let reply = match src {
+        Source::Live(core) => {
+            let facts = FfiChainFacts::new(core.clone());
+            // In-process the console is the operator's own terminal, so the
+            // restricted rule does not apply — as `print_block` says.
+            crate::methods::get_block_headers_range(&facts, &request, false)
+                .map_err(|e| format!("{e:?}"))?
+        }
+        Source::Remote { address, timeout } => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "get_block_headers_range",
+                "params": request,
+            }))
+            .map_err(|e| format!("cannot encode the request: {e}"))?;
+            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
+                .map_err(|(_, reason)| reason)?;
+            json_rpc_result::<shekyl_rpc_types::GetBlockHeadersRangeResponse>(
+                &raw,
+                "get_block_headers_range",
+            )?
+        }
+    };
+    if reply.status.is_ok() {
+        Ok(reply.headers)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// `print_blockchain_info <start> [end]`, and `print_blockchain_info -<n>`.
+///
+/// The negative form is why this command reads `/get_info`: the C++ parser
+/// forwards `(-n, n)` and the executor resolves the window against the tip.
+/// That resolution is the only arithmetic here and it is the arithmetic that
+/// can be asked to describe a chain shorter than the window, which the C++
+/// refused by name — kept, because "start offset is larger than blockchain
+/// height" tells an operator what to type next and an empty listing does not.
+#[deny(clippy::arithmetic_side_effects)]
+fn print_blockchain_info(src: &Source, start: i64, end: u64) -> Result<String, String> {
+    let (start_height, end_height) = if start < 0 {
+        let info = fetch_get_info(src)?;
+        // `-start` as a magnitude, taken through `unsigned_abs` so
+        // `i64::MIN` has no special case.
+        let back = start.unsigned_abs();
+        if back >= info.height {
+            return Err("start offset is larger than blockchain height".to_owned());
+        }
+        let first = info.height.saturating_sub(back);
+        // The C++ wrote `start + end - 1` with `end == -start`, i.e. the
+        // window ends where the tip is. Saturating rather than wrapping: a
+        // zero-length window would otherwise underflow past the tip.
+        (first, first.saturating_add(end).saturating_sub(1))
+    } else {
+        // Non-negative: both indices are literal, and `end` defaults to 0 —
+        // so `print_blockchain_info 5` asks for [5, 0] and is refused by the
+        // method, exactly as the C++ was. RK-D8: the shape is preserved
+        // because changing it is a separate decision from moving it.
+        (start.unsigned_abs(), end)
+    };
+    let headers = fetch_block_headers_range(src, start_height, end_height)?;
+    Ok(headers
+        .iter()
+        .map(render_blockchain_info_entry)
+        .collect::<Vec<_>>()
+        .join("\n\n"))
+}
+
+/// One header as `print_blockchain_info` listed it: four lines, and a blank
+/// line between entries supplied by the join above.
+fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
+    [
+        format!(
+            "height: {}, timestamp: {} ({}), size: {}, weight: {} (long term {}), transactions: {}",
+            h.height,
+            h.timestamp,
+            human_readable_timestamp(h.timestamp),
+            h.block_size,
+            h.block_weight,
+            h.long_term_weight,
+            h.num_txes
+        ),
+        format!(
+            "major version: {}, minor version: {}",
+            h.major_version, h.minor_version
+        ),
+        format!("block id: {}, previous block id: {}", h.hash, h.prev_hash),
+        format!(
+            "difficulty: {}, nonce {}, reward {}",
+            wide_difficulty_decimal(&h.wide_difficulty),
+            h.nonce,
+            AtomicUnits::from_raw(h.reward).to_skl_string()
+        ),
+    ]
+    .join("\n")
+}
+
 /// `sync_info`.
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
@@ -1318,14 +1506,36 @@ mod tests {
     /// An unrouted request is answered `404` with an empty body, which is
     /// what a daemon that no longer serves the route would do.
     fn route_server(routes: Vec<(&'static str, String)>) -> String {
+        route_server_recording(routes).0
+    }
+
+    /// [`route_server`], plus the log of what was asked of it.
+    ///
+    /// A canned reply is blind to the request that fetched it, so a test that
+    /// only reads the output cannot tell a command that asked for the right
+    /// window from one that asked for the wrong window and was answered
+    /// anyway. The log makes the *request* assertable, which for the
+    /// window-resolving commands is the whole behaviour under test.
+    #[expect(clippy::type_complexity, reason = "a test log of (route, body)")]
+    fn route_server_recording(
+        routes: Vec<(&'static str, String)>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
+        let recorder = std::sync::Arc::clone(&log);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { return };
                 let Some((path, body)) = read_request(&mut s) else {
                     continue;
                 };
+                if let Ok(mut log) = recorder.lock() {
+                    log.push((path.clone(), body.clone()));
+                }
                 // `/json_rpc` carries the name in the body; every other route
                 // *is* the name.
                 let key = if path == "/json_rpc" {
@@ -1355,7 +1565,7 @@ mod tests {
                 }
             }
         });
-        address
+        (address, log)
     }
 
     /// Read one HTTP request, returning its path and body.
@@ -2255,6 +2465,176 @@ mod tests {
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
         assert!(out.contains("malformed get_limit reply"), "{out}");
         assert!(out.contains("limit_down"), "{out}");
+    }
+
+    fn info_reply(height: u64) -> String {
+        serde_json::json!({
+            "status": "OK",
+            "height": height,
+            "target_height": 0,
+            "target": 120,
+            "wide_difficulty": "0x1e240",
+            "wide_cumulative_difficulty": "0x2dc6c0",
+            "testnet": false,
+            "stagenet": false,
+            "start_time": 1_700_000_000u64,
+            "outgoing_connections_count": 8,
+            "incoming_connections_count": 3,
+            // A field the console does not read, present because the daemon
+            // sends about thirty of them: an unknown field must be ignored,
+            // since RK-5c *adding* one is not a break.
+            "tx_pool_size": 4
+        })
+        .to_string()
+    }
+
+    fn header_at(height: u64) -> shekyl_rpc_types::BlockHeader {
+        shekyl_rpc_types::BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 1_600_000_000u64.saturating_add(height),
+            prev_hash: HashHex::ZERO,
+            nonce: 42,
+            orphan_status: false,
+            height,
+            depth: 0,
+            hash: HashHex::from_bytes([u8::try_from(height % 256).unwrap(); 32]),
+            difficulty: 1000,
+            wide_difficulty: "0x3e8".to_owned(),
+            difficulty_top64: 0,
+            cumulative_difficulty: 1000,
+            wide_cumulative_difficulty: "0x3e8".to_owned(),
+            cumulative_difficulty_top64: 0,
+            reward: 600_000_000_000,
+            block_size: 100,
+            block_weight: 100,
+            num_txes: 1,
+            pow_hash: None,
+            long_term_weight: 100,
+            miner_tx_hash: HashHex::ZERO,
+            curve_tree_root: HashHex::ZERO,
+            attestation_root: HashHex::ZERO,
+        }
+    }
+
+    fn headers_range_reply(heights: &[u64]) -> String {
+        typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
+                status: RpcStatus::ok(),
+                headers: heights.iter().copied().map(header_at).collect(),
+            },
+        }))
+    }
+
+    /// `print_blockchain_info 2 3` asks for exactly that window and lists it.
+    #[test]
+    fn blockchain_info_lists_the_window_it_was_given() {
+        let address = route_server(vec![(
+            "json_rpc:get_block_headers_range",
+            headers_range_reply(&[2, 3]),
+        )]);
+        let (code, out) = run(&["print_blockchain_info", "2", "3"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("height: 2, timestamp: 1600000002"), "{out}");
+        assert!(out.contains("height: 3, timestamp: 1600000003"), "{out}");
+        assert!(out.contains("major version: 1, minor version: 0"), "{out}");
+        assert!(
+            out.contains("difficulty: 1000, nonce 42, reward 600.000000000"),
+            "{out}"
+        );
+        // Entries are separated by a blank line, as the C++ listed them.
+        assert!(out.contains("\n\nheight: 3"), "{out}");
+    }
+
+    /// The positive form does not read `/get_info` at all.
+    ///
+    /// Asserted from the log rather than inferred from a passing run: the
+    /// route server has no `/get_info` row, so a leg that fired would 404 and
+    /// fail — but only for as long as nobody adds that row to this fixture.
+    #[test]
+    fn a_non_negative_start_needs_no_tip_read() {
+        let (address, log) = route_server_recording(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_block_headers_range",
+                headers_range_reply(&[2, 3]),
+            ),
+        ]);
+        let (code, out) = run(&["print_blockchain_info", "2", "3"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        let asked = log.lock().unwrap();
+        assert!(
+            asked.iter().all(|(path, _)| path != "/get_info"),
+            "the literal form must not spend a bridged leg: {asked:?}"
+        );
+        let (_, body) = &asked[0];
+        let params: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(params["params"]["start_height"], 2);
+        assert_eq!(params["params"]["end_height"], 3);
+    }
+
+    /// The negative form resolves its window against the tip, which is the
+    /// only reason this command reads `/get_info`.
+    ///
+    /// Height 100 with `-3` asks for the last three blocks: 97, 98, 99. The
+    /// **request** is what this pins, read out of the server's log — a canned
+    /// reply arrives whatever window was asked for, so asserting only on the
+    /// output would pass a command that resolved the window wrongly.
+    #[test]
+    fn a_negative_start_counts_back_from_the_tip() {
+        let (address, log) = route_server_recording(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_block_headers_range",
+                headers_range_reply(&[97, 98, 99]),
+            ),
+        ]);
+        let (code, out) = run(&["print_blockchain_info", "-3", "3"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        assert!(out.contains("height: 97"), "{out}");
+        assert!(out.contains("height: 99"), "{out}");
+
+        let asked = log.lock().unwrap();
+        let (_, body) = asked
+            .iter()
+            .find(|(path, _)| path == "/json_rpc")
+            .expect("the range was asked for");
+        let params: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(params["params"]["start_height"], 97);
+        assert_eq!(params["params"]["end_height"], 99);
+        // And the tip read came first: resolving the window needs it.
+        assert_eq!(asked[0].0, "/get_info");
+    }
+
+    /// A window longer than the chain is refused by name.
+    ///
+    /// The C++ said so and it is worth keeping: an operator who typed a
+    /// number too large can act on "larger than blockchain height" and cannot
+    /// act on an empty listing.
+    #[test]
+    fn a_window_longer_than_the_chain_is_refused_by_name() {
+        let address = route_server(vec![("/get_info", info_reply(3))]);
+        let (code, out) = run(&["print_blockchain_info", "-10", "10"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(out.contains("larger than blockchain height"), "{out}");
+    }
+
+    /// A `/get_info` reply missing a field the console reads is named.
+    ///
+    /// The same assertion as `/get_limit`'s, on the leg RK-5c will actually
+    /// move. Without it, a renamed `height` would make this command resolve
+    /// its window against a tip of zero and report the chain as empty.
+    #[test]
+    fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
+        let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+        info.as_object_mut().unwrap().remove("height");
+        let address = route_server(vec![("/get_info", info.to_string())]);
+        let (code, out) = run(&["print_blockchain_info", "-3", "3"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(out.contains("malformed get_info reply"), "{out}");
+        assert!(out.contains("height"), "{out}");
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.

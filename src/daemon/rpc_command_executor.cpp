@@ -533,76 +533,12 @@ bool t_rpc_command_executor::print_net_stats()
 }
 
 bool t_rpc_command_executor::print_blockchain_info(int64_t start_block_index, uint64_t end_block_index) {
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::request req;
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::response res;
-  epee::json_rpc::error error_resp;
-  std::string fail_message = "Problem fetching info";
-
-  // negative: relative to the end
-  if (start_block_index < 0)
-  {
-    cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-    cryptonote::COMMAND_RPC_GET_INFO::response ires;
-    if (m_is_rpc)
-    {
-      if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-      {
-        return true;
-      }
-    }
-    else
-    {
-      if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-      {
-        tools::fail_msg_writer() << make_error(fail_message, ires.status);
-        return true;
-      }
-    }
-    if (start_block_index < 0 && (uint64_t)-start_block_index >= ires.height)
-    {
-      tools::fail_msg_writer() << "start offset is larger than blockchain height";
-      return true;
-    }
-    start_block_index = ires.height + start_block_index;
-    end_block_index = start_block_index + end_block_index - 1;
-  }
-
-  req.start_height = start_block_index;
-  req.end_height = end_block_index;
-  req.fill_pow_hash = false;
-
-  fail_message = "Failed calling getblockheadersrange";
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "getblockheadersrange", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_block_headers_range(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  bool first = true;
-  for (auto & header : res.headers)
-  {
-    if (!first)
-      tools::msg_writer() << "" << std::endl;
-    tools::msg_writer()
-      << "height: " << header.height << ", timestamp: " << header.timestamp << " (" << tools::get_human_readable_timestamp(header.timestamp) << ")"
-      << ", size: " << header.block_size << ", weight: " << header.block_weight << " (long term " << header.long_term_weight << "), transactions: " << header.num_txes << std::endl
-      << "major version: " << (unsigned)header.major_version << ", minor version: " << (unsigned)header.minor_version << std::endl
-      << "block id: " << header.hash << ", previous block id: " << header.prev_hash << std::endl
-      << "difficulty: " << cryptonote::difficulty_type(header.wide_difficulty) << ", nonce " << header.nonce << ", reward " << cryptonote::print_money(header.reward) << std::endl;
-    first = false;
-  }
-
-  return true;
+  // RK-5b: `get_block_headers_range` is served from Rust and renders there.
+  // The parser has already resolved the negative form to (-n, n); resolving
+  // it against the tip needs `/get_info`, which is still bridged, so that
+  // read happens on the Rust side beside the rest of the command.
+  return run_rust_console({"print_blockchain_info",
+    std::to_string(start_block_index), std::to_string(end_block_index)});
 }
 
 bool t_rpc_command_executor::set_log_level(int8_t level) {
