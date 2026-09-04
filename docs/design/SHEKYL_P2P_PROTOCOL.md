@@ -3073,7 +3073,7 @@ decoration:
 
 | Site | What the rejection describes | Universal? | Verdict |
 | --- | --- | --- | --- |
-| **`:257` fee too low** | **Our own state.** the floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp:4372-4385`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
+| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp:4372-4385`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
 | **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp:1688-1701`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
 | **`:267` oversized `tx_extra`** | **The input** — `tx.extra.size()` against a compile-time constant | **No.** The `!kept_by_block` gate says so outright: the same transaction is acceptable inside a block, so this is relay policy | **No drop.** Dropping here punishes configuration divergence |
 | **`:276` non-zero `unlock_time`** | **The input** — `tx.unlock_time` | **No**, for the same reason and by the same gate | **No drop** |
@@ -3119,11 +3119,11 @@ question for all four conditions**, because all four are `kept_by_block`-gated
 short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 
 > **Answer, on three independent legs.** `kept_by_block` **is**
-> `(tx_relay == relay_method::block)` (`tx_pool.cpp:229`); it is documented as
+> `(tx_relay == relay_method::block)` (`src/cryptonote_core/tx_pool.cpp:229`); it is documented as
 > "from a previously-verified block" (`src/cryptonote_core/blockchain.h:585`),
 > so **consensus has already ruled and pool policy is not consensus**; and the
 > pop path passes **`origin = epee::net_utils::zone::invalid`**
-> (`blockchain.cpp:870`) — **there is no connection to attribute an offense
+> (`src/cryptonote_core/blockchain.cpp:870`) — **there is no connection to attribute an offense
 > to.** The third leg is what makes it an answer rather than a plausible story.
 
 ### PWD-B8 — the timer that is declared and never driven
