@@ -1496,6 +1496,15 @@ pin; the rig is the behavioral one.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — Review round 3 on #612: three Copilot findings, all
+  valid. The [7/7] gate's extraction-failure diagnostic was UNREACHABLE
+  under `set -e` (rule 46's class inside the gate itself — the round's
+  mutation checks had only exercised the token path); rc now captured
+  through an `||` arm, both failure paths observed firing. `hit_score`
+  (decrements `m_score`, drops at threshold) joined the punitive token
+  set, observed caught. And the Q3b status paragraph contradicted the
+  round log on the signature — the asserts-is class in the binding
+  record itself; reconciled to signed-with-date, Q1c-only pending.
 - 2026-09-04 — Review round 2 on #612: one Bugbot HIGH, valid,
   addressed — and it re-shaped the fix into its final, cleaner form.
   The goto-skip re-entry carried the dead negotiation with it (stale
