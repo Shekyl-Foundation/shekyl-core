@@ -1,8 +1,8 @@
 # C2-R1 — Reorg / alt-chain / checkpoints design round
 
-**Status:** **OPEN — R1a MERGED (#596); R1b RATIFIED 2026-09-03 and BUILT (§4c) on `feat/c2-r1b-impl`; R1c next after C2-R0** (conditional on F-1's two path-sentences in this doc and F-2's exemption + three named red vectors in the build — both landed; see §4b and the round log). The implementation is PR #603; PR #600 was the proposal-only ratification record, merged 2026-09-03.
+**Status:** CLOSED as record — all three sub-rounds ruled and built: R1a merged #596 (2026-09-02, rule 71 minted); R1b merged #603 (2026-09-03, watermark pop floor, fork-choice/alt-window FFI crossing, degraded-not-punished semantics); R1c signed in full 2026-09-04 (seven rulings Q1a–Q3b, the Q3b sync-orphan defect fixed and rig-pinned in-round, K1 split K1a/K1b, nine rows → bucket 2, close-of-round sweep §5.7). Landed via PR #612. Corrections land in [`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md), never here.
 Second design round of the C2 program
-([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
+([`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md) §10 batch R1, 20
 rows). Steering (shekyl-core-00) adopted the three-sub-round structure
 2026-09-02; Rick ratified **both** R1a lines the same day — C2-R1a-Q1
 (delete the mechanism) and the CEN-G8 retirement (put to him separately as
@@ -15,7 +15,7 @@ Nothing in §4/§5 is ruled yet. On R1c's close this document moves to
 2026-09-02 — the C2-R3 merge). Every `file:line` in this doc was located at
 this pin; where a census citation drifted, both numbers are recorded.
 **Identifier family:** `C2-R1a-Q1`, `C2-R1b-Q1…`, `C2-R1c-Q1…` (registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) this PR, rule 94).
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 94).
 **Authority chain:** census §10 R1 + rows CEN-K1…K10, E1…E5, A1, A2, A4, D5,
 D6; census §3.5 (main-vs-alt rule application) as the starting exhibit;
 [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md)
@@ -41,7 +41,7 @@ regrouping 2026-09-02:
 
 | Sub-round | Rows | The decision | Status |
 | --- | --- | --- | --- |
-| **R1a** | CEN-E3, CEN-E4 (2) | Does the compiled-hash fast path — a consensus skip of PoW and FCMP — exist at all? Separable: rule 60-shaped existence question with its own examined-disposition record ([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §74.2 left it "a shipping decision nobody has taken") | **RULED 2026-09-02, executed (§3, §3.8)** |
+| **R1a** | CEN-E3, CEN-E4 (2) | Does the compiled-hash fast path — a consensus skip of PoW and FCMP — exist at all? Separable: rule 60-shaped existence question with its own examined-disposition record ([`DAEMON_RELAY_PRIVACY.md`](../design/DAEMON_RELAY_PRIVACY.md) §74.2 left it "a shipping decision nobody has taken") | **RULED 2026-09-02, executed (§3, §3.8)** |
 | **R1b** | CEN-K5, K6, K7, K8, D5, D6, E1, E2, E5 (9) | What decides the best chain — the difficulty arm, the checkpoint-forced arm, the depth question, and every override surface that can command a rollback — as one contract | Scoped (§4) |
 | **R1c** | CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4 (9) | What alt admission must verify, what the unvalidated alt store costs, and the acceptance topology around it | Scoped (§5) |
 
@@ -117,8 +117,8 @@ what the reopening criterion is for.
 ### 3.1 The G8 consequence — its own ratification line
 
 **This ruling retires a bucket-1 ratified row: CEN-G8** (the GF-1 fast-path
-debit belt, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6,
-[`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5) — the first
+debit belt, [`ARCHIVAL_FIREWALL_GATE6.md`](../design/ARCHIVAL_FIREWALL_GATE6.md) §9.6,
+[`ARCHIVAL_BOND_GATE4.md`](../design/ARCHIVAL_BOND_GATE4.md) §3.5 step 5) — the first
 time a C2 round retires a previously-ratified row, so it is put to Rick
 explicitly, not inside a deletion inventory.
 
@@ -271,8 +271,8 @@ Sum: 2 + 9 + 9 = 20 ✓. Census: E3/E4/G8 → bucket 3, counts 86/16/5/64
   branch bitten red (the gate's fifth observed-red direction); (ii) the
   §3.1 claim "the gate-6 and gate-4 docs receive closure notes" had
   landed no notes — both closure notes now exist
-  ([`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.6,
-  [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5 step 5) —
+  ([`ARCHIVAL_FIREWALL_GATE6.md`](../design/ARCHIVAL_FIREWALL_GATE6.md) §9.6,
+  [`ARCHIVAL_BOND_GATE4.md`](../design/ARCHIVAL_BOND_GATE4.md) §3.5 step 5) —
   a status claim written before its act, caught by review; (iii) the
   inventory sweep had excluded `docs/` wholesale, but three OPERATIONAL
   docs carried live instructions for the deleted mechanism
@@ -1200,8 +1200,9 @@ acquiring any job beyond ordering (e.g. a consumer keying on its
 specific error) makes it a rule and reopens the split.
 
 **C2-R1c-Q1c — CEN-K9, the supplement gate and its shared tolerance
-(AMENDED pre-signature 2026-09-04: the ruling's own falsifier, executed
-late, caught an under-enumeration — see the round log).** Ratify
+(AMENDED pre-signature 2026-09-04 — the ruling's own falsifier,
+executed late, caught an under-enumeration, see the round log —
+and **SIGNED on the amendment diff by Rick, 2026-09-04**).** Ratify
 NIC-or-reject: alt admission may not plant unverifiable bytes in the
 pool — a supplement tx enters through the same
 `ver_non_input_consensus` the connect path trusts, or the alt block is
@@ -1404,6 +1405,42 @@ through the queue's real fill path, so the assertion now sits on the
 defect's axis. The structural [7/7] gate stays as the cheap always-on
 pin; the rig is the behavioral one.
 
+### 5.7 Close-of-round sweep (2026-09-04)
+
+The three owed legs, executed: **(1) Census-wide line re-anchor**, by a
+forward-validation instrument rather than assumption: every §4 row's
+backtick identifiers were checked for presence within ±50 lines of its
+cited anchors across the full file map (103 rows carried checkable
+ident+ref pairs); 18 true flags after false-positive elimination, all
+grounded and re-anchored against the live tree — including four
+anchors THIS round's own row edits had written wrong minutes earlier
+(drift extrapolated into `blockchain.cpp` that never happened; the
+instrument caught its own operator). Residue named honestly: rows
+whose idents live in files outside the checked set pass vacuously; the
+instrument is recorded here for re-use at the next close.
+**(2) Dangling-anchor sweep** of the census's §-citations into this
+doc: zero dangling (every cited § resolves). **(3) The §10 R2-row
+restatement** (FL-R12′ signed; both conjuncts met; dispatch stays
+Rick's) landed in the census.
+
+**The `core.cpp:259` fourth-instance grading (Rick's sentence binding:
+"absence of harm is not absence of the shape"): BENIGN-BY-COMPOSITION,
+shape present, record-and-specify.** The `test_and_set` guard returns
+`true` for work it skipped — the reports-success shape — but every
+consumer's decision is unchanged by the skip: at init (`core.cpp:650`)
+no concurrent holder can exist, so the guard never skips there; at
+runtime a skip means another thread is mid-reload and THAT thread
+delivers the verdict to its own CHECK, and the 600 s cadence retries.
+No fix in C++ (the P0c inverted default): the Rust store's reload path
+is specified to return a tri-state (ran-clean / ran-conflict /
+skipped-concurrent) so the shape does not survive the port.
+
+Row dispositions landed in the census: K1 split (K1a derived-height,
+Rust owner + belt; K1b claimed-height ordering arm), K2, K3, K4, K9,
+K10, A1, A2, A4 → bucket 2 (`ratified`), each citing §5.5; census
+counts 86/35/5/46 = 172 (the split's +1), re-derived from the row
+column. On this close the document moves to `docs/completed/`.
+
 ## 6. Round log
 
 - 2026-09-02 — Ground read at `bf317111f`; check-in with steering
@@ -1496,6 +1533,14 @@ pin; the rig is the behavioral one.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — **Q1c SIGNED on the amendment diff; R1c CLOSED.** The
+  close-of-round sweep executed (§5.7): census-wide re-anchor by
+  forward validation (18 true flags fixed, four of them this round's
+  own fresh errors — the instrument caught its operator),
+  zero dangling §-citations, the R2 restatement, the `core.cpp:259`
+  grading (benign-by-composition, shape recorded for the Rust store),
+  nine rows → bucket 2 with the K1 split (census 86/35/5/46 = 172).
+  Doc moved to completed. R1 (a+b+c) is COMPLETE.
 - 2026-09-04 — Review round 3 on #612: three Copilot findings, all
   valid. The [7/7] gate's extraction-failure diagnostic was UNREACHABLE
   under `set -e` (rule 46's class inside the gate itself — the round's
