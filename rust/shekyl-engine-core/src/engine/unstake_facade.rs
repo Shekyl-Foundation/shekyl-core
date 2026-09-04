@@ -416,7 +416,10 @@ pub enum CollectUnstakedError {
 struct ExitEvidence {
     pscan: Option<PScanState>,
     pending: Option<PendingPostBlock>,
-    id_by_slot: BTreeMap<u32, PCanonicalId>,
+    /// Slot↔id addressing, keyed by [`PSlot`]. The persisted cache keeps raw
+    /// `u32` keys (postcard state, rule 18); [`read_exit_evidence`] converts
+    /// at the boundary so everything transform-shaped speaks the typed slot.
+    id_by_slot: BTreeMap<PSlot, PCanonicalId>,
 }
 
 /// The `unstake` resolution verdict, separated from I/O so the ladder is
@@ -589,13 +592,8 @@ fn other_exited_pools_remain(evidence: &ExitEvidence, swept: PSlot) -> bool {
     evidence
         .id_by_slot
         .iter()
-        .filter(|(&slot, id)| PSlot::from_raw(slot) != swept && exited.contains_key(id))
-        .any(|(&slot, _)| {
-            pscan
-                .funding_outputs()
-                .iter()
-                .any(|r| r.p_slot == PSlot::from_raw(slot))
-        })
+        .filter(|(&slot, id)| slot != swept && exited.contains_key(id))
+        .any(|(&slot, _)| pscan.funding_outputs().iter().any(|r| r.p_slot == slot))
 }
 
 /// Address a set of persona ids through the slot cache. Fail closed if any
@@ -605,12 +603,12 @@ fn other_exited_pools_remain(evidence: &ExitEvidence, swept: PSlot) -> bool {
 /// rule is explicit (`sort_unstable_by_key`), not a `BTreeMap` iteration
 /// accident.
 fn address_personas(
-    id_by_slot: &BTreeMap<u32, PCanonicalId>,
+    id_by_slot: &BTreeMap<PSlot, PCanonicalId>,
     wanted: impl Fn(&PCanonicalId) -> bool,
     expected: usize,
     missing: &'static str,
 ) -> Result<Vec<(PSlot, PCanonicalId)>, &'static str> {
-    let mut slots: Vec<(u32, PCanonicalId)> = id_by_slot
+    let mut slots: Vec<(PSlot, PCanonicalId)> = id_by_slot
         .iter()
         .filter(|(_, id)| wanted(id))
         .map(|(&slot, &id)| (slot, id))
@@ -619,10 +617,7 @@ fn address_personas(
         return Err(missing);
     }
     slots.sort_unstable_by_key(|(slot, _)| *slot);
-    Ok(slots
-        .into_iter()
-        .map(|(slot, id)| (PSlot::from_raw(slot), id))
-        .collect())
+    Ok(slots)
 }
 
 #[allow(private_bounds, clippy::type_complexity)]
@@ -891,9 +886,17 @@ where
     P: PendingTxEngine,
 {
     let g = engine.read().await;
+    // The typed-domain edge: the persisted cache's raw u32 keys become
+    // `PSlot` here, once, so no downstream logic juggles raw and typed slots.
     let id_by_slot = {
         let guard = g.ledger.read();
-        guard.ledger.staking.persona_id_cache.clone()
+        guard
+            .ledger
+            .staking
+            .persona_id_cache
+            .iter()
+            .map(|(&slot, &id)| (PSlot::from_raw(slot), id))
+            .collect()
     };
     let (pscan, pending) = g.exit_seal_snapshot()?;
     Ok(ExitEvidence {

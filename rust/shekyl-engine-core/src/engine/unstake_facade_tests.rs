@@ -82,7 +82,10 @@ fn evidence(
     ExitEvidence {
         pscan: pscan_state,
         pending,
-        id_by_slot: slots.iter().map(|&(s, id)| (s, persona(id))).collect(),
+        id_by_slot: slots
+            .iter()
+            .map(|&(s, id)| (PSlot::from_raw(s), persona(id)))
+            .collect(),
     }
 }
 
