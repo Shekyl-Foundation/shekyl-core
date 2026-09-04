@@ -28,9 +28,11 @@ plain-text citations convert to links in this same PR at that point.
 (a) FL-R12′ **SIGNED** — FEE_LADDER_DERIVATION.md §8 (commit `6689b0cff`,
 review round 8): composition `paid = max(M_r·curve(remaining), TAIL) ·
 penalty(x)`, penalty **after** the floor, build authorization YES. (A stale
-§0.1 passage in that document still reads "conjunct (a) is OPEN"; `git log -S`
-dates it to review round 4, before the signature. Routed to the fee lane for
-an in-lane fix; it does not gate this draft.)
+§0.1 passage in that document read "conjunct (a) is OPEN" — written at
+review round 4, never updated after the round-8 signature; found here via
+`git log -S`, routed to the fee lane, and **fixed on #614 at `2e29f67d1`**,
+verified at that sha: §0.1 now records was-open-until-round-8-signed and
+"census-R2 is unblocked per its own criterion.")
 (b) The exhaustion-boundary test `terminal_reward_legs_agree` — **also
 branch-only**: it lives in `emission.rs` on the fee-ladder branch
 (FETCH_HEAD `ccfb85c72` :318), not on dev (grepped at the pin: zero hits;
