@@ -42,8 +42,9 @@ use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     base_block_reward, calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
-    effective_emission, emission_speed_factor, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    corrected_fee_ladder, effective_emission, emission_speed_factor, projected_already_generated,
+    quantize_pow2_ceil, round_money_up_2, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -153,41 +154,22 @@ fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
     [fl, fn_, fm, fh]
 }
 
-/// `cryptonote::round_money_up(v, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES=2)`:
-/// round UP to 2 significant decimal digits. The C++ throws on overflow in
-/// the final multiply (`cryptonote_format_utils.cpp`, pinned by
-/// `scaling_2021.cpp`'s overflow case); the `expect` here is the same
-/// fail-loud semantics.
-fn round_money_up_2(v: u64) -> u64 {
-    if v < 100 {
-        return v;
-    }
-    let mut unit = 1u64;
-    let mut head = v;
-    while head >= 100 {
-        head /= 10;
-        unit *= 10;
-    }
-    v.div_ceil(unit)
-        .checked_mul(unit)
-        .expect("round_money_up overflow (C++ throws here)")
-}
-
 fn rounded(raw: [u64; 4]) -> [u64; 4] {
     raw.map(round_money_up_2)
 }
 
-/// Corrected ladder: `C` applied to each unrounded rung, then daemon
-/// rounding. Equivalent — up to integer truncation of at most one atomic
-/// unit per rung, before the coarse 2-significant-digit rounding — to
-/// running the ArticMine formula on the miner-effective reward
-/// `(1−σ)·M_r·R` and dividing by `(1−b)`; the two forms are NOT bit-exact
-/// interchangeable at rounding-step boundaries.
-fn corrected_ladder(raw: [u64; 4], c_scaled: u64) -> [u64; 4] {
-    raw.map(|f| {
-        let scaled = u128::from(f) * u128::from(c_scaled) / u128::from(SCALE);
-        round_money_up_2(u64::try_from(scaled).expect("corrected rung fits u64"))
-    })
+/// Served ladder at this state: the production owner, not C applied to
+/// truncated ArticMine rungs. `C_q` lives in the numerator.
+fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; 4] {
+    corrected_fee_ladder(
+        base_reward,
+        median,
+        median,
+        FULL_REWARD_ZONE_V5,
+        REF_TX_WEIGHT,
+        c_q,
+    )
+    .as_slots()
 }
 
 /// The relay floor, transliterating `get_dynamic_base_fee`
@@ -241,54 +223,33 @@ fn pow2_le(c: u128, s: u128, k: i32) -> bool {
 /// [0.68, 12.92]; the assert makes a future range widening loud instead of
 /// silently truncated).
 fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
-    assert!(c_scaled > 0, "C is structurally positive");
-    let c = u128::from(c_scaled);
-    let s = u128::from(SCALE);
-
-    // kf = floor(log2(c/s)).
-    let mut kf: i32 = -40;
-    while pow2_le(c, s, kf + 1) {
-        kf += 1;
-    }
-
-    let exact = if kf >= 0 {
-        (s << kf) == c
-    } else {
-        (c << (-kf)) == s
-    };
-    let k = match rule {
-        SnapRule::Ceiling => {
-            if exact {
-                kf
-            } else {
-                kf + 1
-            }
-        }
+    match rule {
+        SnapRule::Ceiling => quantize_pow2_ceil(c_scaled),
         SnapRule::Nearest => {
-            // Log-space midpoint between kf and kf+1 is √2·2^kf:
-            // round up iff (c/s)² ≥ 2^(2kf+1), compared exactly.
+            assert!(c_scaled > 0, "C is structurally positive");
+            let c = u128::from(c_scaled);
+            let s = u128::from(SCALE);
+            let mut kf: i32 = -40;
+            while pow2_le(c, s, kf + 1) {
+                kf += 1;
+            }
             let e = 2 * kf + 1;
             let up = if e >= 0 {
                 c * c >= (s * s) << e
             } else {
                 (c * c) << (-e) >= s * s
             };
-            if up {
-                kf + 1
+            let k = if up { kf + 1 } else { kf };
+            assert!(
+                k >= -6,
+                "2^{k} not exactly representable in SCALE=10^6 units"
+            );
+            if k >= 0 {
+                SCALE << k
             } else {
-                kf
+                SCALE >> (-k)
             }
         }
-    };
-
-    assert!(
-        k >= -6,
-        "2^{k} not exactly representable in SCALE=10^6 units"
-    );
-    if k >= 0 {
-        SCALE << k
-    } else {
-        SCALE >> (-k)
     }
 }
 
@@ -405,8 +366,8 @@ fn rung_table(
     let raw = articmine_ladder_raw(st.base_reward, median, median);
     let floor = relay_floor(st.base_reward, median);
     let accept = floor - floor / 50;
-    let corrected = corrected_ladder(raw, corr.c_scaled);
-    let served = corrected_ladder(raw, quantize_c_pow2(corr.c_scaled, SnapRule::Ceiling));
+    let corrected = served_ladder(st.base_reward, median, corr.c_scaled);
+    let served = served_ladder(st.base_reward, median, quantize_pow2_ceil(corr.c_scaled));
     let tail = tail_subsidy_per_block(params).expect("tail");
     let r_eff = shekyl_economics::release::apply_release_multiplier(
         st.base_reward,
@@ -418,10 +379,7 @@ fn rung_table(
             / u128::from(SCALE - corr.burn_pct),
     )
     .expect("c_prime fits");
-    let served_split = corrected_ladder(
-        articmine_ladder_raw(r_eff, median, median),
-        quantize_c_pow2(c_prime, SnapRule::Ceiling),
-    );
+    let served_split = served_ladder(r_eff, median, quantize_pow2_ceil(c_prime));
     RungTable {
         label,
         age_years,
@@ -607,8 +565,9 @@ fn dwell_scenario(
 
         let fees = match mode {
             LadderMode::Current => current_fees,
-            LadderMode::CorrectedRaw => corrected_ladder(
-                raw,
+            LadderMode::CorrectedRaw => served_ladder(
+                st.base_reward,
+                median,
                 correction_factor(v_avg, st.ag, st.height, params).c_scaled,
             ),
             LadderMode::Quantized(rule_name) => {
@@ -618,7 +577,7 @@ fn dwell_scenario(
                     SnapRule::Ceiling
                 };
                 let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
-                corrected_ladder(raw, quantize_c_pow2(c, rule))
+                served_ladder(st.base_reward, median, quantize_c_pow2(c, rule))
             }
             LadderMode::SplitOperandCeil => {
                 let corr = correction_factor(v_avg, st.ag, st.height, params);
@@ -633,20 +592,11 @@ fn dwell_scenario(
                         / u128::from(SCALE - corr.burn_pct),
                 )
                 .expect("c_prime fits");
-                corrected_ladder(
-                    articmine_ladder_raw(r_eff, median, median),
-                    quantize_c_pow2(c_prime, SnapRule::Ceiling),
-                )
+                served_ladder(r_eff, median, quantize_pow2_ceil(c_prime))
             }
             LadderMode::QuantizedWholeCeil => {
-                // C′·M_r ≡ C, so this is the adopted design on the
-                // tail-floored operand (identical away from the tail).
-                let tail = tail_subsidy_per_block(params).expect("tail");
                 let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
-                corrected_ladder(
-                    articmine_ladder_raw(st.base_reward.max(tail), median, median),
-                    quantize_c_pow2(c, SnapRule::Ceiling),
-                )
+                served_ladder(st.base_reward, median, quantize_pow2_ceil(c))
             }
         };
         for i in 0..4 {
@@ -739,7 +689,6 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let raw = articmine_ladder_raw(st.base_reward, median, median);
     let fee_at = |v_avg: u64| -> u64 {
         let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
         let c = match mode {
@@ -753,7 +702,7 @@ fn feedback_scenario(
             }
             _ => c,
         };
-        corrected_ladder(raw, c)[1].max(1)
+        served_ladder(st.base_reward, median, c)[1].max(1)
     };
     let f_ref = fee_at(demand_scale);
 
@@ -814,17 +763,16 @@ pub struct DegeneratePins {
     pub release_at_double_baseline: u64,
     /// Tail subsidy per block, and the supply headroom at tail entry
     /// (`tail << esf`). The tail era is `2^esf` blocks by IDENTITY
-    /// (doc §FL-V7: `remaining/tail = 2^esf`), then the supply cap zeroes
-    /// the validation reward permanently.
+    /// (doc §FL-V7: `remaining/tail = 2^esf`); under FL-R12′ the tail is
+    /// perpetual — there is no supply-cap zeroing.
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
-    /// At `already_generated == money_supply`: what the 5-arg estimate path
-    /// still believes the reward is (it has no supply cap) vs what
-    /// validation pays. FL-V1's divergence in its terminal form.
+    /// At `already_generated == money_supply`: M_r-neutral estimate operand
+    /// vs paid pre-penalty quantity at baseline. Both are TAIL (FL-R12′).
     pub estimate_reward_at_exhaustion: u64,
     pub validation_reward_at_exhaustion: u64,
-    /// The ladder and relay floor computed from each at exhaustion.
+    /// The served ladder (production owner) and relay floor at exhaustion.
     pub estimate_ladder_at_exhaustion: [u64; 4],
     pub validation_ladder_at_exhaustion: [u64; 4],
     pub relay_floor_at_zero_reward: u64,
@@ -870,16 +818,8 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         tail_era_blocks: 1 << esf,
         estimate_reward_at_exhaustion: est_reward,
         validation_reward_at_exhaustion: val_reward,
-        estimate_ladder_at_exhaustion: rounded(articmine_ladder_raw(
-            est_reward,
-            FULL_REWARD_ZONE_V5,
-            FULL_REWARD_ZONE_V5,
-        )),
-        validation_ladder_at_exhaustion: rounded(articmine_ladder_raw(
-            val_reward,
-            FULL_REWARD_ZONE_V5,
-            FULL_REWARD_ZONE_V5,
-        )),
+        estimate_ladder_at_exhaustion: served_ladder(est_reward, FULL_REWARD_ZONE_V5, SCALE),
+        validation_ladder_at_exhaustion: served_ladder(val_reward, FULL_REWARD_ZONE_V5, SCALE),
         relay_floor_at_zero_reward: relay_floor(val_reward, FULL_REWARD_ZONE_V5),
     }
 }
@@ -1238,14 +1178,15 @@ mod tests {
         );
     }
 
-    /// Pin the genesis-condition `Fh` the wallet cap is derived from
-    /// (`fee_policy.rs`: daemon-rounded genesis `Fh` = 14,000,000).
+    /// Heritage genesis `Fh` (C_q = 1, ArticMine shape) is 14,000,000.
+    /// The wallet cap is the served top rung at C_q = 2: 28,000,000.
     #[test]
-    fn genesis_fh_matches_wallet_cap() {
+    fn genesis_fh_and_served_cap_are_distinct_anchors() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
-        let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
-        assert_eq!(fees[3], 14_000_000);
+        let heritage = rounded(articmine_ladder_raw(base, 300_000, 300_000));
+        assert_eq!(heritage[3], 14_000_000);
+        assert_eq!(served_ladder(base, 300_000, 2 * SCALE)[3], 28_000_000);
     }
 
     /// Pin the relay-floor transliteration against

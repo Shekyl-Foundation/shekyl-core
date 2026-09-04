@@ -52,9 +52,8 @@ use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
     base_block_reward,
     burn::compute_burn_split_at,
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{EconomicParams, SCALE},
-    release::apply_release_multiplier,
     split_block_emission, FrozenSegmentCount,
 };
 
@@ -154,7 +153,6 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         ..EconomicParams::default()
     };
 
-    let money_supply = params.money_supply as u128;
     let mut already_generated: u128 =
         (params.money_supply as f64 * scenario.initial_emitted_fraction) as u128;
     let mut total_burned: u128 = 0;
@@ -203,10 +201,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         }
         current_epoch = epoch;
 
-        let remaining = money_supply.saturating_sub(already_generated);
-        let base_reward =
-            base_block_reward(already_generated.min(u64::MAX as u128) as u64, &economic)
-                .expect("sim neutral trajectory stays within supply bounds");
+        let ag = already_generated.min(u64::MAX as u128) as u64;
+        let base_reward = base_block_reward(ag, &economic)
+            .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (scenario.get_volume)(block, params.blocks_per_year);
 
@@ -217,12 +214,9 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             params.release_max,
         );
 
-        // Real ledger advance uses the modulated reward (both arms share it).
-        let mut effective_reward = apply_release_multiplier(base_reward, multiplier);
-        let remaining_u64 = remaining.min(u64::MAX as u128) as u64;
-        if effective_reward > remaining_u64 {
-            effective_reward = remaining_u64;
-        }
+        // Real ledger advance uses the paid emission (both arms share it).
+        let effective_reward = effective_emission(ag, tx_volume, &economic)
+            .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -235,10 +229,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // (a): staker emission leg from the MODULATED reward (shipped).
         let (_miner_a, staker_emission_a) = split_block_emission(effective_reward, emission_share);
         // (b): staker emission leg from the UNMODULATED subsidy (counterfactual).
-        // Cap at `remaining` for symmetry with the ledger clamp, so the
-        // counterfactual never claims more than the supply could pay.
-        let base_unclamped = base_reward.min(remaining_u64);
-        let (_miner_b, staker_emission_b) = split_block_emission(base_unclamped, emission_share);
+        let (_miner_b, staker_emission_b) = split_block_emission(base_reward, emission_share);
 
         // Fee leg — identical under both dispositions.
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
@@ -267,10 +258,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         blocks_in_epoch += 1;
 
         // Advance the real ledger (modulated, both arms share it).
-        already_generated += effective_reward as u128;
-        if already_generated > money_supply {
-            already_generated = money_supply;
-        }
+        already_generated += u128::from(effective_reward);
         total_burned += fee_split.actually_destroyed as u128;
     }
 
