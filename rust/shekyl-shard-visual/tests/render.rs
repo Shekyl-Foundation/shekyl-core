@@ -66,3 +66,22 @@ fn canonical_flag_tracks_input_provenance() {
         .push(("candidate_fg_opacity".into(), "0.5".into()));
     assert!(!recipe_from_params(&tweaked).canonical);
 }
+
+/// Golden recipe for the genesis fixture — the cross-implementation
+/// derivation pin. The Python explorer pins the SAME literals
+/// (`shekyl-dev/visualization/tests/test_candidate.py`), so a change
+/// that breaks Rust/Python recipe parity breaks one of the two pins.
+/// Pixel-level parity is ruling B's oracle; this pins the derivation.
+#[test]
+fn genesis_recipe_matches_the_cross_implementation_pin() {
+    let fixture = fixtures::by_id("genesis").expect("genesis fixture");
+    let r = recipe_from_params(&parameters_from_aggregate(&fixture.aggregate));
+    assert_eq!(r.spec_version, "candidate.v1");
+    assert_eq!(r.fg_opacity, 0.26);
+    assert_eq!(r.fg_tile_palette, "neon");
+    assert_eq!(r.fg_phyllotaxis_palette, "earth");
+    assert_eq!(r.bg_opacity, 0.65);
+    assert_eq!(r.bg_truchet_palette, "prismatic");
+    assert_eq!(r.bg_crystalline_palette, "earth");
+    assert_eq!(r.final_opacity, 0.71);
+}
