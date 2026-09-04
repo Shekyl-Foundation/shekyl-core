@@ -936,11 +936,51 @@ disjoint from every R1b region).
 
 ## 5. R1c scope (alt admission + acceptance topology) — not yet ruled
 
+### 5.1 Threat framing
+
+**The corrected Qubic facts lead this framing, sign first: the
+correction cuts toward MORE risk, not less.** The measured campaign
+averaged 23.38% of Monero's hashrate — 28.33% during withholding
+periods — and inside that minority average, short intervals **briefly
+exceeded 50%** (daily/weekly aggregates never reached 51%; no stable
+majority was held; arXiv 2512.01437, primary-fetched 2026-09-03). The
+campaign's mechanism was **withholding**: selfish mining produces
+multi-block reorgs at sub-majority by construction. An 18-block reorg
+(height 3,499,659, 118 transactions, ~36 minutes, 2025-09-14/15 — the
+deepest instance in this round's corpus; multi-outlet secondary record)
+is attributed to that campaign's withheld chain. Which mechanism
+produced it — brief majority or sub-majority withholding — is not
+established by the source, **and does not need to be: both defeat an
+aggregate-calibrated rule.** A depth rule calibrated on aggregate
+hashrate share is therefore **blind twice over**: it misses the brief
+majority windows inside a minority average, and it misses that the
+withholding mechanism does not need majority at all. **Rick's binding
+design constraint for this round (2026-09-04): a depth rule that
+decides in seconds must be designed against intervals, not averages.**
+GAP-1 and GAP-2 (census §12) deliver this round's inherited questions
+with that evidence attached.
+
+The constraint joins the row set at its center: **CEN-K4's
+prevalidate-only admission deferral is the surface a brief-majority
+attacker stages through** — admission is deliberately cheap (version,
+attestation, timestamp, checkpoint, PoW-at-alt-difficulty, prevalidate
+only), so everything an interval attacker needs to position a withheld
+chain is bought at the cheap tier, and the expensive tier
+(`validate_miner_transaction`, `check_tx_inputs`, the curve-root
+check) is paid only at promotion — by the *victim*, during the seconds
+the rule gets to decide in.
+
+### 5.2 Scope and obligations
+
 **R1c now runs after C2-R0** (§1) and inherits its re-scoping note —
 C2-R0's stated deliverable is naming which of these nine rows a
 protocol-level depth rule affects. The census-wide line re-anchor
 stays this round's obligation at R1c close (C2-R0 is docs-and-schema
-only and moves no line numbers).
+only and moves no line numbers) — and that re-anchor pass now carries a
+second leg: **a dangling-anchor sweep of the census's §-citations into
+this doc**, because the links gate resolves files, not anchors (the
+consumed-§5-heading defect survived to dev exactly that way — a
+collapsed observable no gate can currently see).
 
 Rows: CEN-K1, K2, K3, K4, K9, K10, A1, A2, A4. Banked wargame seeds:
 near-tip cycle cost (a 1-block fork needs ~2 blocks of real PoW to force a
