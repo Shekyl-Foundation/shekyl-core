@@ -79,7 +79,7 @@ Shekyl monetary policy should satisfy six constraints at once:
 5. **Demand-responsive emission**
    - The rate at which coins are released should reflect real network usage.
    - High transaction activity accelerates emission; low activity conserves supply.
-   - Total supply remains fixed — only the release timeline is elastic.
+   - Gross issuance remains anchored to the curve's asymptote plus the perpetual tail — only the release timeline is elastic, and net supply is bounded in practice by the fee burn (FL-R12′).
 
 6. **Self-regulating economic balance**
    - Miners, stakers, and transactors should form interlocking constituencies with complementary incentives.
@@ -92,7 +92,7 @@ Shekyl monetary policy should satisfy six constraints at once:
 
 Historical constants from the original chain configuration:
 
-- `MONEY_SUPPLY = 2^32`
+- `SHEKYL_EMISSION_CURVE_ASYMPTOTE = 2^32` (renamed from `MONEY_SUPPLY` at FL-R12′: it is the emission curve's asymptote, not a supply — gross issuance passes it under the perpetual tail)
 - `COIN = 10^12`
 - `CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12`
 - `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units (**historical Monero
@@ -105,7 +105,7 @@ units (0.3 SHEKYL/min) per the parameter tables below and
 `config/economics_params.json`. The `3 × 10¹¹` figure above is inherited Monero
 baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapshot`.
 
-In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
+In Cryptonote-family code this constant (there `MONEY_SUPPLY`) is interpreted in **atomic units**, not whole coins. Therefore:
 
 - The **historical** 12-decimal interpretation of those constants yielded
   `2^32 / 10^12 = 0.004294967296` SHEKYL — not economically meaningful, and
@@ -115,7 +115,7 @@ In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, no
 
 Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
 
-- `base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`
+- `curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor` (saturating at zero; the paid reward is `max(M_r·curve, TAIL)·penalty` per FL-R12′)
 - `base_reward` is clamped to a minimum via `FINAL_SUBSIDY_PER_MINUTE`
 
 Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
@@ -134,8 +134,8 @@ which carry no duration tier.
 
 If the target is `2^32` **whole coins**, then with atomic accounting:
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^decimals`
-- Must satisfy `MONEY_SUPPLY_ATOMIC <= 2^64 - 1`
+- `EMISSION_CURVE_ASYMPTOTE_ATOMIC = 2^32 * 10^decimals`
+- Must satisfy `EMISSION_CURVE_ASYMPTOTE_ATOMIC <= 2^64 - 1`
 
 For `2^32` whole supply, the maximum safe decimal precision under `uint64_t` is:
 
@@ -163,7 +163,7 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 
 ### `uint64_t` safety verification
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^9 = 4,294,967,296,000,000,000`
+- `EMISSION_CURVE_ASYMPTOTE_ATOMIC = 2^32 * 10^9 = 4,294,967,296,000,000,000`
 - `uint64_t max = 18,446,744,073,709,551,615`
 - Headroom factor: ~4.3x
 - Sufficient for all intermediate arithmetic including reward calculations
@@ -172,25 +172,26 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 
 ## 4) The Four-Component Economic System
 
-The Shekyl economic model consists of four interlocking mechanisms operating on a single fixed supply constraint:
+The Shekyl economic model consists of four interlocking mechanisms operating on a single emission-curve constraint (asymptotic issuance plus a perpetual tail; net supply governed by the burn — FL-R12′):
 
 ### Component 1: Transaction-Responsive Release Rate
 
-Transaction volume controls how quickly the CryptoNote emission curve releases coins from the fixed `2^32` supply. This does NOT create additional coins — it adjusts the timeline of the predetermined emission schedule.
+Transaction volume controls how quickly the CryptoNote emission curve releases coins toward the `2^32` asymptote. It adjusts the timeline of the curve, never the tail: the perpetual 0.6/block floor is deliberately outside the multiplier's reach (a paced floor would pay least exactly when fees are lowest — FL-R12′).
 
 #### Mechanism
 
-The standard CryptoNote block reward formula:
+The paid block reward composes as (FL-R12′, signed):
 
 ```
-base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor
+curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor
+                                          // saturating at zero past the asymptote
+paid  = max(release_multiplier * curve, TAIL) * weight_penalty
 ```
 
-Is modified to:
-
-```
-effective_reward = base_reward * release_multiplier
-```
+The multiplier applies to the CURVE and the tail floors the result; the
+weight penalty applies LAST, to the paid quantity — floors belong to
+emission, penalties to what is paid, so block-size governance never dies,
+tail era included.
 
 Where `release_multiplier` is derived from a rolling average of transaction volume over the previous 720 blocks (~1 day):
 
@@ -658,7 +659,7 @@ The harness uses the same formulas as the production `shekyl-economics` crate, d
 Adopt the **Four-Component Model**:
 
 1. **Fixed `2^32` whole SHEKYL supply** with 9-decimal atomic precision.
-2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, without ever exceeding the fixed supply ceiling.
+2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, with gross issuance anchored to the curve's asymptote (plus the perpetual 0.6/block tail — there is no hard cutoff; FL-R12′).
 3. **Adaptive fee burn** driven algorithmically by transaction volume, chain maturity, and aggregate staking behavior — with a portion of the burn funding staker yields.
 4. **Decaying staker emission share** that bootstraps meaningful staker yields from launch, funded by redirecting a small, declining fraction of block emission from miners to stakers.
 5. **Implicit staker governance** where the act of locking coins is the sole governance input, eliminating the need for voting mechanisms.

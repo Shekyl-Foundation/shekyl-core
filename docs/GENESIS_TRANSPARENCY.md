@@ -45,6 +45,9 @@ The original chain launched with a critical misconfiguration in
 
 ```
 MONEY_SUPPLY = 2^32          // interpreted as atomic units, not whole coins
+                             // (renamed SHEKYL_EMISSION_CURVE_ASYMPTOTE at FL-R12' —
+                             //  an asymptote, not a supply; this section records
+                             //  the genesis derivation as made)
 COIN = 10^12                 // 12-decimal precision
 CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12
 ```
