@@ -2357,10 +2357,16 @@ caps on one handler, reachable by choosing an id.
 | Keep 2001 only | The same | **Refused.** It is the *more* expensive path, and deleting the compact one to keep the verbose one inverts the reason both exist |
 | Keep both, reconcile the caps | The same | **Refused.** Reconciled caps still leave two commands with one schema, so the choice of command carries no information and the receiver must handle both — cost with no property bought |
 
-**Conceded.** A node that has every transaction of an incoming block still pays
-one round trip if any is missing, which the full-block path would have avoided
-for a peer that guessed right. **That is the compact path's standing trade, not
-a new one**, and `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is the mechanism.
+**Conceded — very little, and an earlier version of this row conceded
+something that was not true.** It said deleting 2001 costs a missing-tx round
+trip that the full-block path would have avoided. **It does not.** How much of
+`b.txs` a sender includes is **sender policy, independent of the command id**,
+and 2001 already dispatches into 2008's handler — so the round trip is a
+property of what the sender chose to send, before and after this ruling alike.
+*That concession was written under the `pruned`-based model this row has since
+corrected, and it survived the correction.* What is actually given up is a wire
+name; `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is unchanged and still the
+mechanism for whatever the sender omitted.
 
 **Falsifier.** **Reopen if measured block-propagation latency on the compact
 path exceeds the full-block path by more than one round-trip time at the
@@ -2382,7 +2388,7 @@ is not a table of constants.**
 | `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
 | `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
 | `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
-| `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | `CRYPTONOTE_MAX_TX_SIZE` (1 MB) × the relay batch bound |
+| `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | **Not derivable yet — there is no relay batch bound.** See below |
 | `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
 | `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
 | `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
@@ -2475,18 +2481,62 @@ lane**, not invented here.
 | A static ceiling picked to survive expected growth | The same | **Refused.** It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does |
 | Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
 
-**What this discharges, stated so the dependent rows can be closed:**
+> **Two inputs this round does not have, and the ruling says so rather than
+> implying a table of finished numbers.**
+>
+> **(a) `NOTIFY_NEW_TRANSACTIONS` (2002) has no batch bound to derive from.**
+> `Zone::queue_fluff` appends every transaction to each peer's queue and
+> `flush_fluff` releases the whole accumulated batch —
+> `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
+> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> side checks no cardinality either. **So 2002's cap has no derivation input,
+> and until one exists 2002 is not bounded below 2004.** *An earlier version of
+> this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
+> that bound existed.* Ruling it is cluster B's own work and belongs with the
+> relay cadence rows (PWD-B1/PWD-B2), not here.
+>
+> **(b) The cardinality-derived batch bound exceeds the plaintext ceiling,
+> which contradicts PWD-T6.** The consensus weight limit **floors** at
+> `2 × get_min_block_weight` = **600,000 bytes**
+> (`src/cryptonote_core/blockchain.cpp:6564-6567`; the median is clamped up to
+> `full_reward_zone` at `:6543` before doubling). So even at `margin = 1`,
+> `100 × (600,000 + 866,568)` = **146,656,800 bytes**, above
+> `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
+> (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
+> ceiling to sit **above** the post-handshake limit; this inverts it, so a
+> conforming compressed 2004 could be legal on the wire and rejected after
+> inflation.
 
-- **PWD-T6's post-handshake limit** is the maximum over this table — now a
-  derivation with **two** dynamic terms rather than an inherited round number:
-  the per-block bound *and* `NOTIFY_RESPONSE_GET_OBJECTS`'s requested
-  cardinality. **The maximum is 2004's batch bound, not the single-block one**,
-  which is the term a reader would otherwise take from the more visible row.
-- **PWC-A2** (bucket header length field) can be sized: the field must express
-  the largest value this table can produce — **2004's batch bound**, so the
-  field is sized from the batch, not from one block. Sizing it to the
-  single-block cap would make the header unable to express a legal sync
-  response.
+**Ruled, because the contradiction forces the shape even though it does not
+fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
+cardinality alone.** The responder fills a byte budget and **truncates the
+batch**, leaving the requester to ask for the remainder — which it already
+must handle, since `missed_ids` exists. A cardinality bound multiplies two
+independent worst cases (every block at maximum weight *and* maximum witness
+simultaneously), producing a buffer no honest exchange ever fills, and here it
+produces one the decompressor is required to reject.
+
+> **The budget is chosen at or below the plaintext ceiling, so PWD-T6's
+> ordering holds by construction rather than by arithmetic that has to be
+> re-checked whenever a consensus constant moves.** The budget's value is
+> **owed**, with the same discipline as `margin`: it is a bandwidth/latency
+> trade for initial sync, and picking it needs the sync measurements this round
+> does not have.
+
+**What this discharges — and what it does NOT, which is the correction this
+round owes:**
+
+- **PWD-T6's post-handshake limit** takes its *shape* from this table — the
+  maximum over it, which is `NOTIFY_RESPONSE_GET_OBJECTS`'s byte budget and
+  **not** the single-block bound a reader would take from the more visible row.
+  **Its value is not discharged**: the budget is owed, and 2002 is unbounded
+  until (a) above is ruled, so "2004 is the maximum" is a claim about shape,
+  not yet a proven ordering.
+- **PWC-A2** (bucket header length field) is **not** sized by this round. It
+  must express 2004's byte budget, and that budget does not have a value yet.
+  *An earlier version of this bullet declared it sized; that was premature, and
+  premature-clear is the more expensive direction — nobody re-checks a gate
+  that says it is closed.*
 - **PWD-T7's compression gate** gets its classification — **but from the
   *route*, not from this table, and the difference matters.** *An earlier
   version of this bullet said "every command in this table carries public
