@@ -1224,7 +1224,23 @@ RULED A DEFECT — the honest-path enumeration (§5.3) shows a span
 requested before a local pop and processed after it orphans on OUR
 action, and the arm answers by severing every connection from the
 origin plus a scored drop: the watermark bug's second instance, one
-layer out. The fix shape is R1b's: on in-loop orphan, stop punishing —
+layer out. **The automatic trigger is reachable and leads the ruling**
+(steering's automaticity ranking, answered at source): the
+checkpoints.json reload fires from `handle_notify_new_fluffy_block`
+(`protocol_handler.inl:712`) on any p2p thread, throttled to 600 s
+(`core.cpp:262`); `check_against_checkpoints` takes the same
+`m_blockchain_lock` the span loop acquires PER BLOCK and releases
+between adds — so a conflicting checkpoints file, written by the
+operator at any earlier time, detonates mid-span with no operator
+present: the node rolls back (discard, no re-homing), the span's next
+add orphans, and the node severs and scores the origin serving exactly
+the spans it requested. Post-rollback the node must re-sync toward the
+checkpoint chain — **the peers it just severed are the peers it
+needs**. The operator `pop_blocks` trigger is the same bug at lower
+severity (deliberate, rare, human-timed) and rides second. The posture
+inheritance was ranked first in reading order because of exactly this
+class; Q3b is its second instance, found by enumeration rather than by
+incident. The fix shape is R1b's: on in-loop orphan, stop punishing —
 clean up the span and fall back to the live path's re-sync semantics;
 the `:1407` queue-bookkeeping-mismatch drop KEEPS its teeth (it is the
 arm that independently establishes span misrepresentation, and it
