@@ -361,13 +361,22 @@ mod tests {
             "penalized tail reward != TAIL*(1-x^2): penalty must compose AFTER the floor"
         );
 
-        // Leg 3 — the ladder's operand equals the payer's pre-penalty
-        // quantity everywhere, mid-curve included (kills the V1 class).
-        let mid = s / 2;
+        // Leg 3 — the ESTIMATE operand contract, per the ADOPTED round-8
+        // amendment (whole-scalar): the operand is the M_r-NEUTRAL total
+        // view `max(curve, TAIL)` — `M_r` lives only inside the quantized
+        // scalar. Asserting `base_block_reward == r_eff` here would pin
+        // the REJECTED split and fail a correct implementation (Bugbot
+        // PR #614; maintainer T-1: pin the contract, not a function
+        // shape). The red half of the operand contract today is
+        // TOTALITY: past the asymptote the operand must be the tail, and
+        // the shipped estimate errors instead (FL-R16a's estimator
+        // dead-letter). The operand-equality half graduates against the
+        // named operand function the implementing PR introduces.
         assert_eq!(
-            base_block_reward(mid, &p).unwrap(),
-            r_eff(mid),
-            "estimate operand != payer pre-penalty quantity (R_eff) mid-curve under dormancy"
+            base_block_reward(s + tail, &p)
+                .unwrap_or_else(|e| panic!("estimate operand must be total, got {e:?}")),
+            tail,
+            "estimate operand != TAIL past the asymptote"
         );
     }
 
