@@ -2700,7 +2700,7 @@ checks no cardinality either.
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
 | **Bound the batch in bytes at release, and emit the remainder in the next flush** | The pool-flooder, who makes a victim emit one enormous `NOTIFY_NEW_TRANSACTIONS` — and the path observer, for whom an unbounded batch is a size signal proportional to arrival rate | **Adopted.** A byte bound is what PWD-B3's cap needs as its input, and splitting across flushes costs latency rather than correctness. **Bytes, not count**, for the same reason PWD-B3 rejected cardinality: transactions vary in size, so a count bounds nothing |
-| Bound by transaction count | The same | **Refused.** `CRYPTONOTE_MAX_TX_SIZE` is 1 MB, so any count `n` admits `n` MB — the bound would be nominal |
+| Bound by transaction count | The same | **Refused, but not because it bounds nothing.** `CRYPTONOTE_MAX_TX_SIZE` is 1 MB, so `n` transactions admit at most `n` MB — a **finite** bound, just a loose one that varies by a factor of thousands with the traffic mix. Bytes are adopted because they are **tighter and a direct input to PWD-B3's cap**, not because count is unbounded. *An earlier version of this cell said the bound would be nominal, which overstates the refused option — §1's sixth check, pointed at an alternative instead of at the adopted rule.* |
 | Leave unbounded; the packet limit catches it | The same | **Refused.** That is the fallback PWD-B3a already refused one surface over: a framing bound is not a statement about what the message is, and here it would make the *relay's* behaviour depend on a *framing* constant it never reads |
 
 **Bounding the release does not bound the queue, and the ruling has to say
@@ -2762,19 +2762,36 @@ adversary may send *known* ones at any rate.
 > before any of the four invoke entry points this bucket sits on.** A
 > post-transport rate limit cannot bound a pre-transport cost.
 
-**What does bound the pre-handshake phase today, and what does not.** PWD-T6
-caps the pre-handshake allowance at exactly one flight (1256/1160 B), so the
-*per-connection* buffer is bounded and small. PWD-B9 caps concurrent
-connections *per host*. **Neither bounds the rate at which new connections —
-each paying one ML-KEM decapsulation — may be opened across many hosts**, and
-that is precisely T5's adversary.
+**What does bound the pre-handshake phase today, and what does not — and the
+first version of this paragraph named the wrong mechanism, in the wrong
+direction.** PWD-T6 caps the pre-handshake allowance at exactly one flight
+(1256/1160 B), so the *per-connection* buffer is bounded and small.
 
-> **Open, with an owner and a reason it is not closed here: connection
-> admission *rate* is PWD-B9's surface, and PWD-B9 as briefed is a *cap*, not a
-> *rate*.** A cap on concurrent connections does not bound churn — connect,
-> force a decapsulation, disconnect, repeat. B9 must carry both or a row must
-> be minted, and **"cluster B owns it" is not an owner** (rule 22). Recorded in
-> FOLLOWUPS against PWD-B9.
+> **The decapsulation is forced by an *inbound* connection, so the bound that
+> matters is the inbound one — and that is PWC-E11, not PWD-B9.** PWD-B9 is
+> **outbound slot diversity** (`P2P_2_DISPATCH_BRIEF.md:502`), which says
+> nothing about connections a peer opens *to us*. The inbound cap is
+> `has_too_many_connections` (`src/p2p/net_node.inl:3089` **at this round's pin**; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
+> on `cntxt.m_is_income` — and **returns permit for every non-public zone**, so
+> **on Tor there is no inbound per-host cap at all.**
+
+**So two gaps, not one.** Even on clearnet, a per-host *concurrency* cap does
+not bound **churn** — connect, force one decapsulation, disconnect, repeat —
+and on anonymity zones there is no per-host bound of either kind. That is
+precisely PWD-T5's adversary, and neither PWD-T6 nor PWC-E11 reaches it.
+
+> **Given its own owner rather than folded into PWD-B9.** Widening B9 informally
+> would leave the brief, the index and this document disagreeing about what B9
+> means, and a row that means different things in different documents is worse
+> than a missing row. Queued in FOLLOWUPS as **pre-handshake admission rate**,
+> citing PWC-E11 for the current state — with the anonymity-zone gap named,
+> because a cap that exempts Tor is the kind of "bound" that reads as one
+> without being one.
+
+> **Open, and it is *unruled* rather than blocked** — no decision waits on
+> another, so nothing licenses deferring it beyond this sub-round's surface.
+> Recorded in FOLLOWUPS with PWC-E11 as the current state and the
+> anonymity-zone exemption named.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -2807,7 +2824,7 @@ was chosen against the wrong traffic.
 (`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
 (PWC-E4).
 
-> **Ruled: a cadence an off-path observer can correlate across connections
+> **Ruled: a cadence a *path* observer can correlate across connections
 > gets an independently drawn per-connection deadline; a cadence that is purely
 > local scheduling stays a single fixed timer.**
 
@@ -2850,10 +2867,31 @@ who watches long enough the *mean* is still a fingerprint. **The claim is
 narrow deliberately** (§1's sixth check): this is not an anonymity mechanism,
 it is the removal of one cheap correlation.
 
-**The mechanism is not invented here.** The relay layer already draws
-memoryless delays and jitters its noise cadence; **B2 adopts that lane's
-mechanism rather than minting a second randomisation scheme**, so there is one
-notion of jittered cadence in the tree rather than two that drift.
+**The mechanism is not invented here — but "the relay lane's mechanism" is
+two mechanisms, and the row has to say which.** That lane draws **memoryless**
+delays for *fluff* and **bounded-uniform** `min + U(0, jitter)` for the *noise
+cadence*, and they are not interchangeable.
+
+> **Adopted: the bounded-uniform form, `min + U(0, jitter)` — the
+> `NoiseCadence` *shape*, explicitly not its shipped values.**
+
+**Bounded, not memoryless, and the reason is liveness rather than taste.**
+Timed-sync is how a node learns it has fallen behind; an exponential draw is
+unbounded above, so a node could go arbitrarily long without one. Fluff can
+afford that — memorylessness is exactly what defeats timing inference on
+propagation — but a liveness cadence cannot.
+
+> **The window is derived under a fixed constraint: the mean stays at
+> `P2P_DEFAULT_HANDSHAKE_INTERVAL` (60 s).** This row buys decorrelation, not a
+> load change, and preserving the mean is what keeps the two separable. **The
+> `min`/`jitter` split is owed** (any pair with `min + jitter/2 = 60 s`
+> satisfies the constraint; which pair is a trade between worst-case staleness
+> and how much phase separation the window actually buys).
+
+> **Copying `NoiseCadence::shipped()` would be the wrong reading and is
+> refused explicitly:** it is `3.333 s + U[0, 3.334 s]`, a mean of **5 s**
+> (`rust/shekyl-relay-privacy/src/schedule.rs:741-753`), which would change
+> timed-sync's frequency by 12× while claiming to change only its phase.
 
 **Falsifier.** **Reopen if measured phase correlation between two connections
 of the same node stays distinguishable after jitter** — the property is
