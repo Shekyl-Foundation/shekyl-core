@@ -17,9 +17,6 @@ Default. Lands before genesis if it should exist at launch.
 - **The block-weight penalty-free-zone arbitration was punted and never landed.** `GENESIS_TX_WIRE_FORMAT.md` :806–811 flagged the `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` V1/V2/V5 lineage (300 000 consumed as given) as "the arbitration belongs to the economics doc"; no doc ever received it, and the long-term 1.7× clamps ride along unexamined (owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G6b; C2 batch R2).
   - Target: pre-genesis
 
-- **A failed curve-tree leaf construction silently omits the output from the tree.** `shekyl_construct_curve_tree_leaf`'s false return at blockchain_db.cpp:570–576 (and the `continue` arms just above) drops the output from pending insertion with no abort and no verify-time twin — the block connects and the output is deterministically, permanently unspendable on every node; decide fail-closed vs. documented-skip as design-round input (owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-L11).
-  - Target: pre-genesis
-
 - **Attestation verify must move behind PoW before credit-wire population activates.** `verify_block_attestation` runs before `check_hash` on both acceptance paths (blockchain.cpp:5738 < 5818; 2253 < 2347) — free pre-cutover (empty witness), but post-cutover it does up to one hybrid-signature verify per pass record before any work is proven, a DoS surface; the Phase-5 ordering constraint is pinned at both call sites (re-filed: the earlier entry survives only as the truncated headline "Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy") (owner: [`ARCHIVAL_CREDIT_WIRE.md`](design/ARCHIVAL_CREDIT_WIRE.md) §3; census: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §6.7).
   - Target: pre-genesis
 

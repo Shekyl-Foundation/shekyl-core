@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **Consensus hardening: the curve-tree leaf collector aborts instead of
+  silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
+  collector discarded an output on a `continue` or an unchecked construct
+  verdict, and a dropped output is deterministically unspendable with no
+  verify-time twin. All three are unreachable for any validated transaction —
+  CEN-H12/F8's sole-output-type whitelist, four `outPk.size()` gates, and the
+  canonical/prime-order point gates on output keys and commitment masks — so
+  they now abort rather than skip, each naming the gate that forecloses it.
+  Those gates carry reverse pointers warning that relaxing them surfaces as a
+  connect-time abort, and a Rust falsifier asserts they accept only what the
+  leaf builder can encode. The FOLLOWUPS row that described this as a live
+  fund-loss path is corrected: it was latent.
+
 - **The drain byte-parity e2e pinned a fixture state that never existed.**
   `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
   sweep-all bond leaves exactly ONE persona funding record; the bond post's
@@ -148,9 +161,12 @@
   watermark single-writer/no-revert invariant [6/6].
 
 - **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
-  register now disposes **all 102** bucket-1/2 census rows: **97
-  CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-L11 with L12
-  coupled; CEN-B5's rule-71 FAKECHAIN skip). **Both S-graded findings ran the
+  register disposes the **102** bucket-1/2 census rows that existed when it
+  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
+  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
+  whose fix has landed and whose promotion is owed at a merged sha). The
+  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
+  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
   no S-graded divergence remains and the register no longer gates DRS-0. Each
