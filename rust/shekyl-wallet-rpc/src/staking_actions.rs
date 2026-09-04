@@ -34,8 +34,7 @@ use crate::params::{parse_atomic_units, parse_optional_object, parse_required_ob
 use crate::project::{atomic_units_string, pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    CollectStatusView, CollectUnstakedResult, DrainResult, DrainVerdictView, GetDrainBalanceResult,
-    UnstakeResult,
+    CollectUnstakedResult, DrainResult, DrainVerdictView, GetDrainBalanceResult, UnstakeResult,
 };
 
 /// Params for `stake_in`: `{ amount }` only. The `P` receive address is
@@ -179,21 +178,32 @@ pub(crate) async fn drain(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize drain: {e}")))
 }
 
-/// Project the Engine's [`DrainOutcome`] onto the OpenAPI `DrainResult`
-/// shape — same field discipline as `submit_pending_tx_result`
-/// (`confirmed_height` present iff `ALREADY_IN_CHAIN`).
-fn drain_result(outcome: &DrainOutcome) -> DrainResult {
-    match outcome {
-        DrainOutcome::Broadcast { tx_hash } => DrainResult {
-            tx_hash: tx_hash.to_string(),
+/// Project a sealed-then-dispatched submit onto the OpenAPI `DrainResult`
+/// shape — shared by `drain` and `unstake` so the two receipts cannot
+/// drift (`confirmed_height` present iff `ALREADY_IN_CHAIN`).
+fn sealed_submit_result(tx_hash: String, height: Option<u64>) -> DrainResult {
+    match height {
+        None => DrainResult {
+            tx_hash,
             verdict: DrainVerdictView::Broadcast,
             confirmed_height: None,
         },
-        DrainOutcome::AlreadyInChain { tx_hash, height } => DrainResult {
-            tx_hash: tx_hash.to_string(),
+        Some(h) => DrainResult {
+            tx_hash,
             verdict: DrainVerdictView::AlreadyInChain,
-            confirmed_height: Some(i64::try_from(*height).unwrap_or(i64::MAX)),
+            confirmed_height: Some(i64::try_from(h).unwrap_or(i64::MAX)),
         },
+    }
+}
+
+/// Project the Engine's [`DrainOutcome`] onto the OpenAPI `DrainResult`
+/// shape — same field discipline as `submit_pending_tx_result`.
+fn drain_result(outcome: &DrainOutcome) -> DrainResult {
+    match outcome {
+        DrainOutcome::Broadcast { tx_hash } => sealed_submit_result(tx_hash.to_string(), None),
+        DrainOutcome::AlreadyInChain { tx_hash, height } => {
+            sealed_submit_result(tx_hash.to_string(), Some(*height))
+        }
     }
 }
 
@@ -226,17 +236,11 @@ pub(crate) async fn unstake(
         (shared, state.daemon.address.clone())
     };
     let outcome = StakeFacade::unstake(shared, &daemon_address).await?;
-    let result = match outcome {
-        UnstakeOutcome::Broadcast { tx_hash } => UnstakeResult {
-            tx_hash: tx_hash.to_string(),
-            verdict: DrainVerdictView::Broadcast,
-            confirmed_height: None,
-        },
-        UnstakeOutcome::AlreadyInChain { tx_hash, height } => UnstakeResult {
-            tx_hash: tx_hash.to_string(),
-            verdict: DrainVerdictView::AlreadyInChain,
-            confirmed_height: Some(i64::try_from(height).unwrap_or(i64::MAX)),
-        },
+    let result: UnstakeResult = match outcome {
+        UnstakeOutcome::Broadcast { tx_hash } => sealed_submit_result(tx_hash.to_string(), None),
+        UnstakeOutcome::AlreadyInChain { tx_hash, height } => {
+            sealed_submit_result(tx_hash.to_string(), Some(height))
+        }
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize unstake: {e}")))
@@ -259,18 +263,12 @@ pub(crate) async fn collect_unstaked(
             tx_hash,
             swept,
             remainder,
-        } => CollectUnstakedResult {
-            status: CollectStatusView::Swept,
-            tx_hash: Some(tx_hash.to_string()),
-            swept: Some(atomic_units_string(swept)),
-            remainder: Some(atomic_units_string(remainder)),
+        } => CollectUnstakedResult::Swept {
+            tx_hash: tx_hash.to_string(),
+            swept: atomic_units_string(swept),
+            remainder: atomic_units_string(remainder),
         },
-        CollectOutcome::NothingLeft => CollectUnstakedResult {
-            status: CollectStatusView::NothingLeft,
-            tx_hash: None,
-            swept: None,
-            remainder: None,
-        },
+        CollectOutcome::NothingLeft => CollectUnstakedResult::NothingLeft,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize collect_unstaked: {e}")))
@@ -284,10 +282,11 @@ mod tests {
     use super::*;
 
     /// The F-1 pin, at the deserializer (the actual enforcement): an extra
-    /// key beside `amount` is a params error, never silently dropped. This
-    /// bites against removing `deny_unknown_fields` from any of the three
-    /// params structs; the HTTP suite covers the same property end-to-end
-    /// with the wire `-32602` code.
+    /// key is a params error, never silently dropped. This bites against
+    /// removing `deny_unknown_fields` from any params struct here; the HTTP
+    /// suite covers the same property end-to-end with the wire `-32602`
+    /// code. The exit pair is in scope: a `p_slot` / `amount` / `fee` on
+    /// `unstake` or `collect_unstaked` is the anti-shape this PR refuses.
     #[test]
     fn extra_params_are_rejected_not_dropped() {
         for (method, bad) in [
@@ -314,6 +313,21 @@ mod tests {
         .expect_err("must reject");
         assert!(matches!(err, WalletRpcError::InvalidParams(_)));
 
+        for (method, bad) in [
+            ("unstake", json!({ "p_slot": 1 })),
+            ("unstake", json!({ "amount": "5" })),
+            ("unstake", json!({ "fee": "1" })),
+            ("collect_unstaked", json!({ "p_slot": 1 })),
+            ("collect_unstaked", json!({ "amount": "5" })),
+            ("collect_unstaked", json!({ "fee": "1" })),
+        ] {
+            let err = parse_optional_object::<ExitParams>(&bad, method).expect_err("must reject");
+            assert!(
+                matches!(err, WalletRpcError::InvalidParams(_)),
+                "{method} {bad}: {err:?}"
+            );
+        }
+
         // And the well-formed shapes still parse.
         parse_required_object::<StakeInParams>(&json!({ "amount": "5" }), "stake_in")
             .expect("well-formed stake_in params");
@@ -321,6 +335,10 @@ mod tests {
             .expect("well-formed drain params");
         parse_optional_object::<GetDrainBalanceParams>(&Value::Null, "get_drain_balance")
             .expect("omitted get_drain_balance params");
+        parse_optional_object::<ExitParams>(&Value::Null, "unstake")
+            .expect("omitted unstake params");
+        parse_optional_object::<ExitParams>(&json!({}), "collect_unstaked")
+            .expect("empty collect_unstaked params");
     }
 
     /// The two result arms serialize to the contract's tagged shapes: the
@@ -363,6 +381,36 @@ mod tests {
         .expect("serialize");
         assert_eq!(in_chain["verdict"], "ALREADY_IN_CHAIN");
         assert_eq!(in_chain["confirmed_height"], 4242);
+    }
+
+    /// `CollectUnstakedResult` is internally tagged like
+    /// `GetDrainBalanceResult`: SWEPT carries the three required fields
+    /// (a missing remainder cannot deserialize — the completion fact is
+    /// not optional), NOTHING_LEFT carries only the tag.
+    #[test]
+    fn collect_unstaked_result_arms_match_the_contract_shapes() {
+        let swept = serde_json::to_value(CollectUnstakedResult::Swept {
+            tx_hash: "ab".repeat(32),
+            swept: "100".into(),
+            remainder: "0".into(),
+        })
+        .expect("serialize");
+        assert_eq!(swept["status"], "SWEPT");
+        assert_eq!(swept["remainder"], "0");
+        assert!(swept.get("tx_hash").is_some());
+
+        let empty = serde_json::from_value::<CollectUnstakedResult>(json!({
+            "status": "SWEPT",
+            "tx_hash": "ab".repeat(32),
+            "swept": "100"
+        }));
+        assert!(
+            empty.is_err(),
+            "SWEPT without remainder must not deserialize: {empty:?}"
+        );
+
+        let done = serde_json::to_value(CollectUnstakedResult::NothingLeft).expect("serialize");
+        assert_eq!(done, json!({ "status": "NOTHING_LEFT" }));
     }
 
     /// The engine outcome → wire mapping, all three arms — in particular the

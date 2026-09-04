@@ -50,8 +50,9 @@
   (engine-resolved — the wire never names a slot, fee is the canonical
   P-lane floor, CLI carries the irreversibility confirmation), and
   `collect_unstaked` sweeps the released collateral to principal with an
-  engine-computed exact payment (`Σ selected − fee`, zero change), its
-  reply's `remainder` the completion fact. A single overloaded verb was
+  engine-computed exact payment (`Σ selected − fee`, zero change); a
+  `SWEPT` reply *requires* `remainder` (the completion fact — optional
+  fields cannot forge "done"). A single overloaded verb was
   rejected for irreversible-step mis-selection, and the sweep deliberately
   does not ride `drain`'s firewall-pinned active-persona shape — the
   RESERVED→shipped reconciliation is recorded in the OpenAPI census.

@@ -76,7 +76,7 @@ use tokio::sync::RwLock;
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::drain_assembly::{AssembledDrain, DrainDestination};
 use super::drain_orchestrator::{
-    orchestrate_drain, DrainCtx, DrainIntent, DrainOrchestrationError,
+    orchestrate_drain, DrainCtx, DrainIntent, DrainMoved, DrainOrchestrationError,
 };
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
@@ -105,14 +105,10 @@ pub(crate) struct DrainReceipt {
     pub drain: AssembledDrain,
     /// The daemon's submit verdict (network-exposed / already mined).
     pub submit: SubmitSuccess,
-    /// The principal payment this drain carries — the caller's own figure on
-    /// a `Payment` intent, the pipeline's `Σ selected − fee` on a
-    /// `TerminalSweep` (the figure the caller structurally cannot supply).
-    pub payment: AtomicUnits,
-    /// `TerminalSweep` only: the pool residue this pass leaves (immature
-    /// outputs plus mature overflow past the input cap) — the completion
-    /// fact `collect_unstaked`'s reply owes. `None` on a payment drain.
-    pub sweep_remainder: Option<AtomicUnits>,
+    /// What this drain moved — the output twin of the request's
+    /// [`DrainIntent`]. A sweep's remainder is required on that arm; a
+    /// payment cannot carry one.
+    pub moved: DrainMoved,
 }
 
 /// Why the drain request refused, at any rung: before the pipeline (no stake
@@ -432,8 +428,7 @@ where
         Ok(DrainReceipt {
             drain: assembled,
             submit,
-            payment: orchestrated.payment,
-            sweep_remainder: orchestrated.sweep_remainder,
+            moved: orchestrated.moved,
         })
     }
 }

@@ -266,6 +266,30 @@ pub(crate) enum DrainIntent {
     TerminalSweep(TerminalExitObserved),
 }
 
+/// What one orchestrated drain moved — the output twin of [`DrainIntent`].
+/// A payment has no remainder; a sweep's remainder is required. Flattening
+/// that into `Option` made a missing completion fact representable, and
+/// `collect_unstaked` then had to reconstruct the invariant at the façade.
+#[derive(Debug)]
+pub(crate) enum DrainMoved {
+    /// User-target payment; change (if any) returns to `P`.
+    Payment(AtomicUnits),
+    /// Terminal sweep: `payment` is `Σ selected − fee`, `remainder` is the
+    /// unfiltered slot residue (the completion fact).
+    Sweep {
+        payment: AtomicUnits,
+        remainder: AtomicUnits,
+    },
+}
+
+impl DrainMoved {
+    fn payment(&self) -> AtomicUnits {
+        match *self {
+            Self::Payment(p) | Self::Sweep { payment: p, .. } => p,
+        }
+    }
+}
+
 /// The prepared drain operands: the two projections the guarded stages read.
 ///
 /// Minting this is the projection act — the record vector's `{lineage,
@@ -584,22 +608,14 @@ fn sweep_slot_remainder(
 }
 
 /// One orchestrated drain: the actor's assembled reply plus the pipeline's
-/// own resolution of what it moves.
-///
-/// `payment` restates the caller's figure on the `Payment` intent; on a
-/// `TerminalSweep` it is the pipeline's computed `Σ selected − fee` — the
-/// figure the caller structurally cannot supply, carried out so the receipt
-/// can say what moved. `sweep_remainder` is the sweep pass's pool residue
-/// (`None` on a payment drain): the completion fact `collect_unstaked`'s
-/// reply owes its caller.
+/// own resolution of what it moves ([`DrainMoved`] — the output twin of
+/// [`DrainIntent`], so a sweep receipt cannot forget its remainder and a
+/// payment receipt cannot carry one).
 pub(crate) struct OrchestratedDrain {
     /// The actor's assembled, unbroadcast reply.
     pub assembled: AssembledDrain,
-    /// The principal payment this drain carries.
-    pub payment: AtomicUnits,
-    /// Terminal sweep only: what the pool still holds after this pass
-    /// (immature outputs plus mature overflow past the input cap).
-    pub sweep_remainder: Option<AtomicUnits>,
+    /// What this drain moved.
+    pub moved: DrainMoved,
 }
 
 /// The exit-fee reserve a drain of a persona in this liveness state must leave
@@ -707,8 +723,10 @@ fn scoped_records(
 ///    A drain anchors identically to a bond, so it reuses the exported helper
 ///    rather than re-deriving `tip − REF_ANCHOR_AGE`.
 /// 2. **Scope + plan** — restrict to the handle slot's unreserved records
-///    ([`scoped_records`]) and run the F-D1 planner ([`plan_drain`]: project →
-///    amount → select, the lineage-blind taint-carve) for `payment + fee`.
+///    ([`scoped_records`]) and plan per the intent: a payment runs the F-D1
+///    amount+select half ([`plan_from_operands`]) for `payment + fee`; a
+///    terminal sweep runs [`select_for_sweep`] (payment is an output of
+///    selection; the F-D1 amount stage is not consulted).
 /// 3. **Re-map** — the planner returns leaf positions (gindexes); this trust
 ///    boundary re-maps them to the full records the path assembly needs
 ///    (`output_key`, `commitment`), preserving the planner's selection order.
@@ -767,10 +785,10 @@ pub(crate) async fn orchestrate_drain(
     let operands = project_drain_operands(&scoped, reference_height, ctx.reserved)?;
     let scoped_spendable = operands.balance.spendable.to_raw();
 
-    let (plan, payment, sweep_remainder) = match ctx.intent {
+    let (plan, moved) = match ctx.intent {
         DrainIntent::Payment(payment) => {
-            let payment = payment.to_raw();
             let target = payment
+                .to_raw()
                 .checked_add(ctx.fee)
                 .ok_or(DrainError::AmountOverflow)?;
 
@@ -785,7 +803,7 @@ pub(crate) async fn orchestrate_drain(
 
             let plan =
                 plan_from_operands(&operands, reference_height, AtomicUnits::from_raw(target))?;
-            (plan, payment, None)
+            (plan, DrainMoved::Payment(payment))
         }
         DrainIntent::TerminalSweep(_witness) => {
             // The witness proposes; the seam's own basis resolution disposes
@@ -813,7 +831,13 @@ pub(crate) async fn orchestrate_drain(
                 input_total: sweep.input_total,
                 change: AtomicUnits::ZERO,
             };
-            (plan, sweep.payment.to_raw(), Some(remainder))
+            (
+                plan,
+                DrainMoved::Sweep {
+                    payment: sweep.payment,
+                    remainder,
+                },
+            )
         }
     };
 
@@ -899,15 +923,11 @@ pub(crate) async fn orchestrate_drain(
             funding,
             tree_ctx,
             dest: ctx.dest,
-            payment_amount: payment,
+            payment_amount: moved.payment().to_raw(),
             fee: ctx.fee,
         })
         .await?;
-    Ok(OrchestratedDrain {
-        assembled,
-        payment: AtomicUnits::from_raw(payment),
-        sweep_remainder,
-    })
+    Ok(OrchestratedDrain { assembled, moved })
 }
 
 #[cfg(test)]

@@ -1307,6 +1307,46 @@ mod tests {
         }
     }
 
+    /// PR-C exit pair: no arguments, by contract. Extra slot/amount/fee
+    /// tokens are a hard diagnostic naming the no-steering grammar — the
+    /// CLI-side half of the F-1 `-32602` pin. Bitten red by accepting a
+    /// trailing token.
+    #[test]
+    fn unstake_and_collect_unstaked_parse_no_args() {
+        assert!(matches!(parse("unstake"), ResolvedCommand::Unstake));
+        assert!(matches!(
+            parse("collect_unstaked"),
+            ResolvedCommand::CollectUnstaked
+        ));
+        for line in [
+            "unstake 1",
+            "unstake 1.0",
+            "unstake --slot 0",
+            "unstake --fee 1",
+            "unstake extra",
+            "collect_unstaked 1",
+            "collect_unstaked 1.0",
+            "collect_unstaked --slot 0",
+            "collect_unstaked --amount 5",
+            "collect_unstaked extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    let verb = if line.starts_with("collect") {
+                        "collect_unstaked"
+                    } else {
+                        "unstake"
+                    };
+                    assert!(
+                        message.contains(verb) && message.contains("no arguments"),
+                        "{line:?} diagnostic must name the no-argument grammar: {message}"
+                    );
+                }
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
+            }
+        }
+    }
+
     /// WI-RPC-5 staking actions: exactly one amount, no flags. A
     /// flag-shaped token is a hard diagnostic naming the no-steering
     /// grammar — the CLI-side half of the F-1 `-32602` pin.

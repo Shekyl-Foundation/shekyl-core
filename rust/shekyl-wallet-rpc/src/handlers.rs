@@ -72,8 +72,8 @@ pub async fn dispatch(
         "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
         "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
         "staking_info" => staking::staking_info(tenants, params).await,
-        // WI-RPC-5 archival principal staking actions. `unstake` stays
-        // `-32601` (RESERVED on the Unbond producer).
+        // WI-RPC-5 archival principal staking actions + PR-C exit pair.
+        // `unstake` / `collect_unstaked` shipped; the wire never names a slot.
         "stake_in" => staking_actions::stake_in(tenants, params).await,
         "get_drain_balance" => staking_actions::get_drain_balance(tenants, params).await,
         "drain" => staking_actions::drain(tenants, params).await,

@@ -311,7 +311,8 @@ info:
   # 0.3.0: PR-C — the composed exit: unstake / collect_unstaked (the
   # RESERVED unstake entry became the shipped contract; reconciliation in
   # the census), codes -29513..-29528, the {swept, remainder} completion
-  # contract, and the released-vs-held dispatch dispositions.
+  # contract (CollectUnstakedResult is oneOf: SWEPT requires remainder),
+  # and the released-vs-held dispatch dispositions.
   version: 0.3.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -2503,33 +2504,44 @@ components:
       properties: {}
 
     CollectUnstakedResult:
-      type: object
-      required: [status]
       description: >
-        A SWEPT reply alone is NOT completion — `remainder` is the
-        completion fact: "0" means nothing remains beyond this pass;
-        nonzero means call again once the residue matures or this pass
-        confirms. The engine knows the remainder and the caller cannot
-        infer it from any payment figure, which is why it is on the wire
-        rather than implied. NOTHING_LEFT means the exited pool is
-        already empty: the collection is complete and the funded-gated
-        retirement proceeds engine-side on its own (an active persona
-        retires after its next rotation).
-      properties:
-        status:
-          type: string
-          enum: [SWEPT, NOTHING_LEFT]
-        tx_hash:
-          $ref: "#/components/schemas/Hex32"
-          description: SWEPT only — the pass's transaction hash.
-        swept:
-          $ref: "#/components/schemas/AtomicUnits"
-          description: SWEPT only — what this pass moves to principal.
-        remainder:
-          $ref: "#/components/schemas/AtomicUnits"
-          description: >
-            SWEPT only — what the pool still holds beyond this pass
-            (immature payouts plus mature overflow past the input cap).
+        Internally tagged (status). A SWEPT reply alone is NOT completion
+        — `remainder` is required on that arm and is the completion fact:
+        "0" means nothing remains beyond this pass; nonzero means call
+        again once the residue matures or this pass confirms. The engine
+        knows the remainder and the caller cannot infer it from any
+        payment figure, which is why it is on the wire rather than
+        implied. NOTHING_LEFT means the exited pool is already empty: the
+        collection is complete and the funded-gated retirement proceeds
+        engine-side on its own (an active persona retires after its next
+        rotation).
+      oneOf:
+        - type: object
+          required: [status, tx_hash, swept, remainder]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: SWEPT
+            tx_hash:
+              $ref: "#/components/schemas/Hex32"
+              description: The pass's transaction hash.
+            swept:
+              $ref: "#/components/schemas/AtomicUnits"
+              description: What this pass moves to principal.
+            remainder:
+              $ref: "#/components/schemas/AtomicUnits"
+              description: >
+                What the pool still holds beyond this pass (immature
+                payouts plus mature overflow past the input cap). "0" is
+                completion.
+        - type: object
+          required: [status]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: NOTHING_LEFT
 
     # ── Proofs — WI-RPC-3 (Phase 2c) ─────────────────────────────────
     # DLEQ-based payment and reserve proofs over rust/shekyl-proofs. Two

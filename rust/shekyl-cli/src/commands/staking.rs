@@ -17,7 +17,7 @@
 
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{
-    CollectStatusView, CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
+    CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
 };
 
 use super::{
@@ -495,33 +495,32 @@ pub fn cmd_collect_unstaked(rpc: &RpcSession) {
     println!("Collecting (this may take a while)...");
     match rpc.call("collect_unstaked", json!({})) {
         Ok(val) => match serde_json::from_value::<CollectUnstakedResult>(val.clone()) {
-            Ok(result) => match result.status {
-                CollectStatusView::Swept => {
-                    let swept = result.swept.as_deref().unwrap_or("?");
+            Ok(result) => match result {
+                CollectUnstakedResult::Swept {
+                    tx_hash,
+                    swept,
+                    remainder,
+                } => {
                     println!(
                         "Collection sent: {} ({} SKL on the way to this wallet).",
-                        result.tx_hash.as_deref().unwrap_or("?"),
-                        format_amount_str(swept),
+                        tx_hash,
+                        format_amount_str(&swept),
                     );
-                    match result.remainder.as_deref() {
-                        Some("0") => {
-                            println!(
-                                "Nothing further remains: once this confirms, the \
-                                 collection is complete."
-                            );
-                        }
-                        Some(rest) => {
-                            println!(
-                                "{} SKL still remains in the staking balance (not yet \
-                                 spendable, or beyond this pass's size).",
-                                format_amount_str(rest)
-                            );
-                            println!("Run \"collect_unstaked\" again once this pass confirms.");
-                        }
-                        None => {}
+                    if remainder == "0" {
+                        println!(
+                            "Nothing further remains: once this confirms, the \
+                             collection is complete."
+                        );
+                    } else {
+                        println!(
+                            "{} SKL still remains in the staking balance (not yet \
+                             spendable, or beyond this pass's size).",
+                            format_amount_str(&remainder)
+                        );
+                        println!("Run \"collect_unstaked\" again once this pass confirms.");
                     }
                 }
-                CollectStatusView::NothingLeft => {
+                CollectUnstakedResult::NothingLeft => {
                     println!("Nothing left to collect: the exit's funds are already in");
                     println!("this wallet (or on their way in a previous pass).");
                 }

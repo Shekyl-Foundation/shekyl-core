@@ -101,35 +101,43 @@ pub(crate) enum DrainSelectError {
     Overflow,
 }
 
+/// Mature candidates, ranked largest-first with output-id-ascending ties —
+/// the engine's established selection order (`output_selector.rs`).
+///
+/// Shared by [`select_for_drain`] and [`select_for_sweep`] so the two
+/// policies cannot drift on which outputs they consider or in what order
+/// they take them; they only diverge on the stop condition (cover a target
+/// vs take up to the input cap). `sort_by` is stable, so amount-only ties
+/// would preserve the caller's candidate order; the id tiebreak makes
+/// ranking independent of input order and fully deterministic.
+/// Lineage-blind (never orders on lineage/epoch/height). The maturity
+/// filter is defensive: the projection already hands in the mature subset,
+/// but re-checking keeps this stage correct for any candidate slice.
+fn ranked_mature(
+    candidates: &[DrainCandidate],
+    reference_height: BlockHeight,
+) -> Vec<&DrainCandidate> {
+    let mut mature: Vec<&DrainCandidate> = candidates
+        .iter()
+        .filter(|c| c.spendable_height <= reference_height)
+        .collect();
+    mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
+    mature
+}
+
 /// Select a lineage-blind set of mature candidates whose amounts cover
 /// `amount`.
 ///
 /// Selection reads only `{amount, spendable_height, output_id}` off each
-/// candidate: mature candidates (`spendable_height <= reference_height`) are
-/// taken largest-first (ties broken by output id ascending) — a fully
-/// deterministic, lineage-blind policy that minimises the input count — until
-/// their running total reaches the drain amount. The maturity filter is
-/// defensive: the projection already hands in the mature subset, but
-/// re-checking keeps this stage correct for any candidate slice.
+/// candidate: the ranked mature prefix is taken until the running total
+/// reaches the drain amount. Ranking is [`ranked_mature`].
 pub(crate) fn select_for_drain(
     candidates: &[DrainCandidate],
     amount: DrainAmount,
     reference_height: BlockHeight,
 ) -> Result<DrainSelection, DrainSelectError> {
     let target = amount.get();
-
-    let mut mature: Vec<&DrainCandidate> = candidates
-        .iter()
-        .filter(|c| c.spendable_height <= reference_height)
-        .collect();
-    // Largest-first, ties broken by output id ascending — the engine's
-    // established selection order (`output_selector.rs`). `sort_by` is stable,
-    // so amount-only ties would preserve the caller's candidate order, making
-    // the chosen set depend on how the record slice was built; the id tiebreak
-    // makes selection independent of input order and fully deterministic.
-    // Lineage-blind (never orders on lineage/epoch/height), and minimises the
-    // number of inputs the drain consumes.
-    mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
+    let mature = ranked_mature(candidates, reference_height);
 
     let mut chosen = Vec::new();
     let mut input_total = AtomicUnits::ZERO;
@@ -262,19 +270,14 @@ pub(crate) fn select_for_sweep(
     fee: AtomicUnits,
     reference_height: BlockHeight,
 ) -> Result<SweepSelection, SweepSelectError> {
-    let mut mature: Vec<&DrainCandidate> = candidates
-        .iter()
-        .filter(|c| c.spendable_height <= reference_height)
-        .collect();
+    let mature = ranked_mature(candidates, reference_height);
     if mature.is_empty() {
         return Err(SweepSelectError::NothingSpendable);
     }
-    // The same ordering as `select_for_drain`, same rationale.
-    mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
 
     let mut chosen = Vec::new();
     let mut input_total = AtomicUnits::ZERO;
-    for candidate in &mature {
+    for candidate in mature {
         if chosen.len() == shekyl_tx_builder::MAX_INPUTS {
             break;
         }

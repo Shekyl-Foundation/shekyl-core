@@ -223,8 +223,9 @@ pub enum WalletRpcErrorCode {
     /// Collect: the released collateral is not spendable yet — wait for
     /// maturity and retry.
     CollectNotSpendableYet = -29524,
-    /// Collect: the remaining residue is smaller than the fee to move it —
-    /// the named dust residual; it stays in the persona's pool.
+    /// Collect: the remaining residue cannot fund the fee plus a payable
+    /// amount (the 2-atomic-unit two-output split floor) — the named dust
+    /// residual; it stays in the persona's pool.
     CollectDustRemainder = -29525,
     /// Collect: a sweep pass is already in flight for this persona (or a
     /// concurrent operation raced this pass's inputs — `data.cause`).

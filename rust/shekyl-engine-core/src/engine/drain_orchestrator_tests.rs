@@ -271,9 +271,16 @@ fn retired_sweep_ignores_the_reserve() {
 ///    `Engine` method — no `self_arc`, no `Arc<RwLock<Self>>` (the
 ///    `ENGINE_COMPOSITION_DECOMPOSITION.md` discipline the engine-side
 ///    entry delegates through);
-/// 2. selection routes ONLY through the F-D1 planner ([`plan_drain`]) —
-///    never the bond sweep (`sweep_funding_outputs`), which would bypass
-///    the §12.3 drain-amount taint-carve.
+/// 2. the **body of `orchestrate_drain`** (not the file — `plan_drain` is
+///    still defined here as the public planner, so grepping the file for
+///    it is vacuous) routes the payment arm through the F-D1 amount+select
+///    half ([`plan_from_operands`]) and the sweep arm through
+///    [`select_for_sweep`], never the bond sweep (`sweep_funding_outputs`),
+///    which would bypass the §12.3 drain-amount taint-carve.
+///
+/// Named edits that make this red: delete the `plan_from_operands(` call
+/// from the payment arm; delete the `select_for_sweep(` call from the
+/// sweep arm; add a `sweep_funding_outputs(` call in the body.
 #[test]
 fn orchestrate_drain_is_a_free_function_over_the_fd1_carve() {
     let (src, _tests) = include_str!("drain_orchestrator.rs")
@@ -294,14 +301,33 @@ fn orchestrate_drain_is_a_free_function_over_the_fd1_carve() {
         "orchestrate_drain must not hold the Engine lock"
     );
 
-    let carve_call = concat!("plan", "_drain(");
+    let body: String = src
+        .split_once(free_fn)
+        .expect("orchestrate_drain must exist to pin its body")
+        .1
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//") && !t.starts_with("///")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let payment_planner = concat!("plan_from", "_operands(");
     assert!(
-        src.contains(carve_call),
-        "selection must route through the F-D1 planner (plan_drain)"
+        body.contains(payment_planner),
+        "the payment arm must route through the F-D1 amount+select half \
+         (plan_from_operands) — grepping the file for plan_drain is vacuous \
+         because this module still defines that wrapper"
+    );
+    let sweep_select = concat!("select_for", "_sweep(");
+    assert!(
+        body.contains(sweep_select),
+        "the sweep arm must route through select_for_sweep"
     );
     let bond_sweep = concat!("sweep", "_funding_outputs(");
     assert!(
-        !src.contains(bond_sweep),
+        !body.contains(bond_sweep),
         "the drain must not select via the bond sweep (it bypasses the §12.3 carve)"
     );
 }
