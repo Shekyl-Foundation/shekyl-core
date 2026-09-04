@@ -1024,35 +1024,10 @@ bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
 
 bool t_rpc_command_executor::hard_fork_info(uint8_t version)
 {
-    cryptonote::COMMAND_RPC_HARD_FORK_INFO::request req;
-    cryptonote::COMMAND_RPC_HARD_FORK_INFO::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.version = version;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "hard_fork_info", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_hard_fork_info(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    version = version > 0 ? version : res.voting;
-    tools::msg_writer() << "version " << (uint32_t)version << " " << (res.enabled ? "enabled" : "not enabled") <<
-        ", " << res.votes << "/" << res.window << " votes, threshold " << res.threshold;
-    tools::msg_writer() << "current version " << (uint32_t)res.version << ", voting for version " << (uint32_t)res.voting;
-
-    return true;
+  // RK-5b: `hard_fork_info` is served from Rust and renders there. A zero
+  // still means "the fork we would vote in next"; the Rust side names that
+  // version in the line rather than labelling it with `voting`.
+  return run_rust_console({"hard_fork_info", std::to_string((unsigned)version)});
 }
 
 bool t_rpc_command_executor::print_bans()

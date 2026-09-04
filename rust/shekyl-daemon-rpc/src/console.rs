@@ -652,6 +652,15 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             alt_chain_info(&source, tip, above, last_blocks, unix_now())
         }
         "status" => show_status(&source, unix_now()),
+        // The C++ parser accepts no argument or 1..=255 and forwards 0 for
+        // the first; `None` asks about the fork the daemon would vote in
+        // next, which is what a zero meant.
+        "hard_fork_info" => {
+            let Some(version) = args.get(1).and_then(|a| a.parse::<u8>().ok()) else {
+                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
+            };
+            hard_fork_info(&source, (version > 0).then_some(version))
+        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
@@ -1962,6 +1971,44 @@ fn fork_extra_info(earliest_height: u64, net_height: u64, block_time: u64) -> St
         return format!(" (next fork in {:.1} days)", blocks_f / per_day_f);
     }
     String::new()
+}
+
+/// `hard_fork_info [<version>]`.
+///
+/// The fifth console reader of this slice's methods, and the only one that
+/// needs no bridged leg: one native call, both arms.
+///
+/// **Line one names `queried_version`, which the C++ could get wrong.** It
+/// printed `req.version > 0 ? req.version : res.voting` — with no argument,
+/// the label came from `voting` (`heights.back().version`, the newest fork
+/// the daemon knows of) while the votes, window and threshold beside it
+/// described `get_next_hard_fork_version()`. Two different questions, one
+/// line. They agree on a chain with a single fork entry, which is every
+/// Shekyl chain today, so this changes no output — but the field that says
+/// *which fork these numbers are about* is exactly what
+/// `queried_version` was split out to be, and a label that can drift from
+/// its numbers is worth not carrying forward.
+fn hard_fork_info(src: &Source, version: Option<u8>) -> Result<String, String> {
+    let info = fetch_hard_fork_info(src, version)?;
+    Ok([
+        format!(
+            "version {} {}, {}/{} votes, threshold {}",
+            info.queried_version,
+            if info.enabled {
+                "enabled"
+            } else {
+                "not enabled"
+            },
+            info.votes,
+            info.window,
+            info.threshold
+        ),
+        format!(
+            "current version {}, voting for version {}",
+            info.active_version, info.voting
+        ),
+    ]
+    .join("\n"))
 }
 
 /// `status` / `show_status`.
@@ -3934,6 +3981,44 @@ mod tests {
         let (code, out) = run(&["status"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
         assert!(out.contains(", syncing,"), "{out}");
+    }
+
+    /// `hard_fork_info` names the fork its numbers describe.
+    ///
+    /// The fixture gives queried, active and voting three **different**
+    /// values, so each of the two lines pins its own field: a port that
+    /// confused any pair could not pass by coincidence. The C++ labelled
+    /// line one with `voting` when asked about no particular version, which
+    /// here would print `v9`.
+    #[test]
+    fn hard_fork_info_labels_line_one_with_the_version_it_counted() {
+        let reply = typed_reply(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": shekyl_rpc_types::HardForkInfoResponse {
+                status: RpcStatus::ok(),
+                queried_version: 7,
+                active_version: 3,
+                enabled: false,
+                window: 10080,
+                votes: 42,
+                threshold: 8064,
+                voting: 9,
+                state: 2,
+                earliest_height: 0,
+            },
+        }));
+        let address = route_server(vec![("json_rpc:hard_fork_info", reply)]);
+        let (code, out) = run(&["hard_fork_info", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "version 7 not enabled, 42/10080 votes, threshold 8064",
+                "current version 3, voting for version 9",
+            ]
+        );
     }
 
     /// A route the daemon no longer serves is a request failure, not a zero.
