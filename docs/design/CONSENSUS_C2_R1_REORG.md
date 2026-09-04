@@ -1199,20 +1199,35 @@ the derived-height comparison (grep gate candidate); (ii) leg 1
 acquiring any job beyond ordering (e.g. a consumer keying on its
 specific error) makes it a rule and reopens the split.
 
-**C2-R1c-Q1c — CEN-K9, the supplement gate and its shared tolerance.**
-Ratify NIC-or-reject: alt admission may not plant unverifiable bytes in
-the pool — a supplement tx enters through the same
+**C2-R1c-Q1c — CEN-K9, the supplement gate and its shared tolerance
+(AMENDED pre-signature 2026-09-04: the ruling's own falsifier, executed
+late, caught an under-enumeration — see the round log).** Ratify
+NIC-or-reject: alt admission may not plant unverifiable bytes in the
+pool — a supplement tx enters through the same
 `ver_non_input_consensus` the connect path trusts, or the alt block is
-rejected whole. The `relay_method::block` tolerance this feeds is
-ratified as serving exactly TWO producers — the admission supplement
-(`:2347`) and the pop-return path (`:870`) — and the tolerance's
-meaning is fixed by this ruling: "a block-sourced tx may re-enter the
-pool despite failing relay-tier checks, because chain reorganization
-may re-validate it." Any third producer is a design change, not a call
-site. *Falsifier:* a third `relay_method::block` producer appearing
-(grep-gateable), or either existing producer feeding a tx the connect
-path then skips verification on (M8's gate is the backstop; see Q2a's
-dependency).
+rejected whole. The `relay_method::block` tolerance is ratified as
+serving **three in-daemon producers, each with its own meaning**:
+(1) the admission supplement (`:2347`) and (2) the pop-return path
+(`:870`) share the ratified meaning "a block-sourced tx may (re-)enter
+the pool despite failing relay-tier checks, because chain
+reorganization may re-validate it"; (3) the **return-taken-transactions
+path** (`:5929`, `handle_block_to_main_chain`'s add-failure lambda)
+carries a DIFFERENT meaning — **re-entry on trusted prior
+verification**: its own comment states the tx was taken from this
+pool earlier in the same call at the same fork version, so it returns
+with `nic_verified_hf_version` set and skips re-verification. That is
+not anticipated re-validation; it is an already-checked-skip
+assumption, and its dependency is therefore named in **Q2a's armed
+dependency** (the M8 family), not given a second home. The executed
+enumeration basis (grep at the pin, producers discriminated from
+consumers/switches): the only other feed site in the tree is
+`blockchain_import.cpp:156` — the offline import utility driving
+`handle_incoming_tx` with `relay_method::block`, outside the daemon's
+live paths, same block-sourced meaning as (1)/(2); named so the
+falsifier's basis is exact. *Falsifier:* any NEW feed site beyond
+these four named (grep-gateable, and the gate now exists to be RUN,
+not cited), or any producer feeding a tx the connect path then skips
+verification on outside the Q2a-armed assumptions.
 
 **C2-R1c-Q2a — CEN-K10's residue, with its dependency armed.** Ratify
 the `kept_by_block` storage tolerance (input-check failure stores with
@@ -1220,7 +1235,12 @@ the `kept_by_block` storage tolerance (input-check failure stores with
 hash gate: the stored-unverified tx pays full verification at connect.
 The dependency is explicit and armed: **this disposition assumes M8's
 hash gate; relaxing M8 reopens K10 silently** (nothing at K10's site
-changes). *Falsifier:* the M8 gate weakening in any form — the
+changes). The same armed family now carries Q1c's third producer
+(`:5929`, per the amendment): its `nic_verified_hf_version` skip
+assumes the pool verified the tx at the same fork version earlier in
+the same call — an already-checked-skip assumption of exactly this
+class; weakening either the M8 gate or the same-call/same-version
+premise reopens the respective producer. *Falsifier:* the M8 gate weakening in any form — the
 consensus-invariants gate gains a check that `take_tx`'s cache verdict
 is consumed on the connect skip path (subject-asserting, can fail).
 
@@ -1295,7 +1315,14 @@ handler; rule 20 — no rule content crosses, and the diff direction is
 stated as an expectation the build is measured against: the fix
 REMOVES a punishment path and falls back to existing live-path
 semantics, so the C++ diff must be net-negative or flat — thickening
-would mean the fix grew a mechanism it does not need).
+would mean the fix grew a mechanism it does not need). Build
+sequencing note (steering, 2026-09-04): `:5929` — Q1c's third
+producer — sits on the add-failure path, semantically adjacent to
+this fix's subject ("the add failed, now what") though in a different
+file; if the build finds itself reasoning about `:5929`'s return
+semantics, that is a **finding to raise, not a silent edit** — one of
+the two rulings was blind to that site until today and the build must
+not inherit the blindness.
 
 *Falsifiers, two, reopening different things:* (i) **defect
 falsifier** — the honest-path enumeration being wrong: a demonstration
@@ -1406,6 +1433,28 @@ dangling-anchor sweep ride the round-close PR per §5.2.
   the FFI error table, the stale "lands on PR #600" header corrected.
   `origin/dev` merged in the same round (CHANGELOG both-families
   resolution; dev's CEN-M8 hash-gate disjoint from R1b's regions).
+- 2026-09-04 — **R1c ratifications (Rick, against the pushed §5):**
+  Q1a, Q1b, Q2a, Q2b, Q3a ratified with his anchors re-verified;
+  **Q3b formally signed** (defect + fix direction had been ratified on
+  source the same day; his own verification added the Q1a-derived
+  honest path — the flip-flop terminator manufactures honest orphans —
+  and the `add_fail`+`flush_all_spans` hammer semantics). **Q1c
+  falsified by its own gate BEFORE signature:** the "exactly two
+  producers" count was wrong at the pin — `:5929`'s
+  return-taken-transactions lambda is a third in-daemon producer with
+  a third MEANING (trusted-prior-verification re-entry), and the
+  executed grep also surfaced the out-of-process import feeder
+  (`blockchain_import.cpp:156`). Amended per Rick's spec (three
+  producers, per-producer meanings, `:5929`'s dependency homed in
+  Q2a, falsifier moved outward); signature on the diff. **The lesson,
+  logged under the same heading as R1b's no-arg overload
+  (documentation-is-not-verification): a ruling whose falsifier names
+  a grep must RUN that grep before signature** — an enumeration claim
+  verified by reading rather than by running its own named instrument
+  is a claim with an unexecuted gate attached. Q3b's build proceeds
+  without waiting on Q1c; the sweep inherits Rick's sentence for the
+  `core.cpp:259` fourth-instance grading: "absence of harm is not
+  absence of the shape."
 - 2026-09-03 — Copilot round 4 on #603 (three findings, all valid, all
   addressed): the Q2b saturated-to-zero rollback target aborted on the
   can't-pop-genesis guard for a height-1/2 checkpoint conflict — the
