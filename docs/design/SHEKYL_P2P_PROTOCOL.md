@@ -3192,7 +3192,7 @@ rather than inheriting whatever the default happens to be.
 >
 > **The announce path, checked rather than assumed (same review round).** The
 > parse arm of `handle_notify_new_fluffy_block`
-> (`cryptonote_protocol_handler.inl:546-557`) is genuine *form* —
+> (`cryptonote_protocol_handler.inl:545-556`) is genuine *form* —
 > input-describing, universal — and its drop stands. The size arm
 > (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
