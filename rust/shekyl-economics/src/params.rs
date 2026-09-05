@@ -12,6 +12,14 @@ pub const SCALE: u64 = GENERATED_SCALE;
 /// (`circulating_supply ≤ MONEY_SUPPLY`).
 pub const MONEY_SUPPLY: u64 = GENERATED_MONEY_SUPPLY;
 
+/// Rolling `tx_volume_avg` window in blocks (`shekyl_tx_volume_window`
+/// from `config/economics_params.json`; mirrors C++
+/// `SHEKYL_TX_VOLUME_WINDOW` / `Blockchain::get_tx_volume_avg`). Surfaced
+/// so instruments that model the rolling average read the same
+/// build-generated value consensus uses instead of hand-copying the
+/// provisional-until-testnet JSON number.
+pub const TX_VOLUME_WINDOW: u64 = GENERATED_TX_VOLUME_WINDOW;
+
 /// Base staker emission share in fixed-point [`SCALE`] units
 /// (`shekyl_staker_emission_share`; `150_000` = 15%). This is the
 /// **base** share before the height-dependent decay in

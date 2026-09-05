@@ -29,7 +29,7 @@ pub enum EmissionError {
 /// shift amount directly. Keeping the value in `u64` avoids a gratuitous
 /// narrowing cast.
 #[inline]
-fn emission_speed_factor(params: &EconomicParams) -> u64 {
+pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
     debug_assert_eq!(
         params.daa_target_seconds % 60,
         0,
@@ -40,8 +40,12 @@ fn emission_speed_factor(params: &EconomicParams) -> u64 {
 }
 
 /// Tail (minimum) subsidy per block in atomic units.
+///
+/// `pub` (with [`emission_speed_factor`]) since the FL round: the fee-ladder
+/// instrument's degenerate pins consume both, and a local re-derivation
+/// there was a third undeclared drift pair (FL round review round 3).
 #[inline]
-fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
+pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
     params
         .final_subsidy_per_minute
         .checked_mul(params.daa_target_seconds / 60)
@@ -271,6 +275,166 @@ mod tests {
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
         let near_max = p.money_supply - ((2 << 20) + 1);
         assert_eq!(base_block_reward(near_max, &p).unwrap(), tail);
+    }
+
+    /// FL-V10's red companion, and conjunct (b) of the census-R2 reopen
+    /// criterion (`docs/design/FEE_LADDER_DERIVATION.md` §0.1): the
+    /// estimate leg (uncapped [`base_block_reward`], the C++ 5-arg path),
+    /// the projection leg ([`projected_already_generated`] →
+    /// [`base_block_reward`], which saturates clean past exhaustion), and
+    /// the validation leg (the same reward through
+    /// [`cap_reward_to_remaining_supply`], the 6-arg path) must agree at
+    /// the terminal state — they are descriptions of one chain.
+    ///
+    /// The FL-R12′ oracle in its SIGNED form (review round 8):
+    /// `paid = max(M_r·curve(remaining), TAIL) · penalty(x)` — floor on
+    /// the paid emission (the multiplier has no object at a perpetual
+    /// tail), penalty AFTER the floor (floors belong to emission;
+    /// penalties apply to the paid quantity — the governance lever must
+    /// always bite), `remaining` floored at zero, the supply cap retired.
+    ///
+    /// At and past the asymptote the signed value is `max(M_r·0, TAIL) =
+    /// TAIL` on EVERY release-multiplier rail, so legs 1, 2 and the paid
+    /// half of leg 4 run on BOTH rails (round 10, T-3): rail-independence
+    /// is what separates the signed composition from a
+    /// floor-inside-the-operand rebuild — `max(M_r·base(ag), TAIL)`
+    /// agrees on the dormancy rail and pays `1.3·TAIL` on the surge
+    /// rail.
+    ///
+    /// RED TODAY against the shipped composition
+    /// (curve → tail floor → penalty → multiplier → cap):
+    /// 1. floor on the paid emission at `x = 0`, boundary: shipped pays
+    ///    `M_r·TAIL` then remaining-caps — 480 000 000 under dormancy,
+    ///    599 999 999 under surge — vs the signed rail-independent
+    ///    600 000 000;
+    /// 2. tail with `x > 0`: shipped applies the penalty before the
+    ///    multiplier and cap (360 000 000 at `x = ½` under dormancy) vs
+    ///    the signed `TAIL·(1−x²)` = 450 000 000;
+    /// 3. estimate-operand totality (the adopted whole-scalar contract:
+    ///    the operand is the M_r-NEUTRAL total view, `M_r` only inside
+    ///    the quantized scalar): past the asymptote the operand must be
+    ///    the tail, and the shipped estimate errors instead (FL-R16a);
+    /// 4. the projection leg — `projected_already_generated` BY NAME
+    ///    (the census-R2 reopen conjunct), asserted on ITS OWN AXIS
+    ///    (round 10, T-2): the neutral trajectory must pass the
+    ///    asymptote — a property of `already_generated` itself, red
+    ///    today because the projection saturates AT the asymptote
+    ///    (FL-V10), where the correct paid value is TAIL anyway, so a
+    ///    paid-side assertion alone transports this defect green; then
+    ///    the exact TAIL-per-block accrual rate past the crossing; then
+    ///    the projection-fed paid contract on both rails.
+    ///
+    /// Un-ignore with the FL-R12′ implementation (build authorized at
+    /// round 8 upon the record).
+    #[test]
+    #[ignore = "FL-R12' signed (round 8) but not yet implemented: shipped composition floors the base, penalizes before the multiplier, and caps at remaining"]
+    fn terminal_reward_legs_agree() {
+        use crate::release::{apply_release_multiplier, calc_release_multiplier};
+
+        let p = EconomicParams::default();
+        let tail = tail_subsidy_per_block(&p).unwrap();
+        let s = p.money_supply;
+        let zone = 300_000; // full-reward zone; weight == median ⇒ no penalty
+
+        // Leg 4's own axis FIRST (round 10, T-2), because the rail loop's
+        // projection-fed limb depends on it: the census-R2 reopen
+        // conjunct says the neutral trajectory accrues THROUGH the
+        // asymptote — a property of `already_generated` itself, so it is
+        // asserted on `ag` directly. Routing it only through the paid
+        // value is lossy: a saturated projection lands exactly on the
+        // asymptote, where the correct composition pays TAIL anyway, and
+        // the defect rides through green.
+        let past_boundary = 19_200_000;
+        let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
+        assert!(
+            ag_proj > s,
+            "the neutral trajectory must pass the asymptote (no saturation): \
+             already_generated={ag_proj} at height {past_boundary}"
+        );
+        // Past the crossing it accrues at EXACTLY the tail rate. The
+        // crossing height itself has no integer closed form independent
+        // of the projection's own recurrence (the tail floor cuts in
+        // while `remaining > 0`, so the trajectory skips past the
+        // asymptote mid-stream), but the through-asymptote RATE is TAIL
+        // per block by FL-R12′ — the delta pins the accrual with a
+        // contract-derived expected, without iterating the subject to
+        // produce it.
+        let k = 1_000u64;
+        assert_eq!(
+            projected_already_generated(past_boundary + k, &p).unwrap(),
+            ag_proj + k * tail,
+            "past the asymptote the neutral trajectory must accrue at exactly TAIL per block"
+        );
+
+        // Legs 1, 2 and the projection-fed paid limb, on BOTH rails
+        // (round 10, T-3). The rail setup is asserted, not assumed.
+        for (rail, v, pinned) in [
+            ("dormancy", 0, p.release_min),
+            ("surge", 2 * p.tx_volume_baseline, p.release_max),
+        ] {
+            let m_r =
+                calc_release_multiplier(v, p.tx_volume_baseline, p.release_min, p.release_max);
+            assert_eq!(m_r, pinned, "rail setup: v={v} must pin the {rail} rail");
+            let shipped = |median: u64, weight: u64, ag: u64| -> u64 {
+                let base = block_reward_with_penalty(median, weight, ag, zone, &p)
+                    .unwrap_or_else(|e| panic!("shipped leg errored at ag={ag} ({rail}): {e:?}"));
+                cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, &p)
+            };
+
+            // Leg 1 — floor on the paid emission at x = 0, both sides of
+            // the boundary and past the asymptote: TAIL exactly, on this
+            // rail as on the other.
+            for ag in [s - tail + 1, s, s + tail] {
+                assert_eq!(
+                    shipped(zone, zone, ag),
+                    tail,
+                    "paid reward != TAIL on the {rail} rail at already_generated={ag}"
+                );
+            }
+
+            // Leg 2 — penalty applies AFTER the floor: at the tail with
+            // x = 1/2 (weight = 1.5 * median), the signed contract pays
+            // TAIL * (1 - x^2) = TAIL * 3/4, rail-independent like the
+            // floor it composes onto.
+            let (median, weight) = (zone, zone + zone / 2);
+            let expected = {
+                // penalty(x) in the canonical integer form: (2m - c)*c / m^2.
+                let (m, c) = (u128::from(median), u128::from(weight));
+                u64::try_from(u128::from(tail) * (2 * m - c) * c / (m * m)).unwrap()
+            };
+            assert_eq!(
+                shipped(median, weight, s),
+                expected,
+                "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
+                 penalty must compose AFTER the floor"
+            );
+
+            // Leg 4's paid limb — the projection-fed state pays the same
+            // rail-independent TAIL contract.
+            assert_eq!(
+                shipped(zone, zone, ag_proj),
+                tail,
+                "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
+            );
+        }
+
+        // Leg 3 — the ESTIMATE operand contract, per the ADOPTED round-8
+        // amendment (whole-scalar): the operand is the M_r-NEUTRAL total
+        // view `max(curve, TAIL)` — `M_r` lives only inside the quantized
+        // scalar. Asserting `base_block_reward == r_eff` here would pin
+        // the REJECTED split and fail a correct implementation (Bugbot
+        // PR #614; maintainer T-1: pin the contract, not a function
+        // shape). The red half of the operand contract today is
+        // TOTALITY: past the asymptote the operand must be the tail, and
+        // the shipped estimate errors instead (FL-R16a's estimator
+        // dead-letter). The operand-equality half graduates against the
+        // named operand function the implementing PR introduces.
+        assert_eq!(
+            base_block_reward(s + tail, &p)
+                .unwrap_or_else(|e| panic!("estimate operand must be total, got {e:?}")),
+            tail,
+            "estimate operand != TAIL past the asymptote"
+        );
     }
 
     #[test]
