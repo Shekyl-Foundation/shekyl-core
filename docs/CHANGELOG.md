@@ -15,7 +15,14 @@
   Those gates carry reverse pointers warning that relaxing them surfaces as a
   connect-time abort, and a Rust falsifier asserts they accept only what the
   leaf builder can encode. The FOLLOWUPS row that described this as a live
-  fund-loss path is corrected: it was latent.
+  fund-loss path is corrected: it was latent. **Both rows are now promoted
+  CHECKED-CONFORMANT by the follow-up re-review at the merged sha** —
+  register 99 / 1 / 2 over P0f's 102-row snapshot, CEN-B5 the sole DIVERGENT
+  row. For anyone grepping history: PR #609's merge commit carries the title
+  *"register 99/1/2"*, written before that PR's round 6 withdrew the
+  promotion (withdrawn-in-PR, records-was); the register was 97 / 3 / 2 at
+  that merge and reaches 99 / 1 / 2 only with this re-review, one PR later
+  than the title claims.
 
 - **The drain byte-parity e2e pinned a fixture state that never existed.**
   `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
@@ -78,6 +85,34 @@
   `shard.v1.render.*` / `candidate.v1.*` namespace families are
   registered in the implementation index. Aesthetics closure and the
   determinism bar are ruling B (FOLLOWUPS).
+
+- **C2-R1c — alt admission + acceptance topology: ruled, and the sync
+  orphan arm stops punishing peers for our own state.** Seven rulings
+  signed ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md)
+  §5.5): the two-tier admission contract ratified as defense economics
+  under the intervals-not-averages constraint; CEN-K1 split into its two
+  conflated conditions; K9's `relay_method::block` tolerance fixed to
+  three named producers (the third found by the ruling's own falsifier,
+  executed pre-signature); K10 ratified as-composed with M8's hash gate,
+  dependency armed; storage floors ratified with bounds routed to GAP-4
+  by name; topology ratified with belts named. **The Q3b defect fix:**
+  the sync-loop orphan arm severed and scored every connection from a
+  span's origin on a flag that means "our store lost the parent" — local
+  pops, the checkpoint-rollback discard (reachable mid-span through the
+  600 s reload), and the Q1a flip-flop discard all reach it honestly.
+  The arm now cleans up and re-walks the chain directly via the new
+  shared `request_chain_history` helper (which also retired a three-copy
+  drift set); the queue-bookkeeping-mismatch drop keeps its teeth.
+  Enforced twice: consensus-invariants **[7/7]** (whole-arm extraction,
+  full punitive token set, both failure paths observed firing) and the
+  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam, three
+  vectors: the orphan arm's no-punishment-and-healing vector and the
+  cleanup-failure-recovery vector each observed red-first on their
+  pre-fix forms, while the bookkeeping-mismatch vector stays green on
+  both trees BY DESIGN — it guards against over-correction; five
+  review rounds hardened the fix through two Bugbot HIGHs and two
+  Bugbot MEDIUMs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
+  the R1 batch is complete and the round doc is closed to completed/.
 
 - **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
   the composed verb, wallet-RPC + CLI).** The reachability gate held since
@@ -145,7 +180,7 @@
 
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §4b
   ratified 2026-09-03, §4c execution record). The prune now writes a
   **monotonic watermark** (its durable receipt, same txn as the
   deletions; exempt from every revert), and `BlockchainDB::pop_block` —
@@ -186,9 +221,9 @@
 
 - **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
   register disposes the **102** bucket-1/2 census rows that existed when it
-  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
-  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
-  whose fix has landed and whose promotion is owed at a merged sha). The
+  ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
+  row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
+  CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
   bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
   2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
@@ -375,7 +410,7 @@
 
 - **The per-block-checkpoint fast-sync mechanism (consensus)** — C2-R1a,
   ratified 2026-09-02
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §3).
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §3).
   Deleted whole: the compiled-in hash-of-hashes table and its loader
   (mainnet's pin was a stale inherited constant no Shekyl blob could match;
   testnet/stagenet blobs loaded with no verification), the four

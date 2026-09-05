@@ -12609,7 +12609,7 @@ that the constant needs to roughly double, not move an order.**
 ### 74.2 Initial sync: the fast path existed and has since been deleted
 
 > **Superseded 2026-09-02 (C2-R1a,
-> [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3):** the
+> [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3):** the
 > per-block-checkpoint fast path this section found was **deleted** — the
 > "unmade shipping decision" is made: not shipped. The reopening criterion
 > (a named design round; interim trigger 72 h initial sync on the rule-76

@@ -798,7 +798,7 @@ drain, GF-10 within-epoch timing).
 
 **GF-1 fast-path belt (CEN-G8) — RETIRED 2026-09-02 (C2-R1a, ratified by Rick).** The
 block-level re-pin that re-ran this section's debit authorization under the per-block-checkpoint
-fast path was deleted with that mechanism ([`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md)
+fast path was deleted with that mechanism ([`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md)
 §3.1): with `fast_check` gone, per-tx verify — which reaches the same shared
 `debit_auth_pin` — is unconditional at block connect, so the belt's one job is covered by the
 primary. The identity-only invariant below is untouched; only the duplicate enforcement site is
