@@ -18,7 +18,8 @@ use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
     GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+    CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
@@ -28,6 +29,12 @@ use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry,
 use shekyl_types::BlockHeight;
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
+use shekyl_rpc_types::{
+    BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
+    GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
+    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
+    HardForkInfoRequest, HardForkInfoResponse, CORE_RPC_ERROR_CODE_CORE_BUSY,
+};
 
 /// Why a native method could not answer. Maps onto the transport's existing
 /// error envelopes in the handlers (REST: `status`; JSON-RPC: `-32603`), but
@@ -174,13 +181,66 @@ pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not a shape this method accepts.
 pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcFault> {
+    object_params(params, WRONG_BLOCK_PARAMS)
+}
+
+/// Read a JSON-RPC `params` value as this method's request object when the
+/// request has **no meaningful empty form**.
+///
+/// Absent params, a non-object, and an unusable object are all refused.
+/// The C++ value-initialised `get_block_headers_range`'s two heights to zero
+/// and answered for block 0, for both an absent `params` and an empty object.
+/// The first Rust port reproduced neither faithfully: null took `T::default()`
+/// while `{}` failed to deserialize, so the two spellings of "I gave you
+/// nothing" stopped meaning the same thing. **They mean the same thing here,
+/// and both are refused**: a range is the one request in this family where
+/// the empty form names nothing, and answering it with genesis tells a client
+/// that forgot its arguments about block 0 instead of telling it that it
+/// forgot. `GetBlockHeadersRangeRequest` is not `Default`, which is what
+/// stops this being re-routed through [`object_params`] later.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
+/// params, a non-object, or an object this method cannot read.
+fn required_object_params<T: serde::de::DeserializeOwned>(
+    params: &serde_json::Value,
+    expected: &str,
+) -> Result<T, RpcFault> {
     match params {
-        serde_json::Value::Null => Ok(GetBlockRequest::default()),
         serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_BLOCK_PARAMS))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
-            WRONG_BLOCK_PARAMS,
-        ))),
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+    }
+}
+
+/// Read a JSON-RPC `params` value as this method's request object.
+///
+/// One shape per method: absent params are the request's own defaults, an
+/// object is deserialized, and **anything else is refused** — an array
+/// included. serde's derive would happily read a struct out of a sequence,
+/// which would give every method here a second, undesigned positional form;
+/// `on_get_block_hash` is the one method whose params are deliberately
+/// positional (`[height]`, RK-2), and it does not come through here.
+///
+/// `expected` is the refusal's wording, and it belongs to the caller rather
+/// than to this function: a message naming the wrong method's fields sends
+/// its reader looking in the wrong place, which is the whole value a refusal
+/// has over a parse error.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not an object this method accepts.
+fn object_params<T: serde::de::DeserializeOwned + Default>(
+    params: &serde_json::Value,
+    expected: &str,
+) -> Result<T, RpcFault> {
+    match params {
+        serde_json::Value::Null => Ok(T::default()),
+        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
     }
 }
 
@@ -316,19 +376,7 @@ const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected an object with opt
 pub fn block_header_request(
     params: &serde_json::Value,
 ) -> Result<GetBlockHeaderByHeightRequest, RpcFault> {
-    match params {
-        serde_json::Value::Null => Ok(GetBlockHeaderByHeightRequest::default()),
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(WRONG_HEADER_PARAMS))),
-        // Anything else, an array included. serde's derive would happily read
-        // a struct out of a sequence, which would give this method a second,
-        // undesigned positional form — and `on_get_block_hash` is the method
-        // whose params are deliberately positional (`[height]`, RK-2). One
-        // method, one shape.
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(
-            WRONG_HEADER_PARAMS,
-        ))),
-    }
+    object_params(params, WRONG_HEADER_PARAMS)
 }
 
 /// `on_get_block_hash` (alias `on_getblockhash`): the hash of the block at
@@ -374,7 +422,10 @@ pub fn get_block_header_by_height(
     height: u64,
     fill_pow_hash: bool,
 ) -> Result<GetBlockHeaderByHeightResponse, RpcFault> {
-    let at = match facts.block_header_at(BlockHeight::from_raw(height), fill_pow_hash) {
+    let at = match facts.block_header_at(
+        BlockLookup::Height(BlockHeight::from_raw(height)),
+        fill_pow_hash,
+    ) {
         Ok(at) => at,
         Err(FactsFault::Inconsistent) => {
             return Err(RpcFault::Refused(RpcRefusal {
@@ -439,6 +490,14 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 }
 
 // ─── RK-4c: the transaction read set ─────────────────────────────────────────
+
+/// `RESTRICTED_BLOCK_COUNT` — the cap a restricted listener applies to
+/// `get_block_header_by_hash`'s hash list (`core_rpc_server.cpp`).
+pub const RESTRICTED_BLOCK_COUNT: usize = 1000;
+
+/// `RESTRICTED_BLOCK_HEADER_RANGE` — the span cap on
+/// `get_block_headers_range`.
+pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
 
 /// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
 /// `/get_transactions`. It fires for the first time in this tree: the C++
@@ -623,6 +682,350 @@ where
         status: RpcStatus::ok(),
         txs,
         missed_tx: missed,
+    })
+}
+
+// ── RK-5b: the header remainder ─────────────────────────────────────────────
+
+/// Whether a caller may have the long hash computed for it.
+///
+/// **Refusal, not a blank field.** The C++ wrote `fill_pow_hash && !restricted`
+/// throughout: a restricted caller that asked for a privileged field got an
+/// empty one back with status OK, which reports success about a question it
+/// declined to answer. `5b0c32f51` ruled the other way on the staking-read
+/// path — loud, never the degrade arm — and the one production caller of these
+/// methods passes `false`, so refusing costs nothing.
+fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFault> {
+    if requested && restricted {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_RESTRICTED,
+            message: "fill_pow_hash is not available on the restricted listener".to_owned(),
+        }));
+    }
+    Ok(requested)
+}
+
+/// The request parsers for the five RK-5b methods.
+///
+/// Each names **its own** fields, because a caller that sent the wrong shape
+/// needs to know what this method wanted, not what the last one did.
+/// `get_last_block_header` and `hard_fork_info` accept absent params — the
+/// tip and the next fork are what they answer with no arguments.
+/// `get_block_headers_range` does **not**: a range has no empty form, so
+/// absent params and `{}` are refused rather than answered as genesis.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
+/// `params` is present but is not an object this method accepts.
+pub fn last_block_header_request(
+    params: &serde_json::Value,
+) -> Result<GetLastBlockHeaderRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn block_header_by_hash_request(
+    params: &serde_json::Value,
+) -> Result<GetBlockHeaderByHashRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with hashes (an array of 64-character \
+         hex strings) and optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn block_headers_range_request(
+    params: &serde_json::Value,
+) -> Result<GetBlockHeadersRangeRequest, RpcFault> {
+    required_object_params(
+        params,
+        "Wrong parameters, expected an object with start_height and end_height \
+         (non-negative integers) and optional fill_pow_hash (boolean)",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfoRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional version (1-255); \
+         omit it to ask about the fork this node would vote in next",
+    )
+}
+
+/// See [`last_block_header_request`].
+///
+/// # Errors
+///
+/// As [`last_block_header_request`].
+pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimateRequest, RpcFault> {
+    object_params(
+        params,
+        "Wrong parameters, expected an object with optional grace_blocks \
+         (a non-negative integer)",
+    )
+}
+
+/// How many times [`get_last_block_header`] will re-read a tip that moved.
+///
+/// Small on purpose. Each attempt costs one chain-lock acquisition, and a
+/// second attempt only happens if a block arrived inside the first — which at
+/// any real block interval is rare and never twice running. A larger bound
+/// would not buy correctness, only a longer wait before the honest answer.
+const TIP_READ_ATTEMPTS: usize = 4;
+
+/// `get_last_block_header` (alias `getlastblockheader`).
+///
+/// The tip's header, or a refusal — never a header that is no longer the tip.
+///
+/// **Selecting the tip and projecting it are two lock acquisitions, and the
+/// chain can move between them.** `chain_tip` names a height; `block_header_at`
+/// then reads that height under its *own* lock and derives `depth` from the
+/// chain height it sees there (`rpc_facts_ffi.cpp`: `depth = chain_height -
+/// height - 1`). A block arriving in the gap yields the former tip with
+/// `depth == 1`, returned as the last block header with status OK.
+///
+/// The C++ had exactly this race — `get_blockchain_top` then
+/// `get_block_by_hash`, with `fill_block_header_response` computing depth
+/// from a third read — so this is inherited rather than introduced, and rule
+/// 16 says an inherited flow that contradicts the method's own contract is
+/// migrated, not carried. A method called "last block header" must not
+/// answer with a block that is not last.
+///
+/// Resolved by reading until the projection agrees with its own bound:
+/// `at.chain_height` is authoritative for the read that produced the header,
+/// so `header.height + 1 == at.chain_height` is the tip test, checked against
+/// the same snapshot rather than an earlier one. It converges on the first
+/// retry at any plausible block rate; a chain that outruns
+/// [`TIP_READ_ATTEMPTS`] is answering `CORE_BUSY`, which is true of it.
+pub fn get_last_block_header(
+    facts: &dyn ChainFacts,
+    fill_pow_hash: bool,
+    restricted: bool,
+) -> Result<GetLastBlockHeaderResponse, RpcFault> {
+    let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
+    let tip = facts.chain_tip()?;
+    // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
+    // guarded `on_get_last_block_header` alone among this slice's five —
+    // deliberately, and the reason survives the port: this is the one method
+    // that answers "the tip", which on an unsynchronised node is the top of a
+    // partial chain presented as the top of the chain. The other four take an
+    // explicit height or hash, where the caller already named what it wanted
+    // and a partial chain simply does not have it.
+    //
+    // The C++ answered `status = BUSY` with a **default-constructed header**,
+    // which `shekyl-rpc-client`'s `get_hardfork_version` read straight
+    // through as major version 0. Refusing is the ruling already applied to
+    // `fill_pow_hash`: a method that declines to answer must not report
+    // success (`5b0c32f51`).
+    if !tip.synchronized {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_CORE_BUSY,
+            message: "Core is busy: this node is not synchronized, so it has \
+                      no chain tip to report."
+                .to_owned(),
+        }));
+    }
+    // `chain_height` is the count; the tip's own height is one below it. A
+    // chain with no blocks cannot occur (genesis is block 0), and saturating
+    // rather than asserting keeps the arithmetic total.
+    let mut top = tip.chain_height.to_raw().saturating_sub(1);
+    for _ in 0..TIP_READ_ATTEMPTS {
+        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(top)), pow)?;
+        let Some(header) = at.header else {
+            // The height came from a chain height, so it was below the tip
+            // when it was chosen. Absent now means either the store cannot
+            // produce a block it claims to hold, or the chain shortened under
+            // us; both are read as "try the current top", and the loop bound
+            // stops that becoming unbounded.
+            top = at.chain_height.to_raw().saturating_sub(1);
+            continue;
+        };
+        // The tip test, against the snapshot that produced this header rather
+        // than the earlier one that chose its height.
+        if header.height.to_raw().saturating_add(1) == at.chain_height.to_raw() {
+            return Ok(GetLastBlockHeaderResponse {
+                status: RpcStatus::ok(),
+                block_header: block_header(&header),
+            });
+        }
+        top = at.chain_height.to_raw().saturating_sub(1);
+    }
+    Err(RpcFault::Refused(RpcRefusal {
+        code: CORE_RPC_ERROR_CODE_CORE_BUSY,
+        message: "Core is busy: the chain advanced on every attempt to read \
+                  its tip."
+            .to_owned(),
+    }))
+}
+
+/// `get_block_header_by_hash` (alias `getblockheaderbyhash`).
+///
+/// **Per-element.** Each requested hash gets a slot carrying that hash and
+/// either its header or nothing. The C++ returned on the first miss and
+/// discarded every header already filled, so one unknown hash in a thousand
+/// produced zero headers and an error string was the only way to learn which.
+pub fn get_block_header_by_hash(
+    facts: &dyn ChainFacts,
+    request: &GetBlockHeaderByHashRequest,
+    restricted: bool,
+) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
+    if restricted && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_RESTRICTED,
+            message: "Too many block headers requested in restricted mode".to_owned(),
+        }));
+    }
+    let mut block_headers = Vec::with_capacity(request.hashes.len());
+    for hash in &request.hashes {
+        let at = facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), pow)?;
+        block_headers.push(BlockHeaderSlot {
+            hash: *hash,
+            block_header: at.header.as_ref().map(block_header),
+        });
+    }
+    Ok(GetBlockHeaderByHashResponse {
+        status: RpcStatus::ok(),
+        block_headers,
+    })
+}
+
+/// `get_block_headers_range` (alias `getblockheadersrange`).
+pub fn get_block_headers_range(
+    facts: &dyn ChainFacts,
+    request: &GetBlockHeadersRangeRequest,
+    restricted: bool,
+) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
+    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
+    // **Both endpoints are bounded against the tip before any per-height
+    // work.** The C++ refused `start > end` *and* either endpoint at or past
+    // the chain height in one O(1) test; the first port kept only the
+    // ordering check and let the tip overrun surface inside the loop, one
+    // height at a time. That is a behaviour change and a denial-of-service
+    // vector: on the unrestricted listener, where the span cap does not
+    // apply, `start_height = 0, end_height = u64::MAX` walks the whole chain
+    // — a lock acquisition and a block read per height — before refusing.
+    //
+    // The tip is read once, and it can move **either way** underneath us: a
+    // reorg onto a shorter-but-heavier chain, or an operator `pop_blocks`,
+    // lowers it. So this bound is a fast refusal for the common case, not a
+    // guarantee for the loop below — which is why the loop still has to say
+    // what a vanished height means.
+    let chain_height = facts.chain_tip()?.chain_height.to_raw();
+    if request.start_height > request.end_height
+        || request.start_height >= chain_height
+        || request.end_height >= chain_height
+    {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+            message: "Invalid start/end heights.".to_owned(),
+        }));
+    }
+    // The span, not the endpoints, is what the cap bounds — and it is computed
+    // before any chain read so an absurd range costs nothing to refuse.
+    let span = request
+        .end_height
+        .saturating_sub(request.start_height)
+        .saturating_add(1);
+    // **The cap bounds the count, not the difference.** The C++ tested
+    // `end_height - start_height > RESTRICTED_BLOCK_HEADER_RANGE`, which
+    // permits 1001 headers against a cap of 1000 — the same off-by-one the
+    // deleted singular `hash` produced on `get_block_header_by_hash`, in the
+    // second of the two methods that carry this cap. Found by porting both.
+    if restricted && span > RESTRICTED_BLOCK_HEADER_RANGE {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_RESTRICTED,
+            message: "Too many block headers requested.".to_owned(),
+        }));
+    }
+    let mut headers = Vec::new();
+    for height in request.start_height..=request.end_height {
+        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(height)), pow)?;
+        let Some(header) = at.header else {
+            // **A missing header here can only mean the chain shortened.**
+            // On the height path the shim returns `found == 0` for exactly
+            // one condition — `height >= chain_height` as read *inside* that
+            // call — and reports a store that cannot produce a block it
+            // claims to hold as an error, which `?` has already propagated
+            // above. So this arm is not a store contradiction and must not be
+            // reported as one: it is the tip moving down between the bound
+            // and this iteration (a reorg onto a shorter heavier chain, or a
+            // `pop_blocks`), and the caller's range was valid when it was
+            // checked. `TOO_BIG_HEIGHT` with the height that has gone is what
+            // a caller can act on; a generic internal error is not.
+            return Err(too_big_height(height, at.chain_height.to_raw()));
+        };
+        headers.push(block_header(&header));
+    }
+    Ok(GetBlockHeadersRangeResponse {
+        status: RpcStatus::ok(),
+        headers,
+    })
+}
+
+/// `hard_fork_info`.
+///
+/// A projection. The voting fields are carried exactly as the daemon reports
+/// them, and the two versions are reported apart — see the type.
+pub fn hard_fork_info(
+    facts: &dyn ChainFacts,
+    request: &HardForkInfoRequest,
+) -> Result<HardForkInfoResponse, RpcFault> {
+    let info = facts.hard_fork_info(request.version.map(core::num::NonZeroU8::get))?;
+    Ok(HardForkInfoResponse {
+        status: RpcStatus::ok(),
+        queried_version: info.queried_version,
+        active_version: info.active_version,
+        enabled: info.enabled,
+        window: info.window,
+        votes: info.votes,
+        threshold: info.threshold,
+        voting: info.voting,
+        state: info.state,
+        earliest_height: info.earliest_height,
+    })
+}
+
+/// `get_fee_estimate`.
+///
+/// The grace-blocks ceiling is refused **here**, before an FFI call, because
+/// the estimator's own bound is an assertion that throws — and a caller that
+/// learns "invalid parameter" can fix its request, where one that learns
+/// "internal error" cannot.
+pub fn get_fee_estimate(
+    facts: &dyn ChainFacts,
+    request: &GetFeeEstimateRequest,
+) -> Result<GetFeeEstimateResponse, RpcFault> {
+    let ceiling = facts.fee_grace_blocks_max();
+    if request.grace_blocks > ceiling {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
+            message: format!("grace_blocks must not exceed {ceiling}"),
+        }));
+    }
+    let estimate = facts.fee_estimate(request.grace_blocks)?;
+    Ok(GetFeeEstimateResponse {
+        status: RpcStatus::ok(),
+        fees: FeeTiers(estimate.fees),
+        quantization_mask: estimate.quantization_mask,
     })
 }
 
@@ -935,8 +1338,8 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
 pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
-        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, HardFork,
-        NetStats,
+        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, FeeEstimate,
+        HardFork, HardForkInfo, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
@@ -961,12 +1364,41 @@ pub(crate) mod tests {
         pub asked_height: AtomicU64,
         /// The header the fake chain holds at every in-range height.
         pub header: BlockHeaderFacts,
+        /// When set, the hash arm answers an **alt** block declaring this
+        /// height — the state only a hash lookup can reach, and the one the
+        /// height arm's bound makes unrepresentable.
+        pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
+        /// What `hard_fork_info` was asked about, including whether the
+        /// caller supplied a version at all.
+        pub asked_fork_version: std::sync::Mutex<Option<Option<u8>>>,
+        /// The last `grace_blocks` `fee_estimate` was asked for.
+        pub asked_grace: AtomicU64,
         /// The hash `block_at` was asked for, when it was asked by hash.
         pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
         /// When set, `block_at` faults instead of answering.
         pub block_fault: Option<FactsFault>,
+        /// How many times `block_header_at` was called.
+        ///
+        /// A *count*, not a last-value, because the property
+        /// `get_block_headers_range` owes is about work not done: a range
+        /// past the tip must be refused before any per-height read. An
+        /// assertion on the error code alone cannot tell an O(1) refusal
+        /// from one that walked the chain first and refused at the end.
+        pub header_reads: AtomicU64,
+        /// How many more header reads see the chain grow by one block first.
+        ///
+        /// **The input a fixed-height double cannot express.** `get_last_block_header`
+        /// picks a height from one lock acquisition and projects it under
+        /// another, so its defect only exists while the chain moves *between*
+        /// them — a double whose height is constant makes that state
+        /// unrepresentable and the retry unreachable. Counts down, so a test
+        /// can say "move once, then settle" and assert convergence rather
+        /// than just refusal.
+        pub tip_growth_remaining: AtomicU64,
+        /// Blocks the fake chain has grown so far, added to `hash_chain_height`.
+        pub tip_grown: AtomicU64,
     }
 
     impl ChainFacts for FakeFacts {
@@ -976,6 +1408,39 @@ pub(crate) mod tests {
         fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
             self.forks.clone()
         }
+        fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
+            // The double records the request and answers a fixed shape. It
+            // does not re-derive "0 means next" — that resolution belongs to
+            // the daemon, and a fake that reimplemented it would be asserting
+            // its own copy of the rule.
+            *self.asked_fork_version.lock().expect("not poisoned") = Some(requested);
+            Ok(HardForkInfo {
+                queried_version: requested.unwrap_or(7),
+                active_version: 3,
+                enabled: true,
+                window: 10080,
+                votes: 42,
+                threshold: 0,
+                voting: 9,
+                state: 2,
+                earliest_height: 1_234_000,
+            })
+        }
+
+        fn fee_grace_blocks_max(&self) -> u64 {
+            // The real constant's value, stated by the double rather than
+            // read through a link stub that answers 0 under test.
+            100
+        }
+
+        fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
+            self.asked_grace.store(grace_blocks, Ordering::SeqCst);
+            Ok(FeeEstimate {
+                fees: [10, 20, 30, 40],
+                quantization_mask: 8,
+            })
+        }
+
         fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
             self.asked_height.store(height.to_raw(), Ordering::Relaxed);
             if let Some(fault) = self.hash_fault {
@@ -992,7 +1457,10 @@ pub(crate) mod tests {
             if let Some(fault) = self.block_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(self.hash_chain_height);
+            let chain_height = BlockHeight::from_raw(
+                self.hash_chain_height
+                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
+            );
             // The fake applies the same bound the shim does, so a handler that
             // forgets to check one cannot pass by luck.
             let present = match at {
@@ -1030,25 +1498,84 @@ pub(crate) mod tests {
 
         fn block_header_at(
             &self,
-            height: BlockHeight,
+            at: BlockLookup,
             fill_pow_hash: bool,
         ) -> Result<BlockHeaderAt, FactsFault> {
-            self.asked_height.store(height.to_raw(), Ordering::Relaxed);
+            self.header_reads.fetch_add(1, Ordering::Relaxed);
+            // The chain grows *before* this read resolves its bound, which is
+            // the ordering the race has: the caller chose a height from an
+            // older snapshot, and this read sees a newer one.
+            if self.tip_growth_remaining.load(Ordering::Relaxed) > 0 {
+                self.tip_growth_remaining.fetch_sub(1, Ordering::Relaxed);
+                self.tip_grown.fetch_add(1, Ordering::Relaxed);
+            }
             self.asked_pow.store(fill_pow_hash, Ordering::Relaxed);
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            // Same bound the shim applies, so a handler that forwarded the
-            // wrong height is visible here too.
-            let header = (height.to_raw() < self.hash_chain_height).then(|| {
-                let mut h = self.header.clone();
-                h.height = height;
-                h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
-                h
-            });
+            let chain_height = BlockHeight::from_raw(
+                self.hash_chain_height
+                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
+            );
+            // Same two-arm shape as `block_at`, because it answers the same
+            // question. **This is a fake chain's own shape, not a copy of the
+            // shim's rule** — the fake chain has a height and nothing above it,
+            // which is true of any chain. It is deliberately not described as
+            // "the bound the shim applies": a double that claims to mirror a
+            // rule has to be kept in sync to mean anything, and what the
+            // handler actually owes is asserted directly from `asked_height` /
+            // `asked_hash` instead.
+            let height = match at {
+                BlockLookup::Hash(hash) => {
+                    *self.asked_hash.lock().expect("not poisoned") = Some(hash);
+                    if hash != patterned_hash().to_bytes() {
+                        return Ok(BlockHeaderAt {
+                            header: None,
+                            chain_height,
+                        });
+                    }
+                    // A hash reaches blocks off the main chain, so the height
+                    // is the block's own and can sit anywhere — including at
+                    // or past the tip, which is the input the height arm
+                    // cannot express and the widening made reachable.
+                    self.alt_declared_height.unwrap_or(self.header.height)
+                }
+                BlockLookup::Height(height) => {
+                    self.asked_height.store(height.to_raw(), Ordering::Relaxed);
+                    if height.to_raw() >= chain_height.to_raw() {
+                        return Ok(BlockHeaderAt {
+                            header: None,
+                            chain_height,
+                        });
+                    }
+                    height
+                }
+            };
+            let mut h = self.header.clone();
+            h.height = height;
+            // **Depth is derived, not canned.** "How far below the tip" is
+            // what depth *means* — a property of a chain, not a rule the shim
+            // chose — so a fake chain that reports one inconsistent with its
+            // own height is simply wrong, and a test about the tip could not
+            // observe it. (This is not the mirroring a double must avoid: the
+            // fake is not restating a C++ policy, it is being a chain.) One
+            // test used to compensate by hand, setting `hash_chain_height` to
+            // `1_234_567 + 42 + 1` so the canned depth would line up.
+            h.depth = chain_height
+                .to_raw()
+                .saturating_sub(height.to_raw())
+                .saturating_sub(1);
+            h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
+            // Only the alt case overrides it. `sample_header()` carries the
+            // value the RK-3 oracle vector was captured with, and clobbering
+            // that on the height arm made this fake disagree with the vector
+            // it exists to reproduce.
+            if self.alt_declared_height.is_some() && matches!(at, BlockLookup::Hash(_)) {
+                h.orphan_status = true;
+            }
             Ok(BlockHeaderAt {
-                header,
-                chain_height: BlockHeight::from_raw(self.hash_chain_height),
+                header: Some(h),
+                chain_height,
             })
         }
     }
@@ -1077,8 +1604,14 @@ pub(crate) mod tests {
             hash_chain_height: 1_234_567,
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
+            header_reads: AtomicU64::new(0),
+            tip_growth_remaining: AtomicU64::new(0),
+            tip_grown: AtomicU64::new(0),
             header: sample_header(),
+            alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
+            asked_fork_version: std::sync::Mutex::new(None),
+            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         }
@@ -1315,18 +1848,19 @@ pub(crate) mod tests {
         // Synchronized with a non-zero raw target: the rule zeroes it, and the
         // zero is omitted on the wire exactly as epee omitted it.
         //
-        // Against `_v3`: C2-R1b's `following_degraded` field bumped
-        // `CORE_RPC_VERSION` to 3.26 (the 3.25 bump minted `_v2` the same
-        // way), and the vectors are never hand-edited (see their README), so
-        // each bump gets a file beside the C++ capture rather than inside
-        // it. `get_version_v3_is_v2_with_only_the_version_bumped` is what
-        // keeps `_v3` honest — it may differ from its predecessor by that
-        // constant and nothing else.
+        // Against `_v4`: RK-5b's three header-method shape changes bumped
+        // `CORE_RPC_VERSION` to 3.27 (3.26 was C2-R1b's `following_degraded`,
+        // 3.25 the RK-4c removals), and the vectors are never hand-edited
+        // (see their README), so each bump gets a file beside the C++ capture
+        // rather than inside it. `the_get_version_chain_differs_by_exactly_
+        // the_version_at_every_link` is what keeps the whole chain honest —
+        // it replaced a test that pinned only the newest pair, which is
+        // exactly what let this branch and `dev` both write 196634.
         let out = get_version(&facts(true, 999_999)).unwrap();
         assert_eq!(out.target_height, 0);
         let ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v3.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v4.json"
         ))
         .unwrap();
         assert_eq!(ours, oracle);
@@ -1348,8 +1882,14 @@ pub(crate) mod tests {
             hash_chain_height: 0,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
+            header_reads: AtomicU64::new(0),
+            tip_growth_remaining: AtomicU64::new(0),
+            tip_grown: AtomicU64::new(0),
             header: sample_header(),
+            alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
+            asked_fork_version: std::sync::Mutex::new(None),
+            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         };
@@ -1509,6 +2049,92 @@ pub(crate) mod tests {
                 "{bad} must be refused, naming this method's own params shape"
             );
         }
+    }
+
+    /// The five RK-5b params parsers each accept absent params and their own
+    /// object, and refuse every other shape — an array included.
+    ///
+    /// The array rows are the ones with a defect behind them: serde's derive
+    /// reads a struct out of a sequence, so without the explicit arm
+    /// `getblockheadersrange` would have quietly gained a positional form
+    /// `[start, end]` that nothing designed and nothing else in the daemon
+    /// accepts.
+    #[test]
+    fn the_rk5b_params_parsers_take_one_shape_each() {
+        assert_eq!(
+            last_block_header_request(&json!(null)).unwrap(),
+            GetLastBlockHeaderRequest::default()
+        );
+        assert!(
+            last_block_header_request(&json!({"fill_pow_hash": true}))
+                .unwrap()
+                .fill_pow_hash
+        );
+
+        let range = block_headers_range_request(&json!({"start_height": 3, "end_height": 9}))
+            .expect("an object with both heights");
+        assert_eq!((range.start_height, range.end_height), (3, 9));
+        // **A range has no empty form, and both spellings of "nothing" say so
+        // the same way.** The C++ answered for block 0 whether params were
+        // absent or `{}`; the first port defaulted the first and refused the
+        // second, so the two stopped meaning the same thing. Both are now
+        // refused — a client that forgot its heights is told it forgot,
+        // rather than told about genesis.
+        for empty in [json!(null), json!({}), json!({"fill_pow_hash": true})] {
+            assert!(
+                block_headers_range_request(&empty).is_err(),
+                "{empty} names no range and must be refused"
+            );
+        }
+
+        assert_eq!(
+            hard_fork_info_request(&json!(null)).unwrap().version,
+            None,
+            "absent params ask about the active fork"
+        );
+        assert_eq!(
+            hard_fork_info_request(&json!({"version": 7}))
+                .unwrap()
+                .version,
+            core::num::NonZeroU8::new(7)
+        );
+        assert_eq!(
+            fee_estimate_request(&json!({"grace_blocks": 5}))
+                .unwrap()
+                .grace_blocks,
+            5
+        );
+        assert_eq!(
+            block_header_by_hash_request(&json!({"hashes": []}))
+                .unwrap()
+                .hashes
+                .len(),
+            0
+        );
+
+        // Every parser, every non-object shape. The refusal each carries is
+        // its own wording, so this asserts the code and leaves the message to
+        // the parser that owns it.
+        for bad in [json!([0]), json!([3, 9]), json!("0"), json!(0), json!(true)] {
+            for refusal in [
+                last_block_header_request(&bad).err(),
+                block_header_by_hash_request(&bad).err(),
+                block_headers_range_request(&bad).err(),
+                hard_fork_info_request(&bad).err(),
+                fee_estimate_request(&bad).err(),
+            ] {
+                let RpcFault::Refused(refusal) =
+                    refusal.unwrap_or_else(|| panic!("{bad} is not a usable params value"))
+                else {
+                    panic!("{bad} must be refused as a bad request, not a facts fault");
+                };
+                assert_eq!(refusal.code, CORE_RPC_ERROR_CODE_WRONG_PARAM);
+            }
+        }
+
+        // And a field of the wrong type inside a well-shaped object.
+        assert!(hard_fork_info_request(&json!({"version": "7"})).is_err());
+        assert!(block_headers_range_request(&json!({"start_height": -1})).is_err());
     }
 
     fn block_req(hash: &str, height: u64) -> GetBlockRequest {
@@ -1741,6 +2367,338 @@ pub(crate) mod tests {
                 "{bad} must be WRONG_PARAM"
             );
         }
+    }
+
+    // ── RK-5b: the header remainder ────────────────────────────────────────
+
+    /// Every method in this slice refuses `fill_pow_hash` under restriction
+    /// rather than answering with an empty field and status OK.
+    #[test]
+    fn a_restricted_caller_asking_for_the_pow_hash_is_refused_not_blanked() {
+        // Synchronized, because `get_last_block_header` refuses an
+        // unsynchronised node outright — see the test below.
+        let f = facts(true, 0);
+        for restricted in [true, false] {
+            let out = get_last_block_header(&f, true, restricted);
+            if restricted {
+                assert!(
+                    matches!(out, Err(RpcFault::Refused(_))),
+                    "a privileged field must be refused, not emptied"
+                );
+            } else {
+                assert!(out.is_ok());
+            }
+        }
+        // And not asking for it is fine on either listener.
+        assert!(get_last_block_header(&f, false, true).is_ok());
+    }
+
+    /// A block arriving between choosing the tip and projecting it does not
+    /// produce a header labelled "last" with `depth == 1`.
+    ///
+    /// **The defect is inherited, not introduced.** The C++ read
+    /// `get_blockchain_top`, then `get_block_by_hash`, then computed depth
+    /// from a third read of the chain height — the same three-snapshot shape.
+    /// Rule 16: an inherited flow that contradicts the method's own contract
+    /// is migrated rather than carried, and "last block header" answering
+    /// with a block that is not last is exactly that.
+    ///
+    /// The fake grows its chain once, on the first header read, which is the
+    /// state a constant-height double makes unrepresentable.
+    #[test]
+    fn a_block_arriving_mid_read_does_not_yield_a_stale_tip() {
+        let f = facts(true, 0);
+        let base = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        f.tip_growth_remaining.store(1, Ordering::Relaxed);
+
+        let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
+        // The header returned is the *new* tip, not the height chosen from
+        // the pre-growth snapshot.
+        assert_eq!(out.block_header.height, base);
+        assert_eq!(
+            out.block_header.depth, 0,
+            "a header reported as the last block must be the last block"
+        );
+        // Two reads: the first saw the chain move, the second agreed with its
+        // own bound. Asserted so a fix that merely widened a bound, without
+        // re-reading, is distinguishable from one that converged.
+        assert_eq!(f.header_reads.load(Ordering::Relaxed), 2);
+    }
+
+    /// A chain that moves on every attempt is answered, not looped over.
+    #[test]
+    fn a_chain_that_never_settles_is_refused_rather_than_spun_on() {
+        let f = facts(true, 0);
+        f.tip_growth_remaining.store(u64::MAX, Ordering::Relaxed);
+        let out = get_last_block_header(&f, false, false);
+        assert!(
+            matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
+            "{out:?}"
+        );
+        // Bounded: the refusal costs a fixed number of reads, so a node under
+        // sustained block arrival cannot be made to spin here.
+        assert_eq!(
+            f.header_reads.load(Ordering::Relaxed),
+            TIP_READ_ATTEMPTS as u64
+        );
+    }
+
+    /// An unsynchronised node refuses to report a tip, rather than reporting
+    /// the top of a partial chain.
+    ///
+    /// The C++ `CHECK_CORE_READY()` guarded **this method alone** among the
+    /// slice's five, and the reason survives: this is the one that answers
+    /// "the tip", which on a syncing node is the top of what has arrived so
+    /// far presented as the top of the chain. The other four take an explicit
+    /// height or hash, where the caller named what it wanted.
+    ///
+    /// The C++ answered `status = BUSY` with a **default-constructed**
+    /// header, and that was a live trap rather than a tidy convention:
+    /// `shekyl-rpc-client`'s `get_hardfork_version` reads
+    /// `block_header.major_version` without checking the status, so an
+    /// unsynchronised daemon told it the fork version was 0. A refusal cannot
+    /// be read as an answer.
+    #[test]
+    fn an_unsynchronized_node_refuses_to_report_a_tip() {
+        let unsynced = facts(false, 900_000);
+        let out = get_last_block_header(&unsynced, false, false);
+        assert!(
+            matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
+            "{out:?}"
+        );
+        // No header was read: the refusal precedes the projection, so a
+        // syncing node does not pay for a question it will not answer.
+        assert_eq!(unsynced.header_reads.load(Ordering::Relaxed), 0);
+
+        // The other four have no readiness check, because the C++ gave them
+        // none — asserted, so that "port what is there" stays a fact about
+        // this diff rather than a claim about it.
+        let range = GetBlockHeadersRangeRequest {
+            start_height: 0,
+            end_height: 0,
+            fill_pow_hash: false,
+        };
+        assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
+        assert!(hard_fork_info(&unsynced, &HardForkInfoRequest { version: None }).is_ok());
+        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
+        assert!(get_block_header_by_hash(
+            &unsynced,
+            &GetBlockHeaderByHashRequest {
+                hashes: vec![],
+                fill_pow_hash: false,
+            },
+            false
+        )
+        .is_ok());
+    }
+
+    /// One miss does not discard the rest, and each slot names the hash it
+    /// answers — the two properties the all-or-nothing C++ could not give.
+    #[test]
+    fn a_missing_hash_costs_only_its_own_slot() {
+        let mut f = facts(false, 0);
+        f.hash_chain_height = 1_234_567;
+        let known = HashHex::from_bytes(patterned_hash().to_bytes());
+        let absent = HashHex::from_bytes(tagged_hash(200).to_bytes());
+        let request = GetBlockHeaderByHashRequest {
+            hashes: vec![known, absent, known],
+            fill_pow_hash: false,
+        };
+        let out = get_block_header_by_hash(&f, &request, false).expect("per-element");
+        assert_eq!(out.block_headers.len(), 3, "one slot per requested hash");
+        assert!(out.block_headers[0].block_header.is_some());
+        assert!(
+            out.block_headers[1].block_header.is_none(),
+            "the miss is data, not a fault that discards its neighbours"
+        );
+        assert!(out.block_headers[2].block_header.is_some());
+        assert_eq!(
+            out.block_headers[1].hash, absent,
+            "each slot names its hash"
+        );
+    }
+
+    /// The span cap bounds the number of headers, not the difference between
+    /// the endpoints. The C++ tested the difference, which let 1001 through
+    /// against a cap of 1000.
+    #[test]
+    fn the_header_range_cap_counts_headers_not_the_gap() {
+        let f = facts(false, 0);
+        let range = |start: u64, end: u64| GetBlockHeadersRangeRequest {
+            start_height: start,
+            end_height: end,
+            fill_pow_hash: false,
+        };
+        // Exactly at the cap: 1000 headers, heights 0..=999.
+        assert!(get_block_headers_range(&f, &range(0, 999), true).is_ok());
+        // One more header — the value the C++ admitted.
+        assert!(matches!(
+            get_block_headers_range(&f, &range(0, 1000), true),
+            Err(RpcFault::Refused(_))
+        ));
+        // Unrestricted, neither is capped.
+        assert!(get_block_headers_range(&f, &range(0, 1000), false).is_ok());
+        // An inverted range is refused before any chain read.
+        assert!(matches!(
+            get_block_headers_range(&f, &range(5, 4), false),
+            Err(RpcFault::Refused(_))
+        ));
+    }
+
+    /// A range past the tip is refused **without reading a single header**.
+    ///
+    /// The C++ bounded both endpoints against the chain height in one O(1)
+    /// test before its loop; the first port of this method kept only the
+    /// ordering check and discovered the overrun inside the loop, one height
+    /// at a time. On the unrestricted listener — where the span cap does not
+    /// apply — `start_height = 0, end_height = u64::MAX` therefore walked the
+    /// whole chain, a lock acquisition and a block read per height, before
+    /// refusing. Found by review, not by a test, because **an assertion on
+    /// the error code cannot tell an O(1) refusal from one that did all the
+    /// work first**: both return the same refusal. The count is the only
+    /// observable that separates them, which is why the fake now carries one.
+    #[test]
+    fn a_range_past_the_tip_is_refused_before_any_header_is_read() {
+        let f = facts(false, 0);
+        let reads = || f.header_reads.load(Ordering::Relaxed);
+        let range = |start: u64, end: u64| GetBlockHeadersRangeRequest {
+            start_height: start,
+            end_height: end,
+            fill_pow_hash: false,
+        };
+
+        let before = reads();
+        assert!(matches!(
+            get_block_headers_range(&f, &range(0, u64::MAX), false),
+            Err(RpcFault::Refused(refusal)) if refusal.code == CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT
+        ));
+        assert_eq!(
+            reads(),
+            before,
+            "an unbounded range must cost no header reads"
+        );
+
+        // The tip itself is past the end: `chain_height` is a count, so the
+        // highest readable height is one below it.
+        let tip = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        let before = reads();
+        assert!(matches!(
+            get_block_headers_range(&f, &range(tip, tip), false),
+            Err(RpcFault::Refused(_))
+        ));
+        assert_eq!(reads(), before, "the tip's own height is not readable");
+
+        // And the last valid height still answers, so the bound is not
+        // off by one in the other direction.
+        let before = reads();
+        assert!(get_block_headers_range(&f, &range(tip - 1, tip - 1), false).is_ok());
+        assert_eq!(reads(), before + 1, "exactly one header for one height");
+    }
+
+    /// A height that vanishes between the bound and the loop is a caller
+    /// error, not a store fault.
+    ///
+    /// **The pre-loop bound is a fast refusal, not a guarantee.** The tip can
+    /// move down underneath it — a reorg onto a shorter heavier chain, or an
+    /// operator `pop_blocks` — so the loop still has to say what a missing
+    /// header means. On the height path the shim returns `found == 0` for
+    /// exactly one condition (`height >= chain_height`, read inside that
+    /// call) and reports a store that cannot produce a block it claims to
+    /// hold as an *error*, which `?` propagates before this arm is reached.
+    /// So this arm can only be the chain shortening, and reporting it as
+    /// `Inconsistent` would hand the caller a generic internal error for a
+    /// benign race whose remedy is to re-ask.
+    ///
+    /// The fake reproduces exactly that: the tip it reports on `chain_tip`
+    /// is above the height its header arm will still answer for.
+    #[test]
+    fn a_height_that_vanishes_under_the_bound_is_a_caller_error() {
+        let mut f = facts(true, 0);
+        // The bound sees 1_234_567; the header arm holds only 1_000 blocks.
+        f.hash_chain_height = 1_000;
+        let out = get_block_headers_range(
+            &f,
+            &GetBlockHeadersRangeRequest {
+                start_height: 999,
+                end_height: 1_000,
+                fill_pow_hash: false,
+            },
+            false,
+        );
+        let Err(RpcFault::Refused(refusal)) = out else {
+            panic!("a vanished height is a refusal, not a fault: {out:?}");
+        };
+        assert_eq!(refusal.code, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT);
+        // Names the height that has gone and the tip as it now stands, so
+        // the caller can re-ask rather than guess.
+        assert!(refusal.message.contains("1000"), "{}", refusal.message);
+        assert!(refusal.message.contains("999"), "{}", refusal.message);
+    }
+
+    /// The request's absent version reaches the facts layer as `None` — the
+    /// handler does not substitute a sentinel on the way down, and the
+    /// resolved answer comes back up.
+    #[test]
+    fn hard_fork_info_forwards_the_absence_and_reports_the_resolution() {
+        let f = facts(false, 0);
+        let out = hard_fork_info(&f, &HardForkInfoRequest { version: None }).expect("info");
+        assert_eq!(
+            *f.asked_fork_version.lock().expect("not poisoned"),
+            Some(None),
+            "the handler must forward 'no version given', not a 0"
+        );
+        assert_ne!(
+            out.queried_version, 0,
+            "the reply never carries the sentinel"
+        );
+        assert_ne!(
+            out.queried_version, out.active_version,
+            "the two versions are separate fields, not one under two names"
+        );
+
+        let out = hard_fork_info(
+            &f,
+            &HardForkInfoRequest {
+                version: core::num::NonZeroU8::new(4),
+            },
+        )
+        .expect("info");
+        assert_eq!(
+            *f.asked_fork_version.lock().expect("not poisoned"),
+            Some(Some(4))
+        );
+        assert_eq!(out.queried_version, 4, "an explicit version is echoed");
+    }
+
+    /// `grace_blocks` past the ceiling is refused before the FFI call, so a
+    /// caller learns "invalid parameter" rather than "internal error".
+    #[test]
+    fn an_oversized_grace_window_is_refused_before_the_facts_call() {
+        let f = facts(false, 0);
+        let ceiling = f.fee_grace_blocks_max();
+        let out = get_fee_estimate(
+            &f,
+            &GetFeeEstimateRequest {
+                grace_blocks: ceiling.saturating_add(1),
+            },
+        );
+        assert!(matches!(out, Err(RpcFault::Refused(_))));
+        assert_eq!(
+            f.asked_grace.load(Ordering::SeqCst),
+            u64::MAX,
+            "the facts layer must not have been called at all"
+        );
+    }
+
+    /// The tiers are reachable by name and the scalar `fee` is gone.
+    #[test]
+    fn the_fee_reply_names_its_tiers() {
+        let f = facts(false, 0);
+        let out = get_fee_estimate(&f, &GetFeeEstimateRequest { grace_blocks: 3 }).expect("fees");
+        assert_eq!(f.asked_grace.load(Ordering::SeqCst), 3);
+        assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::Low), 10);
+        assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::High), 40);
+        assert_eq!(out.quantization_mask, 8);
     }
 
     // ── RK-5a: the p2p methods ─────────────────────────────────────────────

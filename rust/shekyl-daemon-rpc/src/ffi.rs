@@ -466,6 +466,9 @@ pub struct BlockHeaderFactsFfi {
     pub minor_version: u8,
     pub orphan_status: u8,
     pub pow_hash_filled: u8,
+    /// `0` means no such block: by height, `height >= chain_height`; by hash,
+    /// a hash this chain does not hold. An in-range height the store cannot
+    /// produce is `ERR_INCONSISTENT`, never `found == 0`.
     pub found: u8,
     pub reserved: [u8; 7],
 }
@@ -510,6 +513,61 @@ pub struct HardforkEntryFfi {
     pub reserved: [u8; 7],
     pub height: u64,
 }
+
+/// Twin of `shekyl_rpc_hard_fork_facts` (RK-5b).
+///
+/// **Two versions, named apart.** `queried_version` is what the voting fields
+/// describe — the caller's, or the resolved next-fork version when the caller
+/// asked with none. `active_version` is the chain's current fork. The C++ this
+/// replaces reported the second under the name `version` while the voting
+/// fields described the first, and echoed nothing of the query.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HardForkFactsFfi {
+    pub earliest_height: u64,
+    pub window: u32,
+    pub votes: u32,
+    pub threshold: u32,
+    pub state: u32,
+    pub queried_version: u8,
+    pub active_version: u8,
+    pub voting: u8,
+    pub enabled: u8,
+    pub reserved: [u8; 4],
+}
+
+/// Twin of `shekyl_rpc_fee_estimate_facts` (RK-5b).
+///
+/// `fees` is fixed at four because the estimator produces exactly four tiers
+/// (Fl, Fn, Fm, Fh). `fee_count` reports how many it actually wrote, so a
+/// change to that contract is a refusal rather than a shorter answer read as
+/// a base fee.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeEstimateFactsFfi {
+    pub fees: [u64; 4],
+    pub quantization_mask: u64,
+    pub fee_count: u8,
+    pub reserved: [u8; 7],
+}
+
+const _: () = assert!(std::mem::size_of::<HardForkFactsFfi>() == 32);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, earliest_height) == 0);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, window) == 8);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, votes) == 12);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, threshold) == 16);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, state) == 20);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, queried_version) == 24);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, active_version) == 25);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, voting) == 26);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, enabled) == 27);
+const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, reserved) == 28);
+
+const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 48);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, quantization_mask) == 32);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 40);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 41);
 
 /// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned both
 /// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
@@ -671,6 +729,18 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 43);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, reserved) == 44);
 
 extern "C" {
+    pub fn shekyl_rpc_hard_fork_info(
+        h: *mut CoreRpcHandle,
+        requested_version: u8,
+        out: *mut HardForkFactsFfi,
+    ) -> i32;
+    pub fn shekyl_rpc_fee_estimate(
+        h: *mut CoreRpcHandle,
+        grace_blocks: u64,
+        out: *mut FeeEstimateFactsFfi,
+    ) -> i32;
+    /// The grace-blocks ceiling the estimator asserts on. Handle-free.
+    pub fn shekyl_rpc_fee_grace_blocks_max() -> u64;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
     /// instant they were read at; release the owner with
@@ -801,6 +871,7 @@ extern "C" {
     ) -> i32;
     pub fn shekyl_rpc_block_header_at(
         h: *mut CoreRpcHandle,
+        block_hash: *const u8,
         height: u64,
         fill_pow_hash: u8,
         out: *mut BlockHeaderFactsFfi,
@@ -917,7 +988,35 @@ mod unit_test_link_stubs {
         std::ptr::null_mut()
     }
     #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_json_rpc(
+        _h: *mut CoreRpcHandle,
+        _method: *const std::os::raw::c_char,
+        _params: *const std::os::raw::c_char,
+    ) -> *mut std::os::raw::c_char {
+        std::ptr::null_mut()
+    }
+    #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_hard_fork_info(
+        _h: *mut CoreRpcHandle,
+        _requested_version: u8,
+        _out: *mut HardForkFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_fee_estimate(
+        _h: *mut CoreRpcHandle,
+        _grace_blocks: u64,
+        _out: *mut FeeEstimateFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_fee_grace_blocks_max() -> u64 {
+        0
+    }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_net_stats(
         _h: *mut CoreRpcHandle,
@@ -1104,6 +1203,7 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_header_at(
         _h: *mut CoreRpcHandle,
+        _block_hash: *const u8,
         _height: u64,
         _fill_pow_hash: u8,
         _out: *mut BlockHeaderFactsFfi,

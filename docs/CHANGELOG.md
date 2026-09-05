@@ -92,6 +92,29 @@
 
 ### Added
 
+- **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
+  registered, and gate-pinned.** The DRS design doc's Round-2 substrate
+  figures (46 tables, seven undocumented, two phantoms) had aged into
+  today's 49; P0a closes the delta by **set difference, not history
+  search** — births = 3 (both attestation-witness tables and
+  `archival_settlement`, each with owning commit and the schema
+  version-ladder as independent witness), **deaths = ∅ measured**, not
+  assumed by the total adding up. A 49-row reconciliation registry in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) records per-table
+  disposition (39 documented-at-pin + 7 since-documented + 3 born-since),
+  the pin-era doc closure (41 claimed = 39 real + 2 phantoms), and the
+  provenance trap that bit twice: a pickaxe on a bare name measures the
+  identifier *family* (`archival_settlement_epoch_at_height`, pre-pin),
+  the quoted literal measures the *table* (post-pin). The schema doc's
+  duplicate `properties`-titled heading — present since before the pin
+  and invisible to the property-row gate's set() dedup — is merged into
+  the one `properties` section, and `check_lmdb_schema_coverage.py`
+  gains the legs that would have seen all of it: section headings as a
+  duplicate-free bijection with `SHEKYL_LMDB_TABLES`, and the registry's
+  rows and stated count pinned to the same macro. Every new failure path
+  observed red before landing. DEL-005 closed; stale DRS figure sites
+  corrected with records-was pins kept.
+
 - **Shard-visual ruling A: parameter admissibility closed, with a
   pre-registered criterion and typed enforcement.** The spec's
   parameter design-review checkpoint had inverted — the gate existed,
@@ -512,6 +535,57 @@
   7 used. CEN-L8 is the one row still failed closed; CEN-B5 the one DIVERGENT.
   The per-height root record is recorded as a spec-level requirement on any
   store the rewrite uses. Register-only; no code.
+
+- **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
+  `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
+  Those three plus `get_last_block_header` and `get_block_headers_range` (and
+  the `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **The last two keep their response
+  shapes** — a client parses them exactly as before, and only their refusals
+  changed. **Operator impact — three replies a client parses differently.** `get_block_header_by_hash` answers **per
+  element**: `block_headers` is now an array of `{hash, block_header?}` slots
+  rather than a bare header array, so a client learns *which* hash was
+  unknown instead of receiving zero headers and an error string, and one
+  unknown hash no longer discards the other nine hundred; the request's
+  singular `hash` field is gone (it had no in-tree caller, and its only
+  effect beside `hashes` was to slip one lookup past the restricted cap of
+  1000). `hard_fork_info` splits the reply's single
+  `version` in two, and the mapping is exact: **`active_version` is that
+  field renamed** — the deleted handler always filled it from
+  `get_current_hard_fork_version()`, whatever the request asked about — and
+  **`queried_version` is new**, naming the version the `window` / `votes` /
+  `threshold` fields beside it actually describe. A client reading `version`
+  today wants `active_version`; nothing it could read before told it what the
+  voting counts were counting. `get_fee_estimate` drops the `fee` scalar,
+  which the C++ handler set to `fees[0]` and which therefore carried nothing
+  the tier array did not. Also corrected while porting: the restricted
+  header-range cap bounded `end - start` rather than the count, so a
+  restricted caller could obtain 1001 headers against a cap of 1000; and a
+  restricted caller asking for `fill_pow_hash` is now refused rather than
+  handed an empty field with status OK. `get_block_headers_range` refuses a
+  request that names no range (absent `params` or `{}`) instead of answering
+  for block 0 as the C++ did — a client that omits its heights is told it
+  omitted them — and bounds both endpoints against the chain tip before
+  reading anything, which the C++ also did and the first port did not.
+  `get_last_block_header` **refuses with `CORE_BUSY` (-9) on an
+  unsynchronized node**, where the C++ answered `status: BUSY` with a
+  zero-filled header — a shape that let a client reading the header without
+  checking the status report a fork version of 0. `hard_fork_info` no longer
+  accepts `version: 0`: it was the C++'s spelling of "absent", and omitting
+  the field is now the only way to ask about the next fork.
+
+- **The daemon console reads the DAA block target from the build, not from
+  the daemon it is talking to.** `T` is genesis-frozen and single-sourced
+  through `config/consensus_constants.json`, which generates both the C++
+  header and the Rust constant. The console previously computed its
+  block-statistics and hash-rate figures from `/get_info`'s `target`, which
+  gave one constant two sources — and over a remote connection, a source the
+  daemon controls. **Operator impact:** `shekyld status`,
+  `print_blockchain_dynamic_stats` and `alt_chain_info` now print a warning
+  when the daemon reports a different target, naming both values, and compute
+  from this build's. A daemon reporting a different `T` is running different
+  consensus rules, so this most likely means a mismatched binary or a
+  different chain.
 
 - **FCMP++ spec: the membership anchor is a state property, not a header
   read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the

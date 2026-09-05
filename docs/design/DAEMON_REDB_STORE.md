@@ -16,7 +16,12 @@ columns are ordered by that hierarchy, not by engineering elegance.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
 **Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**; surface map
-from `blockchain.cpp` `m_db->` vocabulary (97 methods).
+from `blockchain.cpp` `m_db->` vocabulary (97 methods). **The five table-inventory
+rows (handles, opens, claimed total, undocumented, phantoms) re-measured
+at `9742ec4f6` by P0a (2026-09-05)** — the remaining substrate rows
+(`m_db->` counts, atomicity audit, hardfork pop) were not — the pin→HEAD delta
+is closed in the [P0a reconciliation registry](#p0a-reconciliation-registry-2026-09-05-dev-9742ec4f6);
+the other stamped figures are unre-measured and keep the Round-2 pin.
 
 **Identifier family:** `DRS-*` · **Crate name:** **`shekyl-chain-store`**
 (pinned, DRS-R-19).
@@ -76,11 +81,11 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 
 | Fact | Measurement |
 | --- | --- |
-| Live `MDB_dbi` table handles in `db_lmdb.h` | **46** (1:1 with opens) |
-| `lmdb_db_open(` **call** sites (macro path) | **46** — the 47th `rg` hit is the **function definition** at `db_lmdb.cpp:328`, not an open (R2-3) |
-| `docs/LMDB_SCHEMA.md` claimed total | **41** — **stale** |
-| Tables in code, **0 hits** in schema doc (**seven**) | `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_rebond_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** |
-| Phantom tables in schema/audit | `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}` |
+| Live `MDB_dbi` table handles in `db_lmdb.h` | **49** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below) |
+| `lmdb_db_open(` **call** sites (macro path) | **49** — the 50th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
+| `docs/LMDB_SCHEMA.md` claimed total | **49** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_rebond_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
+| Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
 | Atomicity audit | 183 lines, April 2026; **0** archival hits vs **702** in `db_lmdb.cpp` |
 | Hardfork pop | `HardFork::on_block_popped` **reads** `get_hard_fork_version(height)` for heights **above** new tip (`hardfork.cpp:286–302`); interface has **set/get only**, no delete (`blockchain_db.h:1938,1947`) |
@@ -89,18 +94,150 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 
 | Document | Status |
 | --- | --- |
-| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **STALE** — not a DRS-0 input until DRS-P0 |
-| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **STALE** — PASS over superseded write set |
+| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **RECONCILED** (P0a, 2026-09-05) — gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
+| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **STALE** — PASS over superseded write set (P0b's subject) |
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
 **DRS-0 is blocked** until **DRS-P0** lands **and the register's third S-grade is re-verified at its merged sha.** The S0 (CEN-M8, PR #602) and the first S1 (CEN-D2/D1, PR #604) are fixed, merged and re-verified; a **second S1 was found 2026-09-04 and fixed 2026-09-05 (PR #623)** — CEN-B5's header check compared the root *after* the add while `create_block_template` fills the header from the root *before* it, so every non-FAKECHAIN chain would have halted at height 60 (census §7 #17); the check now runs at admission before the add, red → green observed on a TESTNET Blockchain fixture (§7 #18). CEN-L11/L12 were promoted at PR #609's merged fix (2026-09-04).
 
+### P0a reconciliation registry (2026-09-05, `dev` `9742ec4f6`)
+
+The Round-2 substrate figures above were measured against `dev`
+`3247fe3b6` (2026-07-27). This registry closes the delta to the current
+tree by **set difference, not history search**: the pin's table-name set
+(46) against the live `SHEKYL_LMDB_TABLES` X-macro (49, `db_lmdb.cpp` —
+the single source `mdb_env_set_maxdbs` derives from, SO-D4). **Births =
+3, deaths = ∅** — both directions of the set difference are the evidence,
+so "no deaths" is a measurement, not an unstated conjunct of
+`46 + 3 = 49` (a history search alone would have reported identically for
+`4 births − 1 death`). The registry key is the on-disk name string — what
+a deployed datadir contains; the `db_lmdb.h` handle set was separately
+verified `m_<name>` 1:1 against it at HEAD (49/49).
+
+**Birth provenance.** The independent witness is the schema version
+ladder (`LMDB_SCHEMA.md` header): the pin defines `VERSION 8`, HEAD
+defines `12`, v9 is recorded as "witness tables ride" and v10 carries
+"the additive `archival_settlement` table riding the boundary" — all
+three births are dated after the pin by a consensus-relevant schema
+record before any text search is consulted. Text forensics, secondary: a
+bare-substring pickaxe for `archival_settlement` returns `e3fd838ee`
+(2026-06-10, **pre-pin**) via the longer identifier
+`archival_settlement_epoch_at_height` — an epoch helper, not the table;
+all 8 pin-era hits are that helper, and the pin file contains **zero**
+occurrences of the quoted literal `"archival_settlement"` (control: the
+quoted `"archival_serve_credit"` hits the pin file once, so the check
+discriminates). The quoted-literal pickaxe's oldest hit is `9d7661daf8`
+(2026-08-24, SO-D4), post-pin by ancestry. A census delta is a **set
+question** answered by two extractions and a diff; when a pickaxe must be
+used at all, its subject is the quoted name string, never the bare
+identifier family. The sibling trap (hit twice during verification, once
+per verifier): **the instrument must match the era it is pointed at** —
+the pin declares names as `const char* const LMDB_* = "…"` constants
+(the X-macro did not exist yet), so today's macro grep returns zero
+against the pin, and a whitespace-rigid regex against the pin's aligned
+declarations (`LMDB_CURVE_TREE_META   = …`, multiple spaces) silently
+under-counts to 45 and manufactures a phantom fourth birth. Extract by
+the pin's own form, and treat a count that misses the floor as a broken
+parse, not a finding.
+
+**Pin-era doc closure** (counted at `3247fe3b6:docs/LMDB_SCHEMA.md`, not
+inferred from the claimed total): 42 third-level (`###`) headings over 41
+`LMDB name` property rows and a claimed total of 41. The heading surplus
+was a second `properties`-titled heading — already present at the pin,
+invisible to the property-row comparison then as now (merged away, and
+gated at the heading layer, by this PR). The 41 unique documented names =
+**39 real + 2 phantoms** (`staker_accrual` / `staker_claims`); the 46 pin
+tables = those 39 + the seven undocumented. The coverage gate's header
+records **nine** undocumented at its 2026-08-26 census (landed as `2572e6f5b`, 2026-08-25 — the header's date is the same moment in UTC) — both figures are
+correct at their own dates: nine = the seven, plus the two witness tables
+born 2026-08-04 (between pin and census) and undocumented at birth.
+Phantoms at HEAD: **0** — both lost their sections with the claim-era
+wire deletion, and the gate's ghost leg refuses their return.
+
+**49 rows**, one per live table; dispositions count 39 documented-at-pin
++ 7 since-documented + 3 born-since:
+
+| Table | Disposition (pin `3247fe3b6` → `9742ec4f6`) |
+| --- | --- |
+| `alt_blocks` | in code at pin, documented at pin |
+| `archival_alt_attestation_witness` | born since pin — `3dee502595` (2026-08-04, credit-wire PR-B2; schema v9) |
+| `archival_attestation_witness` | born since pin — `a308eb430a` (2026-08-04, credit-wire PR-B2; schema v9) |
+| `archival_bond` | in code at pin, documented at pin |
+| `archival_bond_holdings_update_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_bond_rebond_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_bond_unbond_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_budget` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_budget_accrual` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_emission_claim_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `archival_epoch_close_log` | in code at pin, documented at pin |
+| `archival_r_market` | in code at pin, documented at pin |
+| `archival_serve_credit` | in code at pin, documented at pin |
+| `archival_settlement` | born since pin — `9d7661daf8` (2026-08-24, SO-D4; schema v10 — see provenance note above) |
+| `archival_shard_segment` | in code at pin, documented at pin |
+| `archival_sigma_work` | in code at pin, documented at pin |
+| `archival_slash_applied` | in code at pin, documented at pin |
+| `archival_slash_log` | in code at pin, documented at pin |
+| `block_burn` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
+| `block_heights` | in code at pin, documented at pin |
+| `block_info` | in code at pin, documented at pin |
+| `block_pending_additions` | in code at pin, documented at pin |
+| `blocks` | in code at pin, documented at pin |
+| `curve_tree_checkpoints` | in code at pin, documented at pin |
+| `curve_tree_layers` | in code at pin, documented at pin |
+| `curve_tree_leaves` | in code at pin, documented at pin |
+| `curve_tree_meta` | in code at pin, documented at pin |
+| `curve_tree_roots` | in code at pin, documented at pin |
+| `hf_starting_heights` | in code at pin, documented at pin |
+| `hf_versions` | in code at pin, documented at pin |
+| `leaf_to_output` | in code at pin, documented at pin |
+| `output_amounts` | in code at pin, documented at pin |
+| `output_metadata` | in code at pin, documented at pin |
+| `output_to_leaf` | in code at pin, documented at pin |
+| `output_txs` | in code at pin, documented at pin |
+| `pending_tree_drain` | in code at pin, documented at pin |
+| `pending_tree_leaves` | in code at pin, documented at pin |
+| `properties` | in code at pin, documented at pin |
+| `spent_keys` | in code at pin, documented at pin |
+| `tx_indices` | in code at pin, documented at pin |
+| `tx_outputs` | in code at pin, documented at pin |
+| `txpool_blob` | in code at pin, documented at pin |
+| `txpool_meta` | in code at pin, documented at pin |
+| `txs` | in code at pin, documented at pin |
+| `txs_pqc_auths` | in code at pin, documented at pin |
+| `txs_prunable` | in code at pin, documented at pin |
+| `txs_prunable_hash` | in code at pin, documented at pin |
+| `txs_prunable_tip` | in code at pin, documented at pin |
+| `txs_pruned` | in code at pin, documented at pin |
+
+This registry is CI-pinned: `scripts/ci/check_lmdb_schema_coverage.py`
+asserts these rows are a duplicate-free bijection with
+`SHEKYL_LMDB_TABLES` and that the stated row count matches, in the same
+run that pins `LMDB_SCHEMA.md`'s property rows, section headings, stated
+total, and DB-version header. `doc-links.yml` already triggers on
+`docs/**` and on `db_lmdb.cpp`, so both a registry edit and a
+source-only table change start the gate.
+
+**Field evidence for the RECORD-AND-SPECIFY default (P0c), from the
+round preceding this PR.** C2-R1c-Q3b repaired one inherited defect —
+the sync-phase orphan arm punishing honest origins — and the fix took
+three forms across six review rounds because the machinery around it is
+undocumented: the first fix stalled sync because nothing re-schedules a
+severed request loop (the pre-fix punishment *was* the recovery); the
+second carried dead negotiation state into `request_missing_objects`,
+whose nothing-to-request arm silently drops; the rig's first green came
+through a wrong channel (`reserve_span` had parked the parent in
+`requested_hashes`); and the cleanup-failure path returned early past
+the recovery it guarded. Four failures, each from behavior no document
+records. That per-defect, per-reviewer specification cost is the
+wholesale-port argument in miniature: record the wart, specify the Rust
+store, don't patch blind.
+
 ---
 
 ## 0. Problem statement
 
-Durable state lives in C++ LMDB (~**46** tables). Orchestration tangle is
+Durable state lives in C++ LMDB (**49** tables). Orchestration tangle is
 **`blockchain.cpp`** (253 `m_db->`, 97 methods), not the storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
@@ -317,7 +454,7 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (97 DB methods) → `BlockchainLMDB` (46 tables) + FFI gather shells.
+`blockchain.cpp` (97 DB methods) → `BlockchainLMDB` (49 tables) + FFI gather shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
 
@@ -586,8 +723,8 @@ flowchart TD
 
 | PR | ID | Deliverable | Blocks |
 | --- | --- | --- | --- |
-| **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms); **DRS-CI** bidirectional gates | Mental model |
-| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency | Apply/pop design; E2 pop_block |
+| **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms — *the plan's Round-2-pin figures, kept as written; the live count is 49, see the P0a registry*); **DRS-CI** bidirectional gates. *(Delivered 2026-09-05 — the plan's figures had aged by delivery: the adds/drops landed with the coverage-gate commit `2572e6f5b` (2026-08-25), so P0a shipped the remaining truth: the 49-row reconciliation registry with birth/death provenance, the heading-layer and registry gate legs, and the duplicate-`properties` merge — see the P0a registry in the front matter)* | Mental model |
+| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency. **CI housekeeping (from #624 review, Rick):** the schema-coverage gate rides a workflow named `doc-links` — rename the workflow for what it gates (or move the gate to a schema-named workflow); the coupling is recorded at the trigger site, this closes it | Apply/pop design; E2 pop_block |
 | **P0c** | Wart register — **RECORD-AND-SPECIFY** (inverted 2026-09-01; was “cheap FIX-IN-CPP”) | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
 | **P0d** | Digest v0 | Core chain + spent keys + curve root **minimum**; **must expand archival journals before S-ARCH / DRS-E archival port** (A-1 composes with blind min oracle — see §7.1.1) | C oracle; logical-state definition |
 | **P0e** | Digest totality | Full table inventory / named exclusions | E2 |
@@ -706,16 +843,28 @@ IBD floor from DRS-0).
 
 ### 9.1 Bidirectional inventory CI (≈ one script)
 
-Makes DRS-R-1 **structurally unrepresentable**:
+Makes DRS-R-1 **structurally unrepresentable**. Legs 1–2 are **live** as
+`scripts/ci/check_lmdb_schema_coverage.py` (`2572e6f5b`, 2026-08-25; extended by P0a
+2026-09-05), keyed on the `SHEKYL_LMDB_TABLES` X-macro — the single source
+`mdb_env_set_maxdbs` derives from (SO-D4), which is the sharper subject
+than this section's original `db_lmdb.h` phrasing (the handle set is
+name-derived `m_<name>`, verified 1:1 by P0a):
 
-1. Every `MDB_dbi` member in `db_lmdb.h` appears in `LMDB_SCHEMA.md`
-2. Every table name in `LMDB_SCHEMA.md` exists in `db_lmdb.h` (**catches
-   phantoms** — the half that produced `staker_*`)
-3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md`
+1. Every X-macro table has an `LMDB name` property row **and** a section
+   heading in `LMDB_SCHEMA.md` — headings checked duplicate-free (the
+   property-row legs dedupe, which hid a doubled `properties` heading)
+2. Every `LMDB_SCHEMA.md` property row and heading names an X-macro table
+   (**catches phantoms** — the half that produced `staker_*`), plus the
+   stated total, the DB-version header, and the P0a reconciliation
+   registry's row bijection
+3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md` — **P0b**
 4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
    row
 
-**Seed count: 46/46** — no phantom 47 (R2-3). Gate must not cry wolf on day one.
+**Seed count: 49/49** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
+ruled the definition-site `rg` hit; the same N+1 shape reads 49+1 today).
+Gate must not cry wolf on day one — it has run green on `dev` since
+its landing (`2572e6f5b`, 2026-08-25).
 
 ### 9.2 Other layers
 
@@ -772,7 +921,7 @@ Blocks (and required blobs) live in the most format-stable representation
 | DEL-002 | Time-boxed shims | Surface Rust-owned | Empty until created |
 | DEL-003 | Production dual-backend / shadow | D2 closed + artifacts | Planned |
 | DEL-004 | liblmdb in default `shekyld` | D2 closed path | Planned |
-| DEL-005 | Schema phantoms / missing seven | DRS-P0 | Open |
+| DEL-005 | Schema phantoms / missing seven | DRS-P0 | **Closed** (P0a, 2026-09-05) — phantom sections died with the claim-era wire deletion, the seven documented in `2572e6f5b` (2026-08-25), both directions gate-pinned since |
 | DEL-006 | V4 heed-as-destination without pointer | Docs | Closed |
 | DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve — the genesis block is regenerated from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so it is a derived artifact of a repo constant, not state; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
 
