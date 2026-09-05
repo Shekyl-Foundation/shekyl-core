@@ -301,16 +301,7 @@ namespace cryptonote
 
     if(context.m_state == cryptonote_connection_context::state_synchronizing && context.m_last_request_time == boost::posix_time::not_a_date_time)
     {
-      NOTIFY_REQUEST_CHAIN::request r = {};
-      context.m_needed_objects.clear();
-      m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
-      handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
-      r.prune = m_sync_pruned_blocks;
-      context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
-      context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
-      MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
-      post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
-      MLOG_PEER_STATE("requesting chain");
+      request_chain_history(context);
     }
     else if(context.m_state == cryptonote_connection_context::state_standby)
     {
@@ -694,17 +685,7 @@ namespace cryptonote
     }
     else if( bvc.m_marked_as_orphaned )
     {
-      context.m_needed_objects.clear();
-      context.m_state = cryptonote_connection_context::state_synchronizing;
-      NOTIFY_REQUEST_CHAIN::request r = {};
-      m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
-      handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
-      r.prune = m_sync_pruned_blocks;
-      context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
-      context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
-      MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
-      post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
-      MLOG_PEER_STATE("requesting chain");
+      request_chain_history(context);
     }
 
     // Reload json checkpoints every 10 minutes and verify them against the blocks
@@ -1321,6 +1302,28 @@ namespace cryptonote
     return text;
   }
 
+  //------------------------------------------------------------------------------------------------------------------------
+  template<class t_core>
+  void t_cryptonote_protocol_handler<t_core>::request_chain_history(cryptonote_connection_context& context)
+  {
+    // The one chain re-walk entry: clear the dead negotiation, mark the
+    // context synchronizing, and request NOTIFY_REQUEST_CHAIN from the
+    // node's CURRENT short history with a live request time (the idle
+    // kicker's visibility condition). Shared by the fresh-block orphan
+    // arm, on_callback's resume, and the sync-loop orphan arm (C2-R1c
+    // Q3b) -- three hand-written copies of this block were a drift set.
+    context.m_needed_objects.clear();
+    context.m_state = cryptonote_connection_context::state_synchronizing;
+    NOTIFY_REQUEST_CHAIN::request r = {};
+    m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
+    handler_request_blocks_history( r.block_ids ); // change the limit(?), sleep(?)
+    r.prune = m_sync_pruned_blocks;
+    context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
+    context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
+    MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size() );
+    post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
+    MLOG_PEER_STATE("requesting chain");
+  }
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::try_add_next_blocks(cryptonote_connection_context& context)
   {
@@ -1554,22 +1557,48 @@ namespace cryptonote
             }
             if(bvc.m_marked_as_orphaned)
             {
-              drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
-                LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned, dropping connection");
-                drop_connection(context, true, true);
-                return 1;
-              }))
-                LOG_ERROR_CCONTEXT("span connection id not found");
-
+              // C2-R1c-Q3b: an in-loop orphan here means OUR store lost the
+              // parent between the span's parent pre-check and this add --
+              // every enumerated path is local (the 600s checkpoint-reload
+              // rollback discard, an operator pop_blocks, the Q1a flip-flop
+              // discard), so this is degradation and re-sync, never peer
+              // misconduct. A peer that actually misrepresents a span is
+              // caught at the queue bookkeeping-mismatch arm above, which
+              // fires before any state race can. Drop the span, then take
+              // the shared back-to-download path: a bare return would leave
+              // THIS context synchronizing with its request time already
+              // cleared by the response handler, and the idle kicker
+              // selects only contexts with a live request time -- the
+              // download must be put back in motion here, not assumed.
+              LOG_PRINT_CCONTEXT_L1("Block received at sync phase was marked as orphaned -- local chain state moved during span processing; re-syncing without penalizing the origin");
+              // A cleanup failure is logged loudly but must NOT abort the
+              // recovery below: an early return here would recreate the
+              // synchronizing-and-silent stall this arm exists to close
+              // (the request time is already cleared, and pre-fix the
+              // drop-then-reconnect was the recovery). The queue and p2p
+              // steps below do not depend on the core batch state.
               if (!m_core.cleanup_handle_incoming_blocks())
-              {
                 LOG_PRINT_CCONTEXT_L0("Failure in cleanup_handle_incoming_blocks");
-                return 1;
-              }
 
-              // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
+              // remove the span so other threads can wake up and get it,
+              // then re-walk the chain DIRECTLY: the pre-orphan
+              // negotiation is dead (its needed-objects window descends
+              // from a chain state we no longer hold), and
+              // request_missing_objects' preconditions assume a live one
+              // -- with the state reset and the span gone, its
+              // nothing-to-request arm answers by dropping the peer,
+              // which is the punishment coming back one layer up. The
+              // shared helper clears the negotiation and requests the
+              // chain from the current tip with a live request time.
+              // m_last_known_hash anchored the dead negotiation too:
+              // request_missing_objects' tail PREPENDS it to later chain
+              // requests, which would restart the walk from the chain we
+              // just rolled off -- clear it so the next negotiation
+              // starts from OUR history alone.
               m_block_queue.remove_spans(span_connection_id, start_height);
+              context.m_last_response_height = 0;
+              context.m_last_known_hash = crypto::null_hash;
+              request_chain_history(context);
               return 1;
             }
 
