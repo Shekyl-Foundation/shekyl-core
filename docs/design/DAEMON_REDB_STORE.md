@@ -51,7 +51,7 @@ from `blockchain.cpp` `m_db->` vocabulary (97 methods).
 > conformance register that supplies that record (**CSR-3a**, seeded with
 > CEN-L11) is **complete over the 102 bucket-1/2 rows P0f reviewed, not the
 > current 111** — 99 / 1 / 2, via **DRS-P0f** — so outside the 99 the digest is
-> a *regression* instrument. **Both S-grades are fixed and re-verified** — the S0
+> a *regression* instrument. **The review's two S-grades are fixed and re-verified** — the S0
 > by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (D2/D1 promoted) — but a
 > third S-grade is open (CEN-B5's header-check timing, S1, 2026-09-04, census §7
 > #17) and gates DRS-0. **Also applied — CSR-4:** DRS-C is

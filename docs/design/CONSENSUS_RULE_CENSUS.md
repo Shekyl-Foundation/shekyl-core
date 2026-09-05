@@ -829,8 +829,14 @@ input, not fixes.
     coinbase's stored maturity is `0 + 1 + 60 = 61`, draining when block 60
     connects — and every block after it; the chain halts at height 60.
     Never observed because every Blockchain-level test is FAKECHAIN (the
-    check is skipped, `:6411`), `--regtest` is FAKECHAIN, and every real
-    network is at height 1 — the rule-71 skip R9 owns masked an S1.
+    check is skipped, `:6411`), `--regtest` sets `FAKECHAIN`
+    (`cryptonote_core.cpp:423–426`), and every real network is at height 1.
+    **That is rule 71's strongest evidence to date:** `m_nettype !=
+    FAKECHAIN` gating a *check* is nettype selecting control flow, so the
+    entire test surface took the arm without the check and was structurally
+    blind to a defect that halts every real network at 60 — the skip R9
+    owns did not risk masking something, it masked this. R9 is therefore on
+    this S1's critical path: the fix's regression cannot be FAKECHAIN.
     **Grade S1** (`DAEMON_REDB_STORE.md` §7.2: consensus correctness,
     non-reorg; blocks DRS-0; fix-or-accept is Rick's). **Direction
     recommended, not ruled:** the header commits to the state the block was
@@ -1048,7 +1054,7 @@ the bucket-3/4 rows at C1 close (counts sum to 70).
 | **R8 — Storage-layer enforcement placement** | CEN-L1–L6, L13, L14 (8) | "Validation completed by a side effect of the write path" (KI uniqueness as an LMDB exception, verbatim-hash storage, verify-side-only uniqueness) becomes the rewrite's implicit spec — the rewrite must place each rule deliberately or inherit the accident |
 | **R6 — Inherited crypto verifiers on the acceptance path** | CEN-H11, H19, D1b (3) | The KI-domain check (submit-path-examined only, coupled to the open FCMP y-normalization question), the inherited C++ BP+ verifier (inventory disposition still *pending*), and the KAT-sealed PoW comparison ship as cryptographic consensus surfaces whose right-for-Shekyl was never ruled — a seal is not a ratification |
 | **R7 — Mempool admission semantics** | CEN-M1, M2, M6, M7, M11 (5) | Pool idempotency, NIC caching, and relay-side spend pre-checks freeze as the de-facto admission contract; U-4's open question rides here — whether the pool makes any relay-timing decision independent of the Dandelion++ layer (a privacy-leak channel no relay round examined, because the rounds examined the relay layer and not the pool) |
-| **R9 — Test levers in production consensus paths** | CEN-D7 (1) + the §6.8 carve-out finding (I2/B5/D3-env notes) | Regtest seams compiled into consensus functions fossilize; the rewrite needs a designed test seam, not inherited `FAKECHAIN` branches |
+| **R9 — Test levers in production consensus paths** | CEN-D7 (1) + the §6.8 carve-out finding (I2/B5/D3-env notes) | Regtest seams compiled into consensus functions fossilize; the rewrite needs a designed test seam, not inherited `FAKECHAIN` branches. **On an S1's critical path since 2026-09-04 (§7 #17):** the CEN-B5 fix's regression cannot run on FAKECHAIN, so a generator that produces real header roots is that fix's prerequisite, not a tidy-up |
 
 The 87 bucket-1 and 14 bucket-2 rows are **closed by this census** (Survey
 A O-4): the rewrite consumes their specs and ratification records directly;
