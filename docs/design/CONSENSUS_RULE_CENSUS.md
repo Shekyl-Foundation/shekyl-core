@@ -862,7 +862,7 @@ input, not fixes.
     The compare moved into `handle_block_to_main_chain`'s header-check
     sequence, after proof-of-work and before the miner-tx prevalidation
     (`blockchain.cpp:5896–5908`, the compare block — no nettype wrapper; the
-    caption above it is `:5879–5895`): the prev_id check above it guarantees the
+    caption above it is `:5878–5895`): the prev_id check above it guarantees the
     tip is the block's parent, so `get_curve_tree_root()` read there *is* the
     state at chain height N that the template filled from and the per-height
     record stores under key N (entry 16). A mismatch sets
