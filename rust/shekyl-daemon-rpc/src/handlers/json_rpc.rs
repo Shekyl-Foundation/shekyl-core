@@ -28,6 +28,8 @@
 
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
+use crate::chain_facts::{FfiChainFacts, FfiP2pFacts};
+use crate::core::CoreRpc;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
 use crate::types::{FfiJsonRpcResult, JsonRpcRequest, JsonRpcResponse};
@@ -184,8 +186,6 @@ pub async fn handle(
     }
 }
 
-/// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
-/// table. Each arm is one `methods::*` call framed as a JSON value.
 /// Whether to compute a block's proof-of-work hash: only if the caller asked
 /// **and** the listener is unrestricted — the C++ handler's
 /// `req.fill_pow_hash && !restricted`.
@@ -194,6 +194,11 @@ pub async fn handle(
 /// long hash is the expensive part of a header read, and a restricted
 /// listener is exactly the one that must not be made to do it on request.
 /// Dropping the `!restricted` here fails [`pow_hash_is_never_computed_for_a_restricted_listener`].
+///
+/// RK-5b's methods do **not** use this. They take `restricted` itself and
+/// refuse a restricted caller that asked for the field (`methods::pow_hash_or_refuse`)
+/// rather than blanking it. This stays the policy for RK-2's methods, whose
+/// C++ shape that slice does not reopen.
 fn pow_hash_entitled(requested: bool, restricted: bool) -> bool {
     requested && !restricted
 }
@@ -245,30 +250,26 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
     })
 }
 
+/// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
+/// table. Each arm is one `methods::*` call framed as a JSON value.
 async fn native_method(
     state: &Arc<AppState>,
     method: &str,
     params: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, RpcFault>> {
     match native_method_for(method)? {
-        NativeMethod::Version => {
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_version(&facts)
+        NativeMethod::Version => Some(frame_native(
+            run_blocking(state, |core| {
+                crate::methods::get_version(&FfiChainFacts::new(core))
             })
-            .await;
-            Some(frame_native(out))
-        }
-        NativeMethod::BlockCount => {
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block_count(&facts)
+            .await,
+        )),
+        NativeMethod::BlockCount => Some(frame_native(
+            run_blocking(state, |core| {
+                crate::methods::get_block_count(&FfiChainFacts::new(core))
             })
-            .await;
-            Some(frame_native(out))
-        }
+            .await,
+        )),
         NativeMethod::BlockHash => {
             // The params parse is pure and its refusal needs no core, so it
             // happens before a worker is taken.
@@ -276,13 +277,12 @@ async fn native_method(
                 Ok(height) => height,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block_hash(&facts, height)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_block_hash(&FfiChainFacts::new(core), height)
+                })
+                .await,
+            ))
         }
         NativeMethod::Block => {
             let request = match crate::methods::block_request(params) {
@@ -290,111 +290,105 @@ async fn native_method(
                 Err(fault) => return Some(Err(fault)),
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block(&facts, &request, fill_pow_hash)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_block(&FfiChainFacts::new(core), &request, fill_pow_hash)
+                })
+                .await,
+            ))
         }
-        NativeMethod::SyncInfo => {
-            // Two fact sources, one worker: `sync_info` is the only native
-            // method that reads the chain and the p2p layer, and they are
-            // not synchronised with each other — see `methods::sync_info`.
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let chain = crate::chain_facts::FfiChainFacts::new(Arc::clone(&core));
-                let p2p = crate::chain_facts::FfiP2pFacts::new(core);
+        NativeMethod::SyncInfo => Some(frame_native(
+            run_blocking(state, |core| {
+                // Two fact sources, one worker: `sync_info` is the only
+                // native method that reads the chain and the p2p layer,
+                // and they are not synchronised with each other — see
+                // `methods::sync_info`.
+                let chain = FfiChainFacts::new(Arc::clone(&core));
+                let p2p = FfiP2pFacts::new(core);
                 crate::methods::sync_info(&chain, &p2p)
             })
-            .await;
-            Some(frame_native(out))
-        }
-        NativeMethod::Connections => {
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiP2pFacts::new(core);
-                crate::methods::get_connections(&facts)
+            .await,
+        )),
+        NativeMethod::Connections => Some(frame_native(
+            run_blocking(state, |core| {
+                crate::methods::get_connections(&FfiP2pFacts::new(core))
             })
-            .await;
-            Some(frame_native(out))
-        }
-        // ── RK-5b ───────────────────────────────────────────────────────
-        //
-        // These five take `state.restricted` itself rather than a
-        // pre-computed `fill_pow_hash`, because they **refuse** a restricted
-        // caller that asked for a pow hash instead of blanking the field —
-        // see `methods::pow_hash_or_refuse`. `pow_hash_entitled` above stays
-        // the policy for RK-2's methods, whose C++ shape this slice does not
-        // reopen.
+            .await,
+        )),
         NativeMethod::LastBlockHeader => {
             let request = match crate::methods::last_block_header_request(params) {
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
             let restricted = state.restricted;
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_last_block_header(&facts, request.fill_pow_hash, restricted)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_last_block_header(
+                        &FfiChainFacts::new(core),
+                        request.fill_pow_hash,
+                        restricted,
+                    )
+                })
+                .await,
+            ))
         }
         NativeMethod::BlockHeaderByHash => {
             let request = match crate::methods::block_header_by_hash_request(params) {
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
             let restricted = state.restricted;
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block_header_by_hash(&facts, &request, restricted)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_block_header_by_hash(
+                        &FfiChainFacts::new(core),
+                        &request,
+                        restricted,
+                    )
+                })
+                .await,
+            ))
         }
         NativeMethod::BlockHeadersRange => {
             let request = match crate::methods::block_headers_range_request(params) {
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
             let restricted = state.restricted;
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block_headers_range(&facts, &request, restricted)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_block_headers_range(
+                        &FfiChainFacts::new(core),
+                        &request,
+                        restricted,
+                    )
+                })
+                .await,
+            ))
         }
         NativeMethod::HardForkInfo => {
             let request = match crate::methods::hard_fork_info_request(params) {
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::hard_fork_info(&facts, &request)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::hard_fork_info(&FfiChainFacts::new(core), &request)
+                })
+                .await,
+            ))
         }
         NativeMethod::FeeEstimate => {
             let request = match crate::methods::fee_estimate_request(params) {
                 Ok(request) => request,
                 Err(fault) => return Some(Err(fault)),
             };
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_fee_estimate(&facts, &request)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_fee_estimate(&FfiChainFacts::new(core), &request)
+                })
+                .await,
+            ))
         }
         NativeMethod::BlockHeaderByHeight => {
             // The params parse is pure and its refusal needs no core, so it
@@ -404,30 +398,48 @@ async fn native_method(
                 Err(fault) => return Some(Err(fault)),
             };
             let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, state.restricted);
-            let core = state.core.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                let facts = crate::chain_facts::FfiChainFacts::new(core);
-                crate::methods::get_block_header_by_height(&facts, request.height, fill_pow_hash)
-            })
-            .await;
-            Some(frame_native(out))
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    crate::methods::get_block_header_by_height(
+                        &FfiChainFacts::new(core),
+                        request.height,
+                        fill_pow_hash,
+                    )
+                })
+                .await,
+            ))
         }
     }
 }
 
-/// Frame a native method's outcome as a JSON value, keeping the cause of a
-/// failure where it belongs: a facts fault stays a facts fault; a reply the
-/// transport could not encode, or a handler task that did not complete, is
-/// an [`InternalFault`] — never attributed to the core.
+/// Run a native method on a worker thread holding the live core.
+///
+/// Facts reads block on C++; the HTTP task must not. A join failure is an
+/// [`InternalFault`], never a fact about the chain.
+async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<CoreRpc>) -> Result<T, RpcFault> + Send + 'static,
+{
+    let core = state.core.clone();
+    join_fault(tokio::task::spawn_blocking(move || f(core)).await)?
+}
+
+fn join_fault<T>(out: Result<T, tokio::task::JoinError>) -> Result<T, RpcFault> {
+    out.map_err(|_| RpcFault::Internal(InternalFault::Join))
+}
+
+/// Frame a native method's outcome as a JSON value. A facts fault stays a
+/// facts fault; a reply the transport could not encode is an
+/// [`InternalFault`] — never attributed to the core.
 fn frame_native<T: serde::Serialize>(
-    out: Result<Result<T, RpcFault>, tokio::task::JoinError>,
+    reply: Result<T, RpcFault>,
 ) -> Result<serde_json::Value, RpcFault> {
-    match out {
-        Ok(Ok(reply)) => {
-            serde_json::to_value(reply).map_err(|_| RpcFault::Internal(InternalFault::Serialize))
+    match reply {
+        Ok(value) => {
+            serde_json::to_value(value).map_err(|_| RpcFault::Internal(InternalFault::Serialize))
         }
-        Ok(Err(fault)) => Err(fault),
-        Err(_) => Err(RpcFault::Internal(InternalFault::Join)),
+        Err(fault) => Err(fault),
     }
 }
 
@@ -436,27 +448,26 @@ mod tests {
     use super::*;
     use crate::chain_facts::FactsFault;
 
-    /// The framing keeps causes apart: a facts code is a facts fault, a join
-    /// failure is internal. Collapsing either into the other is the edit this
-    /// turns red (it was `FactsFault::Unknown(0)` for both, once).
-    #[tokio::test]
-    async fn frame_native_keeps_the_cause_of_a_failure() {
-        let ok: Result<Result<u64, RpcFault>, tokio::task::JoinError> = Ok(Ok(7));
-        assert_eq!(frame_native(ok).unwrap(), serde_json::json!(7));
-
-        let facts: Result<Result<u64, RpcFault>, tokio::task::JoinError> =
-            Ok(Err(RpcFault::Facts(FactsFault::NotReady)));
+    /// The framing keeps causes apart: a facts code is a facts fault, a
+    /// serialize failure is internal. Collapsing either into the other is the
+    /// edit this turns red (it was `FactsFault::Unknown(0)` for both, once).
+    #[test]
+    fn frame_native_keeps_the_cause_of_a_failure() {
+        assert_eq!(frame_native(Ok(7)).unwrap(), serde_json::json!(7));
         assert_eq!(
-            frame_native(facts).unwrap_err(),
+            frame_native::<u64>(Err(RpcFault::Facts(FactsFault::NotReady))).unwrap_err(),
             RpcFault::Facts(FactsFault::NotReady)
         );
+    }
 
-        // A task that panicked is the one JoinError we can manufacture.
+    /// A worker that panics is an internal join fault, never a facts code.
+    #[tokio::test]
+    async fn a_panicked_worker_is_an_internal_join_fault() {
         let joined =
             tokio::task::spawn_blocking(|| -> Result<u64, RpcFault> { panic!("boom") }).await;
         assert!(joined.is_err());
         assert_eq!(
-            frame_native(joined).unwrap_err(),
+            join_fault(joined).unwrap_err(),
             RpcFault::Internal(InternalFault::Join)
         );
     }
