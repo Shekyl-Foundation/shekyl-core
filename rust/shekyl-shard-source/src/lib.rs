@@ -49,9 +49,9 @@ pub enum ShardSourceError {
 /// One entry in the shard list: a human label plus the full aggregate that
 /// drives the visual.
 ///
-/// Identity fields (`shard_id`, `shard_hash`, `dominant_regime`) live in
-/// [`ShardAggregate`]; this type deliberately does not duplicate them — a
-/// second copy would drift. Read them via [`ShardSummary::shard_id`] /
+/// Identity fields (`shard_id`, `shard_hash`) live in [`ShardAggregate`];
+/// this type deliberately does not duplicate them — a second copy would
+/// drift. Read them via [`ShardSummary::shard_id`] /
 /// [`ShardSummary::shard_hash`] or directly from `aggregate`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ShardSummary {
@@ -323,33 +323,14 @@ mod tests {
 
     #[test]
     fn summary_identity_survives_the_wire() {
-        // The aggregate carries f64 "aesthetic scalar" fields (coinbase_ratio,
-        // value_log_*) that the JSON float path does not round-trip bit-exactly
-        // in this toolchain — which is fine: they are display-only and never
-        // feed a consensus or rendered-on-the-wire decision (the renderer runs
-        // Rust-side on the in-memory aggregate). The wire contract that matters
-        // is that *identity* — shard id, hash, label, and the integer counts —
-        // survives intact. That is what we assert.
+        // Post ruling-A the aggregate is integer counts, timestamps, and the
+        // hash — no f64 fields — so the JSON wire must round-trip the whole
+        // value bit-exactly, and the assertion holds it to that.
         let src = FixtureShardSource;
         let shards = src.list_shards().unwrap();
         let json = serde_json::to_string(&shards).unwrap();
         let back: Vec<ShardSummary> = serde_json::from_str(&json).unwrap();
-        assert_eq!(shards.len(), back.len());
-        for (orig, round) in shards.iter().zip(back.iter()) {
-            assert_eq!(orig.label, round.label);
-            assert_eq!(orig.shard_id(), round.shard_id());
-            assert_eq!(orig.shard_hash(), round.shard_hash());
-            assert_eq!(orig.aggregate.block_count, round.aggregate.block_count);
-            assert_eq!(orig.aggregate.tx_count, round.aggregate.tx_count);
-            assert_eq!(
-                orig.aggregate.tier_distribution,
-                round.aggregate.tier_distribution
-            );
-            assert_eq!(
-                orig.aggregate.dominant_regime,
-                round.aggregate.dominant_regime
-            );
-        }
+        assert_eq!(shards, back);
     }
 
     #[test]

@@ -4519,6 +4519,7 @@ dependencies = [
  "hex",
  "image",
  "imageproc",
+ "png",
  "serde",
  "serde_json",
  "sha2",
