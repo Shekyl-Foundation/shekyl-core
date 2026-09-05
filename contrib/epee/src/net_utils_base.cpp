@@ -92,37 +92,19 @@ namespace epee { namespace net_utils
 		//! \brief Does this address name a host at all?
 		//!
 		//! Anonymity zones hand every inbound connection the same per-zone
-		//! default address (`net_node.inl` `set_default_remote`, one call per
-		//! zone), and that default is the family's `unknown()` sentinel.
+		//! `unknown()` sentinel (`net_node.inl` `set_default_remote`, one call
+		//! per zone), so an address-keyed operation that equates two of them
+		//! selects the whole zone rather than one peer.
 		//!
-		//! **The sentinel should not exist**, and it is not a design decision
-		//! worth reconstructing. Every peer has an endpoint — `.onion`,
-		//! `.b32.i2p`, or IP and port — because a peer must be reachable to
-		//! serve. The inherited handshake simply never asks for one:
-		//! `basic_node_data` announces a port and no address, which works on
-		//! clearnet only because the socket supplies the rest. On an overlay
-		//! there is nothing to combine the port with, and a zone-wide sentinel
-		//! was filled in instead of the missing field.
+		//! Spelled over `is_blockable()`, which is already exactly this test
+		//! wherever it is used, but named separately: `is_blockable` asks a
+		//! policy question ("may we ban this?") and this asks a semantic one
+		//! ("does this denote a host?"). Coextensive today; if they diverge,
+		//! this is the one line to change.
 		//!
-		//! The fix is for the handshake to carry the endpoint. This guard is a
-		//! stopgap until it does: while the sentinel exists, comparing two
-		//! addresses that both name nothing must not report "same host", or one
-		//! sweep takes the whole zone.
-		//!
-		//! DELETE THIS, the predicate, and every word of this comment when the
-		//! handshake carries the endpoint. There will be no `unknown()` to
-		//! compare, so the guard becomes dead code and the explanation becomes
-		//! another inherited comment describing machinery that is gone.
-		//!
-		//! Implemented over `is_blockable()` because that predicate is already
-		//! exactly this test everywhere it is used —
-		//! `node_server::block_host`, `node_server::add_host_fail` and the RPC
-		//! ban path all refuse to act on an address that names no host. Named
-		//! separately here because the two are *concepts*, not synonyms:
-		//! `is_blockable` is a policy question ("may we ban this?") and this is
-		//! a semantic one ("does this denote a host?"). They are coextensive
-		//! today. If they ever diverge, this is the one line to change, and the
-		//! divergence is a deliberate reopening rather than a silent drift.
+		//! DELETE this, the guard in `is_same_host`, and both comments once an
+		//! inbound anonymity-zone connection carries a dial-verified endpoint:
+		//! there is then no `unknown()` to compare and this is dead code.
 		bool identifies_a_host(const network_address& addr)
 		{
 			return addr.is_blockable();
@@ -139,20 +121,14 @@ namespace epee { namespace net_utils
 		if (!self_ && !other_self) return true;
 		if (!self_ || !other_self) return false;
 		// An address that names no host is not the same host as anything,
-		// including another address that names no host. Guarded here rather
-		// than at the call sites: a check only some consumers remember is the
-		// defect this closes — `is_same_host` was the one address-keyed
-		// operation that did not already ask.
+		// including another such address.
 		//
-		// THIS MUST PRECEDE THE POINTER-EQUALITY SHORT-CIRCUIT BELOW. `self` is
-		// a `shared_ptr`, so copies of one address share a pointee — and every
-		// inbound connection in an anonymity zone is assigned its remote from
-		// the zone's single `default_remote`, so in production they all alias
-		// the same object. Placed after `self_ == other_self`, this guard is
-		// dead in exactly the case it exists for: the comparison returns true
-		// on pointer identity and never reaches the check. A unit test that
-		// builds two separate `unknown()` objects does not reproduce that
-		// aliasing and will pass while production collapses.
+		// MUST PRECEDE THE POINTER-EQUALITY SHORT-CIRCUIT BELOW. `self` is a
+		// `shared_ptr`, and every inbound connection in an anonymity zone is
+		// assigned its remote from the zone's single `default_remote`, so in
+		// production they all alias one pointee. Placed after `self_ ==
+		// other_self` this guard is dead in exactly the case it exists for, and
+		// a test that builds two separate `unknown()` values still passes.
 		if (!identifies_a_host(*this) || !identifies_a_host(other)) return false;
 		if (self_ == other_self) return true;
 		if (typeid(*self_) == typeid(*other_self))
