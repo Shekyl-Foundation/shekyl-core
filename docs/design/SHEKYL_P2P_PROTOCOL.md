@@ -411,7 +411,7 @@ stopped at the p2p layer.** `for_each_connection` (`net_node.inl:155-160`)
 forwards `cntx.peer_id` as a **parameter** into every cryptonote-layer callback,
 and two of them read it as the same boolean:
 
-- `cryptonote_protocol_handler.inl:1725` — `if (!peer_id || context.m_is_income)`,
+- `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
 - `:2659-2660` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
@@ -468,7 +468,7 @@ it:**
 
 | Site | Kind | Disposition |
 | --- | --- | --- |
-| `cryptonote_protocol_handler.inl:1723` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
+| `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
 | `:2657-2660` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
