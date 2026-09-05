@@ -44,6 +44,8 @@
 use shekyl_curve_tree::client::{BlockLeaves, CurveTreeClient, RawOutput, TxLeafInputs};
 use shekyl_curve_tree::types::{BlockHeight, TargetKind};
 
+use crate::legacy_util::slice_from_ptr;
+
 /// One output's leaf-relevant facts, as the C++ side decodes them from a
 /// `cryptonote::transaction` (`vout[i]` + `ct_signatures.outPk[i].mask`).
 /// Layout pinned by the matching definition in `src/shekyl/shekyl_ffi.h`.
@@ -128,17 +130,21 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_free(replica: *mut ShekylCurv
     }
 }
 
-/// Borrow a slice from a (pointer, len) pair, tolerating a null pointer when
-/// `len == 0` (an empty `std::vector` may hand over null).
+/// Borrow a typed slice from a (pointer, len) pair, tolerating a null
+/// pointer when `len == 0` (an empty `std::vector` may hand over null).
+/// Byte reads go through `legacy_util::slice_from_ptr`; this is the one
+/// typed-slice raw site the FFI boundary ratchet pins for this file, and
+/// it re-owns the `isize::MAX` byte bound the language requires.
 unsafe fn borrow<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
         return Some(&[]);
     }
-    if ptr.is_null() {
+    if ptr.is_null() || len > isize::MAX as usize / std::mem::size_of::<T>().max(1) {
         return None;
     }
     // SAFETY: non-null with `len` valid, initialized elements per the
-    // caller's contract; the borrow does not outlive the FFI call.
+    // caller's contract, byte length bounded above; the borrow does not
+    // outlive the FFI call.
     Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
@@ -186,12 +192,12 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
 
     // Two passes because `TxLeafInputs` borrows the `RawOutput` slices: decode
     // every tx's outputs first, then build the borrowing views.
-    let mut decoded: Vec<DecodedTx<'_>> = Vec::with_capacity(raw_txs.len());
+    let mut decoded: Vec<DecodedTx<'_>> = Vec::new();
     for (ti, tx) in raw_txs.iter().enumerate() {
         // SAFETY: caller contract on the inner pointers.
         let (blob, outs) = unsafe {
             let blob = if tx.has_leaf_hash_blob != 0 {
-                let Some(b) = borrow(tx.leaf_hash_blob, tx.leaf_hash_blob_len) else {
+                let Some(b) = slice_from_ptr(tx.leaf_hash_blob, tx.leaf_hash_blob_len) else {
                     tracing::error!("curve-tree replica: tx {ti} has a null leaf-hash blob");
                     return false;
                 };
@@ -205,7 +211,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
             };
             (blob, outs)
         };
-        let mut outputs = Vec::with_capacity(outs.len());
+        let mut outputs = Vec::new();
         for (oi, o) in outs.iter().enumerate() {
             let Some(target) = target_kind(o.target_kind) else {
                 tracing::error!(
