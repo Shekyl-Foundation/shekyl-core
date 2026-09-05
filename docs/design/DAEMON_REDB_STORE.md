@@ -129,7 +129,15 @@ discriminates). The quoted-literal pickaxe's oldest hit is `9d7661daf8`
 (2026-08-24, SO-D4), post-pin by ancestry. A census delta is a **set
 question** answered by two extractions and a diff; when a pickaxe must be
 used at all, its subject is the quoted name string, never the bare
-identifier family.
+identifier family. The sibling trap (hit twice during verification, once
+per verifier): **the instrument must match the era it is pointed at** —
+the pin declares names as `const char* const LMDB_* = "…"` constants
+(the X-macro did not exist yet), so today's macro grep returns zero
+against the pin, and a whitespace-rigid regex against the pin's aligned
+declarations (`LMDB_CURVE_TREE_META   = …`, multiple spaces) silently
+under-counts to 45 and manufactures a phantom fourth birth. Extract by
+the pin's own form, and treat a count that misses the floor as a broken
+parse, not a finding.
 
 **Pin-era doc closure** (counted at `3247fe3b6:docs/LMDB_SCHEMA.md`, not
 inferred from the claimed total): 42 third-level (`###`) headings over 41
@@ -714,7 +722,7 @@ flowchart TD
 | PR | ID | Deliverable | Blocks |
 | --- | --- | --- | --- |
 | **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms); **DRS-CI** bidirectional gates. *(Delivered 2026-09-05 — the plan's figures had aged by delivery: the adds/drops landed with the coverage-gate commit `2572e6f5b` (2026-08-25), so P0a shipped the remaining truth: the 49-row reconciliation registry with birth/death provenance, the heading-layer and registry gate legs, and the duplicate-`properties` merge — see the P0a registry in the front matter)* | Mental model |
-| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency | Apply/pop design; E2 pop_block |
+| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency. **CI housekeeping (from #624 review, Rick):** the schema-coverage gate rides a workflow named `doc-links` — rename the workflow for what it gates (or move the gate to a schema-named workflow); the coupling is recorded at the trigger site, this closes it | Apply/pop design; E2 pop_block |
 | **P0c** | Wart register — **RECORD-AND-SPECIFY** (inverted 2026-09-01; was “cheap FIX-IN-CPP”) | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
 | **P0d** | Digest v0 | Core chain + spent keys + curve root **minimum**; **must expand archival journals before S-ARCH / DRS-E archival port** (A-1 composes with blind min oracle — see §7.1.1) | C oracle; logical-state definition |
 | **P0e** | Digest totality | Full table inventory / named exclusions | E2 |
