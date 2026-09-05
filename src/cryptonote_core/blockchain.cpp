@@ -4212,8 +4212,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
         *pmax_used_block_height = ref_height;
 
-        // Step 2: Curve tree root lookup (from per-height root table, not block header,
-        // because FAKECHAIN block headers carry placeholder roots from test_generator)
+        // Step 2: the membership anchor is the curve-tree state at chain height
+        // ref_height -- after the reference block's parent connected, before its
+        // own drain (CEN-I12). The verifier reads its own per-height record of
+        // that state, never the block header: the header is the block's
+        // attestation of the same value, bound to the record by the CEN-B5
+        // admission check, and a verifier that trusted it would be trusting the
+        // block it is validating. (That FAKECHAIN headers carry placeholder
+        // roots is a consequence of this choice, not its reason.)
         std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
 
         MDEBUG("FCMP++ verify: ref_height=" << ref_height
