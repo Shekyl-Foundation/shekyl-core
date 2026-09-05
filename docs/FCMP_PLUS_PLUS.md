@@ -293,8 +293,12 @@ A mismatch rejects the block.
 
 ### RPC Exposure
 
-The `block_header_response` RPC response includes `curve_tree_root` as a
-hex string.
+Every block-header reply carries `curve_tree_root` as a hex string. The wire
+type is `shekyl_rpc_types::BlockHeader` (`rust/shekyl-rpc-types/src/chain.rs`),
+shared by `get_block_header_by_height`, `get_block_header_by_hash`,
+`get_block_headers_range`, `get_last_block_header` and `get_block`. It
+replaced the C++ `block_header_response`, deleted in RK-5b — an implementer
+sent to that name would find nothing.
 
 ### `get_curve_tree_path` JSON-RPC
 

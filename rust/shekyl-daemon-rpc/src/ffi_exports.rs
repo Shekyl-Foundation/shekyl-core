@@ -349,6 +349,110 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn hard_fork_facts_filled(seed: u64) -> crate::ffi::HardForkFactsFfi {
+    crate::ffi::HardForkFactsFfi {
+        earliest_height: submit_facts_field_value(seed, 0),
+        window: submit_facts_field_value(seed, 1) as u32,
+        votes: submit_facts_field_value(seed, 2) as u32,
+        threshold: submit_facts_field_value(seed, 3) as u32,
+        state: submit_facts_field_value(seed, 4) as u32,
+        queried_version: submit_facts_field_value(seed, 5) as u8,
+        active_version: submit_facts_field_value(seed, 6) as u8,
+        voting: submit_facts_field_value(seed, 7) as u8,
+        enabled: submit_facts_field_value(seed, 8) as u8,
+        reserved: [0; 4],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_hard_fork_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_hard_fork_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_fill(
+    out: *mut crate::ffi::HardForkFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(hard_fork_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_hard_fork_facts`: 0 iff every field matches.
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_hard_fork_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_check(
+    facts: *const crate::ffi::HardForkFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == hard_fork_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
+    crate::ffi::FeeEstimateFactsFfi {
+        fees: [
+            submit_facts_field_value(seed, 0),
+            submit_facts_field_value(seed, 1),
+            submit_facts_field_value(seed, 2),
+            submit_facts_field_value(seed, 3),
+        ],
+        quantization_mask: submit_facts_field_value(seed, 4),
+        fee_count: submit_facts_field_value(seed, 5) as u8,
+        reserved: [0; 7],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_fee_estimate_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_fee_estimate_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_fee_estimate_facts_rust_fill(
+    out: *mut crate::ffi::FeeEstimateFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(fee_estimate_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_fee_estimate_facts`: 0 iff every field
+/// matches.
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_fee_estimate_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_fee_estimate_facts_rust_check(
+    facts: *const crate::ffi::FeeEstimateFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == fee_estimate_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
 fn net_stats_facts_filled(seed: u64) -> crate::ffi::NetStatsFactsFfi {
     crate::ffi::NetStatsFactsFfi {
         start_time: submit_facts_field_value(seed, 0),

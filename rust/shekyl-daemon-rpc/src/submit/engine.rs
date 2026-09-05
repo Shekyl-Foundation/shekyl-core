@@ -14,8 +14,8 @@
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_wire::transaction::Ct;
 
+use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::certificate::VerificationCertificate;
-use crate::submit::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::facts::{
     BondProbe, CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta,
 };

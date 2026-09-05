@@ -46,26 +46,6 @@
 namespace daemonize {
 
 namespace {
-  void print_block_header(cryptonote::block_header_response const & header)
-  {
-    tools::success_msg_writer()
-      << "timestamp: " << boost::lexical_cast<std::string>(header.timestamp) << " (" << tools::get_human_readable_timestamp(header.timestamp) << ")" << std::endl
-      << "previous hash: " << header.prev_hash << std::endl
-      << "nonce: " << boost::lexical_cast<std::string>(header.nonce) << std::endl
-      << "is orphan: " << header.orphan_status << std::endl
-      << "height: " << boost::lexical_cast<std::string>(header.height) << std::endl
-      << "depth: " << boost::lexical_cast<std::string>(header.depth) << std::endl
-      << "hash: " << header.hash << std::endl
-      << "difficulty: " << cryptonote::difficulty_type(header.wide_difficulty) << std::endl
-      << "cumulative difficulty: " << cryptonote::difficulty_type(header.wide_cumulative_difficulty) << std::endl
-      << "POW hash: " << header.pow_hash << std::endl
-      << "block size: " << header.block_size << std::endl
-      << "block weight: " << header.block_weight << std::endl
-      << "long term weight: " << header.long_term_weight << std::endl
-      << "num txes: " << header.num_txes << std::endl
-      << "reward: " << cryptonote::print_money(header.reward) << std::endl
-      << "miner tx hash: " << header.miner_tx_hash;
-  }
 
   std::string get_human_time_ago(time_t t, time_t now)
   {
@@ -324,127 +304,14 @@ static std::string get_mining_speed(cryptonote::difficulty_type hr)
   return (boost::format("%.2f %cH/s") % hr_d % prefix).str();
 }
 
-static std::string get_fork_extra_info(uint64_t t, uint64_t now, uint64_t block_time)
-{
-  uint64_t blocks_per_day = 86400 / block_time;
-
-  if (t == now)
-    return " (forking now)";
-
-  if (t > now)
-  {
-    uint64_t dblocks = t - now;
-    if (dblocks <= 30)
-      return (boost::format(" (next fork in %u blocks)") % (unsigned)dblocks).str();
-    if (dblocks <= blocks_per_day / 2)
-      return (boost::format(" (next fork in %.1f hours)") % (dblocks / (float)(blocks_per_day / 24))).str();
-    if (dblocks <= blocks_per_day * 30)
-      return (boost::format(" (next fork in %.1f days)") % (dblocks / (float)blocks_per_day)).str();
-    return "";
-  }
-  return "";
-}
-
-static float get_sync_percentage(uint64_t height, uint64_t target_height)
-{
-  target_height = target_height ? target_height < height ? height : target_height : height;
-  float pc = 100.0f * height / target_height;
-  if (height < target_height && pc > 99.9f)
-    return 99.9f; // to avoid 100% when not fully synced
-  return pc;
-}
-static float get_sync_percentage(const cryptonote::COMMAND_RPC_GET_INFO::response &ires)
-{
-  return get_sync_percentage(ires.height, ires.target_height);
-}
 
 bool t_rpc_command_executor::show_status() {
-  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-  cryptonote::COMMAND_RPC_GET_INFO::response ires;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::request hfreq;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::response hfres;
-  cryptonote::COMMAND_RPC_MINING_STATUS::request mreq;
-  cryptonote::COMMAND_RPC_MINING_STATUS::response mres;
-  epee::json_rpc::error error_resp;
-  bool has_mining_info = true;
-
-  std::string fail_message = "Problem fetching info";
-
-  hfreq.version = 0;
-  bool mining_busy = false;
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->json_rpc_request(hfreq, hfres, "hard_fork_info", fail_message.c_str()))
-    {
-      return true;
-    }
-    // mining info is only available non unrestricted RPC mode
-    has_mining_info = m_rpc_client->rpc_request(mreq, mres, "/mining_status", fail_message.c_str());
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, ires.status);
-      return true;
-    }
-    if (!m_rpc_server->on_hard_fork_info(hfreq, hfres, error_resp) || hfres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, hfres.status);
-      return true;
-    }
-    if (!m_rpc_server->on_mining_status(mreq, mres))
-    {
-      tools::fail_msg_writer() << fail_message.c_str();
-      return true;
-    }
-
-    if (mres.status == CORE_RPC_STATUS_BUSY)
-    {
-      mining_busy = true;
-    }
-    else if (mres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, mres.status);
-      return true;
-    }
-  }
-
-  std::time_t uptime = std::time(nullptr) - ires.start_time;
-  uint64_t net_height = ires.target_height > ires.height ? ires.target_height : ires.height;
-
-  std::stringstream str;
-  str << boost::format("Height: %llu/%llu (%.1f%%) on %s, %s, net hash %s, v%u%s, %u(out)+%u(in) connections")
-    % (unsigned long long)ires.height
-    % (unsigned long long)net_height
-    % get_sync_percentage(ires)
-    % (ires.testnet ? "testnet" : ires.stagenet ? "stagenet" : "mainnet")
-    % (!has_mining_info ? "mining info unavailable" : mining_busy ? "syncing" : mres.active ? ( ( mres.is_background_mining_enabled ? "smart " : "" ) + std::string("mining at ") + get_mining_speed(mres.speed)) : "not mining")
-    % get_mining_speed(cryptonote::difficulty_type(ires.wide_difficulty) / ires.target)
-    % (unsigned)hfres.version
-    % get_fork_extra_info(hfres.earliest_height, net_height, ires.target)
-    % (unsigned)ires.outgoing_connections_count
-    % (unsigned)ires.incoming_connections_count
-  ;
-
-  // restricted RPC does not disclose start time
-  if (ires.start_time)
-  {
-    str << boost::format(", uptime %ud %uh %um %us")
-      % (unsigned int)floor(uptime / 60.0 / 60.0 / 24.0)
-      % (unsigned int)floor(fmod((uptime / 60.0 / 60.0), 24.0))
-      % (unsigned int)floor(fmod((uptime / 60.0), 60.0))
-      % (unsigned int)fmod(uptime, 60.0)
-    ;
-  }
-
-  tools::success_msg_writer() << str.str();
-
-  return true;
+  // RK-5b: `hard_fork_info` is served from Rust and the whole line renders
+  // there. `/get_info` (RK-5c) and `/mining_status` (RK-7) are still bridged,
+  // and the "mining info unavailable" arm still belongs to the remote case
+  // only — in-process a `/mining_status` that will not answer is this
+  // daemon's own fault.
+  return run_rust_console({"status"});
 }
 
 bool t_rpc_command_executor::mining_status() {
@@ -533,76 +400,12 @@ bool t_rpc_command_executor::print_net_stats()
 }
 
 bool t_rpc_command_executor::print_blockchain_info(int64_t start_block_index, uint64_t end_block_index) {
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::request req;
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::response res;
-  epee::json_rpc::error error_resp;
-  std::string fail_message = "Problem fetching info";
-
-  // negative: relative to the end
-  if (start_block_index < 0)
-  {
-    cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-    cryptonote::COMMAND_RPC_GET_INFO::response ires;
-    if (m_is_rpc)
-    {
-      if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-      {
-        return true;
-      }
-    }
-    else
-    {
-      if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-      {
-        tools::fail_msg_writer() << make_error(fail_message, ires.status);
-        return true;
-      }
-    }
-    if (start_block_index < 0 && (uint64_t)-start_block_index >= ires.height)
-    {
-      tools::fail_msg_writer() << "start offset is larger than blockchain height";
-      return true;
-    }
-    start_block_index = ires.height + start_block_index;
-    end_block_index = start_block_index + end_block_index - 1;
-  }
-
-  req.start_height = start_block_index;
-  req.end_height = end_block_index;
-  req.fill_pow_hash = false;
-
-  fail_message = "Failed calling getblockheadersrange";
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "getblockheadersrange", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_block_headers_range(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  bool first = true;
-  for (auto & header : res.headers)
-  {
-    if (!first)
-      tools::msg_writer() << "" << std::endl;
-    tools::msg_writer()
-      << "height: " << header.height << ", timestamp: " << header.timestamp << " (" << tools::get_human_readable_timestamp(header.timestamp) << ")"
-      << ", size: " << header.block_size << ", weight: " << header.block_weight << " (long term " << header.long_term_weight << "), transactions: " << header.num_txes << std::endl
-      << "major version: " << (unsigned)header.major_version << ", minor version: " << (unsigned)header.minor_version << std::endl
-      << "block id: " << header.hash << ", previous block id: " << header.prev_hash << std::endl
-      << "difficulty: " << cryptonote::difficulty_type(header.wide_difficulty) << ", nonce " << header.nonce << ", reward " << cryptonote::print_money(header.reward) << std::endl;
-    first = false;
-  }
-
-  return true;
+  // RK-5b: `get_block_headers_range` is served from Rust and renders there.
+  // The parser has already resolved the negative form to (-n, n); resolving
+  // it against the tip needs `/get_info`, which is still bridged, so that
+  // read happens on the Rust side beside the rest of the command.
+  return run_rust_console({"print_blockchain_info",
+    std::to_string(start_block_index), std::to_string(end_block_index)});
 }
 
 bool t_rpc_command_executor::set_log_level(int8_t level) {
@@ -1221,35 +1024,10 @@ bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
 
 bool t_rpc_command_executor::hard_fork_info(uint8_t version)
 {
-    cryptonote::COMMAND_RPC_HARD_FORK_INFO::request req;
-    cryptonote::COMMAND_RPC_HARD_FORK_INFO::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.version = version;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "hard_fork_info", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_hard_fork_info(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    version = version > 0 ? version : res.voting;
-    tools::msg_writer() << "version " << (uint32_t)version << " " << (res.enabled ? "enabled" : "not enabled") <<
-        ", " << res.votes << "/" << res.window << " votes, threshold " << res.threshold;
-    tools::msg_writer() << "current version " << (uint32_t)res.version << ", voting for version " << (uint32_t)res.voting;
-
-    return true;
+  // RK-5b: `hard_fork_info` is served from Rust and renders there. A zero
+  // still means "the fork we would vote in next"; the Rust side names that
+  // version in the line rather than labelling it with `voting`.
+  return run_rust_console({"hard_fork_info", std::to_string((unsigned)version)});
 }
 
 bool t_rpc_command_executor::print_bans()
@@ -1493,246 +1271,23 @@ bool t_rpc_command_executor::print_coinbase_tx_sum(uint64_t height, uint64_t cou
 
 bool t_rpc_command_executor::alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks)
 {
-  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-  cryptonote::COMMAND_RPC_GET_INFO::response ires;
-  cryptonote::COMMAND_RPC_GET_ALTERNATE_CHAINS::request req;
-  cryptonote::COMMAND_RPC_GET_ALTERNATE_CHAINS::response res;
-  epee::json_rpc::error error_resp;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->json_rpc_request(req, res, "get_alternate_chains", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, ires.status);
-      return true;
-    }
-    if (!m_rpc_server->on_get_alternate_chains(req, res, error_resp))
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  if (tip.empty())
-  {
-    auto chains = res.chains;
-    std::sort(chains.begin(), chains.end(), [](const cryptonote::COMMAND_RPC_GET_ALTERNATE_CHAINS::chain_info &info0, cryptonote::COMMAND_RPC_GET_ALTERNATE_CHAINS::chain_info &info1){ return info0.height < info1.height; });
-    std::vector<size_t> display;
-    for (size_t i = 0; i < chains.size(); ++i)
-    {
-      const auto &chain = chains[i];
-      if (chain.length <= above)
-        continue;
-      const uint64_t start_height = (chain.height - chain.length + 1);
-      if (last_blocks > 0 && ires.height - 1 - start_height >= last_blocks)
-        continue;
-      display.push_back(i);
-    }
-    tools::msg_writer() << boost::lexical_cast<std::string>(display.size()) << " alternate chains found:";
-    for (const size_t idx: display)
-    {
-      const auto &chain = chains[idx];
-      const uint64_t start_height = (chain.height - chain.length + 1);
-      tools::msg_writer() << chain.length << " blocks long, from height " << start_height << " (" << (ires.height - start_height - 1)
-          << " deep), diff " << cryptonote::difficulty_type(chain.wide_difficulty) << ": " << chain.block_hash;
-    }
-  }
-  else
-  {
-    const uint64_t now = time(NULL);
-    const auto i = std::find_if(res.chains.begin(), res.chains.end(), [&tip](cryptonote::COMMAND_RPC_GET_ALTERNATE_CHAINS::chain_info &info){ return info.block_hash == tip; });
-    if (i != res.chains.end())
-    {
-      const auto &chain = *i;
-      tools::success_msg_writer() << "Found alternate chain with tip " << tip;
-      uint64_t start_height = (chain.height - chain.length + 1);
-      tools::msg_writer() << chain.length << " blocks long, from height " << start_height << " (" << (ires.height - start_height - 1)
-          << " deep), diff " << cryptonote::difficulty_type(chain.wide_difficulty) << ":";
-      for (const std::string &block_id: chain.block_hashes)
-        tools::msg_writer() << "  " << block_id;
-      tools::msg_writer() << "Chain parent on main chain: " << chain.main_chain_parent_block;
-      cryptonote::COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH::request bhreq;
-      cryptonote::COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH::response bhres;
-      bhreq.hashes = chain.block_hashes;
-      bhreq.hashes.push_back(chain.main_chain_parent_block);
-      bhreq.fill_pow_hash = false;
-      if (m_is_rpc)
-      {
-        if (!m_rpc_client->json_rpc_request(bhreq, bhres, "getblockheaderbyhash", fail_message.c_str()))
-        {
-          return true;
-        }
-      }
-      else
-      {
-        if (!m_rpc_server->on_get_block_header_by_hash(bhreq, bhres, error_resp))
-        {
-          tools::fail_msg_writer() << make_error(fail_message, res.status);
-          return true;
-        }
-      }
-      if (bhres.block_headers.size() != chain.length + 1)
-      {
-        tools::fail_msg_writer() << "Failed to get block header info for alt chain";
-        return true;
-      }
-      uint64_t t0 = bhres.block_headers.front().timestamp, t1 = t0;
-      for (const cryptonote::block_header_response &block_header: bhres.block_headers)
-      {
-        t0 = std::min<uint64_t>(t0, block_header.timestamp);
-        t1 = std::max<uint64_t>(t1, block_header.timestamp);
-      }
-      const uint64_t dt = t1 - t0;
-      const uint64_t age = std::max(dt, t0 < now ? now - t0 : 0);
-      tools::msg_writer() << "Age: " << tools::get_human_readable_timespan(age);
-      if (chain.length > 1)
-      {
-        tools::msg_writer() << "Time span: " << tools::get_human_readable_timespan(dt);
-        cryptonote::difficulty_type start_difficulty = bhres.block_headers.back().difficulty;
-        if (start_difficulty > 0)
-          tools::msg_writer() << "Approximated " << 100.f * SHEKYL_DAA_TARGET_SECONDS * chain.length / dt << "% of network hash rate";
-        else
-          tools::fail_msg_writer() << "Bad cmumulative difficulty reported by dameon";
-      }
-    }
-    else
-      tools::fail_msg_writer() << "Block hash " << tip << " is not the tip of any known alternate chain";
-  }
-  return true;
+  // RK-5b: `get_block_header_by_hash` is served from Rust and the whole
+  // command renders there. `/get_info` and `get_alternate_chains` are still
+  // bridged (RK-5c and RK-8); the length check on the header batch is now a
+  // per-hash correspondence check, which is what the per-element reply makes
+  // possible.
+  return run_rust_console({"alt_chain_info", tip,
+    std::to_string(above), std::to_string(last_blocks)});
 }
 
 bool t_rpc_command_executor::print_blockchain_dynamic_stats(uint64_t nblocks)
 {
-  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-  cryptonote::COMMAND_RPC_GET_INFO::response ires;
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::request bhreq;
-  cryptonote::COMMAND_RPC_GET_BLOCK_HEADERS_RANGE::response bhres;
-  cryptonote::COMMAND_RPC_GET_BASE_FEE_ESTIMATE::request fereq;
-  cryptonote::COMMAND_RPC_GET_BASE_FEE_ESTIMATE::response feres;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::request hfreq;
-  cryptonote::COMMAND_RPC_HARD_FORK_INFO::response hfres;
-  epee::json_rpc::error error_resp;
-
-  std::string fail_message = "Problem fetching info";
-
-  fereq.grace_blocks = 0;
-  hfreq.version = HF_VERSION_PER_BYTE_FEE;
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->json_rpc_request(fereq, feres, "get_fee_estimate", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->json_rpc_request(hfreq, hfres, "hard_fork_info", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, ires.status);
-      return true;
-    }
-    if (!m_rpc_server->on_get_base_fee_estimate(fereq, feres, error_resp) || feres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, feres.status);
-      return true;
-    }
-    if (!m_rpc_server->on_hard_fork_info(hfreq, hfres, error_resp) || hfres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, hfres.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "Height: " << ires.height << ", diff " << cryptonote::difficulty_type(ires.wide_difficulty) << ", cum. diff " << cryptonote::difficulty_type(ires.wide_cumulative_difficulty)
-      << ", target " << ires.target << " sec" << ", dyn fee " << cryptonote::print_money(feres.fee) << "/" << (hfres.enabled ? "byte" : "kB");
-
-  if (nblocks > 0)
-  {
-    if (nblocks > ires.height)
-      nblocks = ires.height;
-
-    bhreq.start_height = ires.height - nblocks;
-    bhreq.end_height = ires.height - 1;
-    bhreq.fill_pow_hash = false;
-    if (m_is_rpc)
-    {
-      if (!m_rpc_client->json_rpc_request(bhreq, bhres, "getblockheadersrange", fail_message.c_str()))
-      {
-        return true;
-      }
-    }
-    else
-    {
-      if (!m_rpc_server->on_get_block_headers_range(bhreq, bhres, error_resp) || bhres.status != CORE_RPC_STATUS_OK)
-      {
-        tools::fail_msg_writer() << make_error(fail_message, bhres.status);
-        return true;
-      }
-    }
-
-    cryptonote::difficulty_type avgdiff = 0;
-    double avgnumtxes = 0;
-    double avgreward = 0;
-    std::vector<uint64_t> weights;
-    weights.reserve(nblocks);
-    uint64_t earliest = std::numeric_limits<uint64_t>::max(), latest = 0;
-    std::vector<unsigned> major_versions(256, 0), minor_versions(256, 0);
-    for (const auto &bhr: bhres.headers)
-    {
-      avgdiff += cryptonote::difficulty_type(bhr.wide_difficulty);
-      avgnumtxes += bhr.num_txes;
-      avgreward += bhr.reward;
-      weights.push_back(bhr.block_weight);
-      static_assert(sizeof(bhr.major_version) == 1, "major_version expected to be uint8_t");
-      static_assert(sizeof(bhr.minor_version) == 1, "major_version expected to be uint8_t");
-      major_versions[(unsigned)bhr.major_version]++;
-      minor_versions[(unsigned)bhr.minor_version]++;
-      earliest = std::min(earliest, bhr.timestamp);
-      latest = std::max(latest, bhr.timestamp);
-    }
-    avgdiff /= nblocks;
-    avgnumtxes /= nblocks;
-    avgreward /= nblocks;
-    uint64_t median_block_weight = epee::misc_utils::median(weights);
-    tools::msg_writer() << "Last " << nblocks << ": avg. diff " << avgdiff << ", " << (latest - earliest) / nblocks << " avg sec/block, avg num txes " << avgnumtxes
-        << ", avg. reward " << cryptonote::print_money(avgreward) << ", median block weight " << median_block_weight;
-
-    unsigned int max_major = 256, max_minor = 256;
-    while (max_major > 0 && !major_versions[--max_major]);
-    while (max_minor > 0 && !minor_versions[--max_minor]);
-    std::string s = "";
-    for (unsigned n = 0; n <= max_major; ++n)
-      if (major_versions[n])
-        s += (s.empty() ? "" : ", ") + boost::lexical_cast<std::string>(major_versions[n]) + std::string(" v") + boost::lexical_cast<std::string>(n);
-    tools::msg_writer() << "Block versions: " << s;
-    s = "";
-    for (unsigned n = 0; n <= max_minor; ++n)
-      if (minor_versions[n])
-        s += (s.empty() ? "" : ", ") + boost::lexical_cast<std::string>(minor_versions[n]) + std::string(" v") + boost::lexical_cast<std::string>(n);
-    tools::msg_writer() << "Voting for: " << s;
-  }
-  return true;
+  // RK-5b: `get_fee_estimate` and `get_block_headers_range` are served from
+  // Rust, and the whole command renders there. The `hard_fork_info` leg is
+  // gone rather than moved: its only use was choosing between "byte" and
+  // "kB", and `HF_VERSION_PER_BYTE_FEE` is 1 on a chain whose HardFork is
+  // constructed with original_version 1, so the "kB" arm was unreachable.
+  return run_rust_console({"print_blockchain_dynamic_stats", std::to_string(nblocks)});
 }
 
 bool t_rpc_command_executor::relay_tx(const std::string &txid)

@@ -23,6 +23,10 @@ void shekyl_rpc_block_hash_facts_rust_fill(shekyl_rpc_block_hash_facts* out, uin
 int shekyl_rpc_block_hash_facts_rust_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
 void shekyl_rpc_block_header_facts_rust_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
 int shekyl_rpc_block_header_facts_rust_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
+void shekyl_rpc_hard_fork_facts_rust_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed);
+int shekyl_rpc_hard_fork_facts_rust_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed);
+void shekyl_rpc_fee_estimate_facts_rust_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
+int shekyl_rpc_fee_estimate_facts_rust_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
 void shekyl_rpc_net_stats_facts_rust_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
 int shekyl_rpc_net_stats_facts_rust_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed);
 }
@@ -132,6 +136,46 @@ TEST(rpc_facts_ffi_roundtrip, net_stats_facts_rust_writes_cpp_reads)
   }
 }
 
+TEST(rpc_facts_ffi_roundtrip, hard_fork_facts_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_hard_fork_facts f;
+    shekyl_rpc_hard_fork_facts_test_fill(&f, seed);
+    EXPECT_EQ(0, shekyl_rpc_hard_fork_facts_rust_check(&f, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, hard_fork_facts_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_hard_fork_facts f;
+    shekyl_rpc_hard_fork_facts_rust_fill(&f, seed);
+    EXPECT_EQ(0, shekyl_rpc_hard_fork_facts_test_check(&f, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, fee_estimate_facts_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_fee_estimate_facts f;
+    shekyl_rpc_fee_estimate_facts_test_fill(&f, seed);
+    EXPECT_EQ(0, shekyl_rpc_fee_estimate_facts_rust_check(&f, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, fee_estimate_facts_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_fee_estimate_facts f;
+    shekyl_rpc_fee_estimate_facts_rust_fill(&f, seed);
+    EXPECT_EQ(0, shekyl_rpc_fee_estimate_facts_test_check(&f, seed)) << "seed " << seed;
+  }
+}
+
 TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
 {
   static_assert(sizeof(shekyl_rpc_chain_tip_facts) == 56, "chain-tip facts POD changed size");
@@ -182,6 +226,8 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_tx_entry, reserved) == 108, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_hard_fork_facts) == 32, "hard-fork facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 48, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
   // carry pointers, so a fill/check twin has nothing to compare and the

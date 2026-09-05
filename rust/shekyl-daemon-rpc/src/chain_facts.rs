@@ -148,6 +148,19 @@ impl FactsFault {
 }
 
 /// The facts the chain-tip / version handlers consume.
+///
+/// **Why a trait with one implementation.** It earns its keep today, before
+/// any second impl exists: it is the seam that makes handler logic testable
+/// without standing up a `core_rpc_server` over a live chain, which is what
+/// keeps the unit tests fast enough to run per-assertion and the regtest
+/// harness reserved for what genuinely needs a daemon. That is the whole
+/// reason the handler tests in `methods` can exist at all.
+///
+/// It is *also* where a Rust store would plug in when DRS-E lands (RK-D7),
+/// and the deletion register schedules the FFI shims for that moment — but
+/// that is the second reason, not the first. Stated the other way round, a
+/// one-impl trait reads as speculative generality to a rule-15 pass, against
+/// a program that is not yet scoped.
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
     fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
@@ -159,9 +172,26 @@ pub trait ChainFacts: Send + Sync {
     /// restricted-listener rule — and computing it is the expensive part.
     fn block_header_at(
         &self,
-        height: BlockHeight,
+        at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
+    /// Hard-fork voting info for one version. `requested` is `None` for
+    /// "the next fork" — the daemon resolves it and reports which it chose,
+    /// so the sentinel never reaches a caller.
+    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault>;
+    /// The dynamic base-fee estimate. A `grace_blocks` above
+    /// [`Self::fee_grace_blocks_max`] is refused by the caller first; the
+    /// facts layer refuses it too rather than letting the estimator throw.
+    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault>;
+    /// The ceiling `grace_blocks` must not exceed.
+    ///
+    /// **On the trait, not a free function reaching into the FFI.** As a free
+    /// function it read the C++ constant directly, which meant the unit-test
+    /// link stub answered 0 and every request was refused under test — the
+    /// refusal test then passed for the wrong reason, asserting a bound it
+    /// had not exercised. Here the production impl still single-sources the
+    /// constant from C++ and a double can state one.
+    fn fee_grace_blocks_max(&self) -> u64;
     /// A whole block, named either way. Absence is data ([`BlockAt::block`]
     /// is `None`) for both lookups; the caller knows which it asked for and
     /// so which refusal to produce.
@@ -225,6 +255,34 @@ pub trait P2pFacts: Send + Sync {
     fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
 }
 
+/// Hard-fork voting info, carried verbatim.
+///
+/// Nothing here is re-derived: CEN-B2/B3 are bucket-4 rows reserved for the R4
+/// round that owns the hard-fork subsystem, so a Rust reimplementation of the
+/// threshold accounting would be work that round has to undo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardForkInfo {
+    /// The version the fields below describe — resolved, so the request's
+    /// "next fork" sentinel never reaches a reader.
+    pub queried_version: u8,
+    /// The chain's current fork version. Not the subject of the fields below.
+    pub active_version: u8,
+    pub enabled: bool,
+    pub window: u32,
+    pub votes: u32,
+    pub threshold: u32,
+    pub voting: u8,
+    pub state: u32,
+    pub earliest_height: u64,
+}
+
+/// The dynamic base-fee estimate: four tiers and the quantization mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeEstimate {
+    pub fees: [u64; 4],
+    pub quantization_mask: u64,
+}
+
 /// Throttle counters and the core's start time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetStats {
@@ -247,6 +305,30 @@ impl FfiChainFacts {
     pub fn new(core: Arc<CoreRpc>) -> Self {
         Self { core }
     }
+}
+
+/// How a lookup names the block for the two FFI exports that share a selector.
+fn lookup_selector(at: BlockLookup) -> (Option<[u8; 32]>, u64) {
+    match at {
+        BlockLookup::Hash(h) => (Some(h), 0),
+        BlockLookup::Height(h) => (None, h.to_raw()),
+    }
+}
+
+/// The fee POD becomes typed facts only when C++ wrote every tier it claimed.
+///
+/// `fee_count` is the runtime half of the four-ness `FeeTiers` enforces on
+/// the wire: the estimator resizes to four, the C++ shim refuses any other
+/// length, and this check is what makes a POD that arrived `OK` with a
+/// shorter write a fault rather than a base fee padded with zeros.
+fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, FactsFault> {
+    if pod.fee_count != 4 {
+        return Err(FactsFault::Inconsistent);
+    }
+    Ok(FeeEstimate {
+        fees: pod.fees,
+        quantization_mask: pod.quantization_mask,
+    })
 }
 
 /// One place where a header POD becomes typed facts.
@@ -329,6 +411,39 @@ impl ChainFacts for FfiChainFacts {
         })
     }
 
+    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
+        let pod = self
+            .core
+            .hard_fork_info(requested.unwrap_or(0))
+            .map_err(FactsFault::from_code)?;
+        Ok(HardForkInfo {
+            queried_version: pod.queried_version,
+            active_version: pod.active_version,
+            enabled: pod.enabled != 0,
+            window: pod.window,
+            votes: pod.votes,
+            threshold: pod.threshold,
+            voting: pod.voting,
+            state: pod.state,
+            earliest_height: pod.earliest_height,
+        })
+    }
+
+    fn fee_grace_blocks_max(&self) -> u64 {
+        // The C++ constant, single-sourced: `CRYPTONOTE_REWARD_BLOCKS_WINDOW`
+        // behind a handle-free export, never restated here.
+        // SAFETY: a compile-time constant, no handle, no allocation.
+        unsafe { ffi::shekyl_rpc_fee_grace_blocks_max() }
+    }
+
+    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
+        let pod = self
+            .core
+            .fee_estimate(grace_blocks)
+            .map_err(FactsFault::from_code)?;
+        fee_estimate_from_pod(pod)
+    }
+
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
         let pod = self
             .core
@@ -342,12 +457,13 @@ impl ChainFacts for FfiChainFacts {
 
     fn block_header_at(
         &self,
-        height: BlockHeight,
+        at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault> {
+        let (hash, height) = lookup_selector(at);
         let pod = self
             .core
-            .block_header_at(height.to_raw(), fill_pow_hash)
+            .block_header_at(hash.as_ref(), height, fill_pow_hash)
             .map_err(FactsFault::from_code)?;
         let chain_height = BlockHeight::from_raw(pod.chain_height);
         if pod.found == 0 {
@@ -363,10 +479,7 @@ impl ChainFacts for FfiChainFacts {
     }
 
     fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
-        let (hash, height) = match at {
-            BlockLookup::Hash(h) => (Some(h), 0),
-            BlockLookup::Height(h) => (None, h.to_raw()),
-        };
+        let (hash, height) = lookup_selector(at);
         let (pod, blob, json, tx_hashes) = self
             .core
             .block_at(hash.as_ref(), height, fill_pow_hash)
@@ -404,6 +517,7 @@ impl ChainFacts for FfiChainFacts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ffi;
 
     #[test]
     fn fault_codes_map_one_to_one_and_unknown_is_never_guessed() {
@@ -424,5 +538,28 @@ mod tests {
             FactsFault::Inconsistent
         );
         assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
+    }
+
+    #[test]
+    fn a_fee_pod_that_did_not_write_four_tiers_is_inconsistent() {
+        let four = ffi::FeeEstimateFactsFfi {
+            fees: [1, 2, 3, 4],
+            quantization_mask: 8,
+            fee_count: 4,
+            reserved: [0; 7],
+        };
+        let ok = fee_estimate_from_pod(four).expect("four tiers is the contract");
+        assert_eq!(ok.fees, [1, 2, 3, 4]);
+        assert_eq!(ok.quantization_mask, 8);
+
+        for count in [0, 3, 5] {
+            let mut short = four;
+            short.fee_count = count;
+            assert_eq!(
+                fee_estimate_from_pod(short),
+                Err(FactsFault::Inconsistent),
+                "fee_count {count} must not be read as a shorter answer"
+            );
+        }
     }
 }
