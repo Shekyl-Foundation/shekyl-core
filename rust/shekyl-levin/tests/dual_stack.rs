@@ -73,7 +73,6 @@ impl Daemon {
                 "--regtest",
                 "--non-interactive",
                 "--no-igd",
-                "--hide-my-port",
                 "--out-peers",
                 "0",
                 "--fixed-difficulty",

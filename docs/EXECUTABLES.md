@@ -75,7 +75,6 @@ shekyld [options] [command]
 | `--seed-node <ip:port>` | Connect to a seed node for initial peer discovery |
 | `--out-peers <n>` | Maximum outbound connections |
 | `--in-peers <n>` | Maximum inbound connections |
-| `--hide-my-port` | Do not advertise this node to the network |
 | `--no-igd` | Disable UPnP port forwarding |
 | `--prune-blockchain` | Enable blockchain pruning |
 | `--offline` | Run without P2P networking |

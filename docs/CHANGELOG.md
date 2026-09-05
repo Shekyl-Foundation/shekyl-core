@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`--hide-my-port` is gone, as an option and as a capability; whether this
+  node advertises a port is now derived.** The flag expressed something the
+  node can determine for itself, and its default meant a reachability
+  downgrade required no conscious act. `get_local_node_data` now announces the
+  listening (or `--p2p-external-port`) port only where a peer could actually
+  reach us on it: the zone must support the back-ping that verifies the claim,
+  and we must accept inbound connections at all. **This also fixes a
+  divergence** — `check_incoming_connections` has always asked the second
+  question, while the announcement site asked only whether the flag was set, so
+  a node run with `--in-peers 0` announced a port that refuses every connection
+  it attracts. Operators wanting no inbound use `--in-peers 0`, which now
+  suppresses the announcement by derivation; operators wanting no p2p
+  participation at all should not run a daemon. The flag never did anything on
+  Tor or I2P, where `m_can_pingback` is false by construction. NAT'd ports are
+  handled naturally by the revised p2p rather than by an operator flag.
+
 ### Fixed
 
 - **Consensus hardening: the curve-tree leaf collector aborts instead of

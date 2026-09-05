@@ -411,7 +411,6 @@ namespace nodetool
       : m_payload_handler(payload_handler),
         m_external_port(0),
         m_allow_local_ip(false),
-        m_hide_my_port(false),
         m_igd(no_igd),
         m_offline(false),
         is_closing(false),
@@ -602,7 +601,6 @@ namespace nodetool
     uint32_t m_listening_port_ipv6;
     uint32_t m_external_port;
     bool m_allow_local_ip;
-    bool m_hide_my_port;
     igd_t m_igd;
     bool m_offline;
     bool m_use_ipv6;
@@ -678,7 +676,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound;
     extern const command_line::arg_descriptor<std::string> arg_ban_list;
-    extern const command_line::arg_descriptor<bool> arg_p2p_hide_my_port;
     extern const command_line::arg_descriptor<bool> arg_no_sync;
 
     extern const command_line::arg_descriptor<bool>        arg_no_igd;

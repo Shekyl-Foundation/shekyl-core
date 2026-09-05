@@ -120,7 +120,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_tx_proxy);
     command_line::add_arg(desc, arg_anonymous_inbound);
     command_line::add_arg(desc, arg_ban_list);
-    command_line::add_arg(desc, arg_p2p_hide_my_port);
     command_line::add_arg(desc, arg_no_sync);
     command_line::add_arg(desc, arg_no_igd);
     command_line::add_arg(desc, arg_igd);
@@ -577,9 +576,6 @@ namespace nodetool
         MERROR("Invalid IP address or IPv4 subnet: " << line);
       }
     }
-
-    if(command_line::has_arg(vm, arg_p2p_hide_my_port))
-      m_hide_my_port = true;
 
     if (command_line::has_arg(vm, arg_no_sync))
       m_payload_handler.set_no_sync(true);
@@ -2043,7 +2039,7 @@ namespace nodetool
     const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
     if (public_zone != m_network_zones.end() && get_incoming_connections_count(public_zone->second) == 0)
     {
-      if (m_hide_my_port || public_zone->second.m_config.m_net_config.max_in_connection_count == 0)
+      if (public_zone->second.m_config.m_net_config.max_in_connection_count == 0)
       {
         MGINFO("Incoming connections disabled, enable them for full connectivity");
       }
@@ -2157,7 +2153,15 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::get_local_node_data(basic_node_data& node_data, const network_zone& zone)
   {
     node_data.peer_id = zone.m_config.m_peer_id;
-    if(!m_hide_my_port && zone.m_can_pingback)
+    // Announce a port only where a peer could actually reach us on it. Both
+    // conditions are facts the node already holds, so there is no operator
+    // input in this decision: the zone must support the back-ping that
+    // verifies the claim, and we must accept inbound connections at all.
+    //
+    // `check_incoming_connections` has always asked the second question; this
+    // site asked only whether a flag was set, so a node run with `--in-peers 0`
+    // announced a port that refuses every connection it attracts.
+    if(zone.m_can_pingback && zone.m_config.m_net_config.max_in_connection_count > 0)
       node_data.my_port = m_external_port ? m_external_port : m_listening_port;
     else
       node_data.my_port = 0;
