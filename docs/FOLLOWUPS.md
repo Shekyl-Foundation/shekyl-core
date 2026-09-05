@@ -997,9 +997,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual ruling B](V3_SHARD_VISUALIZATION.md) — candidate.v1 empirical closure + the determinism bar.** Owes the
-  mobile-budget/continuity review of ruling A's rewired aesthetics, ONE determinism bar (the spec holds
-  two incompatible claims), a property-axis oracle (pixels/perceptual metric), and Rust/Python parity pinned or retracted.
+- **[Shard-visual ruling B — measurement half](V3_SHARD_VISUALIZATION.md) (ratified 2026-09-05; spec § landed).**
+  Remaining: designated-reference goldens, full-recipe per-fixture KATs, two-limb avalanche test, skl-pi budget
+  matrix. Held by name: build-slowdown directive (P2P focus) + skl-pi occupancy; device slot via coordination.
   - Target: pre-genesis
 
 - **Transport selection for the staker-archival path (gate 6 /
