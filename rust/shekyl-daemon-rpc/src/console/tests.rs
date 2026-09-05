@@ -1645,6 +1645,18 @@ fn a_slot_answering_a_different_hash_is_refused() {
         headers_in_correspondence(&slots[..1], &requested).expect_err("one slot for two hashes");
     assert!(err.contains("1 of 2"), "{err}");
 
+    // **An envelope that echoes the request over a header for another
+    // block.** The slot's `hash` is what the reply *says* it answered; the
+    // header's `hash` is what it actually carries. A check on the echo alone
+    // passes this, and `alt_chain_info` would compute an age and a hash-rate
+    // share from an unrelated block with every visible input agreeing.
+    let mut forged = slot(1, 10);
+    forged.block_header.as_mut().expect("a header").hash = hash_n(9);
+    let err = headers_in_correspondence(&[forged], &[hash_n(1)])
+        .expect_err("the envelope agreed; the header did not");
+    assert!(err.contains(&hash_n(1).to_string()), "{err}");
+    assert!(err.contains(&hash_n(9).to_string()), "{err}");
+
     // The agreeing case, so this is not a test that only knows how to
     // refuse.
     let good = headers_in_correspondence(&[slot(1, 10), slot(2, 20)], &requested)

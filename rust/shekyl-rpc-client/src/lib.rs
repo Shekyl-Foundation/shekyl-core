@@ -360,14 +360,27 @@ pub trait Rpc: Sync + Clone {
             // reached a runtime parse failure once already. This one read a
             // two-field subset, so it would not have *broken* — it would have
             // kept working while quietly disagreeing about what a header is.
-            Ok(self
-                .json_rpc_call::<shekyl_rpc_types::GetLastBlockHeaderResponse>(
-                    "get_last_block_header",
-                    None,
-                )
-                .await?
-                .block_header
-                .major_version)
+            let reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
+                self.json_rpc_call("get_last_block_header", None).await?;
+            // **A non-OK status is a refusal, whatever the header holds**, and
+            // this is the exact trap that made the daemon side of this slice
+            // refuse rather than answer `BUSY`: `CHECK_CORE_READY()` returned
+            // `status = BUSY` with a *default-constructed* header, and reading
+            // `major_version` straight through reported fork version 0.
+            //
+            // The daemon this ships with no longer does that — it refuses with
+            // `CORE_BUSY`, which arrives here as a JSON-RPC error. This guard
+            // is for every *other* daemon: an older build, or one this wallet
+            // was merely pointed at. Fixing the producer and trusting every
+            // peer to be the fixed producer is not a fix. Same shape as
+            // `get_height` and `get_block_hash` below.
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_last_block_header returned status {}",
+                    reply.status.0
+                )));
+            }
+            Ok(reply.block_header.major_version)
         }
     }
 

@@ -120,6 +120,25 @@ pub(super) fn headers_in_correspondence(
                 "no block header for {asked} — the chain may have moved since it was listed"
             ));
         };
+        // **The envelope is not the payload.** The slot's `hash` is the reply
+        // echoing what was asked; `header.hash` is the block it actually
+        // carries. Checking only the echo lets a reply agree with the request
+        // in the wrapper while nesting a header for an unrelated block, and
+        // this command would then compute an age and a hash-rate share from
+        // it — every input consistent, every figure wrong.
+        //
+        // Third time in this review that a correspondence check was written
+        // one layer short: the declared alt-chain length against its hashes,
+        // the range reply against its requested heights, and now the slot
+        // against its own contents. The rule is that a reply is checked
+        // against the request at **every** level that carries an identity,
+        // not at the level the last finding named.
+        if header.hash != *asked {
+            return Err(format!(
+                "the daemon answered for {asked} with a header for {}",
+                header.hash
+            ));
+        }
         headers.push(header.clone());
     }
     Ok(headers)
