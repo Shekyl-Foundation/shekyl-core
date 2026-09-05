@@ -134,8 +134,10 @@
 //! (0.53 ms against adm's 22.8): FCMP++ admission verification dominates,
 //! now grounded rather than conditional. **Reachability, read from the
 //! call graph rather than name-matched (a review asked; the answer is
-//! load-bearing):** the shipped verifier IS on the acceptance path, through
-//! a wrapper a name-grep misses — `tx_pool::add_tx` (`tx_pool.cpp:236`) and
+//! load-bearing):** the shipped verifier IS on the acceptance path — but
+//! **only through the `verBulletproofPlus` wrapper: a name-match on
+//! `bulletproof_plus_VERIFY` alone WILL miss it** (a truncated grep did
+//! exactly that during review and reported the verifier dead) — `tx_pool::add_tx` (`tx_pool.cpp:236`) and
 //! the pool-supplement connect overload → `ver_non_input_consensus` → Rule
 //! 7 `ver_mixed_ct_semantics` (`tx_verification_utils.cpp:188` → `:212`,
 //! canonical-layout check then batch) → `verCtSemanticsSimple(rvv)`
