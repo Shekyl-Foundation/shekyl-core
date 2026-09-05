@@ -73,7 +73,12 @@ public:
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
   bool get_test_drop_download_height() const {return true;}
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return true; }
+  // Configurable so a test can drive the failure arm at the
+  // `prepare_handle_incoming_blocks` check in `try_add_next_blocks`.
+  // Defaults to the previous hardcoded `true`, so existing tests are
+  // unaffected.
+  bool prepare_handle_incoming_blocks_result = true;
+  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return prepare_handle_incoming_blocks_result; }
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
@@ -104,6 +109,26 @@ public:
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
   void stop() {}
+};
+
+//! Grants this file access to the protocol handler's private members. See the
+//! `friend` declaration in `cryptonote_protocol_handler.h` for what it exists
+//! for and when it retires.
+struct cryptonote_protocol_handler_test_seam
+{
+  template<class T>
+  static cryptonote::block_queue &queue(cryptonote::t_cryptonote_protocol_handler<T> &h)
+  { return h.m_block_queue; }
+
+  template<class T>
+  static void drop_connections(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                               const epee::net_utils::network_address &addr)
+  { h.drop_connections(addr); }
+
+  template<class T>
+  static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                 cryptonote::cryptonote_connection_context &ctx)
+  { return h.try_add_next_blocks(ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -1677,4 +1702,111 @@ TEST(node_server, both_outbound_paths_clear_the_failure_history)
   EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
     << "after a success the next failure is charged the FIRST-failure window, "
        "whichever routine reported the success";
+}
+
+// ---------------------------------------------------------------------------
+// Anonymity-zone address keying (fix/anon-zone-address-keying)
+//
+// Every inbound connection in an anonymity zone is handed the zone's
+// `unknown()` sentinel as its remote address (`net_node.inl` `set_default_remote`,
+// one call per zone). `is_same_host` used to report two such addresses as the
+// same host, so `drop_connections(addr)` — which severs every connection
+// sharing a host — severed the entire inbound anon population on one bad span.
+// ---------------------------------------------------------------------------
+namespace
+{
+  //! Records what the protocol handler asks the p2p layer to do.
+  struct recording_endpoint final
+    : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connection_context>
+  {
+    std::vector<cryptonote::cryptonote_connection_context> conns;
+    std::vector<boost::uuids::uuid> dropped;
+    std::vector<epee::net_utils::network_address> host_fails;
+
+    void add(const boost::uuids::uuid &id, const epee::net_utils::network_address &addr)
+    {
+      cryptonote::cryptonote_connection_context c{};
+      const_cast<boost::uuids::uuid&>(c.m_connection_id) = id;
+      const_cast<epee::net_utils::network_address&>(c.m_remote_address) = addr;
+      const_cast<bool&>(c.m_is_income) = true;
+      conns.push_back(std::move(c));
+    }
+
+    virtual void for_each_connection(
+      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+    {
+      for (auto &c : conns)
+        if (!f(c, 0, 0))
+          return;
+    }
+    virtual bool for_connection(const boost::uuids::uuid &id,
+      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+    {
+      for (auto &c : conns)
+        if (c.m_connection_id == id) { f(c, 0, 0); return true; }
+      return false;
+    }
+    virtual bool drop_connection(const epee::net_utils::connection_context_base &context) override
+    {
+      dropped.push_back(context.m_connection_id);
+      return true;
+    }
+    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int) override
+    {
+      // Fidelity: production's `node_server::add_host_fail` opens with
+      // `if(!address.is_blockable()) return false;` (`net_node.inl:412`), so an
+      // address that names no host is never scored regardless of the caller. A
+      // double that recorded unconditionally would be MORE PERMISSIVE than the
+      // real endpoint, and a limb asserting the difference would pin the mock
+      // rather than the code.
+      if (!address.is_blockable())
+        return false;
+      host_fails.push_back(address);
+      return true;
+    }
+  };
+}
+
+TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid anon1 = boost::uuids::random_generator()();
+  const boost::uuids::uuid anon2 = boost::uuids::random_generator()();
+  endpoint.add(anon1, unknown_tor);
+  endpoint.add(anon2, unknown_tor);
+
+  // Negative limb: the sweep must sever NOTHING when handed an address that
+  // names no host. Before the fix both anon connections were severed, because
+  // `unknown()` compared equal to `unknown()`.
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor);
+  EXPECT_TRUE(endpoint.dropped.empty());
+  // Scoring: the mock models production's `is_blockable` bail, so this limb is
+  // guaranteed by the double rather than by the fix -- it documents the
+  // contract, it does not pin A1. A1's independent observables are the
+  // misleading `MWARNING` and the avoided scan; see the PR body.
+  EXPECT_TRUE(endpoint.host_fails.empty());
+
+  // Positive limb: the sweep still works where the address DOES name a host,
+  // so a guard that over-reached into "never sever" fails loudly here. This is
+  // the public-zone per-host cap's behaviour and it must be untouched.
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const auto ip_other_port = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18081}};
+  const boost::uuids::uuid clear1 = boost::uuids::random_generator()();
+  endpoint.add(clear1, ip_other_port);
+
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip);
+  ASSERT_EQ(1u, endpoint.dropped.size());
+  EXPECT_EQ(clear1, endpoint.dropped.front());   // the same host, different port
+  // The sweep scores the host, and `drop_connection(context, true, ...)` scores
+  // each severed peer again, so the count is not 1 -- assert the contract
+  // rather than a number: scoring happened, and it never names an address that
+  // names no host.
+  EXPECT_FALSE(endpoint.host_fails.empty());
+  for (const auto &a : endpoint.host_fails)
+    EXPECT_TRUE(a.is_blockable());
 }
