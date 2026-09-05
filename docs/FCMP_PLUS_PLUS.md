@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-15
+> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -265,6 +265,15 @@ Each block header contains a `curve_tree_root` field (`crypto::hash`,
 32 bytes) that commits to the state of the curve tree after processing
 all transactions in the block.
 
+> **Open — S1, ruling owed (2026-09-04; census §7 #17).** The sentence above
+> describes neither the template, which fills the field from the root
+> *before* the block is added (`blockchain.cpp:2006` — the state at chain
+> height N, which the wallet client's `drained_through = N − 1` and the CT-2
+> KAT also name), nor the connect check, which compares the field against
+> the root *after* the add (`:6413`). The two agree only when nothing drains
+> at the block. Which state the field commits to is Rick's ruling; until
+> then this section is not a ratified specification of that boundary.
+
 ### Serialization
 
 The field is always serialized (genesis-native, no version gating) in both
@@ -436,8 +445,9 @@ Constants from `cryptonote_config.h`:
 
 > **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
 > deferred tree insertion: outputs only enter the curve tree after their
-> type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
-> staked: max(effective_lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> type-specific maturity period (coinbase: 60 blocks; every other output: 10
+> blocks — the claim-era "staked" arm was retired with the confidential-staking
+> cutover and never existed in code, CEN-L12).  MIN_AGE therefore only needs to
 > provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
 > to ensure the referenced tree state is stable.
 
@@ -452,9 +462,35 @@ Constants from `cryptonote_config.h`:
 The tree root and depth at `referenceBlock` height anchor the proof. A
 mismatch in `curve_trees_tree_depth` is a consensus failure.
 
-The per-block tree root is stored in the block header's `curve_tree_root`
-field. The `check_tx_inputs` code retrieves it via
-`m_db->get_block_header(rv.referenceBlock).curve_tree_root`.
+**What the anchor is (ruled 2026-09-04, CEN-I12).** The anchor is the
+curve-tree state **at chain height `ref_height`**: the tree as it stands
+after `referenceBlock`'s *parent* connects and before `referenceBlock`'s own
+drain — a property of chain state, not of any one place that state is
+written down. Every existing keying names that one state: the reference
+block's header `curve_tree_root` was filled from it at template time
+(`blockchain.cpp:2006`), the per-height record stores it under key
+`ref_height` (written by the parent's connect under post-add keying,
+`blockchain_db.cpp:636`), the wallet client names it `drained_through =
+ref_height − 1` (`shekyl-curve-tree/src/client.rs:908`), and the CT-2 KAT
+pins it at height 61. Two witnesses of it therefore exist — the header
+field (the block's *attestation*) and the node's own per-height record —
+and CEN-B5 is the consensus check meant to bind them (§5) — **but today
+that binding holds on no nettype:** the check is skipped on FAKECHAIN and,
+everywhere else, compares the header against the root *after* the block's
+own drain (census §7 #17, S1, ruling owed), so the two witnesses currently
+agree only because the template fills the header honestly. One more reason
+the verifier reads its **own computed record**, never the header; a rewrite
+does the same in whatever form its store keeps that record. The prover holds no
+store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
+protection is its own leaf recompute against that header (`verify_root`
+refuses to build against a root it cannot reproduce), and B5 adds the
+consensus-side binding only once the S1 below is closed. The two reads name one
+value on every network where B5 runs; the only thing that makes the choice
+observable is B5's FAKECHAIN skip (census R9), and only in tests.
+
+*Reconciled 2026-09-04:* this paragraph previously narrated a header read
+the code stopped performing on 2026-04-13; the archaeology and the ruling
+are in [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §7 #16.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 
